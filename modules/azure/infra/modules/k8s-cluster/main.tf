@@ -29,6 +29,68 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 locals {
+  # ── Internal ingress load balancer ─────────────────────────────────────────
+  # Microsoft, "Create an internal load balancer in AKS" (updated 2026-07-31):
+  # azure-load-balancer-internal makes the Service's load balancer private,
+  # azure-load-balancer-internal-subnet names a subnet of the cluster's VNet
+  # by name, and azure-load-balancer-ipv4 pins the address. Every controller
+  # the module installs gets the same set, so one map serves them all.
+  ingress_internal = var.ingress_load_balancer == "internal"
+  ingress_internal_annotations = local.ingress_internal ? merge(
+    { "service.beta.kubernetes.io/azure-load-balancer-internal" = "true" },
+    var.ingress_load_balancer_subnet_id != "" ? {
+      "service.beta.kubernetes.io/azure-load-balancer-internal-subnet" = element(split("/", var.ingress_load_balancer_subnet_id), length(split("/", var.ingress_load_balancer_subnet_id)) - 1)
+    } : {},
+    var.ingress_load_balancer_ip != "" ? {
+      "service.beta.kubernetes.io/azure-load-balancer-ipv4" = var.ingress_load_balancer_ip
+    } : {},
+  ) : {}
+
+  # A subnet other than the node subnet needs subnets/join/action and
+  # subnets/read for the cluster identity (same page, "Use an internal load
+  # balancer with private networks"). The root decides from known inputs, so
+  # the grant's count is known at plan even when the node subnet is carved.
+  ingress_lb_other_subnet = var.ingress_load_balancer_needs_subnet_grant
+  nginx_service_annotations = merge(
+    {
+      # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
+      # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
+      "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
+    },
+    var.dns_label != "" ? {
+      # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
+      "service.beta.kubernetes.io/azure-dns-label-name" = var.dns_label
+    } : {},
+    local.ingress_internal_annotations,
+  )
+
+  # With an internal load balancer, the add-on's internal gateway serves
+  # LangSmith and the public one is off, so nothing answers from outside.
+  istio_addon_external_gateway = var.istio_external_gateway_enabled && !local.ingress_internal
+  istio_addon_internal_gateway = var.istio_internal_gateway_enabled || local.ingress_internal
+
+  # A user-assigned control-plane identity leaves identity[0].principal_id
+  # empty on the cluster, so the grant goes to that identity's principal. An
+  # attached cluster's is read from the identity it names.
+  cluster_identity_principal_id = local.control_plane_user ? local.control_plane_principal_id : (
+    var.create_cluster ? try(azurerm_kubernetes_cluster.main[0].identity[0].principal_id, null) : (
+      length(data.azurerm_user_assigned_identity.existing_control_plane) > 0
+      ? data.azurerm_user_assigned_identity.existing_control_plane[0].principal_id
+      : try(data.azurerm_kubernetes_cluster.existing[0].identity[0].principal_id, null)
+    )
+  )
+}
+
+# An attached cluster with a user-assigned control-plane identity, read for the
+# principal the load-balancer subnet grant goes to. The ID comes from Azure, so
+# the name and group are positions 8 and 4.
+data "azurerm_user_assigned_identity" "existing_control_plane" {
+  count               = !var.create_cluster && local.ingress_lb_other_subnet && try(data.azurerm_kubernetes_cluster.existing[0].identity[0].type, "") == "UserAssigned" ? 1 : 0
+  name                = split("/", data.azurerm_kubernetes_cluster.existing[0].identity[0].identity_ids[0])[8]
+  resource_group_name = split("/", data.azurerm_kubernetes_cluster.existing[0].identity[0].identity_ids[0])[4]
+}
+
+locals {
   # azurerm reports an unzoned default node pool as null, not [], so the drift
   # check below has to normalize before toset() and sort() ever see it. one()
   # also folds away the count, returning null when create_cluster = false.
@@ -606,8 +668,8 @@ resource "azurerm_kubernetes_cluster" "main" {
     content {
       mode                             = "Istio"
       revisions                        = [var.istio_addon_revision]
-      external_ingress_gateway_enabled = var.istio_external_gateway_enabled
-      internal_ingress_gateway_enabled = var.istio_internal_gateway_enabled
+      external_ingress_gateway_enabled = local.istio_addon_external_gateway
+      internal_ingress_gateway_enabled = local.istio_addon_internal_gateway
     }
   }
 
@@ -809,18 +871,8 @@ resource "helm_release" "nginx_ingress" {
         }
 
         service = {
-          type = "LoadBalancer"
-          annotations = merge(
-            {
-              # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
-              # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
-              "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
-            },
-            var.dns_label != "" ? {
-              # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
-              "service.beta.kubernetes.io/azure-dns-label-name" = var.dns_label
-            } : {}
-          )
+          type        = "LoadBalancer"
+          annotations = local.nginx_service_annotations
         }
       }
     })
@@ -876,12 +928,17 @@ resource "helm_release" "istiod" {
 # Replaces NGINX when Istio is in use. Gateway + VirtualService resources
 # (in use-cases/istio/) route traffic to LangSmith services.
 resource "helm_release" "istio_gateway" {
-  count      = var.ingress_controller == "istio" && var.istio_external_gateway_enabled ? 1 : 0
+  count      = var.ingress_controller == "istio" && (var.istio_external_gateway_enabled || local.ingress_internal) ? 1 : 0
   name       = "istio-ingressgateway"
   namespace  = "istio-system"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "gateway"
   version    = var.istio_version
+
+  # The gateway chart puts service.annotations on its LoadBalancer Service.
+  values = local.ingress_internal ? [yamlencode({
+    service = { annotations = local.ingress_internal_annotations }
+  })] : []
 
   depends_on = [helm_release.istiod]
 }
@@ -1084,6 +1141,16 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # EnvoyProxy (which carries the DNS label onto the proxy Service), GatewayClass
 # and Gateway, and the LangSmith chart renders the HTTPRoutes.
 
+#
+# With envoy_gateway_image_registry, the controller (and its certgen job) pull
+# from the mirror through the chart's global image value, and the proxy image is
+# exported for deploy.sh, which sets it on the EnvoyProxy.
+locals {
+  envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
+  envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
+}
+
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0
   name      = "envoy-gateway"
@@ -1094,17 +1161,45 @@ resource "helm_release" "envoy_gateway" {
   create_namespace = true
 
   values = [
-    yamlencode({
-      deployment = {
-        envoyGateway = {
-          resources = {
-            requests = {
-              cpu    = "100m"
-              memory = "256Mi"
+    yamlencode(merge(
+      {
+        deployment = {
+          envoyGateway = {
+            resources = {
+              requests = {
+                cpu    = "100m"
+                memory = "256Mi"
+              }
             }
           }
         }
-      }
-    })
+      },
+      local.envoy_gateway_mirror ? {
+        global = {
+          images = {
+            envoyGateway = merge(
+              { image = local.envoy_gateway_image },
+              var.envoy_gateway_image_pull_secret_name != "" ? { pullSecrets = [{ name = var.envoy_gateway_image_pull_secret_name }] } : {}
+            )
+          }
+        }
+      } : {}
+    ))
   ]
+}
+
+# ── Internal ingress load balancer: the subnet grant ─────────────────────────
+# Only when the load balancer takes its IP from a subnet other than the node
+# subnet. The cluster identity creates the frontend there, which takes
+# subnets/join/action and subnets/read (Microsoft, "Create an internal load
+# balancer in AKS", updated 2026-07-31); Network Contributor carries both.
+# Gated so a network owner who keeps role assignments to itself can make it
+# instead: the ingress_load_balancer_subnet_grant output names what to grant.
+resource "azurerm_role_assignment" "ingress_lb_subnet" {
+  count = local.ingress_lb_other_subnet && var.ingress_load_balancer_manage_subnet_assignment ? 1 : 0
+
+  scope                = var.ingress_load_balancer_subnet_id
+  role_definition_name = "Network Contributor"
+  principal_id         = local.cluster_identity_principal_id
+  principal_type       = "ServicePrincipal"
 }

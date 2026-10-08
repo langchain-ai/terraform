@@ -189,6 +189,16 @@ output "langsmith_namespace" {
   value       = module.k8s_bootstrap.langsmith_namespace
 }
 
+output "envoy_gateway_proxy_image" {
+  description = "Envoy proxy image from envoy_gateway_image_registry, empty without a mirror. helm/scripts/deploy.sh sets it on the EnvoyProxy."
+  value       = module.aks.envoy_gateway_proxy_image
+}
+
+output "envoy_gateway_image_pull_secret_name" {
+  description = "Pull Secret for the Envoy proxy pods, empty without one. helm/scripts/deploy.sh sets it on the EnvoyProxy."
+  value       = module.aks.envoy_gateway_image_pull_secret_name
+}
+
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
   value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing${module.aks.api_server_public_fqdn == true ? " --public-fqdn" : ""}"
@@ -238,6 +248,21 @@ output "dns_label" {
 output "ingress_controller" {
   description = "Ingress controller type passed through from var.ingress_controller"
   value       = var.ingress_controller
+}
+
+output "ingress_load_balancer" {
+  description = "'public' or 'internal': whether the ingress controller's load balancer has a public or a private IP."
+  value       = var.ingress_load_balancer
+}
+
+output "ingress_internal_annotations" {
+  description = "Service annotations that make the ingress controller's load balancer internal; make deploy puts them on the Envoy Gateway proxy Service. Empty with ingress_load_balancer = \"public\"."
+  value       = module.aks.ingress_internal_annotations
+}
+
+output "ingress_load_balancer_subnet_grant" {
+  description = "With an internal load balancer in a subnet other than the node subnet: the role, actions, scope and principal the cluster identity needs there, and whether Terraform makes the grant (made_by = \"terraform\") or the network owner must (\"owner\"). Null when no grant is needed."
+  value       = module.aks.ingress_load_balancer_subnet_grant
 }
 
 output "tls_certificate_source" {

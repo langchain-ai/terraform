@@ -179,6 +179,21 @@ output "envoy_gateway_version" {
   value       = join("", helm_release.envoy_gateway[*].version)
 }
 
+output "envoy_gateway_image" {
+  description = "Envoy Gateway controller image the Helm release sets, empty without a mirror or without Envoy Gateway."
+  value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.image, "")])
+}
+
+output "envoy_gateway_proxy_image" {
+  description = "Envoy proxy image from the mirror, empty without envoy_gateway_image_registry or without Envoy Gateway. deploy.sh sets it on the EnvoyProxy."
+  value       = var.ingress_controller == "envoy-gateway" ? local.envoy_proxy_image : ""
+}
+
+output "envoy_gateway_image_pull_secret_name" {
+  description = "Pull Secret the Helm release sets on the controller, empty without one. deploy.sh sets it on the EnvoyProxy too."
+  value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.pullSecrets[0].name, "")])
+}
+
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
@@ -200,4 +215,38 @@ output "kube_auth" {
 output "api_server_public_fqdn" {
   description = "True when clients reach the API server through its public FQDN (a private cluster with no private DNS zone: private_dns_zone_id = \"None\", or an attached cluster Azure reports with None), so az aks get-credentials needs --public-fqdn."
   value       = local.api_server_public_fqdn
+}
+
+output "ingress_internal_annotations" {
+  description = "Service annotations that make the ingress controller's load balancer internal. Empty with ingress_load_balancer = \"public\"."
+  value       = local.ingress_internal_annotations
+}
+
+output "ingress_load_balancer_subnet_grant" {
+  description = "The grant the internal load balancer needs on a subnet other than the node subnet, or null when none is needed. made_by is \"terraform\" when this module creates it and \"owner\" when the network owner must."
+  value = local.ingress_lb_other_subnet ? {
+    role         = "Network Contributor"
+    actions      = ["Microsoft.Network/virtualNetworks/subnets/join/action", "Microsoft.Network/virtualNetworks/subnets/read"]
+    scope        = var.ingress_load_balancer_subnet_id
+    principal_id = local.cluster_identity_principal_id
+    made_by      = var.ingress_load_balancer_manage_subnet_assignment ? "terraform" : "owner"
+  } : null
+}
+
+output "nginx_service_annotations" {
+  description = "Annotations on the NGINX controller's LoadBalancer Service, as passed to the chart."
+  value       = local.nginx_service_annotations
+}
+
+output "istio_gateway_values" {
+  description = "Values passed to the self-managed Istio gateway chart, or null when it is not installed."
+  value       = one(helm_release.istio_gateway[*].values)
+}
+
+output "istio_addon_gateways" {
+  description = "Which Istio add-on ingress gateways service_mesh_profile enables."
+  value = {
+    external = local.istio_addon_external_gateway
+    internal = local.istio_addon_internal_gateway
+  }
 }
