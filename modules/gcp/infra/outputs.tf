@@ -126,7 +126,7 @@ output "redis_port" {
 }
 
 output "sandbox_juicefs_csi_config_secret_name" {
-  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  description = "Kubernetes Secret name for the sandbox JuiceFS config when sandboxes are enabled"
   value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
 }
 
@@ -138,6 +138,11 @@ output "sandbox_juicefs_redis_instance_name" {
 output "sandbox_juicefs_bucket_url" {
   description = "GCS bucket URL passed to JuiceFS for sandbox object storage"
   value       = var.enable_sandboxes ? module.storage.bucket_url : null
+}
+
+output "sandbox_host_machine_type" {
+  description = "Resolved sandbox-host machine type (from sizing_profile unless set explicitly)"
+  value       = var.enable_sandboxes ? local.sandbox_host_machine_type : null
 }
 
 output "sandbox_host_node_service_account_email" {
@@ -304,7 +309,7 @@ output "letsencrypt_issuer" {
 }
 
 #------------------------------------------------------------------------------
-# SmithDB Outputs (chart 0.16+)
+# SmithDB Outputs (chart 0.17)
 # Consumed by Pass 2 (helm/scripts/init-values.sh) to generate the SmithDB
 # values overrides. The metastore password is deliberately not exposed
 # here — it only ever lands in the smithdb-metastore Kubernetes secret.
@@ -339,19 +344,24 @@ output "smithdb_metastore_instance_name" {
   value       = var.enable_smithdb ? module.smithdb[0].metastore_instance_name : null
 }
 
+output "smithdb_metastore_tier" {
+  description = "Cloud SQL tier of the created SmithDB metastore (resolved from smithdb_metastore_tier and smithdb_sizing), or null for an external metastore or when SmithDB is disabled"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_tier : null
+}
+
 output "smithdb_metastore_port" {
   description = "SmithDB metastore port"
   value       = var.enable_smithdb ? module.smithdb[0].metastore_port : null
 }
 
 output "smithdb_metastore_use_ssl" {
-  description = "Whether SmithDB connects to the metastore over TLS directly"
-  value       = var.smithdb_metastore_use_ssl
+  description = "Whether SmithDB connects to the metastore over TLS directly (resolved; null when SmithDB is disabled)"
+  value       = var.enable_smithdb ? local.smithdb_metastore_use_ssl : null
 }
 
 output "smithdb_metastore_use_auth_proxy" {
-  description = "Whether SmithDB reaches the metastore through a Cloud SQL Auth Proxy sidecar on the Pod loopback"
-  value       = var.smithdb_metastore_use_auth_proxy
+  description = "Whether SmithDB reaches the metastore through a Cloud SQL Auth Proxy sidecar on the Pod loopback (resolved; null when SmithDB is disabled)"
+  value       = var.enable_smithdb ? local.smithdb_metastore_use_auth_proxy : null
 }
 
 output "smithdb_metastore_connection_name" {
@@ -390,8 +400,8 @@ output "smithdb_query_enabled" {
 }
 
 output "smithdb_node_pools" {
-  description = "SmithDB node pool names, or null on Autopilot / when disabled"
-  value = var.enable_smithdb && !var.gke_use_autopilot ? {
+  description = "SmithDB node pool names, or null on Autopilot, for smithdb_sizing = minimal, or when disabled"
+  value = local.smithdb_dedicated_pools ? {
     instance_store = module.smithdb_nodes[0].instance_store_pool_name
     compute        = module.smithdb_nodes[0].compute_pool_name
   } : null
@@ -399,7 +409,42 @@ output "smithdb_node_pools" {
 
 output "smithdb_local_ssd_capacity_gb" {
   description = "Raw Local SSD capacity per cache node in GB. Allocatable ephemeral-storage is lower after filesystem and kubelet reservations."
-  value       = var.enable_smithdb && !var.gke_use_autopilot ? module.smithdb_nodes[0].local_ssd_capacity_gb : null
+  value       = local.smithdb_dedicated_pools ? module.smithdb_nodes[0].local_ssd_capacity_gb : null
+}
+
+output "smithdb_node_pool_config" {
+  description = "Resolved SmithDB node pool shapes, or null when there are no SmithDB node pools"
+  value = local.smithdb_dedicated_pools ? {
+    instance_store_machine_type    = local.smithdb_instance_store_machine_type
+    instance_store_local_ssd_count = local.smithdb_instance_store_local_ssd_count
+    instance_store_disk_size_gb    = local.smithdb_instance_store_disk_size
+    compute_machine_type           = local.smithdb_compute_machine_type
+  } : null
+}
+
+output "smithdb_sizing" {
+  description = "Resolved SmithDB size, or null when SmithDB is disabled"
+  value       = var.enable_smithdb ? local.smithdb_sizing : null
+}
+
+output "smithdb_cache_storage" {
+  description = "Resolved SmithDB cache storage, or null when SmithDB is disabled"
+  value       = var.enable_smithdb ? local.smithdb_cache_storage : null
+}
+
+output "smithdb_quota_extra" {
+  description = "SmithDB headroom that k8s-bootstrap adds to the LangSmith namespace ResourceQuota"
+  value = {
+    cpu       = local.smithdb_quota_extra_cpu
+    memory_gi = local.smithdb_quota_extra_memory_gi
+    pods      = local.smithdb_quota_extra_pods
+  }
+}
+
+# helm/scripts/init-values.sh writes this to langsmith-values-smithdb-sizing.yaml.
+output "smithdb_helm_values" {
+  description = "SmithDB sizing and placement Helm values as YAML, or null when SmithDB is disabled"
+  value       = local.smithdb_helm_values
 }
 
 #------------------------------------------------------------------------------
@@ -424,7 +469,7 @@ output "resource_summary" {
       "enabled (metastore:",
       var.smithdb_metastore_source == "create" ? "Cloud SQL ${module.smithdb[0].metastore_instance_name}," : "external,",
       "bucket: ${module.smithdb[0].object_store_bucket_name},",
-      "local SSD: ${var.smithdb_instance_store_local_ssd_count * 375} GB/node)",
+      "sizing: ${local.smithdb_sizing}, cache: ${local.smithdb_cache_storage})",
     ]) : "disabled"
   }
 }

@@ -90,7 +90,7 @@ cd terraform/gcp
 ./helm/scripts/uninstall.sh
 ```
 
-**Sandboxes and JuiceFS:** The JuiceFS CSI driver is part of the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods.
+**Sandboxes and JuiceFS (chart 0.16 releases):** Chart 0.16 ships the JuiceFS CSI driver in the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods. Chart 0.17 has no CSI driver: sandbox-host mounts JuiceFS itself, so these steps find no claims or mount pods and change nothing.
 
 **In-cluster data disks:** In-cluster ClickHouse, Postgres, and Redis keep their data on StatefulSet claims: `data-langsmith-clickhouse-*`, `data-langsmith-postgres-*`, and `data-langsmith-redis-*`. The in-cluster Postgres and Redis of the Fleet, Insights, and Polly add-ons have claims too, for example `data-langsmith-standalone-polly-redis-0`. The GCE PD CSI driver provisions each Persistent Disk, so Terraform does not track the disks. `helm uninstall` does not delete these claims. The uninstall script keeps the claims by default to support a clean Helm reinstall. During a SmithDB backfill, the taskdb has a claim too (`data-langsmith-smithdb-taskdb-postgres-*`). The chart deletes the taskdb claim with its StatefulSet. The script deletes the taskdb claim if the claim is still there. For Postgres and Redis, the script deletes only the chart claims of the release in `RELEASE_NAME`. The claims of another release in the namespace do not match, for example the claims of `langsmith-dev` when `RELEASE_NAME` is `langsmith`. When the release name is longer than 13 characters, the chart can shorten the add-on claim names. The script does not delete a claim with a shortened name, so check for `pvc-*` disks in A8.
 
@@ -235,7 +235,7 @@ Terraform destroys in dependency order:
 - Memorystore Redis instance
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
 - Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
-- GKE cluster and node pools, including the SmithDB Local SSD and compute pools
+- GKE cluster and node pools, including the SmithDB cache and compute pools
 - Private service connection (only when `postgres_source` or `redis_source` is `"external"`, when `enable_sandboxes = true`, or when the module creates the SmithDB metastore): removed from state only (`deletion_policy = "ABANDON"`). The VPC delete removes its peering.
 - VPC, subnet, Cloud Router, Cloud NAT
 
@@ -978,7 +978,7 @@ Several resources can be deleted in parallel since they have no dependencies on 
 - **The PSA reserved range is a separate resource.** `$PREFIX-vpc-private-ip` is not removed with the peering and must be deleted before the VPC.
 - **Verify peering removal on both sides.** `gcloud compute networks peerings list --format="value(name)"` returns the *network* name, not the peering name — grepping it for `servicenetworking` silently reports success on an unfinished delete. Use `gcloud services vpc-peerings list --format="value(peering)"`.
 - **The PSA delete can stay blocked well past "a couple of minutes."** `FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION` persists after the producer instances are gone. Once Cloud SQL, Redis (all regions), and Filestore all come back empty for the VPC, drop to `gcloud compute networks peerings delete`.
-- **JuiceFS CSI lives in the LangSmith Helm release.** Uninstall the sandbox-host workload and JuiceFS claims before `helm uninstall`, or mount pods stay `Terminating` with `juicefs.com/finalizer` and namespace delete hangs. Use `./helm/scripts/uninstall.sh`.
+- **On chart 0.16, JuiceFS CSI lives in the LangSmith Helm release.** Uninstall the sandbox-host workload and JuiceFS claims before `helm uninstall`, or mount pods stay `Terminating` with `juicefs.com/finalizer` and namespace delete hangs. Use `./helm/scripts/uninstall.sh`. Chart 0.17 has no CSI driver, so the same script is safe on either line.
 - **In-cluster ClickHouse, Postgres, and Redis use dynamically provisioned GCE PDs.** Terraform does not track them. Run `DELETE_DATA_PVCS=true make uninstall` before `terraform destroy`, or the disks are orphaned.
 - **Terraform validates `postgres_password` on destroy.** Source `infra/scripts/setup-env.sh` first. If the Secret Manager secret is already gone, set `export TF_VAR_postgres_password="any-placeholder"`.
 - **The Cloud SQL database is destroyed before its user.** `google_sql_database` carries a `depends_on` for the matching `google_sql_user`, because Cloud SQL rejects `DROP ROLE` while the role owns objects (`role "langsmith" cannot be dropped because some objects depend on it`). On a stack built before that edge existed, re-run `terraform destroy` once the database is gone.
