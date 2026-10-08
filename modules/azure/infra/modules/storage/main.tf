@@ -27,6 +27,14 @@ resource "azurerm_storage_account" "storage_account" {
   account_replication_type = var.replication_type
   tags                     = merge(var.tags, { module = "blob" })
 
+  # Nothing reads this account with a key or anonymously: LangSmith uses
+  # Workload Identity, and Terraform manages the account, container and
+  # lifecycle policy through the management plane. Policies built on the Azure
+  # security benchmark deny accounts that allow either.
+  shared_access_key_enabled       = var.shared_access_key_enabled
+  allow_nested_items_to_be_public = false
+  allowed_copy_scope              = var.allowed_copy_scope
+
   # With a Private Endpoint there is no public listener to filter, so the rules
   # below stop applying. They stay declared: turning the endpoint back off must
   # land on a default-deny account, not an open one.

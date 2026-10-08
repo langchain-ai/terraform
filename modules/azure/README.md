@@ -1606,6 +1606,31 @@ nothing to be out of sync with. To re-zone an existing cluster on purpose, remov
 `default_node_pool[0].zones` from the `ignore_changes` block in
 `infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
 
+### Storage security defaults
+
+Both storage accounts, trace blobs and SmithDB's object store, are created with the
+settings that policies built on the Azure security benchmark deny or audit already
+closed:
+
+| Setting | Default | Variable |
+|---|---|---|
+| Shared Key (access key) authorization | Off | `storage_shared_access_key_enabled` |
+| Anonymous blob access | Off | none (always off) |
+| Copy operations | Same Entra tenant only (`AAD`) | `storage_allowed_copy_scope` (`AAD`, `PrivateLink`, or `""` for any) |
+
+Nothing in the install uses a key or anonymous access: LangSmith and SmithDB reach
+their accounts through Workload Identity, and Terraform manages the accounts, the
+container and the lifecycle policy through the management plane. The provider is
+configured with `features { storage { data_plane_available = false } }`, so
+Terraform never calls the storage data plane. That also lets an install machine
+outside the VNet create an account whose public access is off: without it, the
+provider waits after creating the account for endpoints it cannot reach.
+
+Set `storage_shared_access_key_enabled = true` only for SmithDB's optional
+static-key authentication (`smithdb.config.objectStore.azure.accessKeySecretKey`).
+On an existing deployment, upgrading to this release turns Shared Key off and sets
+the copy scope in place; plan shows both as in-place updates.
+
 ### Storage redundancy
 
 Both storage accounts are locally redundant (LRS) by default: three copies in one

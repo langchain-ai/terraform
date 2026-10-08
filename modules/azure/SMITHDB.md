@@ -42,10 +42,11 @@ The Terraform root creates:
 
 - a dedicated private Azure Database for PostgreSQL Flexible Server 18 and an
   empty `smithdb` database;
-- a dedicated Blob Storage account and private container. Shared Key stays
-  enabled so the chart's optional static-key path
-  (`smithdb.config.objectStore.azure.accessKeySecretKey`) remains available.
-  The default runtime path does not use it;
+- a dedicated Blob Storage account and private container, with Shared Key off
+  by default. The chart's optional static-key path
+  (`smithdb.config.objectStore.azure.accessKeySecretKey`) needs
+  `storage_shared_access_key_enabled = true`; the default runtime path does not
+  use a key (README "Storage security defaults");
 - a SmithDB-only user-assigned identity, federated to the chart-owned SmithDB
   Kubernetes ServiceAccount and scoped to `Storage Blob Data Contributor` on
   that account. Set `smithdb_migration_enabled = true` and the identity also

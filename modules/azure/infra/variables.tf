@@ -793,6 +793,23 @@ variable "storage_allowed_ips" {
   default     = []
 }
 
+variable "storage_shared_access_key_enabled" {
+  type        = bool
+  description = "Whether the LangSmith and SmithDB storage accounts accept Shared Key (access key) authorization. Off by default: LangSmith and SmithDB reach their accounts through Workload Identity, and Terraform manages them through the management plane, so nothing uses a key. Policies built on the Azure security benchmark deny accounts that allow it. Set true only for SmithDB's optional static-key authentication (objectStore.azure.accessKeySecretKey). Changing it updates the accounts in place."
+  default     = false
+}
+
+variable "storage_allowed_copy_scope" {
+  type        = string
+  description = "Which storage accounts a copy into the LangSmith or SmithDB account may come from: \"AAD\" (the default: accounts in the same Entra tenant), \"PrivateLink\" (accounts with a private link to the same virtual network), or \"\" for any account, Azure's own default, which security-benchmark policies audit. LangSmith never copies between accounts, so either restriction changes nothing it does."
+  default     = "AAD"
+
+  validation {
+    condition     = contains(["", "AAD", "PrivateLink"], var.storage_allowed_copy_scope)
+    error_message = "storage_allowed_copy_scope must be \"AAD\", \"PrivateLink\" or \"\" (any account)."
+  }
+}
+
 variable "storage_replication_type" {
   type        = string
   description = "Redundancy of the LangSmith trace-blob account, which holds every trace payload and attachment. LRS (the default, so no existing account moves) keeps three copies in one datacenter. ZRS spreads them across availability zones and keeps the account readable and writable through a zone loss; Microsoft recommends it for high availability, and it matches a cluster spread by availability_zones. GZRS adds a copy in the paired region. ZRS, GZRS and RAGZRS need a region with availability zones. Changing between LRS, GRS and RAGRS, or between ZRS, GZRS and RAGZRS, updates the account in place. A change across those two groups adds or removes zone redundancy, which the azurerm provider can only apply by deleting and recreating the account, so plan refuses it on an existing account: run Azure's conversion first (az storage account migration start), then set this to match. See README \"Storage redundancy\"."
