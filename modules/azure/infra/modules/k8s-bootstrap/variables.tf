@@ -43,6 +43,12 @@ variable "langsmith_namespace" {
   default     = "langsmith"
 }
 
+variable "sizing_profile" {
+  type        = string
+  description = "Helm sizing overlay. production-large gets a larger namespace ResourceQuota."
+  default     = "production"
+}
+
 # ── Backing services ──────────────────────────────────────────────────────────
 
 variable "use_external_postgres" {

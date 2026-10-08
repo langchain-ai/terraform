@@ -1563,10 +1563,9 @@ variable "langsmith_custom_ca_secret_key" {
   default     = "ca.crt"
 }
 
-# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform uses it to size the namespace ResourceQuota."
   default     = "production"
 }
 
