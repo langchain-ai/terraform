@@ -17,7 +17,7 @@
 #
 # Requests start from those idle measurements, raised where a
 # component could not start at the measured idle figure.
-# With Deployments and Fleet on, the requests come to ~4.4 vCPU before system
+# With Deployments and Fleet on, the requests come to ~4.3 vCPU before system
 # pods, so plan on two D4s_v5 nodes rather than one.
 # ============================================================================
 
