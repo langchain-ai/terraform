@@ -323,6 +323,22 @@ variable "aks_private_dns_zone_id" {
   }
 
   validation {
+    # AKS names the private API server under its own domain per cloud, and a
+    # zone can only hold names under its own name, so AKS refuses any other zone
+    # at create, after the rest of stage 1 has run. Azure Government's domain is
+    # cx.aks.containerservice.azure.us, not the azmk8s.io that Microsoft's
+    # private-endpoint DNS table lists for it. The four forms are the ones AKS's
+    # own error message accepts; "private." is for API Server VNet integration.
+    condition = contains(["", "System", "None"], var.aks_private_dns_zone_id) || can(regex(
+      format("(?i)/privateDnsZones/(?:[a-z0-9-]{1,32}\\.)?(?:private|privatelink)\\.%s\\.%s$",
+        replace(lower(var.location), " ", ""),
+      var.azure_environment == "usgovernment" ? "cx\\.aks\\.containerservice\\.azure\\.us" : "azmk8s\\.io"),
+      var.aks_private_dns_zone_id
+    ))
+    error_message = "aks_private_dns_zone_id names a zone AKS will not use for a cluster in this location and cloud. The zone must be privatelink.<location>.cx.aks.containerservice.azure.us in Azure Government (azure_environment = \"usgovernment\") or privatelink.<location>.azmk8s.io in commercial Azure, optionally with a subzone prefix of up to 32 letters, digits or hyphens (<subzone>.privatelink...), or private.<location>... for API Server VNet integration. <location> is var.location, for example usgovvirginia."
+  }
+
+  validation {
     # A system-assigned identity does not exist until the cluster does, so
     # nothing can grant it rights on the zone before AKS needs them.
     condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || var.aks_control_plane_identity == "user"
