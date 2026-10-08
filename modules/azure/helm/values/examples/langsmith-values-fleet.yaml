@@ -54,20 +54,20 @@ fleet:
       resources:
         requests:
           cpu: "500m"
-          memory: 1Gi
+          memory: "1Gi"
         limits:
           cpu: "2"
-          memory: 4Gi
+          memory: "4Gi"
 
   queue:
     deployment:
       resources:
         requests:
           cpu: "500m"
-          memory: 1Gi
+          memory: "1Gi"
         limits:
           cpu: "2"
-          memory: 4Gi
+          memory: "4Gi"
 
   postgres:
     external:
