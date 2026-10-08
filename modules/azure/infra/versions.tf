@@ -43,7 +43,18 @@ terraform {
 provider "azurerm" {
   subscription_id = var.subscription_id
   environment     = var.azure_environment
-  features {}
+  features {
+    # No resource here needs the storage data plane: the trace-blob and SmithDB
+    # accounts, the container (by storage_account_id) and the lifecycle policy
+    # are all managed through the management plane. With the data plane on, the
+    # provider waits after creating an account until its blob, queue and file
+    # endpoints answer, which never happens from a machine outside the VNet once
+    # public access is off and the private endpoint does not exist yet, and it
+    # needs Shared Key or a data role to read them.
+    storage {
+      data_plane_available = false
+    }
+  }
 }
 
 # Configured explicitly so both providers target the same cloud and the same
