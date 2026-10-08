@@ -256,6 +256,17 @@ langsmith_release_name = "langsmith"
 #
 sizing_profile = "production"
 
+# Namespace ResourceQuota. The default (40 CPU requests, 80 CPU limits, 200 pods)
+# fits every profile except production-large, whose sizing file header has the
+# block to use. Replaces the whole map, so list every key.
+# resource_quota = {
+#   "requests.cpu"    = "40"
+#   "requests.memory" = "80Gi"
+#   "limits.cpu"      = "80"
+#   "limits.memory"   = "160Gi"
+#   pods              = "200"
+# }
+
 # Pass 3 — LangGraph Platform (hostBackend, listener, operator)
 # Required before enabling agent_builder, insights, or polly.
 # enable_deployments = true

@@ -652,29 +652,31 @@ run "cluster_components_absent_when_flags_are_false" {
 # production-large needs more than the default quota even at minimum replicas,
 # so a broken pass-through would leave its pods rejected at admission.
 
-run "production_large_gets_the_larger_quota" {
+run "resource_quota_reaches_the_namespace" {
   command = plan
 
   variables {
-    sizing_profile = "production-large"
+    resource_quota = {
+      "requests.cpu"    = "160"
+      "requests.memory" = "320Gi"
+      "limits.cpu"      = "560"
+      "limits.memory"   = "1200Gi"
+      pods              = "250"
+    }
   }
 
   assert {
     condition     = module.k8s_bootstrap.resource_quota["limits.cpu"] == "560"
-    error_message = "sizing_profile = \"production-large\" planned limits.cpu = ${module.k8s_bootstrap.resource_quota["limits.cpu"]}"
+    error_message = "resource_quota limits.cpu = \"560\" planned ${module.k8s_bootstrap.resource_quota["limits.cpu"]}"
   }
 }
 
-run "production_keeps_the_default_quota" {
+run "unset_resource_quota_keeps_the_default" {
   command = plan
-
-  variables {
-    sizing_profile = "production"
-  }
 
   assert {
     condition     = module.k8s_bootstrap.resource_quota["limits.cpu"] == "80"
-    error_message = "sizing_profile = \"production\" planned limits.cpu = ${module.k8s_bootstrap.resource_quota["limits.cpu"]}"
+    error_message = "unset resource_quota planned limits.cpu = ${module.k8s_bootstrap.resource_quota["limits.cpu"]}"
   }
 }
 

@@ -1993,8 +1993,7 @@ module "k8s_bootstrap" {
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace
 
-  # Sets the namespace ResourceQuota.
-  sizing_profile = var.sizing_profile
+  resource_quota = var.resource_quota
 
   # SmithDB metastore connection. Keeping this Secret in the bootstrap module
   # ensures it uses that module's AKS-configured Kubernetes provider.

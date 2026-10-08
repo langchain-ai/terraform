@@ -1303,6 +1303,18 @@ variable "langsmith_namespace" {
   default     = "langsmith"
 }
 
+variable "resource_quota" {
+  type        = map(string)
+  description = "Hard limits on the LangSmith namespace ResourceQuota. Replaces the whole map, so list every key. sizing_profile = \"production-large\" needs a larger quota: see the header of helm/values/examples/langsmith-values-sizing-production-large.yaml."
+  default = {
+    "requests.cpu"    = "40"
+    "requests.memory" = "80Gi"
+    "limits.cpu"      = "80"
+    "limits.memory"   = "160Gi"
+    pods              = "200"
+  }
+}
+
 variable "ingress_controller" {
   type        = string
   description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. Changing it on an existing deployment removes the old controller and its load balancer IP. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
@@ -1563,9 +1575,10 @@ variable "langsmith_custom_ca_secret_key" {
   default     = "ca.crt"
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform uses it to size the namespace ResourceQuota."
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
   default     = "production"
 
   # "default" is the scripts' value for the chart's base values with no overlay.

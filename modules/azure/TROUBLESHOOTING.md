@@ -1199,7 +1199,7 @@ The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. See
 
 **Cause:** `make deploy` loads the sizing file last, so its listener limit wins over the `langsmith-values-agent-deploys.yaml` overlay. The `dev` and `production` profiles cap the listener at 2Gi and `minimum` caps it at 1536Mi. When Deployments (Pass 3) are enabled, the listener is heavier and can exceed that limit.
 
-**Fix:** Set `sizing_profile = "production-large"` in `terraform.tfvars`, which gives the listener 4Gi, then run `make apply`, `make init-values`, and `make deploy`. `make apply` raises the namespace ResourceQuota to fit production-large. To stay on your profile, raise `listener.deployment.resources.limits.memory` in `helm/values/langsmith-values-sizing-<profile>.yaml` and run `make deploy`. `make init-values` copies the sizing file again, so repeat the edit after each run.
+**Fix:** Set `sizing_profile = "production-large"` in `terraform.tfvars`, which gives the listener 4Gi, and copy the `resource_quota` block from the header of `helm/values/examples/langsmith-values-sizing-production-large.yaml` into it. Then run `make apply`, `make init-values`, and `make deploy`. To stay on your profile, raise `listener.deployment.resources.limits.memory` in `helm/values/langsmith-values-sizing-<profile>.yaml` and run `make deploy`. `make init-values` copies the sizing file again, so repeat the edit after each run.
 
 **Key gotcha — `resources` vs `deployment.resources`:** The LangSmith chart uses `listener.deployment.resources` (not `listener.resources`) for container resource limits. Setting `listener.resources` in an overlay file is silently ignored. Always use the `deployment.resources` path.
 

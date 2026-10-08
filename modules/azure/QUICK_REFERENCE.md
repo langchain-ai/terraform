@@ -198,7 +198,9 @@ sizing_profile = "dev"                # single-replica, minimal resources (dev/C
 sizing_profile = "minimum"            # absolute minimum (demos, very low resource budget)
 ```
 
-Then run `make apply`, which sizes the namespace ResourceQuota to the profile, and `make init-values && make deploy`.
+Then re-run `make init-values && make deploy`.
+
+`production-large` needs a larger namespace ResourceQuota. Copy the `resource_quota` block from the header of `helm/values/examples/langsmith-values-sizing-production-large.yaml` into `terraform.tfvars` and run `make apply` before the deploy.
 
 ---
 
