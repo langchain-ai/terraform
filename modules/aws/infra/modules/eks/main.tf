@@ -91,8 +91,6 @@ module "irsa-ebs-csi" {
   provider_url                  = module.eks.oidc_provider
   role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
-
-  depends_on = [module.eks]
 }
 
 # Create the EBS CSI Driver addon for volume provisioning.
@@ -164,7 +162,8 @@ module "eks_blueprints_addons" {
   # unify into one type even when custom networking is off.
   eks_addons = { for k, v in var.eks_addons : k => v if !(local.custom_networking && k == "vpc-cni") }
 
-  depends_on = [module.eks]
+  # Waits for node groups without a module-level depends_on, which defers this module's data sources and replaces (detaches) the Karpenter node role's policy attachments whenever module.eks changes.
+  create_delay_dependencies = [for ng in module.eks.eks_managed_node_groups : ng.node_group_arn]
 }
 
 # Karpenter node role access entry. The eks-blueprints add-on creates the
