@@ -179,6 +179,13 @@ enable_public_eks_cluster = false
 #
 # eks_public_access_cidrs = ["0.0.0.0/0"]
 
+# Node placement — by default the managed node groups spread across every
+# cluster subnet, public ones included: nodes there get public IPs, and with the
+# default VPC CNI their pods take IPs from those public subnets. Set true to keep
+# all nodes and pod IPs in the private subnets. Changing it later replaces the
+# node groups.
+# eks_node_groups_private_subnets_only = false
+
 # Node group sizing — controls the EC2 instances that run your pods.
 #
 # Instance type guidance:
@@ -376,6 +383,8 @@ redis_instance_type = "cache.m6g.xlarge"
 #                  ClickHouse deployment. Connection details are configured
 #                  in Helm values (Pass 2), not in this file. Terraform does
 #                  not provision anything for external ClickHouse.
+# "none" (chart 0.17+, new installs only): SmithDB is the only trace store — see
+# "SmithDB only (no ClickHouse)" in SMITHDB.md.
 clickhouse_source = "in-cluster"
 
 #------------------------------------------------------------------------------
@@ -856,7 +865,14 @@ enable_bedrock_access = false
 # smithdb_s3_versioning_enabled = false
 # smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
 
-# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
+# ── SmithDB node provisioning ─────────────────────────────────────────────────
+# "karpenter" (default) or "node_group": no Karpenter; SmithDB runs on
+# eks_managed_node_groups entries labeled smithdb-local/instance-store = "true"
+# and smithdb-local/compute = "true" (one group may carry both). No local NVMe
+# needed; see "Without Karpenter" in SMITHDB.md.
+# smithdb_node_provisioner = "karpenter"
+
+# ── Karpenter node provisioning (smithdb_node_provisioner = "karpenter") ──────
 # When enable_smithdb = true, the eks module installs the Karpenter controller
 # and this module creates two SmithDB pools:
 #   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (no userdata needed)

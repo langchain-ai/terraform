@@ -96,6 +96,12 @@ variable "enable_public_eks_cluster" {
   default     = true
 }
 
+variable "eks_node_groups_private_subnets_only" {
+  type        = bool
+  description = "Place all EKS managed node groups (and, with the default VPC CNI, their pod IPs) in the private subnets only. When false, nodes spread across the private and public subnets the cluster is given. Changing this on an existing cluster replaces the node groups."
+  default     = false
+}
+
 variable "eks_public_access_cidrs" {
   type        = list(string)
   description = "CIDRs allowed to reach the public EKS API endpoint. Defaults to unrestricted (0.0.0.0/0). Set to your corporate VPN egress CIDRs to lock down access while keeping the endpoint public."
@@ -692,19 +698,19 @@ variable "tags" {
 #------------------------------------------------------------------------------
 # No Terraform resource reads this — where ClickHouse runs is a Helm-values
 # decision, and helm/scripts/init-values.sh parses it out of terraform.tfvars.
-# The declaration earns its place through the validation block: init-values.sh
-# tests only for "in-cluster" and treats everything else as external, so without
-# a plan-time check a typo would silently start prompting for the connection
-# details of an external ClickHouse the operator never meant to use.
-# tflint-ignore: terraform_unused_declarations
+# The declaration earns its place through plan-time checks: the validation block
+# (init-values.sh treats anything but "in-cluster" and "none" as external, so a
+# typo would silently start prompting for an external ClickHouse) and the
+# terraform_data.validate_inputs precondition that "none" needs SmithDB on both
+# the ingestion and query paths.
 variable "clickhouse_source" {
   type        = string
-  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a StatefulSet via Helm and is recommended for production during the transition to SmithDB. 'external' uses LangChain Managed ClickHouse — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
+  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a StatefulSet via Helm and is recommended for production during the transition to SmithDB. 'external' uses LangChain Managed ClickHouse — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse. 'none' (chart 0.17+, new installations only) runs no ClickHouse: SmithDB is the only trace store, so enable_smithdb, smithdb_ingestion_enabled and smithdb_query_enabled must be true and smithdb_migration_enabled false — see https://docs.langchain.com/langsmith/self-host-smithdb-install#install-without-clickhouse"
   default     = "in-cluster"
 
   validation {
-    condition     = contains(["in-cluster", "external"], var.clickhouse_source)
-    error_message = "clickhouse_source must be 'in-cluster' or 'external'."
+    condition     = contains(["in-cluster", "external", "none"], var.clickhouse_source)
+    error_message = "clickhouse_source must be 'in-cluster', 'external', or 'none'."
   }
 }
 
@@ -945,13 +951,14 @@ variable "langsmith_polly_encryption_key" {
 # It shares the LangSmith namespace and release (it cannot run in a separate
 # namespace or cluster). Enabling it provisions a dedicated metastore Postgres,
 # a dedicated object-store S3 bucket, an IRSA role for the SmithDB service
-# account, and instance-store + compute node groups (SmithDB requires local
-# NVMe SSD instances). The Helm side is enabled in Pass 2 (helm/ or app/).
+# account, and (by default) Karpenter instance-store + compute node pools on
+# local NVMe SSD instances; smithdb_node_provisioner = "node_group" uses labeled
+# managed node groups instead. The Helm side is enabled in Pass 2 (helm/ or app/).
 #
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Pass 2 uses the repository's compatible 0.17.x chart pin. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, and nodes per smithdb_node_provisioner). Pass 2 uses the repository's compatible 0.17.x chart pin. The default Karpenter mode uses local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
   default     = false
 }
 
@@ -1108,11 +1115,31 @@ variable "smithdb_s3_force_destroy" {
   default     = false
 }
 
-# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
-# Karpenter (installed by the eks module when enable_smithdb = true) provisions
-# the SmithDB pools on demand. The instance-store pool uses instanceStorePolicy
-# RAID0, so no launch-template userdata is needed. Both amd64 and arm64 work;
-# amd64 is the default to match core LangSmith and avoid multi-arch job issues.
+# ── SmithDB node provisioning ─────────────────────────────────────────────────
+# "karpenter" (default): Karpenter provisions local-NVMe instance-store and
+# compute pools on demand (the variables below).
+# "node_group": no Karpenter. SmithDB schedules onto entries in
+# eks_managed_node_groups that carry the smithdb-local/instance-store and
+# smithdb-local/compute labels (one group may carry both). Chart 0.17 backs the
+# SmithDB caches with per-pod PVCs on the default StorageClass, so these nodes
+# need no local NVMe. Suited to dev/lab clusters; see SMITHDB.md.
+variable "smithdb_node_provisioner" {
+  type        = string
+  description = "How SmithDB nodes are provisioned: 'karpenter' (install Karpenter and create the instance-store/compute NodePools) or 'node_group' (no Karpenter; SmithDB runs on labeled entries in eks_managed_node_groups). The smithdb_karpenter_*, smithdb_capacity_type, smithdb_instance_store_*, smithdb_compute_* and smithdb_node_* variables apply only to 'karpenter'."
+  default     = "karpenter"
+
+  validation {
+    condition     = contains(["karpenter", "node_group"], var.smithdb_node_provisioner)
+    error_message = "smithdb_node_provisioner must be 'karpenter' or 'node_group'."
+  }
+}
+
+# ── Karpenter node provisioning (smithdb_node_provisioner = "karpenter") ──────
+# Karpenter (installed by the eks module when enable_smithdb = true and
+# smithdb_node_provisioner = "karpenter") provisions the SmithDB pools on
+# demand. The instance-store pool uses instanceStorePolicy RAID0, so no
+# launch-template userdata is needed. Both amd64 and arm64 work; amd64 is the
+# default to match core LangSmith and avoid multi-arch job issues.
 variable "smithdb_karpenter_chart_version" {
   type        = string
   description = "Karpenter Helm chart version. MUST match eks_cluster_version per the Karpenter compatibility matrix (https://karpenter.sh/docs/upgrading/compatibility/): K8s 1.34 -> >= 1.6, 1.35 -> >= 1.9, 1.36 -> 1.13."

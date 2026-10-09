@@ -51,3 +51,8 @@ output "karpenter_node_iam_role_arn" {
   description = "ARN of the Karpenter node IAM role (null when Karpenter is disabled)."
   value       = var.enable_karpenter ? try(module.eks_blueprints_addons.karpenter.node_iam_role_arn, null) : null
 }
+
+output "node_subnet_ids" {
+  description = "Subnets pinned for the managed node groups (null when they follow the upstream default across all cluster subnets)."
+  value       = var.node_subnet_ids
+}

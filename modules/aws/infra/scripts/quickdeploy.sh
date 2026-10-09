@@ -171,9 +171,9 @@ _langsmith_url=""
 _overrides_file="$VALUES_DIR/langsmith-values-overrides.yaml"
 if [[ -f "$_overrides_file" ]]; then
   _hostname=$(grep -E '^\s*hostname:' "$_overrides_file" 2>/dev/null \
-    | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _hostname=""
+    | head -1 | sed 's/^[^:]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d '[:space:]') || _hostname=""
   _url=$(grep -E '^\s*url:' "$_overrides_file" 2>/dev/null \
-    | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _url=""
+    | head -1 | sed 's/^[^:]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d '[:space:]') || _url=""
   if [[ -n "$_url" ]]; then
     _langsmith_url="$_url"
   elif [[ -n "$_hostname" ]]; then

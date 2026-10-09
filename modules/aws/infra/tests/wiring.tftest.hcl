@@ -53,6 +53,10 @@ run "optional_modules_absent_when_flags_are_false" {
     error_message = "create_bastion = false still planned the bastion"
   }
   assert {
+    condition     = length(aws_vpc_security_group_ingress_rule.bastion_to_cluster_api) == 0
+    error_message = "create_bastion = false still planned the bastion-to-API rule"
+  }
+  assert {
     condition     = length(module.cert_manager) == 0
     error_message = "create_cert_manager_irsa = false still planned the cert-manager IRSA role"
   }
@@ -150,6 +154,10 @@ run "create_bastion_adds_only_the_bastion" {
     error_message = "create_bastion = true did not plan the bastion"
   }
   assert {
+    condition     = length(aws_vpc_security_group_ingress_rule.bastion_to_cluster_api) == 1
+    error_message = "create_bastion = true did not open the EKS API endpoint to the bastion"
+  }
+  assert {
     condition     = length(module.waf) == 0
     error_message = "create_bastion = true also planned the WAF"
   }
@@ -208,6 +216,77 @@ run "enable_smithdb_adds_only_smithdb" {
   assert {
     condition     = length(module.bastion) == 0
     error_message = "enable_smithdb = true also planned the bastion"
+  }
+  assert {
+    condition     = length(kubectl_manifest.smithdb_nodepool_instance_store) == 1 && length(kubectl_manifest.smithdb_nodepool_compute) == 1
+    error_message = "the default smithdb_node_provisioner did not plan the Karpenter NodePools"
+  }
+}
+
+# Karpenter, its NodePools/EC2NodeClasses, and its discovery tags are skipped;
+# SmithDB itself (metastore, bucket, IRSA) is unchanged.
+run "smithdb_node_group_mode_plans_no_karpenter" {
+  command = plan
+
+  variables {
+    enable_smithdb           = true
+    smithdb_node_provisioner = "node_group"
+    eks_managed_node_groups = {
+      default = {
+        name           = "node-group-default"
+        instance_types = ["m5.2xlarge"]
+      }
+      smithdb = {
+        name           = "node-group-smithdb"
+        instance_types = ["m5.2xlarge"]
+        labels = {
+          "smithdb-local/instance-store" = "true"
+          "smithdb-local/compute"        = "true"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(module.smithdb) == 1
+    error_message = "node_group mode dropped SmithDB itself"
+  }
+  assert {
+    condition = (
+      length(kubectl_manifest.smithdb_ec2nc_instance_store) == 0 &&
+      length(kubectl_manifest.smithdb_ec2nc_compute) == 0 &&
+      length(kubectl_manifest.smithdb_nodepool_instance_store) == 0 &&
+      length(kubectl_manifest.smithdb_nodepool_compute) == 0
+    )
+    error_message = "node_group mode still planned Karpenter NodePools or EC2NodeClasses"
+  }
+  assert {
+    condition     = module.eks.karpenter_node_iam_role_name == null
+    error_message = "node_group mode still installed Karpenter"
+  }
+}
+
+# ── Node placement ───────────────────────────────────────────────────────────
+
+run "node_groups_follow_all_cluster_subnets_by_default" {
+  command = plan
+
+  assert {
+    condition     = module.eks.node_subnet_ids == null
+    error_message = "node groups were pinned to a subnet set without eks_node_groups_private_subnets_only"
+  }
+}
+
+run "private_subnets_only_pins_the_node_groups" {
+  command = plan
+
+  variables {
+    eks_node_groups_private_subnets_only = true
+  }
+
+  assert {
+    condition     = module.eks.node_subnet_ids != null
+    error_message = "eks_node_groups_private_subnets_only = true did not pin the node groups to the private subnets"
   }
 }
 
@@ -371,5 +450,51 @@ run "in_cluster_fleet_storage_plans_no_shared_credentials" {
   assert {
     condition     = length(kubernetes_secret.fleet_redis) == 0
     error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
+  }
+}
+
+# ── Envoy Gateway stream-timeout route ───────────────────────────────────────
+# Planned whenever Envoy is the gateway, with or without a domain: the chart's
+# route then binds to the ALB hostname, and this one has to follow it.
+
+run "envoy_without_a_domain_plans_the_fleet_stream_route" {
+  command = plan
+
+  assert {
+    condition     = length(kubectl_manifest.fleet_stream_httproute) == 1
+    error_message = "Envoy Gateway without langsmith_domain did not plan the Fleet stream-timeout route"
+  }
+}
+
+run "nginx_plans_no_fleet_stream_route" {
+  command = plan
+
+  variables {
+    enable_envoy_gateway = false
+    enable_nginx_ingress = true
+  }
+
+  assert {
+    condition     = length(kubectl_manifest.fleet_stream_httproute) == 0
+    error_message = "the Envoy-only Fleet stream route was planned with NGINX ingress"
+  }
+}
+
+# ── SmithDB-only (no ClickHouse) ─────────────────────────────────────────────
+# The supported combination plans clean; ClickHouse itself is Helm-side only.
+
+run "no_clickhouse_with_smithdb_serving_both_paths_plans" {
+  command = plan
+
+  variables {
+    clickhouse_source         = "none"
+    enable_smithdb            = true
+    smithdb_ingestion_enabled = true
+    smithdb_query_enabled     = true
+  }
+
+  assert {
+    condition     = length(module.smithdb) == 1
+    error_message = "clickhouse_source = \"none\" with SmithDB on both paths did not plan SmithDB"
   }
 }

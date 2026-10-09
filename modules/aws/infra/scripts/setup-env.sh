@@ -10,6 +10,8 @@
 #   source infra/scripts/setup-env.sh
 #
 # Run with `source` so exported variables persist in your shell session.
+# Because it is sourced, it does not `set -euo pipefail` (that would change the
+# caller's shell); failures are checked explicitly and reported with `return 1`.
 # Do NOT commit terraform.tfvars with real passwords — use this script instead.
 #
 # Secret storage:
@@ -101,6 +103,11 @@ _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 # (its values come back via export, not command substitution), so the append
 # inside it is visible here.
 _missing_vars=""
+
+# Variables whose SSM read failed for a reason other than ParameterNotFound
+# (expired or missing credentials, AccessDenied, a timeout). Their stored value
+# is unknown, so nothing is generated for them and the script fails at the end.
+_ssm_read_errors=""
 
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
 # _ssm_secret short-circuits (step 0) when a variable is already exported.
@@ -205,13 +212,35 @@ _ssm_secret() {
     return
   fi
 
-  # 1. Try SSM Parameter Store
+  # Once one SSM read has failed, skip the rest: they would fail the same way,
+  # each after a timeout.
+  if [[ -n "$_ssm_read_errors" ]]; then
+    _ssm_read_errors="$_ssm_read_errors $varname"
+    return 1
+  fi
+
+  # 1. Try SSM Parameter Store. Only ParameterNotFound means "no value yet".
+  #    Any other failure leaves the stored value unknown, and generating a
+  #    replacement would silently diverge from SSM: a new Postgres password
+  #    (Terraform then rotates RDS) or API key salt (every API key breaks).
+  local _ssm_err _ssm_rc=0
+  _ssm_err="$(mktemp)" || return 1
   val=$(_aws_bounded ssm get-parameter \
     --region "$AWS_REGION" \
     --name "$_path" \
     --with-decryption \
     --query Parameter.Value \
-    --output text 2>/dev/null) || val=""
+    --output text 2>"$_ssm_err") || _ssm_rc=$?
+  if [[ $_ssm_rc -ne 0 ]]; then
+    val=""
+    if ! grep -q "ParameterNotFound" "$_ssm_err"; then
+      echo "  ERROR: could not read $_path from SSM (exit $_ssm_rc): $(grep -m1 . "$_ssm_err" | cut -c1-200)" >&2
+      rm -f "$_ssm_err"
+      _ssm_read_errors="$_ssm_read_errors $varname"
+      return 1
+    fi
+  fi
+  rm -f "$_ssm_err"
 
   # 2. Fall back to local file (migration from pre-SSM runs)
   if [[ -z "$val" && -n "$file_name" && -f "$file_name" ]]; then
@@ -432,6 +461,16 @@ _ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
 # Only populated when stdin is not a tty and a secret was in neither the
 # environment nor SSM. Reported here, once, on stdout — and before the summary,
 # which would otherwise claim the environment was set up successfully.
+if [[ -n "$_ssm_read_errors" ]]; then
+  echo ""
+  echo "ERROR: could not read existing secrets from SSM under ${_ssm_prefix}:"
+  echo "       ${_ssm_read_errors# }"
+  echo "       Nothing was generated or written for them. Fix AWS access (an expired"
+  echo "       session: aws login / aws sso login; or ssm:GetParameter on ${_ssm_prefix}/*),"
+  echo "       then re-run: source infra/scripts/setup-env.sh"
+  return 1
+fi
+
 if [[ -n "$_missing_vars" ]]; then
   echo ""
   echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."

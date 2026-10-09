@@ -12,7 +12,14 @@ module "eks" {
   enable_cluster_creator_admin_permissions = true
   cluster_enabled_log_types                = var.cluster_enabled_log_types
 
-  eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
+  # Node groups fall back to eks_managed_node_group_defaults.subnet_ids, then to
+  # subnet_ids (private + public), so node_subnet_ids pins them to one set. The
+  # filtered for-expression adds the key only when set (a conditional between
+  # the two object shapes is a type error).
+  eks_managed_node_group_defaults = merge(
+    var.eks_managed_node_group_defaults,
+    { for k, v in { subnet_ids = var.node_subnet_ids } : k => v if v != null },
+  )
 
   # The community module ignores desired_size changes (lifecycle ignore_changes) so
   # the cluster autoscaler can manage it. min_size and max_size DO propagate through

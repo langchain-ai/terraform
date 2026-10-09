@@ -19,6 +19,12 @@ variable "subnet_ids" {
   description = "The IDs of the subnets"
 }
 
+variable "node_subnet_ids" {
+  type        = list(string)
+  description = "Subnets for the managed node groups. null keeps the upstream default, which places nodes across subnet_ids (private and public)."
+  default     = null
+}
+
 variable "public_cluster_enabled" {
   type        = bool
   description = "Whether to enable public cluster access"
