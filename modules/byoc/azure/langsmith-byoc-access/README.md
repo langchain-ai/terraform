@@ -9,9 +9,10 @@ This module creates these resources:
 | Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. The app gets no Microsoft Graph permissions. |
 | Resource group `langsmith-byoc-<key>` | One per data plane | LangSmith deploys the data plane into this resource group. |
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the 2 secrets that LangSmith writes. No public network access. |
-| `Contributor` and `User Access Administrator` role assignments | Two per data plane | Give the LangSmith service principal access to that resource group only. |
+| `Contributor` and `User Access Administrator` role assignments | Two per data plane | Give the LangSmith service principal access to that resource group only. With `byo_iam`, the roles are `Contributor` and `Azure Kubernetes Service RBAC Cluster Admin`. |
+| Managed identities, a custom role, and their role assignments | Only with `byo_iam` | See [Bring your own IAM](#bring-your-own-iam). |
 
-> **WARNING:** LangSmith deletes the whole resource group when you delete the data plane. The resource group must contain only the Key Vault from this module when you create the data plane in LangSmith. Do not put other resources in it.
+> **WARNING:** LangSmith deletes the whole resource group when you delete the data plane. The resource group must contain only the resources from this module when you create the data plane in LangSmith. Do not put other resources in it.
 
 ## Prerequisites
 
@@ -136,6 +137,40 @@ terraform output -json langsmith_byoc_access | jq --arg dp prod '{
 }'
 ```
 
+### Bring your own IAM
+
+Set `byo_iam = true` to create all identity and authorization resources yourself. The setting applies to all data planes of the module.
+
+> **CAUTION:** Set `byo_iam` before you create the data planes in LangSmith. Do not change it for a data plane that exists.
+
+For each data plane, the module then creates these resources in the data plane resource group:
+
+- The user-assigned managed identities `langsmith-aks`, `langsmith-cert-manager`, `langsmith-external-secrets`, `langsmith-workload`, `langsmith-postgres-setup`, and `langsmith-smithdb`. LangSmith finds them by these names.
+- The custom role `<resource group name>-blob-objects`. It reads the trace containers, and reads, writes, or deletes their blobs. Role names are unique in the tenant, thus the name contains the resource group name.
+- These role assignments:
+
+| Principal | Role | Scope |
+|-----------|------|-------|
+| `langsmith-aks` | `Network Contributor` | Resource group |
+| `langsmith-cert-manager` | `DNS Zone Contributor` | Resource group |
+| `langsmith-external-secrets` | `Key Vault Secrets User` | Data plane Key Vault |
+| `langsmith-workload` | `<resource group name>-blob-objects` | Resource group |
+| `langsmith-smithdb` | `<resource group name>-blob-objects` | Resource group |
+| LangSmith service principal | `Contributor` | Resource group |
+| LangSmith service principal | `Azure Kubernetes Service RBAC Cluster Admin` | Resource group |
+
+`langsmith-postgres-setup` gets no Azure role. LangSmith makes it the Entra admin of the PostgreSQL server.
+
+The roles use the resource group as scope, not the single resources. The VNet, the cluster, the storage accounts, and the DNS zone do not exist when you apply. The resource group holds only one data plane, so the roles stop at that data plane.
+
+In this mode, LangSmith gets `Contributor` and no `User Access Administrator`. It also gets `Azure Kubernetes Service RBAC Cluster Admin`, which gives access to the Kubernetes API of the cluster. Neither role lets LangSmith create role assignments or role definitions.
+
+LangSmith still creates the federated identity credentials on the identities. Each credential needs the OIDC issuer URL of the AKS cluster. That URL exists only after LangSmith creates the cluster. `Contributor` lets LangSmith create the credentials.
+
+The Crossplane compositions only read the identities. They create no role assignments, no custom role, and no delete locks in this mode.
+
+Add `"byoiam_enabled": true` to the body that creates the data plane. For the `jq` command, add `byoiam_enabled: true` to the object.
+
 ### Delete a data plane
 
 > **CAUTION:** Do not remove the key from `data_planes` before you delete the data plane in LangSmith. Terraform then tries to delete a resource group that contains the data plane. With the default `features {}`, the AzureRM provider stops the delete.
@@ -150,9 +185,10 @@ terraform output -json langsmith_byoc_access | jq --arg dp prod '{
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. LangChain gives you this value. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes** in LangSmith. Must not be empty. The module writes it as the description of each LangSmith role assignment. |
-| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}) }))` | no | `{}` | Map of data planes. The key is the data plane name. Each data plane gets the resource group `langsmith-byoc-<key>` with only a Key Vault in it. LangSmith deletes the whole resource group when you delete the data plane. |
+| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}) }))` | no | `{}` | Map of data planes. The key is the data plane name. Each data plane gets the resource group `langsmith-byoc-<key>` with only the resources from this module in it. LangSmith deletes the whole resource group when you delete the data plane. |
 | `key_vault_purge_protection_enabled` | `bool` | no | `true` | Enables purge protection on each data plane Key Vault. |
-| `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
+| `byo_iam` | `bool` | no | `false` | Creates the identities, the custom role, and their role assignments for all data planes. See [Bring your own IAM](#bring-your-own-iam). |
+| `tags` | `map(string)` | no | `{}` | Tags for all resource groups, Key Vaults, and managed identities. The `tags` of a data plane override these tags. |
 
 A `data_planes` key must have 1 to 63 characters. Use only lowercase letters, digits, and hyphens. Start the key with a letter. End the key with a letter or a digit. Do not use two hyphens in sequence. These rules keep the resource group name and the Key Vault name valid.
 
@@ -171,7 +207,7 @@ The module creates the service principal of the LangSmith multi-tenant app in yo
 
 ### Role assignments
 
-The LangSmith service principal gets `Contributor` and `User Access Administrator` on each data plane resource group, and on nothing else. The data plane Crossplane compositions create role assignments, one custom role definition with the resource group as its scope, and management locks. `Contributor` alone cannot do these operations.
+By default, the LangSmith service principal gets `Contributor` and `User Access Administrator` on each data plane resource group, and on nothing else. The data plane Crossplane compositions create role assignments, one custom role definition with the resource group as its scope, and management locks. `Contributor` alone cannot do these operations. With `byo_iam`, the roles change. See [Bring your own IAM](#bring-your-own-iam).
 
 The description of each role assignment is the `external_id`. LangSmith reads this description to verify that the owner of the subscription is the LangSmith organization with that external ID.
 
