@@ -230,7 +230,7 @@ output "envoy_gateway_image_pull_secret_name" {
 
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
-  value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing"
+  value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing${module.aks.api_server_public_fqdn == true ? " --public-fqdn" : ""}"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -346,4 +346,9 @@ output "storage_blob_endpoint" {
 output "smithdb_storage_blob_endpoint" {
   description = "Blob service endpoint of the SmithDB object-store account. Null when enable_smithdb = false."
   value       = var.enable_smithdb ? module.smithdb[0].storage_blob_endpoint : null
+}
+
+output "aks_kubeconfig_public_fqdn" {
+  description = "true when az aks get-credentials needs --public-fqdn: a private cluster with no private DNS zone, from aks_private_dns_zone_id = \"None\" or, when attaching, from the cluster. The helm scripts read it."
+  value       = module.aks.api_server_public_fqdn == true
 }

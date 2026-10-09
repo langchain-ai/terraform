@@ -14,15 +14,17 @@ output "oidc_issuer_url" {
 }
 
 output "host" {
-  description = "The Kubernetes API server endpoint"
-  value       = local.cluster_kube_config[0].host
+  description = "The Kubernetes API server endpoint: the public FQDN on a private cluster with no private DNS zone, the kubeconfig's server otherwise"
+  value       = local.cluster_host
   sensitive   = true
 }
 
 output "kube_config_raw" {
-  description = "Raw kubeconfig for the AKS cluster"
-  value       = local.cluster_kube_config_raw
-  sensitive   = true
+  description = "Raw kubeconfig for the AKS cluster, with its server set to host"
+  # Azure's kubeconfig names the private FQDN, which nothing resolves with no
+  # private DNS zone.
+  value     = local.cluster_host == local.cluster_kube_config[0].host ? local.cluster_kube_config_raw : replace(local.cluster_kube_config_raw, local.cluster_kube_config[0].host, local.cluster_host)
+  sensitive = true
 }
 
 output "client_certificate" {
@@ -143,6 +145,7 @@ output "access_profile" {
   value = !var.create_cluster ? null : {
     private_cluster_enabled = one(azurerm_kubernetes_cluster.main[*].private_cluster_enabled)
     private_dns_zone_id     = var.private_cluster_enabled ? one(azurerm_kubernetes_cluster.main[*].private_dns_zone_id) : null
+    public_fqdn_enabled     = one(azurerm_kubernetes_cluster.main[*].private_cluster_public_fqdn_enabled)
     local_account_disabled  = one(azurerm_kubernetes_cluster.main[*].local_account_disabled)
     azure_rbac_enabled      = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].azure_rbac_enabled, false)
     admin_group_object_ids  = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].admin_group_object_ids, [])
@@ -207,6 +210,11 @@ output "control_plane_grants" {
 output "kube_auth" {
   description = "How the module's Kubernetes and Helm providers sign in to the cluster: 'entra' (kubelogin with the caller's az session) or 'certificate' (kube_config client certificate)."
   value       = local.kube_auth
+}
+
+output "api_server_public_fqdn" {
+  description = "True when clients reach the API server through its public FQDN (a private cluster with no private DNS zone: private_dns_zone_id = \"None\", or an attached cluster Azure reports with None), so az aks get-credentials needs --public-fqdn."
+  value       = local.api_server_public_fqdn
 }
 
 output "ingress_internal_annotations" {

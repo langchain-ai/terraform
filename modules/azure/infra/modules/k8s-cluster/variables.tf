@@ -428,6 +428,12 @@ variable "control_plane_identity_manage_grants" {
   default     = true
 }
 
+variable "control_plane_grant_check" {
+  type        = bool
+  description = "With control_plane_identity_manage_grants = false: whether plan checks the identity's direct role assignments before the cluster is created. False skips the check, for an owner who grants through group membership, which the check cannot see."
+  default     = true
+}
+
 variable "vnet_id" {
   type        = string
   description = "Resource ID of the cluster VNet. Read only with control_plane_identity = \"user\" and a custom private_dns_zone_id, as the scope of its Network Contributor grant."
