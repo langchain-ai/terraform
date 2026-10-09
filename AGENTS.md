@@ -14,6 +14,8 @@ before the PR does, not a separate standard.
 - `modules/byoc/aws/langsmith-byoc-role/` — another root, one level deeper
   than the rest: the customer-side IAM role and break-glass role for BYOC.
   Gated like the others, so run the checks after touching the policies.
+- `modules/byoc/gcp/langsmith-byoc-service-account/` — the GCP counterpart
+  (beta): the customer-side service account the control plane impersonates.
 - `modules/<provider>/helm/scripts/` — the shell drivers (`deploy.sh`,
   `init-values.sh`, secrets managers). Linted by `check.sh --scripts` along with
   every other tracked script, not per root.
