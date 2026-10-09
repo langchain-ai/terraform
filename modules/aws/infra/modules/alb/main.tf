@@ -117,13 +117,14 @@ resource "aws_security_group" "alb" {
   }
 
   # Egress scoped to VPC CIDR: ALB only needs to reach EKS pod IPs (target-type: ip).
+  # Under VPC CNI custom networking the pods live in pod_cidr_blocks instead.
   # If using VPC peering for targets outside this VPC, add those CIDRs here.
   egress {
     description = "Allow all outbound to VPC"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [var.vpc_cidr_block]
+    cidr_blocks = concat([var.vpc_cidr_block], var.pod_cidr_blocks)
   }
 
   tags = var.tags
