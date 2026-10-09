@@ -828,7 +828,8 @@ resource "terraform_data" "postgres_connection_url_revision" {
 # Idempotent: skips CREATE DATABASE if the database already exists. Sources the
 # admin connection URL from the langsmith-postgres Secret created by k8s-bootstrap
 # so the master password is not embedded in the Job manifest.
-resource "kubernetes_job_v1" "standalone_db" {
+# Applied via kubectl local-exec rather than kubernetes_job_v1: that resource drops the Job from state once ttl_seconds_after_finished deletes it, so every later plan showed it as a new resource.
+resource "terraform_data" "standalone_db" {
   for_each = {
     for k, v in {
       fleet    = var.enable_fleet && var.fleet_storage == "external"
@@ -837,62 +838,74 @@ resource "kubernetes_job_v1" "standalone_db" {
     } : k => v if v && var.postgres_source == "external"
   }
 
-  metadata {
-    name      = "langsmith-standalone-${each.key}-db-init"
-    namespace = var.langsmith_namespace
-  }
-
-  spec {
-    backoff_limit = 6
-    # Keep the result available briefly, then let Kubernetes remove this
-    # Terraform-managed, idempotent database bootstrap Job.
-    ttl_seconds_after_finished = 3600
-    template {
-      metadata {
-        labels = {
-          app     = "langsmith-standalone-db-init"
-          feature = each.key
-        }
-      }
-      spec {
-        restart_policy = "Never"
-        container {
-          name  = "create-db"
-          image = "postgres:16"
-          command = [
-            "/bin/sh",
-            "-c",
-            <<-EOT
-              set -e
-              DB="langsmith_${each.key}"
-              if psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1; then
-                echo "Database $DB already exists — nothing to do."
-              else
-                echo "Creating database $DB..."
-                psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$DB\""
-                echo "Created database $DB."
-              fi
-            EOT
-          ]
-          env {
-            name = "ADMIN_URL"
-            value_from {
-              secret_key_ref {
-                name = "langsmith-postgres"
-                key  = "connection_url"
-              }
-            }
+  triggers_replace = jsonencode({
+    apiVersion = "batch/v1"
+    kind       = "Job"
+    metadata = {
+      name      = "langsmith-standalone-${each.key}-db-init"
+      namespace = var.langsmith_namespace
+    }
+    spec = {
+      backoffLimit = 6
+      # Keep the result available briefly, then let Kubernetes remove this
+      # Terraform-managed, idempotent database bootstrap Job.
+      ttlSecondsAfterFinished = 3600
+      template = {
+        metadata = {
+          labels = {
+            app     = "langsmith-standalone-db-init"
+            feature = each.key
           }
+        }
+        spec = {
+          restartPolicy = "Never"
+          containers = [{
+            name  = "create-db"
+            image = "postgres:16"
+            command = [
+              "/bin/sh",
+              "-c",
+              <<-EOT
+                set -e
+                DB="langsmith_${each.key}"
+                if psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1; then
+                  echo "Database $DB already exists — nothing to do."
+                else
+                  echo "Creating database $DB..."
+                  psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$DB\""
+                  echo "Created database $DB."
+                fi
+              EOT
+            ]
+            env = [{
+              name = "ADMIN_URL"
+              valueFrom = {
+                secretKeyRef = {
+                  name = "langsmith-postgres"
+                  key  = "connection_url"
+                }
+              }
+            }]
+          }]
         }
       }
     }
-  }
+  })
 
-  wait_for_completion = true
-
-  timeouts {
-    create = "5m"
-    update = "5m"
+  # Deletes any Job left from the last run first, because a Job with an unchanged spec does not rerun on apply.
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    environment = {
+      MANIFEST = self.triggers_replace
+    }
+    command = <<-EOT
+      set -euo pipefail
+      export KUBECONFIG="$HOME/.kube/langsmith-${local.cluster_name}"
+      aws eks update-kubeconfig --name ${local.cluster_name} --region ${var.region} --alias ${local.cluster_name} --kubeconfig "$KUBECONFIG" > /dev/null
+      kubectl delete job langsmith-standalone-${each.key}-db-init -n ${var.langsmith_namespace} --ignore-not-found --wait
+      printf '%s' "$MANIFEST" | kubectl apply -f -
+      kubectl wait --for=condition=complete job/langsmith-standalone-${each.key}-db-init -n ${var.langsmith_namespace} --timeout=300s
+    EOT
   }
 
   lifecycle {
@@ -902,6 +915,15 @@ resource "kubernetes_job_v1" "standalone_db" {
   }
 
   depends_on = [module.postgres, module.k8s_bootstrap]
+}
+
+# Forget the earlier kubernetes_job_v1 without deleting the Job, so its destroy cannot race the provisioner above, which deletes and recreates the Job itself.
+removed {
+  from = kubernetes_job_v1.standalone_db
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── Per-feature connection-URL Secrets ────────────────────────────────────────
@@ -920,7 +942,7 @@ resource "kubernetes_secret" "fleet_postgres" {
     postgres_connection_url = local.standalone_fleet_pg_url
   }
   type       = "Opaque"
-  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+  depends_on = [terraform_data.standalone_db, module.k8s_bootstrap]
 }
 
 resource "kubernetes_secret" "fleet_redis" {
@@ -946,7 +968,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
     postgres_connection_url = local.standalone_polly_pg_url
   }
   type       = "Opaque"
-  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+  depends_on = [terraform_data.standalone_db, module.k8s_bootstrap]
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
@@ -972,7 +994,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
     postgres_connection_url = local.standalone_insights_pg_url
   }
   type       = "Opaque"
-  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+  depends_on = [terraform_data.standalone_db, module.k8s_bootstrap]
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
