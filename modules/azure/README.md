@@ -146,7 +146,7 @@ az keyvault show --name <vault> --query "{rbac:properties.enableRbacAuthorizatio
 | Azure RBAC authorization, not access policies | Terraform grants access with `azurerm_role_assignment`, which grants nothing on an access-policy vault while the apply still reports success | Migrate the vault to RBAC or pick a different one. The plan fails naming this rather than applying |
 | Deployer already holds Key Vault Secrets Officer | Terraform writes `postgres-admin-password` and `langsmith-license-key` through the data plane, and it does not create its own grant on a vault it doesn't own | Have the vault's owner grant it on the vault or its resource group before apply, or set `keyvault_manage_terraform_admin_assignment = true` if the deployer has `roleAssignments/write` on the vault. Failing both, set `keyvault_manage_secrets = false`: apply then writes nothing to the vault, and whoever runs `make seed-secrets` afterwards needs the role instead of the apply identity |
 | Apply host's IP allowlisted, if the vault firewall is on | A vault with `default_action = Deny` accepts the role assignment and then rejects the secret writes partway through apply, with an error that reads nothing like a permissions error | Add the apply host's egress IP to the vault firewall, or add the AKS subnet with the `Microsoft.KeyVault` service endpoint |
-| Purge protection off, on any vault you intend to tear down | Destroying the deployment soft-deletes the nine secrets, reserving their names for the vault's retention window. Purging early needs a permission the deployer won't have on a vault someone else owns, so the next apply blocks until the window passes | Leave purge protection off on dev vaults |
+| Purge protection off, on any vault you intend to tear down | Destroying the deployment soft-deletes the ten secrets, reserving their names for the vault's retention window. Purging early needs a permission the deployer won't have on a vault someone else owns, so the next apply blocks until the window passes | Leave purge protection off on dev vaults |
 
 Both role assignments follow `create_keyvault`, so neither is attempted on a vault Terraform doesn't own:
 
@@ -464,6 +464,24 @@ any value. A deployment that set `identifier = "-prod"` and never set
 replaced, but cost allocation and Azure Policy rules keyed on the old value stop
 matching. Set `environment = "dev"` explicitly to keep the old tag.
 
+### Keeping deployment config outside this repo
+
+By default the scripts and `make` targets read `terraform.tfvars`,
+`secrets.auto.tfvars`, and state from `infra/`, and write generated Helm values
+to `helm/values/`. To keep a deployment's config in its own repo, write a
+wrapper root module that sources `modules/azure/infra` and re-exports its
+outputs, then point the tooling at it:
+
+```bash
+export LANGSMITH_INFRA_DIR=/path/to/deployment        # Terraform root: tfvars, secrets, state
+export LANGSMITH_VALUES_DIR=/path/to/deployment/helm/values   # generated Helm values
+```
+
+The scripts and the tracked base `helm/values/values.yaml` still come from this
+repo. `make apply` refuses to run under `LANGSMITH_INFRA_DIR`, because its
+staged `-target` addresses gain the wrapper's module prefix; run
+`terraform apply` in the wrapper directory instead.
+
 ---
 
 ## Deployment Passes
@@ -659,7 +677,7 @@ Only two secrets reach Terraform, because Terraform needs them to build somethin
 
 Writes the LangSmith application secrets directly into Key Vault via `az`, after `make apply` has created the vault. These never pass through Terraform, so they never land in Terraform state — the same split the AWS module uses with SSM and the GCP module uses with Secret Manager.
 
-Seeds the seven secrets Terraform never sees:
+Seeds the eight secrets Terraform never sees:
 
 | Secret | Source |
 |---|---|
@@ -670,10 +688,11 @@ Seeds the seven secrets Terraform never sees:
 | `langsmith-agent-builder-encryption-key` | Generated (Fernet) |
 | `langsmith-insights-encryption-key` | Generated (Fernet) |
 | `langsmith-polly-encryption-key` | Generated (Fernet) |
+| `smithdb-taskdb-password` | Generated (`openssl rand -hex 32`) |
 
 It also seeds `postgres-admin-password` and `langsmith-license-key`, from `secrets.auto.tfvars` or the environment, when the vault does not already hold them. That is what `keyvault_manage_secrets = false` relies on. On the default path Terraform wrote both and the script skips them.
 
-- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, a new Fernet key makes existing encrypted data unreadable. Rotate deliberately with `make keyvault` instead.
+- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, a new Fernet key makes existing encrypted data unreadable, and a new taskdb password locks the SmithDB backfill out of a taskdb that already initialized. Rotate deliberately with `make keyvault` instead.
 - **Validates the admin password before storing it:** min 12 characters, with a lowercase letter, an uppercase letter, and a symbol from ``!#$%()+,-./:?@[\]^_{~}``. The Helm chart's auth-bootstrap job rejects a password without a symbol, and it fails ~10 minutes into the release rather than at the point you typed it.
 - Requires the **Key Vault Secrets Officer** role on the vault, which `make apply` grants to the deployer identity.
 - Set `LANGSMITH_ADMIN_PASSWORD` to run it non-interactively (CI); it exits with a clear error if the password is unset and stdin is not a tty.
@@ -723,7 +742,7 @@ Runs `terraform apply` in `infra/` in three targeted stages, each of which shows
 - Azure DB for PostgreSQL Flexible Server (if `postgres_source = "external"`)
 - Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
-- Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The seven LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
+- Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The eight LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
 - cert-manager, KEDA, ingress controller (Envoy Gateway / NGINX / Istio / AGIC — based on `ingress_controller` in tfvars)
 - For `agic`: Application Gateway v2 + static public IP + AGIC managed identity + Contributor/Reader/Network Contributor role assignments + the AKS `ingress-appgw` add-on
 - For `envoy-gateway`: `envoyproxy/gateway-helm` v1.2.0 in the `envoy-gateway-system` namespace, which ships the Gateway API CRDs, and the `ExperimentalGatewayAPISupport=true` feature gate on cert-manager, installed after Envoy Gateway

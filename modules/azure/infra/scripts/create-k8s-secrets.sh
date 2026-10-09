@@ -20,6 +20,9 @@ set -euo pipefail
 #   langsmith-config-secret — license key, API salt, JWT secret, admin password,
 #                             and four Fernet encryption keys. Read by all LangSmith
 #                             pods via config.existingSecretName in Helm values.
+#   smithdb-taskdb          — postgres_password for the SmithDB backfill's taskdb,
+#                             when Key Vault holds smithdb-taskdb-password. Read
+#                             through smithdb.migration.taskdb.postgres.auth.
 #
 # The other two required secrets are created by Terraform (Pass 1):
 #   langsmith-postgres-secret — connection_url
@@ -152,6 +155,23 @@ if [ "$ERRORS" -eq 0 ]; then
 else
   echo -e "  ${RED}${ERRORS} key(s) missing. Re-run this script or check Key Vault secrets.${NC}"
   exit 1
+fi
+
+# ── SmithDB taskdb secret ──────────────────────────────────────────────────────
+# Piped through --from-file=/dev/stdin so the password never appears in argv.
+# A vault seeded before this secret existed skips it; deploy.sh stops the
+# backfill until make seed-secrets adds it.
+echo ""
+if _kv_exists "smithdb-taskdb-password"; then
+  TASKDB_PASSWORD=$(_kv "smithdb-taskdb-password")
+  echo "  Applying smithdb-taskdb to namespace/$NAMESPACE..."
+  printf '%s' "$TASKDB_PASSWORD" | kubectl create secret generic smithdb-taskdb \
+    --namespace "$NAMESPACE" \
+    --from-file=postgres_password=/dev/stdin \
+    --dry-run=client -o yaml | kubectl apply -f -
+  unset TASKDB_PASSWORD
+else
+  echo "  smithdb-taskdb-password not in Key Vault; skipping smithdb-taskdb (run make seed-secrets)"
 fi
 # Note: langsmith-clickhouse secret is NOT needed for in-cluster ClickHouse
 # (clickhouse_source = "in-cluster"). The chart manages the connection internally.
