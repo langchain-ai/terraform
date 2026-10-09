@@ -156,7 +156,9 @@ resource "google_service_account" "provisioner" {
   project      = var.project_id
   account_id   = var.service_account_id
   display_name = "LangSmith BYOC provisioner"
-  description  = "Impersonated by the LangSmith control plane to provision BYOC data planes"
+  # LangSmith reads this description to verify that the LangSmith organization
+  # with this external ID owns the provisioner.
+  description = var.external_id
 }
 
 resource "google_project_iam_custom_role" "provisioner" {

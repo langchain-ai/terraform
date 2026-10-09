@@ -14,6 +14,21 @@ variable "crossplane_service_account" {
   type        = string
 }
 
+variable "external_id" {
+  description = "External ID copied from Settings > Data Planes in the LangSmith UI. The module writes it as the description of the provisioner service account. LangSmith reads it to verify that you own the provisioner."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.external_id)) > 0
+    error_message = "external_id must not be empty. Copy it from Settings > Data Planes in the LangSmith UI."
+  }
+
+  validation {
+    condition     = length(var.external_id) <= 256
+    error_message = "external_id must be at most 256 characters, the limit of a service account description."
+  }
+}
+
 variable "enable_apis" {
   description = "Enable the GCP APIs that data planes use. Disable when the project's APIs are managed elsewhere."
   type        = bool

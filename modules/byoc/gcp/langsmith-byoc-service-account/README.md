@@ -16,6 +16,7 @@ Provisions the service account in **your GCP project** that the LangSmith contro
 1. A GCP project for the LangSmith data plane, and credentials with permission to create service accounts, grant project IAM roles, and enable APIs in it.
 2. Terraform `>= 1.11.0` and the Google provider `~> 6.0`.
 3. The `crossplane_service_account` provided by LangChain.
+4. The external ID from **Settings > Data Planes** in the LangSmith UI. Copy this value and use it as `external_id`. Do not make your own value.
 
 ## Usage
 
@@ -29,11 +30,17 @@ terraform {
   }
 }
 
+variable "external_id" {
+  description = "External ID from Settings > Data Planes in the LangSmith UI."
+  type        = string
+}
+
 module "langsmith_byoc_service_account" {
   source = "github.com/langchain-ai/terraform//modules/byoc/gcp/langsmith-byoc-service-account?ref=<release tag>"
 
   project_id                 = "<your-project-id>"
   crossplane_service_account = "<provided by LangChain>"
+  external_id                = var.external_id
 }
 
 output "provisioner_service_account" {
@@ -41,7 +48,17 @@ output "provisioner_service_account" {
 }
 ```
 
+Set `external_id` in the `terraform.tfvars` file of your root module to the value from **Settings > Data Planes**:
+
+```hcl
+external_id = "<external-id-copied-from-langsmith>"
+```
+
 Share the `provisioner_service_account` output with LangChain when you create a data plane.
+
+### External ID
+
+Every customer's provisioner trusts the same LangSmith Crossplane service account. So before LangSmith uses a provisioner, it checks that the description of the service account is the external ID of the LangSmith organization that creates the data plane. The module writes `external_id` as that description. This stops another LangSmith organization from using your provisioner.
 
 ## Permissions
 
@@ -63,6 +80,7 @@ Custom role IDs are unique per project, so set `custom_role_id_prefix` when more
 |------|-------------|---------|
 | `project_id` | The GCP project that hosts the LangSmith data planes. | required |
 | `crossplane_service_account` | LangSmith control plane Crossplane service account that impersonates the provisioner. | required |
+| `external_id` | External ID from **Settings > Data Planes** in LangSmith. Must not be empty and must be at most 256 characters. The module writes it as the description of the provisioner service account. | required |
 | `service_account_id` | Account ID of the provisioner service account. | `langsmith-byoc-provisioner` |
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
