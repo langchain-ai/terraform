@@ -124,9 +124,14 @@ insights_storage     = "external" # Or "in-cluster"
 enable_polly         = true    # LangSmith Chat (formerly Polly)
 polly_storage        = "external" # Or "in-cluster"
 enable_usage_telemetry = false # Extended usage telemetry
+
+# Engine (chart v0.17+; requires enable_sandboxes = true; see ENGINE.md)
+enable_engine        = true    # Engine on Amazon Bedrock through a dedicated IRSA role
 ```
 
 ```bash
+# Engine only: create its SSM keys and its IRSA role first.
+# source infra/scripts/setup-env.sh && make apply
 make init-values   # copies addon values files based on enable_* flags
 make deploy
 ```

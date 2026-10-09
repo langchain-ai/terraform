@@ -606,7 +606,7 @@ variable "create_langsmith_irsa_role" {
 
 variable "enable_bedrock_access" {
   type        = bool
-  description = "Attach a Bedrock InvokeModel policy to the shared LangSmith IRSA role (module.eks.langsmith_irsa_role_name), so backend/platformBackend/queue/etc. pods can call Bedrock models directly via workload identity instead of static AWS keys. Requires create_langsmith_irsa_role = true."
+  description = "Attach a Bedrock InvokeModel policy to the shared LangSmith IRSA role (module.eks.langsmith_irsa_role_name), so backend/platformBackend/queue/etc. pods can call Bedrock models directly via workload identity instead of static AWS keys. Requires create_langsmith_irsa_role = true. With enable_engine = true, the Engine IRSA role also gets this policy, because Insights runs under that role. Engine itself uses Bedrock Mantle (engine_bedrock_policy_arn), not this policy."
   default     = false
 }
 
@@ -1015,7 +1015,7 @@ variable "smithdb_query_enabled" {
 
 variable "langsmith_release_name" {
   type        = string
-  description = "Helm release name for LangSmith (Pass 2). Used to scope the SmithDB IRSA trust to the <release>-langsmith-smithdb service account. Must match RELEASE_NAME / release_name used in helm/ or app/."
+  description = "Helm release name for LangSmith (Pass 2). Used to scope the SmithDB IRSA trust to the <release>-langsmith-smithdb service account, and the Engine IRSA trust to the <release>-langsmith-standalone-insights-{api-server,queue} service accounts. A release name that contains \"langsmith\" drops the -langsmith part. Must match RELEASE_NAME / release_name used in helm/ or app/."
   default     = "langsmith"
 }
 
@@ -1228,4 +1228,79 @@ variable "smithdb_node_root_volume_size_gb" {
   type        = number
   description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
   default     = 100
+}
+
+#------------------------------------------------------------------------------
+# LangSmith Engine (chart 0.17+) — see ENGINE.md
+#
+# Engine finds recurring failures in your traces, diagnoses them against your
+# code, and proposes fixes. It runs on the deployment it shares with Insights
+# (engineInsightsAgent), and every Engine run executes in a sandbox.
+#------------------------------------------------------------------------------
+variable "enable_engine" {
+  type        = bool
+  description = "Enable LangSmith Engine (chart 0.17+). Creates an IRSA role for Engine's API server and queue, with Amazon Bedrock Mantle access and the shared role's LangSmith bucket access. Makes init-values.sh copy, and deploy.sh load, langsmith-values-engine.yaml. Requires enable_sandboxes = true and a license with the Engine entitlement."
+  default     = false
+}
+
+variable "engine_bedrock_policy_arn" {
+  type        = string
+  description = "IAM policy attached to the Engine IRSA role. Empty uses the AWS managed policy AmazonBedrockMantleInferenceAccess in the current partition. Set a customer-managed policy ARN to grant less."
+  default     = ""
+
+  validation {
+    condition     = var.engine_bedrock_policy_arn == "" || can(regex("^arn:aws[a-z-]*:iam::(aws|[0-9]{12}):policy/[A-Za-z0-9+=,.@_/-]+$", var.engine_bedrock_policy_arn))
+    error_message = "engine_bedrock_policy_arn must be empty or an IAM policy ARN (arn:<partition>:iam::<aws|account-id>:policy/<name>)."
+  }
+}
+
+# Read by helm/scripts/init-values.sh out of terraform.tfvars, not by Terraform.
+# tflint-ignore: terraform_unused_declarations
+variable "engine_sandbox_tenant_id" {
+  type        = string
+  description = "Workspace ID that owns Engine's sandboxes. Required when the shared organization has more than one workspace. Empty lets LangSmith use the only workspace. Use a workspace reserved for Engine."
+  default     = ""
+
+  validation {
+    condition     = var.engine_sandbox_tenant_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.engine_sandbox_tenant_id))
+    error_message = "engine_sandbox_tenant_id must be empty or a workspace ID (a lowercase UUID)."
+  }
+}
+
+# Read by helm/scripts/init-values.sh out of terraform.tfvars, not by Terraform.
+# tflint-ignore: terraform_unused_declarations
+variable "engine_intelligence_base_url" {
+  type        = string
+  description = "Empty keeps the chart default (https://beacon.langchain.com/intelligence), which only records usage when Engine runs on your own model providers, such as Amazon Bedrock. Set https://beacon.aws.langchain.com/intelligence to run Engine's models on LangSmith Intelligence."
+  default     = ""
+
+  validation {
+    condition     = var.engine_intelligence_base_url == "" || can(regex("^https://[^[:space:]]+$", var.engine_intelligence_base_url))
+    error_message = "engine_intelligence_base_url must be empty or an https:// URL."
+  }
+}
+
+# ESO-managed secrets, like langsmith_api_key_salt. Terraform does not read them.
+# setup-env.sh writes both to SSM and exports them as TF_VAR_*. apply-eso.sh syncs
+# them into the langsmith-config Secret. deploy.sh reads the TF_VAR_* values only
+# when SKIP_ESO=true. Do not put them in Helm values.
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_engine_encryption_key" {
+  type        = string
+  description = "Fernet key for the payloads LangSmith passes to Engine. Auto-generated by setup-env.sh and stored in SSM: /langsmith/{base_name}/engine-encryption-key. Keep it stable; see ENGINE.md for rotation."
+  sensitive   = true
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_engine_usage_signing_secret" {
+  type        = string
+  description = "Secret of at least 32 characters that signs Engine's usage reports. Auto-generated by setup-env.sh and stored in SSM: /langsmith/{base_name}/engine-usage-signing-secret."
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_engine_usage_signing_secret == "" || length(var.langsmith_engine_usage_signing_secret) >= 32
+    error_message = "langsmith_engine_usage_signing_secret must be at least 32 characters."
+  }
 }

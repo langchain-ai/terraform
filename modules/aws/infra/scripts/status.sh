@@ -139,6 +139,14 @@ else
     )
   fi
 
+  # Engine reads both keys from langsmith-config, which apply-eso.sh fills from SSM.
+  if _tfvar_is_true "enable_engine"; then
+    _required_params+=(
+      engine-encryption-key
+      engine-usage-signing-secret
+    )
+  fi
+
   for param in "${_required_params[@]}"; do
     if aws ssm get-parameter --name "${_ssm_prefix}/${param}" \
         --query Parameter.Name --output text &>/dev/null; then
@@ -286,7 +294,7 @@ else
 fi
 
 # Report addon files
-for addon in sizing-production sizing-production-large sizing-dev agent-deploys fleet insights polly standalone-polly standalone-insights; do
+for addon in sizing-production sizing-production-large sizing-dev agent-deploys fleet insights polly standalone-polly standalone-insights engine; do
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
   if [[ -f "$f" ]]; then
     pass "langsmith-values-${addon}.yaml (addon)"

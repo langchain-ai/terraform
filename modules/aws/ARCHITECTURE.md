@@ -195,6 +195,8 @@ IRSA is used instead of static credentials for S3 access:
 3. The Kubernetes Service Account in `langsmith` namespace is annotated with the role ARN.
 4. Pods receive temporary credentials via the EKS token webhook — no static AWS keys required.
 
+With `enable_engine`, Engine's API server and queue run under a dedicated `<name_prefix>-<environment>-engine-irsa` role. Its trust policy allows only those two service accounts. The role holds `AmazonBedrockMantleInferenceAccess`, so Engine calls Amazon Bedrock without stored credentials. Insights runs on the same two service accounts. The role therefore also gets the bucket access of the shared role. When `enable_bedrock_access = true`, it also gets the Bedrock `InvokeModel` access of the shared role. See [ENGINE.md](ENGINE.md).
+
 ---
 
 ## Module Dependency Graph

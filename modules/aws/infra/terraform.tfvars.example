@@ -378,6 +378,33 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox_service_url_base_url = "https://sandbox-services.example.com"
 
 #------------------------------------------------------------------------------
+# ENGINE (chart 0.17+) — see ../ENGINE.md
+#------------------------------------------------------------------------------
+# Engine finds recurring failures in your traces, diagnoses them against your
+# code, and proposes fixes. It needs enable_sandboxes = true and a license with
+# the Engine entitlement. It shares a deployment with Insights. Its two keys come
+# from infra/scripts/setup-env.sh (SSM), and apply-eso.sh syncs them into the
+# langsmith-config Secret.
+#
+# enable_engine = true creates the IAM role <name_prefix>-<environment>-engine-irsa
+# for Engine's API server and queue, with the AWS managed policy
+# AmazonBedrockMantleInferenceAccess. Engine then calls Amazon Bedrock with no
+# stored credentials. To use provider API keys (Anthropic, OpenAI, and others)
+# instead, add them in LangSmith under Settings > Engine > Model providers.
+# enable_engine = true
+#
+# Optional: a customer-managed policy that grants less than the managed policy.
+# engine_bedrock_policy_arn = "arn:aws:iam::123456789012:policy/langsmith-engine-bedrock"
+#
+# Required when the shared organization has more than one workspace: the
+# workspace that owns Engine's sandboxes. Use a workspace reserved for Engine.
+# engine_sandbox_tenant_id = "00000000-0000-0000-0000-000000000000"
+#
+# Empty keeps the chart default, which only records usage. To run Engine's models
+# on LangSmith Intelligence instead:
+# engine_intelligence_base_url = "https://beacon.aws.langchain.com/intelligence"
+
+#------------------------------------------------------------------------------
 # CLICKHOUSE
 #------------------------------------------------------------------------------
 # Controls where ClickHouse runs. ClickHouse is the analytics database for
