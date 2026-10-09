@@ -8,7 +8,7 @@ set -euo pipefail
 # create-k8s-secrets.sh — Create langsmith-config-secret from Azure Key Vault
 #
 # Usage:
-#   cd terraform/azure/infra
+#   cd terraform/modules/azure/infra
 #   ./scripts/create-k8s-secrets.sh
 #
 # Prerequisites:
