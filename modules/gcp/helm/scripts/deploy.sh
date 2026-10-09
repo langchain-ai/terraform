@@ -375,9 +375,12 @@ _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;  
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
 _tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
 # An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
-# addon keys falls back to loading every addon file on disk.
+# addon keys falls back to loading every addon file on disk. Keep this list in
+# step with the one in init-values.sh, or the two scripts disagree on which
+# addons a tfvars file asks for.
 for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
-          enable_fleet enable_standalone_polly enable_standalone_insights; do
+          enable_usage_telemetry enable_fleet enable_standalone_polly \
+          enable_standalone_insights enable_sandboxes; do
   if [[ -n "$(_parse_tfvar "$_k")" ]]; then _any_flag_set=true; fi
 done
 
