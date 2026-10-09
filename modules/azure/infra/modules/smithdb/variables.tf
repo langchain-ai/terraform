@@ -63,3 +63,13 @@ variable "private_dns_zone_name" {
   description = "Name of the metastore private DNS zone when this module creates it. The root passes the name for its azure_environment."
   default     = "privatelink.postgres.database.azure.com"
 }
+
+variable "shared_access_key_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "allowed_copy_scope" {
+  type    = string
+  default = "AAD"
+}

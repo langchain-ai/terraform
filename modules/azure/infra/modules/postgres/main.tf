@@ -39,7 +39,7 @@ resource "azurerm_postgresql_flexible_server" "db" {
   # Private-only: no public endpoint. Access via private DNS + VNet only.
   public_network_access_enabled = false
   delegated_subnet_id           = var.subnet_id
-  private_dns_zone_id           = azurerm_private_dns_zone.db_dns_zone.id
+  private_dns_zone_id           = local.private_dns_zone_id
 
   zone                         = var.availability_zone != "" ? var.availability_zone : null
   geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
@@ -102,7 +102,18 @@ resource "azurerm_postgresql_flexible_server_database" "fleet" {
 # Private DNS zone for PostgreSQL name resolution within the VNet.
 # Resolves: <server-name>.postgres.database.<cloud suffix> → private IP.
 # Without this zone, AKS pods cannot resolve the database hostname.
+#
+# Skipped when the caller supplies a central zone (var.private_dns_zone_id):
+# the server registers its record there, and that zone's VNet links belong to
+# whoever owns it.
+locals {
+  create_private_dns_zone = var.private_dns_zone_id == null
+  private_dns_zone_id     = local.create_private_dns_zone ? azurerm_private_dns_zone.db_dns_zone[0].id : var.private_dns_zone_id
+  private_dns_zone_name   = local.create_private_dns_zone ? azurerm_private_dns_zone.db_dns_zone[0].name : reverse(split("/", var.private_dns_zone_id))[0]
+}
+
 resource "azurerm_private_dns_zone" "db_dns_zone" {
+  count               = local.create_private_dns_zone ? 1 : 0
   name                = var.private_dns_zone_name
   resource_group_name = var.resource_group_name
   tags                = merge(var.tags, { module = "postgres" })
@@ -112,12 +123,25 @@ resource "azurerm_private_dns_zone" "db_dns_zone" {
 # (including AKS pods) can resolve the PostgreSQL private hostname.
 # registration_enabled = false: we don't want auto-registration of VM names.
 resource "azurerm_private_dns_zone_virtual_network_link" "dns_zone_vnet_link" {
+  count                 = local.create_private_dns_zone ? 1 : 0
   name                  = "${var.name}-link"
   resource_group_name   = var.resource_group_name
-  private_dns_zone_name = azurerm_private_dns_zone.db_dns_zone.name
+  private_dns_zone_name = azurerm_private_dns_zone.db_dns_zone[0].name
   virtual_network_id    = var.vnet_id
   registration_enabled  = false
   tags                  = merge(var.tags, { module = "postgres" })
+}
+
+# Deployments applied before private_dns_zone_id existed hold the zone and its
+# link at the unindexed addresses.
+moved {
+  from = azurerm_private_dns_zone.db_dns_zone
+  to   = azurerm_private_dns_zone.db_dns_zone[0]
+}
+
+moved {
+  from = azurerm_private_dns_zone_virtual_network_link.dns_zone_vnet_link
+  to   = azurerm_private_dns_zone_virtual_network_link.dns_zone_vnet_link[0]
 }
 
 # Allow-list PostgreSQL extensions that LangSmith requires.

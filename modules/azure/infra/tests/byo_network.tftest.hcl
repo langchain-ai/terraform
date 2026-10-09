@@ -283,6 +283,50 @@ run "an_aks_subnet_without_service_endpoints_is_refused" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# With the Key Vault on a private endpoint its firewall drops the subnet rule,
+# so Microsoft.KeyVault is no longer needed on the subnet. Microsoft.Storage
+# still is: both accounts keep their default-deny rule for the AKS subnet.
+run "a_keyvault_private_endpoint_drops_only_the_keyvault_endpoint_requirement" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/19"]
+      service_endpoints = ["Microsoft.Storage"]
+    }
+  }
+
+  variables {
+    aks_subnet_id                     = "${var.vnet_id}/subnets/aks"
+    keyvault_private_endpoint_enabled = true
+  }
+
+  assert {
+    condition     = length(module.keyvault.firewall_subnet_ids) == 0
+    error_message = "With the Key Vault private endpoint on, the AKS subnet is still allowlisted on the vault firewall"
+  }
+}
+
+run "a_keyvault_private_endpoint_still_needs_the_storage_endpoint" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/19"]
+      service_endpoints = ["Microsoft.KeyVault"]
+    }
+  }
+
+  variables {
+    aks_subnet_id                     = "${var.vnet_id}/subnets/aks"
+    keyvault_private_endpoint_enabled = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
 # With the flag on, the missing endpoint is Terraform's to add, so the check
 # steps aside. The patch appends to what is there: Azure replaces the whole
 # list on write, so rebuilding it would drop the existing endpoint's locations.
@@ -437,6 +481,10 @@ run "subnet_nsgs_plan_on_an_attached_cluster_in_one_subnet" {
     condition     = module.vnet.subnet_nsg_rules.postgres != null
     error_message = "enable_subnet_nsgs = true on an attached cluster in one subnet did not plan the Postgres NSG"
   }
+  assert {
+    condition     = output.aks_resource_group_name == "platform-aks-rg" && output.aks_resource_group_name != output.resource_group_name
+    error_message = "the aks_resource_group_name output is not the attached cluster's resource group"
+  }
 }
 
 run "subnet_nsgs_are_refused_on_an_attached_cluster_across_subnets" {
@@ -557,10 +605,11 @@ run "an_attached_cluster_counts_the_pools_terraform_adds" {
   expect_failures = [terraform_data.validate_network]
 }
 
-
 # On a cluster with Entra ID integration azurerm returns an empty client
 # certificate, so the providers must sign in through kubelogin instead. The
-# choice is module.aks.kube_auth, which feeds all three provider blocks.
+# choice is module.aks.kube_auth, which feeds all three provider blocks. On an
+# attached cluster it follows the cluster whatever aks_entra_only says, and the
+# create-path access variables plan nothing.
 
 run "kube_auth_is_certificate_on_an_attached_cluster_without_entra" {
   command = plan
@@ -590,6 +639,7 @@ run "kube_auth_is_certificate_on_an_attached_cluster_without_entra" {
     existing_cluster_name                = "platform-aks"
     existing_cluster_resource_group_name = "platform-aks-rg"
     aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_entra_only                       = true
   }
 
   assert {
@@ -626,11 +676,16 @@ run "kube_auth_is_entra_on_an_attached_entra_cluster" {
     existing_cluster_name                = "platform-aks"
     existing_cluster_resource_group_name = "platform-aks-rg"
     aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_private_cluster_enabled          = true
   }
 
   assert {
     condition     = module.aks.kube_auth == "entra"
     error_message = "an attached Entra ID cluster did not choose kubelogin sign-in"
+  }
+  assert {
+    condition     = module.aks.access_profile == null && module.aks.live_access_profile == null
+    error_message = "The access variables planned something on an attached cluster"
   }
 }
 

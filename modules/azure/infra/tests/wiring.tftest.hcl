@@ -456,6 +456,10 @@ run "the_resource_group_is_created_by_default" {
     condition     = output.resource_group_name == "langsmith-rg-wiring"
     error_message = "the resource_group_name output is not the created group's name"
   }
+  assert {
+    condition     = output.aks_resource_group_name == "langsmith-rg-wiring"
+    error_message = "the aks_resource_group_name output is not the created group's name on a created cluster"
+  }
 }
 
 run "an_existing_resource_group_is_read_not_created" {

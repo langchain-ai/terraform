@@ -885,7 +885,7 @@ run "additional_pool_os_sku_rejects_an_unknown_value" {
   expect_failures = [var.additional_node_pools]
 }
 
-# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.59.0, where the
+# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.65.0, where the
 # provider rejects it; refused here until the floor moves.
 run "aks_os_sku_rejects_ubuntu2404_below_the_provider_floor" {
   command = plan

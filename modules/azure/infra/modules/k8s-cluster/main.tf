@@ -13,8 +13,11 @@
 #   • OIDC issuer + Workload Identity: allows Kubernetes service accounts to
 #     federate with Azure AD and assume Managed Identities — used by LangSmith
 #     pods to authenticate to Azure Blob Storage without static keys.
-#   • System-assigned Managed Identity: AKS manages its own identity for
-#     pulling images, accessing node resource group, and VMSS operations.
+#   • Control-plane Managed Identity: system-assigned by default, or a
+#     user-assigned identity the caller pre-grants, for pulling images,
+#     accessing the node resource group, and VMSS operations.
+#   • Optional private API server and Entra-only access (Azure RBAC, local
+#     accounts disabled); providers then authenticate through kubelogin.
 #   • Default node pool: Standard_D8s_v5 (8 vCPU, 32 GB RAM) — Dsv5 family,
 #     the production baseline (matches the root module default). Dsv3
 #     (D8s_v3 / D16s_v3) is the documented fallback when Dsv5 quota is short.
@@ -24,6 +27,68 @@
 #     exposes a single Azure Load Balancer IP that routes to all LangSmith
 #     services by path/host.
 # ══════════════════════════════════════════════════════════════════════════════
+
+locals {
+  # ── Internal ingress load balancer ─────────────────────────────────────────
+  # Microsoft, "Create an internal load balancer in AKS" (updated 2026-07-31):
+  # azure-load-balancer-internal makes the Service's load balancer private,
+  # azure-load-balancer-internal-subnet names a subnet of the cluster's VNet
+  # by name, and azure-load-balancer-ipv4 pins the address. Every controller
+  # the module installs gets the same set, so one map serves them all.
+  ingress_internal = var.ingress_load_balancer == "internal"
+  ingress_internal_annotations = local.ingress_internal ? merge(
+    { "service.beta.kubernetes.io/azure-load-balancer-internal" = "true" },
+    var.ingress_load_balancer_subnet_id != "" ? {
+      "service.beta.kubernetes.io/azure-load-balancer-internal-subnet" = element(split("/", var.ingress_load_balancer_subnet_id), length(split("/", var.ingress_load_balancer_subnet_id)) - 1)
+    } : {},
+    var.ingress_load_balancer_ip != "" ? {
+      "service.beta.kubernetes.io/azure-load-balancer-ipv4" = var.ingress_load_balancer_ip
+    } : {},
+  ) : {}
+
+  # A subnet other than the node subnet needs subnets/join/action and
+  # subnets/read for the cluster identity (same page, "Use an internal load
+  # balancer with private networks"). The root decides from known inputs, so
+  # the grant's count is known at plan even when the node subnet is carved.
+  ingress_lb_other_subnet = var.ingress_load_balancer_needs_subnet_grant
+  nginx_service_annotations = merge(
+    {
+      # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
+      # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
+      "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
+    },
+    var.dns_label != "" ? {
+      # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
+      "service.beta.kubernetes.io/azure-dns-label-name" = var.dns_label
+    } : {},
+    local.ingress_internal_annotations,
+  )
+
+  # With an internal load balancer, the add-on's internal gateway serves
+  # LangSmith and the public one is off, so nothing answers from outside.
+  istio_addon_external_gateway = var.istio_external_gateway_enabled && !local.ingress_internal
+  istio_addon_internal_gateway = var.istio_internal_gateway_enabled || local.ingress_internal
+
+  # A user-assigned control-plane identity leaves identity[0].principal_id
+  # empty on the cluster, so the grant goes to that identity's principal. An
+  # attached cluster's is read from the identity it names.
+  cluster_identity_principal_id = local.control_plane_user ? local.control_plane_principal_id : (
+    var.create_cluster ? try(azurerm_kubernetes_cluster.main[0].identity[0].principal_id, null) : (
+      length(data.azurerm_user_assigned_identity.existing_control_plane) > 0
+      ? data.azurerm_user_assigned_identity.existing_control_plane[0].principal_id
+      : try(data.azurerm_kubernetes_cluster.existing[0].identity[0].principal_id, null)
+    )
+  )
+}
+
+# An attached cluster with a user-assigned control-plane identity, read for the
+# principal the load-balancer subnet grant goes to. The ID comes from Azure, so
+# the name and group are positions 8 and 4.
+data "azurerm_user_assigned_identity" "existing_control_plane" {
+  count               = !var.create_cluster && local.ingress_lb_other_subnet && try(data.azurerm_kubernetes_cluster.existing[0].identity[0].type, "") == "UserAssigned" ? 1 : 0
+  name                = split("/", data.azurerm_kubernetes_cluster.existing[0].identity[0].identity_ids[0])[8]
+  resource_group_name = split("/", data.azurerm_kubernetes_cluster.existing[0].identity[0].identity_ids[0])[4]
+}
 
 locals {
   # azurerm reports an unzoned default node pool as null, not [], so the drift
@@ -83,6 +148,15 @@ locals {
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
 
+  # A private cluster with no private DNS zone ("None") is reached through its
+  # public FQDN, whose A record points at the private IP: the credentials Azure
+  # returns name the private FQDN, which no zone resolves. Terraform's providers
+  # use the public FQDN instead, and the scripts pass --public-fqdn to
+  # az aks get-credentials (output api_server_public_fqdn).
+  api_server_public_fqdn = var.private_cluster_enabled == true && var.private_dns_zone_id == "None"
+  cluster_fqdn           = var.create_cluster ? azurerm_kubernetes_cluster.main[0].fqdn : data.azurerm_kubernetes_cluster.existing[0].fqdn
+  cluster_host           = local.api_server_public_fqdn ? "https://${local.cluster_fqdn}:443" : local.cluster_kube_config[0].host
+
   # On a cluster with Entra ID integration, azurerm returns kube_config with an
   # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
   # whether or not local accounts are disabled, so certificate sign-in cannot work
@@ -91,8 +165,12 @@ locals {
   # application, the same in every Azure cloud (kubelogin docs/book concepts/aks.md).
   # A cluster still on the legacy, customer-registered server app needs that
   # app's ID instead, which this module does not take.
+  # On the create path the live cluster wins over the planned block, so a plan
+  # that turns Entra on for an existing cluster still refreshes with the
+  # certificate the cluster accepts today.
   cluster_entra_profile = var.create_cluster ? azurerm_kubernetes_cluster.main[0].azure_active_directory_role_based_access_control : data.azurerm_kubernetes_cluster.existing[0].azure_active_directory_role_based_access_control
-  kube_auth             = var.kube_auth == "auto" ? (try(length(local.cluster_entra_profile) > 0, false) ? "entra" : "certificate") : var.kube_auth
+  cluster_entra         = var.create_cluster && local.live_cluster != null ? try(local.live_cluster.entra, null) == true : try(length(local.cluster_entra_profile) > 0, false)
+  kube_auth             = var.kube_auth == "auto" ? (local.cluster_entra ? "entra" : "certificate") : var.kube_auth
 
   # var.location for a cluster created here, so the location check below is
   # trivially satisfied and only has something to say under create_cluster = false.
@@ -224,10 +302,13 @@ check "existing_cluster_location" {
 # Helm provider uses the AKS cluster credentials to deploy charts
 # (the ingress controller, and later cert-manager/KEDA via k8s-bootstrap).
 # Credentials come from the AKS cluster (created here or pre-existing) —
-# no external kubeconfig needed.
+# no external kubeconfig needed. On an Entra cluster the client certificate is
+# empty, so the provider runs kubelogin for a token as the az CLI identity
+# instead. The server ID is the AKS Entra server application, the same in
+# every cloud.
 provider "helm" {
   kubernetes {
-    host                   = local.cluster_kube_config[0].host
+    host                   = local.cluster_host
     client_certificate     = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_certificate)
     client_key             = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_key)
     cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
@@ -260,13 +341,16 @@ provider "helm" {
 # caller can read; the resource group is matched in Terraform below, since a
 # name can repeat across groups. The comparison lives in the root module
 # (terraform_data.aks_network_mode_guard), where a failing precondition is
-# reachable by the test suite. Read-only GET, no writes.
+# reachable by the test suite. The same read feeds the access guard
+# (terraform_data.aks_access_guard), with the control-plane identity it runs
+# as, and tells the providers whether the cluster already takes Entra tokens.
+# Read-only GET, no writes.
 data "azapi_resource_list" "clusters" {
   count     = var.create_cluster ? 1 : 0
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities}"
   }
 }
 
@@ -278,6 +362,136 @@ locals {
     for c in try(data.azapi_resource_list.clusters[0].output.clusters, []) : c
     if lower(c.name) == lower(var.cluster_name) && lower(split("/", c.id)[4]) == lower(var.resource_group_name)
   ])
+}
+
+# ── Control-plane identity ────────────────────────────────────────────────────
+# A system-assigned identity exists only once the cluster does, so its grants on
+# a supplied VNet can only be made at or after creation. A user-assigned one is
+# created, or supplied, and granted first, which is Microsoft's recommendation
+# for a cluster in a VNet, route table, or private DNS zone the caller owns.
+locals {
+  control_plane_user   = var.create_cluster && var.control_plane_identity == "user"
+  control_plane_create = local.control_plane_user && var.control_plane_identity_id == ""
+
+  # The identity's ID as the access guard compares it, known at plan for both
+  # sources: the created identity's ID is built from its name.
+  control_plane_identity_id = !local.control_plane_user ? null : (
+    local.control_plane_create
+    ? "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${var.cluster_name}-control-plane"
+    : var.control_plane_identity_id
+  )
+  control_plane_principal_id = !local.control_plane_user ? null : (
+    local.control_plane_create
+    ? one(azurerm_user_assigned_identity.control_plane[*].principal_id)
+    : one(data.azurerm_user_assigned_identity.control_plane[*].principal_id)
+  )
+
+  # AKS registers a private API server in a zone the caller supplies as the
+  # control-plane identity; System and None need no grant.
+  control_plane_dns_zone = var.private_cluster_enabled && !contains(["", "System", "None"], var.private_dns_zone_id)
+
+  # AKS links a supplied zone to the cluster's VNet unless the zone's owner
+  # already has, which takes Network Contributor on the VNet. Terraform cannot
+  # tell which, so the grants it makes cover the VNet. Without a zone, Microsoft
+  # documents the node subnet as enough.
+  control_plane_network_scope = local.control_plane_dns_zone ? var.vnet_id : var.subnet_id
+
+  control_plane_grant = local.control_plane_user && var.control_plane_identity_manage_grants
+  control_plane_check = local.control_plane_user && !var.control_plane_identity_manage_grants && var.control_plane_grant_check
+}
+
+resource "azurerm_user_assigned_identity" "control_plane" {
+  count               = local.control_plane_create ? 1 : 0
+  name                = "${var.cluster_name}-control-plane"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+# A supplied identity is read for its principal ID, which the grants and the
+# check below are keyed on. Its resource ID passed validation, so the name and
+# group are positions 8 and 4.
+data "azurerm_user_assigned_identity" "control_plane" {
+  count               = local.control_plane_user && !local.control_plane_create ? 1 : 0
+  name                = split("/", var.control_plane_identity_id)[8]
+  resource_group_name = split("/", var.control_plane_identity_id)[4]
+}
+
+# principal_type spares a just-created identity the directory lookup Azure
+# otherwise makes before the identity has replicated.
+resource "azurerm_role_assignment" "control_plane_network_contributor" {
+  count                = local.control_plane_grant ? 1 : 0
+  scope                = local.control_plane_network_scope
+  role_definition_name = "Network Contributor"
+  principal_id         = local.control_plane_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "control_plane_dns_zone_contributor" {
+  count                = local.control_plane_grant && local.control_plane_dns_zone ? 1 : 0
+  scope                = var.private_dns_zone_id
+  role_definition_name = "Private DNS Zone Contributor"
+  principal_id         = local.control_plane_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# AKS documents up to 60 minutes for a grant to its identity to take effect,
+# and a cluster created before then fails on the network it cannot yet join.
+# Hold the cluster back once, when the grants are made. 300s covers the common
+# case, as time_sleep.agic_identity_propagation below does for the AGIC grants.
+resource "time_sleep" "control_plane_grant_propagation" {
+  count           = local.control_plane_grant ? 1 : 0
+  create_duration = "300s"
+  depends_on = [
+    azurerm_role_assignment.control_plane_network_contributor,
+    azurerm_role_assignment.control_plane_dns_zone_contributor,
+  ]
+}
+
+# With grants left to the network's owner, the cluster's preconditions check
+# that the identity holds a role at each scope. Any role counts: Microsoft's
+# minimum for a custom role differs between its pages, so Azure, not this
+# check, decides whether the role is enough when the cluster is created.
+# Azure lists a principal's assignments at, above, and below the scope it is
+# asked about, so each check keeps the ones at or above it. The network check
+# stays on the node subnet with a supplied zone: an owner who linked the zone to
+# the VNet first leaves AKS nothing to do on the VNet, and the check cannot tell
+# a linked zone from one AKS would link. The root requires a supplied identity
+# here, so its principal, and the check, resolve at plan. A route table on the
+# subnet is checked too: Microsoft lists it among the identity's scopes.
+data "azurerm_role_assignments" "control_plane" {
+  for_each = local.control_plane_check ? merge(
+    { network = var.subnet_id },
+    var.subnet_route_table_id != "" ? { route_table = var.subnet_route_table_id } : {},
+    local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {},
+  ) : {}
+  scope        = each.value
+  principal_id = local.control_plane_principal_id
+}
+
+locals {
+  control_plane_missing_grants = [
+    for g in [
+      { key = "network", role = "Network Contributor", scope = var.subnet_id },
+      { key = "route_table", role = "Network Contributor", scope = var.subnet_route_table_id },
+      { key = "dns_zone", role = "Private DNS Zone Contributor", scope = var.private_dns_zone_id },
+    ] : g
+    # ?: rather than &&, which evaluates both sides and would index a check
+    # that does not exist.
+    if contains(keys(data.azurerm_role_assignments.control_plane), g.key) ? !anytrue([
+      for a in data.azurerm_role_assignments.control_plane[g.key].role_assignments :
+      startswith("${lower(g.scope)}/", "${lower(trimsuffix(a.role_assignment_scope, "/"))}/")
+    ]) : false
+  ]
+}
+
+# Orders the cluster after anything its egress needs that the root module
+# creates (a NAT gateway's association with the node subnet). A module-level
+# depends_on would also defer this module's plan-time reads to apply, so the
+# dependency is carried by this resource alone.
+resource "terraform_data" "egress_ready" {
+  count = var.create_cluster ? 1 : 0
+  input = var.egress_dependencies
 }
 
 resource "azurerm_kubernetes_cluster" "main" {
@@ -345,11 +559,40 @@ resource "azurerm_kubernetes_cluster" "main" {
     zones = var.availability_zones
   }
 
-  # System-assigned Managed Identity: AKS uses this to manage node VMs,
-  # pull from ACR (if configured), and interact with the node resource group.
+  # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
+  # configured), and interact with the node resource group. System-assigned,
+  # or the user-assigned identity above, granted before the cluster exists.
+  # The provider updates a change of identity in place, but grants held by the
+  # old identity do not follow it, so the root module refuses the change.
   identity {
-    type = "SystemAssigned"
+    type         = local.control_plane_user ? "UserAssigned" : "SystemAssigned"
+    identity_ids = local.control_plane_user ? [local.control_plane_create ? azurerm_user_assigned_identity.control_plane[0].id : var.control_plane_identity_id] : null
   }
+
+  # Entra-only access: Kubernetes authorization through Azure RBAC, and no
+  # local admin account, so kube_config carries no client certificate and the
+  # providers authenticate through kubelogin (see the exec blocks). Azure
+  # refuses to turn Entra integration off once it is on; the root module
+  # refuses the edit before Azure gets the chance.
+  local_account_disabled = var.entra_only ? true : null
+
+  dynamic "azure_active_directory_role_based_access_control" {
+    for_each = var.entra_only ? [1] : []
+    content {
+      azure_rbac_enabled     = true
+      admin_group_object_ids = var.entra_admin_group_object_ids
+    }
+  }
+
+  # Private API server: the endpoint lives in the cluster's VNet and the
+  # public FQDN goes away. Both settings force a new cluster, which is why the
+  # root module refuses to flip them on a cluster that already exists.
+  private_cluster_enabled = var.private_cluster_enabled
+  private_dns_zone_id     = var.private_cluster_enabled ? (var.private_dns_zone_id == "" ? "System" : var.private_dns_zone_id) : null
+  # Except with no private zone ("None"): then the API server resolves only
+  # through its public FQDN, an A record to the private IP. Microsoft does not
+  # support None with the public FQDN off, and the provider defaults it to off.
+  private_cluster_public_fqdn_enabled = var.private_cluster_enabled && var.private_dns_zone_id == "None"
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply
@@ -380,6 +623,15 @@ resource "azurerm_kubernetes_cluster" "main" {
     network_policy      = var.network_policy
     service_cidr        = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
     dns_service_ip      = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
+
+    # Egress. loadBalancer (the provider's default) gives the cluster an
+    # AKS-managed outbound public IP. userDefinedRouting sends it by the node
+    # subnet's route table, to a firewall or on-premises, and AKS creates no
+    # outbound IP; userAssignedNATGateway leaves through the NAT gateway on the
+    # subnet. The provider updates a change in place, and Azure supports each
+    # change between these three on a cluster in a supplied VNet, but it moves
+    # the egress IP and drops connections, so the root refuses one unasked.
+    outbound_type = var.outbound_type
   }
 
   # Key Vault CSI Secrets Store driver — enables pods to mount secrets from
@@ -400,8 +652,8 @@ resource "azurerm_kubernetes_cluster" "main" {
     content {
       mode                             = "Istio"
       revisions                        = [var.istio_addon_revision]
-      external_ingress_gateway_enabled = var.istio_external_gateway_enabled
-      internal_ingress_gateway_enabled = var.istio_internal_gateway_enabled
+      external_ingress_gateway_enabled = local.istio_addon_external_gateway
+      internal_ingress_gateway_enabled = local.istio_addon_internal_gateway
     }
   }
 
@@ -431,7 +683,21 @@ resource "azurerm_kubernetes_cluster" "main" {
       default_node_pool[0].upgrade_settings,
       default_node_pool[0].zones,
     ]
+
+    precondition {
+      condition = length(local.control_plane_missing_grants) == 0
+      error_message = join(" ", concat(
+        [
+          "The control-plane identity (principal ${coalesce(local.control_plane_principal_id, "unknown")}) holds no role on ${join(" or ", [for g in local.control_plane_missing_grants : g.scope])}.",
+          "aks_control_plane_identity_manage_grants = false leaves these grants to the network's owner, and AKS needs them before the cluster is created.",
+          "A grant counts at that scope or above it, in the built-in role below or a custom role with the same permissions. Run, then apply again:",
+        ],
+        [for g in local.control_plane_missing_grants : "az role assignment create --assignee-object-id ${coalesce(local.control_plane_principal_id, "unknown")} --assignee-principal-type ServicePrincipal --role \"${g.role}\" --scope ${g.scope};"],
+      ))
+    }
   }
+
+  depends_on = [time_sleep.control_plane_grant_propagation, terraform_data.egress_ready]
 }
 
 # ignore_changes on default_node_pool[0].zones makes an availability_zones edit
@@ -589,18 +855,8 @@ resource "helm_release" "nginx_ingress" {
         }
 
         service = {
-          type = "LoadBalancer"
-          annotations = merge(
-            {
-              # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
-              # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
-              "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
-            },
-            var.dns_label != "" ? {
-              # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
-              "service.beta.kubernetes.io/azure-dns-label-name" = var.dns_label
-            } : {}
-          )
+          type        = "LoadBalancer"
+          annotations = local.nginx_service_annotations
         }
       }
     })
@@ -656,12 +912,17 @@ resource "helm_release" "istiod" {
 # Replaces NGINX when Istio is in use. Gateway + VirtualService resources
 # (in use-cases/istio/) route traffic to LangSmith services.
 resource "helm_release" "istio_gateway" {
-  count      = var.ingress_controller == "istio" && var.istio_external_gateway_enabled ? 1 : 0
+  count      = var.ingress_controller == "istio" && (var.istio_external_gateway_enabled || local.ingress_internal) ? 1 : 0
   name       = "istio-ingressgateway"
   namespace  = "istio-system"
   repository = "https://istio-release.storage.googleapis.com/charts"
   chart      = "gateway"
   version    = var.istio_version
+
+  # The gateway chart puts service.annotations on its LoadBalancer Service.
+  values = local.ingress_internal ? [yamlencode({
+    service = { annotations = local.ingress_internal_annotations }
+  })] : []
 
   depends_on = [helm_release.istiod]
 }
@@ -864,6 +1125,16 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # EnvoyProxy (which carries the DNS label onto the proxy Service), GatewayClass
 # and Gateway, and the LangSmith chart renders the HTTPRoutes.
 
+#
+# With envoy_gateway_image_registry, the controller (and its certgen job) pull
+# from the mirror through the chart's global image value, and the proxy image is
+# exported for deploy.sh, which sets it on the EnvoyProxy.
+locals {
+  envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
+  envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
+}
+
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0
   name      = "envoy-gateway"
@@ -874,17 +1145,45 @@ resource "helm_release" "envoy_gateway" {
   create_namespace = true
 
   values = [
-    yamlencode({
-      deployment = {
-        envoyGateway = {
-          resources = {
-            requests = {
-              cpu    = "100m"
-              memory = "256Mi"
+    yamlencode(merge(
+      {
+        deployment = {
+          envoyGateway = {
+            resources = {
+              requests = {
+                cpu    = "100m"
+                memory = "256Mi"
+              }
             }
           }
         }
-      }
-    })
+      },
+      local.envoy_gateway_mirror ? {
+        global = {
+          images = {
+            envoyGateway = merge(
+              { image = local.envoy_gateway_image },
+              var.envoy_gateway_image_pull_secret_name != "" ? { pullSecrets = [{ name = var.envoy_gateway_image_pull_secret_name }] } : {}
+            )
+          }
+        }
+      } : {}
+    ))
   ]
+}
+
+# ── Internal ingress load balancer: the subnet grant ─────────────────────────
+# Only when the load balancer takes its IP from a subnet other than the node
+# subnet. The cluster identity creates the frontend there, which takes
+# subnets/join/action and subnets/read (Microsoft, "Create an internal load
+# balancer in AKS", updated 2026-07-31); Network Contributor carries both.
+# Gated so a network owner who keeps role assignments to itself can make it
+# instead: the ingress_load_balancer_subnet_grant output names what to grant.
+resource "azurerm_role_assignment" "ingress_lb_subnet" {
+  count = local.ingress_lb_other_subnet && var.ingress_load_balancer_manage_subnet_assignment ? 1 : 0
+
+  scope                = var.ingress_load_balancer_subnet_id
+  role_definition_name = "Network Contributor"
+  principal_id         = local.cluster_identity_principal_id
+  principal_type       = "ServicePrincipal"
 }

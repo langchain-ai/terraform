@@ -95,6 +95,8 @@ resource "azurerm_storage_account" "smithdb" {
   account_replication_type        = var.replication_type
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
+  shared_access_key_enabled       = var.shared_access_key_enabled
+  allowed_copy_scope              = var.allowed_copy_scope
   tags                            = merge(var.tags, { module = "smithdb" })
 
   # With a Private Endpoint there is no public listener to filter, so the rules
@@ -102,8 +104,9 @@ resource "azurerm_storage_account" "smithdb" {
   # land on a default-deny account, not an open one.
   public_network_access_enabled = !var.blob_private_endpoint_enabled
 
-  # Runtime access uses Workload Identity by default. Shared Key remains
-  # available for parity with the chart's optional static-key authentication.
+  # Runtime access uses Workload Identity. Shared Key is off unless
+  # storage_shared_access_key_enabled = true, which the chart's optional
+  # static-key authentication (objectStore.azure.accessKeySecretKey) needs.
   network_rules {
     default_action             = "Deny"
     bypass                     = ["AzureServices"]
