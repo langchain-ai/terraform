@@ -130,6 +130,128 @@ run "byo_vpc_serving_the_internet_without_public_subnets_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+# ── VPC CNI custom networking ────────────────────────────────────────────────
+# The subnet lookups are overridden because a mock invents a different random
+# AZ for every subnet. override_data gives every instance of a data source the
+# same values, so the pod subnets all share one AZ and the cluster subnets all
+# share one AZ, which is exactly what the two AZ rules need.
+
+run "byo_custom_networking_without_pod_subnets_is_rejected" {
+  command = plan
+
+  variables {
+    eks_network_mode = "custom-networking"
+    create_vpc       = false
+    vpc_id           = "vpc-00000000000000001"
+    vpc_cidr_block   = "10.0.0.0/16"
+    private_subnets  = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets   = ["subnet-00000000000000003", "subnet-00000000000000004"]
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "pod_subnet_ids_with_a_created_vpc_are_rejected" {
+  command = plan
+
+  variables {
+    eks_network_mode   = "custom-networking"
+    eks_pod_subnet_ids = ["subnet-00000000000000005"]
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "pod_subnet_ids_in_node_subnet_mode_are_rejected" {
+  command = plan
+
+  variables {
+    create_vpc         = false
+    vpc_id             = "vpc-00000000000000001"
+    vpc_cidr_block     = "10.0.0.0/16"
+    private_subnets    = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets     = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    eks_pod_subnet_ids = ["subnet-00000000000000005"]
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "two_pod_subnets_in_one_az_are_rejected" {
+  command = plan
+
+  variables {
+    eks_network_mode   = "custom-networking"
+    create_vpc         = false
+    vpc_id             = "vpc-00000000000000001"
+    vpc_cidr_block     = "10.0.0.0/16"
+    private_subnets    = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets     = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    eks_pod_subnet_ids = ["subnet-00000000000000005", "subnet-00000000000000006"]
+  }
+
+  override_data {
+    target = data.aws_subnet.pod
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000001" }
+  }
+  override_data {
+    target = data.aws_subnet.cluster
+    values = { availability_zone = "us-east-2a" }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "pod_subnets_missing_a_cluster_az_are_rejected" {
+  command = plan
+
+  variables {
+    eks_network_mode   = "custom-networking"
+    create_vpc         = false
+    vpc_id             = "vpc-00000000000000001"
+    vpc_cidr_block     = "10.0.0.0/16"
+    private_subnets    = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets     = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    eks_pod_subnet_ids = ["subnet-00000000000000005"]
+  }
+
+  override_data {
+    target = data.aws_subnet.pod
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000001" }
+  }
+  override_data {
+    target = data.aws_subnet.cluster
+    values = { availability_zone = "us-east-2b" }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "pod_subnets_in_another_vpc_are_rejected" {
+  command = plan
+
+  variables {
+    eks_network_mode   = "custom-networking"
+    create_vpc         = false
+    vpc_id             = "vpc-00000000000000001"
+    vpc_cidr_block     = "10.0.0.0/16"
+    private_subnets    = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets     = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    eks_pod_subnet_ids = ["subnet-00000000000000005"]
+  }
+
+  override_data {
+    target = data.aws_subnet.pod
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000009" }
+  }
+  override_data {
+    target = data.aws_subnet.cluster
+    values = { availability_zone = "us-east-2a" }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 # ── Add-on storage ───────────────────────────────────────────────────────────
 # External add-on storage means a dedicated database on the shared RDS and a
 # logical index on the shared ElastiCache, so both services have to be external.
