@@ -7,6 +7,8 @@ on:
       - "agents/**"
       - ".github/scripts/**"
       - ".github/actions/setup-shellcheck/**"
+      - ".github/actions/setup-terraform/**"
+      - ".terraform-version"
       - ".github/workflows/checks.yaml"
   push:
     branches:
@@ -16,6 +18,8 @@ on:
       - "agents/**"
       - ".github/scripts/**"
       - ".github/actions/setup-shellcheck/**"
+      - ".github/actions/setup-terraform/**"
+      - ".terraform-version"
       - ".github/workflows/checks.yaml"
 
 permissions:
@@ -80,9 +84,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
+        uses: ./.github/actions/setup-terraform
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
@@ -124,8 +126,14 @@ jobs:
   # name because it has no infra/ root to plan, and a leg that says so beats a
   # missing check nobody can account for. ocp is out of both matrices, having no
   # versions.tf to init against at all.
+  #
+  # Each provider also runs at the floor: the last patch of the oldest Terraform
+  # the roots accept (required_version = ">= 1.11.0"). Expressions and test
+  # teardown behave differently there; && and || don't short-circuit before
+  # 1.14. The empty terraform entry is the pin, and keeps the job's plain name.
+  # Raise the floor here when required_version moves.
   plan-tests:
-    name: plan tests (${{ matrix.provider }})
+    name: plan tests (${{ matrix.provider }}${{ matrix.terraform && format(', tf {0}', matrix.terraform) || '' }})
     needs: changes
     if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
@@ -133,6 +141,7 @@ jobs:
       fail-fast: false
       matrix:
         provider: ${{ fromJSON(needs.changes.outputs.providers) }}
+        terraform: ["", "1.11.4"]
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:
@@ -140,9 +149,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: ./.github/actions/setup-terraform
         with:
-          terraform_wrapper: false
+          version: ${{ matrix.terraform }}
 
       # Shared with the check leg above by key, so whichever job runs first
       # populates it and the other reads it.
@@ -184,3 +193,20 @@ jobs:
 
       - name: Shellcheck every tracked script
         run: bash agents/check.sh --scripts
+
+  # Formatting for modules/ocp, the one HCL tree with no check leg: it has no
+  # versions.tf, so check.sh finds no root there to validate. The provider legs
+  # already fmt-check their own trees, so this covers the gap and nothing else.
+  # Always on, like the scripts job, since it needs no provider selection.
+  fmt-ocp:
+    name: fmt (ocp)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: ./.github/actions/setup-terraform
+
+      - name: Format check
+        run: bash agents/check.sh --fmt modules/ocp
