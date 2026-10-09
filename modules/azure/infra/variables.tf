@@ -1311,12 +1311,12 @@ variable "langsmith_namespace" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. Changing it on an existing deployment removes the old controller and its load balancer IP. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. Changing it on an existing deployment removes the old controller and its load balancer IP. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
   default     = "envoy-gateway"
 
   validation {
-    condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
-    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
+    condition     = contains(["istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
+    error_message = "ingress_controller must be 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
   }
 }
 
@@ -1522,7 +1522,7 @@ variable "create_dns_zone" {
 
 variable "ingress_ip" {
   type        = string
-  description = "Public IP of the ingress controller's Load Balancer. Used by the DNS module for the A record. For envoy-gateway, get it from: kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway. For nginx: kubectl get svc -n ingress-nginx."
+  description = "Public IP of the ingress controller's Load Balancer. Used by the DNS module for the A record. For envoy-gateway, get it from: kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway."
   default     = ""
 }
 
@@ -1646,13 +1646,13 @@ variable "enable_fleet" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with envoy-gateway, nginx, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with envoy-gateway, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
   default     = ""
 }
 
 variable "ingress_load_balancer" {
   type        = string
-  description = "Whether the ingress controller's Azure load balancer is 'public' (the default: a public IP) or 'internal' (a private IP in the cluster's VNet, on the AKS-managed kubernetes-internal load balancer, with no public frontend). Applies to envoy-gateway, nginx, istio and istio-addon. 'internal' cannot be combined with dns_label, which needs a public IP; put the hostname in your own DNS or a private DNS zone instead. See INGRESS_CONTROLLERS.md, \"Private ingress\"."
+  description = "Whether the ingress controller's Azure load balancer is 'public' (the default: a public IP) or 'internal' (a private IP in the cluster's VNet, on the AKS-managed kubernetes-internal load balancer, with no public frontend). Applies to envoy-gateway, istio and istio-addon. 'internal' cannot be combined with dns_label, which needs a public IP; put the hostname in your own DNS or a private DNS zone instead. See INGRESS_CONTROLLERS.md, \"Private ingress\"."
   default     = "public"
 
   validation {
@@ -1665,7 +1665,7 @@ variable "ingress_load_balancer" {
     # module installs no controller, so neither has a Service to annotate.
     # Refused rather than ignored, so a set value is never silently dropped.
     condition     = var.ingress_load_balancer == "public" || !contains(["agic", "none"], var.ingress_controller)
-    error_message = "ingress_load_balancer = \"internal\" applies to envoy-gateway, nginx, istio and istio-addon. With agic, give the Application Gateway a private frontend instead; with none, configure your own controller's Service."
+    error_message = "ingress_load_balancer = \"internal\" applies to envoy-gateway, istio and istio-addon. With agic, give the Application Gateway a private frontend instead; with none, configure your own controller's Service."
   }
 
   validation {

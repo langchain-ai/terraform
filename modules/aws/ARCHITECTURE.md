@@ -43,7 +43,7 @@ LangSmith on AWS is deployed in three passes.
 │    • postgres       — metadata store (in-cluster or RDS)                     │
 │                                                                              │
 │  Storage:  RDS PostgreSQL → metadata / S3 → trace blobs (VPC endpoint)      │
-│  Ingress:  AWS ALB | NGINX | Envoy Gateway | Istio  (see Ingress Options)    │
+│  Ingress:  AWS ALB | Envoy Gateway | Istio  (see Ingress Options)            │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  Pass 1 — AWS Infrastructure                                                 │
 │                                                                              │
@@ -150,7 +150,6 @@ split dataplane (agent pods in a separate namespace) is possible:
 | Option | Variable | Split dataplane | Traffic path | When to use |
 |---|---|---|---|---|
 | **ALB (AWS LBC)** | *(default)* | No | `ALB → frontend NodePort` | Default. Single-namespace deployments, POC, simplest TLS via ACM. |
-| **NGINX Ingress** | `enable_nginx_ingress = true` | No | `ALB → TGB → NGINX controller → frontend ClusterIP` | When NGINX is already the standard in your org. ALB TGB wires the pre-provisioned ALB target group to the NGINX pods. |
 | **Envoy Gateway** | `enable_envoy_gateway = true` | Yes | `ALB → TGB → Envoy proxy pod:10080 → HTTPRoute → services` | Cross-namespace HTTPRoute routing. Recommended for split dataplane on new AWS deployments. |
 | **Istio** | `enable_istio_gateway = true` | Yes | `ALB → TGB → istio-ingressgateway:80 → VirtualService → services` | For clusters with Istio already installed or when mTLS mesh is required. Istio 1.23+ binds port 80 directly via `NET_BIND_SERVICE`. |
 
@@ -250,7 +249,6 @@ Discovered during the gateway permutation test run (April 2026, all four modes v
 | 2 | **In-cluster Redis** | The LangSmith Helm chart deploys Redis **without** `requirepass`. The Terraform `k8s_bootstrap` module writes `redis://langsmith-redis:6379` (no password). Do not add an auth token unless you also configure the Helm chart Redis values. |
 | 3 | **`name_prefix` length** | Maximum 15 characters (not 11). Names like `dz-nginx-tst` (12) are valid. |
 | 4 | **Istio port** | Istio 1.23+ ingressgateway listens on port **80** directly via `NET_BIND_SERVICE` capability — not port `8080`. ALB TGB health check and SG rules must target port 80. |
-| 5 | **NGINX TGB port** | NGINX ingress-nginx controller pods listen on port **80**. The TargetGroupBinding target type is `ip`. |
 | 6 | **Envoy proxy port** | Envoy proxy pods listen on port **10080** (not 80) when running as non-root. The TGB `servicePort` must be `10080`. |
 | 7 | **Destroy order** | Always run `terraform destroy` first and let Terraform handle namespace + Helm release lifecycle. Pre-deleting namespaces causes the `helm_release` Terraform resource to timeout (~5m) because Helm cannot uninstall cleanly into a terminating namespace. |
 | 8 | **Stuck Terminating namespaces** | KEDA's stale `external.metrics.k8s.io/v1beta1` API group causes `NamespaceDeletionDiscoveryFailure`. Clear with: `kubectl get namespace $ns -o json \| python3 -c "import sys,json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" \| kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f -` |
@@ -275,7 +273,7 @@ Three paths for TLS, configured via `tls_certificate_source`:
 | Mode | Behavior | Gateway |
 |------|----------|---------|
 | `none` | HTTP:80 only. No certificate. | Any |
-| `acm` | HTTPS:443 with HTTP→HTTPS redirect. ACM certificate (auto-provisioned or BYO). | ALB, NGINX |
+| `acm` | HTTPS:443 with HTTP→HTTPS redirect. ACM certificate (auto-provisioned or BYO). | ALB |
 | `letsencrypt` | HTTPS via cert-manager + Let's Encrypt DNS-01 (Route 53 IRSA). | Istio, Envoy |
 
 > **CAA constraint:** `langchain.com` has `0 issue "amazon.com"` but not `0 issuewild "amazon.com"`. ACM cannot issue wildcard certificates (`*.subdomain.langchain.com`) for subdomains of `langchain.com`. The `dns` module requests the apex domain only. Customers using their own domain are not affected.

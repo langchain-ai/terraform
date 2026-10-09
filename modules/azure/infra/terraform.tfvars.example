@@ -155,7 +155,6 @@ smithdb_query_enabled     = false
 # smithdb_cache_disk_throughput_mbps = 1000
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API, uses Gateway/HTTPRoute; start here)
-# "nginx"         — NGINX ingress via Helm (legacy Ingress compatibility)
 # "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
 # "istio"         — Istio via Helm (self-managed)
 # "agic"          — Application Gateway Ingress Controller (enterprise Azure, native WAF)
@@ -190,7 +189,7 @@ ingress_controller = "envoy-gateway"
 # Not applicable to AGIC — use langsmith_domain or terraform output agw_public_ip_fqdn.
 #
 # ⚠️  TLS compatibility:
-#   letsencrypt (HTTP-01) works with: envoy-gateway, nginx, istio (self-managed)
+#   letsencrypt (HTTP-01) works with: envoy-gateway, istio (self-managed)
 #   letsencrypt does NOT work with:   istio-addon, agic  (no IngressClass — ACME challenge fails)
 #   dns01 works with: all controllers (requires custom domain — see Option C)
 #   See INGRESS_CONTROLLERS.md for the full compatibility matrix.
@@ -206,7 +205,7 @@ dns_label              = "langsmith-prod"     # → langsmith-prod.eastus.clouda
 # ingress_load_balancer_ip        = "10.0.40.10"                                   # optional
 tls_certificate_source = "none"
 
-# Option B: HTTPS via Let's Encrypt HTTP-01 — envoy-gateway, nginx, istio (validated ✅)
+# Option B: HTTPS via Let's Encrypt HTTP-01 — envoy-gateway, istio (validated ✅)
 #   → https://<dns_label>.<location>.cloudapp.azure.com
 # tls_certificate_source = "letsencrypt"
 # letsencrypt_email      = "you@example.com"

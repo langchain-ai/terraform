@@ -210,7 +210,7 @@ variable "cert_manager_version" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (envoy-gateway → envoy-gateway-system, nginx → ingress-nginx, istio → istio-system, istio-addon → aks-istio-ingress), and whether cert-manager runs with Gateway API support (envoy-gateway only). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress), and whether cert-manager runs with Gateway API support (envoy-gateway only). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
   default     = "envoy-gateway"
 }
 

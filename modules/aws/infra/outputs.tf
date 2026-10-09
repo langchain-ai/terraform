@@ -352,11 +352,6 @@ output "enable_istio_gateway" {
   value       = var.enable_istio_gateway
 }
 
-output "enable_nginx_ingress" {
-  description = "Whether the NGINX ingress controller path is enabled"
-  value       = var.enable_nginx_ingress
-}
-
 output "gateway_target_group_arn" {
   description = "ARN of the ALB target group for gateway proxy (Envoy or Istio). Null when gateway mode is not enabled."
   value       = module.alb.gateway_target_group_arn

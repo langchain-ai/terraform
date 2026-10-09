@@ -111,8 +111,6 @@ echo "  Uninstall complete."
 echo "══════════════════════════════════════════════════════"
 echo ""
 echo "To destroy infrastructure:"
-[[ "$_ingress_controller" == "nginx" ]] && \
-  echo "  helm uninstall ingress-nginx -n ingress-nginx --wait  # remove Azure LB"
 echo "  make destroy"
 warn "Then: make clean    (removes local secrets and generated files)"
 echo ""

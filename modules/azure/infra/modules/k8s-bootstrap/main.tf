@@ -192,7 +192,6 @@ resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
 # namespace, so there is no namespace to name here.
 locals {
   ingress_namespace = lookup({
-    "nginx"         = "ingress-nginx"
     "envoy-gateway" = "envoy-gateway-system"
     "istio"         = "istio-system"
     "istio-addon"   = "aks-istio-ingress"

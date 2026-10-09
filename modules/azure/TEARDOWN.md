@@ -40,7 +40,7 @@ make uninstall
 4. With `ingress_controller = "envoy-gateway"`: deletes the Gateway `langsmith-gateway` (which removes the Envoy proxy LB service and its Azure LB IP), the GatewayClass `langsmith-eg`, and the EnvoyProxy `langsmith-proxy`
 5. Prompts before deleting the `langsmith` namespace
 
-`terraform destroy` removes cert-manager, KEDA, and the ingress controller release. With `ingress_controller = "nginx"`, run `helm uninstall ingress-nginx -n ingress-nginx --wait` before Step 2 to free its Azure LB; `uninstall.sh` prints this reminder.
+`terraform destroy` removes cert-manager, KEDA, and the ingress controller release.
 
 > If `make uninstall` hangs on namespace deletion (finalizers from a stuck resource), run:
 > ```bash

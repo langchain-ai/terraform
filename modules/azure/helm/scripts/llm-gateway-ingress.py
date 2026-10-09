@@ -3,12 +3,12 @@
 """Build the LLM Gateway's own Ingress from the chart's LangSmith Ingress.
 
 The chart's frontend proxy allows 900 s on /gateway/ for long model calls, but
-the ingress controller in front of it cuts requests sooner: ingress-nginx at
-60 s, Application Gateway at 30 s. Raising the timeout on the chart's Ingress
+Application Gateway in front of it cuts requests at 30 s. Raising the timeout
+on the chart's Ingress
 would raise it for every LangSmith path, so a hung request anywhere could hold
 a connection for fifteen minutes. Instead this builds a second Ingress for the
-same host with only the /gateway/ path and the longer timeout. Both
-controllers merge Ingresses for one host and route by the longest matching
+same host with only the /gateway/ path and the longer timeout. Application
+Gateway merges Ingresses for one host and routes by the longest matching
 path, so every other path keeps the controller's default.
 
 The new Ingress copies the chart's class, TLS block, host and frontend backend,
@@ -20,7 +20,7 @@ Reads the chart's Ingress as JSON on stdin; writes the new one as JSON on
 stdout. Usage:
 
   kubectl get ingress <release>-ingress -n <ns> -o json \\
-    | llm-gateway-ingress.py --controller nginx --name <release>-llm-gateway \\
+    | llm-gateway-ingress.py --controller agic --name <release>-llm-gateway \\
     | kubectl apply -f -
 """
 
@@ -31,10 +31,6 @@ import sys
 TIMEOUT_SECONDS = "900"
 
 TIMEOUT_ANNOTATIONS = {
-    "nginx": {
-        "nginx.ingress.kubernetes.io/proxy-read-timeout": TIMEOUT_SECONDS,
-        "nginx.ingress.kubernetes.io/proxy-send-timeout": TIMEOUT_SECONDS,
-    },
     "agic": {
         "appgw.ingress.kubernetes.io/request-timeout": TIMEOUT_SECONDS,
     },

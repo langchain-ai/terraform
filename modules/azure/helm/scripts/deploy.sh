@@ -132,7 +132,7 @@ echo ""
 # Azure assigns <dns_label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net
 # in Azure Government) to the public IP only when
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
-# Covers nginx, istio and istio-addon. Envoy Gateway creates its Service per Gateway,
+# Covers istio and istio-addon. Envoy Gateway creates its Service per Gateway,
 # so the EnvoyProxy in the Envoy Gateway block below carries the label instead.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
@@ -141,7 +141,7 @@ _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller=
 _cloudapp_suffix=$(_azure_cloudapp_suffix)
 # ingress_load_balancer = "internal" puts the controller's load balancer on a
 # private IP in the cluster's VNet. Terraform annotates the Services it owns
-# (nginx, self-managed Istio); the EnvoyProxy and the Istio add-on's internal
+# (self-managed Istio); the EnvoyProxy and the Istio add-on's internal
 # gateway are handled below. Terraform refuses dns_label with "internal".
 _ingress_lb=$(_parse_tfvar "ingress_load_balancer") || _ingress_lb="public"
 _ingress_lb_subnet_id=$(_parse_tfvar "ingress_load_balancer_subnet_id") || _ingress_lb_subnet_id=""
@@ -150,10 +150,6 @@ _ingress_lb_ip=$(_parse_tfvar "ingress_load_balancer_ip") || _ingress_lb_ip=""
 _ingress_lb_subnet="${_ingress_lb_subnet_id##*/}"
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
-    nginx)
-      _lb_svc="ingress-nginx-controller"
-      _lb_ns="ingress-nginx"
-      ;;
     istio-addon)
       _lb_svc="aks-istio-ingressgateway-external"
       _lb_ns="aks-istio-ingress"
@@ -268,7 +264,6 @@ EOF
     # For none, an empty class leaves the solver's Ingress to the default class.
     case "$_ingress_controller" in
       istio|istio-addon) _acme_ingress_class="istio" ;;
-      nginx)             _acme_ingress_class="nginx" ;;
       agic)              _acme_ingress_class="azure-application-gateway" ;;
       *)                 _acme_ingress_class="$_byo_ingress_class" ;;
     esac
@@ -730,7 +725,7 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   _eg_service_annotations="{}"
   [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
-  # Internal: the annotations Terraform puts on the nginx and Istio Services,
+  # Internal: the annotations Terraform puts on the Istio Services,
   # from its output. It prints a one-line JSON object, which is YAML flow
   # syntax. dns_label is refused with "internal", so the two never combine.
   if [[ "$_ingress_lb" == "internal" ]]; then
@@ -1062,7 +1057,7 @@ fi
 
 # ── LLM Gateway: an Ingress of its own for /gateway/ ─────────────────────
 # The chart's frontend allows 900 s on /gateway/ for long model calls, but
-# ingress-nginx cuts at 60 s and Application Gateway at 30 s. Raising that on the
+# Application Gateway cuts at 30 s. Raising that on the
 # chart's Ingress would raise it for every path, so /gateway/ gets a second
 # Ingress, built from the chart's (same class, host, TLS and backend), carrying
 # the longer timeout; every other path keeps the controller default. Istio has no
@@ -1071,7 +1066,7 @@ fi
 _chart_fullname="$RELEASE_NAME"
 [[ "$RELEASE_NAME" == *langsmith* ]] || _chart_fullname="${RELEASE_NAME}-langsmith"
 _gw_ingress="${_chart_fullname}-llm-gateway"
-if [[ "$_enable_llm_gateway" == "true" && ( "$_ingress_controller" == "nginx" || "$_ingress_controller" == "agic" ) ]]; then
+if [[ "$_enable_llm_gateway" == "true" && "$_ingress_controller" == "agic" ]]; then
   if _chart_ingress_json=$(kubectl get ingress "${_chart_fullname}-ingress" -n "$NAMESPACE" -o json 2>/dev/null); then
     if printf '%s' "$_chart_ingress_json" \
         | python3 "$SCRIPT_DIR/llm-gateway-ingress.py" --controller "$_ingress_controller" --name "$_gw_ingress" \

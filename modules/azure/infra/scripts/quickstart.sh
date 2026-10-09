@@ -1036,7 +1036,6 @@ _run_section_5() {
   _section "5. Ingress Controller"
   _hint "The ingress controller routes external HTTP/HTTPS traffic to LangSmith pods."
   _hint "envoy-gateway — Gateway API native; the same controller on AWS and GCP."
-  _hint "nginx         — classic K8s Ingress; for clusters standardized on it."
   _hint "istio-addon   — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
   _hint "istio         — self-managed Istio via Helm; more control, more operational overhead."
   _hint "agic          — Azure Application Gateway; enterprise WAF built-in. Needs a"
@@ -1044,13 +1043,12 @@ _run_section_5() {
   _hint "Start with envoy-gateway unless you have a specific reason to use another."
 
   local ingress_choice=""
-  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" envoy-gateway nginx istio-addon istio agic none)"
+  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" envoy-gateway istio-addon istio agic none)"
 
   while true; do
     _ask_choice --default "$ingress_choice" \
       "Which ingress controller?" \
       "envoy-gateway — Envoy Gateway, Gateway API (recommended default)" \
-      "nginx         — NGINX via Helm (legacy Ingress compatibility)" \
       "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
       "istio         — Istio via Helm (self-managed)" \
       "agic          — Application Gateway Ingress Controller (enterprise, native WAF)" \
@@ -1058,11 +1056,10 @@ _run_section_5() {
 
     case "$_CHOICE" in
       1) INGRESS_CONTROLLER="envoy-gateway" ;;
-      2) INGRESS_CONTROLLER="nginx" ;;
-      3) INGRESS_CONTROLLER="istio-addon" ;;
-      4) INGRESS_CONTROLLER="istio" ;;
-      5) INGRESS_CONTROLLER="agic" ;;
-      6) INGRESS_CONTROLLER="none" ;;
+      2) INGRESS_CONTROLLER="istio-addon" ;;
+      3) INGRESS_CONTROLLER="istio" ;;
+      4) INGRESS_CONTROLLER="agic" ;;
+      5) INGRESS_CONTROLLER="none" ;;
     esac
 
     # Terraform will not carve an Application Gateway subnet inside a VNet it
@@ -1143,7 +1140,7 @@ _run_section_6() {
   _hint "Let's Encrypt proves you control the name, and both register an ACME account."
   _hint ""
   _hint "HTTP-01       — Let's Encrypt fetches a token over port 80. Needs a public DNS label."
-  _hint "              Works with: nginx, istio (self-managed), envoy-gateway."
+  _hint "              Works with: istio (self-managed), envoy-gateway."
   _hint "              Does NOT work with istio-addon or agic (no IngressClass / path rewrite)."
   _hint ""
   _hint "DNS-01        — cert-manager writes a TXT record to Azure DNS. No HTTP port needed,"
@@ -1158,7 +1155,7 @@ _run_section_6() {
   _ask_choice --default "$tls_choice" \
     "TLS certificate source:" \
     "None                    — HTTP only (quickstart default, zero setup)" \
-    "Let's Encrypt (HTTP-01) — nginx, istio, envoy-gateway only" \
+    "Let's Encrypt (HTTP-01) — istio, envoy-gateway only" \
     "Let's Encrypt (DNS-01)  — all controllers, requires a custom domain" \
     "Existing                — bring your own K8s TLS secret"
 
@@ -1517,7 +1514,7 @@ _run_section_10() {
     _hint "                  more). Starts in Detection mode — logs matches without blocking."
     _hint "                  Say yes to diagnostics too, or nothing collects the firewall log and"
     _hint "                  you cannot see what to exclude before switching to Prevention."
-    _hint "                  For envoy-gateway/nginx/istio the policy is created but nothing references it —"
+    _hint "                  For envoy-gateway/istio the policy is created but nothing references it —"
     _hint "                  use Azure Front Door or DDoS Protection instead."
     if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "$waf_yn"; then
       CREATE_WAF="true"

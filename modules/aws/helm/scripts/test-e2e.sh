@@ -38,7 +38,7 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 # ── Resolve test URL ──────────────────────────────────────────────────────────
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
-# Derived in Terraform (unset = on unless Istio/NGINX was chosen), so read the
+# Derived in Terraform (unset = on unless Istio was chosen), so read the
 # applied output rather than the tfvars text.
 _enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
 

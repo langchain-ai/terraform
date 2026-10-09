@@ -6,7 +6,7 @@ typeface clean
 // ============================================================
 // KUBERNETES VIEW: All Pods Across All Namespaces
 // Full-featured LangSmith deployment — all features enabled:
-//   LangGraph Deployments, Fleet, Insights, LangSmith Chat, NGINX, cert-manager
+//   LangGraph Deployments, Fleet, Insights, LangSmith Chat, cert-manager
 // AWS services shown as external reference boxes only
 // ============================================================
 
@@ -47,7 +47,7 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
 
     // AWS Load Balancer Controller — manages ALB lifecycle
     // In ALB-native mode: watches Ingress resources, provisions ALB
-    // In Envoy/Istio/NGINX modes: manages TargetGroupBinding CRD
+    // In Envoy/Istio modes: manages TargetGroupBinding CRD
     // Runs as 2-replica Deployment for HA
     aws-load-balancer-controller [icon: kubernetes, color: gray]
 
@@ -107,17 +107,6 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
     // Certificate CRD — requests a TLS cert for the LangSmith domain
     // cert-manager fulfills this via ACME challenge → stores as TLS Secret
     Certificate langsmith-tls [icon: lock, color: gray]
-  }
-
-  // ── ingress-nginx (opt-in, NGINX mode — Path 2) ──────────
-  // Deployed when enable_nginx_ingress = true
-  // ALB forwards HTTPS traffic to NGINX NodePort → NGINX routes internally
-  ingress-nginx [color: purple] {
-
-    // NGINX Ingress Controller — single Deployment, handles all routing
-    // Reads Ingress resources in langsmith namespace
-    // Terminates TLS here (Let's Encrypt cert from cert-manager)
-    ingress-nginx-controller [icon: server, color: purple]
   }
 
   // ── envoy-gateway-system (opt-in, Envoy mode — Path 3) ───
@@ -340,8 +329,6 @@ aws-load-balancer-controller --> TargetGroupBinding: manages CRD lifecycle
 aws-load-balancer-controller --> Ingress langsmith: provisions ALB (Path 1)
 
 // ── Inbound traffic → gateway → services ────────────────────
-// NGINX path (opt-in, Path 2)
-ingress-nginx-controller > langsmith-frontend: Ingress backend
 
 // Envoy path (opt-in, Path 3)
 envoy-langsmith-gateway-proxy > langsmith-frontend: HTTPRoute backendRef

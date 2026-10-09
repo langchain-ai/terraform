@@ -486,16 +486,15 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 | Value | What Terraform installs | Best for |
 |-------|------------------------|----------|
 | `envoy-gateway` **(default)** | `gateway-helm` OCI chart (Envoy Gateway v1.2.0, ships the Gateway API CRDs) → Azure LB | Standard deployments. Gateway API-native. Use this for quickstart. |
-| `nginx` | `ingress-nginx` Helm chart → Azure LB | Legacy Ingress compatibility, for clusters standardized on classic Kubernetes Ingress. |
 | `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
 | `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
 
 > **Upgrading a deployment created on the old `nginx` default:** if `terraform.tfvars` omits
-> `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. To keep nginx,
-> set `ingress_controller = "nginx"`. To move to Envoy Gateway, set
+> `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. NGINX support
+> has been removed. To move to Envoy Gateway, set
 > `ingress_controller = "envoy-gateway"`, then run `make apply`, `make init-values`, and
-> `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes.
+> `make deploy` back to back. `make deploy` upgrades the existing LangSmith Helm release with the replacement routing. LangSmith is unreachable from the apply until the deploy finishes.
 > Update any DNS A record that points at the old IP.
 
 ---
@@ -512,7 +511,7 @@ tls_certificate_source = "none"
 
 **A private address instead of a public one:** `ingress_load_balancer = "internal"` puts the ingress controller on a private IP in the cluster's VNet, with no public frontend. It can't be combined with `dns_label` or with `tls_certificate_source = "letsencrypt"`. See [INGRESS_CONTROLLERS.md, "Private ingress"](INGRESS_CONTROLLERS.md#private-ingress).
 
-**Add HTTPS with Let's Encrypt (`envoy-gateway`, `nginx`, or self-managed `istio`):**
+**Add HTTPS with Let's Encrypt (`envoy-gateway` or self-managed `istio`):**
 ```hcl
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
@@ -553,7 +552,7 @@ langsmith_custom_ca_secret_name = "langsmith-ca"   # only for a private CA, see 
    ```
 2. `make init-values` writes the Ingress `tls:` entry for that Secret, with no cert-manager annotation. The Envoy Gateway Gateway references the same Secret, and `make deploy` copies it to the Istio gateway's namespace for `istio` and `istio-addon`. `langsmith_domain` alone is enough for every controller; `dns_label` is not needed.
 3. `make deploy` checks the Secret exists and is `kubernetes.io/tls` before it runs Helm, and stops with the command above if not.
-4. **Renewal is yours:** replace the Secret with the new certificate. NGINX and Envoy Gateway pick it up without a restart; with `istio` or `istio-addon`, re-run `make deploy` so the gateway's copy is refreshed.
+4. **Renewal is yours:** replace the Secret with the new certificate. Envoy Gateway picks it up without a restart; with `istio` or `istio-addon`, re-run `make deploy` so the gateway's copy is refreshed.
 
 **A private CA needs one more Secret** if LangSmith's pods call anything that CA signed, such as an OIDC provider or a Postgres or ClickHouse server. Browsers trust your CA through your organization's devices; the pods do not. Give them the CA bundle (root and intermediates, PEM) as `langsmith_custom_ca_secret_name`. `init-values.sh` sets the chart's `config.customCa` from it, and `deploy.sh` checks it before Helm runs:
 ```bash
@@ -565,7 +564,7 @@ The key defaults to `ca.crt` (`langsmith_custom_ca_secret_key`).
 - **Which pods do not:** the frontend, the operator, and the agent deployments the operator creates. If those must trust the CA, they need wiring this module does not yet do.
 - **It replaces the default trust store** for those pods, so include a public CA as well if they also reach public endpoints, such as Beacon for an online license.
 
-> ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
+> ⚠️ **`letsencrypt` (HTTP-01) only works with `istio` (self-managed) and `envoy-gateway`.**
 > `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
 > For those controllers, use `dns01` with a custom domain, `existing` with your own certificate, or `none` for HTTP-only.
 >
@@ -592,7 +591,7 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 - Re-running against an existing `terraform.tfvars` offers to load its values as answers, so you can change one setting without retyping the rest
 - Auto-detects Azure subscription ID from `az account show`
 - Validates deployment name format (`prod`, `staging`, `myco`)
-- Supports all 5 ingress options: `envoy-gateway` (default), `nginx`, `istio-addon`, `istio`, `agic`
+- Supports all 4 ingress options: `envoy-gateway` (default), `istio-addon`, `istio`, `agic`
 - Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 
@@ -724,7 +723,7 @@ Runs `terraform apply` in `infra/` in three targeted stages, each of which shows
 - Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
 - Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The seven LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
-- cert-manager, KEDA, ingress controller (Envoy Gateway / NGINX / Istio / AGIC — based on `ingress_controller` in tfvars)
+- cert-manager, KEDA, ingress controller (Envoy Gateway / Istio / AGIC — based on `ingress_controller` in tfvars)
 - For `agic`: Application Gateway v2 + static public IP + AGIC managed identity + Contributor/Reader/Network Contributor role assignments + the AKS `ingress-appgw` add-on
 - For `envoy-gateway`: `envoyproxy/gateway-helm` v1.2.0 in the `envoy-gateway-system` namespace, which ships the Gateway API CRDs, and the `ExperimentalGatewayAPISupport=true` feature gate on cert-manager, installed after Envoy Gateway
 - `langsmith` namespace + `langsmith-sa` service account
@@ -791,7 +790,7 @@ Translates Terraform outputs and `terraform.tfvars` flags into Helm values files
 - Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
 - Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
-- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`, `gateway.enabled: true`, `gateway.name: langsmith-gateway`)
+- Sets `ingressClassName` based on `ingress_controller`: `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`, `gateway.enabled: true`, `gateway.name: langsmith-gateway`)
 - Generates `helm/values/values-overrides.yaml` with: hostname, auth config, Blob WI config, Postgres/Redis blocks, Workload Identity annotations for 5 service accounts, ingress/TLS block
 - Copies the selected sizing file from `examples/` into `helm/values/`
 - Copies addon files based on `enable_*` flags: `agent-deploys` (with `url` and `tlsEnabled` injected automatically), `agent-builder`, `insights` (minimal in-cluster file or full external example), `polly`
@@ -805,7 +804,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 
 - Validates `values-overrides.yaml` exists (fails fast with `make init-values` hint if missing)
 - Refreshes kubeconfig via `az aks get-credentials`
-- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `nginx`, `istio-addon`, and `istio`
+- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `istio-addon` and `istio`
 - With `ingress_load_balancer = "internal"`, writes the internal load-balancer annotations into the Envoy Gateway EnvoyProxy, binds the Istio add-on Gateway to the add-on's internal gateway, and puts the subnet and IP annotations on it
 - For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
@@ -897,10 +896,9 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   `<release>-presidio-analyzer`) with the LangSmith identity. Those two credentials exist whether or not the flag is set,
   so turning the gateway on needs no `make apply` on a cluster applied from this version. On an older cluster, run
   `make apply` once first.
-- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls, but ingress-nginx cuts requests
-  at 60 s and Application Gateway at 30 s. `make deploy` gives `/gateway/` an Ingress of its own,
-  `<release>-llm-gateway`, copied from the chart's (same class, host, TLS and backend) and carrying a 900 s timeout: the
-  NGINX read and send timeouts with `ingress_controller = "nginx"`, Application Gateway's request timeout with `agic`.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls, but Application Gateway cuts requests
+  at 30 s. `make deploy` gives `/gateway/` an Ingress of its own,
+  `<release>-llm-gateway`, copied from the chart's (same class, host, TLS and backend) and carrying a 900 s timeout: Application Gateway's request timeout with `agic`.
   Every other path keeps the controller's default, so a slow request elsewhere is not held for fifteen minutes. Istio sets
   no request timeout by default. With `envoy-gateway` or `none`, `init-values.sh` warns, and the timeout has to be raised
   there. `make uninstall` removes the extra Ingress.
@@ -929,7 +927,7 @@ All files in `helm/values/` are **gitignored** (generated or contain live secret
 ### `values.yaml` — Azure base config
 **Location:** `helm/values/values.yaml` (tracked in git)
 
-The Azure-specific base that applies on every deploy. Sets `nginx` as the fallback ingress class (the overrides layer replaces it, or disables Ingress for `envoy-gateway`), configures Blob Storage with Workload Identity (no static credentials), and disables Istio gateway. You should not need to edit this file — environment-specific overrides go in `values-overrides.yaml`.
+The Azure-specific base that applies on every deploy. The overrides layer sets the ingress class or disables Ingress for `envoy-gateway`. The base configures Blob Storage with Workload Identity (no static credentials), and disables Istio gateway. You should not need to edit this file — environment-specific overrides go in `values-overrides.yaml`.
 
 ---
 
@@ -1059,7 +1057,7 @@ azure/
 | Module | Required | Description |
 |--------|----------|-------------|
 | `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Not zonal — an Azure subnet spans every zone in its region. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
-| `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: envoy-gateway (default) / nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart). |
+| `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: envoy-gateway (default) / istio / istio-addon / agic (App Gateway v2 + AGIC chart). |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
 | `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete), its network ACLs and role assignments, and the two secrets Terraform needs (Postgres password, license key). The LangSmith app secrets are seeded by `make seed-secrets`, not Terraform. |
@@ -1418,7 +1416,7 @@ The Helm charts are not on this list when Terraform and `make deploy` run
 outside the VNet: the runner fetches them, not the cluster. From a jump host
 inside the VNet, its route has to reach `charts.jetstack.io`,
 `kedacore.github.io`, `langchain-ai.github.io`, `docker.io` (the Envoy Gateway
-chart), and the NGINX or Istio chart repository for the controller you choose.
+chart), and the Istio chart repository for the controller you choose.
 
 **A public ingress and user-defined routes.** With `userDefinedRouting`, a
 public load balancer for the ingress controller receives traffic on its public

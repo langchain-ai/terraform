@@ -233,11 +233,6 @@ output "ingress_load_balancer_subnet_grant" {
   } : null
 }
 
-output "nginx_service_annotations" {
-  description = "Annotations on the NGINX controller's LoadBalancer Service, as passed to the chart."
-  value       = local.nginx_service_annotations
-}
-
 output "istio_gateway_values" {
   description = "Values passed to the self-managed Istio gateway chart, or null when it is not installed."
   value       = one(helm_release.istio_gateway[*].values)

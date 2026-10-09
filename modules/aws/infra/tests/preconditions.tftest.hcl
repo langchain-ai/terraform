@@ -380,7 +380,7 @@ run "two_ingress_controllers_are_rejected" {
 
   variables {
     enable_envoy_gateway = true
-    enable_nginx_ingress = true
+    enable_istio_gateway = true
   }
 
   expect_failures = [terraform_data.validate_inputs]

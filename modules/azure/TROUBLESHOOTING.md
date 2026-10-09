@@ -561,30 +561,7 @@ kubectl get svc -n envoy-gateway-system \
 # Expected: langsmith-demo (or your dns_label value)
 ```
 
-If either is missing, set `dns_label` in `terraform.tfvars` and run `make deploy`, which re-applies the EnvoyProxy. Once DNS resolves, delete the stuck cert as in the nginx fix that follows.
-
-**Fix with `ingress_controller = "nginx"`:** set the annotation manually.
-```bash
-kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
-  service.beta.kubernetes.io/azure-dns-label-name=<dns_label> \
-  --overwrite
-# e.g. --overwrite with value: langsmith-demo
-
-# Wait 1-2 minutes, then verify DNS resolves:
-nslookup langsmith-demo.eastus.cloudapp.azure.com
-# Expected: returns the public IP
-
-# Once DNS resolves, delete the stuck cert to trigger a re-issue:
-kubectl delete certificate langsmith-tls -n langsmith
-# cert-manager re-creates it and the ACME challenge completes within 2-3 minutes
-```
-
-**Verify the annotation was set:**
-```bash
-kubectl get svc ingress-nginx-controller -n ingress-nginx \
-  -o jsonpath='{.metadata.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}'
-# Expected: langsmith-demo (or your dns_label value)
-```
+If either is missing, set `dns_label` in `terraform.tfvars` and run `make deploy`, which re-applies the EnvoyProxy. Once DNS resolves, delete the stuck Certificate to trigger reissuance: `kubectl delete certificate langsmith-tls -n langsmith`.
 
 ---
 
@@ -743,7 +720,7 @@ spec:
     solvers:
     - http01:
         ingress:
-          ingressClassName: nginx   # replace with "istio" when ingress_controller = "istio-addon" or "istio"
+          ingressClassName: istio
 EOF
 
 # Verify it becomes Ready (takes ~20 seconds)
@@ -789,7 +766,7 @@ infra/scripts/_common.sh: No such file or directory
 | `infra/scripts/_common.sh` | Shared bash helpers (`_parse_tfvar`, `pass/fail/warn/info/header`) |
 | `helm/scripts/get-kubeconfig.sh` | Reads cluster name from `terraform output`, runs `az aks get-credentials` |
 | `helm/scripts/preflight-check.sh` | Checks required tools, cluster connectivity, helm repo |
-| `helm/scripts/preflight-check.sh` | TLS check, NGINX DNS label annotation |
+| `helm/scripts/preflight-check.sh` | TLS check, ingress DNS label annotation |
 | `helm/scripts/uninstall.sh` | Uninstalls Helm release, prompts for namespace deletion |
 | `infra/scripts/status.sh` | 9-section health check for the full deployment |
 | `infra/scripts/tf-run.sh` | Wrapper for `terraform init/plan/apply/destroy` |
@@ -1153,7 +1130,7 @@ az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningStat
 
 **Symptom:** `terraform destroy` hangs waiting to delete the VNet or subnet with no progress.
 
-**Cause:** The Azure Load Balancer provisioned for the ingress controller's LoadBalancer service (the Envoy proxy service for `envoy-gateway`, `ingress-nginx-controller` for `nginx`) is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
+**Cause:** The Azure Load Balancer provisioned for the ingress controller's LoadBalancer service (the Envoy proxy service for `envoy-gateway`) is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
 
 **Fix — correct teardown order:**
 ```bash
@@ -1161,8 +1138,6 @@ az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningStat
 #    (for envoy-gateway, make uninstall deletes the Gateway, which removes the proxy service)
 make uninstall
 
-# 1b. With ingress_controller = "nginx": remove the ingress-nginx Load Balancer
-helm uninstall ingress-nginx -n ingress-nginx --wait
 
 # 2. Delete the namespace (clears any lingering finalizers)
 kubectl delete namespace langsmith --timeout=60s

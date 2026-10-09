@@ -107,9 +107,3 @@ variable "gateway_target_group_arn" {
   description = "ARN of the Terraform-managed ALB target group for the gateway proxy. When non-empty and enable_envoy_gateway is true, a TargetGroupBinding is created in envoy-gateway-system so the ALB controller registers Envoy proxy pod IPs automatically."
   default     = ""
 }
-
-variable "enable_nginx_ingress" {
-  type        = bool
-  description = "Install NGINX ingress controller (ingress-nginx). When enabled, the ALB forwards to NGINX controller pods via a TargetGroupBinding, and LangSmith uses ingressClassName: nginx."
-  default     = false
-}

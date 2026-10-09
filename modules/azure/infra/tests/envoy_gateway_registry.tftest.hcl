@@ -91,7 +91,7 @@ run "other_ingress_controllers_output_nothing" {
   command = plan
 
   variables {
-    ingress_controller           = "nginx"
+    ingress_controller           = "istio"
     envoy_gateway_image_registry = "nexus.example.com"
   }
 

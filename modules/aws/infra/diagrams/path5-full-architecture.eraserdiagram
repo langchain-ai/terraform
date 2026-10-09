@@ -6,7 +6,7 @@ typeface clean
 // ============================================================
 // PATH 5: FULL AWS LangSmith Architecture — All Deployment Paths
 // Macro view: all components, all gateway options, all opt-ins
-// Shows ALB-native, NGINX, Envoy, and Istio as parallel options
+// Shows ALB-native, Envoy, and Istio as parallel options
 // Use this diagram when presenting to a customer CTO or architect
 // ============================================================
 
@@ -171,19 +171,10 @@ AWS Account [icon: aws, color: blue] {
         }
 
         // ── GATEWAY OPTIONS — choose one per deployment ────
-        // All four are shown as parallel options; only one is active at a time
+        // All three are shown as parallel options; only one is active at a time
 
         // Path 1: ALB-Native (AWS LBC manages ALB via Kubernetes Ingress)
         // No separate gateway controller — AWS LBC IS the gateway layer
-        // ingress-nginx not needed; Ingress resource lives in langsmith ns
-        // opt-in: enable_nginx_ingress = false (default: ALB native)
-
-        // Path 2: NGINX Ingress Controller
-        // ALB → NLB/NodePort → NGINX → LangSmith services
-        // Enable with: enable_nginx_ingress = true
-        ingress-nginx [color: purple] {
-          nginx-ingress-controller [icon: server, color: purple]
-        }
 
         // Path 3: Envoy Gateway
         // ALB (Terraform-pre-provisioned) → TargetGroupBinding → Envoy proxy
@@ -315,8 +306,6 @@ ACM DNS Validation Record > ALB Internet-Facing: cert bound to ALB listener
 ALB Internet-Facing > Ingress langsmith: Path 1 — LBC-managed ALB
 aws-load-balancer-controller --> Ingress langsmith: watches and reconciles
 
-// Path 2: NGINX — ALB forwards to NGINX NodePort
-ALB Internet-Facing > nginx-ingress-controller: Path 2 — HTTPS :443 → NodePort
 
 // Path 3: Envoy — ALB TGB forwards to Envoy proxy pod IPs
 ALB Internet-Facing > TargetGroupBinding: Path 3 — HTTP :10080 (TLS offloaded)
@@ -331,7 +320,6 @@ istiod --> istio-ingressgateway: xDS programs data plane
 istiod --> VirtualService langsmith: reconciles traffic rules
 
 // ── Gateway → frontend ──────────────────────────────────────
-nginx-ingress-controller > langsmith-frontend: Ingress backend
 envoy-langsmith-proxy Pods > langsmith-frontend: HTTPRoute backendRef
 istio-ingressgateway > langsmith-frontend: VirtualService destination
 Ingress langsmith > langsmith-frontend: ALB-native rule /

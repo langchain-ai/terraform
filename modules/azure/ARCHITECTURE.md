@@ -76,7 +76,6 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 | Controller | Variable | DNS label support | Notes |
 |-----------|---------|------------------|-------|
 | `envoy-gateway` | `ingress_controller = "envoy-gateway"` | yes | Default. Gateway API native. Uses `envoyproxy/gateway-helm`. |
-| `nginx` | `ingress_controller = "nginx"` | yes | NGINX via Helm, standard Kubernetes Ingress. For clusters standardized on classic Ingress. |
 | `istio-addon` | `ingress_controller = "istio-addon"` | yes | AKS managed Istio service mesh. Use `istio_addon_revision` to pin revision. |
 | `istio` | `ingress_controller = "istio"` | yes | Self-managed Istio via Helm. Full control over revision and config. |
 | `none` | `ingress_controller = "none"` | — | Bring your own ingress. The Ingress goes to the cluster's default IngressClass unless `ingress.ingressClassName` is set in `values-overrides.yaml`; `deploy.sh` checks for one. |
