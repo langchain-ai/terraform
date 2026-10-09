@@ -355,6 +355,8 @@ resource "google_service_account" "byo_iam" {
   account_id   = each.key
   display_name = each.value.display_name
   description  = each.value.description
+
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_iam_member" "byo_iam" {
@@ -387,6 +389,8 @@ resource "google_project_iam_custom_role" "service_account_iam_manager" {
     "iam.serviceAccounts.getIamPolicy",
     "iam.serviceAccounts.setIamPolicy",
   ]
+
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_service_account_iam_member" "byo_iam_iam_manager" {
