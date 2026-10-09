@@ -3,6 +3,11 @@ output "langsmith_namespace" {
   value       = kubernetes_namespace_v1.langsmith.metadata[0].name
 }
 
+output "resource_quota" {
+  description = "Hard limits on the LangSmith namespace ResourceQuota"
+  value       = kubernetes_resource_quota_v1.langsmith.spec[0].hard
+}
+
 output "cert_manager_namespace" {
   description = "Kubernetes namespace where cert-manager is deployed, or null when this module did not install it"
   value       = one(helm_release.cert_manager[*].namespace)

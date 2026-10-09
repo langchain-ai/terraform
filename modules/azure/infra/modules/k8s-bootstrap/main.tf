@@ -120,7 +120,6 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 # ── Resource Quota ────────────────────────────────────────────────────────────
 # Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
 # deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
-# Defaults: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods.
 
 resource "kubernetes_resource_quota_v1" "langsmith" {
   metadata {
@@ -129,13 +128,7 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
   }
 
   spec {
-    hard = {
-      "requests.cpu"    = "40"
-      "requests.memory" = "80Gi"
-      "limits.cpu"      = "80"
-      "limits.memory"   = "160Gi"
-      pods              = "200"
-    }
+    hard = var.resource_quota
   }
 }
 

@@ -200,6 +200,8 @@ sizing_profile = "minimum"            # absolute minimum (demos, very low resour
 
 Then re-run `make init-values && make deploy`.
 
+`production-large` needs a larger namespace ResourceQuota. Copy the `resource_quota` block from the header of `helm/values/examples/langsmith-values-sizing-production-large.yaml` into `terraform.tfvars` and run `make apply` before the deploy.
+
 ---
 
 ## Deployment Summary

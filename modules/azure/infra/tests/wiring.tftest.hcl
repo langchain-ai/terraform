@@ -648,6 +648,38 @@ run "cluster_components_absent_when_flags_are_false" {
   }
 }
 
+# ── Namespace quota, both directions ─────────────────────────────────────────
+# production-large needs more than the default quota even at minimum replicas,
+# so a broken pass-through would leave its pods rejected at admission.
+
+run "resource_quota_reaches_the_namespace" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      "requests.cpu"    = "160"
+      "requests.memory" = "320Gi"
+      "limits.cpu"      = "560"
+      "limits.memory"   = "1200Gi"
+      pods              = "250"
+    }
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.resource_quota["limits.cpu"] == "560"
+    error_message = "resource_quota limits.cpu = \"560\" planned ${module.k8s_bootstrap.resource_quota["limits.cpu"]}"
+  }
+}
+
+run "unset_resource_quota_keeps_the_default" {
+  command = plan
+
+  assert {
+    condition     = module.k8s_bootstrap.resource_quota["limits.cpu"] == "80"
+    error_message = "unset resource_quota planned limits.cpu = ${module.k8s_bootstrap.resource_quota["limits.cpu"]}"
+  }
+}
+
 # The root accepts "existing" and passes it to k8s-bootstrap unchanged, so the
 # child's own validation must accept it too, or the documented setup fails at
 # plan. Nothing in k8s-bootstrap reacts to it: the dns01 wiring stays off.

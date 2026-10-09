@@ -43,6 +43,18 @@ variable "langsmith_namespace" {
   default     = "langsmith"
 }
 
+variable "resource_quota" {
+  type        = map(string)
+  description = "Hard limits on the LangSmith namespace ResourceQuota. Replaces the whole map, so list every key."
+  default = {
+    "requests.cpu"    = "40"
+    "requests.memory" = "80Gi"
+    "limits.cpu"      = "80"
+    "limits.memory"   = "160Gi"
+    pods              = "200"
+  }
+}
+
 # ── Backing services ──────────────────────────────────────────────────────────
 
 variable "use_external_postgres" {

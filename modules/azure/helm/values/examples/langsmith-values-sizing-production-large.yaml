@@ -9,8 +9,20 @@
 # deployments, start with sizing_profile = "production" and scale up if
 # monitoring shows sustained pressure.
 #
-# Covers ALL chart components including infrastructure (ClickHouse, operator,
-# agent-builder servers) — not just the application pods.
+# This profile needs more than the default namespace ResourceQuota. Before the
+# first deploy, add this to terraform.tfvars and run `make apply`. It covers
+# every HPA at its maximum with Deployments and Fleet on:
+#
+#   resource_quota = {
+#     "requests.cpu"    = "160"
+#     "requests.memory" = "320Gi"
+#     "limits.cpu"      = "560"
+#     "limits.memory"   = "1200Gi"
+#     pods              = "250"
+#   }
+#
+# The profile covers ALL chart components including infrastructure (ClickHouse,
+# operator, agent-builder servers) — not just the application pods.
 #
 # Monitor actual usage with:
 #   kubectl top pods -n langsmith
