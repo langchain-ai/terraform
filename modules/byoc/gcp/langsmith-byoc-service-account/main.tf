@@ -159,6 +159,9 @@ resource "google_service_account" "provisioner" {
   # LangSmith reads this description to verify that the LangSmith organization
   # with this external ID owns the provisioner.
   description = var.external_id
+
+  # The IAM API must be enabled first in a new project.
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_iam_custom_role" "provisioner" {
@@ -168,6 +171,8 @@ resource "google_project_iam_custom_role" "provisioner" {
   description = "Creates, updates and deletes the resources of LangSmith BYOC data planes"
   stage       = "BETA"
   permissions = local.provisioner_permissions
+
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_iam_custom_role" "project_iam_granter" {
@@ -180,6 +185,8 @@ resource "google_project_iam_custom_role" "project_iam_granter" {
     "resourcemanager.projects.getIamPolicy",
     "resourcemanager.projects.setIamPolicy",
   ]
+
+  depends_on = [google_project_service.apis]
 }
 
 # Data planes run GKE nodes and workloads as service accounts the provisioner
@@ -193,6 +200,8 @@ resource "google_project_iam_custom_role" "service_account_user" {
   description = "Runs GKE nodes and workloads as the data plane service accounts"
   stage       = "BETA"
   permissions = ["iam.serviceAccounts.actAs"]
+
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_project_iam_member" "provisioner" {
