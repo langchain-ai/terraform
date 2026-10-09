@@ -131,7 +131,6 @@ gcp/
 │       ├── preflight.sh        ← Pre-Terraform tooling/auth/API checks
 │       ├── quickstart.sh       ← Interactive setup wizard — generates terraform.tfvars
 │       ├── setup-env.sh        ← Exports TF_VAR_* secrets from Secret Manager (source it)
-│       ├── smithdb.sh          ← SmithDB size, rollout phase, and status (make smithdb-*)
 │       ├── status.sh           ← Deployment health check — tells you what to run next
 │       ├── manage-secrets.sh   ← Secret Manager CRUD (list/get/set/validate/delete)
 │       └── tf-run.sh           ← Terraform wrapper that auto-sources setup-env.sh
@@ -141,6 +140,8 @@ gcp/
     │   ├── get-kubeconfig.sh     ← gcloud get-credentials wrapper
     │   ├── init-values.sh        ← Generates values-overrides.yaml from Terraform outputs
     │   ├── preflight-check.sh    ← Pre-deploy validation (tools, cluster, values)
+    │   ├── smithdb-migration-job-start.sh ← Sets up the SmithDB historical migration (make smithdb-migration-job-start)
+    │   ├── smithdb-migration-job-end.sh   ← Removes the migration setup (make smithdb-migration-job-end)
     │   └── uninstall.sh          ← Helm uninstall + operator resource cleanup
     └── values/
         ├── values.yaml                    ← GCP base Helm values (Gateway, GCS HMAC)
@@ -538,16 +539,18 @@ List what is published with `helm search repo langchain/langsmith --versions`.
 
 ### Sizing and staged rollout
 
-`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The three gates `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, and `smithdb_query_enabled` move SmithDB through dual write, backfill, and cutover. ClickHouse stays enabled in every phase.
+`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) in `infra/terraform.tfvars` set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
+
+The historical migration (backfill) is the one stage with its own make targets:
 
 ```bash
-make smithdb-configure SIZING=small CACHE=local-ssd    # size and cache mode
-make smithdb-phase PHASE=dual-write                    # off | dual-write | backfill | cutover
-make smithdb-status                                    # read-only
-make deploy-all                                        # after each change
+make smithdb-migration-job-start   # TaskDB, sizing; sets smithdb_migration_enabled = true
+make deploy-all                    # make apply, make init-values, make deploy
+make smithdb-migration-job-end     # once the Job is Complete; sets smithdb_migration_enabled = false
+make deploy-all
 ```
 
-See [SMITHDB.md](SMITHDB.md) for the sizing table, the phases, and the upgrade from chart 0.16.
+See [SMITHDB.md](SMITHDB.md) for the sizing table, the stages, and the upgrade from chart 0.16.
 
 ---
 
