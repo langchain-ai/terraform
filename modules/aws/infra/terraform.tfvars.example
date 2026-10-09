@@ -623,8 +623,8 @@ langsmith_namespace = "langsmith"
 #       Also opens port 15017 on the node SG for the istiod webhook.
 #
 # enable_envoy_gateway has no hardcoded default. Leave it out entirely and Envoy
-# Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true,
-# so existing Istio/NGINX configurations keep working untouched. Setting it
+# Gateway is enabled unless enable_istio_gateway is true,
+# so existing Istio configurations keep working untouched. Setting it
 # explicitly — as below — always wins over that derivation.
 enable_envoy_gateway = true
 enable_istio_gateway = false

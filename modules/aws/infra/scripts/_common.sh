@@ -49,11 +49,11 @@ _tfvar_is_true() {
   [[ "$val" == "true" ]]
 }
 
-# Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway /
-# enable_nginx_ingress) for post-apply scripts.
+# Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway)
+# for post-apply scripts.
 #
-# enable_envoy_gateway is derived in Terraform — unset means "on unless Istio or
-# NGINX was chosen" — so terraform.tfvars text alone cannot tell you which mode was
+# enable_envoy_gateway is derived in Terraform — unset means "on unless Istio
+# was chosen" — so terraform.tfvars text alone cannot tell you which mode was
 # applied. Read the Terraform output instead, and fall back to tfvars only when no
 # state exists yet (pre-apply callers such as preflight).
 _read_gateway_flag() {

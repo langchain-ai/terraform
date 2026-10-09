@@ -16,7 +16,7 @@
 
 ingress:
   enabled: true
-  # No class here. The overrides layer sets one (nginx, istio,
+  # No class here. The overrides layer sets one (istio,
   # azure-application-gateway) or disables Ingress (envoy-gateway, the default,
   # and istio-addon). With ingress_controller = "none" the cluster's default
   # IngressClass serves it; set ingressClassName in values-overrides.yaml to

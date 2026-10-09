@@ -227,12 +227,11 @@ _existing() {
 
 # Return the gateway menu choice for QuickStart.
 # Fresh configurations recommend Envoy (1). Updates preserve the existing
-# controller; ALB is represented by all three controller flags being false (3).
+# controller; ALB is represented by both controller flags being false (3).
 _quickstart_gateway_default() {
   local update_mode="$1"
   local envoy_enabled="$2"
   local istio_enabled="$3"
-  local nginx_enabled="$4"
 
   if [[ "$update_mode" != "true" ]]; then
     echo "1"
@@ -240,8 +239,6 @@ _quickstart_gateway_default() {
     echo "1"
   elif [[ "$istio_enabled" == "true" ]]; then
     echo "2"
-  elif [[ "$nginx_enabled" == "true" ]]; then
-    echo "4"
   else
     echo "3"
   fi
@@ -272,16 +269,14 @@ _validate_conflicts() {
 
   local envoy; envoy=$(_parse_tfvar "enable_envoy_gateway" 2>/dev/null || echo "false")
   local istio;  istio=$(_parse_tfvar "enable_istio_gateway" 2>/dev/null || echo "false")
-  local nginx;  nginx=$(_parse_tfvar "enable_nginx_ingress" 2>/dev/null || echo "false")
   local tls;    tls=$(_parse_tfvar "tls_certificate_source" 2>/dev/null || echo "none")
   local dns01;  dns01=$(_parse_tfvar "create_cert_manager_irsa" 2>/dev/null || echo "false")
   # More than one gateway controller enabled at the same time
   local gw_count=0
   [[ "$envoy" == "true" ]] && (( gw_count++ )) || true
   [[ "$istio" == "true" ]] && (( gw_count++ )) || true
-  [[ "$nginx" == "true" ]] && (( gw_count++ )) || true
   if (( gw_count > 1 )); then
-    _conflict_warn "Multiple gateway controllers enabled (nginx=$nginx, envoy=$envoy, istio=$istio)."
+    _conflict_warn "Multiple gateway controllers enabled (envoy=$envoy, istio=$istio)."
     printf "  Only one gateway controller can be active. Choose one in Section 8.\n"
   fi
 
@@ -688,34 +683,23 @@ printf "  ${DIM}you don't need Gateway API. Istio is another split-dataplane opt
 
 _ex_envoy=$(_existing "enable_envoy_gateway" "false")
 _ex_istio=$(_existing "enable_istio_gateway" "false")
-_ex_nginx=$(_existing "enable_nginx_ingress" "false")
 _gw_default=$(_quickstart_gateway_default \
-  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio" "$_ex_nginx")
+  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio")
 
-_ask_choice "$(_choice_arg "enable_envoy_gateway" "enable_istio_gateway" "enable_nginx_ingress")" "$_gw_default" --recommended 1 "$(_numbered_prompt "8.1" "Ingress / Gateway mode:")" \
+_ask_choice "$(_choice_arg "enable_envoy_gateway" "enable_istio_gateway")" "$_gw_default" --recommended 1 "$(_numbered_prompt "8.1" "Ingress / Gateway mode:")" \
   "Envoy Gateway — modern routing with the Kubernetes Gateway API" \
   "Istio Gateway — service-mesh routing with VirtualServices" \
-  "Application Load Balancer (ALB) — simplest path using AWS load balancing" \
-  "NGINX Ingress Controller — legacy ingress compatibility"
+  "Application Load Balancer (ALB) — simplest path using AWS load balancing"
 
 GATEWAY_MODE="envoy"
 ENABLE_ENVOY="true"
 ENABLE_ISTIO="false"
-ENABLE_NGINX="false"
 
 case "$_CHOICE" in
   1) GATEWAY_MODE="envoy"; ENABLE_ENVOY="true" ;;
   2) GATEWAY_MODE="istio"; ENABLE_ENVOY="false"; ENABLE_ISTIO="true" ;;
   3) GATEWAY_MODE="alb"; ENABLE_ENVOY="false" ;;
-  4) GATEWAY_MODE="nginx"; ENABLE_ENVOY="false"; ENABLE_NGINX="true" ;;
 esac
-
-# For NGINX: brief note (ALB TGB wires automatically, no extra input needed)
-if [[ "$GATEWAY_MODE" == "nginx" ]]; then
-  echo ""
-  printf "  ${DIM}NGINX: ALB → TargetGroupBinding → NGINX controller pods → LangSmith.${RESET}\n"
-  printf "  ${DIM}TLS terminates at the ALB using ACM.${RESET}\n"
-fi
 
 # For Istio: brief note. No input is needed because the gateway service is ClusterIP and the ALB in front of it decides whether it is public or internal.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
@@ -1446,9 +1430,8 @@ cat >> "$OUTPUT" << TFVARS
 
 #------------------------------------------------------------------------------
 # Traffic Routing
-# Only one of enable_nginx_ingress / enable_envoy_gateway / enable_istio_gateway should be true at a time.
+# Only one of enable_envoy_gateway / enable_istio_gateway should be true at a time.
 #------------------------------------------------------------------------------
-enable_nginx_ingress = ${ENABLE_NGINX}
 enable_envoy_gateway = ${ENABLE_ENVOY}
 enable_istio_gateway = ${ENABLE_ISTIO}
 TFVARS
@@ -1590,11 +1573,6 @@ if [[ "$GATEWAY_MODE" == "istio" ]]; then
   if [[ "$CREATE_CERT_MANAGER" == "true" ]]; then
     printf "  ${DIM}Terraform also installs cert-manager and configures DNS-01 through Route 53.${RESET}\n"
   fi
-elif [[ "$GATEWAY_MODE" == "nginx" ]]; then
-  echo ""
-  printf "  ${DIM}Note: terraform apply installs NGINX ingress-nginx chart and creates a${RESET}\n"
-  printf "  ${DIM}TargetGroupBinding to wire the ALB target group to the NGINX controller.${RESET}\n"
-  printf "  ${DIM}No separate controller install step needed — handled by k8s-bootstrap.${RESET}\n"
 elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
   echo ""
   printf "  ${DIM}Note: terraform apply installs Envoy Gateway and creates the GatewayClass/Gateway.${RESET}\n"

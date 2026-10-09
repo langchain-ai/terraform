@@ -51,18 +51,6 @@ locals {
   # balancer with private networks"). The root decides from known inputs, so
   # the grant's count is known at plan even when the node subnet is carved.
   ingress_lb_other_subnet = var.ingress_load_balancer_needs_subnet_grant
-  nginx_service_annotations = merge(
-    {
-      # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
-      # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
-      "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
-    },
-    var.dns_label != "" ? {
-      # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
-      "service.beta.kubernetes.io/azure-dns-label-name" = var.dns_label
-    } : {},
-    local.ingress_internal_annotations,
-  )
 
   # With an internal load balancer, the add-on's internal gateway serves
   # LangSmith and the public one is off, so nothing answers from outside.
@@ -223,7 +211,7 @@ data "azurerm_kubernetes_cluster" "existing" {
       # on, but unlike the mesh it is usable on an attached cluster when the customer
       # has already enabled the add-on, which the postcondition below checks for.
       condition     = var.ingress_controller != "istio-addon"
-      error_message = "ingress_controller = 'istio-addon' requires create_cluster = true — Azure Service Mesh is configured through service_mesh_profile on a Terraform-owned cluster resource, and this module cannot enable it on a cluster it only reads. Use 'istio' for the self-managed Helm install, or 'nginx', 'agic', or 'envoy-gateway'."
+      error_message = "ingress_controller = 'istio-addon' requires create_cluster = true — Azure Service Mesh is configured through service_mesh_profile on a Terraform-owned cluster resource, and this module cannot enable it on a cluster it only reads. Use 'istio' for the self-managed Helm install, or 'agic' or 'envoy-gateway'."
     }
 
     precondition {
@@ -836,49 +824,6 @@ resource "azurerm_federated_identity_credential" "k8s_app" {
   subject  = "system:serviceaccount:${var.langsmith_namespace}:${each.value}"
 }
 
-# NGINX Ingress Controller — the single entry point for all HTTP(S) traffic.
-# Creates an Azure Standard Load Balancer with a public IP.
-# Routes traffic to LangSmith services by host/path via Ingress rules.
-# cert-manager integrates with NGINX to automate TLS certificate provisioning.
-resource "helm_release" "nginx_ingress" {
-  count      = var.ingress_controller == "nginx" ? 1 : 0
-  name       = "ingress-nginx"
-  namespace  = "ingress-nginx"
-  repository = "https://kubernetes.github.io/ingress-nginx"
-  chart      = "ingress-nginx"
-
-  create_namespace = true
-
-  values = [
-    yamlencode({
-      controller = {
-        replicaCount = 2
-
-        # Dedicated health-check endpoint that always returns 200.
-        # Azure LB HTTP probes hit /nginx-health on the NodePort — this returns 200
-        # so backends are never marked unhealthy. More reliable than TCP probes because
-        # the AKS cloud controller manager respects the request-path annotation on every
-        # reconcile cycle (e.g. after autoscaler node add/remove), whereas the protocol
-        # annotation is only applied at service creation time.
-        config = {
-          server-snippet = <<-EOT
-            location /nginx-health {
-              access_log off;
-              return 200 "healthy\n";
-              add_header Content-Type text/plain;
-            }
-          EOT
-        }
-
-        service = {
-          type        = "LoadBalancer"
-          annotations = local.nginx_service_annotations
-        }
-      }
-    })
-  ]
-}
-
 # ── Istio (self-managed Helm) ──────────────────────────────────────────────────
 # Used when ingress_controller = "istio". Installs istio-base (CRDs), istiod
 # (control plane), and istio-ingressgateway (external LB) into istio-system.
@@ -925,7 +870,7 @@ resource "helm_release" "istiod" {
 }
 
 # Istio ingress gateway: the external-facing Load Balancer for all LangSmith traffic.
-# Replaces NGINX when Istio is in use. Gateway + VirtualService resources
+# Gateway + VirtualService resources
 # (in use-cases/istio/) route traffic to LangSmith services.
 resource "helm_release" "istio_gateway" {
   count      = var.ingress_controller == "istio" && (var.istio_external_gateway_enabled || local.ingress_internal) ? 1 : 0

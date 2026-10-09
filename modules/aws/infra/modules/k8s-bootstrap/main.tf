@@ -458,7 +458,7 @@ resource "helm_release" "envoy_gateway" {
 # subsequent applies. Without a GatewayClass, the Gateway stays in "Waiting
 # for controller" state indefinitely.
 #
-# Istio and NGINX keep their proxy Service internal with a one-line Helm value.
+# Istio keep their proxy Service internal with a one-line Helm value.
 # Envoy cannot: its Service is created per Gateway at runtime, so the override
 # must be an EnvoyProxy on the GatewayClass. Without it the Service defaults to
 # LoadBalancer and AWS provisions an NLB that never receives traffic.
@@ -823,84 +823,3 @@ MANIFEST
 
   depends_on = [terraform_data.istio_gateway_resource]
 }
-
-# ── NGINX Ingress Controller ──────────────────────────────────────────────────
-# Installs ingress-nginx as a ClusterIP service — no external NLB is created.
-# A TargetGroupBinding wires the Terraform-managed ALB target group to the
-# nginx controller pods (target-type: ip via VPC-CNI). The LangSmith Helm chart
-# uses ingressClassName: nginx and standard Ingress resources.
-#
-# ALB-always pattern: ALB → NGINX controller (port 80) → Ingress → frontend svc.
-# TLS terminates at the ALB (ACM cert); NGINX handles HTTP-only internally.
-
-resource "helm_release" "nginx_ingress" {
-  count = var.enable_nginx_ingress ? 1 : 0
-
-  name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
-  chart            = "ingress-nginx"
-  namespace        = "ingress-nginx"
-  create_namespace = true
-  version          = "4.10.1"
-
-  set {
-    name  = "controller.service.type"
-    value = "ClusterIP"
-  }
-  set {
-    name  = "controller.resources.requests.cpu"
-    value = "100m"
-  }
-  set {
-    name  = "controller.resources.requests.memory"
-    value = "128Mi"
-  }
-}
-
-# NGINX TargetGroupBinding — binds ALB TG to ingress-nginx-controller service.
-resource "terraform_data" "nginx_target_group_binding" {
-  count = var.enable_nginx_ingress ? 1 : 0
-
-  input = {
-    cluster_name = var.cluster_name
-    region       = var.region
-  }
-
-  triggers_replace = [
-    var.namespace,
-    var.gateway_target_group_arn,
-  ]
-
-  provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
-    command     = <<-EOT
-      ${local._ctx_check}
-      cat <<MANIFEST | kubectl apply -f -
-apiVersion: elbv2.k8s.aws/v1beta1
-kind: TargetGroupBinding
-metadata:
-  name: langsmith-nginx-tgb
-  namespace: ingress-nginx
-spec:
-  serviceRef:
-    name: ingress-nginx-controller
-    port: 80
-  targetGroupARN: ${var.gateway_target_group_arn}
-  targetType: ip
-MANIFEST
-    EOT
-  }
-
-  provisioner "local-exec" {
-    when        = destroy
-    interpreter = ["bash", "-c"]
-    command     = <<-EOT
-      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
-      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
-      kubectl delete targetgroupbinding langsmith-nginx-tgb -n ingress-nginx --ignore-not-found=true 2>/dev/null || true
-    EOT
-  }
-
-  depends_on = [helm_release.nginx_ingress]
-}
-

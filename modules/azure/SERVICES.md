@@ -166,11 +166,6 @@ All passes verified during production deploy (external Postgres + Redis).
 - **Type**: LoadBalancer (Azure Load Balancer assigned public IP), Service `envoy-<namespace>-langsmith-gateway-<hash>`
 - **Deployed by**: Terraform k8s-cluster module. `deploy.sh` creates the EnvoyProxy, GatewayClass, and Gateway
 
-### ingress-nginx
-- **What**: NGINX Ingress Controller, installed with `ingress_controller = "nginx"`. It routes external HTTPS traffic to frontend and backend
-- **Type**: LoadBalancer (Azure Load Balancer assigned public IP)
-- **Deployed by**: Terraform k8s-cluster module
-
 ---
 
 *Passes 2–5 were verified on chart v0.13.28 (appVersion 0.13.31). deploy.sh now requires the chart 0.17 line (see [SMITHDB.md](SMITHDB.md#version-requirements)). Pass 2 has been re-verified on chart 0.16.3 (appVersion 0.16.36); Passes 3–5 have not.*

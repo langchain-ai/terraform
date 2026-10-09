@@ -63,11 +63,11 @@ locals {
   alb_ingress_cidr_blocks = concat(var.alb_allowed_cidr_blocks, local.pod_cidr_blocks)
 
   # Envoy Gateway is the default ingress mode, but a bare default of `true` would
-  # silently add a second gateway controller to every existing Istio/NGINX tfvars
+  # silently add a second gateway controller to every existing Istio tfvars
   # that never mentioned Envoy. Deriving it instead means "Envoy unless you already
   # chose something else", so only configurations with no gateway controller at all
-  # change behaviour. An explicit true/false in terraform.tfvars still wins.
-  enable_envoy_gateway = var.enable_envoy_gateway != null ? var.enable_envoy_gateway : !(var.enable_istio_gateway || var.enable_nginx_ingress)
+  # change behavior. An explicit true/false in terraform.tfvars still wins.
+  enable_envoy_gateway = var.enable_envoy_gateway != null ? var.enable_envoy_gateway : !var.enable_istio_gateway
 
   sandbox_host_cache_dirs = var.sandbox_host_local_nvme_bootstrap_enabled && var.sandbox_host_local_nvme_expected_device_count > 1 ? [
     for idx in range(var.sandbox_host_local_nvme_expected_device_count - 1) : "/mnt/juicefs-cache${idx}"

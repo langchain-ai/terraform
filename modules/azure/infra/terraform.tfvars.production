@@ -86,7 +86,7 @@ ingress_controller = "envoy-gateway"
 
 #------------------------------------------------------------------------------
 # DNS + TLS — Public IP DNS label + Let's Encrypt HTTP-01
-#   Works with envoy-gateway, nginx, and istio (self-managed); not istio-addon or agic.
+#   Works with envoy-gateway, and istio (self-managed); not istio-addon or agic.
 #   → https://<dns_label>.<location>.cloudapp.azure.com
 #   For custom domain: swap to tls_certificate_source = "dns01" + langsmith_domain
 #------------------------------------------------------------------------------

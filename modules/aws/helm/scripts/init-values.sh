@@ -59,12 +59,11 @@ _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
-# is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
+# is derived (unset = on unless Istio was chosen), so a tfvars that never mentions
 # Envoy still deploys it. Reading the applied state keeps this script in agreement with
 # what Terraform actually built.
 _enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
 _enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
-_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
 
 _enable_smithdb=false
 _tfvar_is_true "enable_smithdb" && _enable_smithdb=true
@@ -88,14 +87,13 @@ fi
 _gateway_modes=0
 [[ "$_enable_envoy_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 [[ "$_enable_istio_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
-[[ "$_enable_nginx_ingress" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 if (( _gateway_modes > 1 )); then
-  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true." >&2
-  echo "       Envoy Gateway is the default when enable_envoy_gateway is unset — set it to false explicitly in terraform.tfvars to run Istio or NGINX, then re-apply." >&2
+  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway can be true." >&2
+  echo "       Envoy Gateway is the default when enable_envoy_gateway is unset — set it to false explicitly in terraform.tfvars to run Istio, then re-apply." >&2
   exit 1
 fi
 
-# Classic ALB Ingress mode = none of the gateway/nginx routing modes enabled.
+# Classic ALB Ingress mode = none of the gateway routing modes enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB.
 _alb_ingress_mode=false
 (( _gateway_modes == 0 )) && _alb_ingress_mode=true
@@ -161,7 +159,7 @@ echo ""
 #     On first run the Ingress doesn't exist yet, so this resolves to blank and
 #     deploy.sh patches config.hostname/deployment.url once the controller
 #     provisions the ALB.
-#   - NGINX / Envoy / Istio modes: the Terraform-provisioned ALB is the entry
+#   - Envoy / Istio modes: the Terraform-provisioned ALB is the entry
 #     point (it fronts the in-cluster controller/gateway via a TargetGroupBinding).
 _ingress_alb_hostname() {
   kubectl get ingress langsmith-ingress -n "${NAMESPACE:-langsmith}" \
@@ -588,25 +586,6 @@ istioGateway:
   namespace: \"${NAMESPACE:-langsmith}\"
 
 # ALB-always: frontend is ClusterIP. External traffic: ALB → Istio gateway → VirtualService → frontend.
-# The Terraform ALB module provisions a target group; k8s-bootstrap creates a TargetGroupBinding.
-frontend:
-  service:
-    type: ClusterIP"
-elif [[ "$_enable_nginx_ingress" == "true" ]]; then
-  # ALB-always + NGINX Ingress mode: ALB is the external entry point.
-  # The ALB forwards to ingress-nginx-controller pods via a TargetGroupBinding (Terraform-managed).
-  # Frontend service is ClusterIP — no internet-facing NLB is created.
-  # NGINX handles host-based routing via standard Kubernetes Ingress resources.
-  _routing_block="
-ingress:
-  enabled: true
-  ingressClassName: nginx
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: \"0\"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: \"3600\"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: \"3600\"
-
-# ALB-always: frontend is ClusterIP. External traffic: ALB → NGINX controller → Ingress → frontend.
 # The Terraform ALB module provisions a target group; k8s-bootstrap creates a TargetGroupBinding.
 frontend:
   service:

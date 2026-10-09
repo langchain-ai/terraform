@@ -123,12 +123,12 @@ variable "additional_node_pools" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'none' = skip."
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'none' = skip."
   default     = "envoy-gateway"
 
   validation {
-    condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
-    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
+    condition     = contains(["istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
+    error_message = "ingress_controller must be 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
   }
 }
 
@@ -273,7 +273,7 @@ variable "support_plan" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with envoy-gateway, nginx, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with envoy-gateway, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
   default     = ""
 }
 

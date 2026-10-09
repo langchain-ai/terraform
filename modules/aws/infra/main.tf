@@ -191,16 +191,16 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
 
-    # Two gateway controllers share one ALB target group (all three
+    # Two gateway controllers share one ALB target group (both
     # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
     # gateway_target_port can only describe one of them, so a second controller
     # leaves both permanently unhealthy. init-values.sh rejects this combination
     # too, but only after apply — fail at plan time instead.
     precondition {
       condition = length([
-        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway, var.enable_nginx_ingress] : true if enabled
+        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway] : true if enabled
       ]) <= 1
-      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio or NGINX."
+      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio."
     }
   }
 }
@@ -579,7 +579,6 @@ module "alb" {
   bucket_suffix          = random_id.bucket_suffix.hex
   enable_envoy_gateway   = local.enable_envoy_gateway
   enable_istio_gateway   = var.enable_istio_gateway
-  enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
 
   existing_security_group_id = var.alb_existing_security_group_id
@@ -595,7 +594,6 @@ module "alb" {
 #
 # Envoy Gateway: port 10080 (Gateway listener port 80 + 10000 offset, Envoy runs non-root)
 # Istio Gateway: port 80    (istio-ingressgateway listens on 80 directly via NET_BIND_SERVICE)
-# NGINX Ingress:  port 80    (ingress-nginx-controller)
 
 resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
   count = local.enable_envoy_gateway ? 1 : 0
@@ -621,19 +619,6 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_istio" {
   to_port                      = 80
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Istio ingress gateway pods on HTTP (target-type: ip)"
-
-  tags = local.common_tags
-}
-
-resource "aws_vpc_security_group_ingress_rule" "alb_to_nginx" {
-  count = var.enable_nginx_ingress ? 1 : 0
-
-  security_group_id            = module.eks.node_security_group_id
-  referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 80
-  to_port                      = 80
-  ip_protocol                  = "tcp"
-  description                  = "Allow ALB to reach NGINX ingress controller pods on HTTP (target-type: ip)"
 
   tags = local.common_tags
 }
@@ -738,7 +723,6 @@ module "k8s_bootstrap" {
 
   enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
-  enable_nginx_ingress     = var.enable_nginx_ingress
   gateway_target_group_arn = module.alb.gateway_target_group_arn != null ? module.alb.gateway_target_group_arn : ""
 
   # cert-manager DNS-01 (Route 53 / Istio Gateway)

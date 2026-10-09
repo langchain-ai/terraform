@@ -63,7 +63,6 @@ _nginx=$(terraform -chdir="$INFRA_DIR" state list 'module.aks.helm_release.nginx
 
 fail "ingress_controller is not set, and this deployment runs ingress-nginx."
 info "The default is now envoy-gateway. Applying it removes ingress-nginx and its load balancer, and the public IP changes."
-action "To keep NGINX, add to terraform.tfvars:  ingress_controller = \"nginx\""
 action "To move to Envoy Gateway, add:  ingress_controller = \"envoy-gateway\""
 action "Then run make apply, make init-values, and make deploy back to back. LangSmith is unreachable from the apply until the deploy finishes."
 action "Update any DNS A record that points at the old IP."
