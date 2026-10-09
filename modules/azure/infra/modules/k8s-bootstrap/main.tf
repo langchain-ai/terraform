@@ -159,8 +159,11 @@ resource "kubernetes_limit_range_v1" "langsmith" {
         cpu    = "1"
         memory = "1Gi"
       }
+      # 250m covers an unsized container's startup CPU, so the scheduler stops
+      # packing more of them onto a node than it can feed. A LimitRange applies
+      # at admission: running pods keep their old request until they restart.
       default_request = {
-        cpu    = "100m"
+        cpu    = "250m"
         memory = "256Mi"
       }
     }
