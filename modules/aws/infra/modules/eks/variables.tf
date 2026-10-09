@@ -132,3 +132,15 @@ variable "pod_subnet_ids_by_az" {
   description = "VPC CNI custom networking: pod subnet ID keyed by availability zone name. Empty leaves pods in the node subnets."
   default     = {}
 }
+
+variable "iam_permissions_boundary_arn" {
+  type        = string
+  description = "Permissions boundary policy ARN for the IAM roles this module creates. Null sets no boundary."
+  default     = null
+}
+
+variable "iam_role_path" {
+  type        = string
+  description = "IAM path for the IAM roles and instance profiles this module creates."
+  default     = "/"
+}

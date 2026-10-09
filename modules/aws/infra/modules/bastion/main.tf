@@ -23,8 +23,10 @@ data "aws_ami" "al2023" {
 # --- IAM instance profile for SSM Session Manager ---
 
 resource "aws_iam_role" "bastion" {
-  name = "${var.name}-bastion"
-  tags = var.tags
+  name                 = "${var.name}-bastion"
+  path                 = var.iam_role_path
+  permissions_boundary = var.iam_permissions_boundary_arn
+  tags                 = var.tags
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -62,6 +64,7 @@ resource "aws_iam_role_policy" "eks_readonly" {
 
 resource "aws_iam_instance_profile" "bastion" {
   name = "${var.name}-bastion"
+  path = var.iam_role_path
   role = aws_iam_role.bastion.name
   tags = var.tags
 }

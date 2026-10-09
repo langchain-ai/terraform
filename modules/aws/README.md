@@ -391,6 +391,28 @@ not as a clear plan-time error. Double-check the ID and its rules before applyin
 
 ---
 
+## IAM permissions boundary and role path
+
+If your account requires a permissions boundary or a dedicated IAM path on every
+role, set both here:
+
+```hcl
+iam_permissions_boundary_arn = "arn:aws:iam::<account-id>:policy/<boundary-policy>"
+iam_role_path                = "/langsmith/"
+```
+
+Both apply to every IAM role this module creates: the EKS cluster role, each
+node group role, the Karpenter node role and its instance profile, the EBS CSI,
+ALB controller, cluster-autoscaler, and Karpenter controller roles, the
+LangSmith, ESO, SmithDB, and cert-manager IRSA roles, and the bastion role and
+instance profile. The defaults (no boundary, path `/`) plan no changes.
+
+Set `iam_role_path` before the first apply. A path change replaces every role
+above, and the pods and nodes using them lose AWS access until the new roles
+exist.
+
+---
+
 ## Pass 1 — Infrastructure
 
 Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC endpoint, ALB, IRSA role, ESO IRSA role, SSM secrets.

@@ -597,6 +597,29 @@ variable "s3_versioning_enabled" {
   default     = false
 }
 
+# IAM roles
+variable "iam_permissions_boundary_arn" {
+  type        = string
+  description = "IAM policy ARN set as the permissions boundary on every IAM role this module creates: the EKS cluster and node roles, the Karpenter node role, each add-on and IRSA role, and the bastion role. Leave null for no boundary."
+  default     = null
+
+  validation {
+    condition     = var.iam_permissions_boundary_arn == null ? true : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:policy/[a-zA-Z0-9/+=,.@_-]+$", var.iam_permissions_boundary_arn))
+    error_message = "Supply an IAM policy ARN without wildcards."
+  }
+}
+
+variable "iam_role_path" {
+  type        = string
+  description = "IAM path for every IAM role and instance profile this module creates. Changing it on an existing deployment replaces those roles."
+  default     = "/"
+
+  validation {
+    condition     = can(regex("^/([a-zA-Z0-9+=,.@_-]+/)*$", var.iam_role_path))
+    error_message = "Supply a path that starts and ends with /, such as /langsmith/."
+  }
+}
+
 # IRSA (IAM Roles for Service Accounts) settings
 variable "create_langsmith_irsa_role" {
   type        = bool

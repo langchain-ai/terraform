@@ -280,6 +280,8 @@ module "eks" {
   pod_subnet_ids_by_az            = local.pod_subnet_ids_by_az
   cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
   enable_istio_gateway            = var.enable_istio_gateway
+  iam_permissions_boundary_arn    = var.iam_permissions_boundary_arn
+  iam_role_path                   = var.iam_role_path
 }
 
 # State migration: adding count changes the module address.
@@ -472,8 +474,10 @@ resource "aws_iam_role_policy" "langsmith_bedrock" {
 # ESO:  https://external-secrets.io/latest/provider/aws-parameter-store/
 
 resource "aws_iam_role" "eso" {
-  name = "${local.base_name}-eso"
-  tags = local.common_tags
+  name                 = "${local.base_name}-eso"
+  path                 = var.iam_role_path
+  permissions_boundary = var.iam_permissions_boundary_arn
+  tags                 = local.common_tags
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -526,6 +530,9 @@ module "cert_manager" {
   oidc_provider_arn = module.eks.oidc_provider_arn
   hosted_zone_id    = var.cert_manager_hosted_zone_id
   tags              = local.common_tags
+
+  iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
+  iam_role_path                = var.iam_role_path
 }
 
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
@@ -700,6 +707,9 @@ module "bastion" {
   tags                = local.common_tags
 
   existing_security_group_id = var.bastion_existing_security_group_id
+
+  iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
+  iam_role_path                = var.iam_role_path
 
   depends_on = [module.vpc]
 }
@@ -1085,6 +1095,9 @@ module "smithdb" {
 
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
+
+  iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
+  iam_role_path                = var.iam_role_path
 }
 
 # Metastore connection secret consumed by smithdb.config.existingSecretName.

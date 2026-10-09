@@ -176,6 +176,44 @@ run "cert_manager_irsa_adds_only_cert_manager" {
   }
 }
 
+run "iam_roles_default_to_no_boundary_and_the_root_path" {
+  command = plan
+
+  assert {
+    condition     = aws_iam_role.eso.permissions_boundary == null
+    error_message = "With iam_permissions_boundary_arn unset, the ESO role planned a boundary"
+  }
+  assert {
+    condition     = aws_iam_role.eso.path == "/"
+    error_message = "With iam_role_path unset, the ESO role planned a path other than /"
+  }
+}
+
+# Every module that creates a role is on, so a boundary that one of them fails
+# to accept stops this plan.
+run "iam_boundary_and_path_reach_the_roles" {
+  command = plan
+
+  variables {
+    iam_permissions_boundary_arn = "arn:aws:iam::123456789012:policy/plantest-boundary"
+    iam_role_path                = "/langsmith/"
+    create_bastion               = true
+    create_cert_manager_irsa     = true
+    cert_manager_hosted_zone_id  = "Z00000000000000000001"
+    letsencrypt_email            = "plan-tests@example.com"
+    enable_smithdb               = true
+  }
+
+  assert {
+    condition     = aws_iam_role.eso.permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary"
+    error_message = "iam_permissions_boundary_arn did not reach the ESO role"
+  }
+  assert {
+    condition     = aws_iam_role.eso.path == "/langsmith/"
+    error_message = "iam_role_path did not reach the ESO role"
+  }
+}
+
 run "enable_sandboxes_adds_the_juicefs_redis" {
   command = plan
 

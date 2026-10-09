@@ -60,6 +60,8 @@ resource "aws_iam_policy" "cert_manager_route53" {
 
 resource "aws_iam_role" "cert_manager" {
   name                  = "${var.cluster_name}-cert-manager"
+  path                  = var.iam_role_path
+  permissions_boundary  = var.iam_permissions_boundary_arn
   force_detach_policies = true
   tags                  = var.tags
 

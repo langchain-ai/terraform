@@ -86,6 +86,8 @@ run "names_and_ids_reject_a_malformed_value" {
     cert_manager_hosted_zone_id  = "hostedzone/Z00000000000000000001"
     dns_existing_zone_id         = "hostedzone/Z00000000000000000001"
     langsmith_helm_chart_version = "0.15.0"
+    iam_permissions_boundary_arn = "arn:aws:iam::123456789012:policy/*"
+    iam_role_path                = "langsmith"
   }
 
   expect_failures = [
@@ -97,6 +99,8 @@ run "names_and_ids_reject_a_malformed_value" {
     var.cert_manager_hosted_zone_id,
     var.dns_existing_zone_id,
     var.langsmith_helm_chart_version,
+    var.iam_permissions_boundary_arn,
+    var.iam_role_path,
   ]
 }
 

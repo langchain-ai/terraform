@@ -43,8 +43,10 @@ locals {
   # try() covers extra groups, which are untyped and may omit either attribute.
   eks_managed_node_groups = {
     for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
-      desired_size             = coalesce(try(v.desired_size, null), v.min_size)
-      iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      desired_size                  = coalesce(try(v.desired_size, null), v.min_size)
+      iam_role_use_name_prefix      = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      iam_role_permissions_boundary = var.iam_permissions_boundary_arn
+      iam_role_path                 = var.iam_role_path
     })
   }
 }
@@ -62,6 +64,9 @@ module "eks" {
   cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
   enable_cluster_creator_admin_permissions = true
   cluster_enabled_log_types                = var.cluster_enabled_log_types
+
+  iam_role_permissions_boundary = var.iam_permissions_boundary_arn
+  iam_role_path                 = var.iam_role_path
 
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
 
@@ -91,6 +96,8 @@ module "irsa-ebs-csi" {
 
   create_role                   = true
   role_name                     = "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  role_path                     = var.iam_role_path
+  role_permissions_boundary_arn = var.iam_permissions_boundary_arn
   provider_url                  = module.eks.oidc_provider
   role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
@@ -125,6 +132,8 @@ module "eks_blueprints_addons" {
   # "no endpoints available for service aws-load-balancer-webhook-service" if the
   # ALB controller pods aren't ready yet.
   aws_load_balancer_controller = {
+    role_path                     = var.iam_role_path
+    role_permissions_boundary_arn = var.iam_permissions_boundary_arn
     set = [{
       name  = "enableServiceMutatorWebhook"
       value = "false"
@@ -142,7 +151,11 @@ module "eks_blueprints_addons" {
   # infra root.
   enable_karpenter = var.enable_karpenter
   karpenter = merge(
-    { chart_version = var.karpenter_chart_version },
+    {
+      chart_version                 = var.karpenter_chart_version
+      role_path                     = var.iam_role_path
+      role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    },
     # The primary ENI holds no pod IPs under custom networking, so Karpenter must
     # leave it out of the max-pods calculation or it overcommits every node.
     local.custom_networking ? { set = [{ name = "settings.reservedENIs", value = "1" }] } : {},
@@ -151,12 +164,16 @@ module "eks_blueprints_addons" {
   # controller itself runs on the core managed node group — SmithDB nodes are
   # tainted, so it never lands there.
   karpenter_node = {
-    iam_role_use_name_prefix = false
+    iam_role_use_name_prefix      = false
+    iam_role_path                 = var.iam_role_path
+    iam_role_permissions_boundary = var.iam_permissions_boundary_arn
   }
 
   # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
   cluster_autoscaler = {
-    chart_version = "9.56.0"
+    chart_version                 = "9.56.0"
+    role_path                     = var.iam_role_path
+    role_permissions_boundary_arn = var.iam_permissions_boundary_arn
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
@@ -228,7 +245,9 @@ resource "aws_security_group_rule" "istiod_webhook" {
 resource "aws_iam_role" "langsmith" {
   count = var.create_langsmith_irsa_role ? 1 : 0
 
-  name = "${module.eks.cluster_name}-irsa-role"
+  name                 = "${module.eks.cluster_name}-irsa-role"
+  path                 = var.iam_role_path
+  permissions_boundary = var.iam_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
