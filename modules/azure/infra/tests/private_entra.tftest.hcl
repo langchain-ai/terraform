@@ -133,6 +133,65 @@ run "a_private_cluster_takes_a_zone_it_does_not_own" {
   }
 }
 
+# The providers and the kubeconfig output follow the same switch: the public
+# FQDN once the cluster has one. Azure's kubeconfig names the private FQDN.
+run "a_cluster_with_no_private_zone_is_reached_through_its_public_fqdn" {
+  command = plan
+
+  override_resource {
+    target          = module.aks.azurerm_kubernetes_cluster.main
+    override_during = plan
+    values = {
+      id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+      fqdn            = "ls-aks-test-abc.hcp.eastus.azmk8s.io"
+      kube_config     = [{ host = "https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      kube_config_raw = "clusters:\n- cluster:\n    server: https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443\n"
+    }
+  }
+
+  variables {
+    aks_private_cluster_enabled = true
+    aks_private_dns_zone_id     = "None"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://ls-aks-test-abc.hcp.eastus.azmk8s.io:443"
+    error_message = "With aks_private_dns_zone_id = \"None\", the providers do not dial the public FQDN"
+  }
+  assert {
+    condition     = strcontains(nonsensitive(output.kubeconfig), "server: https://ls-aks-test-abc.hcp.eastus.azmk8s.io:443") && !strcontains(nonsensitive(output.kubeconfig), "privatelink")
+    error_message = "With aks_private_dns_zone_id = \"None\", the kubeconfig output still names the private FQDN"
+  }
+}
+
+# A cluster already deployed with None has no public FQDN until this apply turns
+# it on, so the plan that does it keeps the kubeconfig's host rather than
+# dialing "https://:443".
+run "a_cluster_with_no_public_fqdn_yet_keeps_the_kubeconfig_host" {
+  command = plan
+
+  override_resource {
+    target          = module.aks.azurerm_kubernetes_cluster.main
+    override_during = plan
+    values = {
+      id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+      fqdn            = ""
+      kube_config     = [{ host = "https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      kube_config_raw = "clusters:\n- cluster:\n    server: https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443\n"
+    }
+  }
+
+  variables {
+    aks_private_cluster_enabled = true
+    aks_private_dns_zone_id     = "None"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443"
+    error_message = "With no public FQDN yet, the providers did not fall back to the kubeconfig's host"
+  }
+}
+
 run "a_private_cluster_registers_in_a_supplied_zone_as_the_supplied_identity" {
   command = plan
 

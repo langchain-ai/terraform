@@ -277,7 +277,7 @@ aks_control_plane_identity = "user"
 | `aks_control_plane_identity` | `system` (default): AKS creates a system-assigned control-plane identity. `user`: the control plane runs as a user-assigned identity, `<cluster_name>-control-plane` in the deployment's resource group |
 | `aks_control_plane_identity_id` | An existing user-assigned identity to use instead of the one Terraform creates. Requires `aks_control_plane_identity = "user"`, and is required when `aks_control_plane_identity_manage_grants` is false |
 | `aks_control_plane_identity_manage_grants` | Whether Terraform grants the user-assigned identity its roles. Defaults to `create_vnet`: Terraform grants on a VNet it built, and leaves a supplied VNet's grants to its owner |
-| `aks_network_owner_checks` | Default `true`. `false` skips two plan-time reads of a supplied network: the route table's default route, and the control-plane identity's direct role assignments. Use it when the deploying identity cannot read the route table, or when the owner grants the identity through group membership, which the direct-assignment check cannot see. Azure still checks both at create |
+| `aks_network_owner_checks` | Default `true`. `false` skips two plan-time reads of a supplied network: the route table, which feeds the default-route refusal and the warnings for a missing default route and for service-tag-only egress, and the control-plane identity's direct role assignments. Use it when the deploying identity cannot read the route table, or when the owner grants the identity through group membership, which the direct-assignment check cannot see. Azure still checks both at create |
 
 The zone's name has to match the cloud and `location`, and plan refuses one that doesn't: `privatelink.<location>.azmk8s.io` in commercial Azure, and `privatelink.<location>.cx.aks.containerservice.azure.us` in Azure Government (for example `privatelink.usgovvirginia.cx.aks.containerservice.azure.us`). Either may carry a subzone prefix of up to 32 letters, digits or hyphens, and `private.` replaces `privatelink.` with API Server VNet integration. Microsoft's private-endpoint DNS table lists `privatelink.<region>.azmk8s.io` for Government too, but AKS in Government refuses that name at cluster create.
 
@@ -1296,7 +1296,8 @@ warning, because a default route learned over BGP from ExpressRoute or VPN
 never appears in the route table.
 `aks_network_owner_checks = false` skips the route-table read, for a
 deploying identity that may not read the route table. Azure then checks the
-route only when it creates the cluster.
+route only when it creates the cluster, and plan gives neither the missing
+default route warning nor the service-tag warning below.
 
 **A NAT gateway on the subnet** (`aks_nat_gateway`) is for
 `userAssignedNATGateway`, which requires one, and for `userDefinedRouting`,

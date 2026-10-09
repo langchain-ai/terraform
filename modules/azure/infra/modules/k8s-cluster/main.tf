@@ -152,10 +152,15 @@ locals {
   # public FQDN, whose A record points at the private IP: the credentials Azure
   # returns name the private FQDN, which no zone resolves. Terraform's providers
   # use the public FQDN instead, and the scripts pass --public-fqdn to
-  # az aks get-credentials (output api_server_public_fqdn).
-  api_server_public_fqdn = var.private_cluster_enabled == true && var.private_dns_zone_id == "None"
+  # az aks get-credentials (output api_server_public_fqdn). The zone comes from
+  # the settings for a cluster created here, and from Azure for an attached one,
+  # since the settings are ignored when attaching.
+  api_server_public_fqdn = var.create_cluster ? var.private_cluster_enabled && var.private_dns_zone_id == "None" : lower(try(data.azapi_resource.existing_security_profile[0].output.properties.apiServerAccessProfile.privateDNSZone, "")) == "none"
   cluster_fqdn           = var.create_cluster ? azurerm_kubernetes_cluster.main[0].fqdn : data.azurerm_kubernetes_cluster.existing[0].fqdn
-  cluster_host           = local.api_server_public_fqdn ? "https://${local.cluster_fqdn}:443" : local.cluster_kube_config[0].host
+  # fqdn is empty until the public FQDN is on: on the plan that turns it on for
+  # a cluster already deployed with None, the providers keep the kubeconfig's
+  # host, and switch on the next plan.
+  cluster_host = local.api_server_public_fqdn && local.cluster_fqdn != "" ? "https://${local.cluster_fqdn}:443" : local.cluster_kube_config[0].host
 
   # On a cluster with Entra ID integration, azurerm returns kube_config with an
   # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
@@ -273,11 +278,16 @@ data "azurerm_kubernetes_cluster" "existing" {
 # that passes the check above, applies cleanly, and then leaves pods without a
 # projected service account token. The azurerm data source doesn't expose the
 # flag, so read the cluster's ARM properties directly. Read-only GET, no writes.
+# The same read gives the private DNS zone, which the data source doesn't expose
+# either, for local.api_server_public_fqdn.
 data "azapi_resource" "existing_security_profile" {
-  count                  = var.create_cluster ? 0 : 1
-  type                   = "Microsoft.ContainerService/managedClusters@2024-09-01"
-  resource_id            = data.azurerm_kubernetes_cluster.existing[0].id
-  response_export_values = ["properties.securityProfile.workloadIdentity.enabled"]
+  count       = var.create_cluster ? 0 : 1
+  type        = "Microsoft.ContainerService/managedClusters@2024-09-01"
+  resource_id = data.azurerm_kubernetes_cluster.existing[0].id
+  response_export_values = [
+    "properties.securityProfile.workloadIdentity.enabled",
+    "properties.apiServerAccessProfile.privateDNSZone",
+  ]
 
   lifecycle {
     postcondition {
@@ -592,7 +602,7 @@ resource "azurerm_kubernetes_cluster" "main" {
   # Except with no private zone ("None"): then the API server resolves only
   # through its public FQDN, an A record to the private IP. Microsoft does not
   # support None with the public FQDN off, and the provider defaults it to off.
-  private_cluster_public_fqdn_enabled = var.private_cluster_enabled && var.private_dns_zone_id == "None"
+  private_cluster_public_fqdn_enabled = local.api_server_public_fqdn
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply

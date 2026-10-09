@@ -20,9 +20,11 @@ output "host" {
 }
 
 output "kube_config_raw" {
-  description = "Raw kubeconfig for the AKS cluster"
-  value       = local.cluster_kube_config_raw
-  sensitive   = true
+  description = "Raw kubeconfig for the AKS cluster, with its server set to host"
+  # Azure's kubeconfig names the private FQDN, which nothing resolves with no
+  # private DNS zone.
+  value     = local.cluster_host == local.cluster_kube_config[0].host ? local.cluster_kube_config_raw : replace(local.cluster_kube_config_raw, local.cluster_kube_config[0].host, local.cluster_host)
+  sensitive = true
 }
 
 output "client_certificate" {
@@ -245,6 +247,6 @@ output "istio_addon_gateways" {
 }
 
 output "api_server_public_fqdn" {
-  description = "True when clients reach the API server through its public FQDN (a private cluster with private_dns_zone_id = \"None\"), so az aks get-credentials needs --public-fqdn."
+  description = "True when clients reach the API server through its public FQDN (a private cluster with no private DNS zone: private_dns_zone_id = \"None\", or an attached cluster Azure reports with None), so az aks get-credentials needs --public-fqdn."
   value       = local.api_server_public_fqdn
 }
