@@ -82,8 +82,12 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
 fi
 
 _project_id=$(_parse_tfvar "project_id")
+# Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
+# variables.tf default. Keep identical across the GCP scripts.
 _name_prefix=$(_parse_tfvar "name_prefix")
+_name_prefix="${_name_prefix:-${TF_VAR_name_prefix:-ls}}"
 _environment=$(_parse_tfvar "environment")
+_environment="${_environment:-${TF_VAR_environment:-prod}}"
 _region=$(_parse_tfvar "region")
 _region="${_region:-us-west2}"
 _tls_source=$(_parse_tfvar "tls_certificate_source")
@@ -136,9 +140,9 @@ if [[ "$_smithdb_ingestion_enabled" != "true" ]] && \
   exit 1
 fi
 
-if [[ -z "$_project_id" || -z "$_name_prefix" || -z "$_environment" ]]; then
-  echo "ERROR: Could not read project_id, name_prefix, and/or environment from $INFRA_DIR/terraform.tfvars." >&2
-  echo "       Ensure terraform.tfvars has these values set." >&2
+if [[ -z "$_project_id" ]]; then
+  echo "ERROR: Could not read project_id from $INFRA_DIR/terraform.tfvars." >&2
+  echo "       Ensure terraform.tfvars has it set." >&2
   exit 1
 fi
 

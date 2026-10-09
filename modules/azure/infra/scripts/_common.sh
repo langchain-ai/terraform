@@ -117,6 +117,17 @@ _cert_manager_azure_environment() {
   esac
 }
 
+# ── Cluster credentials ──────────────────────────────────────────────────────
+# az aks get-credentials for the deployed cluster. With no private DNS zone
+# ("None"), only the public FQDN resolves (to the private IP), so the kubeconfig
+# has to name it: the aks_kubeconfig_public_fqdn output says when.
+_aks_get_credentials() {
+  local cluster="$1" rg="$2" flags=()
+  [[ "$(_tf_out aks_kubeconfig_public_fqdn || true)" == "true" ]] && flags=(--public-fqdn)
+  az aks get-credentials --name "$cluster" --resource-group "$rg" \
+    --overwrite-existing ${flags[@]+"${flags[@]}"}
+}
+
 # ── Entra ID sign-in for kubectl and Helm ───────────────────────────────────
 # On a cluster with Entra ID integration, `az aks get-credentials` writes a
 # kubeconfig whose user signs in interactively. Convert it to reuse the caller's
