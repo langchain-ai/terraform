@@ -1945,8 +1945,10 @@ module "keyvault" {
 #
 # LangSmith application deployment is handled outside Terraform:
 #   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
-#   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
-#             (deploy.sh also applies the letsencrypt-prod ClusterIssuer)
+#   Pass 2:   bash helm/scripts/deploy.sh
+#             (deploy.sh runs infra/scripts/create-k8s-secrets.sh when
+#             langsmith-config-secret is missing, and applies the
+#             letsencrypt-prod ClusterIssuer)
 #   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
 #
 # Note: This module configures its own kubernetes/helm providers internally,
@@ -1990,7 +1992,6 @@ module "k8s_bootstrap" {
   agic_subnet_cidrs = local.byo_agic_subnet ? data.azurerm_subnet.byo_agic_subnet[0].address_prefixes : var.agic_subnet_address_prefix
 
   # Backing services — connection URLs are injected as K8s secrets.
-  # generate-secrets.sh also writes these secrets with the full URL from KV.
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
   postgres_admin_password = var.postgres_source == "external" ? var.postgres_admin_password : ""
@@ -2015,7 +2016,7 @@ module "k8s_bootstrap" {
 
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
-  # helm/scripts/generate-secrets.sh from Azure Key Vault.
+  # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
   # Cluster components, off when the cluster already runs them, which is only
