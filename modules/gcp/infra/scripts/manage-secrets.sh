@@ -34,11 +34,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 _project_id=$(_parse_tfvar "project_id") || _project_id=""
-_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
-_environment=$(_parse_tfvar "environment") || _environment="dev"
+# Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
+# variables.tf default. Keep identical across the GCP scripts.
+_name_prefix=$(_parse_tfvar "name_prefix")
+_name_prefix="${_name_prefix:-${TF_VAR_name_prefix:-ls}}"
+_environment=$(_parse_tfvar "environment")
+_environment="${_environment:-${TF_VAR_environment:-prod}}"
 
-if [[ -z "$_project_id" || -z "$_name_prefix" ]]; then
-  echo "ERROR: Could not read project_id / name_prefix from $INFRA_DIR/terraform.tfvars" >&2
+if [[ -z "$_project_id" ]]; then
+  echo "ERROR: Could not read project_id from $INFRA_DIR/terraform.tfvars" >&2
   exit 1
 fi
 

@@ -277,6 +277,36 @@ variable "dns_label" {
   default     = ""
 }
 
+variable "ingress_load_balancer" {
+  type        = string
+  description = "'public' or 'internal': whether the ingress controller's load balancer gets a public IP or a private one in the cluster's VNet. Validated at the root."
+  default     = "public"
+}
+
+variable "ingress_load_balancer_subnet_id" {
+  type        = string
+  description = "Subnet for the internal load balancer's private IP. Empty uses the node subnet."
+  default     = ""
+}
+
+variable "ingress_load_balancer_ip" {
+  type        = string
+  description = "Static private IPv4 address for the internal load balancer. Empty lets Azure pick one."
+  default     = ""
+}
+
+variable "ingress_load_balancer_needs_subnet_grant" {
+  type        = bool
+  description = "Whether the internal load balancer takes its IP from a subnet other than the node subnet, so the cluster identity needs a grant there. Computed by the root from inputs known at plan."
+  default     = false
+}
+
+variable "ingress_load_balancer_manage_subnet_assignment" {
+  type        = bool
+  description = "Whether Terraform grants the cluster identity Network Contributor on ingress_load_balancer_subnet_id when it is not the node subnet."
+  default     = true
+}
+
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
 
 variable "subscription_id" {
@@ -325,6 +355,24 @@ variable "envoy_gateway_version" {
   type        = string
   description = "Envoy Gateway Helm chart version (e.g. 'v1.2.0'). See: https://gateway.envoyproxy.io/releases"
   default     = "v1.2.0"
+}
+
+variable "envoy_gateway_image_registry" {
+  type        = string
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's controller and proxy images, with docker.io as the first path segment under it. Empty pulls from docker.io."
+  default     = ""
+}
+
+variable "envoy_proxy_default_image" {
+  type        = string
+  description = "Envoy proxy image the controller uses by default for envoy_gateway_version, without a registry (e.g. 'envoyproxy/envoy:distroless-v1.32.1'). Mirrored with envoy_gateway_image_registry."
+  default     = ""
+}
+
+variable "envoy_gateway_image_pull_secret_name" {
+  type        = string
+  description = "Pull Secret in envoy-gateway-system for the controller and proxy pods. Empty pulls without credentials."
+  default     = ""
 }
 
 # ── API server access ─────────────────────────────────────────────────────────
@@ -376,6 +424,12 @@ variable "control_plane_identity_id" {
 variable "control_plane_identity_manage_grants" {
   type        = bool
   description = "With control_plane_identity = \"user\": true grants the identity Network Contributor on subnet_id, or on vnet_id with a custom private_dns_zone_id, and Private DNS Zone Contributor on that zone; false checks the identity holds a role on subnet_id, on subnet_route_table_id when set, and on that zone, and stops before the cluster is created when it does not. The check skips the VNet, which a zone its owner already linked does not need."
+  default     = true
+}
+
+variable "control_plane_grant_check" {
+  type        = bool
+  description = "With control_plane_identity_manage_grants = false: whether plan checks the identity's direct role assignments before the cluster is created. False skips the check, for an owner who grants through group membership, which the check cannot see."
   default     = true
 }
 
