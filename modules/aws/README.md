@@ -146,6 +146,7 @@ aws/
     ├── scripts/
     │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
     │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
+    │   ├── sso.sh                  ← Turn on SSO login after a working password install (make sso)
     │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
     │   ├── preflight-check.sh      ← Pre-deploy validation
     │   └── uninstall.sh            ← Helm uninstall + cleanup
@@ -849,6 +850,28 @@ Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` a
    | `.../polly-encryption-key` | `polly_encryption_key` *(only if key exists in SSM)* |
 
 The optional keys are dynamically included — `apply-eso.sh` probes SSM for each one and only adds it to the ExternalSecret if it exists. This prevents ESO from failing to sync because a disabled addon's key isn't in SSM yet.
+
+---
+
+### `make sso`
+
+**When to use:** Once the install works with password login and the org admin can log in, to switch to SSO through any OIDC provider (Entra ID, Okta, Auth0, Google Workspace, etc.).
+
+**One-way:** LangSmith does not support moving a self-hosted install from SSO back to password login.
+
+Runs `helm/scripts/sso.sh`. It stops with a clear message at the first check that fails, and changes `terraform.tfvars` only after all checks pass:
+
+1. Reads `name_prefix`, `environment`, and `region`, and requires the deployed hostname in `langsmith-values-overrides.yaml` to use HTTPS; LangSmith SSO only works over HTTPS.
+2. Checks AWS credentials, points kubectl at this deployment's cluster (as `deploy.sh` does), and checks the Helm release is deployed.
+3. Asks you to confirm the org admin can log in, and that the same email exists in your identity provider.
+4. Prints the redirect URI to register in your identity provider: `https://<host>/api/v1/oauth/custom-oidc/callback`.
+5. Checks SSM for `oauth-client-id`, `oauth-client-secret`, and `oauth-issuer-url`, and asks for any that are missing (the secret is typed hidden).
+6. Checks the issuer URL serves an OIDC discovery document.
+7. Runs `apply-eso.sh` and checks `langsmith-config` has the three OIDC keys.
+8. Sets `enable_sso_oidc = true` in `terraform.tfvars`, changing only that line.
+9. Copies `helm/values/examples/langsmith-values-sso.yaml` to `helm/values/` if it is not there yet, then asks before running `make deploy`.
+
+It never runs `init-values.sh`, so `langsmith-values-overrides.yaml` is not rewritten. `deploy.sh` layers `langsmith-values-sso.yaml` whenever `enable_sso_oidc = true`, and stops if that file is missing, or if SSO is already on in the cluster but `enable_sso_oidc` is not true, rather than deploying with password login.
 
 ---
 
