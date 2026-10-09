@@ -161,6 +161,7 @@ aws/
         │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
         │   ├── langsmith-values-standalone-polly.yaml   ← Chat external-storage overlay
         │   ├── langsmith-values-standalone-insights.yaml ← Insights external-storage overlay
+        │   ├── langsmith-values-engine.yaml             ← Engine (see ENGINE.md)
         │   ├── langsmith-values-smithdb.yaml            ← SmithDB base
         │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
         │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
@@ -583,6 +584,8 @@ For each secret it follows this priority order:
 | `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Fleet; historical key name retained for compatibility |
 | `insights-encryption-key` | Auto-generated (Fernet key) | For Insights feature |
 | `polly-encryption-key` | Auto-generated (Fernet key) | For LangSmith Chat (formerly Polly) |
+| `engine-encryption-key` | Auto-generated (Fernet key) | For Engine. Keep it stable. See [ENGINE.md](ENGINE.md) |
+| `engine-usage-signing-secret` | Auto-generated (`openssl rand -hex 32`) | For Engine usage reports. Keep it stable |
 
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
@@ -708,6 +711,7 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
    - `enable_fleet = true` → copies `langsmith-values-fleet.yaml`
    - `enable_insights = true` → copies `langsmith-values-insights.yaml`
    - `enable_polly = true` → copies `langsmith-values-polly.yaml`
+   - `enable_engine = true` → copies `langsmith-values-engine.yaml`, and writes the Engine IRSA role annotation into the overrides file
 5. Copies the appropriate sizing file if `sizing_profile` is set
 
 Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
@@ -733,6 +737,7 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 -f langsmith-values.yaml                      (base — always)
 -f langsmith-values-overrides.yaml            (your env — always)
 -f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
+-f langsmith-values-engine.yaml               (enable_engine = true)
 -f langsmith-values-insights.yaml             (enable_insights = true)
 -f langsmith-values-polly.yaml                (enable_polly = true)
 -f langsmith-values-fleet.yaml                (enable_fleet = true)
@@ -785,6 +790,9 @@ Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` a
    | `.../insights-encryption-key` | `insights_encryption_key` *(only if key exists in SSM)* |
    | `.../deployments-encryption-key` | `deployments_encryption_key` *(only if key exists in SSM)* |
    | `.../polly-encryption-key` | `polly_encryption_key` *(only if key exists in SSM)* |
+   | `.../engine-encryption-key` | `engine_encryption_key` *(only if key exists in SSM)* |
+   | `.../engine-usage-signing-secret` | `engine_usage_signing_secret` *(only if key exists in SSM)* |
+   | `.../engine-encryption-key-previous` | `engine_encryption_key_previous` *(only if key exists in SSM; Engine key rotation, see [ENGINE.md](ENGINE.md#keys))* |
 
 The optional keys are dynamically included — `apply-eso.sh` probes SSM for each one and only adds it to the ExternalSecret if it exists. This prevents ESO from failing to sync because a disabled addon's key isn't in SSM yet.
 
@@ -1049,6 +1057,10 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
 | `polly_storage` | `external` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
+| `enable_engine` | `false` | no | Enable Engine (chart 0.17+). Requires `enable_sandboxes`. Creates the Engine IRSA role with Amazon Bedrock Mantle access. See [ENGINE.md](ENGINE.md) |
+| `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
+| `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
+| `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
 | `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
@@ -1061,6 +1073,8 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |
+| `langsmith_engine_encryption_key` | `""` | no | Fernet key for Engine. Set by `setup-env.sh` |
+| `langsmith_engine_usage_signing_secret` | `""` | no | Engine usage signing secret, at least 32 characters. Set by `setup-env.sh` |
 | `owner` | `""` | no | Owner tag applied to all resources |
 | `cost_center` | `""` | no | Cost center tag for billing |
 | `tags` | `{}` | no | Additional tags applied to all resources |

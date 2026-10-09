@@ -161,6 +161,13 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
 
+    # Engine runs every analysis in a sandbox, and the chart rejects Engine
+    # without Sandboxes.
+    precondition {
+      condition     = !var.enable_engine || var.enable_sandboxes
+      error_message = "enable_engine requires enable_sandboxes = true. Every Engine run executes in a sandbox, and the chart rejects Engine without Sandboxes."
+    }
+
     # Two gateway controllers share one ALB target group (all three
     # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
     # gateway_target_port can only describe one of them, so a second controller
@@ -328,13 +335,10 @@ module "postgres" {
   depends_on = [module.eks]
 }
 
-resource "aws_iam_role_policy" "langsmith_s3" {
-  count = var.create_langsmith_irsa_role ? 1 : 0
-
-  name = "langsmith-s3-access"
-  role = module.eks.langsmith_irsa_role_name
-
-  policy = jsonencode({
+# engine.tf also attaches this policy to the Engine role, because Engine and
+# Insights run under that role when enable_engine = true.
+locals {
+  langsmith_s3_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -355,6 +359,15 @@ resource "aws_iam_role_policy" "langsmith_s3" {
   })
 }
 
+resource "aws_iam_role_policy" "langsmith_s3" {
+  count = var.create_langsmith_irsa_role ? 1 : 0
+
+  name = "langsmith-s3-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = local.langsmith_s3_policy
+}
+
 # Lets backend/platformBackend/queue/etc. pods (all sharing the langsmith IRSA
 # role) call Bedrock models directly via workload identity instead of static
 # AWS keys. Not scoped to specific model IDs, since self-hosted customers pick
@@ -368,13 +381,11 @@ resource "aws_iam_role_policy" "langsmith_s3" {
 # ARN outside var.region. inference-profile is also wildcarded across regions
 # for the same reason (covers "global." profiles alongside geography-scoped
 # ones like "us.", "eu.").
-resource "aws_iam_role_policy" "langsmith_bedrock" {
-  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
-
-  name = "langsmith-bedrock-access"
-  role = module.eks.langsmith_irsa_role_name
-
-  policy = jsonencode({
+#
+# engine.tf also attaches this policy to the Engine role, because Engine and
+# Insights run under that role when enable_engine = true.
+locals {
+  langsmith_bedrock_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -400,6 +411,15 @@ resource "aws_iam_role_policy" "langsmith_bedrock" {
       }
     ]
   })
+}
+
+resource "aws_iam_role_policy" "langsmith_bedrock" {
+  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+
+  name = "langsmith-bedrock-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = local.langsmith_bedrock_policy
 }
 
 # ── ESO IRSA role (External Secrets Operator) ─────────────────────────────

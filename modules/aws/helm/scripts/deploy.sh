@@ -10,14 +10,15 @@
 #   1. langsmith-values.yaml              — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
-#   4. langsmith-values-insights.yaml       — Insights (if enable_insights)
-#   5. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
-#   6. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
-#   7. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
-#   8. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
-#   9. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
-#  10. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
-#  11. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
+#   4. langsmith-values-engine.yaml         — Engine (if enable_engine)
+#   5. langsmith-values-insights.yaml       — Insights (if enable_insights)
+#   6. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
+#   7. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
+#   8. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
+#   9. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
+#  10. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
+#  11. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#  12. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -148,6 +149,8 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+_enable_engine=false
+_tfvar_is_true "enable_engine" && _enable_engine=true
 _direct_polly_enabled=false
 if _tfvar_is_true "enable_polly" || _tfvar_is_true "enable_standalone_polly"; then
   _direct_polly_enabled=true
@@ -160,6 +163,27 @@ fi
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
     echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
+    exit 1
+  fi
+fi
+
+# Engine needs chart 0.17, which the chart-line check above already enforces.
+if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
+  echo "ERROR: enable_engine = true requires enable_sandboxes = true. Every Engine run executes in a sandbox." >&2
+  exit 1
+fi
+
+# The Engine IRSA role trusts the service account names that Terraform makes from
+# langsmith_release_name and langsmith_namespace. A different release or namespace
+# gives pods with no AWS credentials, and Bedrock calls then fail.
+if [[ "$_enable_engine" == "true" ]]; then
+  _tf_release_name=$(_parse_tfvar "langsmith_release_name") || _tf_release_name="langsmith"
+  _tf_namespace=$(_parse_tfvar "langsmith_namespace") || _tf_namespace="langsmith"
+  if [[ "$RELEASE_NAME" != "$_tf_release_name" || "$NAMESPACE" != "$_tf_namespace" ]]; then
+    echo "ERROR: enable_engine = true, but this deploy uses release '$RELEASE_NAME' in namespace '$NAMESPACE'." >&2
+    echo "       The Engine IRSA role trusts release '$_tf_release_name' in namespace '$_tf_namespace'" >&2
+    echo "       (langsmith_release_name and langsmith_namespace in terraform.tfvars)." >&2
+    echo "       Set RELEASE_NAME and NAMESPACE to these values, or change terraform.tfvars and run 'make apply'." >&2
     exit 1
   fi
 fi
@@ -253,6 +277,10 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   if [[ "$_direct_insights_enabled" == "true" ]]; then
     _require_env "TF_VAR_langsmith_insights_encryption_key"
   fi
+  if [[ "$_enable_engine" == "true" ]]; then
+    _require_env "TF_VAR_langsmith_engine_encryption_key"
+    _require_env "TF_VAR_langsmith_engine_usage_signing_secret"
+  fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
   _sandbox_secret_literals=()
@@ -276,7 +304,17 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
       --from-literal=insights_encryption_key="${TF_VAR_langsmith_insights_encryption_key}"
     )
   fi
+  _engine_secret_literals=()
+  if [[ "$_enable_engine" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _engine_secret_literals=(
+      --from-literal=engine_encryption_key="${TF_VAR_langsmith_engine_encryption_key}"
+      --from-literal=engine_usage_signing_secret="${TF_VAR_langsmith_engine_usage_signing_secret}"
+    )
+  fi
 
+  # Bash 3.2 treats an empty array as unset under nounset, so each optional
+  # array expands only when it has elements.
   # shellcheck disable=SC2154  # TF_VAR_* exported by setup-env.sh; _require_env above asserts them
   kubectl create secret generic langsmith-config \
     --namespace "$NAMESPACE" \
@@ -285,9 +323,10 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
     --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
-    "${_sandbox_secret_literals[@]}" \
-    "${_polly_secret_literals[@]}" \
-    "${_insights_secret_literals[@]}" \
+    ${_sandbox_secret_literals[@]+"${_sandbox_secret_literals[@]}"} \
+    ${_polly_secret_literals[@]+"${_polly_secret_literals[@]}"} \
+    ${_insights_secret_literals[@]+"${_insights_secret_literals[@]}"} \
+    ${_engine_secret_literals[@]+"${_engine_secret_literals[@]}"} \
     --dry-run=client -o yaml | kubectl apply -f -
   echo "  langsmith-config secret ready (direct)."
 else
@@ -295,6 +334,32 @@ else
   # Applied here after ESO is installed by terraform apply.
   # Run standalone to re-sync ESO without a full redeploy: ./helm/scripts/apply-eso.sh
   NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/apply-eso.sh"
+fi
+
+# Engine's pods, platform-backend, and ingest-queue read engine_encryption_key and
+# engine_usage_signing_secret from langsmith-config with optional: false. The chart
+# checks for them only when Helm can read the Secret, so check here first, by key
+# name only. ESO can take a few seconds to write a new key after apply-eso.sh.
+if [[ "$_enable_engine" == "true" ]]; then
+  _engine_missing=""
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    _engine_missing=""
+    for _key in engine_encryption_key engine_usage_signing_secret; do
+      _present=$(kubectl get secret langsmith-config -n "$NAMESPACE" \
+        -o go-template="{{with .data}}{{if index . \"${_key}\"}}yes{{end}}{{end}}" 2>/dev/null) || _present=""
+      [[ "$_present" == "yes" ]] || _engine_missing+=" ${_key}"
+    done
+    [[ -z "$_engine_missing" ]] && break
+    sleep 5
+  done
+  if [[ -n "$_engine_missing" ]]; then
+    echo "ERROR: enable_engine = true, but Secret langsmith-config in $NAMESPACE has no key:${_engine_missing}" >&2
+    echo "       Create the SSM parameters, then sync them and re-run:" >&2
+    echo "         source infra/scripts/setup-env.sh   # creates engine-encryption-key and engine-usage-signing-secret" >&2
+    echo "         make apply-eso" >&2
+    exit 1
+  fi
+  echo "  langsmith-config has engine_encryption_key and engine_usage_signing_secret."
 fi
 echo ""
 
@@ -402,8 +467,11 @@ echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 # Addon files: gated by enable_* flags in terraform.tfvars.
 # The file must exist AND the corresponding flag must be true.
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
+# Engine loads before the Insights files: Engine and Insights share the
+# engineInsightsAgent deployment, so the Insights sizing and storage settings win.
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
+  "engine:engine:$_enable_engine"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
   "fleet:fleet:$_enable_fleet"
@@ -715,7 +783,7 @@ fi
 # <release>-<namePrefix>-<component>; namePrefix is standalone-{fleet,polly,insights}.
 [[ "$_enable_fleet" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-fleet-api-server")
 [[ "$_enable_polly" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
-[[ "$_enable_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
+[[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do

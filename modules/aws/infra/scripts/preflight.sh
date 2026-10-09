@@ -67,11 +67,14 @@ check_denied() { echo "$1" | grep -Eqi "$DENY_RE"; }
 
 # Parse a value from terraform.tfvars for a given key.
 # Usage: _tfvars_get <key> <tfvars_path>
+# Prints nothing and returns 0 when the key is not in the file. Without "|| true",
+# pipefail returns the grep status, and set -e stops a top-level caller on an
+# optional key such as enable_engine.
 _tfvars_get() {
   local key="$1" file="$2"
   grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null \
     | head -1 \
-    | sed -E 's/^[^=]+=//; s/[[:space:]]*//g; s/^"//; s/"$//'
+    | sed -E 's/^[^=]+=//; s/[[:space:]]*//g; s/^"//; s/"$//' || true
 }
 
 # Check that all required SSM params exist under /langsmith/{prefix}-{env}/
@@ -100,6 +103,16 @@ run_ssm_checks() {
     "langsmith-jwt-secret"
     "langsmith-admin-password"
   )
+
+  # Engine reads both keys from langsmith-config, which apply-eso.sh fills from SSM.
+  local enable_engine
+  enable_engine=$(_tfvars_get "enable_engine" "$tfvars")
+  if [[ "${enable_engine%%#*}" == "true" ]]; then
+    required_params+=(
+      "engine-encryption-key"
+      "engine-usage-signing-secret"
+    )
+  fi
 
   local all_ok=true
   for param in "${required_params[@]}"; do
@@ -345,6 +358,17 @@ if [[ ! -f "$TFVARS" ]]; then
 fi
 success "terraform.tfvars found"
 
+# Engine runs every analysis in a sandbox. Terraform rejects the combination too,
+# but only at plan time. _tfvars_get keeps a trailing "# comment", so cut it off.
+ENABLE_ENGINE=$(_tfvars_get "enable_engine" "$TFVARS")
+ENABLE_ENGINE=${ENABLE_ENGINE%%#*}
+ENABLE_SANDBOXES=$(_tfvars_get "enable_sandboxes" "$TFVARS")
+ENABLE_SANDBOXES=${ENABLE_SANDBOXES%%#*}
+if [[ "$ENABLE_ENGINE" == "true" && "$ENABLE_SANDBOXES" != "true" ]]; then
+  error "enable_engine = true requires enable_sandboxes = true in terraform.tfvars. Every Engine run executes in a sandbox."
+  exit 1
+fi
+
 # ── Credentials ───────────────────────────────────────────────────────────────
 info "Checking AWS credentials..."
 if ! aws sts get-caller-identity &>/dev/null; then
@@ -425,6 +449,29 @@ if check_denied "$IAM_OUT"; then
   exit 1
 fi
 success "IAM read permissions OK"
+
+# IAM — the policy that terraform apply attaches to the Engine IRSA role. The
+# managed policy is not in every partition, and a custom ARN can be wrong.
+if [[ "$ENABLE_ENGINE" == "true" ]]; then
+  ENGINE_POLICY_ARN=$(_tfvars_get "engine_bedrock_policy_arn" "$TFVARS")
+  ENGINE_POLICY_ARN=${ENGINE_POLICY_ARN%%#*}
+  ENGINE_POLICY_ARN=${ENGINE_POLICY_ARN%\"}
+  if [[ -z "$ENGINE_POLICY_ARN" ]]; then
+    ENGINE_POLICY_ARN="arn:$(echo "$USER_ARN" | cut -d: -f2):iam::aws:policy/AmazonBedrockMantleInferenceAccess"
+  fi
+  info "IAM — Engine Bedrock policy $ENGINE_POLICY_ARN..."
+  ENGINE_POLICY_OUT=$(aws iam get-policy --policy-arn "$ENGINE_POLICY_ARN" --query 'Policy.Arn' --output text 2>&1 || true)
+  if check_denied "$ENGINE_POLICY_OUT"; then
+    warning "iam:GetPolicy denied, so the Engine policy is not verified. terraform apply attaches it with iam:AttachRolePolicy."
+  elif echo "$ENGINE_POLICY_OUT" | grep -q "NoSuchEntity"; then
+    error "IAM policy $ENGINE_POLICY_ARN does not exist. Set engine_bedrock_policy_arn to a policy that grants Amazon Bedrock Mantle access."
+    exit 1
+  elif [[ "$ENGINE_POLICY_OUT" != "$ENGINE_POLICY_ARN" ]]; then
+    warning "Could not verify the Engine policy: $ENGINE_POLICY_OUT"
+  else
+    success "Engine Bedrock policy found"
+  fi
+fi
 
 # RDS — PostgreSQL (needed for postgres module)
 info "RDS — PostgreSQL..."

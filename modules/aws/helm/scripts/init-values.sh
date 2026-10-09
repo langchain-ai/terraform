@@ -11,7 +11,8 @@
 #
 # Reads:
 #   - aws/infra/terraform.tfvars    → name_prefix, environment, region, tls_certificate_source
-#   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs
+#   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs,
+#                                     engine_irsa_role_arn (if Engine is enabled)
 #
 # Prompts for (on first run):
 #   - Admin email
@@ -26,6 +27,7 @@
 #   - values/langsmith-values-fleet.yaml        (if Fleet is enabled)
 #   - values/langsmith-values-standalone-polly.yaml (if Chat uses external storage)
 #   - values/langsmith-values-standalone-insights.yaml (if Insights uses external storage)
+#   - values/langsmith-values-engine.yaml        (if Engine is enabled)
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
 #
@@ -252,6 +254,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_engine=false
 _enable_sso_oidc=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
@@ -261,7 +264,14 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
+_tfvar_is_true "enable_engine"              && _enable_engine=true
 _tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
+
+# Engine runs every analysis in a sandbox, and the chart rejects Engine without them.
+if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
+  echo "ERROR: enable_engine requires enable_sandboxes = true in terraform.tfvars." >&2
+  exit 1
+fi
 
 # Fail fast rather than let this surface later as a CreateContainerConfigError.
 # apply-eso.sh gates the whole oauth block (client id/secret/issuer url) behind
@@ -527,6 +537,23 @@ else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
 
+# Engine: the overlay turns Engine on. Its IRSA annotation and optional settings
+# go into the overrides file below.
+_engine_file="$VALUES_DIR/langsmith-values-engine.yaml"
+if [[ "$_enable_engine" == "true" ]]; then
+  if [[ ! -f "$_engine_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-engine.yaml" "$_engine_file"
+    echo "  Created: langsmith-values-engine.yaml"
+  else
+    echo "  Existing: langsmith-values-engine.yaml"
+  fi
+  _engine_storage_label="in-cluster Postgres/Redis"
+  [[ "$_enable_insights" == "true" ]] && _engine_storage_label="Insights ${_insights_storage} Postgres/Redis"
+  echo "  ✔ Engine (Bedrock through IRSA; $_engine_storage_label)"
+else
+  echo "  ✗ Engine (enable_engine = false)"
+fi
+
 # Patch tlsEnabled in agent-deploys if present — derive from tls_certificate_source.
 # The example file defaults to false; fix it so deploys don't get stuck in DEPLOYING state.
 if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
@@ -749,24 +776,63 @@ if [[ "$_enable_insights" == "true" ]]; then
     exit 1
   fi
   # Chart 0.16 keeps the encryption key on `insights` but moved the workload
-  # settings — including the service accounts — to `engineInsightsAgent`.
+  # settings — including the service accounts — to `engineInsightsAgent` (below).
   _standalone_block+="
 insights:
   encryptionKey: \"${_insights_key}\"
-
-engineInsightsAgent:
-  apiServer:
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
-  queue:
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+"
 else
   _standalone_block+="
 insights:
   enabled: false"
+fi
+
+# ── Engine (enable_engine) ────────────────────────────────────────────────────
+# langsmith-values-engine.yaml turns Engine on. Its keys reach the chart only
+# through the langsmith-config Secret (SSM → ESO), never through values. Engine
+# and Insights share the engineInsightsAgent deployment and its two service
+# accounts. With Engine on, both run under the Engine IRSA role from terraform
+# apply. That role trusts only these two service accounts.
+_engine_agent_role_arn="$IRSA_ROLE_ARN"
+if [[ "$_enable_engine" == "true" ]]; then
+  ENGINE_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw engine_irsa_role_arn 2>/dev/null) || ENGINE_IRSA_ROLE_ARN=""
+  if [[ "$ENGINE_IRSA_ROLE_ARN" != arn:* ]]; then
+    echo "ERROR: enable_engine = true but terraform output engine_irsa_role_arn is empty." >&2
+    echo "       Is 'terraform apply' complete in $INFRA_DIR with enable_engine = true?" >&2
+    exit 1
+  fi
+  echo "Engine: engine_irsa_role_arn = $ENGINE_IRSA_ROLE_ARN"
+  _engine_agent_role_arn="$ENGINE_IRSA_ROLE_ARN"
+
+  _engine_tenant=$(_parse_tfvar "engine_sandbox_tenant_id") || _engine_tenant=""
+  _engine_intel_url=$(_parse_tfvar "engine_intelligence_base_url") || _engine_intel_url=""
+  _engine_settings=""
+  if [[ -n "$_engine_tenant" ]]; then
+    _engine_settings+="
+  sandboxTenantId: \"${_engine_tenant}\""
+  fi
+  if [[ -n "$_engine_intel_url" ]]; then
+    _engine_settings+="
+  intelligenceBaseUrl: \"${_engine_intel_url}\""
+  fi
+  if [[ -n "$_engine_settings" ]]; then
+    _standalone_block+="
+engine:${_engine_settings}
+"
+  fi
+fi
+
+if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
+  _standalone_block+="
+engineInsightsAgent:
+  apiServer:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\"
+  queue:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\""
 fi
 
 _sandbox_config_block=""
