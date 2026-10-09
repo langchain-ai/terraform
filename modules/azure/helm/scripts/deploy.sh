@@ -119,8 +119,7 @@ _rg_name=$(_tf_out aks_resource_group_name) || {
 }
 
 info "Cluster: ${_cluster_name}"
-az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
-  --overwrite-existing >/dev/null || {
+_aks_get_credentials "$_cluster_name" "$_rg_name" >/dev/null || {
   fail "Could not fetch credentials for cluster '${_cluster_name}'."
   action "make kubeconfig  (to retry once the error above is fixed)"
   exit 1
@@ -140,6 +139,15 @@ _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _location=$(_parse_tfvar "location") || _location="eastus"
 _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
 _cloudapp_suffix=$(_azure_cloudapp_suffix)
+# ingress_load_balancer = "internal" puts the controller's load balancer on a
+# private IP in the cluster's VNet. Terraform annotates the Services it owns
+# (nginx, self-managed Istio); the EnvoyProxy and the Istio add-on's internal
+# gateway are handled below. Terraform refuses dns_label with "internal".
+_ingress_lb=$(_parse_tfvar "ingress_load_balancer") || _ingress_lb="public"
+_ingress_lb_subnet_id=$(_parse_tfvar "ingress_load_balancer_subnet_id") || _ingress_lb_subnet_id=""
+_ingress_lb_ip=$(_parse_tfvar "ingress_load_balancer_ip") || _ingress_lb_ip=""
+# The subnet annotation takes the subnet's name, not its ID.
+_ingress_lb_subnet="${_ingress_lb_subnet_id##*/}"
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
     nginx)
@@ -351,6 +359,11 @@ if [[ "$_ingress_controller" == "istio-addon" && ( -n "$_dns_label" || -n "$_lan
   _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
   _namespace="$NAMESPACE"
+  # The add-on labels each gateway's Service istio: aks-istio-ingressgateway-
+  # external or -internal; Terraform enables only the internal one when the
+  # load balancer is internal.
+  _istio_gw="external"
+  [[ "$_ingress_lb" == "internal" ]] && _istio_gw="internal"
 
   kubectl apply -f - &>/dev/null <<EOF
 apiVersion: networking.istio.io/v1beta1
@@ -360,7 +373,7 @@ metadata:
   namespace: ${_namespace}
 spec:
   selector:
-    istio: aks-istio-ingressgateway-external
+    istio: aks-istio-ingressgateway-${_istio_gw}
   servers:
   - port:
       number: 80
@@ -379,6 +392,25 @@ spec:
     - "${_istio_hostname}"
 EOF
   pass "Istio Gateway created: ${_istio_hostname} (ports 80 + 443)"
+fi
+
+# The Istio add-on creates its internal gateway's Service itself, so the subnet
+# and static IP go on as annotations, which Microsoft lists as supported on that
+# Service ("External or internal ingresses for the Istio service mesh add-on").
+if [[ "$_ingress_controller" == "istio-addon" && "$_ingress_lb" == "internal" ]]; then
+  _istio_int_ann=()
+  [[ -n "$_ingress_lb_subnet" ]] && _istio_int_ann+=("service.beta.kubernetes.io/azure-load-balancer-internal-subnet=${_ingress_lb_subnet}")
+  [[ -n "$_ingress_lb_ip" ]] && _istio_int_ann+=("service.beta.kubernetes.io/azure-load-balancer-ipv4=${_ingress_lb_ip}")
+  if [[ ${#_istio_int_ann[@]} -gt 0 ]]; then
+    if kubectl get svc aks-istio-ingressgateway-internal -n aks-istio-ingress &>/dev/null; then
+      kubectl annotate svc aks-istio-ingressgateway-internal -n aks-istio-ingress \
+        "${_istio_int_ann[@]}" --overwrite >/dev/null
+      pass "Istio internal gateway: ${_istio_int_ann[*]}"
+    else
+      fail "aks-istio-ingressgateway-internal not found in aks-istio-ingress. Run make apply: ingress_load_balancer = \"internal\" enables the add-on's internal gateway."
+      exit 1
+    fi
+  fi
 fi
 
 # ── Your own certificate and CA bundle ─────────────────────────────────────
@@ -698,6 +730,42 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   _eg_service_annotations="{}"
   [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
+  # Internal: the annotations Terraform puts on the nginx and Istio Services,
+  # from its output. It prints a one-line JSON object, which is YAML flow
+  # syntax. dns_label is refused with "internal", so the two never combine.
+  if [[ "$_ingress_lb" == "internal" ]]; then
+    _eg_service_annotations=$(terraform -chdir="$INFRA_DIR" output -json ingress_internal_annotations 2>/dev/null) || _eg_service_annotations=""
+    if [[ "$_eg_service_annotations" != "{"*"azure-load-balancer-internal"*"}" ]]; then
+      fail "ingress_load_balancer = \"internal\" but the ingress_internal_annotations output does not carry it. Run make apply first."
+      exit 1
+    fi
+  fi
+
+  # With envoy_gateway_image_registry, the proxy pods pull from the mirror as
+  # the controller does. _tf_out refuses the "/" and ":" of an image reference,
+  # so that output is read and checked here.
+  _eg_proxy_image=$(terraform -chdir="$INFRA_DIR" output -raw envoy_gateway_proxy_image 2>/dev/null) || _eg_proxy_image=""
+  [[ "$_eg_proxy_image" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]*$ ]] || _eg_proxy_image=""
+  _eg_registry=$(_parse_tfvar "envoy_gateway_image_registry") || _eg_registry=""
+  if [[ -n "$_eg_registry" && -z "$_eg_proxy_image" ]]; then
+    fail "envoy_gateway_image_registry is set, but the envoy_gateway_proxy_image output is empty or not an image reference, so the proxy pods would pull from docker.io. Run terraform apply in ${INFRA_DIR}, then rerun."
+    exit 1
+  fi
+  _eg_pull_secret=$(_tf_out envoy_gateway_image_pull_secret_name) || _eg_pull_secret=""
+  _eg_deployment=""
+  if [[ -n "$_eg_proxy_image" ]]; then
+    info "Envoy proxy image: ${_eg_proxy_image}"
+    _eg_deployment="
+      envoyDeployment:
+        container:
+          image: \"${_eg_proxy_image}\""
+    if [[ -n "$_eg_pull_secret" ]]; then
+      _eg_deployment+="
+        pod:
+          imagePullSecrets:
+          - name: \"${_eg_pull_secret}\""
+    fi
+  fi
 
   kubectl apply -f - >/dev/null <<EOF
 apiVersion: gateway.envoyproxy.io/v1alpha1
@@ -710,7 +778,7 @@ spec:
     type: Kubernetes
     kubernetes:
       envoyService:
-        annotations: ${_eg_service_annotations}
+        annotations: ${_eg_service_annotations}${_eg_deployment}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
