@@ -309,7 +309,7 @@ variable "aks_private_cluster_enabled" {
 
 variable "aks_private_dns_zone_id" {
   type        = string
-  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and resolving the API server is left to the caller's DNS. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity = \"user\" with Private DNS Zone Contributor on the zone. Set before the first apply."
+  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and the module turns on the public FQDN, which Azure requires with None: the API server's name then resolves through public DNS to its private IP, so the nodes' and operators' DNS must resolve public names. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity = \"user\" with Private DNS Zone Contributor on the zone. Set before the first apply."
   default     = ""
 
   validation {
@@ -396,6 +396,12 @@ variable "aks_control_plane_identity_manage_grants" {
     condition     = var.aks_control_plane_identity_manage_grants == null || var.aks_control_plane_identity == "user"
     error_message = "aks_control_plane_identity_manage_grants only applies to a user-assigned control plane. Set aks_control_plane_identity = \"user\", or leave aks_control_plane_identity_manage_grants unset."
   }
+}
+
+variable "aks_network_owner_checks" {
+  type        = bool
+  description = "Whether plan reads two things on a network you supply, to catch at plan what Azure would otherwise refuse at cluster create: the node subnet's route table (with aks_outbound_type = \"userDefinedRouting\", to check its 0.0.0.0/0 next hop, and to warn on a missing default route or service-tag-only egress; needs read on the route table), and, with aks_control_plane_identity_manage_grants = false, the control-plane identity's direct role assignments on the subnet, route table and private DNS zone. Set false where the deploying identity cannot read the route table, or where the network owner grants the control-plane identity its roles through group membership, which the direct-assignment check cannot see. Azure still checks the grants and the next hop when it creates the cluster; the two warnings have no counterpart there."
+  default     = true
 }
 
 variable "location" {
@@ -1644,6 +1650,86 @@ variable "dns_label" {
   default     = ""
 }
 
+variable "ingress_load_balancer" {
+  type        = string
+  description = "Whether the ingress controller's Azure load balancer is 'public' (the default: a public IP) or 'internal' (a private IP in the cluster's VNet, on the AKS-managed kubernetes-internal load balancer, with no public frontend). Applies to envoy-gateway, nginx, istio and istio-addon. 'internal' cannot be combined with dns_label, which needs a public IP; put the hostname in your own DNS or a private DNS zone instead. See INGRESS_CONTROLLERS.md, \"Private ingress\"."
+  default     = "public"
+
+  validation {
+    condition     = contains(["public", "internal"], var.ingress_load_balancer)
+    error_message = "ingress_load_balancer must be 'public' or 'internal'."
+  }
+
+  validation {
+    # AGIC's frontend belongs to the Application Gateway, and with 'none' the
+    # module installs no controller, so neither has a Service to annotate.
+    # Refused rather than ignored, so a set value is never silently dropped.
+    condition     = var.ingress_load_balancer == "public" || !contains(["agic", "none"], var.ingress_controller)
+    error_message = "ingress_load_balancer = \"internal\" applies to envoy-gateway, nginx, istio and istio-addon. With agic, give the Application Gateway a private frontend instead; with none, configure your own controller's Service."
+  }
+
+  validation {
+    # HTTP-01 has Let's Encrypt fetch a token from the load balancer over the
+    # internet, which a private address never answers. DNS-01, your own
+    # certificate and HTTP-only all work behind an internal load balancer.
+    condition     = var.ingress_load_balancer == "public" || var.tls_certificate_source != "letsencrypt"
+    error_message = "ingress_load_balancer = \"internal\" cannot use tls_certificate_source = \"letsencrypt\": the HTTP-01 challenge reaches the load balancer from the internet, and a private address never answers it. Use \"dns01\" (with langsmith_domain and an Azure DNS zone), \"existing\" (your own certificate) or \"none\"."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer == "public" || var.dns_label == ""
+    error_message = "ingress_load_balancer = \"internal\" cannot be combined with dns_label: a cloudapp DNS label needs a public IP. Leave dns_label empty and resolve the hostname through your own DNS or a private DNS zone."
+  }
+}
+
+variable "ingress_load_balancer_subnet_id" {
+  type        = string
+  description = "With ingress_load_balancer = \"internal\": the resource ID of a subnet in the cluster's VNet to take the load balancer's private IP from. Empty uses the AKS node subnet. A subnet other than the node subnet needs subnets/join/action and subnets/read for the cluster identity; see ingress_load_balancer_manage_subnet_assignment."
+  default     = ""
+
+  validation {
+    condition     = var.ingress_load_balancer_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.ingress_load_balancer_subnet_id))
+    error_message = "ingress_load_balancer_subnet_id must be a subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer_subnet_id == "" || var.ingress_load_balancer == "internal"
+    error_message = "ingress_load_balancer_subnet_id is only used with ingress_load_balancer = \"internal\"."
+  }
+
+  validation {
+    # Microsoft: "The subnet specified must be in the same virtual network as
+    # your AKS cluster." Checkable whenever the VNet is supplied; a VNet the
+    # module creates has no ID until apply.
+    condition     = var.ingress_load_balancer_subnet_id == "" || var.create_vnet || var.vnet_id == "" || startswith(lower(var.ingress_load_balancer_subnet_id), "${lower(var.vnet_id)}/subnets/")
+    error_message = "ingress_load_balancer_subnet_id must be a subnet of vnet_id: Azure places an internal load balancer only in a subnet of the cluster's own virtual network."
+  }
+
+}
+
+variable "ingress_load_balancer_ip" {
+  type        = string
+  description = "With ingress_load_balancer = \"internal\": a static private IPv4 address for the load balancer, free in its subnet (ingress_load_balancer_subnet_id, or the node subnet). Not an Azure-reserved address or one in the Kubernetes service CIDR. Empty lets Azure pick one."
+  default     = ""
+
+  validation {
+    # cidrnetmask, unlike cidrhost, refuses IPv6.
+    condition     = var.ingress_load_balancer_ip == "" || can(cidrnetmask("${var.ingress_load_balancer_ip}/32"))
+    error_message = "ingress_load_balancer_ip must be an IPv4 address, for example 10.0.2.10."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer_ip == "" || var.ingress_load_balancer == "internal"
+    error_message = "ingress_load_balancer_ip is only used with ingress_load_balancer = \"internal\"."
+  }
+}
+
+variable "ingress_load_balancer_manage_subnet_assignment" {
+  type        = bool
+  description = "With ingress_load_balancer_subnet_id set to a subnet other than the node subnet: whether Terraform grants the cluster identity Network Contributor on that subnet, which carries the subnets/join/action and subnets/read the internal load balancer needs. Set false when the network owner makes that grant; the ingress_load_balancer_subnet_grant output names the role, scope and principal."
+  default     = true
+}
+
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
 
 variable "agic_subnet_address_prefix" {
@@ -1680,4 +1766,33 @@ variable "envoy_gateway_version" {
   type        = string
   description = "Envoy Gateway Helm chart version. Only used when ingress_controller = 'envoy-gateway'."
   default     = "v1.2.0"
+}
+
+variable "envoy_gateway_image_registry" {
+  type        = string
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, so the mirror keeps the source host as the first path segment, the layout LangSmith's images.registry expects. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
+  default     = ""
+
+  validation {
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+  }
+
+  # A version missing from local.envoy_proxy_default_images would leave the
+  # proxy pulling from docker.io.
+  validation {
+    condition     = var.envoy_gateway_image_registry == "" || contains(keys(local.envoy_proxy_default_images), var.envoy_gateway_version)
+    error_message = "envoy_gateway_image_registry needs the Envoy proxy image that Envoy Gateway uses by default, and the module knows it only for envoy_gateway_version v1.2.0. Set envoy_gateway_version = \"v1.2.0\", or leave envoy_gateway_image_registry empty."
+  }
+}
+
+variable "envoy_gateway_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the envoy-gateway-system namespace that the Envoy Gateway controller and proxy pods pull with. Create the namespace and the Secret before the apply that installs Envoy Gateway. Empty (default) pulls without credentials. Requires envoy_gateway_image_registry."
+  default     = ""
+
+  validation {
+    condition     = var.envoy_gateway_image_pull_secret_name == "" || var.envoy_gateway_image_registry != ""
+    error_message = "envoy_gateway_image_pull_secret_name only applies with a mirror. Set envoy_gateway_image_registry, or leave envoy_gateway_image_pull_secret_name empty."
+  }
 }
