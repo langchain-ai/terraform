@@ -50,6 +50,7 @@ run "enums_reject_an_unlisted_value" {
     ingress_type                              = "nginx"
     clickhouse_source                         = "clickhouse-cloud"
     tls_certificate_source                    = "acm"
+    cert_manager_issuer_kind                  = "Certificate"
     sizing_profile                            = "small"
     smithdb_metastore_source                  = "import"
     smithdb_metastore_ssl_mode                = "REQUIRED"
@@ -69,6 +70,7 @@ run "enums_reject_an_unlisted_value" {
     var.ingress_type,
     var.clickhouse_source,
     var.tls_certificate_source,
+    var.cert_manager_issuer_kind,
     var.sizing_profile,
     var.smithdb_metastore_source,
     var.smithdb_metastore_ssl_mode,
@@ -94,6 +96,8 @@ run "names_and_versions_reject_a_malformed_value" {
     smithdb_auth_proxy_image           = "gcr.io/langsmith/auth-proxy"
     labels                             = { "Owner" = "platform" }
     sandbox_default_container_requests = { cpu = "100m" }
+    cert_manager_version               = "1.21.2"
+    tls_google_managed_issuance_config = "corp-ca"
   }
 
   expect_failures = [
@@ -108,6 +112,8 @@ run "names_and_versions_reject_a_malformed_value" {
     var.smithdb_auth_proxy_image,
     var.labels,
     var.sandbox_default_container_requests,
+    var.cert_manager_version,
+    var.tls_google_managed_issuance_config,
   ]
 }
 
@@ -225,6 +231,24 @@ run "postgres_password_rejects_a_short_value" {
   expect_failures = [var.postgres_password]
 }
 
+# The region and zone rules must also accept the regions whose number has two
+# digits. The ingress module is on, so its own region rule sees the value too,
+# and k8s-bootstrap checks the same value.
+run "two_digit_regions_and_zones_are_accepted" {
+  command = plan
+
+  variables {
+    region          = "europe-west10"
+    zone            = "europe-west10-a"
+    install_ingress = true
+  }
+
+  assert {
+    condition     = length(module.ingress) == 1
+    error_message = "install_ingress = true did not plan the ingress module"
+  }
+}
+
 run "smithdb_migration_start_time_rejects_an_impossible_date" {
   command = plan
 
@@ -267,4 +291,31 @@ run "smithdb_disabled_ignores_the_metastore_tls_variables" {
     )
     error_message = "With SmithDB disabled, the metastore TLS outputs, the metastore tier, the Helm values, or the quota headroom are not empty"
   }
+}
+
+# The stack does not create the proxy-only subnet that a regional class needs,
+# and the namespace NetworkPolicy admits only Google's front-end ranges, so a
+# regional class would never receive traffic.
+run "gke_regional_gateway_class_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_type      = "gke"
+    gke_gateway_class = "gke-l7-rilb"
+  }
+
+  expect_failures = [var.gke_gateway_class]
+}
+
+# A gke-l7-global prefix also matches the multi-cluster class, which needs a
+# fleet, so the rule matches the one class by name.
+run "gke_multi_cluster_gateway_class_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_type      = "gke"
+    gke_gateway_class = "gke-l7-global-external-managed-mc"
+  }
+
+  expect_failures = [var.gke_gateway_class]
 }

@@ -135,7 +135,17 @@ helm uninstall envoy-gateway -n envoy-gateway-system
 kubectl delete namespace envoy-gateway-system
 ```
 
+For `ingress_type = "gke"`, there is no Envoy Gateway to uninstall. Delete the Gateway instead. The GKE controller holds a finalizer until it has removed the load balancer, so the command waits for that cleanup:
+
+```bash
+kubectl -n langsmith delete gateway --all --timeout=300s
+```
+
+The static IP (`<name>-gateway-ip`) is a Terraform resource, so `make destroy` releases it after the Gateway is gone.
+
 > **Envoy Gateway IP:** When you uninstall Envoy Gateway, GCP releases the external IP address. If you re-deploy later, a new IP is issued and you must update your DNS A record. Uninstall → reinstall cannot preserve the same IP unless you pre-allocate a static regional address and bind it to the Gateway (not currently wired in this stack).
+>
+> With `ingress_type = "gke"` and the default global class, the IP is reserved by Terraform, so it survives a Gateway delete and recreate. `make destroy` releases it.
 
 ## A4 — Handle KEDA ScaledObject Finalizers (if namespace stuck)
 
@@ -229,6 +239,7 @@ make destroy
 
 Terraform destroys in dependency order:
 - The Envoy Gateway `Gateway`, before the Envoy Gateway release and the cluster (only when `install_ingress = true` and `ingress_type = "envoy"`). The step waits up to 5 minutes for the LoadBalancer Service to go, so that GKE deletes the load balancer while the cluster exists. When the cluster is not reachable, the step does nothing.
+- The GKE `Gateway` (only when `install_ingress = true` and `ingress_type = "gke"`), before its static IP and the cluster. The step waits up to 5 minutes for the controller to remove the load balancer. When the cluster is not reachable, the step does nothing.
 - k8s-bootstrap (KEDA, cert-manager Helm releases)
 - Cloud SQL PostgreSQL instance
 - SmithDB metastore Cloud SQL instance and its GCS bucket (only when `enable_smithdb = true`)
@@ -336,6 +347,9 @@ gcloud compute networks list --project "$PROJECT_ID" --filter="name~$PREFIX"
 # as in B8 step 3.
 gcloud compute firewall-rules list --project "$PROJECT_ID" --filter="network~$PREFIX-vpc" \
   --format="table(name,network.basename())"
+
+# Global static IP left by ingress_type = "gke" (name ends in -gateway-ip)
+gcloud compute addresses list --project "$PROJECT_ID" --global --filter="name~gateway-ip"
 
 # Service accounts (WI uses name_prefix only; sandbox-node and SmithDB use PREFIX)
 gcloud iam service-accounts list --project "$PROJECT_ID" \
@@ -521,6 +535,8 @@ done < <(kubectl get pvc -n langsmith -o name 2>/dev/null \
 #    GKE can still leave the shared k8s-<cluster-id>-node-http-hc rule (B8 step 3).
 kubectl -n envoy-gateway-system delete gateway --all 2>/dev/null || true
 kubectl -n envoy-gateway-system get svc -l gateway.envoyproxy.io/owning-gateway-name
+# With ingress_type = "gke" the Gateway is in the langsmith namespace instead.
+kubectl -n langsmith delete gateway --all --timeout=300s 2>/dev/null || true
 helm uninstall cert-manager -n cert-manager 2>/dev/null || true
 helm uninstall keda -n keda 2>/dev/null || true
 helm uninstall envoy-gateway -n envoy-gateway-system 2>/dev/null || true
@@ -816,6 +832,11 @@ gcloud services vpc-peerings delete \
 #    private service connection; it is not removed with the peering.
 gcloud compute addresses delete "$VPC_NAME-private-ip" \
   --global --project "$PROJECT_ID" --quiet
+
+# 6b. Release the Gateway's static IP, only if you used ingress_type = "gke" with a
+#     global class. Delete the Gateway first (B1) so the IP is no longer in use.
+gcloud compute addresses delete "$PREFIX-gateway-ip" \
+  --global --project "$PROJECT_ID" --quiet 2>/dev/null || true
 
 # 7. Delete the VPC
 gcloud compute networks delete "$VPC_NAME" --project "$PROJECT_ID" --quiet

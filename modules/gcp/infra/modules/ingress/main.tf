@@ -1,13 +1,9 @@
-# Ingress Module - Envoy Gateway (Gateway API)
+# Ingress Module - Envoy Gateway (default) or GKE Gateway, both via Gateway API
 
 #------------------------------------------------------------------------------
 # Gateway API CRDs
 #------------------------------------------------------------------------------
 locals {
-  # Gateway API standard channel. Envoy Gateway v1.9 needs Gateway API v1.6, and
-  # the upstream upgrade order is Gateway API first, then Envoy Gateway.
-  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
-
   envoy_gateway_version = "v1.9.2"
   # The Envoy Gateway CRDs of that release, without the Gateway API CRDs.
   envoy_gateway_crds_url = "https://github.com/envoyproxy/gateway/releases/download/${local.envoy_gateway_version}/envoy-gateway-crds.yaml"
@@ -24,9 +20,20 @@ locals {
     KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
     export KUBECONFIG
     trap 'rm -f "$KUBECONFIG"' EXIT
-    gcloud container clusters get-credentials ${var.cluster_name} \
-      --region ${var.region} --project ${var.project_id} --quiet || exit 1
+    gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+      --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet || exit 1
   EOT
+
+  # Input values reach these scripts only through the environment, never as
+  # script text, so the shell cannot run a value as a command. Each provisioner
+  # that uses kubectl_creds sets environment = local.kubectl_env, and each
+  # destroy provisioner builds the same names from self.triggers.
+  kubectl_env = {
+    LS_CLUSTER_NAME = var.cluster_name
+    LS_REGION       = var.region
+    LS_PROJECT_ID   = var.project_id
+    LS_GATEWAY_NAME = var.gateway_name
+  }
 }
 
 resource "null_resource" "install_gateway_api_crds" {
@@ -34,11 +41,12 @@ resource "null_resource" "install_gateway_api_crds" {
 
   # A new URL runs the step again, so an existing cluster gets the new CRDs.
   triggers = {
-    crds_url = local.gateway_api_crds_url
+    crds_url = var.gateway_api_crds_url
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = merge(local.kubectl_env, { LS_GATEWAY_API_CRDS_URL = var.gateway_api_crds_url })
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for API server to be accessible
       for i in {1..30}; do
@@ -51,7 +59,7 @@ resource "null_resource" "install_gateway_api_crds" {
       
       # Install Gateway API CRDs. Server-side apply with --force-conflicts takes
       # over the fields that an earlier client-side apply or Helm wrote.
-      kubectl apply --server-side --force-conflicts -f ${local.gateway_api_crds_url}
+      kubectl apply --server-side --force-conflicts -f "$LS_GATEWAY_API_CRDS_URL"
     EOT
   }
 
@@ -69,9 +77,10 @@ resource "null_resource" "install_envoy_gateway_crds" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = merge(local.kubectl_env, { LS_ENVOY_GATEWAY_CRDS_URL = local.envoy_gateway_crds_url })
+    command     = <<-EOT
       ${local.kubectl_creds}
-      kubectl apply --server-side --force-conflicts -f ${local.envoy_gateway_crds_url}
+      kubectl apply --server-side --force-conflicts -f "$LS_ENVOY_GATEWAY_CRDS_URL"
     EOT
   }
 
@@ -150,7 +159,8 @@ resource "null_resource" "apply_gateway_class" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for Gateway API CRDs to be available
       for i in {1..30}; do
@@ -162,7 +172,7 @@ resource "null_resource" "apply_gateway_class" {
       done
       
       # Apply the GatewayClass
-      kubectl apply -f ${local_file.gateway_class[0].filename}
+      kubectl apply -f "${local_file.gateway_class[0].filename}"
     EOT
   }
 
@@ -178,57 +188,76 @@ locals {
   # when there is a domain to put in it.
   gateway_listener_hostname = var.langsmith_domain != "" ? { hostname = var.langsmith_domain } : {}
 
-  # Port 80 carries the ACME challenge for Let's Encrypt, and is the only
-  # entrypoint when no certificate source is configured.
-  gateway_http_listener_enabled = var.tls_certificate_source != "existing"
+  tls_enabled        = var.tls_certificate_source != "none"
+  tls_google_managed = var.tls_certificate_source == "google-managed"
 
-  # The HTTPS listener references var.tls_secret_name, which nothing creates when
-  # tls_certificate_source = "none". Declaring it anyway leaves a listener that
-  # can never be programmed, so omit it instead.
-  gateway_https_listener_enabled = var.tls_certificate_source != "none"
+  # Every TLS source except google-managed terminates in the Gateway from the
+  # Secret named by tls_secret_name, in the LangSmith namespace. A
+  # Google-managed certificate stays on the load balancer, which reads it from
+  # the certificate map in the Gateway annotation.
+  tls_from_secret = local.tls_enabled && !local.tls_google_managed
+
+  # The HTTP listener is always there. With no TLS it serves LangSmith. With TLS
+  # it only redirects to HTTPS (https_redirect below), and for Let's Encrypt it
+  # also carries the HTTP-01 challenge, whose exact-path route takes precedence
+  # over the redirect's prefix match.
+  gateway_http_listener = merge({
+    name     = "http"
+    protocol = "HTTP"
+    port     = 80
+    allowedRoutes = {
+      namespaces = {
+        from = "All"
+      }
+    }
+  }, local.gateway_listener_hostname)
+
+  # With no TLS there is nothing to terminate with, so the HTTPS listener is
+  # omitted rather than declared unprogrammable.
+  gateway_https_listener = merge(
+    {
+      name     = "https"
+      protocol = "HTTPS"
+      port     = 443
+      allowedRoutes = {
+        namespaces = {
+          from = "All"
+        }
+      }
+    },
+    local.tls_from_secret ? {
+      tls = {
+        mode = "Terminate"
+        certificateRefs = [{
+          name      = var.tls_secret_name
+          kind      = "Secret"
+          namespace = var.langsmith_namespace
+        }]
+      }
+    } : {},
+    local.gateway_listener_hostname,
+  )
+
+  # Listeners shared by the Envoy and GKE Gateways. Both attach routes from any
+  # namespace.
+  gateway_listeners = concat(
+    [local.gateway_http_listener],
+    local.tls_enabled ? [local.gateway_https_listener] : [],
+  )
 
   gateway_yaml = var.ingress_type == "envoy" ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
     kind       = "Gateway"
+    # No cert-manager.io/cluster-issuer annotation: k8s-bootstrap creates the
+    # Certificate explicitly, in the LangSmith namespace. The annotation would
+    # have cert-manager's gateway-shim manage a second one for the same Secret.
     metadata = {
       name      = var.gateway_name
       namespace = "envoy-gateway-system"
-      annotations = var.tls_certificate_source == "letsencrypt" ? {
-        "cert-manager.io/cluster-issuer" = "letsencrypt-prod"
-      } : {}
     }
     spec = {
       gatewayClassName = "envoy-gateway-class"
-      listeners = concat(
-        local.gateway_http_listener_enabled ? [merge({
-          name     = "http"
-          protocol = "HTTP"
-          port     = 80
-          allowedRoutes = {
-            namespaces = {
-              from = "All"
-            }
-          }
-        }, local.gateway_listener_hostname)] : [],
-        local.gateway_https_listener_enabled ? [merge({
-          name     = "https"
-          protocol = "HTTPS"
-          port     = 443
-          tls = {
-            mode = "Terminate"
-            certificateRefs = [{
-              name      = var.tls_secret_name
-              kind      = "Secret"
-              namespace = var.langsmith_namespace
-            }]
-          }
-          allowedRoutes = {
-            namespaces = {
-              from = "All"
-            }
-          }
-        }, local.gateway_listener_hostname)] : []
-      )
+      listeners        = local.gateway_listeners
     }
   }) : ""
 }
@@ -237,6 +266,13 @@ resource "local_file" "gateway" {
   count    = var.ingress_type == "envoy" ? 1 : 0
   filename = "${path.module}/gateway.yaml"
   content  = local.gateway_yaml
+
+  lifecycle {
+    precondition {
+      condition     = !local.tls_google_managed
+      error_message = "tls_certificate_source = \"google-managed\" requires ingress_type = \"gke\". Envoy Gateway terminates TLS in the cluster from a Secret: use \"existing\" or \"cert-manager\"."
+    }
+  }
 }
 
 resource "null_resource" "apply_gateway" {
@@ -248,7 +284,8 @@ resource "null_resource" "apply_gateway" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for Gateway CRD to be available
       for i in {1..30}; do
@@ -260,7 +297,7 @@ resource "null_resource" "apply_gateway" {
       done
       
       # Apply the Gateway
-      kubectl apply -f ${local_file.gateway[0].filename}
+      kubectl apply -f "${local_file.gateway[0].filename}"
     EOT
   }
 
@@ -300,23 +337,29 @@ resource "null_resource" "delete_gateway_on_destroy" {
   provisioner "local-exec" {
     when       = destroy
     on_failure = continue
-    command    = <<-EOT
+    environment = {
+      LS_CLUSTER_NAME = self.triggers.cluster_name
+      LS_REGION       = self.triggers.region
+      LS_PROJECT_ID   = self.triggers.project_id
+      LS_GATEWAY_NAME = self.triggers.gateway_name
+    }
+    command = <<-EOT
       KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
       export KUBECONFIG
       trap 'rm -f "$KUBECONFIG"' EXIT
-      if ! gcloud container clusters get-credentials ${self.triggers.cluster_name} \
-        --region ${self.triggers.region} --project ${self.triggers.project_id} --quiet; then
-        echo "Cluster ${self.triggers.cluster_name} is not reachable. Skipping the Gateway delete."
+      if ! gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+        --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet; then
+        echo "Cluster $LS_CLUSTER_NAME is not reachable. Skipping the Gateway delete."
         exit 0
       fi
-      kubectl delete gateway ${self.triggers.gateway_name} -n envoy-gateway-system \
+      kubectl delete gateway "$LS_GATEWAY_NAME" -n envoy-gateway-system \
         --ignore-not-found --timeout=120s || true
       # Envoy Gateway deletes the proxy Service. GKE removes the Service only
       # after it deletes the load balancer.
       i=0
       while [ "$i" -lt 60 ]; do
         if ! SVC=$(kubectl get svc -n envoy-gateway-system \
-          -l gateway.envoyproxy.io/owning-gateway-name=${self.triggers.gateway_name} \
+          -l "gateway.envoyproxy.io/owning-gateway-name=$LS_GATEWAY_NAME" \
           -o name 2>/dev/null); then
           echo "WARNING: cannot list the Gateway Services. See TEARDOWN.md."
           exit 0
@@ -338,8 +381,13 @@ resource "null_resource" "delete_gateway_on_destroy" {
 #------------------------------------------------------------------------------
 # ReferenceGrant for cross-namespace secret access
 #------------------------------------------------------------------------------
+# The Envoy Gateway sits in envoy-gateway-system and its certificate Secret in the
+# LangSmith namespace, so every Secret-based source needs this grant, not only
+# Let's Encrypt. Without it the HTTPS listener reports RefNotPermitted.
 locals {
-  reference_grant_yaml = var.ingress_type == "envoy" && var.tls_certificate_source == "letsencrypt" ? yamlencode({
+  reference_grant_enabled = var.ingress_type == "envoy" && local.tls_from_secret
+
+  reference_grant_yaml = local.reference_grant_enabled ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1beta1"
     kind       = "ReferenceGrant"
     metadata = {
@@ -362,20 +410,21 @@ locals {
 }
 
 resource "local_file" "reference_grant" {
-  count    = var.ingress_type == "envoy" && var.tls_certificate_source == "letsencrypt" ? 1 : 0
+  count    = local.reference_grant_enabled ? 1 : 0
   filename = "${path.module}/reference-grant.yaml"
   content  = local.reference_grant_yaml
 }
 
 resource "null_resource" "apply_reference_grant" {
-  count = var.ingress_type == "envoy" && var.tls_certificate_source == "letsencrypt" ? 1 : 0
+  count = local.reference_grant_enabled ? 1 : 0
 
   triggers = {
     reference_grant_content = local_file.reference_grant[0].content
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for ReferenceGrant CRD to be available
       for i in {1..30}; do
@@ -387,7 +436,7 @@ resource "null_resource" "apply_reference_grant" {
       done
       
       # Apply the ReferenceGrant
-      kubectl apply -f ${local_file.reference_grant[0].filename}
+      kubectl apply -f "${local_file.reference_grant[0].filename}"
     EOT
   }
 
@@ -405,23 +454,24 @@ resource "null_resource" "get_external_ip" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for Envoy proxy service to have external IP
       # The Envoy proxy service is created by Envoy Gateway for each Gateway resource
       for i in {1..60}; do
         # Find the Envoy proxy service using label selector
         IP=$(kubectl get svc -n envoy-gateway-system \
-          -l gateway.envoyproxy.io/owning-gateway-name=${var.gateway_name},app.kubernetes.io/component=proxy \
+          -l "gateway.envoyproxy.io/owning-gateway-name=$LS_GATEWAY_NAME,app.kubernetes.io/component=proxy" \
           -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
         if [ -n "$IP" ] && [ "$IP" != "null" ]; then
-          echo "$IP" > ${path.module}/external-ip.txt
+          echo "$IP" > "${path.module}/external-ip.txt"
           exit 0
         fi
         echo "Waiting for external IP... ($i/60)"
         sleep 5
       done
-      echo "WARNING: External IP not available yet" > ${path.module}/external-ip.txt
+      echo "WARNING: External IP not available yet" > "${path.module}/external-ip.txt"
     EOT
   }
 
@@ -432,6 +482,222 @@ data "local_file" "external_ip" {
   count      = var.ingress_type == "envoy" ? 1 : 0
   filename   = "${path.module}/external-ip.txt"
   depends_on = [null_resource.get_external_ip]
+}
+
+#------------------------------------------------------------------------------
+# GKE Gateway (ingress_type = "gke")
+#------------------------------------------------------------------------------
+# The GKE Gateway controller is built into the cluster (enable_gateway_api on the
+# k8s-cluster module), so there are no CRDs or Helm releases to install here. The
+# Gateway lives in the LangSmith namespace, which is also where k8s-bootstrap
+# creates the TLS secret, so no ReferenceGrant is needed.
+locals {
+  gke_gateway_enabled = var.ingress_type == "gke"
+
+  # Only global classes can use a global static IP. Regional classes (for example
+  # gke-l7-rilb) need a regional address and a proxy-only subnet, which this
+  # module does not create. The root accepts only the global class.
+  gke_gateway_global_ip    = local.gke_gateway_enabled && startswith(var.gke_gateway_class, "gke-l7-global")
+  gke_gateway_address_name = "${var.gateway_name}-ip"
+
+  # A Google-managed certificate is attached through its certificate map. GKE
+  # rejects a Gateway that sets this annotation and listener certificateRefs
+  # together, so the HTTPS listener carries no tls block in that case.
+  gke_gateway_annotations = local.tls_google_managed ? {
+    "networking.gke.io/certmap" = var.tls_certificate_map_name
+  } : {}
+
+  gke_gateway_yaml = local.gke_gateway_enabled ? yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "Gateway"
+    metadata = merge({
+      name      = var.gateway_name
+      namespace = var.langsmith_namespace
+      }, length(local.gke_gateway_annotations) > 0 ? {
+      annotations = local.gke_gateway_annotations
+    } : {})
+    spec = merge({
+      gatewayClassName = var.gke_gateway_class
+      listeners        = local.gateway_listeners
+      }, local.gke_gateway_global_ip ? {
+      addresses = [{
+        type  = "NamedAddress"
+        value = local.gke_gateway_address_name
+      }]
+    } : {})
+  }) : ""
+}
+
+# A static IP lets DNS point at the Gateway before, and after, it is recreated.
+resource "google_compute_global_address" "gke_gateway" {
+  count   = local.gke_gateway_global_ip ? 1 : 0
+  name    = local.gke_gateway_address_name
+  project = var.project_id
+}
+
+resource "local_file" "gke_gateway" {
+  count    = local.gke_gateway_enabled ? 1 : 0
+  filename = "${path.module}/gke-gateway.yaml"
+  content  = local.gke_gateway_yaml
+
+  lifecycle {
+    precondition {
+      condition     = var.tls_certificate_source != "letsencrypt"
+      error_message = "ingress_type = \"gke\" supports tls_certificate_source = \"none\", \"google-managed\", \"existing\", or \"cert-manager\". The Let's Encrypt HTTP-01 solver is wired to Envoy Gateway only."
+    }
+    # Regional classes take regional Certificate Manager certificates, which
+    # this module does not create yet.
+    precondition {
+      condition     = !local.tls_google_managed || (local.gke_gateway_global_ip && var.tls_certificate_map_name != "")
+      error_message = "tls_certificate_source = \"google-managed\" requires a global gke_gateway_class (gke-l7-global-*) and a certificate map."
+    }
+  }
+}
+
+resource "null_resource" "apply_gke_gateway" {
+  count = local.gke_gateway_enabled ? 1 : 0
+
+  triggers = {
+    gateway_content = local_file.gke_gateway[0].content
+  }
+
+  provisioner "local-exec" {
+    environment = local.kubectl_env
+    command     = <<-EOT
+      ${local.kubectl_creds}
+      # GKE installs the Gateway API CRDs after the cluster update that enables
+      # the controller, which can take a few minutes.
+      for i in {1..60}; do
+        if kubectl get crd gateways.gateway.networking.k8s.io >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for Gateway CRD... ($i/60)"
+        sleep 5
+      done
+
+      # Apply the Gateway
+      kubectl apply -f "${local_file.gke_gateway[0].filename}"
+    EOT
+  }
+
+  depends_on = [local_file.gke_gateway, google_compute_global_address.gke_gateway]
+}
+
+# Same reasoning as delete_gateway_on_destroy, which is Envoy-only. The GKE
+# controller holds a finalizer on the Gateway until it has removed the load
+# balancer, so a blocking delete waits for that cleanup. It is not on
+# apply_gke_gateway, because a Gateway change replaces that resource and would
+# delete the Gateway on each edit. It depends on the address so that, in reverse
+# on destroy, the Gateway is gone before Terraform tries to release the IP.
+resource "null_resource" "delete_gke_gateway_on_destroy" {
+  count = local.gke_gateway_enabled ? 1 : 0
+
+  triggers = {
+    project_id   = var.project_id
+    region       = var.region
+    cluster_name = var.cluster_name
+    gateway_name = var.gateway_name
+    namespace    = var.langsmith_namespace
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    on_failure = continue
+    environment = {
+      LS_CLUSTER_NAME = self.triggers.cluster_name
+      LS_REGION       = self.triggers.region
+      LS_PROJECT_ID   = self.triggers.project_id
+      LS_GATEWAY_NAME = self.triggers.gateway_name
+      LS_NAMESPACE    = self.triggers.namespace
+    }
+    command = <<-EOT
+      KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+      export KUBECONFIG
+      trap 'rm -f "$KUBECONFIG"' EXIT
+      if ! gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+        --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet; then
+        echo "Cluster $LS_CLUSTER_NAME is not reachable. Skipping the Gateway delete."
+        exit 0
+      fi
+      if ! kubectl delete gateway "$LS_GATEWAY_NAME" -n "$LS_NAMESPACE" \
+        --ignore-not-found --timeout=300s; then
+        echo "WARNING: the Gateway is still present. See TEARDOWN.md."
+      fi
+    EOT
+  }
+
+  depends_on = [null_resource.apply_gke_gateway, google_compute_global_address.gke_gateway]
+}
+
+#------------------------------------------------------------------------------
+# HTTP to HTTPS redirect (any TLS source, either ingress_type)
+#------------------------------------------------------------------------------
+# With TLS on, the LangSmith HTTPRoute attaches only to the https listener
+# (init-values.sh sets gateway.sectionName), and this route answers every
+# request on the http listener with a 301 to the same URL over HTTPS. It lives
+# beside the Gateway, so it needs no ReferenceGrant.
+locals {
+  https_redirect_enabled = local.tls_enabled && contains(["envoy", "gke"], var.ingress_type)
+  gateway_namespace      = var.ingress_type == "gke" ? var.langsmith_namespace : "envoy-gateway-system"
+
+  https_redirect_yaml = local.https_redirect_enabled ? yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "${var.gateway_name}-https-redirect"
+      namespace = local.gateway_namespace
+    }
+    spec = merge({
+      parentRefs = [{
+        name        = var.gateway_name
+        namespace   = local.gateway_namespace
+        sectionName = "http"
+      }]
+      rules = [{
+        filters = [{
+          type = "RequestRedirect"
+          requestRedirect = {
+            scheme     = "https"
+            statusCode = 301
+          }
+        }]
+      }]
+      }, var.langsmith_domain != "" ? {
+      hostnames = [var.langsmith_domain]
+    } : {})
+  }) : ""
+}
+
+resource "local_file" "https_redirect" {
+  count    = local.https_redirect_enabled ? 1 : 0
+  filename = "${path.module}/https-redirect.yaml"
+  content  = local.https_redirect_yaml
+}
+
+resource "null_resource" "apply_https_redirect" {
+  count = local.https_redirect_enabled ? 1 : 0
+
+  triggers = {
+    route_content = local_file.https_redirect[0].content
+  }
+
+  provisioner "local-exec" {
+    environment = local.kubectl_env
+    command     = <<-EOT
+      ${local.kubectl_creds}
+      for i in {1..60}; do
+        if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for HTTPRoute CRD... ($i/60)"
+        sleep 5
+      done
+
+      kubectl apply -f "${local_file.https_redirect[0].filename}"
+    EOT
+  }
+
+  depends_on = [null_resource.apply_gateway, null_resource.apply_gke_gateway, local_file.https_redirect]
 }
 
 #------------------------------------------------------------------------------

@@ -120,6 +120,17 @@ _clickhouse_source="${_clickhouse_source:-in-cluster}"
 _sizing_profile=$(_parse_tfvar "sizing_profile")
 _sizing_profile="${_sizing_profile:-default}"
 _gateway_name="${_name_prefix}-${_environment}-gateway"
+# The Gateway lives in a different namespace per ingress_type: Envoy Gateway keeps
+# it in its own namespace, the GKE Gateway sits in the LangSmith namespace.
+if ! _ingress_type=$(terraform -chdir="$INFRA_DIR" output -raw ingress_type 2>/dev/null); then
+  _ingress_type=$(_parse_tfvar "ingress_type") || _ingress_type=""
+fi
+if [[ "$_ingress_type" == "gke" ]]; then
+  _gateway_namespace=$(_parse_tfvar "langsmith_namespace")
+  _gateway_namespace="${_gateway_namespace:-langsmith}"
+else
+  _gateway_namespace="envoy-gateway-system"
+fi
 _enable_smithdb=false
 _tfvar_is_true "enable_smithdb" && _enable_smithdb=true
 _smithdb_ingestion_enabled=false
@@ -146,11 +157,16 @@ if [[ -z "$_project_id" ]]; then
   exit 1
 fi
 
-# Derive protocol
-if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "existing" ]]; then
+# Derive protocol. Every source except "none" puts an HTTPS listener on the
+# Gateway, and its HTTP listener only redirects to HTTPS. The LangSmith
+# HTTPRoute then attaches to the https listener alone (gateway.sectionName), so
+# it does not compete with the redirect route for plain-HTTP requests.
+if [[ "$_tls_source" != "none" ]]; then
   _protocol="https"
+  _gateway_section_line='  sectionName: "https"'
 else
   _protocol="http"
+  _gateway_section_line=""
 fi
 
 OUT_FILE="$VALUES_DIR/values-overrides.yaml"
@@ -705,7 +721,7 @@ fi
 
 # Patch tlsEnabled in agent-deploys if TLS is configured
 if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
-  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "existing" ]]; then
+  if [[ "$_tls_source" != "none" ]]; then
     sed -i.bak 's/tlsEnabled: false/tlsEnabled: true/' "$_deploys_file" && rm -f "$_deploys_file.bak"
   fi
 fi
@@ -1119,8 +1135,8 @@ cat > "$OUT_FILE" << YAML
 # The service account must have Storage Admin on the ${BUCKET_NAME} bucket.
 
 config:
-  # Envoy Gateway IP — required for OAuth and Deployments features.
-  # Find it with: kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
+  # Gateway IP — required for OAuth and Deployments features.
+  # Find it with: kubectl get gateway -A -o jsonpath='{.items[0].status.addresses[0].value}'
   hostname: "${HOSTNAME}"
   langsmithLicenseKey: "${LANGSMITH_LICENSE_KEY}"
   apiKeySalt: "${API_KEY_SALT}"
@@ -1147,7 +1163,8 @@ ${_sandbox_config_block}
 
 gateway:
   name: "${_gateway_name}"
-  namespace: "envoy-gateway-system"
+  namespace: "${_gateway_namespace}"
+${_gateway_section_line}
 ${_wi_block}
 ${_external_services_block}
 ${_fleet_key_block}
@@ -1159,8 +1176,8 @@ YAML
 echo "Written: $OUT_FILE"
 if [[ -z "$HOSTNAME" ]]; then
   echo ""
-  echo "WARNING: hostname is empty. Run again after the Envoy Gateway has an external IP:"
-  echo "  kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'"
+  echo "WARNING: hostname is empty. Run again after the Gateway has an external IP:"
+  echo "  kubectl get gateway -A -o jsonpath='{.items[0].status.addresses[0].value}'"
   echo "  Then set langsmith_domain in terraform.tfvars and re-run this script."
 fi
 echo ""

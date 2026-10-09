@@ -94,7 +94,8 @@ It adds these for the matching configuration:
 | Cloud SQL or Memorystore is created, or `enable_sandboxes = true` | `servicenetworking.services.addPeering`, `compute.globalAddresses.create` |
 | `enable_secret_manager_module = true` | `secretmanager.secrets.create` |
 | `enable_dns_module = true` | `dns.managedZones.create`, `dns.resourceRecordSets.create` |
-| `enable_dns_module = true`, unless `dns_create_certificate = false` | `compute.sslCertificates.create` |
+| `tls_certificate_source = "google-managed"` | `certificatemanager.certs.create`, `certificatemanager.certmaps.create`, `certificatemanager.certmapentries.create`, `certificatemanager.dnsauthorizations.create` |
+| `ingress_type = "gke"` | `compute.globalAddresses.create` |
 | `enable_smithdb = true` with `smithdb_metastore_source = "create"` | `cloudsql.instances.create`, `cloudsql.databases.create` |
 | `enable_smithdb = true` with `smithdb_metastore_use_auth_proxy = true` | `resourcemanager.projects.setIamPolicy` |
 

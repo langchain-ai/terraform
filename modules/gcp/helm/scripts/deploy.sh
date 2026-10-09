@@ -214,6 +214,11 @@ fi
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
 
+# The Gateway's namespace is whatever the chart will attach its HTTPRoute to:
+# envoy-gateway-system for Envoy Gateway, the LangSmith namespace for the GKE Gateway.
+_gateway_ns=$(awk '/^gateway:/{f=1;next} f&&/^  namespace:/{gsub(/"/,"",$2);print $2;exit}' "$OVERRIDES_FILE" 2>/dev/null)
+_gateway_ns="${_gateway_ns:-envoy-gateway-system}"
+
 if [[ ! -f "$BASE_VALUES_FILE" ]]; then
   echo "ERROR: $BASE_VALUES_FILE not found." >&2
   exit 1
@@ -309,7 +314,7 @@ fi
 if ! _langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null); then
   _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 fi
-_live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
+_live_gateway_ip=$(kubectl get gateway -n "$_gateway_ns" \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
 if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
   # Domain-based install: never rewrite the hostname. Surface a DNS mismatch
@@ -1011,14 +1016,16 @@ fi
 # ── Post-deploy access info ───────────────────────────────────────────────────
 _hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
-_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
+_gateway_ip=$(kubectl get gateway -n "$_gateway_ns" \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
 
 echo "Access LangSmith:"
 echo "  Port-forward:  kubectl port-forward svc/${RELEASE_NAME}-frontend -n ${NAMESPACE} 8080:80"
 echo "  Then open:     http://localhost:8080"
 if [[ -n "$_hostname" ]]; then
-  echo "  URL:           https://${_hostname}"
+  _scheme="https"
+  grep -qE '^\s*url:\s*"http://' "$OVERRIDES_FILE" 2>/dev/null && _scheme="http"
+  echo "  URL:           ${_scheme}://${_hostname}"
 fi
 if [[ -n "$_gateway_ip" && "$_gateway_ip" != "$_hostname" ]]; then
   echo "  Gateway IP:    ${_gateway_ip}"
