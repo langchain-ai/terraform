@@ -1,4 +1,4 @@
-output "tenant_id" {
+output "azure_entra_tenant_id" {
   description = "Entra tenant ID of the subscription."
   value       = data.azurerm_client_config.current.tenant_id
 }

@@ -116,10 +116,9 @@ Send this body to the LangSmith API to create the data plane. The example uses t
 
 ```json
 {
-  "cloud": "AZURE",
   "name": "prod",
   "region": "<data_planes.prod.region>",
-  "tenant_id": "<tenant_id>",
+  "azure_entra_tenant_id": "<azure_entra_tenant_id>",
   "resource_group_id": "<data_planes.prod.resource_group_id>",
   "vpc_cidr": "10.80.0.0/16"
 }
@@ -129,10 +128,9 @@ This `jq` command makes the body from the outputs:
 
 ```bash
 terraform output -json langsmith_byoc_access | jq --arg dp prod '{
-  cloud: "AZURE",
   name: $dp,
   region: .data_planes[$dp].region,
-  tenant_id: .tenant_id,
+  azure_entra_tenant_id: .azure_entra_tenant_id,
   resource_group_id: .data_planes[$dp].resource_group_id,
   vpc_cidr: "10.80.0.0/16"
 }'
@@ -162,7 +160,7 @@ A `data_planes` key must have 1 to 63 characters. Use only lowercase letters, di
 
 | Output | Description |
 |--------|-------------|
-| `tenant_id` | Entra tenant ID of the subscription. |
+| `azure_entra_tenant_id` | Entra tenant ID of the subscription. |
 | `data_planes` | Map of data plane key to `resource_group_id`, `region`, and `key_vault_name`. |
 
 ## Security model
