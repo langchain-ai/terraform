@@ -271,12 +271,13 @@ aks_control_plane_identity = "user"
 | Variable | Effect |
 |---|---|
 | `aks_private_cluster_enabled` | The API server gets a private endpoint in the cluster VNet and no public address. Refused alongside `aks_authorized_ip_ranges`, which filters the public endpoint |
-| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and resolving the API server is left to your DNS. A zone ID: AKS registers the API server in your zone, which requires `aks_control_plane_identity = "user"` |
+| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and the module turns on the public FQDN, which Azure requires with `None`: the API server's name resolves through public DNS to its private IP, so the nodes' and operators' DNS must resolve public names. A zone ID: AKS registers the API server in your zone, which requires `aks_control_plane_identity = "user"` |
 | `aks_entra_only` | Entra ID integration with Azure RBAC for Kubernetes authorization, and local accounts disabled |
 | `aks_entra_admin_group_object_ids` | Entra groups granted cluster-admin. Requires `aks_entra_only` |
 | `aks_control_plane_identity` | `system` (default): AKS creates a system-assigned control-plane identity. `user`: the control plane runs as a user-assigned identity, `<cluster_name>-control-plane` in the deployment's resource group |
 | `aks_control_plane_identity_id` | An existing user-assigned identity to use instead of the one Terraform creates. Requires `aks_control_plane_identity = "user"`, and is required when `aks_control_plane_identity_manage_grants` is false |
 | `aks_control_plane_identity_manage_grants` | Whether Terraform grants the user-assigned identity its roles. Defaults to `create_vnet`: Terraform grants on a VNet it built, and leaves a supplied VNet's grants to its owner |
+| `aks_network_owner_checks` | Default `true`. `false` skips two plan-time reads of a supplied network: the route table, which feeds the default-route refusal and the warnings for a missing default route and for service-tag-only egress, and the control-plane identity's direct role assignments. Use it when the deploying identity cannot read the route table, or when the owner grants the identity through group membership, which the direct-assignment check cannot see. Azure still checks both at create |
 
 In Azure Government, confirm the private zone's name before you create your own. Microsoft's private-endpoint DNS table gives `privatelink.<region>.azmk8s.io`, but Government API servers use the `cx.aks.containerservice.azure.us` suffix. With `aks_private_dns_zone_id = "System"`, AKS creates the zone in the node resource group, and that zone's name is the one to copy.
 
@@ -508,6 +509,8 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
 ```
+
+**A private address instead of a public one:** `ingress_load_balancer = "internal"` puts the ingress controller on a private IP in the cluster's VNet, with no public frontend. It can't be combined with `dns_label` or with `tls_certificate_source = "letsencrypt"`. See [INGRESS_CONTROLLERS.md, "Private ingress"](INGRESS_CONTROLLERS.md#private-ingress).
 
 **Add HTTPS with Let's Encrypt (`envoy-gateway`, `nginx`, or self-managed `istio`):**
 ```hcl
@@ -803,6 +806,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Validates `values-overrides.yaml` exists (fails fast with `make init-values` hint if missing)
 - Refreshes kubeconfig via `az aks get-credentials`
 - Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `nginx`, `istio-addon`, and `istio`
+- With `ingress_load_balancer = "internal"`, writes the internal load-balancer annotations into the Envoy Gateway EnvoyProxy, binds the Istio add-on Gateway to the add-on's internal gateway, and puts the subnet and IP annotations on it
 - For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
 - Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
@@ -1327,6 +1331,10 @@ route table. A `0.0.0.0/0` route to any next hop but `VirtualAppliance` or
 with `RouteTableInvalidNextHop`. No `0.0.0.0/0` route at all is only a
 warning, because a default route learned over BGP from ExpressRoute or VPN
 never appears in the route table.
+`aks_network_owner_checks = false` skips the route-table read, for a
+deploying identity that may not read the route table. Azure then checks the
+route only when it creates the cluster, and plan gives neither the missing
+default route warning nor the service-tag warning below.
 
 **A NAT gateway on the subnet** (`aks_nat_gateway`) is for
 `userAssignedNATGateway`, which requires one, and for `userDefinedRouting`,
@@ -1391,7 +1399,11 @@ decides what the cluster can reach, and nothing works until it allows:
   [Required outbound access](#required-outbound-access).
 - **Images**, from wherever the cluster pulls them: LangSmith's from
   `docker.io`, and the add-ons from their upstream registries, or your mirror
-  for all of them.
+  for all of them. For Envoy Gateway, `envoy_gateway_image_registry` points the
+  controller and the proxy at a mirror laid out as
+  `<registry>/docker.io/envoyproxy/...`, with an optional pull Secret in
+  `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The machine
+  running Terraform still pulls the chart from `oci://docker.io`.
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 

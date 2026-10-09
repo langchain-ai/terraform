@@ -3,3 +3,9 @@ plugin "aws" {
   version = "0.38.0"
   source  = "github.com/terraform-linters/tflint-ruleset-aws"
 }
+
+plugin "google" {
+  enabled = true
+  version = "0.34.0"
+  source  = "github.com/terraform-linters/tflint-ruleset-google"
+}

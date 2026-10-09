@@ -99,6 +99,7 @@ The deployment creates the following assignments. Each one requires `Microsoft.A
 | `Virtual Machine Administrator Login` | `1c0163c0-47e6-4577-8991-ea5c82e286e4` | Bastion VM | Operators | Bastion module is enabled |
 | `Network Contributor` | `4d97b98b-1d4f-4787-a291-c67834d212e7` | AKS subnet, or the virtual network with a zone ID in `aks_private_dns_zone_id` | AKS control-plane identity | `aks_control_plane_identity = "user"`, with grants managed |
 | `Private DNS Zone Contributor` | `b12aa53e-6015-4669-85d0-8515ebb3ae7f` | API server private DNS zone | AKS control-plane identity | As above, with a zone ID in `aks_private_dns_zone_id` |
+| `Network Contributor` | `4d97b98b-1d4f-4787-a291-c67834d212e7` | `ingress_load_balancer_subnet_id` | The cluster identity | `ingress_load_balancer = "internal"` with a subnet other than the node subnet, and `ingress_load_balancer_manage_subnet_assignment` left `true`. The load balancer needs `subnets/join/action` and `subnets/read` there; with the flag `false`, the network owner grants them, and `terraform output ingress_load_balancer_subnet_grant` names what to grant |
 
 The Key Vault assignment to the deploying identity is self-granting: Terraform gives itself `Key Vault Secrets Officer` so that it can then write `postgres-admin-password` and `langsmith-license-key` through the Key Vault data plane. The vault runs in RBAC mode, so no access policy path exists as a fallback. Set `keyvault_manage_secrets = false` to drop both writes, and `keyvault_manage_terraform_admin_assignment = false` alongside it to drop the grant they exist for, as below.
 
@@ -119,6 +120,8 @@ Who makes the grants follows `aks_control_plane_identity_manage_grants`, which d
 - **`false`.** Terraform makes no grants, and the network's owner makes them. This is the default on a supplied VNet. The identity must already exist and be set in `aks_control_plane_identity_id`. The plan reads its assignments and fails if a scope has none. The error names the principal ID and gives the `az role assignment create` command for each missing grant.
 
 The check covers the subnet, its route table when it has one, and the zone. It does not check the VNet, which needs a grant only when the zone is not linked yet. It accepts any role at the scope or above it, so a custom role passes, and so does a grant on the VNet's resource group or subscription. A grant at management-group scope is reported missing, because a management group's path is not a prefix of the subscription's: grant at the subnet, the route table, and the zone as well. Azure decides whether the role carries enough permissions when it creates the cluster, and fails the create if it does not.
+
+The check reads only roles assigned to the identity itself. A network owner who grants it through group membership, which works for AKS, should set `aks_network_owner_checks = false`: the plan then skips the check, and Azure validates the grants at create.
 
 To deploy with `false`:
 
