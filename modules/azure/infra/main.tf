@@ -619,6 +619,9 @@ data "azapi_resource" "byo_agic_subnet_delegations" {
 # for None, on a test cluster in eastus2), so such a route is refused here.
 # No 0.0.0.0/0 route at all is only a warning: a default route learned over
 # BGP from ExpressRoute or VPN never appears in the table.
+# aks_network_owner_checks = false skips the read, for a deploying identity
+# that may not read the route table; Azure still checks the next hop at create,
+# but nothing replaces the two warnings below that read it.
 locals {
   aks_outbound_custom   = var.aks_outbound_type != "loadBalancer"
   aks_subnet_route_tbl  = try(one(data.azurerm_subnet.byo_aks_subnet[*].route_table_id), null)
@@ -656,7 +659,7 @@ locals {
 }
 
 data "azurerm_route_table" "byo_aks_subnet" {
-  count               = var.create_cluster && var.aks_outbound_type == "userDefinedRouting" && local.aks_route_tbl_parts != null ? 1 : 0
+  count               = var.create_cluster && var.aks_network_owner_checks && var.aks_outbound_type == "userDefinedRouting" && local.aks_route_tbl_parts != null ? 1 : 0
   name                = local.aks_route_tbl_parts[1]
   resource_group_name = local.aks_route_tbl_parts[0]
 }
@@ -1195,6 +1198,15 @@ check "agic_with_overlay_unverified" {
   }
 }
 
+# The Envoy Gateway controller picks the proxy image itself, so mirroring it
+# needs that default for each chart version. envoy_gateway_image_registry
+# refuses a version missing from this map.
+locals {
+  envoy_proxy_default_images = {
+    "v1.2.0" = "envoyproxy/envoy:distroless-v1.32.1"
+  }
+}
+
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
 # AKS cluster with OIDC + Workload Identity enabled, ingress controller installed.
 # The OIDC issuer URL output is consumed by module.blob for federated credentials.
@@ -1252,8 +1264,22 @@ module "aks" {
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
-  ingress_controller   = var.ingress_controller
-  dns_label            = var.dns_label
+  ingress_controller = var.ingress_controller
+  dns_label          = var.dns_label
+
+  ingress_load_balancer                          = var.ingress_load_balancer
+  ingress_load_balancer_subnet_id                = var.ingress_load_balancer_subnet_id
+  ingress_load_balancer_ip                       = var.ingress_load_balancer_ip
+  ingress_load_balancer_manage_subnet_assignment = var.ingress_load_balancer_manage_subnet_assignment
+  # A ternary rather than &&, which below Terraform 1.14 evaluates both sides.
+  # A supplied node subnet is compared by ID. A carved one has no ID before
+  # apply, so it is compared by name: the load-balancer subnet is in the
+  # cluster's VNet, where the name alone identifies it.
+  ingress_load_balancer_needs_subnet_grant = var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? (
+    local.byo_aks_subnet
+    ? lower(var.ingress_load_balancer_subnet_id) != lower(var.aks_subnet_id)
+    : lower(element(split("/", var.ingress_load_balancer_subnet_id), length(split("/", var.ingress_load_balancer_subnet_id)) - 1)) != lower("${local.vnet_name}-subnet-0")
+  ) : false
   istio_version        = var.istio_version
   istio_addon_revision = var.istio_addon_revision
 
@@ -1272,7 +1298,10 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version = var.envoy_gateway_version
+  envoy_gateway_version                = var.envoy_gateway_version
+  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
+  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -1301,6 +1330,7 @@ module "aks" {
   control_plane_identity_id    = var.aks_control_plane_identity_id
 
   control_plane_identity_manage_grants = local.aks_control_plane_manage_grants
+  control_plane_grant_check            = var.aks_network_owner_checks
   vnet_id                              = local.vnet_id
   subnet_route_table_id                = local.aks_subnet_has_routes ? local.aks_subnet_route_tbl : ""
 
@@ -2107,6 +2137,29 @@ module "bastion" {
   tags                 = local.common_tags
 
   depends_on = [module.vnet]
+}
+
+# A public Azure DNS zone answers on the internet, so with an internal load
+# balancer its A record would publish a private address that resolves for
+# everyone and connects for no one outside the network. The record exists only
+# when ingress_ip is set; the zone alone is what DNS-01 needs. A warning rather
+# than a refusal: a split-horizon setup can want exactly that record.
+# Behind an internal load balancer there is no cloudapp label, so the hostname
+# can only come from langsmith_domain. Without one, init-values.sh has nothing
+# to write, and deploy.sh creates no Istio add-on Gateway. A warning, because
+# a hostname can still be supplied to init-values.sh another way.
+check "internal_ingress_hostname" {
+  assert {
+    condition     = var.ingress_load_balancer == "public" || var.langsmith_domain != ""
+    error_message = "ingress_load_balancer = \"internal\" with no langsmith_domain: there is no cloudapp label behind a private address, so set langsmith_domain to the name your DNS resolves to the load balancer's IP."
+  }
+}
+
+check "dns_zone_with_internal_ingress" {
+  assert {
+    condition     = !(var.create_dns_zone && var.ingress_load_balancer == "internal" && var.ingress_ip != "")
+    error_message = "create_dns_zone = true and ingress_ip set with ingress_load_balancer = \"internal\": the public zone's A record would carry the load balancer's private address. Leave ingress_ip empty so the zone serves only the DNS-01 challenge, and put the record in your own DNS or an Azure Private DNS zone linked to the VNet, unless you mean to publish it."
+  }
 }
 
 # ── DNS (optional) ────────────────────────────────────────────────────────────

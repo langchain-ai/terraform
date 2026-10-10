@@ -113,6 +113,46 @@ variable "eks_cluster_version" {
   }
 }
 
+variable "eks_network_mode" {
+  type        = string
+  description = <<-EOT
+    Where pods get their IP addresses. "node-subnet" (default) gives each pod an
+    address in the node's subnet. "custom-networking" moves pods to dedicated pod
+    subnets (VPC CNI custom networking), so the node subnets only need room for
+    nodes. Pod IPs stay routable VPC addresses, so the ALB keeps targeting pods
+    directly. Set this at cluster creation: nodes that joined before the switch
+    keep pod IPs in the node subnets until they are replaced.
+  EOT
+  default     = "node-subnet"
+
+  validation {
+    condition     = contains(["node-subnet", "custom-networking"], var.eks_network_mode)
+    error_message = "eks_network_mode must be \"node-subnet\" or \"custom-networking\"."
+  }
+}
+
+variable "eks_pod_cidr" {
+  type        = string
+  description = "Secondary VPC CIDR for the pod subnets when eks_network_mode = \"custom-networking\" and create_vpc = true. Split into one pod subnet per AZ. Must not overlap the VPC CIDR or any network the VPC routes to."
+  default     = "100.64.0.0/16"
+
+  validation {
+    # A VPC CIDR block is /16 to /28, and each pod subnet is two bits longer
+    # than eks_pod_cidr, so a /26 is the longest prefix that still fits.
+    condition = can(cidrhost(var.eks_pod_cidr, 0)) && try(
+      tonumber(split("/", var.eks_pod_cidr)[1]) >= 16 && tonumber(split("/", var.eks_pod_cidr)[1]) <= 26,
+      false,
+    )
+    error_message = "eks_pod_cidr must be an IPv4 CIDR from /16 to /26 (e.g., 100.64.0.0/16)."
+  }
+}
+
+variable "eks_pod_subnet_ids" {
+  type        = list(string)
+  description = "Pod subnet IDs when eks_network_mode = \"custom-networking\" and create_vpc = false. One subnet per AZ, covering every AZ the cluster subnets are in, usually carved from a secondary VPC CIDR."
+  default     = []
+}
+
 variable "create_gp3_storage_class" {
   type        = bool
   description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."

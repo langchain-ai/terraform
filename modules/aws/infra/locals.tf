@@ -41,6 +41,27 @@ locals {
   public_subnets  = var.create_vpc ? module.vpc[0].public_subnets : var.public_subnets
   vpc_cidr_block  = var.create_vpc ? module.vpc[0].vpc_cidr_block : var.vpc_cidr_block
 
+  # VPC CNI custom networking. A created VPC carves the pod subnets out of
+  # eks_pod_cidr; a BYO VPC brings them in eks_pod_subnet_ids, and their AZs and
+  # CIDRs come from the subnet lookups in main.tf. Grouping (the trailing ...)
+  # keeps a duplicate AZ from failing here, so the precondition that rejects it
+  # can name the problem instead.
+  custom_networking = var.eks_network_mode == "custom-networking"
+  byo_pod_subnets_by_az = {
+    for az, ids in { for s in data.aws_subnet.pod : s.availability_zone => s.id... } : az => ids[0]
+  }
+  pod_subnet_ids_by_az = !local.custom_networking ? {} : (
+    var.create_vpc ? zipmap(module.vpc[0].azs, module.vpc[0].pod_subnets) : local.byo_pod_subnets_by_az
+  )
+  # Pods talk to VPC destinations from their own IPs, so every CIDR rule that
+  # admits the cluster lists these alongside the VPC CIDR.
+  pod_cidr_blocks = !local.custom_networking ? [] : (
+    var.create_vpc ? [var.eks_pod_cidr] : [for s in data.aws_subnet.pod : s.cidr_block]
+  )
+  # In-cluster callers of the LangSmith hostname reach an internal ALB from
+  # their pod IPs, so a restricted alb_allowed_cidr_blocks still admits them.
+  alb_ingress_cidr_blocks = concat(var.alb_allowed_cidr_blocks, local.pod_cidr_blocks)
+
   # Envoy Gateway is the default ingress mode, but a bare default of `true` would
   # silently add a second gateway controller to every existing Istio/NGINX tfvars
   # that never mentioned Envoy. Deriving it instead means "Envoy unless you already

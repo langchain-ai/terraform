@@ -179,6 +179,21 @@ enable_public_eks_cluster = false
 #
 # eks_public_access_cidrs = ["0.0.0.0/0"]
 
+# Pod networking. Set this at cluster creation; existing nodes keep their pod
+# IPs until they are replaced. See README.md "Pod networking".
+#
+# "node-subnet" (default): pods get IPs from the node's private subnet.
+# "custom-networking": pods get IPs from dedicated pod subnets (VPC CNI custom
+#   networking), so the private subnets only need room for nodes.
+#
+# eks_network_mode = "custom-networking"
+#
+# create_vpc = true: secondary VPC CIDR, split into one pod subnet per AZ.
+# eks_pod_cidr = "100.64.0.0/16"
+#
+# create_vpc = false: your pod subnets, one per AZ the cluster subnets are in.
+# eks_pod_subnet_ids = ["subnet-fff", "subnet-ggg", "subnet-hhh"]
+
 # Node group sizing — controls the EC2 instances that run your pods.
 #
 # Instance type guidance:
@@ -749,9 +764,7 @@ enable_usage_telemetry = false
 # SSO login via any standard OIDC provider — Entra ID (Azure AD), Okta,
 # Auth0, Google Workspace, etc. all work through the same generic
 # client_id/secret/issuer_url. Default is off (basic auth). When enabled,
-# disables config.basicAuth and requires the client ID/secret/issuer URL to
-# already be populated in SSM before the first deploy — see
-# infra/scripts/setup-env.sh — under:
+# disables config.basicAuth and requires the client ID/secret/issuer URL in SSM (`make sso` asks for any that are missing) under:
 #   /langsmith/<name_prefix>-<environment>/oauth-client-id
 #   /langsmith/<name_prefix>-<environment>/oauth-client-secret
 #   /langsmith/<name_prefix>-<environment>/oauth-issuer-url
@@ -759,10 +772,10 @@ enable_usage_telemetry = false
 # — the /v2.0 suffix is required, not the tenant-specific /common/ endpoint;
 # other providers publish their own issuer URL in their OIDC discovery doc).
 #
-# WARNING: leave this false for the initial install. Deploy first with
-# basic auth and confirm you can log in as the org admin, then flip this to
-# true and redeploy. Turning it on before an admin account exists locks you
-# out of the UI, since basicAuth is disabled the moment oauth is enabled.
+# Leave this false for the initial install.
+# Once you can log in as the org admin with basic auth, run `make sso`: it checks the prerequisites, sets this to true, and deploys.
+# Turning it on before an admin account exists locks you out of the UI, since basicAuth is disabled the moment oauth is enabled.
+# One-way: LangSmith does not support moving from SSO back to basic auth.
 # Set up SCIM (if you're using it) after this, not before — SCIM's user
 # matching depends on the OIDC provider this creates.
 enable_sso_oidc = false

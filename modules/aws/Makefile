@@ -15,7 +15,7 @@
 
 .PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
-        init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end uninstall clean deploy-all \
+        init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end sso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
@@ -155,6 +155,9 @@ smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB,
 
 smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
 	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
+
+sso: ## Turn on SSO (OIDC) login after a working password install — one-way
+	$(HELM_DIR)/scripts/sso.sh
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh

@@ -33,3 +33,8 @@ output "azs" {
   description = "List of availability zones used by this VPC."
   value       = module.vpc.azs
 }
+
+output "pod_subnets" {
+  description = "IDs of the pod subnets, in the same AZ order as azs. Empty when pod_cidr is null."
+  value       = module.vpc.intra_subnets
+}

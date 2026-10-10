@@ -81,6 +81,9 @@ make apply-eso
 make smithdb-migration-job-start
 make smithdb-migration-job-end
 
+# Turn on SSO login after a working password install (one-way)
+make sso
+
 # Check SSM secrets status + TF_VAR_* export status (read-only)
 make secrets
 

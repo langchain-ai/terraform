@@ -165,6 +165,13 @@ smithdb_query_enabled     = false
 # "none"          — skip (bring your own)
 ingress_controller = "envoy-gateway"
 
+# Envoy Gateway's controller and proxy images from a registry that mirrors Docker
+# Hub with docker.io as the first path segment (<registry>/docker.io/envoyproxy/...),
+# the same layout LangSmith's images.registry uses. The pull Secret goes in the
+# envoy-gateway-system namespace, created before the apply that installs Envoy Gateway.
+# envoy_gateway_image_registry         = "nexus.example.com"
+# envoy_gateway_image_pull_secret_name = "nexus-pull"
+
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
 # istio_addon_revision = "asm-1-27"
@@ -192,6 +199,11 @@ ingress_controller = "envoy-gateway"
 #   → http://<dns_label>.<location>.cloudapp.azure.com
 #
 dns_label              = "langsmith-prod"     # → langsmith-prod.eastus.cloudapp.azure.com
+# A private IP in the VNet instead of a public one (no dns_label, no letsencrypt);
+# see INGRESS_CONTROLLERS.md, "Private ingress".
+# ingress_load_balancer           = "internal"
+# ingress_load_balancer_subnet_id = "<subnet resource ID in the cluster's VNet>"   # optional
+# ingress_load_balancer_ip        = "10.0.40.10"                                   # optional
 tls_certificate_source = "none"
 
 # Option B: HTTPS via Let's Encrypt HTTP-01 — envoy-gateway, nginx, istio (validated ✅)
