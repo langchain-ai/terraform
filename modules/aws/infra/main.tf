@@ -1060,6 +1060,8 @@ module "smithdb" {
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
 
+  migration_source_bucket_arn = var.smithdb_migration_enabled ? module.storage.bucket_arn : ""
+
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
 }
