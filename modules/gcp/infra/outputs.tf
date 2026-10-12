@@ -394,6 +394,11 @@ output "smithdb_migration_enabled" {
   value       = var.smithdb_migration_enabled
 }
 
+output "smithdb_migration_parallelism" {
+  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
+  value       = var.smithdb_migration_parallelism
+}
+
 output "smithdb_query_enabled" {
   description = "Whether LangSmith reads are served from SmithDB"
   value       = var.smithdb_query_enabled
