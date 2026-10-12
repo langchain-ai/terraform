@@ -19,7 +19,7 @@ This module creates these resources:
 2. Azure credentials with the `Owner` role on that subscription. The module creates role assignments, and the provider registers resource providers for the subscription.
 3. An Entra ID role that can create a service principal for a multi-tenant app, for example `Cloud Application Administrator`.
 4. Terraform `>= 1.11.0`, the AzureRM provider `>= 4.42.0, < 5.0.0`, and the AzureAD provider `~> 3.0`.
-5. The client ID of the LangSmith multi-tenant app. LangChain gives you this value. Use it as `langsmith_app_client_id`.
+5. The client ID of the LangSmith multi-tenant app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`. Use it as `langsmith_app_client_id`.
 6. The external ID from **Settings > Data Planes** in the LangSmith UI. Copy this value and use it as `external_id`. Do not make your own value. LangSmith compares it with the description of each role assignment to verify that you own the subscription.
 
 ## Usage
@@ -68,7 +68,7 @@ variable "external_id" {
 module "langsmith_byoc_access" {
   source = "github.com/langchain-ai/terraform//modules/byoc/azure/langsmith-byoc-access?ref=main"
 
-  langsmith_app_client_id = "<langsmith-app-client-id>"
+  langsmith_app_client_id = "5b0a74cb-9f37-4797-b557-c15d7be80d3b"
   external_id             = var.external_id
 
   data_planes = {
@@ -148,7 +148,7 @@ terraform output -json langsmith_byoc_access | jq --arg dp prod '{
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. LangChain gives you this value. |
+| `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes** in LangSmith. Must not be empty. The module writes it as the description of each LangSmith role assignment. |
 | `data_planes` | `map(object({ location = string, tags = optional(map(string), {}) }))` | no | `{}` | Map of data planes. The key is the data plane name. Each data plane gets the resource group `langsmith-byoc-<key>` with only a Key Vault in it. LangSmith deletes the whole resource group when you delete the data plane. |
 | `key_vault_purge_protection_enabled` | `bool` | no | `true` | Enables purge protection on each data plane Key Vault. |
