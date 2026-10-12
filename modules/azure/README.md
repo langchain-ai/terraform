@@ -1373,6 +1373,14 @@ decides what the cluster can reach, and nothing works until it allows:
   `<registry>/docker.io/envoyproxy/...`, with an optional pull Secret in
   `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The machine
   running Terraform still pulls the chart from `oci://docker.io`.
+- **A mirror behind an internal CA** also needs that CA on the nodes, where
+  containerd does the pulling and trusts only public CAs; without it every pull
+  fails with `x509: certificate signed by unknown authority`.
+  `aks_custom_ca_trust_certificate_files` lists the PEM files (one CA each, up
+  to 10) that AKS installs in every Linux node's trust store. Set it before the
+  first apply where you can: a change to the list replaces every node (AKS
+  creates new nodes, drains and deletes the old). It is the nodes' trust store
+  only; LangSmith's own is `langsmith_custom_ca_secret_name`.
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 

@@ -7,6 +7,8 @@
 *.pem
 *.key
 *.crt
+# Throwaway self-signed certificates the Azure plan tests read; no key is kept.
+!modules/azure/infra/tests/fixtures/*.pem
 credentials.json
 token.json
 
