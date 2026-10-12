@@ -163,7 +163,7 @@ The Cloud SQL Auth Proxy is now the default for a created metastore.
     350 vCPU. To avoid this, set `smithdb_sizing = "medium"` or `"small"`.
   - A `minimum` install resolves to `minimal` and has no SmithDB node pools.
   - To keep the 0.16 pool (n2-standard-16, 2 Local SSD), set
-    `smithdb_sizing = "small"`: `make smithdb-configure SIZING=small CACHE=local-ssd`.
+    `smithdb_sizing = "small"` and `smithdb_cache_storage = "local-ssd"` in `infra/terraform.tfvars`.
 - Check the metastore tier. An unset `smithdb_metastore_tier` now follows the size.
   - For a created metastore, the tier goes from `db-custom-2-8192` to
     `db-custom-4-16384` for `small`, `db-custom-6-32768` for `medium`, and
