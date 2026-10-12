@@ -1370,9 +1370,11 @@ decides what the cluster can reach, and nothing works until it allows:
   `docker.io`, and the add-ons from their upstream registries, or your mirror
   for all of them. For Envoy Gateway, `envoy_gateway_image_registry` points the
   controller and the proxy at a mirror laid out as
-  `<registry>/docker.io/envoyproxy/...`, with an optional pull Secret in
-  `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The machine
-  running Terraform still pulls the chart from `oci://docker.io`.
+  `<registry>/docker.io/envoyproxy/...`, or as `<registry>/envoyproxy/...` with
+  `envoy_gateway_image_registry_keeps_source_host = false` (the layout of a
+  Docker Hub proxy repository in Nexus or Artifactory), with an optional pull
+  Secret in `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The
+  machine running Terraform still pulls the chart from `oci://docker.io`.
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 
