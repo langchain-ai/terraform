@@ -212,6 +212,21 @@ these outputs, which the scripts read through `LANGSMITH_INFRA_DIR`:
 - `smithdb_migration_parallelism`, which `deploy.sh` compares with the
   migration values file.
 
+### Metastore SKU on an existing install
+
+Earlier module versions used `GP_Standard_D2ds_v5` for an unset
+`smithdb_metastore_sku_name`. On an existing install that leaves it unset, the
+first `make apply` with this module version changes the SKU for every size
+except `minimal`, and Azure restarts the metastore. Check the Edsv5 vCPU quota before the apply. To
+keep the current SKU, set it in `infra/terraform.tfvars`:
+
+```hcl
+smithdb_metastore_sku_name = "GP_Standard_D2ds_v5"
+```
+
+For the downtime and the quota commands, see
+[SmithDB metastore SKU on Azure](../../MIGRATION-0.16-to-0.17.md#6-smithdb-metastore-sku-on-azure).
+
 ## Staged rollout
 
 Keep ClickHouse enabled in every stage. Set the gates in
@@ -521,7 +536,8 @@ bash agents/check.sh modules/azure/infra
 Before a real apply, also confirm:
 
 - PostgreSQL 18 and the selected Flexible Server SKU are available in the
-  chosen region;
+  chosen region, and the regional vCPU quota for its family covers it. See
+  [Metastore SKU on an existing install](#metastore-sku-on-an-existing-install);
 - Premium SSD v2 is available in the chosen region, and the AKS nodes are zonal.
   In most regions that offer availability zones a Premium SSD v2 disk attaches
   only to a zonal VM, so `availability_zones` has to name the zones the nodes

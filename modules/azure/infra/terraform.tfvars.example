@@ -152,6 +152,9 @@ smithdb_query_enabled     = false
 # default metastore SKU. See SMITHDB.md, "Sizing".
 # smithdb_sizing = "small"
 
+# An install from an earlier module version that left this unset runs
+# GP_Standard_D2ds_v5. Set that value to keep it: a SKU change restarts the
+# metastore. See MIGRATION-0.16-to-0.17.md, section 6.
 # smithdb_metastore_sku_name       = "MO_Standard_E2ds_v5" # unset takes the default for smithdb_sizing
 # smithdb_metastore_storage_mb     = 32768
 # smithdb_storage_account_name     = "" # empty derives a globally unique name
