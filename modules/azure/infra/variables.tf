@@ -1013,6 +1013,39 @@ variable "aks_os_sku" {
   }
 }
 
+variable "aks_custom_ca_trust_certificate_files" {
+  type        = list(string)
+  description = "Paths to PEM files, one CA certificate per file, that AKS installs in the trust store of every Linux node: for example the internal CA that signs an image mirror's certificate. containerd on the node does the pulling and trusts only public CAs, so a mirror behind an internal CA fails every pull with 'x509: certificate signed by unknown authority' until its CA is here. Up to 10. Paths are relative to the directory Terraform runs in (infra/) or absolute, and the files are read at plan. Empty (default) leaves the cluster's custom CA trust unset. A change replaces every node: AKS creates new nodes, drains and deletes the old ones. The module owns the setting because the provider reads it back from the cluster, so a CA added by hand with az aks update is removed by the next apply. Nodes only: pods keep their own trust store, and LangSmith's is langsmith_custom_ca_secret_name. Ignored when create_cluster = false."
+  default     = []
+
+  validation {
+    condition     = length(var.aks_custom_ca_trust_certificate_files) <= 10
+    error_message = "aks_custom_ca_trust_certificate_files lists ${length(var.aks_custom_ca_trust_certificate_files)} files, and AKS installs at most 10 custom CA certificates on a node. List only the CAs the nodes need to reach the image mirror: the root of each chain is enough when the mirror serves its intermediates."
+  }
+
+  validation {
+    condition     = alltrue([for f in var.aks_custom_ca_trust_certificate_files : can(file(f))])
+    error_message = "aks_custom_ca_trust_certificate_files names files Terraform cannot read: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !can(file(f))])}. Each must exist, as an absolute path or one relative to the directory Terraform runs in (infra/), and be text: a DER certificate converts with openssl x509 -inform der -in <file> -out <file>.pem."
+  }
+
+  validation {
+    # Exactly one certificate per file: AKS takes each list element as one
+    # certificate, and az aks update splits a multi-certificate file into
+    # elements, which filebase64 of a whole file would not.
+    # try() rather than || : Terraform 1.11 evaluates both operands, so an
+    # unreadable file would error here instead of failing the check above.
+    condition     = alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) == 1])
+    error_message = "aks_custom_ca_trust_certificate_files names files that do not hold exactly one certificate: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) != 1])}. Each file holds one PEM certificate (one -----BEGIN CERTIFICATE----- block); split a bundle into one file per certificate, and a private key, a CSR or an empty file is not a certificate."
+  }
+
+  validation {
+    # AKS fails to decode a certificate whose lines end in CRLF; the Microsoft
+    # page on custom CA trust names it as a cause of the unknown-authority error.
+    condition     = alltrue([for f in var.aks_custom_ca_trust_certificate_files : !can(file(f)) || !can(regex("\r", file(f)))])
+    error_message = "aks_custom_ca_trust_certificate_files names files with CRLF line endings: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if can(file(f)) && can(regex("\r", file(f)))])}. AKS cannot decode a certificate with them. Convert with: tr -d '\\r' < <file> > <file>.lf, then list the new file."
+  }
+}
+
 # Both of these are empty by default rather than carrying the create-path value,
 # because 10.0.64.0/20 is only safe against the subnets Terraform carves. main.tf
 # fills them in for create_vnet = true and requires aks_service_cidr under
