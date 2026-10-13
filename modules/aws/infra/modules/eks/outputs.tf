@@ -32,6 +32,11 @@ output "cluster_certificate_authority_data" {
   value       = module.eks.cluster_certificate_authority_data
 }
 
+output "cluster_security_group_id" {
+  description = "Security group the eks module attaches to the control plane ENIs."
+  value       = module.eks.cluster_security_group_id
+}
+
 output "cluster_primary_security_group_id" {
   description = "Primary security group ID for the EKS cluster (control plane SG, not attached to worker nodes)."
   value       = module.eks.cluster_primary_security_group_id

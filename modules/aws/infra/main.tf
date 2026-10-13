@@ -174,6 +174,11 @@ resource "terraform_data" "validate_inputs" {
       error_message = "existing_iam_role_arns.cert_manager replaces the DNS-01 role, so it needs create_cert_manager_irsa = true."
     }
 
+    precondition {
+      condition     = !var.bastion_cluster_admin || var.create_bastion
+      error_message = "bastion_cluster_admin grants the bastion role cluster admin, so it needs create_bastion = true."
+    }
+
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
     # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
     precondition {
@@ -732,7 +737,7 @@ module "bastion" {
   source = "./modules/bastion"
   count  = var.create_bastion ? 1 : 0
 
-  name                = local.bastion_name
+  name                = var.fix_bastion_names ? local.base_name : local.bastion_name
   vpc_id              = local.vpc_id
   subnet_id           = var.bastion_enable_ssh ? local.public_subnets[0] : local.private_subnets[0]
   associate_public_ip = var.bastion_enable_ssh
@@ -751,6 +756,38 @@ module "bastion" {
   iam_role_path                = var.iam_role_path
 
   depends_on = [module.vpc]
+}
+
+# The bastion reaches the private API endpoint through the cluster security group.
+resource "aws_security_group_rule" "bastion_to_cluster_api" {
+  count = var.create_bastion ? 1 : 0
+
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = module.eks.cluster_security_group_id
+  source_security_group_id = module.bastion[0].security_group_id
+  description              = "Kubernetes API from the bastion"
+}
+
+resource "aws_eks_access_entry" "bastion" {
+  count = var.create_bastion && var.bastion_cluster_admin ? 1 : 0
+
+  cluster_name  = module.eks.cluster_name
+  principal_arn = module.bastion[0].iam_role_arn
+}
+
+resource "aws_eks_access_policy_association" "bastion" {
+  count = var.create_bastion && var.bastion_cluster_admin ? 1 : 0
+
+  cluster_name  = module.eks.cluster_name
+  principal_arn = aws_eks_access_entry.bastion[0].principal_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
 }
 
 # The ALB controller (installed by EKS blueprints) registers a mutating webhook

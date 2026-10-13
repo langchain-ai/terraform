@@ -622,6 +622,8 @@ For customers who require a fully private EKS cluster (`enable_public_eks_cluste
 # terraform.tfvars
 enable_public_eks_cluster = false   # private API endpoint
 create_bastion            = true    # bastion for access
+bastion_cluster_admin     = true    # let the bastion role use the cluster
+fix_bastion_names         = true    # <base>-bastion, not <base>-bastion-bastion
 
 # Optional SSH (SSM is the default — no key needed):
 # bastion_key_name          = "my-keypair"
@@ -643,7 +645,9 @@ aws ssm start-session --target <instance-id> --region us-west-2
 
 ### Working from the bastion
 
-The bastion comes pre-installed with kubectl, helm, terraform, git, and jq. Kubeconfig is pre-configured for the EKS cluster.
+The bastion comes pre-installed with kubectl, helm, terraform, git, and jq. Kubeconfig is pre-configured for the EKS cluster. Terraform opens 443 from the bastion to the cluster API, and `bastion_cluster_admin = true` gives the bastion role cluster admin through an EKS access entry. Without it, `kubectl` on the bastion gets `Unauthorized`. Anyone who can open a session on the bastion gets that access.
+
+Set `fix_bastion_names` on a new bastion. On an existing one it replaces the role, instance profile, and security group.
 
 ```bash
 # After SSM-ing in:
@@ -1211,6 +1215,8 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `bastion_enable_ssh` | `false` | no | Open port 22 on bastion security group |
 | `bastion_ssh_allowed_cidrs` | `[]` | no | CIDRs allowed to SSH to bastion |
 | `bastion_root_volume_size_gb` | `20` | no | Root EBS volume size for bastion |
+| `bastion_cluster_admin` | `false` | no | Give the bastion role cluster admin through an EKS access entry |
+| `fix_bastion_names` | `false` | no | Name the bastion resources `<base>-bastion` instead of `<base>-bastion-bastion` |
 | `bastion_existing_security_group_id` | `null` | no | Attach an existing SG to the bastion instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `create_cloudtrail` | `false` | no | Create CloudTrail trail for AWS API audit |
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |

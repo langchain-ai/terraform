@@ -153,6 +153,33 @@ run "create_bastion_adds_only_the_bastion" {
     condition     = length(module.waf) == 0
     error_message = "create_bastion = true also planned the WAF"
   }
+  assert {
+    condition     = length(aws_security_group_rule.bastion_to_cluster_api) == 1
+    error_message = "create_bastion = true did not open 443 from the bastion to the cluster"
+  }
+  assert {
+    condition     = length(aws_eks_access_entry.bastion) == 0
+    error_message = "create_bastion = true granted cluster admin without bastion_cluster_admin"
+  }
+}
+
+run "bastion_cluster_admin_adds_the_access_entry" {
+  command = plan
+
+  variables {
+    create_bastion        = true
+    bastion_cluster_admin = true
+    fix_bastion_names     = true
+  }
+
+  assert {
+    condition     = length(aws_eks_access_entry.bastion) == 1
+    error_message = "bastion_cluster_admin = true did not plan the access entry"
+  }
+  assert {
+    condition     = aws_eks_access_policy_association.bastion[0].policy_arn == "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+    error_message = "bastion_cluster_admin = true did not associate the cluster admin policy"
+  }
 }
 
 # The DNS-01 Let's Encrypt path. The hosted zone and the contact address are

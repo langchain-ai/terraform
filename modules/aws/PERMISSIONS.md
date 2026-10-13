@@ -166,7 +166,7 @@ The deployment creates the following roles. IRSA roles trust the cluster's OIDC 
 | `<base_name>-smithdb-irsa` | The SmithDB service account | Object access on the SmithDB bucket, plus `kms:Decrypt` and `kms:GenerateDataKey` when `s3_kms_key_arn` is set | `enable_smithdb = true` |
 | Karpenter controller and node roles | The Karpenter service account, and `ec2.amazonaws.com` | Policies the module creates for node provisioning and the interruption queue | `enable_smithdb = true` |
 | `<base_name>-sandbox-host` | `ec2.amazonaws.com` | The node group policies above | `enable_sandboxes = true` |
-| `<name>-bastion`, with an instance profile | `ec2.amazonaws.com` | `AmazonSSMManagedInstanceCore`, plus `eks:DescribeCluster` and `eks:ListClusters` | `create_bastion = true` |
+| `<base_name>-bastion-bastion`, or `<base_name>-bastion` with `fix_bastion_names = true`, with an instance profile | `ec2.amazonaws.com` | `AmazonSSMManagedInstanceCore`, plus `eks:DescribeCluster` and `eks:ListClusters`. With `bastion_cluster_admin = true`, an EKS access entry with `AmazonEKSClusterAdminPolicy` | `create_bastion = true` |
 
 The LangSmith role also gets `rds-db:connect` for one database user when `postgres_iam_database_user` is set.
 

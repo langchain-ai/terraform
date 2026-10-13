@@ -522,6 +522,18 @@ variable "create_bastion" {
   default     = false
 }
 
+variable "fix_bastion_names" {
+  type        = bool
+  description = "Name the bastion role, instance profile, and security group <name_prefix>-<environment>-bastion instead of <name_prefix>-<environment>-bastion-bastion. Changing it on an existing bastion replaces them."
+  default     = false
+}
+
+variable "bastion_cluster_admin" {
+  type        = bool
+  description = "Give the bastion role cluster admin through an EKS access entry, so you can run kubectl, helm, and Terraform from the bastion. Anyone who can open a session on the bastion gets cluster admin. Requires create_bastion = true."
+  default     = false
+}
+
 variable "bastion_instance_type" {
   type        = string
   description = "EC2 instance type for the bastion host."
