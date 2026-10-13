@@ -850,7 +850,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
     # (4.5 to 6 minutes per pool on a test cluster). A tfvars edit should not
     # do that unannounced, and a pool created regional before availability_zones
     # reached additional pools should not be rotated by the first plan after the
-    # upgrade. check.aks_additional_node_pool_zone_drift below names the
+    # upgrade. check.aks_additional_node_pool_zone_drift above names the
     # mismatch instead.
     ignore_changes = [upgrade_settings, zones]
   }

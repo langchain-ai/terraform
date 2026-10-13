@@ -175,7 +175,10 @@ precondition above is satisfied, and the nodes stay where they were. The
 `aks_additional_node_pool_zone_drift` check (the additional pools) report this as
 a plan warning naming the live zones against the requested ones. Read that
 warning: a nonzonal pool with SmithDB enabled gets a cache StorageClass no pod
-can bind to. Re-zoning means rebuilding the pool.
+can bind to. Re-zoning means rebuilding the pool. With SmithDB on, plan also
+refuses an `additional_node_pools` entry that sets `zones = []`: SmithDB's
+components carry no `nodeSelector` by default, so a regional pool can receive
+them.
 
 ## Pre-apply review
 

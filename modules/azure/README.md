@@ -1610,7 +1610,8 @@ written before `postgres_high_availability` keeps its standby.
 
 Set `availability_zones` before the first apply. It covers the default node pool
 and every pool in `additional_node_pools` that sets no `zones` of its own; a pool
-sets `zones` for a VM size not offered in every zone, or `[]` to stay regional.
+sets `zones` for a VM size not offered in every zone, or `[]` to stay regional
+(refused while SmithDB is on; see [SMITHDB.md](SMITHDB.md)).
 Zones are set once, at creation, and a pool keeps the ones it was created with:
 `azurerm` re-zones a default node pool by cycling the system node pool, which
 does not cordon and drain, and an additional pool by rotating it through a
