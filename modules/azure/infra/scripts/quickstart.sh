@@ -1260,11 +1260,9 @@ _run_section_6() {
     printf "   challenge — without one the cert times out and is never issued.\n"
     printf "   Supported TLS options for istio-addon: none, dns01\n"
     echo ""
-    if ! _ask_yn "Continue anyway (cert will fail to issue)?" "n"; then
-      echo "  Re-run section 6 to pick a compatible TLS option."
-      _run_section_6
-      return
-    fi
+    echo "  Terraform rejects this pair. Pick a compatible TLS option."
+    _run_section_6
+    return
   fi
 
   if [[ "$TLS_SOURCE" == "letsencrypt" && "$INGRESS_CONTROLLER" == "agic" ]]; then
@@ -1275,11 +1273,9 @@ _run_section_6() {
     printf "   Let's Encrypt cannot verify the token — cert will never issue.\n"
     printf "   Supported TLS options for agic: none, dns01\n"
     echo ""
-    if ! _ask_yn "Continue anyway (cert will fail to issue)?" "n"; then
-      echo "  Re-run section 6 to pick a compatible TLS option."
-      _run_section_6
-      return
-    fi
+    echo "  Terraform rejects this pair. Pick a compatible TLS option."
+    _run_section_6
+    return
   fi
 
   if [[ "$TLS_SOURCE" == "none" && "$PROFILE" == "prod" ]]; then

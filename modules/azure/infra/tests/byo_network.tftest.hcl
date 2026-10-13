@@ -394,8 +394,9 @@ run "a_delegated_agic_subnet_plans_clean" {
   command = plan
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 }
 
@@ -412,8 +413,9 @@ run "an_undelegated_agic_subnet_warns" {
   }
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 
   expect_failures = [check.agic_subnet_delegation]
