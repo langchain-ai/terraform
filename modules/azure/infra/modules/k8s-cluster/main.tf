@@ -100,6 +100,33 @@ locals {
     : toset(one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].zones))
   )
 
+  # Each additional pool's zones: its own when it sets them, availability_zones
+  # otherwise, as the default pool takes availability_zones. An empty list here
+  # becomes null on the resource, a regional pool, so a cluster built under the
+  # [] default plans no change.
+  node_pool_zones = {
+    for name, pool in var.additional_node_pools :
+    name => pool.zones != null ? pool.zones : var.availability_zones
+  }
+
+  # Live zones of each additional pool, with null (a regional pool) normalized
+  # to an empty set as live_node_pool_zones does for the default pool. Keyed by
+  # the pool resources that exist, so an attached cluster whose pools this
+  # module does not manage has nothing here.
+  live_additional_node_pool_zones = {
+    for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool :
+    name => pool.zones == null ? toset([]) : toset(pool.zones)
+  }
+
+  # Additional pools whose live zones differ from the zones requested for them.
+  # A pool with no requested zones is exempt, as the default pool is under an
+  # empty availability_zones: [] asks Azure to place it, so whatever zones it
+  # reports are not drift from a request nobody made.
+  additional_node_pool_zone_drift = [
+    for name in sort(keys(local.live_additional_node_pool_zones)) : name
+    if length(local.node_pool_zones[name]) > 0 && local.live_additional_node_pool_zones[name] != toset(local.node_pool_zones[name])
+  ]
+
   service_accounts_for_workload_identity = [
     "${var.langsmith_release_name}-backend",
     "${var.langsmith_release_name}-platform-backend",
@@ -747,6 +774,37 @@ check "aks_node_pool_zone_drift" {
   }
 }
 
+# The same for the additional pools. ignore_changes on zones in
+# azurerm_kubernetes_cluster_node_pool.node_pool makes an edit to
+# availability_zones, or to a pool's own zones, a silent no-op there too, and a
+# pool created before availability_zones reached additional pools is regional
+# whatever the variable says. One warning names every pool whose live zones
+# differ from the request, with both values. The exemptions are the default
+# pool's: a pool with no requested zones, and a cluster whose pools this module
+# does not manage, where local.live_additional_node_pool_zones is empty.
+check "aks_additional_node_pool_zone_drift" {
+  assert {
+    condition = length(local.additional_node_pool_zone_drift) == 0
+    error_message = join("", [
+      "AKS additional node pool zones differ from the request: ",
+      join("; ", [
+        for name in local.additional_node_pool_zone_drift :
+        "pool ${name} is in [${join(",", sort(tolist(local.live_additional_node_pool_zones[name])))}] but [${join(",", sort(local.node_pool_zones[name]))}] is requested"
+      ]),
+      ". This module ignores zone changes on an existing node pool, so the ",
+      "request was discarded and the live zones above are what you have: a ",
+      "pool's zones cannot change after creation, and letting the plan change ",
+      "them would rotate the pool through its temporary pool and drain every ",
+      "node on it. To make it take effect, either revert the request to the ",
+      "live value, add a new pool with the zones to additional_node_pools and ",
+      "move the workloads to it, or drop zones from the ignore_changes block of ",
+      "azurerm_kubernetes_cluster_node_pool.node_pool in ",
+      "modules/k8s-cluster/main.tf and apply during a maintenance window, ",
+      "which rotates each pool named above and drains every node on it.",
+    ])
+  }
+}
+
 # Additional node pools for workloads that need different compute profiles.
 # Default: one "large" pool (Standard_D16s_v5, 16 vCPU / 64 GB) for ClickHouse
 # and other memory-intensive services. Scales 0→2 (scales to zero when idle).
@@ -777,8 +835,24 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   # a stable hash fragment so truncating long pool names cannot collide.
   temporary_name_for_rotation = "${substr(each.key, 0, 7)}${substr(sha1(each.key), 0, 2)}tmp"
 
+  # availability_zones unless the pool sets its own zones; null, a regional
+  # pool, when neither names a zone, so a cluster built under the [] default
+  # plans no change here. Set once: see ignore_changes below.
+  zones = length(local.node_pool_zones[each.key]) > 0 ? local.node_pool_zones[each.key] : null
+
   lifecycle {
-    ignore_changes = [upgrade_settings]
+    # upgrade_settings change during rolling node upgrades; ignore to prevent
+    # drift between Terraform state and live cluster configuration.
+    #
+    # zones: a pool's zones cannot change after creation. The provider applies
+    # a change by rotating the pool through temporary_name_for_rotation, a
+    # replacement scale set that drains every node of a pool holding workloads
+    # (4.5 to 6 minutes per pool on a test cluster). A tfvars edit should not
+    # do that unannounced, and a pool created regional before availability_zones
+    # reached additional pools should not be rotated by the first plan after the
+    # upgrade. check.aks_additional_node_pool_zone_drift below names the
+    # mismatch instead.
+    ignore_changes = [upgrade_settings, zones]
   }
 }
 

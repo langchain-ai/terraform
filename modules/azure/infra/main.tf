@@ -1260,7 +1260,9 @@ module "aks" {
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
