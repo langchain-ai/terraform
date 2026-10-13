@@ -872,3 +872,43 @@ run "byo_vpc_smithdb_subnet_selector_skips_the_tags" {
     error_message = "the EC2NodeClasses do not select smithdb_karpenter_subnet_selector"
   }
 }
+
+run "no_customer_managed_keys_leaves_aws_managed_keys" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  assert {
+    condition     = !strcontains(kubectl_manifest.smithdb_ec2nc_compute[0].yaml_body, "kmsKeyID")
+    error_message = "with ebs_kms_key_arn unset, the SmithDB EC2NodeClass named a KMS key"
+  }
+}
+
+# Every key at once, with every resource it reaches enabled, so a type mismatch
+# in any of the wiring fails the plan.
+run "customer_managed_keys_reach_every_resource" {
+  command = plan
+
+  variables {
+    enable_smithdb                   = true
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    postgres_source                  = "external"
+    redis_source                     = "external"
+    rds_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ab"
+    elasticache_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ac"
+    ebs_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/mrk-0123456789abcdef0123456789abcdef"
+    eks_secrets_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ae"
+  }
+
+  assert {
+    condition     = strcontains(kubectl_manifest.smithdb_ec2nc_compute[0].yaml_body, var.ebs_kms_key_arn)
+    error_message = "the SmithDB EC2NodeClass does not name ebs_kms_key_arn"
+  }
+  assert {
+    condition     = strcontains(kubectl_manifest.smithdb_ec2nc_instance_store[0].yaml_body, var.ebs_kms_key_arn)
+    error_message = "the SmithDB instance-store EC2NodeClass does not name ebs_kms_key_arn"
+  }
+}

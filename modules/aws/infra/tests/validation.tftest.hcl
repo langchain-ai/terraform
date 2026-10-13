@@ -94,6 +94,10 @@ run "names_and_ids_reject_a_malformed_value" {
     langsmith_image_registry     = "registry.example.com/$(id)"
     helm_chart_overrides         = { nginx = { repository = "https://charts.example.com" } }
     s3_gateway_endpoint_id       = "vpc-0123456789abcdef0"
+    rds_kms_key_arn              = "alias/langsmith"
+    elasticache_kms_key_arn      = "arn:aws:kms:us-east-2:123456789012:alias/langsmith"
+    ebs_kms_key_arn              = "arn:aws:kms:us-east-2:123456789012:key/*"
+    eks_secrets_kms_key_arn      = "0123abcd-0123-0123-0123-0123456789ab"
   }
 
   expect_failures = [
@@ -113,6 +117,10 @@ run "names_and_ids_reject_a_malformed_value" {
     var.langsmith_image_registry,
     var.helm_chart_overrides,
     var.s3_gateway_endpoint_id,
+    var.rds_kms_key_arn,
+    var.elasticache_kms_key_arn,
+    var.ebs_kms_key_arn,
+    var.eks_secrets_kms_key_arn,
   ]
 }
 

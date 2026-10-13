@@ -471,6 +471,31 @@ without granting the deployer CloudFormation permissions, skip it:
 create_eks_blueprints_telemetry_stack = false
 ```
 
+## Encrypt with customer-managed KMS keys
+
+Each encrypted resource uses an AWS-managed key until you name one of your own:
+
+```hcl
+rds_kms_key_arn         = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+elasticache_kms_key_arn = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+ebs_kms_key_arn         = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+eks_secrets_kms_key_arn = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+s3_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+```
+
+| Variable | Encrypts |
+|---|---|
+| `rds_kms_key_arn` | The LangSmith Postgres instance and the SmithDB metastore |
+| `elasticache_kms_key_arn` | The LangSmith Redis and the sandbox JuiceFS Redis |
+| `ebs_kms_key_arn` | Managed node group and SmithDB node volumes, and volumes from the `gp3` storage class |
+| `eks_secrets_kms_key_arn` | Kubernetes secrets, in place of the key the EKS module creates |
+| `s3_kms_key_arn` | The LangSmith and SmithDB buckets |
+
+- Set the RDS, ElastiCache, and EKS keys before the first apply. Each service takes its key at creation, so setting or changing one later replaces the database, the cache, or the cluster. Replacing the cluster also schedules the key the EKS module created for deletion.
+- Setting `ebs_kms_key_arn` rolls the managed node groups onto new launch templates and replaces the `gp3` storage class. Existing volumes keep their key.
+- Terraform grants the EBS CSI driver and Karpenter the use of the EBS key, and the EKS module grants the cluster role the use of the secrets key. A role you supply through `existing_iam_role_arns` needs the same access from your IAM team.
+- The EBS key policy must let the `AWSServiceRoleForAutoScaling` service-linked role use the key and create grants on it, because that role launches the managed node group instances. A service-linked role takes no IAM policies, so only the key policy can grant this.
+
 ---
 
 ## Pass 1 — Infrastructure
@@ -1281,6 +1306,10 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
 | `s3_kms_key_arn` | `""` | no | KMS CMK ARN for S3 encryption (empty = SSE-S3) |
+| `rds_kms_key_arn` | `""` | no | KMS key for the Postgres instance and SmithDB metastore. Creation only. See [customer-managed KMS keys](#encrypt-with-customer-managed-kms-keys) |
+| `elasticache_kms_key_arn` | `""` | no | KMS key for both Redis caches. Creation only |
+| `ebs_kms_key_arn` | `""` | no | KMS key for node volumes and the `gp3` storage class |
+| `eks_secrets_kms_key_arn` | `""` | no | KMS key for Kubernetes secrets. Creation only |
 | `s3_versioning_enabled` | `false` | no | Enable S3 bucket versioning |
 | `tls_certificate_source` | `acm` | no | `acm`, `letsencrypt`, or `none` |
 | `acm_certificate_arn` | `""` | when acm | ACM certificate ARN |

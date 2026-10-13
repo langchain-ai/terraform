@@ -192,3 +192,15 @@ variable "chart_overrides" {
   description = "Chart repository and extra values for the EKS Blueprints add-ons, keyed by aws_load_balancer_controller, metrics_server, cluster_autoscaler, or karpenter. An add-on with no entry uses its upstream repository."
   default     = {}
 }
+
+variable "ebs_kms_key_arn" {
+  type        = string
+  description = "KMS key for node group volumes and the gp3 storage class. Empty uses the account's default EBS encryption."
+  default     = ""
+}
+
+variable "secrets_kms_key_arn" {
+  type        = string
+  description = "KMS key for Kubernetes secrets. Empty has the EKS module create one."
+  default     = ""
+}

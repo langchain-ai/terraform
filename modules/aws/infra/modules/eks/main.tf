@@ -3,6 +3,22 @@ data "aws_region" "current" {}
 locals {
   custom_networking = length(var.pod_subnet_ids_by_az) > 0
 
+  # With an EBS key, every node group volume uses it, and a group with no block
+  # devices gets its AL2023 root volume (/dev/xvda) mapped to carry the key.
+  node_group_block_devices = {
+    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => {
+      for dk, dv in merge(
+        try(length(v.block_device_mappings), 0) > 0 ? {} : { xvda = { device_name = "/dev/xvda", ebs = { volume_type = "gp3" } } },
+        try(v.block_device_mappings, {}),
+      ) : dk => merge(dv, { ebs = merge(lookup(dv, "ebs", {}), { encrypted = true, kms_key_id = var.ebs_kms_key_arn }) })
+    }
+  }
+
+  # A customer-managed EBS key needs grants that AmazonEBSCSIDriverPolicy and the
+  # Karpenter controller policy do not carry.
+  ebs_kms_grant_actions = ["kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant"]
+  ebs_kms_use_actions   = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
+
   # Role names that upstream modules choose for themselves. With a prefix, each
   # starts with it like the roles this module names, so one role/<prefix>-*
   # grant covers them all. Each fits a 15-character name_prefix plus "staging"
@@ -73,7 +89,7 @@ locals {
       iam_role_arn                  = local.existing_roles.node_group
       iam_role_permissions_boundary = var.iam_permissions_boundary_arn
       iam_role_path                 = var.iam_role_path
-    })
+    }, var.ebs_kms_key_arn != "" ? { block_device_mappings = local.node_group_block_devices[k] } : {})
   }
 }
 
@@ -113,6 +129,10 @@ module "eks" {
   iam_role_permissions_boundary = var.iam_permissions_boundary_arn
   iam_role_path                 = var.iam_role_path
 
+  # EKS takes the secrets key at cluster creation only.
+  create_kms_key            = var.secrets_kms_key_arn == ""
+  cluster_encryption_config = merge({ resources = ["secrets"] }, var.secrets_kms_key_arn != "" ? { provider_key_arn = var.secrets_kms_key_arn } : {})
+
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
 
   # The community module ignores desired_size changes (lifecycle ignore_changes) so
@@ -146,6 +166,29 @@ module "irsa-ebs-csi" {
   provider_url                  = module.eks.oidc_provider
   role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+}
+
+resource "aws_iam_role_policy" "ebs_csi_kms" {
+  count = var.ebs_kms_key_arn != "" && local.existing_roles.ebs_csi == null ? 1 : 0
+
+  name = "ebs-kms"
+  role = module.irsa-ebs-csi.iam_role_name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Action    = local.ebs_kms_grant_actions
+        Resource  = var.ebs_kms_key_arn
+        Condition = { Bool = { "kms:GrantIsForAWSResource" = "true" } }
+      },
+      {
+        Effect   = "Allow"
+        Action   = local.ebs_kms_use_actions
+        Resource = var.ebs_kms_key_arn
+      },
+    ]
+  })
 }
 
 # Create the EBS CSI Driver addon for volume provisioning.
@@ -226,6 +269,21 @@ module "eks_blueprints_addons" {
     role_name                     = local.role_names.karpenter
     role_path                     = var.iam_role_path
     role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    # Karpenter launches the SmithDB nodes, so it needs the EBS key too.
+    policy_statements = var.ebs_kms_key_arn != "" ? [
+      {
+        sid        = "EBSKMSGrant"
+        actions    = local.ebs_kms_grant_actions
+        resources  = [var.ebs_kms_key_arn]
+        conditions = [{ test = "Bool", variable = "kms:GrantIsForAWSResource", values = ["true"] }]
+      },
+      {
+        sid        = "EBSKMSUse"
+        actions    = local.ebs_kms_use_actions
+        resources  = [var.ebs_kms_key_arn]
+        conditions = []
+      },
+    ] : []
     set = concat(
       # The primary ENI holds no pod IPs under custom networking, so Karpenter must
       # leave it out of the max-pods calculation or it overcommits every node.
@@ -297,9 +355,7 @@ resource "kubernetes_storage_class" "gp3_default" {
   volume_binding_mode    = "WaitForFirstConsumer"
   allow_volume_expansion = true
 
-  parameters = {
-    type = "gp3"
-  }
+  parameters = merge({ type = "gp3" }, var.ebs_kms_key_arn != "" ? { encrypted = "true", kmsKeyId = var.ebs_kms_key_arn } : {})
 
   depends_on = [aws_eks_addon.ebs-csi]
 }

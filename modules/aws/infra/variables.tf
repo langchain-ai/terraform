@@ -689,6 +689,50 @@ variable "s3_kms_key_arn" {
   default     = ""
 }
 
+variable "rds_kms_key_arn" {
+  type        = string
+  description = "KMS key for the LangSmith Postgres instance and the SmithDB metastore. Empty uses the AWS-managed aws/rds key. RDS takes a key only at creation, so changing it replaces the database."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.rds_kms_key_arn))
+    error_message = "rds_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "elasticache_kms_key_arn" {
+  type        = string
+  description = "KMS key for the LangSmith and sandbox JuiceFS Redis. Empty uses the AWS-managed key. ElastiCache takes a key only at creation, so changing it replaces the cache."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.elasticache_kms_key_arn))
+    error_message = "elasticache_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "ebs_kms_key_arn" {
+  type        = string
+  description = "KMS key for node group and SmithDB node volumes and for volumes from the gp3 storage class. Empty uses the account's default EBS encryption."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.ebs_kms_key_arn))
+    error_message = "ebs_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "eks_secrets_kms_key_arn" {
+  type        = string
+  description = "KMS key for Kubernetes secrets, in place of the key the EKS module creates. EKS takes a key only at creation, so changing it replaces the cluster."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.eks_secrets_kms_key_arn))
+    error_message = "eks_secrets_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
 variable "create_s3_gateway_endpoint" {
   type        = bool
   description = "Create an S3 gateway endpoint on every route table in the VPC. Set false when the VPC already has one, and set s3_gateway_endpoint_id to it."

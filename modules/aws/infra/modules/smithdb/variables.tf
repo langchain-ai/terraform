@@ -193,6 +193,12 @@ variable "migration_source_bucket_arn" {
   default     = ""
 }
 
+variable "metastore_kms_key_arn" {
+  type        = string
+  description = "KMS key for the metastore RDS instance. Empty uses the AWS-managed aws/rds key."
+  default     = ""
+}
+
 variable "s3_versioning_enabled" {
   type        = bool
   description = "Enable versioning on the SmithDB object-store bucket."

@@ -362,6 +362,8 @@ module "eks" {
   iam_role_name_prefix            = var.prefix_iam_role_names ? local.base_name : null
   existing_iam_role_arns          = var.existing_iam_role_arns
   create_blueprints_telemetry     = var.create_eks_blueprints_telemetry_stack
+  ebs_kms_key_arn                 = var.ebs_kms_key_arn
+  secrets_kms_key_arn             = var.eks_secrets_kms_key_arn
   chart_overrides                 = var.helm_chart_overrides
 }
 
@@ -389,6 +391,7 @@ module "redis" {
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
   parameter_group_name = "default.redis7"
+  kms_key_arn          = var.elasticache_kms_key_arn
 
   existing_security_group_id = var.redis_existing_security_group_id
 }
@@ -419,6 +422,7 @@ module "sandbox_juicefs_redis" {
   auth_token               = var.sandbox_juicefs_redis_auth_token
   parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
   snapshot_retention_limit = var.sandbox_juicefs_redis_snapshot_retention_limit
+  kms_key_arn              = var.elasticache_kms_key_arn
 }
 
 module "storage" {
@@ -454,6 +458,7 @@ module "postgres" {
   max_storage_gb = var.postgres_max_storage_gb
   username       = var.postgres_username
   password       = var.postgres_password
+  kms_key_arn    = var.rds_kms_key_arn
 
   iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
   iam_database_user                   = var.postgres_iam_database_user
@@ -1239,6 +1244,7 @@ module "smithdb" {
   # Object store
   bucket_name           = local.smithdb_bucket_name
   s3_kms_key_arn        = var.s3_kms_key_arn
+  metastore_kms_key_arn = var.rds_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
 
@@ -1299,6 +1305,8 @@ locals {
   # on the node SG ourselves: the EKS module reconciles node-SG tags and can drop
   # an out-of-band tag, leaving the EC2NodeClass with SecurityGroupsReady=False.
   smithdb_karpenter_sg_selector = { "kubernetes.io/cluster/${local.cluster_name}" = "owned" }
+
+  smithdb_ebs_kms = var.ebs_kms_key_arn != "" ? { kmsKeyID = var.ebs_kms_key_arn } : {}
 }
 
 # EC2NodeClass subnet discovery for a bring-your-own VPC: tag the existing private
@@ -1336,11 +1344,11 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
       }
       blockDeviceMappings = [{
         deviceName = "/dev/xvda"
-        ebs = {
+        ebs = merge({
           volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
           volumeType = "gp3"
           encrypted  = true
-        }
+        }, local.smithdb_ebs_kms)
       }]
     }
   })
@@ -1369,11 +1377,11 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
       }
       blockDeviceMappings = [{
         deviceName = "/dev/xvda"
-        ebs = {
+        ebs = merge({
           volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
           volumeType = "gp3"
           encrypted  = true
-        }
+        }, local.smithdb_ebs_kms)
       }]
     }
   })
