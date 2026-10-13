@@ -19,7 +19,7 @@ the parts that fit your environment and swap the rest:
 | Envoy Gateway | you have no ingress yet | your ingress controller or Gateway; set the chart's `ingress` or `gateway` values |
 | local-path storage | evaluation and small installs | your storage system's StorageClass (Ceph, Longhorn, a SAN CSI driver) |
 | In-cluster Postgres ×2 and Redis | evaluation and small production | managed or HA services, wired through the chart's `postgres.external` and `redis.external` |
-| RustFS | you have no object storage yet | any S3-compatible store (MinIO, Ceph RGW, Dell ObjectScale, NetApp StorageGRID, AWS S3) |
+| RustFS | you have no object storage yet | any S3-compatible store (MinIO, Ceph RGW, an enterprise object store, AWS S3) |
 | Cloudflare Tunnel | you want public HTTPS without inbound ports | TLS on your own load balancer or ingress |
 | Sizing profiles and the budget gate | always: they size the LangSmith and SmithDB pods for your nodes | — |
 
