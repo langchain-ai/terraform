@@ -79,6 +79,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
 | **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`) — needs a stable chart release on the 0.17 line; see [SMITHDB.md](SMITHDB.md#version-requirements) | `terraform -chdir=infra apply` | ~15–30 min |
+| **Optional** | Sandboxes (`enable_sandboxes = true`), chart 0.17; see [Sandboxes](#sandboxes) | `make apply && make seed-secrets && make init-values && make deploy` | ~15–30 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
@@ -691,7 +692,7 @@ Only two secrets reach Terraform, because Terraform needs them to build somethin
 
 Writes the LangSmith application secrets directly into Key Vault via `az`, after `make apply` has created the vault. These never pass through Terraform, so they never land in Terraform state — the same split the AWS module uses with SSM and the GCP module uses with Secret Manager.
 
-Seeds the eight secrets Terraform never sees:
+Seeds these secrets, which Terraform never sees:
 
 | Secret | Source |
 |---|---|
@@ -703,6 +704,7 @@ Seeds the eight secrets Terraform never sees:
 | `langsmith-insights-encryption-key` | Generated (Fernet) |
 | `langsmith-polly-encryption-key` | Generated (Fernet) |
 | `smithdb-taskdb-password` | Generated (`openssl rand -hex 32`) |
+| `langsmith-sandbox-callback-signing-jwk` | Generated (Ed25519 JWK), only with `enable_sandboxes = true`. Needs OpenSSL 3: the LibreSSL that ships with macOS has no Ed25519, so run `brew install openssl@3` and put it first on `PATH` |
 
 It also seeds `postgres-admin-password` and `langsmith-license-key`, from `secrets.auto.tfvars` or the environment, when the vault does not already hold them. That is what `keyvault_manage_secrets = false` relies on. On the default path Terraform wrote both and the script skips them.
 
@@ -904,6 +906,7 @@ enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed a
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
 enable_llm_gateway   = false          # LLM Gateway, private beta (chart 0.17)
 enable_gateway_pii_redaction = false  # Presidio PII redaction for gateway traffic (requires enable_llm_gateway)
+enable_sandboxes     = false          # Sandboxes (chart 0.17); needs make apply first, see Sandboxes below
 ```
 
 **Pass 3** requires a node pool scale-up before deploying — operator-spawned pods need headroom. Set `default_node_pool_min_count = 5` and run `make apply` first, then `make init-values && make deploy`.
@@ -944,6 +947,94 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   mirror.
 - **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
   organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
+
+#### Sandboxes
+
+`enable_sandboxes = true` turns on LangSmith Sandboxes (chart 0.17), which run agent code in Firecracker microVMs. A
+privileged `sandbox-host` pod runs the microVMs on a dedicated `sandboxhost` node pool. The sandbox file system is
+JuiceFS: its data goes to a Blob container in the LangSmith storage account, and its metadata goes to a dedicated Azure
+Managed Redis.
+
+**Requirements**
+
+- Chart 0.17 or later.
+- A VM size with nested virtualization, so the node exposes `/dev/kvm`. The Dsv4, Ddsv4, Dsv5, Ddsv5, and Ddsv6
+  families have it.
+- Regional vCPU quota in that family for `sandbox_host_max_count` nodes. `make preflight` counts the sandbox pool in its
+  quota check.
+- OpenSSL 3 on the machine that runs `make seed-secrets`, which generates an Ed25519 callback signing key.
+- Azure commercial cloud. Azure Government has no Azure Managed Redis, so the plan fails with
+  `azure_environment = "usgovernment"`.
+
+**Enable**
+
+1. Set `enable_sandboxes = true` in `infra/terraform.tfvars`.
+2. Run `make apply`. Terraform adds the node pool, the JuiceFS Redis, the Blob container, the sandbox-host identity, and
+   the `juicefs-csi-config` Secret.
+3. Run `make seed-secrets`. The script writes `langsmith-sandbox-callback-signing-jwk` to Key Vault.
+4. Run `make init-values && make deploy`. `init-values.sh` writes `helm/values/langsmith-values-sandboxes.yaml`.
+   `deploy.sh` adds the signing key to `langsmith-config-secret`, then waits for the `juicefs-format` Job and the
+   sandbox-host rollout.
+
+**Host size**
+
+The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
+
+| `sizing_profile` | `sandbox_host_vm_size` |
+|---|---|
+| `production`, `production-large` | `Standard_D32ds_v5` |
+| every other profile | `Standard_D8ds_v5` |
+
+- Set `sandbox_host_vm_size` when the region has no Dv5 quota, for example `Standard_D8ds_v4` or `Standard_D8ds_v6`.
+- `sandbox_host_min_count` defaults to `0` and `sandbox_host_max_count` to `5`. The cluster autoscaler adds a node when
+  a sandbox-host replica is Pending, and keeps one node for each replica.
+- sandbox-host has the pod annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so the autoscaler
+  does not remove a node that runs sandboxes.
+- The `juicefs-format` Job prefers a sandbox node but runs on any Linux node, so it does not wait for the pool to scale
+  up from 0.
+- For pool settings these variables do not cover, add an `additional_node_pools` entry named `sandboxhost`. It
+  replaces the generated pool, so keep the `sandbox.langsmith.com/host=true` label and the
+  `sandbox.langsmith.com/host=true:NoSchedule` taint.
+
+**Identity and network**
+
+- sandbox-host and the `juicefs-format` Job use their own Workload Identity, `<cluster>-sandbox-host-identity`,
+  federated to the `<release>-sandbox-host` ServiceAccount. It holds `Storage Blob Data Contributor` on the JuiceFS
+  container and nothing else, because sandbox nodes run untrusted code and the storage account also holds trace data.
+  The JuiceFS Secret holds no storage account key.
+- The JuiceFS Redis runs with `NoCluster` and `NoEviction`, and with zone-redundant HA unless
+  `sandbox_juicefs_redis_high_availability = false`. Losing it loses every sandbox file system. Its private endpoint is
+  in the AKS subnet, so it needs no Redis subnet. Size it with `sandbox_juicefs_amr_sku`; JuiceFS uses about 300 bytes
+  of Redis memory per file.
+- sandbox-host runs on the host network and calls platform-backend from a node IP. The namespace's default-deny
+  NetworkPolicy leaves out platform-backend for that reason; every other LangSmith pod keeps it.
+- The namespace ResourceQuota caps requests only, and the LimitRange sets no default limits. sandbox-host runs the
+  microVMs in child cgroups of its own pod, so a container limit would cap every sandbox on the node.
+- `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy.
+- `sandbox_service_url_base_url` sets the base URL for HTTP services that run inside sandboxes. It needs wildcard DNS
+  and TLS for that host.
+
+**Verify**
+
+```bash
+kubectl get jobs -n langsmith -l app.kubernetes.io/component=juicefs-format
+kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
+kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -i "juicefs mount ready"
+```
+
+A failed `juicefs-format` Job with a Blob `403` means the identity label or the federated credential is wrong. Run
+`make apply` and `make init-values`, delete the Job, and run `make deploy` again:
+
+```bash
+kubectl delete job -n langsmith -l app.kubernetes.io/component=juicefs-format
+```
+
+**Disable**
+
+1. Set `enable_sandboxes = false`, then run `make deploy`. The chart removes sandbox-host while the Redis and the
+   Secret still exist.
+2. Run `make apply`. Terraform deletes the node pool, the JuiceFS Redis, the Blob container and its data, and the
+   identity.
 
 ---
 
@@ -1035,6 +1126,10 @@ Enables Polly, the AI-powered evaluation and monitoring agent. On chart 0.16 Pol
 
 > Requires `enable_deployments = true`.
 
+**`langsmith-values-sandboxes.yaml`** (`enable_sandboxes = true`)
+
+`make init-values` generates this file instead of copying it, because it holds the sandbox-host Workload Identity client ID from Terraform. It points the chart at the Terraform-managed JuiceFS Secret, pins sandbox-host to the sandbox pool, and gives sandbox-host and the `juicefs-format` Job the Workload Identity label. It holds no secret. Refer to [Sandboxes](#sandboxes).
+
 ---
 
 ## Repository Layout
@@ -1068,6 +1163,7 @@ azure/
     └── values/
         ├── values.yaml                              # Azure base (fallback Ingress class, Blob WI, external secrets)
         ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
+        ├── langsmith-values-sandboxes.yaml          # Gitignored, generated by init-values.sh when enable_sandboxes = true
         └── examples/
             ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
             ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources

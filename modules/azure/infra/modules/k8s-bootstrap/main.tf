@@ -123,6 +123,10 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 # Base: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods. The
 # resource_quota_extra_* inputs add SmithDB's pods on top, once to requests and
 # twice to limits, so a plain install keeps the base figures.
+#
+# With sandboxes on, the quota caps requests only. sandbox-host runs Firecracker
+# VMs in child cgroups beneath its own pod cgroup, so a container limit would cap
+# every sandbox on the node, and a limits.* quota would force one onto it.
 
 resource "kubernetes_resource_quota_v1" "langsmith" {
   metadata {
@@ -131,13 +135,14 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
   }
 
   spec {
-    hard = {
+    hard = merge({
       "requests.cpu"    = tostring(40 + var.resource_quota_extra_cpu)
       "requests.memory" = "${80 + var.resource_quota_extra_memory_gi}Gi"
-      "limits.cpu"      = tostring(80 + var.resource_quota_extra_cpu * 2)
-      "limits.memory"   = "${160 + var.resource_quota_extra_memory_gi * 2}Gi"
       pods              = tostring(200 + var.resource_quota_extra_pods)
-    }
+      }, var.enable_sandboxes ? {} : {
+      "limits.cpu"    = tostring(80 + var.resource_quota_extra_cpu * 2)
+      "limits.memory" = "${160 + var.resource_quota_extra_memory_gi * 2}Gi"
+    })
   }
 }
 
@@ -148,6 +153,8 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
 # agent features) ship without resource stanzas, so without defaults they're rejected
 # with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
 # This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
+# With sandboxes on it supplies requests only: a default 1 CPU limit lands below
+# sandbox-host's 2 CPU request, and the API server rejects the pod.
 resource "kubernetes_limit_range_v1" "langsmith" {
   metadata {
     name      = "langsmith-defaults"
@@ -157,7 +164,7 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
-      default = {
+      default = var.enable_sandboxes ? null : {
         cpu    = "1"
         memory = "1Gi"
       }
@@ -173,6 +180,12 @@ resource "kubernetes_limit_range_v1" "langsmith" {
 # Default-deny blocks all ingress to LangSmith pods unless explicitly allowed.
 # This is defense-in-depth: even if a pod is compromised, it cannot receive
 # lateral traffic from other namespaces. Egress is unrestricted (external DBs).
+#
+# With sandboxes on, both policies leave out platform-backend. sandbox-host runs
+# on the host network and calls platform-backend from a node IP, which no
+# NetworkPolicy peer matches on Cilium, and which an ipBlock on Azure NPM can
+# admit only as the whole node subnet: every pod's subnet too under node-subnet
+# IPAM. Every other pod keeps the default-deny.
 
 resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
   metadata {
@@ -181,7 +194,16 @@ resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
   }
 
   spec {
-    pod_selector {}
+    pod_selector {
+      dynamic "match_expressions" {
+        for_each = var.enable_sandboxes ? [1] : []
+        content {
+          key      = "app.kubernetes.io/component"
+          operator = "NotIn"
+          values   = [var.platform_backend_component]
+        }
+      }
+    }
     policy_types = ["Ingress"]
   }
 }
@@ -212,7 +234,16 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
   }
 
   spec {
-    pod_selector {}
+    pod_selector {
+      dynamic "match_expressions" {
+        for_each = var.enable_sandboxes ? [1] : []
+        content {
+          key      = "app.kubernetes.io/component"
+          operator = "NotIn"
+          values   = [var.platform_backend_component]
+        }
+      }
+    }
 
     # Ingress controller namespace — skipped for controllers that do not run as
     # in-cluster pods (e.g. agic), where ingress_namespace resolves to "".
@@ -361,6 +392,23 @@ resource "kubernetes_secret_v1" "license" {
   data = {
     license_key = var.langsmith_license_key
   }
+
+  type = "Opaque"
+}
+
+# JuiceFS config for sandbox-host and the chart's juicefs-format Job, passed to
+# the chart as sandboxes.juicefs.existingSecretName. The format Job's name hashes
+# this Secret's name, not its data, so a changed value reaches an existing volume
+# only under a new Secret name.
+resource "kubernetes_secret_v1" "sandbox_juicefs" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_secret_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = var.sandbox_juicefs_config
 
   type = "Opaque"
 }

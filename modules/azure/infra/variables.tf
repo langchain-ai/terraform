@@ -1329,6 +1329,88 @@ variable "smithdb_cache_disk_throughput_mbps" {
   }
 }
 
+# ── Sandboxes (optional) ─────────────────────────────────────────────────────
+# LangSmith Sandboxes run Firecracker microVMs in a privileged sandbox-host pod,
+# one per node, on a dedicated pool whose VMs expose /dev/kvm. Requires chart
+# 0.17 or later; see the README, "Sandboxes".
+
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Azure Managed Redis for JuiceFS metadata, a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
+  default     = false
+}
+
+variable "sandbox_host_vm_size" {
+  type        = string
+  description = "VM size for sandbox-host nodes. The size must support nested virtualization so the node exposes /dev/kvm; the Dsv4, Ddsv4, Dsv5, Ddsv5 and Ddsv6 families do. null follows sizing_profile: production and production-large use Standard_D32ds_v5, every other profile uses Standard_D8ds_v5. Confirm the family's regional vCPU quota covers sandbox_host_max_count nodes."
+  default     = null
+}
+
+variable "sandbox_host_min_count" {
+  type        = number
+  description = "Minimum sandbox-host node count. The default of 0 lets the autoscaler keep only the nodes sandbox-host replicas need; a Pending replica adds one."
+  default     = 0
+
+  validation {
+    condition     = var.sandbox_host_min_count >= 0
+    error_message = "sandbox_host_min_count must be 0 or greater."
+  }
+}
+
+variable "sandbox_host_max_count" {
+  type        = number
+  description = "Maximum sandbox-host node count. Must be at least 1 and at least sandbox_host_min_count."
+  default     = 5
+
+  validation {
+    condition     = var.sandbox_host_max_count >= 1
+    error_message = "sandbox_host_max_count must be 1 or greater."
+  }
+}
+
+variable "sandbox_juicefs_name" {
+  type        = string
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state. Also the name of the Blob container that holds the volume's data."
+  default     = "sandbox-juicefs"
+
+  # Blob container naming rules, since the container takes this name.
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", var.sandbox_juicefs_name))
+    error_message = "sandbox_juicefs_name must be 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
+  }
+}
+
+variable "sandbox_juicefs_redis_name" {
+  type        = string
+  description = "Name for the JuiceFS metadata Redis. Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
+  default     = ""
+}
+
+variable "sandbox_juicefs_amr_sku" {
+  type        = string
+  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. InsufficientCapacity is regional, so use redis_location for it, not a larger SKU."
+  default     = "Balanced_B1"
+}
+
+variable "sandbox_juicefs_redis_high_availability" {
+  type        = bool
+  description = "Zone-redundant HA for the JuiceFS metadata Redis. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
+  default     = true
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  type        = string
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket, access-key). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL init-values.sh uses to generate browser and programmatic service URLs for HTTP services running inside sandboxes. Needs wildcard DNS and TLS for the host when set. Read by helm/scripts/; Terraform ignores this value."
+  default     = ""
+}
+
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."

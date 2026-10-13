@@ -292,3 +292,30 @@ variable "keda_version" {
   description = "KEDA Helm chart version"
   default     = "2.14.0"
 }
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Shape the namespace for sandbox-host: the quota and LimitRange drop CPU and memory limits, the default-deny policies leave platform-backend reachable, and the JuiceFS config Secret is created."
+  default     = false
+}
+
+variable "sandbox_juicefs_secret_name" {
+  type        = string
+  description = "Name of the JuiceFS config Secret, passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_config" {
+  type        = map(string)
+  description = "JuiceFS config Secret data: name, metaurl, storage, bucket, access-key."
+  sensitive   = true
+  default     = {}
+}
+
+variable "platform_backend_component" {
+  type        = string
+  description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. The default-deny policies leave it out when sandboxes are on."
+  default     = "langsmith-platform-backend"
+}

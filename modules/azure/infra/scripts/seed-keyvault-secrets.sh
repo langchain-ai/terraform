@@ -29,6 +29,7 @@ set -euo pipefail
 #   langsmith-insights-encryption-key        — generated (Fernet)
 #   langsmith-polly-encryption-key           — generated (Fernet)
 #   smithdb-taskdb-password                  — generated (hex)
+#   langsmith-sandbox-callback-signing-jwk   — generated (Ed25519 JWK), enable_sandboxes only
 #
 # The eight LangSmith secrets are deliberately NOT Terraform-managed: Terraform
 # would persist their plaintext in state. This mirrors the AWS module (writes SSM)
@@ -207,6 +208,40 @@ _seed "langsmith-polly-encryption-key" "$(_gen_fernet)" \
 
 _seed "smithdb-taskdb-password" "$(openssl rand -hex 32)" \
   "component=smithdb stability=critical module=seed-script"
+
+# ── Sandbox callback signing key ──────────────────────────────────────────────
+# An Ed25519 private JWK. platform-backend signs sandbox callbacks with it and
+# sandbox-host verifies them; create-k8s-secrets.sh copies it into
+# langsmith-config-secret as sandbox_callback_signing_jwk. Seeded only with
+# enable_sandboxes = true, because it needs OpenSSL 3: the LibreSSL that macOS
+# ships has no Ed25519. Rotating it drops the callbacks of running sandboxes.
+
+_b64url_nopad() {
+  base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+# The last 32 bytes of the PKCS#8 private key are the seed (d) and of the SPKI
+# public key the point (x). Same generator as the GCP module's setup-env.sh.
+_gen_ed25519_jwk() {
+  local tmpdir d x
+  tmpdir=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/langsmith-jwk.XXXXXX") || return 1
+  if openssl genpkey -algorithm ED25519 -out "$tmpdir/key.pem" >/dev/null 2>&1 \
+    && openssl pkey -in "$tmpdir/key.pem" -outform DER -out "$tmpdir/private.der" >/dev/null 2>&1 \
+    && openssl pkey -in "$tmpdir/key.pem" -pubout -outform DER -out "$tmpdir/public.der" >/dev/null 2>&1; then
+    d=$(tail -c 32 "$tmpdir/private.der" | _b64url_nopad)
+    x=$(tail -c 32 "$tmpdir/public.der" | _b64url_nopad)
+  fi
+  rm -rf "$tmpdir"
+  [[ -n "${d:-}" && -n "${x:-}" ]] || return 1
+  printf '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"sandbox-callback-%s","x":"%s","d":"%s"}' \
+    "$(openssl rand -hex 8)" "$x" "$d"
+}
+
+if _tfvar_is_true "enable_sandboxes"; then
+  _seed "langsmith-sandbox-callback-signing-jwk" "$(_gen_ed25519_jwk || true)" \
+    "component=sandboxes stability=critical module=seed-script" \
+    "Generating it needs OpenSSL 3 with Ed25519 (openssl version; on macOS: brew install openssl@3)."
+fi
 
 # ── Terraform's two secrets ───────────────────────────────────────────────────
 # Skips on the default path; written here when keyvault_manage_secrets = false

@@ -39,3 +39,8 @@ output "cluster_password" {
   description = "AMR primary access key for redis.external.cluster.password"
   sensitive   = true
 }
+
+output "private_dns_zone_id" {
+  value       = local.private_dns_zone_id
+  description = "The privatelink.redis.azure.net zone the private endpoint registers in, for a second AMR in the same resource group"
+}

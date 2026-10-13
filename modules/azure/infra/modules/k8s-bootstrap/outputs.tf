@@ -37,3 +37,26 @@ output "smithdb_cache_storage_class_name" {
   description = "Name of the Premium SSD v2 StorageClass for SmithDB cache volumes."
   value       = var.enable_smithdb ? kubernetes_storage_class_v1.smithdb_cache[0].metadata[0].name : null
 }
+
+output "sandbox_juicefs_secret_name" {
+  description = "Name of the JuiceFS config Secret, or null when sandboxes are off."
+  value       = one(kubernetes_secret_v1.sandbox_juicefs[*].metadata[0].name)
+}
+
+output "resource_quota_keys" {
+  description = "Resources the namespace ResourceQuota caps. No limits.* with sandboxes on."
+  value       = sort(keys(kubernetes_resource_quota_v1.langsmith.spec[0].hard))
+}
+
+output "limit_range_default_limits" {
+  description = "Default container limits the namespace LimitRange injects, or null with sandboxes on."
+  value       = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
+}
+
+output "network_policy_excluded_components" {
+  description = "app.kubernetes.io/component values each default-deny policy leaves out, keyed by policy name. Empty lists with sandboxes off."
+  value = {
+    for p in [kubernetes_network_policy_v1.langsmith_default_deny, kubernetes_network_policy_v1.langsmith_allow_internal] :
+    p.metadata[0].name => flatten([for e in p.spec[0].pod_selector[0].match_expressions : e.values])
+  }
+}

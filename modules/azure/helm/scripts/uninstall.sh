@@ -70,6 +70,22 @@ if [[ "$_lgp_count" -gt 0 ]]; then
   kubectl delete lgp --all -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
 fi
 
+# ── Stop sandbox-host before the rest of the release ────────────────────────
+# sandbox-host unmounts JuiceFS and stops its sandbox VMs within a 300 s grace
+# period, so delete it while Redis, Blob, and platform-backend are all still up.
+# A pod still there after that is force-deleted so it cannot hold up teardown;
+# its host mount goes away with the node.
+_sandbox_host_selector="app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host"
+if kubectl get deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" -o name 2>/dev/null | grep -q .; then
+  info "Stopping sandbox-host (up to 6m while sandboxes shut down)..."
+  kubectl delete deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" --wait=false 2>/dev/null || true
+  kubectl wait --for=delete pod -n "$NAMESPACE" -l "$_sandbox_host_selector" --timeout=6m 2>/dev/null || {
+    warn "sandbox-host pods still present after 6m; force-deleting them"
+    kubectl delete pod -n "$NAMESPACE" -l "$_sandbox_host_selector" --grace-period=0 --force 2>/dev/null || true
+  }
+  pass "sandbox-host stopped"
+fi
+
 # ── Uninstall Helm release ──────────────────────────────────────────────────
 if helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --short 2>/dev/null | grep -q "^${RELEASE_NAME}$"; then
   info "Uninstalling Helm release: ${RELEASE_NAME}..."

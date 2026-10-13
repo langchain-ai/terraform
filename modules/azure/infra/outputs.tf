@@ -352,3 +352,31 @@ output "aks_kubeconfig_public_fqdn" {
   description = "true when az aks get-credentials needs --public-fqdn: a private cluster with no private DNS zone, from aks_private_dns_zone_id = \"None\" or, when attaching, from the cluster. The helm scripts read it."
   value       = module.aks.api_server_public_fqdn == true
 }
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# Read by init-values.sh for the sandboxes overlay. Null when enable_sandboxes = false.
+
+output "enable_sandboxes" {
+  description = "Whether sandboxes are provisioned; gates the sandboxes values overlay."
+  value       = var.enable_sandboxes
+}
+
+output "sandbox_host_workload_identity_client_id" {
+  description = "Client ID to annotate on the sandbox-host Kubernetes ServiceAccount (sandboxes.sandboxHost.serviceAccount.annotations)."
+  value       = var.enable_sandboxes ? azurerm_user_assigned_identity.sandbox_host[0].client_id : null
+}
+
+output "sandbox_juicefs_secret_name" {
+  description = "Kubernetes Secret holding the JuiceFS config, for sandboxes.juicefs.existingSecretName."
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_juicefs_container_name" {
+  description = "Blob container holding JuiceFS sandbox data."
+  value       = var.enable_sandboxes ? azurerm_storage_container.sandbox_juicefs[0].name : null
+}
+
+output "sandbox_juicefs_redis_name" {
+  description = "Azure Managed Redis cluster holding JuiceFS metadata."
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+}

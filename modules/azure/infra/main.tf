@@ -65,6 +65,10 @@ locals {
   langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
+  # The chart names sandbox-host's service account <fullname>-sandbox-host.
+  sandbox_host_service_account = "${local.langsmith_release_fullname}-sandbox-host"
+  sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+
   # A StorageClass is cluster-scoped, unlike everything else this module creates
   # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
   # the second apply fails on an object the first one owns. Suffix it the same
@@ -260,7 +264,26 @@ locals {
   aks_node_total             = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes]))
   aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
-  effective_node_pools = var.additional_node_pools
+  # enable_sandboxes adds the sandbox-host pool. An additional_node_pools entry
+  # named sandboxhost replaces it whole, for a pool that needs other settings.
+  sandbox_host_vm_size = var.sandbox_host_vm_size != null ? var.sandbox_host_vm_size : (contains(["production", "production-large"], var.sizing_profile) ? "Standard_D32ds_v5" : "Standard_D8ds_v5")
+  sandbox_node_pools = var.enable_sandboxes ? {
+    sandboxhost = {
+      vm_size   = local.sandbox_host_vm_size
+      min_count = var.sandbox_host_min_count
+      max_count = var.sandbox_host_max_count
+      node_labels = {
+        "sandbox.langsmith.com/host"      = "true"
+        "sandbox.langsmith.com/node-pool" = "host"
+      }
+      node_taints       = ["sandbox.langsmith.com/host=true:NoSchedule"]
+      kubelet_disk_type = "OS"
+      zones             = []
+      os_sku            = null
+    }
+  } : {}
+
+  effective_node_pools = merge(local.sandbox_node_pools, var.additional_node_pools)
 
   # On a pre-existing cluster whose node pools the customer owns, an empty map, so
   # Terraform doesn't attach pools to a cluster it doesn't manage.
@@ -451,6 +474,7 @@ locals {
     !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24) ? "" : "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly.",
     length(local.postgres_name) <= 63 ? "" : "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly.",
     length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
+    !var.enable_sandboxes || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
     !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
   ])
 }
@@ -977,6 +1001,18 @@ resource "terraform_data" "validate_network" {
         : true
       )
       error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_count >= var.sandbox_host_min_count
+      error_message = "sandbox_host_max_count (${var.sandbox_host_max_count}) must be at least sandbox_host_min_count (${var.sandbox_host_min_count})."
+    }
+
+    # JuiceFS metadata lives in Azure Managed Redis, which Azure Government does
+    # not offer; see redis_source.
+    precondition {
+      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment")
+      error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips
@@ -1970,6 +2006,73 @@ module "redis" {
   tags = local.common_tags
 }
 
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# JuiceFS keeps sandbox filesystem metadata in Redis and the data in Blob.
+# Metadata loss loses every sandbox filesystem, so the Redis is dedicated, never
+# evicts, and runs NoCluster: JuiceFS issues multi-key transactions that a
+# sharded database rejects. Its private endpoint goes in the AKS subnet beside
+# the Blob endpoints, so no Redis subnet is needed when redis_source is
+# in-cluster, and it shares the LangSmith Redis's DNS zone when there is one.
+
+module "sandbox_juicefs_redis" {
+  count                   = var.enable_sandboxes ? 1 : 0
+  source                  = "./modules/redis"
+  name                    = local.sandbox_juicefs_redis_name
+  location                = var.location
+  resource_group_name     = local.rg_name
+  resource_group_id       = local.rg_id
+  subnet_id               = local.aks_subnet_id
+  vnet_id                 = local.vnet_id
+  create_private_dns_zone = var.redis_source != "external"
+  private_dns_zone_id     = var.redis_source == "external" ? module.redis[0].private_dns_zone_id : null
+  amr_sku                 = var.sandbox_juicefs_amr_sku
+  clustering_policy       = "NoCluster"
+  eviction_policy         = "NoEviction"
+  high_availability       = var.sandbox_juicefs_redis_high_availability
+  cluster_location        = var.redis_location
+
+  tags = local.common_tags
+}
+
+# JuiceFS data goes in its own container in the LangSmith Blob account, and
+# sandbox-host gets its own identity with access to that container alone. The
+# container is outside the ttl_s/ and ttl_l/ prefixes the lifecycle rules
+# delete from.
+resource "azurerm_storage_container" "sandbox_juicefs" {
+  count                 = var.enable_sandboxes ? 1 : 0
+  name                  = var.sandbox_juicefs_name
+  storage_account_id    = module.blob.storage_account_id
+  container_access_type = "private"
+}
+
+resource "azurerm_user_assigned_identity" "sandbox_host" {
+  count               = var.enable_sandboxes ? 1 : 0
+  name                = "${local.aks_name}-sandbox-host-identity"
+  resource_group_name = local.rg_name
+  location            = var.location
+  tags                = local.common_tags
+}
+
+resource "azurerm_federated_identity_credential" "sandbox_host" {
+  count                     = var.enable_sandboxes ? 1 : 0
+  name                      = "langsmith-federated-${local.sandbox_host_service_account}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.sandbox_host[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.langsmith_namespace}:${local.sandbox_host_service_account}"
+}
+
+# principal_type is explicit for the same ABAC reason as the storage module's
+# grant. The scope is the container's ARM ID, built rather than read, because
+# the provider's id attribute for a container is its data-plane URL.
+resource "azurerm_role_assignment" "sandbox_host_blob" {
+  count                = var.enable_sandboxes ? 1 : 0
+  principal_id         = azurerm_user_assigned_identity.sandbox_host[0].principal_id
+  principal_type       = "ServicePrincipal"
+  role_definition_name = "Storage Blob Data Contributor"
+  scope                = "${module.blob.storage_account_id}/blobServices/default/containers/${azurerm_storage_container.sandbox_juicefs[0].name}"
+}
+
 # ── Blob private DNS ──────────────────────────────────────────────────────────
 # Shared by the LangSmith trace-blob account and the SmithDB object store. The
 # account keeps its usual <name>.blob.<cloud suffix> hostname; this zone is
@@ -2233,6 +2336,22 @@ module "k8s_bootstrap" {
   resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
   resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
   resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+
+  # Sandboxes. JuiceFS reads the container from the first label of the bucket
+  # host and the account from access-key, so the bucket is
+  # https://<container>.core.windows.net, not the account's blob URL. No account
+  # key: the format Job and sandbox-host reach Blob through workload identity.
+  # AMR serves database 0 only.
+  enable_sandboxes            = var.enable_sandboxes
+  platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
+  sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
+  sandbox_juicefs_config = var.enable_sandboxes ? {
+    name         = var.sandbox_juicefs_name
+    metaurl      = "${module.sandbox_juicefs_redis[0].connection_url}/0"
+    storage      = "wasb"
+    bucket       = replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1")
+    "access-key" = module.blob.storage_account_name
+  } : {}
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.
