@@ -1,0 +1,19 @@
+MIGRATION-0.16-to-0.17.md
+  s_b1487d7356bcac::t_bd76431e2aba01 142-148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4fa3b1cacfcdea41b6e219e8f9df0ccfc3b7f3ce",
+  "prompts": {},
+  "sessions": {
+    "s_b1487d7356bcac": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7fc49cf0-0096-4929-9080-e50739690ff9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
