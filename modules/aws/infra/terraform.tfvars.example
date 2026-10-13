@@ -141,6 +141,13 @@ region = "us-west-2"
 # existing VPC (e.g. for VPC peering, Transit Gateway, or compliance).
 create_vpc = true
 
+# Keep every node off the public subnets. Node groups span private and public
+# subnets by default; turning this on for an existing cluster replaces them.
+# eks_node_groups_private_subnets_only = true
+# With create_vpc = true, also stop giving public-subnet instances a public IP.
+# Requires eks_node_groups_private_subnets_only = true.
+# vpc_map_public_ip_on_launch = false
+
 # BRING YOUR OWN VPC (BYOV) — only fill these in if create_vpc = false.
 # To find these values:
 #   AWS Console → VPC → Your VPCs → copy the VPC ID

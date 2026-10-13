@@ -184,6 +184,12 @@ resource "terraform_data" "validate_inputs" {
       error_message = "A private-only EKS endpoint needs a way in. Set create_bastion = true, or set eks_private_access_cidrs to the CIDR your Terraform runs from."
     }
 
+    # A node in a public subnet without a public IP has no route out.
+    precondition {
+      condition     = !var.create_vpc || var.vpc_map_public_ip_on_launch || var.eks_node_groups_private_subnets_only
+      error_message = "vpc_map_public_ip_on_launch = false leaves nodes in the public subnets without egress. Set eks_node_groups_private_subnets_only = true with it."
+    }
+
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
     # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
     precondition {
@@ -238,6 +244,8 @@ module "vpc" {
   private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 
+  map_public_ip_on_launch = var.vpc_map_public_ip_on_launch
+
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
   extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
@@ -280,6 +288,7 @@ module "eks" {
   cluster_version                 = var.eks_cluster_version
   vpc_id                          = local.vpc_id
   subnet_ids                      = concat(local.private_subnets, local.public_subnets)
+  node_group_subnet_ids           = var.eks_node_groups_private_subnets_only ? local.private_subnets : []
   tags                            = local.common_tags
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults

@@ -672,6 +672,18 @@ make apply
 make deploy
 ```
 
+### Keep nodes off the public subnets
+
+The managed node groups span the private and public subnets, and the VPC this module creates gives an instance in a public subnet a public IP. To keep every node private:
+
+```hcl
+# terraform.tfvars
+eks_node_groups_private_subnets_only = true
+vpc_map_public_ip_on_launch          = false   # create_vpc = true only
+```
+
+On an existing cluster, `eks_node_groups_private_subnets_only` replaces each node group. The control plane stays where it is. `vpc_map_public_ip_on_launch = false` without it fails the plan, because a node in a public subnet without a public IP has no egress. With your own VPC, the public IP setting belongs to your subnets.
+
 ### Important notes
 
 - The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
@@ -1172,6 +1184,8 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `private_subnets` | `[]` | when !create_vpc | Existing private subnet IDs |
 | `public_subnets` | `[]` | when !create_vpc | Existing public subnet IDs |
 | `vpc_cidr_block` | `null` | when !create_vpc | Existing VPC CIDR block |
+| `vpc_map_public_ip_on_launch` | `true` | no | Give instances in the module-created VPC's public subnets a public IP. See [keep nodes off the public subnets](#keep-nodes-off-the-public-subnets) |
+| `eks_node_groups_private_subnets_only` | `false` | no | Place the managed node groups in the private subnets only. Replaces existing node groups |
 | `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
 | `eks_private_access_cidrs` | `[]` | no | CIDRs that reach the private EKS API endpoint on 443, such as the runner Terraform uses |

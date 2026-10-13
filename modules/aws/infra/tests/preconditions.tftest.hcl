@@ -149,6 +149,16 @@ run "private_access_from_anywhere_is_rejected" {
   expect_failures = [var.eks_private_access_cidrs]
 }
 
+run "no_public_ips_with_nodes_in_public_subnets_is_rejected" {
+  command = plan
+
+  variables {
+    vpc_map_public_ip_on_launch = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 # Two bring-your-own-VPC rules have no run here: create_vpc = false with none of

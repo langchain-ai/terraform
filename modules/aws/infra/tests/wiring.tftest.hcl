@@ -727,3 +727,14 @@ run "private_endpoint_with_a_runner_cidr_plans" {
     eks_private_access_cidrs  = ["10.100.0.0/16"]
   }
 }
+
+# Node group subnets and the public IP setting sit inside the eks and vpc
+# modules, out of an assert's reach, so this run proves only that they plan.
+run "private_subnet_node_groups_without_public_ips_plan" {
+  command = plan
+
+  variables {
+    eks_node_groups_private_subnets_only = true
+    vpc_map_public_ip_on_launch          = false
+  }
+}

@@ -51,6 +51,18 @@ variable "vpc_public_subnets" {
   default     = []
 }
 
+variable "vpc_map_public_ip_on_launch" {
+  type        = bool
+  description = "Give instances launched in the module-created VPC's public subnets a public IP. Set false with eks_node_groups_private_subnets_only = true. The bastion sets its own public IP and is unaffected."
+  default     = true
+}
+
+variable "eks_node_groups_private_subnets_only" {
+  type        = bool
+  description = "Place the managed node groups in the private subnets only. Off, they span private and public subnets. Turning it on for an existing cluster replaces each node group."
+  default     = false
+}
+
 variable "dns_create_zone" {
   type        = bool
   description = "Create a dedicated public Route 53 hosted zone for langsmith_domain. Set to false to write DNS validation and ALB alias records into dns_existing_zone_id instead."

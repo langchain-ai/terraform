@@ -84,8 +84,11 @@ module "eks" {
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version
 
+  # Upstream places node groups in subnet_ids and the control plane in
+  # control_plane_subnet_ids, so node groups can move without touching the cluster.
   vpc_id                                   = var.vpc_id
-  subnet_ids                               = var.subnet_ids
+  control_plane_subnet_ids                 = var.subnet_ids
+  subnet_ids                               = length(var.node_group_subnet_ids) > 0 ? var.node_group_subnet_ids : var.subnet_ids
   cluster_endpoint_private_access          = true
   cluster_endpoint_public_access           = var.public_cluster_enabled
   cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
