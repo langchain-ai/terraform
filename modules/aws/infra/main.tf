@@ -623,7 +623,7 @@ resource "aws_iam_role_policy" "eso_ssm" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Effect = "Allow"
       Action = [
         "ssm:GetParameter",
@@ -631,7 +631,13 @@ resource "aws_iam_role_policy" "eso_ssm" {
         "ssm:GetParametersByPath",
       ]
       Resource = "arn:aws:ssm:${var.region}:*:parameter/langsmith/${local.base_name}/*"
-    }]
+      }], var.ssm_kms_key_arn != "" ? [{
+      Sid       = "SsmKmsDecrypt"
+      Effect    = "Allow"
+      Action    = "kms:Decrypt"
+      Resource  = var.ssm_kms_key_arn
+      Condition = { StringEquals = { "kms:ViaService" = "ssm.${var.region}.amazonaws.com" } }
+    }] : [])
   })
 }
 

@@ -98,6 +98,7 @@ run "names_and_ids_reject_a_malformed_value" {
     elasticache_kms_key_arn      = "arn:aws:kms:us-east-2:123456789012:alias/langsmith"
     ebs_kms_key_arn              = "arn:aws:kms:us-east-2:123456789012:key/*"
     eks_secrets_kms_key_arn      = "0123abcd-0123-0123-0123-0123456789ab"
+    ssm_kms_key_arn              = "arn:aws:kms:us-east-2:123456789012:alias/aws/ssm"
   }
 
   expect_failures = [
@@ -121,6 +122,7 @@ run "names_and_ids_reject_a_malformed_value" {
     var.elasticache_kms_key_arn,
     var.ebs_kms_key_arn,
     var.eks_secrets_kms_key_arn,
+    var.ssm_kms_key_arn,
   ]
 }
 

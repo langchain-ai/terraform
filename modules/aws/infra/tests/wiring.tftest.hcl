@@ -884,6 +884,10 @@ run "no_customer_managed_keys_leaves_aws_managed_keys" {
     condition     = !strcontains(kubectl_manifest.smithdb_ec2nc_compute[0].yaml_body, "kmsKeyID")
     error_message = "with ebs_kms_key_arn unset, the SmithDB EC2NodeClass named a KMS key"
   }
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.eso_ssm[0].policy, "kms:")
+    error_message = "with ssm_kms_key_arn unset, the ESO policy granted a KMS action"
+  }
 }
 
 # Every key at once, with every resource it reaches enabled, so a type mismatch
@@ -901,6 +905,12 @@ run "customer_managed_keys_reach_every_resource" {
     elasticache_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ac"
     ebs_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/mrk-0123456789abcdef0123456789abcdef"
     eks_secrets_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ae"
+    ssm_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789af"
+  }
+
+  assert {
+    condition     = strcontains(aws_iam_role_policy.eso_ssm[0].policy, var.ssm_kms_key_arn)
+    error_message = "the ESO policy does not grant kms:Decrypt on ssm_kms_key_arn"
   }
 
   assert {

@@ -146,15 +146,23 @@ _ssm_put_safe() {
   # shellcheck disable=SC2064
   trap "rm -f '$_tmpjson'" RETURN
 
+  # ssm_kms_key_arn names a customer-managed key; empty uses aws/ssm.
+  local _kms_key
+  _kms_key="$(_parse_tfvar ssm_kms_key_arn)" || _kms_key=""
+
   if command -v jq &>/dev/null; then
-    jq -n --arg name "$_path" --arg val "$_val" \
-      '{Name: $name, Value: $val, Type: "SecureString", Overwrite: true}' > "$_tmpjson"
+    jq -n --arg name "$_path" --arg val "$_val" --arg key "$_kms_key" \
+      '{Name: $name, Value: $val, Type: "SecureString", Overwrite: true}
+       + (if $key != "" then {KeyId: $key} else {} end)' > "$_tmpjson"
   else
     # Pure bash fallback — escape JSON special characters in the value.
-    local _escaped_val
+    local _escaped_val _key_json=""
     _escaped_val=$(printf '%s' "$_val" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g')
-    printf '{"Name":"%s","Value":"%s","Type":"SecureString","Overwrite":true}\n' \
-      "$_path" "$_escaped_val" > "$_tmpjson"
+    if [[ -n "$_kms_key" ]]; then
+      _key_json=",\"KeyId\":\"${_kms_key}\""
+    fi
+    printf '{"Name":"%s","Value":"%s","Type":"SecureString","Overwrite":true%s}\n' \
+      "$_path" "$_escaped_val" "$_key_json" > "$_tmpjson"
   fi
 
   local _rc=0

@@ -608,6 +608,7 @@ s3_ttl_long_days  = 400    # delete long-lived traces after ~13 months
 # elasticache_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/..."
 # ebs_kms_key_arn         = "arn:aws:kms:us-west-2:123456789012:key/..."
 # eks_secrets_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/..."
+# ssm_kms_key_arn         = "arn:aws:kms:us-west-2:123456789012:key/..."
 
 # S3 versioning — retains all previous versions of trace objects. Increases storage costs.
 # s3_versioning_enabled = false

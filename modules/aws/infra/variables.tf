@@ -733,6 +733,17 @@ variable "eks_secrets_kms_key_arn" {
   }
 }
 
+variable "ssm_kms_key_arn" {
+  type        = string
+  description = "KMS key for the SSM SecureString parameters the scripts write. Empty uses the AWS-managed aws/ssm key. The External Secrets Operator role gets kms:Decrypt on it."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.ssm_kms_key_arn))
+    error_message = "ssm_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
 variable "create_s3_gateway_endpoint" {
   type        = bool
   description = "Create an S3 gateway endpoint on every route table in the VPC. Set false when the VPC already has one, and set s3_gateway_endpoint_id to it."
