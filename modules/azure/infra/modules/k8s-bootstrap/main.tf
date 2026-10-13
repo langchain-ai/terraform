@@ -260,7 +260,7 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
 # ── Kubernetes Secrets (infrastructure dependencies) ──────────────────────────
 # These are created here because they depend on Terraform outputs (connection URLs).
 # Application-level secrets (api_key_salt, jwt_secret, admin_password) are
-# written by helm/scripts/generate-secrets.sh from Azure Key Vault.
+# written by infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
 
 # PostgreSQL connection URL injected into the namespace so the Helm chart can
 # reference it via existingSecretName. Created here (not by Helm) because the

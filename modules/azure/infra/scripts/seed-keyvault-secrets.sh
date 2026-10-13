@@ -8,7 +8,7 @@ set -euo pipefail
 # seed-keyvault-secrets.sh — Write LangSmith app secrets straight into Key Vault
 #
 # Usage:
-#   cd terraform/azure/infra
+#   cd terraform/modules/azure/infra
 #   ./scripts/seed-keyvault-secrets.sh
 #
 # Prerequisites:

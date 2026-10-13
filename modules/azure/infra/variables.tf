@@ -1431,7 +1431,7 @@ variable "postgres_admin_password" {
 # The admin password, API key salt, JWT secret and Fernet encryption keys are
 # NOT Terraform variables by design — Terraform would persist them in plaintext
 # in state. scripts/seed-keyvault-secrets.sh writes them directly to Key Vault
-# after apply, and helm/scripts/generate-secrets.sh reads them back from KV.
+# after apply, and scripts/create-k8s-secrets.sh reads them back from KV.
 
 variable "langsmith_release_name" {
   type        = string

@@ -182,7 +182,7 @@ variable "smithdb_cache_disk_throughput" {
 # ── Application secrets ───────────────────────────────────────────────────────
 # License key is stored in K8s as langsmith-license secret.
 # Other app secrets (api_key_salt, jwt_secret, admin_password) are written by
-# helm/scripts/generate-secrets.sh from Azure Key Vault.
+# infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
 
 variable "langsmith_license_key" {
   type        = string
