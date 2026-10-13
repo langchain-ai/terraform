@@ -980,15 +980,17 @@ resource "terraform_data" "validate_network" {
       error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
     }
 
-    # The rule above covers the default pool. An additional pool that sets
-    # zones = [] is regional under a zoned availability_zones, and SmithDB's
-    # components carry no nodeSelector by default, so they can land on it,
-    # where a Premium SSD v2 cache volume cannot attach. Refuse that too.
+    # On a zoned cluster, a pool that sets zones = [] is regional, and SmithDB's
+    # components carry no nodeSelector by default, so they can land on it, where
+    # a Premium SSD v2 cache volume cannot attach. Refuse that. On a nonzonal
+    # cluster (availability_zones empty) the first SmithDB rule above already
+    # requires a zonal additional pool, and SMITHDB.md pins SmithDB to it; the other
+    # pools are regional by construction there, so this rule stands down.
     precondition {
-      condition = !var.enable_smithdb || alltrue([
+      condition = !var.enable_smithdb || length(var.availability_zones) == 0 || alltrue([
         for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
       ])
-      error_message = "enable_smithdb = true requires every node pool Terraform manages to be zonal, and these additional_node_pools entries set zones = []: ${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+      error_message = "enable_smithdb = true with availability_zones set requires every node pool Terraform manages to be zonal, and these additional_node_pools entries set zones = []: ${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips

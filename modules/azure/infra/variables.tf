@@ -1042,7 +1042,6 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
-    zones             = optional(list(string), [])
     os_sku            = optional(string)
     zones             = optional(list(string))
   }))

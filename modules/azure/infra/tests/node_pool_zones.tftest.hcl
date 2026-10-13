@@ -189,6 +189,28 @@ run "smithdb_refuses_a_regional_pool_under_zoned_availability_zones" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# A cluster built nonzonal takes SmithDB through a zonal additional pool that
+# the overlay pins SmithDB to (SMITHDB.md). The other pools are regional there
+# by construction, so the regional-pool rule stands down and the zonal-pool
+# rule carries the decision.
+run "smithdb_accepts_a_zonal_pool_beside_regional_pools_on_a_nonzonal_cluster" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      large   = { vm_size = "Standard_D16s_v5", min_count = 0, max_count = 2 }
+      smithdb = { vm_size = "Standard_D16s_v5", min_count = 1, max_count = 3, zones = ["1", "2", "3"] }
+    }
+  }
+
+  assert {
+    condition     = module.aks.node_pool_zones["large"] == null && toset(module.aks.node_pool_zones["smithdb"]) == toset(["1", "2", "3"])
+    error_message = "On a nonzonal cluster the zonal SmithDB pool should plan beside a regional pool"
+  }
+}
+
 run "smithdb_accepts_pools_with_zones_of_their_own" {
   command = plan
 
