@@ -14,7 +14,9 @@ With `enable_smithdb = true`, the infrastructure pass creates:
 - the `smithdb-local` Kubernetes Secret containing metastore connection fields.
 
 The existing S3 Gateway VPC endpoint is associated with the VPC route tables,
-so same-region SmithDB S3 traffic takes the private AWS network path.
+so same-region SmithDB S3 traffic takes the private AWS network path. With
+`s3_gateway_endpoint_id`, that endpoint is the VPC's own, and it must be on the
+private subnets' route tables.
 
 ## Configure infrastructure
 

@@ -156,6 +156,10 @@ create_vpc = true
 # them. Leave off if the VPC already has endpoints for these services.
 # create_vpc_endpoints    = true
 # vpc_endpoint_subnet_ids = []   # empty uses the private subnets
+# The VPC's own S3 gateway endpoint instead of a new one. The bucket policy
+# admits LangSmith's role only through it.
+# create_s3_gateway_endpoint = false
+# s3_gateway_endpoint_id     = "vpce-0123456789abcdef0"
 
 # Mirrors for a cluster without egress. Keys of helm_chart_overrides are the
 # release names listed in the README; values is YAML passed to the release.

@@ -93,6 +93,7 @@ run "names_and_ids_reject_a_malformed_value" {
     langsmith_helm_repository    = "http://charts.example.com"
     langsmith_image_registry     = "registry.example.com/$(id)"
     helm_chart_overrides         = { nginx = { repository = "https://charts.example.com" } }
+    s3_gateway_endpoint_id       = "vpc-0123456789abcdef0"
   }
 
   expect_failures = [
@@ -111,6 +112,7 @@ run "names_and_ids_reject_a_malformed_value" {
     var.langsmith_helm_repository,
     var.langsmith_image_registry,
     var.helm_chart_overrides,
+    var.s3_gateway_endpoint_id,
   ]
 }
 

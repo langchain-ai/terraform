@@ -700,6 +700,7 @@ create_vpc_endpoints   = true
 - `create_vpc_endpoints` creates an interface endpoint with private DNS for each service in `vpc_endpoint_services`: `ecr.api`, `ecr.dkr`, `sts`, `ec2`, `logs`, `ssm`, `ssmmessages`, `ec2messages`, `elasticloadbalancing`, `autoscaling`, `eks`, `eks-auth`, `kms`, and `sqs`. The storage module already adds the S3 gateway endpoint that ECR image layers come through.
 - The endpoints go in the private subnets. To use dedicated subnets, set `vpc_endpoint_subnet_ids`, one per AZ.
 - If your VPC already has endpoints for these services, leave `create_vpc_endpoints = false`. A second endpoint with private DNS for the same service collides with the first.
+- If your VPC already has an S3 gateway endpoint, set `create_s3_gateway_endpoint = false` and `s3_gateway_endpoint_id` to its ID. The bucket policy admits LangSmith's role only through that endpoint, and a second gateway endpoint on the same route tables fails to create.
 - With your own VPC, `enable_internet_egress = false` applies the same checks but changes no routes. Removing the route to the internet is up to you.
 - LangSmith's license check calls `beacon.langchain.com`, so a cluster with no egress needs an offline license.
 - Charts and images from outside your network need a mirror. Refer to [Pull charts and images from a mirror](#pull-charts-and-images-from-a-mirror).
@@ -1239,6 +1240,8 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `create_vpc_endpoints` | `false` | no | Create interface endpoints with private DNS for `vpc_endpoint_services` |
 | `vpc_endpoint_services` | 14 services | no | Endpoint service suffixes, such as `ecr.api`. The default covers a cluster with no egress |
 | `vpc_endpoint_subnet_ids` | `[]` | no | Subnets for the endpoints, one per AZ. Empty uses the private subnets |
+| `create_s3_gateway_endpoint` | `true` | no | Create the S3 gateway endpoint on every route table in the VPC |
+| `s3_gateway_endpoint_id` | `""` | no | The VPC's existing S3 endpoint, admitted by the bucket policy. Required when `create_s3_gateway_endpoint = false` |
 | `helm_chart_overrides` | `{}` | no | Chart repository and extra values per release Terraform installs. See [pull charts and images from a mirror](#pull-charts-and-images-from-a-mirror) |
 | `envoy_proxy_image` | `""` | no | Image for the Envoy proxy pods. Empty keeps the controller's default |
 | `langsmith_helm_repository` | `""` | no | HTTPS or `oci://` source of the LangSmith chart for `make deploy`. Empty uses `https://langchain-ai.github.io/helm` |

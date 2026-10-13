@@ -689,6 +689,23 @@ variable "s3_kms_key_arn" {
   default     = ""
 }
 
+variable "create_s3_gateway_endpoint" {
+  type        = bool
+  description = "Create an S3 gateway endpoint on every route table in the VPC. Set false when the VPC already has one, and set s3_gateway_endpoint_id to it."
+  default     = true
+}
+
+variable "s3_gateway_endpoint_id" {
+  type        = string
+  description = "The VPC's existing S3 endpoint (vpce-...), which the bucket policy admits. Required when create_s3_gateway_endpoint = false."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(vpce-[0-9a-f]{8,17})?$", var.s3_gateway_endpoint_id))
+    error_message = "s3_gateway_endpoint_id must be empty or a VPC endpoint ID (vpce-...)."
+  }
+}
+
 variable "s3_versioning_enabled" {
   type        = bool
   description = "Enable S3 bucket versioning. Increases storage costs as all prior object versions are retained."

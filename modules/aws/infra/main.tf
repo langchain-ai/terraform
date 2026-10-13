@@ -218,6 +218,12 @@ resource "terraform_data" "validate_inputs" {
       error_message = "vpc_endpoint_subnet_ids applies only with create_vpc_endpoints = true."
     }
 
+    # The bucket policy admits requests through exactly one S3 endpoint.
+    precondition {
+      condition     = var.create_s3_gateway_endpoint != (var.s3_gateway_endpoint_id != "")
+      error_message = "Set exactly one of create_s3_gateway_endpoint = true or s3_gateway_endpoint_id. The bucket policy admits requests only through that endpoint."
+    }
+
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
     # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
     precondition {
@@ -423,6 +429,9 @@ module "storage" {
   s3_ttl_long_days        = var.s3_ttl_long_days
   kms_key_arn             = var.s3_kms_key_arn
   versioning_enabled      = var.s3_versioning_enabled
+
+  create_vpc_endpoint      = var.create_s3_gateway_endpoint
+  existing_vpc_endpoint_id = var.s3_gateway_endpoint_id
 }
 
 module "postgres" {

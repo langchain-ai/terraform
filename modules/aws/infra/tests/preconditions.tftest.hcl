@@ -218,6 +218,26 @@ run "no_egress_with_a_downloading_bastion_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+run "no_s3_endpoint_at_all_is_rejected" {
+  command = plan
+
+  variables {
+    create_s3_gateway_endpoint = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "two_s3_endpoints_are_rejected" {
+  command = plan
+
+  variables {
+    s3_gateway_endpoint_id = "vpce-0123456789abcdef0"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 run "endpoint_subnets_without_endpoints_are_rejected" {
   command = plan
 

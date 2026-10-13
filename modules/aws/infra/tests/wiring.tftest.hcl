@@ -813,3 +813,17 @@ run "helm_chart_overrides_accept_every_release" {
     error_message = "helm_chart_overrides did not accept every release key"
   }
 }
+
+run "an_existing_s3_endpoint_replaces_the_created_one" {
+  command = plan
+
+  variables {
+    create_s3_gateway_endpoint = false
+    s3_gateway_endpoint_id     = "vpce-0123456789abcdef0"
+  }
+
+  assert {
+    condition     = module.storage.s3_vpc_endpoint_id == "vpce-0123456789abcdef0"
+    error_message = "the bucket policy does not admit the existing S3 endpoint"
+  }
+}
