@@ -1387,7 +1387,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins for Azure. enable_smithdb requires an explicit chart line selection; see SMITHDB.md, 'Version requirements'."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x; see SMITHDB.md, 'Version requirements'."
   default     = ""
 }
 
