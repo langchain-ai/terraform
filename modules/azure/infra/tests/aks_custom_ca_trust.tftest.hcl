@@ -6,7 +6,11 @@
 # the setting plans no change. The fixtures under tests/fixtures/ are throwaway
 # self-signed certificates with no key kept. The expected values are tolist()
 # because the output is a list and a bare [...] is a tuple, which == never
-# treats as equal. Each refusal run breaks one input.
+# treats as equal. Each refusal run breaks one input. A file whose content is
+# not the one certificate block alone (a key after it, a byte-order mark, an
+# openssl "Bag Attributes" preamble) is refused; the key block in the fixture
+# is twelve characters of base64 and not a key. Attach mode skips every file
+# check: byo_network.tftest.hcl has that run, with the attach overrides.
 
 mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
@@ -121,6 +125,36 @@ run "refuses_crlf_line_endings" {
 
   variables {
     aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-crlf.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_certificate_followed_by_its_key" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-key.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_an_openssl_bag_attributes_preamble" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-bag-attributes.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_byte_order_mark" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-bom.pem"]
   }
 
   expect_failures = [var.aks_custom_ca_trust_certificate_files]

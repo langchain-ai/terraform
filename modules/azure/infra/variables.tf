@@ -1015,7 +1015,7 @@ variable "aks_os_sku" {
 
 variable "aks_custom_ca_trust_certificate_files" {
   type        = list(string)
-  description = "Paths to PEM files, one CA certificate per file, that AKS installs in the trust store of every Linux node: for example the internal CA that signs an image mirror's certificate. containerd on the node does the pulling and trusts only public CAs, so a mirror behind an internal CA fails every pull with 'x509: certificate signed by unknown authority' until its CA is here. Up to 10. Paths are relative to the directory Terraform runs in (infra/) or absolute, and the files are read at plan. Empty (default) leaves the cluster's custom CA trust unset. A change replaces every node: AKS creates new nodes, drains and deletes the old ones. The module owns the setting because the provider reads it back from the cluster, so a CA added by hand with az aks update is removed by the next apply. Nodes only: pods keep their own trust store, and LangSmith's is langsmith_custom_ca_secret_name. Ignored when create_cluster = false."
+  description = "Paths to PEM files, one CA certificate per file, that AKS installs in the trust store of every Linux node: for example the internal CA that signs an image mirror's certificate. containerd on the node does the pulling and trusts only public CAs, so a mirror behind an internal CA fails every pull with 'x509: certificate signed by unknown authority' until its CA is here. Up to 10. Paths are relative to the directory Terraform runs in (infra/) or absolute, and the files are read at plan. Empty (default) leaves the cluster's custom CA trust unset. A change replaces every node: AKS creates new nodes, drains and deletes the old ones. The module owns the setting because the provider reads it back from the cluster, so a CA added by hand with az aks update is removed by the next apply. Nodes only: pods keep their own trust store, and LangSmith's is langsmith_custom_ca_secret_name. Ignored when create_cluster = false, and the file checks are skipped then. The files must stay in place for the life of the cluster: Terraform reads them at every plan, including the one for destroy, so a file that has gone blocks destroy until it is restored or removed from the list."
   default     = []
 
   validation {
@@ -1023,8 +1023,11 @@ variable "aks_custom_ca_trust_certificate_files" {
     error_message = "aks_custom_ca_trust_certificate_files lists ${length(var.aks_custom_ca_trust_certificate_files)} files, and AKS installs at most 10 custom CA certificates on a node. List only the CAs the nodes need to reach the image mirror: the root of each chain is enough when the mirror serves its intermediates."
   }
 
+  # The file checks below run only for a cluster this module creates: an
+  # attached cluster ignores the list, and a missing file must not block it.
+  # A ternary rather than || : Terraform 1.11 evaluates both operands.
   validation {
-    condition     = alltrue([for f in var.aks_custom_ca_trust_certificate_files : can(file(f))])
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : can(file(f))]) : true
     error_message = "aks_custom_ca_trust_certificate_files names files Terraform cannot read: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !can(file(f))])}. Each must exist, as an absolute path or one relative to the directory Terraform runs in (infra/), and be text: a DER certificate converts with openssl x509 -inform der -in <file> -out <file>.pem."
   }
 
@@ -1034,15 +1037,27 @@ variable "aks_custom_ca_trust_certificate_files" {
     # elements, which filebase64 of a whole file would not.
     # try() rather than || : Terraform 1.11 evaluates both operands, so an
     # unreadable file would error here instead of failing the check above.
-    condition     = alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) == 1])
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) == 1]) : true
     error_message = "aks_custom_ca_trust_certificate_files names files that do not hold exactly one certificate: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) != 1])}. Each file holds one PEM certificate (one -----BEGIN CERTIFICATE----- block); split a bundle into one file per certificate, and a private key, a CSR or an empty file is not a certificate."
   }
 
   validation {
     # AKS fails to decode a certificate whose lines end in CRLF; the Microsoft
     # page on custom CA trust names it as a cause of the unknown-authority error.
-    condition     = alltrue([for f in var.aks_custom_ca_trust_certificate_files : !can(file(f)) || !can(regex("\r", file(f)))])
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : !can(file(f)) || !can(regex("\r", file(f)))]) : true
     error_message = "aks_custom_ca_trust_certificate_files names files with CRLF line endings: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if can(file(f)) && can(regex("\r", file(f)))])}. AKS cannot decode a certificate with them. Convert with: tr -d '\\r' < <file> > <file>.lf, then list the new file."
+  }
+
+  validation {
+    # One block and nothing around it. A server PEM that also holds the key
+    # passes the count above, and filebase64 would then put the key in plan
+    # output, in state and in the request to AKS. A byte-order mark or an
+    # openssl pkcs12 "Bag Attributes" preamble passes the count too. try() so
+    # a missing file is reported by the check above. On a cluster that already
+    # holds an entry with such content, stripping it changes the encoded value
+    # and the next apply replaces every node once: the message says so.
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(startswith(trimspace(file(f)), "-----BEGIN CERTIFICATE-----") && endswith(trimspace(file(f)), "-----END CERTIFICATE-----"), true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate block: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(startswith(trimspace(file(f)), "-----BEGIN CERTIFICATE-----") && endswith(trimspace(file(f)), "-----END CERTIFICATE-----"), true)])}. A private key after the certificate, a byte-order mark, or an openssl Bag Attributes preamble all count. Keep only the -----BEGIN CERTIFICATE----- block: openssl x509 -in <file> -out <file>.crt writes it alone. On a cluster that already holds the entry with that extra content, the stripped file encodes to a different value, and the next apply replaces every node once."
   }
 }
 

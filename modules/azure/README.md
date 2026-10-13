@@ -1380,7 +1380,10 @@ decides what the cluster can reach, and nothing works until it allows:
   to 10) that AKS installs in every Linux node's trust store. Set it before the
   first apply where you can: a change to the list replaces every node (AKS
   creates new nodes, drains and deletes the old). It is the nodes' trust store
-  only; LangSmith's own is `langsmith_custom_ca_secret_name`.
+  only; LangSmith's own is `langsmith_custom_ca_secret_name`. Keep the files in
+  place for the life of the cluster: Terraform reads them at every plan, destroy
+  included, so a missing file blocks `terraform destroy` until it is back or off
+  the list.
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 
