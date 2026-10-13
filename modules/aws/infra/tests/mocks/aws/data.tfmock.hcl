@@ -23,6 +23,13 @@ mock_data "aws_caller_identity" {
   }
 }
 
+# The eks_addon resource validates addon_version as an EKS version string.
+mock_data "aws_eks_addon_version" {
+  defaults = {
+    version = "v1.0.0-eksbuild.1"
+  }
+}
+
 mock_data "aws_iam_session_context" {
   defaults = {
     issuer_arn  = "arn:aws:iam::123456789012:role/plan-tests"
