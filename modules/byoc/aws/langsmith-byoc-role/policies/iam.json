@@ -75,7 +75,8 @@
     "Action": [
       "iam:TagRole",
       "iam:UntagRole",
-      "iam:PutRolePolicy"
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy"
     ],
     "Resource": [
       "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
