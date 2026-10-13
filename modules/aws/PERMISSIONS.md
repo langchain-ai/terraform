@@ -102,7 +102,7 @@ The operator who runs `make setup-env` also needs `ssm:PutParameter` and `ssm:Ge
 
 ## Verify access before the first apply
 
-Run `make preflight`. It confirms credentials with `aws sts get-caller-identity`, prints the account, identity, and region, and then makes one read-only call per service. A denial on any required service stops the script with exit 1 and names the actions that service needs.
+Run `make preflight`. It stops with exit 1 when Terraform is older than 1.11, the version `versions.tf` requires. It confirms credentials with `aws sts get-caller-identity`, prints the account, identity, and region, and then makes one read-only call per service. A denial on any required service stops the script with exit 1 and names the actions that service needs.
 
 | Service | Call the script makes | Required |
 |---------|----------------------|----------|
@@ -120,6 +120,8 @@ Run `make preflight`. It confirms credentials with `aws sts get-caller-identity`
 | IAM | `iam:GetPolicy` on the Engine policy | Only when `enable_engine = true`. A missing policy stops the script. A denial warns only |
 
 A read-only call that succeeds does not prove the create action behind it is allowed. The read-only pass never tests `iam:PassRole`, KMS, CloudWatch Logs, SQS, or EventBridge, and never checks service quotas.
+
+After the read-only pass, the script asks the IAM policy simulator whether the identity can call `iam:CreateRole`, `iam:PassRole`, `iam:CreateInstanceProfile`, `ec2:CreateVpcEndpoint`, `ec2:CreateTags`, `kms:CreateKey`, and `sqs:CreateQueue`. A denial there warns rather than exits. The simulator tests each action against any resource, so a policy scoped to the deployment's ARNs can show a denial that the apply would not hit. The step needs `iam:SimulatePrincipalPolicy`, plus `iam:GetRole` for an assumed role, and warns that it was skipped without them.
 
 To test creation, pass `--create-test-resources`:
 
