@@ -1375,6 +1375,11 @@ decides what the cluster can reach, and nothing works until it allows:
   Docker Hub proxy repository in Nexus or Artifactory), with an optional pull
   Secret in `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The
   machine running Terraform still pulls the chart from `oci://docker.io`.
+  LangSmith's own images are separate: the chart joins `images.registry` to
+  repositories that all begin with `docker.io/`, so under a proxy-layout mirror
+  leave `images.registry` empty and set each `images.<name>Image.repository` in
+  `values-overrides.yaml` to the mirror's path, for example
+  `<registry>/langchain/langsmith-backend`.
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 
