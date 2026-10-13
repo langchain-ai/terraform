@@ -11,6 +11,7 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
+#   _use_cluster_kubeconfig <cluster> <region> — Export KUBECONFIG for one cluster
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -64,6 +65,14 @@ _read_gateway_flag() {
     _tfvar_is_true "$key" && val=true
   fi
   echo "$val"
+}
+
+# Point kubectl and helm at one cluster without touching ~/.kube/config: write
+# the same per-cluster file set-kubeconfig.sh writes, and export it.
+_use_cluster_kubeconfig() {
+  local cluster="$1" region="$2"
+  export KUBECONFIG="$HOME/.kube/langsmith-${cluster}"
+  aws eks update-kubeconfig --name "$cluster" --region "$region" --alias "$cluster" --kubeconfig "$KUBECONFIG"
 }
 
 # ── AWS credential helpers ───────────────────────────────────────────────────

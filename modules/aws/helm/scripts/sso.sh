@@ -103,7 +103,7 @@ if [[ -z "$_cluster_name" ]]; then
   fail "Could not read cluster_name from Terraform outputs. Is terraform apply complete?"
   exit 1
 fi
-aws eks update-kubeconfig --name "$_cluster_name" --region "$_region" >/dev/null
+_use_cluster_kubeconfig "$_cluster_name" "$_region" >/dev/null
 pass "Cluster: $_cluster_name"
 
 header "3. LangSmith install"

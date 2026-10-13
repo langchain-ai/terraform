@@ -97,7 +97,7 @@ fi
 
 if [[ -n "$_cluster_name" ]]; then
   echo "Updating kubeconfig for cluster: $_cluster_name..."
-  aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
+  _use_cluster_kubeconfig "$_cluster_name" "$_region"
 else
   echo "NOTE: cluster name unavailable from Terraform output — kubeconfig left as is."
 fi

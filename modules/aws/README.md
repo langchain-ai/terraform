@@ -783,7 +783,7 @@ Re-running is safe — it refreshes Terraform outputs and preserves your admin e
 
 Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here is the exact sequence:
 
-**Step 1 — Kubeconfig.** Reads `cluster_name` from `terraform output` and runs `aws eks update-kubeconfig`.
+**Step 1 — Kubeconfig.** Reads `cluster_name` from `terraform output` and runs `aws eks update-kubeconfig` into `~/.kube/langsmith-<cluster>`, the file `set-kubeconfig.sh` writes. `~/.kube/config` is left alone; the script prints the `export KUBECONFIG=...` line for your shell when it finishes.
 
 **Step 2 — Preflight checks** (`preflight-check.sh`). Confirms `aws`, `kubectl`, `helm`, `terraform` are installed; validates AWS credentials with `aws sts get-caller-identity`; verifies `kubectl` can reach the cluster; adds the `langchain` Helm repo if missing.
 
