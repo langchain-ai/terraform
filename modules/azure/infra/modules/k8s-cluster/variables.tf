@@ -91,7 +91,7 @@ variable "default_node_pool_os_sku" {
 
 variable "aks_custom_ca_trust_certificate_files" {
   type        = list(string)
-  description = "PEM files, one CA certificate each, for every Linux node's trust store; the cluster resource reads and base64-encodes them. Validated in the root module. Empty leaves the attribute unset."
+  description = "PEM files, one CA certificate each, for every Linux node's trust store; the cluster resource reads each, trims the whitespace around its certificate block, and base64-encodes it. Validated in the root module. Empty leaves the attribute unset."
   default     = []
 }
 

@@ -1,8 +1,9 @@
 # aks_custom_ca_trust_certificate_files: PEM files whose CA certificates AKS
 # installs in every Linux node's trust store, so containerd on the node can pull
 # from an image mirror whose certificate an internal CA signed. The cluster
-# resource reads each file and base64-encodes it, one entry per file in the
-# order given; no files leaves the attribute null, so a cluster created before
+# resource reads each file, trims the whitespace around the certificate block,
+# and base64-encodes it with one trailing newline, one entry per file in the
+# order given, so a clean fixture encodes exactly as filebase64 reads it; no files leaves the attribute null, so a cluster created before
 # the setting plans no change. The fixtures under tests/fixtures/ are throwaway
 # self-signed certificates with no key kept. The expected values are tolist()
 # because the output is a list and a bare [...] is a tuple, which == never
@@ -76,15 +77,41 @@ run "two_files_keep_their_order" {
   }
 }
 
+run "whitespace_around_the_block_does_not_change_the_entry" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-surrounding-whitespace.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == tolist([filebase64("tests/fixtures/ca-1.pem")])
+    error_message = "A blank line before the certificate block and extra newlines after it should encode exactly as the clean file does, so an editor's whitespace change does not replace every node"
+  }
+}
+
+# Eleven distinct spellings of the two fixtures, so only the 10-file limit fails
+# and not the refusal of a file listed twice.
 run "refuses_an_eleventh_certificate" {
   command = plan
 
   variables {
     aks_custom_ca_trust_certificate_files = [
-      "tests/fixtures/ca-1.pem", "tests/fixtures/ca-2.pem", "tests/fixtures/ca-1.pem", "tests/fixtures/ca-2.pem",
-      "tests/fixtures/ca-1.pem", "tests/fixtures/ca-2.pem", "tests/fixtures/ca-1.pem", "tests/fixtures/ca-2.pem",
-      "tests/fixtures/ca-1.pem", "tests/fixtures/ca-2.pem", "tests/fixtures/ca-1.pem",
+      "tests/fixtures/ca-1.pem", "./tests/fixtures/ca-1.pem", "tests/./fixtures/ca-1.pem", "./tests/./fixtures/ca-1.pem",
+      "tests/fixtures/../fixtures/ca-1.pem", "./tests/fixtures/../fixtures/ca-1.pem",
+      "tests/fixtures/ca-2.pem", "./tests/fixtures/ca-2.pem", "tests/./fixtures/ca-2.pem", "./tests/./fixtures/ca-2.pem",
+      "tests/fixtures/../fixtures/ca-2.pem",
     ]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_file_listed_twice" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1.pem", "tests/fixtures/ca-2.pem", "tests/fixtures/ca-1.pem"]
   }
 
   expect_failures = [var.aks_custom_ca_trust_certificate_files]

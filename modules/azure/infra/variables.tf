@@ -1023,18 +1023,23 @@ variable "aks_custom_ca_trust_certificate_files" {
     error_message = "aks_custom_ca_trust_certificate_files lists ${length(var.aks_custom_ca_trust_certificate_files)} files, and AKS installs at most 10 custom CA certificates on a node. List only the CAs the nodes need to reach the image mirror: the root of each chain is enough when the mirror serves its intermediates."
   }
 
+  validation {
+    condition     = length(distinct(var.aks_custom_ca_trust_certificate_files)) == length(var.aks_custom_ca_trust_certificate_files)
+    error_message = "aks_custom_ca_trust_certificate_files lists the same file more than once: ${join(", ", distinct([for i, f in var.aks_custom_ca_trust_certificate_files : f if contains(slice(var.aks_custom_ca_trust_certificate_files, 0, i), f)]))}. List each CA once."
+  }
+
   # The file checks below run only for a cluster this module creates: an
   # attached cluster ignores the list, and a missing file must not block it.
   # A ternary rather than || : Terraform 1.11 evaluates both operands.
   validation {
     condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : can(file(f))]) : true
-    error_message = "aks_custom_ca_trust_certificate_files names files Terraform cannot read: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !can(file(f))])}. Each must exist, as an absolute path or one relative to the directory Terraform runs in (infra/), and be text: a DER certificate converts with openssl x509 -inform der -in <file> -out <file>.pem."
+    error_message = "aks_custom_ca_trust_certificate_files names files Terraform cannot read: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !can(file(f))])}. Each must exist, as an absolute path or one relative to the directory Terraform runs in (infra/), and be UTF-8 text. A UTF-16 file, the default of Out-File in Windows PowerShell 5.1, is not: re-save it as UTF-8. A DER certificate converts with openssl x509 -inform der -in <file> -out <file>.pem."
   }
 
   validation {
     # Exactly one certificate per file: AKS takes each list element as one
     # certificate, and az aks update splits a multi-certificate file into
-    # elements, which filebase64 of a whole file would not.
+    # elements, which encoding the whole file as one entry would not.
     # try() rather than || : Terraform 1.11 evaluates both operands, so an
     # unreadable file would error here instead of failing the check above.
     condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) == 1]) : true
@@ -1050,7 +1055,7 @@ variable "aks_custom_ca_trust_certificate_files" {
 
   validation {
     # One block and nothing around it. A server PEM that also holds the key
-    # passes the count above, and filebase64 would then put the key in plan
+    # passes the count above, and the cluster module would then put the key in plan
     # output, in state and in the request to AKS. A byte-order mark or an
     # openssl pkcs12 "Bag Attributes" preamble passes the count too. try() so
     # a missing file is reported by the check above. On a cluster that already
