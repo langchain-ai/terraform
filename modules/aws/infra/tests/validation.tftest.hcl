@@ -219,3 +219,15 @@ run "postgres_password_rejects_a_reserved_character" {
 
   expect_failures = [var.postgres_password]
 }
+
+run "existing_iam_role_arns_rejects_a_non_role_arn" {
+  command = plan
+
+  variables {
+    existing_iam_role_arns = {
+      eso = "arn:aws:iam::123456789012:policy/plantest-eso"
+    }
+  }
+
+  expect_failures = [var.existing_iam_role_arns]
+}

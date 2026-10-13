@@ -124,6 +124,10 @@ region = "us-west-2"
 # iam_role_path                = "/langsmith/"
 # Start every role name with <name_prefix>-<environment>- so one role/<base>-* grant covers them.
 # prefix_iam_role_names        = true
+# Use roles your IAM team created instead. See the README for what each needs.
+# existing_iam_role_arns = {
+#   eso = "arn:aws:iam::<account-id>:role/<base>-eso"
+# }
 
 #------------------------------------------------------------------------------
 # NETWORKING — VPC configuration

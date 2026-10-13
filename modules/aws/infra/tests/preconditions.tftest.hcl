@@ -106,6 +106,18 @@ run "cert_manager_irsa_without_an_email_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+run "existing_cert_manager_role_without_cert_manager_irsa_is_rejected" {
+  command = plan
+
+  variables {
+    existing_iam_role_arns = {
+      cert_manager = "arn:aws:iam::123456789012:role/plantest-cert-manager"
+    }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 # Two bring-your-own-VPC rules have no run here: create_vpc = false with none of

@@ -171,6 +171,24 @@ output "langsmith_irsa_role_arn" {
   value       = module.eks.langsmith_irsa_role_arn
 }
 
+output "iam_role_trust_policies" {
+  description = "Trust policy JSON for each IRSA role set in existing_iam_role_arns, keyed like that variable. Give each one to your IAM team once the cluster and its OIDC provider exist."
+  value = {
+    for k, sub in local.irsa_subjects : k => jsonencode({
+      Version = "2012-10-17"
+      Statement = [{
+        Effect    = "Allow"
+        Principal = { Federated = module.eks.oidc_provider_arn }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = { "${module.eks.oidc_provider}:aud" = "sts.amazonaws.com" }
+          StringLike   = { "${module.eks.oidc_provider}:sub" = sub }
+        }
+      }]
+    }) if sub != null && lookup(var.existing_iam_role_arns, k, null) != null
+  }
+}
+
 #------------------------------------------------------------------------------
 # Engine (populated only when enable_engine = true)
 #------------------------------------------------------------------------------
@@ -314,7 +332,7 @@ output "acm_certificate_arn" {
 #------------------------------------------------------------------------------
 output "cert_manager_irsa_role_arn" {
   description = "ARN of the IRSA role for cert-manager DNS-01 (null if create_cert_manager_irsa = false)"
-  value       = var.create_cert_manager_irsa ? module.cert_manager[0].cert_manager_irsa_role_arn : null
+  value       = !var.create_cert_manager_irsa ? null : var.existing_iam_role_arns.cert_manager != null ? var.existing_iam_role_arns.cert_manager : module.cert_manager[0].cert_manager_irsa_role_arn
 }
 
 #------------------------------------------------------------------------------

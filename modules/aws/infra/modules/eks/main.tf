@@ -16,6 +16,13 @@ locals {
     ebs_csi            = local.prefixed_role_names ? "${var.iam_role_name_prefix}-ebs-csi" : "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
   }
 
+  # Roles the caller created. Blueprints sets the IRSA annotation only on roles
+  # it creates, so a supplied controller role gets it through set.
+  existing_roles           = var.existing_iam_role_arns
+  irsa_annotation          = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+  karpenter_node_role_name = local.existing_roles.karpenter_node != null ? reverse(split("/", local.existing_roles.karpenter_node))[0] : local.role_names.karpenter_node
+  karpenter_node_role_arn  = local.existing_roles.karpenter_node != null ? local.existing_roles.karpenter_node : module.eks_blueprints_addons.karpenter.node_iam_role_arn
+
   # Custom networking owns the vpc-cni add-on, so a vpc-cni entry in eks_addons
   # moves here instead of going to the Blueprints add-on, where it would be a
   # second aws_eks_addon for the same add-on. Its settings carry over, and its
@@ -62,6 +69,8 @@ locals {
       iam_role_name = try(v.iam_role_name, null) != null || !local.prefixed_role_names ? try(v.iam_role_name, null) : (
         coalesce(try(v.iam_role_use_name_prefix, null), true) ? substr("${var.iam_role_name_prefix}-${try(v.name, k)}", 0, 37) : "${var.iam_role_name_prefix}-${try(v.name, k)}"
       )
+      create_iam_role               = local.existing_roles.node_group == null
+      iam_role_arn                  = local.existing_roles.node_group
       iam_role_permissions_boundary = var.iam_permissions_boundary_arn
       iam_role_path                 = var.iam_role_path
     })
@@ -82,6 +91,8 @@ module "eks" {
   enable_cluster_creator_admin_permissions = true
   cluster_enabled_log_types                = var.cluster_enabled_log_types
 
+  create_iam_role               = local.existing_roles.cluster == null
+  iam_role_arn                  = local.existing_roles.cluster
   iam_role_permissions_boundary = var.iam_permissions_boundary_arn
   iam_role_path                 = var.iam_role_path
 
@@ -111,7 +122,7 @@ module "irsa-ebs-csi" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role-with-oidc"
   version = "4.24.1"
 
-  create_role                   = true
+  create_role                   = local.existing_roles.ebs_csi == null
   role_name                     = local.role_names.ebs_csi
   role_path                     = var.iam_role_path
   role_permissions_boundary_arn = var.iam_permissions_boundary_arn
@@ -124,7 +135,7 @@ module "irsa-ebs-csi" {
 resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
-  service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
+  service_account_role_arn = local.existing_roles.ebs_csi != null ? local.existing_roles.ebs_csi : module.irsa-ebs-csi.iam_role_arn
   tags                     = var.tags
 
   depends_on = [module.eks]
@@ -149,13 +160,17 @@ module "eks_blueprints_addons" {
   # "no endpoints available for service aws-load-balancer-webhook-service" if the
   # ALB controller pods aren't ready yet.
   aws_load_balancer_controller = {
+    create_role                   = local.existing_roles.alb_controller == null
     role_name                     = local.role_names.alb_controller
     role_path                     = var.iam_role_path
     role_permissions_boundary_arn = var.iam_permissions_boundary_arn
-    set = [{
-      name  = "enableServiceMutatorWebhook"
-      value = "false"
-    }]
+    set = concat(
+      [{
+        name  = "enableServiceMutatorWebhook"
+        value = "false"
+      }],
+      local.existing_roles.alb_controller != null ? [{ name = local.irsa_annotation, value = local.existing_roles.alb_controller }] : [],
+    )
   }
 
   enable_metrics_server     = true
@@ -168,23 +183,27 @@ module "eks_blueprints_addons" {
   # interruption queue. The SmithDB NodePools/EC2NodeClasses are created in the
   # infra root.
   enable_karpenter = var.enable_karpenter
-  karpenter = merge(
-    {
-      chart_version                 = var.karpenter_chart_version
-      role_name                     = local.role_names.karpenter
-      role_path                     = var.iam_role_path
-      role_permissions_boundary_arn = var.iam_permissions_boundary_arn
-    },
-    # The primary ENI holds no pod IPs under custom networking, so Karpenter must
-    # leave it out of the max-pods calculation or it overcommits every node.
-    local.custom_networking ? { set = [{ name = "settings.reservedENIs", value = "1" }] } : {},
-  )
+  karpenter = {
+    chart_version                 = var.karpenter_chart_version
+    create_role                   = local.existing_roles.karpenter == null
+    role_name                     = local.role_names.karpenter
+    role_path                     = var.iam_role_path
+    role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    set = concat(
+      # The primary ENI holds no pod IPs under custom networking, so Karpenter must
+      # leave it out of the max-pods calculation or it overcommits every node.
+      local.custom_networking ? [{ name = "settings.reservedENIs", value = "1" }] : [],
+      local.existing_roles.karpenter != null ? [{ name = local.irsa_annotation, value = local.existing_roles.karpenter }] : [],
+    )
+  }
   # Stable node IAM role name (referenced by the SmithDB EC2NodeClass). The
   # controller itself runs on the core managed node group — SmithDB nodes are
   # tainted, so it never lands there.
   karpenter_node = {
+    create_iam_role               = local.existing_roles.karpenter_node == null
+    iam_role_arn                  = local.existing_roles.karpenter_node
     iam_role_use_name_prefix      = false
-    iam_role_name                 = local.role_names.karpenter_node
+    iam_role_name                 = local.karpenter_node_role_name
     iam_role_path                 = var.iam_role_path
     iam_role_permissions_boundary = var.iam_permissions_boundary_arn
   }
@@ -192,9 +211,11 @@ module "eks_blueprints_addons" {
   # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
   cluster_autoscaler = {
     chart_version                 = "9.56.0"
+    create_role                   = local.existing_roles.cluster_autoscaler == null
     role_name                     = local.role_names.cluster_autoscaler
     role_path                     = var.iam_role_path
     role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    set                           = local.existing_roles.cluster_autoscaler != null ? [{ name = local.irsa_annotation, value = local.existing_roles.cluster_autoscaler }] : []
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
@@ -216,7 +237,7 @@ resource "aws_eks_access_entry" "karpenter_node" {
   count = var.enable_karpenter ? 1 : 0
 
   cluster_name  = module.eks.cluster_name
-  principal_arn = module.eks_blueprints_addons.karpenter.node_iam_role_arn
+  principal_arn = local.karpenter_node_role_arn
   type          = "EC2_LINUX"
 
   depends_on = [module.eks_blueprints_addons]
@@ -264,7 +285,7 @@ resource "aws_security_group_rule" "istiod_webhook" {
 # IRSA role for LangSmith pods — allows pods to access S3 via their service account.
 # https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
 resource "aws_iam_role" "langsmith" {
-  count = var.create_langsmith_irsa_role ? 1 : 0
+  count = var.create_langsmith_irsa_role && local.existing_roles.langsmith == null ? 1 : 0
 
   name                 = "${module.eks.cluster_name}-irsa-role"
   path                 = var.iam_role_path

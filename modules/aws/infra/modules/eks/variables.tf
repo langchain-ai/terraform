@@ -150,3 +150,18 @@ variable "iam_role_name_prefix" {
   description = "Prefix for the role names that upstream modules otherwise choose (node groups, add-ons, Karpenter node, EBS CSI). Null keeps the upstream names."
   default     = null
 }
+
+variable "existing_iam_role_arns" {
+  type = object({
+    cluster            = optional(string)
+    node_group         = optional(string)
+    karpenter_node     = optional(string)
+    karpenter          = optional(string)
+    alb_controller     = optional(string)
+    cluster_autoscaler = optional(string)
+    ebs_csi            = optional(string)
+    langsmith          = optional(string)
+  })
+  description = "ARNs of roles to use instead of creating them. Each one set skips creating that role, and no policies are attached to it."
+  default     = {}
+}

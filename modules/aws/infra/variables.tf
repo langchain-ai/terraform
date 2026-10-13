@@ -626,6 +626,29 @@ variable "prefix_iam_role_names" {
   default     = false
 }
 
+variable "existing_iam_role_arns" {
+  type = object({
+    cluster            = optional(string)
+    node_group         = optional(string)
+    karpenter_node     = optional(string)
+    karpenter          = optional(string)
+    alb_controller     = optional(string)
+    cluster_autoscaler = optional(string)
+    ebs_csi            = optional(string)
+    langsmith          = optional(string)
+    eso                = optional(string)
+    smithdb            = optional(string)
+    cert_manager       = optional(string)
+  })
+  description = "ARNs of roles your IAM team created, for accounts where the deployer cannot create roles. Each one set skips creating that role, and the module attaches no policies to it. node_group covers every managed node group. The iam_role_trust_policies output gives the trust policy each IRSA role needs once the cluster exists."
+  default     = {}
+
+  validation {
+    condition     = alltrue([for arn in values(var.existing_iam_role_arns) : arn == null || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/", arn))])
+    error_message = "Each existing_iam_role_arns value must be an IAM role ARN, such as arn:aws:iam::123456789012:role/langsmith-eso."
+  }
+}
+
 # IRSA (IAM Roles for Service Accounts) settings
 variable "create_langsmith_irsa_role" {
   type        = bool

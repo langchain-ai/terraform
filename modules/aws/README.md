@@ -422,6 +422,46 @@ prefix_iam_role_names = true
 
 Set it before the first apply too. Turning it on later replaces those six roles.
 
+If the deployer cannot create roles at all, have your IAM team create them and
+pass their ARNs. Each ARN you set skips creating that role, and the module
+attaches no policies to it:
+
+```hcl
+existing_iam_role_arns = {
+  cluster            = "arn:aws:iam::<account-id>:role/<base>-eks-cluster"
+  node_group         = "arn:aws:iam::<account-id>:role/<base>-eks-node"
+  karpenter_node     = "arn:aws:iam::<account-id>:role/<base>-karpenter-node"
+  karpenter          = "arn:aws:iam::<account-id>:role/<base>-karpenter"
+  alb_controller     = "arn:aws:iam::<account-id>:role/<base>-lb-controller"
+  cluster_autoscaler = "arn:aws:iam::<account-id>:role/<base>-autoscaler"
+  ebs_csi            = "arn:aws:iam::<account-id>:role/<base>-ebs-csi"
+  langsmith          = "arn:aws:iam::<account-id>:role/<base>-eks-irsa-role"
+  eso                = "arn:aws:iam::<account-id>:role/<base>-eso"
+  smithdb            = "arn:aws:iam::<account-id>:role/<base>-smithdb-irsa"
+  cert_manager       = "arn:aws:iam::<account-id>:role/<base>-cert-manager"
+}
+```
+
+Set only the keys you need. `node_group` covers every managed node group,
+`karpenter`, `karpenter_node`, and `smithdb` apply with `enable_smithdb = true`,
+and `cert_manager` needs `create_cert_manager_irsa = true`.
+
+Each role needs the permissions the module would otherwise attach. To see them,
+run `terraform plan` without `existing_iam_role_arns` and read the policy
+documents it plans. The cluster role trusts `eks.amazonaws.com` and needs
+`AmazonEKSClusterPolicy`. The node group and Karpenter node roles trust
+`ec2.amazonaws.com` and need `AmazonEKSWorkerNodePolicy`,
+`AmazonEC2ContainerRegistryReadOnly`, and `AmazonEKS_CNI_Policy`.
+
+Create every role before the first apply. The other eight are IRSA roles, and
+their trust policies name the cluster's OIDC provider, which the first apply
+creates, so they start with a placeholder trust policy:
+
+1. Run `terraform apply`. Pods that use an IRSA role start without AWS access.
+2. Run `terraform output -json iam_role_trust_policies` and have your IAM team
+   set each policy as the trust policy of the role with the same key.
+3. Restart the pods that use those roles.
+
 ---
 
 ## Pass 1 — Infrastructure
@@ -1122,6 +1162,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
+| `existing_iam_role_arns` | `{}` | no | Roles your IAM team created, used instead of creating them. See [IAM permissions boundary, path, and role names](#iam-permissions-boundary-path-and-role-names) |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |

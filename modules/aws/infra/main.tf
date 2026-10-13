@@ -169,6 +169,11 @@ resource "terraform_data" "validate_inputs" {
       error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
     }
 
+    precondition {
+      condition     = var.existing_iam_role_arns.cert_manager == null || var.create_cert_manager_irsa
+      error_message = "existing_iam_role_arns.cert_manager replaces the DNS-01 role, so it needs create_cert_manager_irsa = true."
+    }
+
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
     # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
     precondition {
@@ -283,6 +288,7 @@ module "eks" {
   iam_permissions_boundary_arn    = var.iam_permissions_boundary_arn
   iam_role_path                   = var.iam_role_path
   iam_role_name_prefix            = var.prefix_iam_role_names ? local.base_name : null
+  existing_iam_role_arns          = var.existing_iam_role_arns
 }
 
 # State migration: adding count changes the module address.
@@ -348,7 +354,7 @@ module "storage" {
   region                  = var.region
   vpc_id                  = local.vpc_id
   langsmith_irsa_role_arn = module.eks.langsmith_irsa_role_arn
-  create_bucket_policy    = true
+  create_bucket_policy    = var.create_langsmith_irsa_role || var.existing_iam_role_arns.langsmith != null
   s3_ttl_enabled          = var.s3_ttl_enabled
   s3_ttl_short_days       = var.s3_ttl_short_days
   s3_ttl_long_days        = var.s3_ttl_long_days
@@ -374,12 +380,29 @@ module "postgres" {
 
   iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
   iam_database_user                   = var.postgres_iam_database_user
-  iam_auth_role_name                  = module.eks.langsmith_irsa_role_name
+  iam_auth_role_name                  = local.create_langsmith_irsa_role ? module.eks.langsmith_irsa_role_name : null
   deletion_protection                 = var.postgres_deletion_protection
   skip_final_snapshot                 = var.postgres_skip_final_snapshot
   backup_retention_period             = var.postgres_backup_retention_period
 
   existing_security_group_id = var.postgres_existing_security_group_id
+}
+
+# A role from existing_iam_role_arns gets no policies here; its owner attaches them.
+locals {
+  create_langsmith_irsa_role = var.create_langsmith_irsa_role && var.existing_iam_role_arns.langsmith == null
+
+  # Service account each IRSA role serves, for the iam_role_trust_policies output.
+  irsa_subjects = {
+    ebs_csi            = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+    alb_controller     = "system:serviceaccount:kube-system:aws-load-balancer-controller-sa"
+    cluster_autoscaler = "system:serviceaccount:kube-system:cluster-autoscaler-sa"
+    karpenter          = "system:serviceaccount:karpenter:karpenter"
+    langsmith          = "system:serviceaccount:${var.langsmith_namespace}:*"
+    eso                = "system:serviceaccount:external-secrets:external-secrets"
+    cert_manager       = "system:serviceaccount:cert-manager:cert-manager"
+    smithdb            = var.enable_smithdb ? module.smithdb[0].service_account_subject : null
+  }
 }
 
 # engine.tf also attaches this policy to the Engine role, because Engine and
@@ -407,7 +430,7 @@ locals {
 }
 
 resource "aws_iam_role_policy" "langsmith_s3" {
-  count = var.create_langsmith_irsa_role ? 1 : 0
+  count = local.create_langsmith_irsa_role ? 1 : 0
 
   name = "langsmith-s3-access"
   role = module.eks.langsmith_irsa_role_name
@@ -461,7 +484,7 @@ locals {
 }
 
 resource "aws_iam_role_policy" "langsmith_bedrock" {
-  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+  count = local.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
 
   name = "langsmith-bedrock-access"
   role = module.eks.langsmith_irsa_role_name
@@ -474,7 +497,19 @@ resource "aws_iam_role_policy" "langsmith_bedrock" {
 # IRSA: https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
 # ESO:  https://external-secrets.io/latest/provider/aws-parameter-store/
 
+moved {
+  from = aws_iam_role.eso
+  to   = aws_iam_role.eso[0]
+}
+
+moved {
+  from = aws_iam_role_policy.eso_ssm
+  to   = aws_iam_role_policy.eso_ssm[0]
+}
+
 resource "aws_iam_role" "eso" {
+  count = var.existing_iam_role_arns.eso == null ? 1 : 0
+
   name                 = "${local.base_name}-eso"
   path                 = var.iam_role_path
   permissions_boundary = var.iam_permissions_boundary_arn
@@ -499,8 +534,10 @@ resource "aws_iam_role" "eso" {
 }
 
 resource "aws_iam_role_policy" "eso_ssm" {
+  count = var.existing_iam_role_arns.eso == null ? 1 : 0
+
   name = "eso-ssm-read"
-  role = aws_iam_role.eso.name
+  role = aws_iam_role.eso[0].name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -524,7 +561,7 @@ resource "aws_iam_role_policy" "eso_ssm" {
 
 module "cert_manager" {
   source = "./modules/cert-manager"
-  count  = var.create_cert_manager_irsa ? 1 : 0
+  count  = var.create_cert_manager_irsa && var.existing_iam_role_arns.cert_manager == null ? 1 : 0
 
   cluster_name      = local.cluster_name
   oidc_provider     = module.eks.oidc_provider
@@ -766,7 +803,7 @@ module "k8s_bootstrap" {
   tls_certificate_source = var.tls_certificate_source
   letsencrypt_email      = var.letsencrypt_email
 
-  eso_irsa_role_arn = aws_iam_role.eso.arn
+  eso_irsa_role_arn = var.existing_iam_role_arns.eso != null ? var.existing_iam_role_arns.eso : aws_iam_role.eso[0].arn
 
   enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
@@ -779,7 +816,7 @@ module "k8s_bootstrap" {
   # module outputs (which are "known after apply" and cause plan-time errors).
   # The actual role ARN is still passed for runtime use (ClusterIssuer, SA annotation).
   create_cert_manager_irsa    = var.create_cert_manager_irsa
-  cert_manager_irsa_role_arn  = length(module.cert_manager) > 0 ? module.cert_manager[0].cert_manager_irsa_role_arn : ""
+  cert_manager_irsa_role_arn  = var.existing_iam_role_arns.cert_manager != null ? var.existing_iam_role_arns.cert_manager : (length(module.cert_manager) > 0 ? module.cert_manager[0].cert_manager_irsa_role_arn : "")
   langsmith_domain            = var.langsmith_domain
   region                      = var.region
   cert_manager_hosted_zone_id = var.cert_manager_hosted_zone_id
@@ -1097,6 +1134,7 @@ module "smithdb" {
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
 
+  service_account_role_arn     = var.existing_iam_role_arns.smithdb
   iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
   iam_role_path                = var.iam_role_path
 }

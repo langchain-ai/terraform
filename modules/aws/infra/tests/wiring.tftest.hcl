@@ -188,12 +188,20 @@ run "iam_roles_default_to_no_boundary_and_the_root_path" {
     error_message = "With prefix_iam_role_names unset, the Karpenter node role lost its upstream name"
   }
   assert {
-    condition     = aws_iam_role.eso.permissions_boundary == null
+    condition     = aws_iam_role.eso[0].permissions_boundary == null
     error_message = "With iam_permissions_boundary_arn unset, the ESO role planned a boundary"
   }
   assert {
-    condition     = aws_iam_role.eso.path == "/"
+    condition     = aws_iam_role.eso[0].path == "/"
     error_message = "With iam_role_path unset, the ESO role planned a path other than /"
+  }
+  assert {
+    condition     = length(aws_iam_role_policy.langsmith_s3) == 1
+    error_message = "With existing_iam_role_arns unset, the LangSmith role lost its S3 policy"
+  }
+  assert {
+    condition     = output.iam_role_trust_policies == {}
+    error_message = "With existing_iam_role_arns unset, iam_role_trust_policies is not empty"
   }
 }
 
@@ -213,11 +221,11 @@ run "iam_boundary_and_path_reach_the_roles" {
   }
 
   assert {
-    condition     = aws_iam_role.eso.permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary"
+    condition     = aws_iam_role.eso[0].permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary"
     error_message = "iam_permissions_boundary_arn did not reach the ESO role"
   }
   assert {
-    condition     = aws_iam_role.eso.path == "/langsmith/"
+    condition     = aws_iam_role.eso[0].path == "/langsmith/"
     error_message = "iam_role_path did not reach the ESO role"
   }
 }
@@ -233,6 +241,65 @@ run "prefix_iam_role_names_starts_the_upstream_names_with_the_base" {
   assert {
     condition     = module.eks.karpenter_node_iam_role_name == "plantest-dev-karpenter-node"
     error_message = "prefix_iam_role_names did not reach the Karpenter node role"
+  }
+}
+
+# Every module that creates a role is on, so a role that one of them still
+# creates or attaches a policy to shows up here.
+run "existing_iam_role_arns_replace_the_roles" {
+  command = plan
+
+  variables {
+    create_cert_manager_irsa    = true
+    cert_manager_hosted_zone_id = "Z00000000000000000001"
+    letsencrypt_email           = "plan-tests@example.com"
+    enable_smithdb              = true
+    existing_iam_role_arns = {
+      cluster            = "arn:aws:iam::123456789012:role/plantest-cluster"
+      node_group         = "arn:aws:iam::123456789012:role/plantest-node"
+      karpenter_node     = "arn:aws:iam::123456789012:role/langsmith/plantest-karpenter-node"
+      karpenter          = "arn:aws:iam::123456789012:role/plantest-karpenter"
+      alb_controller     = "arn:aws:iam::123456789012:role/plantest-alb"
+      cluster_autoscaler = "arn:aws:iam::123456789012:role/plantest-autoscaler"
+      ebs_csi            = "arn:aws:iam::123456789012:role/plantest-ebs-csi"
+      langsmith          = "arn:aws:iam::123456789012:role/plantest-langsmith"
+      eso                = "arn:aws:iam::123456789012:role/plantest-eso"
+      smithdb            = "arn:aws:iam::123456789012:role/plantest-smithdb"
+      cert_manager       = "arn:aws:iam::123456789012:role/plantest-cert-manager"
+    }
+  }
+
+  assert {
+    condition     = length(aws_iam_role.eso) == 0 && length(aws_iam_role_policy.eso_ssm) == 0
+    error_message = "existing_iam_role_arns.eso still planned the ESO role or its policy"
+  }
+  assert {
+    condition     = length(aws_iam_role_policy.langsmith_s3) == 0
+    error_message = "existing_iam_role_arns.langsmith still planned a policy on the supplied role"
+  }
+  assert {
+    condition     = length(module.cert_manager) == 0
+    error_message = "existing_iam_role_arns.cert_manager still planned the cert-manager role"
+  }
+  assert {
+    condition     = output.langsmith_irsa_role_arn == "arn:aws:iam::123456789012:role/plantest-langsmith"
+    error_message = "existing_iam_role_arns.langsmith did not reach the langsmith_irsa_role_arn output"
+  }
+  assert {
+    condition     = output.smithdb_irsa_role_arn == "arn:aws:iam::123456789012:role/plantest-smithdb"
+    error_message = "existing_iam_role_arns.smithdb did not reach the smithdb_irsa_role_arn output"
+  }
+  assert {
+    condition     = output.cert_manager_irsa_role_arn == "arn:aws:iam::123456789012:role/plantest-cert-manager"
+    error_message = "existing_iam_role_arns.cert_manager did not reach the cert_manager_irsa_role_arn output"
+  }
+  assert {
+    condition     = module.eks.karpenter_node_iam_role_name == "plantest-karpenter-node"
+    error_message = "The Karpenter node role name was not taken from the last segment of its ARN"
+  }
+  assert {
+    condition     = toset(keys(output.iam_role_trust_policies)) == toset(["ebs_csi", "alb_controller", "cluster_autoscaler", "karpenter", "langsmith", "eso", "cert_manager", "smithdb"])
+    error_message = "iam_role_trust_policies does not cover exactly the supplied IRSA roles"
   }
 }
 
