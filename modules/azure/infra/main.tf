@@ -266,11 +266,12 @@ locals {
   # Terraform doesn't attach pools to a cluster it doesn't manage.
   aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
-  # Additional pools this module creates with zones set. One of these gives
-  # SmithDB zonal nodes for its Premium SSD v2 cache disks on a cluster whose
-  # default pool was built nonzonal.
+  # Additional pools this module creates that resolve to zones: their own, or
+  # availability_zones when they set none. One of these gives SmithDB zonal
+  # nodes for its Premium SSD v2 cache disks on a cluster whose default pool
+  # was built nonzonal.
   zonal_node_pools = [
-    for name, pool in local.aks_managed_node_pools : name if length(pool.zones) > 0
+    for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) > 0
   ]
 
   # One row per pool, so an operator can see which pool dominates the total
@@ -1284,7 +1285,9 @@ module "aks" {
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
