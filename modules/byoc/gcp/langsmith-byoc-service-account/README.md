@@ -88,11 +88,13 @@ The module then creates these service accounts in the project. LangSmith finds t
 | Service account | Used by | Project roles |
 |-----------------|---------|---------------|
 | `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/redis.dbConnectionUser` |
-| `langsmith-external-secrets` | External Secrets Operator | `roles/secretmanager.secretAccessor` |
-| `langsmith-cert-manager` | cert-manager | `roles/dns.admin` |
+| `langsmith-external-secrets` | External Secrets Operator | `roles/secretmanager.secretAccessor`, with a condition limiting it to secrets whose IDs start with `ls-` |
+| `langsmith-cert-manager` | cert-manager | None. LangSmith grants `roles/dns.admin` on each data plane's DNS zones. |
 | `langsmith-postgres-setup` | The job that sets up the Cloud SQL databases | `roles/cloudsql.admin` |
 | `langsmith-node` | GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader` |
 | `langsmith-sandbox-host` | Sandbox GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader`, `roles/redis.dbConnectionUser` |
+
+Name any secrets of your own in the project so their IDs don't start with `ls-`. Otherwise External Secrets can read them.
 
 It also grants `roles/container.admin` on the project to `var.crossplane_service_account`. The LangSmith control plane reaches the data plane GKE clusters through it.
 
@@ -104,7 +106,7 @@ In this mode, the provisioner gets:
 
 The module does not create `<prefix>ProjectIamGranter` or `<prefix>ServiceAccountUser`. So the provisioner cannot create, update or delete service accounts and cannot change the project IAM policy. It can set IAM policies on these six accounts only, and act as `langsmith-node` and `langsmith-sandbox-host` only. It can still read the other service accounts in the project and their IAM policies.
 
-LangSmith still creates the Workload Identity bindings on these accounts, and the Token Creator grant of `langsmith-workload` on itself. The Workload Identity bindings need the project's workload identity pool, which exists only after LangSmith creates the first GKE cluster. That is why the provisioner can set the IAM policies of the six accounts. Through them, it can let an identity act as any of the six.
+LangSmith still creates the Workload Identity bindings on these accounts, the Token Creator grant of `langsmith-workload` on itself, and the `roles/dns.admin` grants for `langsmith-cert-manager` on the data plane DNS zones. The Workload Identity bindings need the project's workload identity pool, which exists only after LangSmith creates the first GKE cluster. That is why the provisioner can set the IAM policies of the six accounts. Through them, it can let an identity act as any of the six.
 
 Create the data plane with `byoiam_enabled` set to `true`.
 
