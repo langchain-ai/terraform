@@ -1,0 +1,19 @@
+modules/baremetal/README.md
+  s_b081d01eaf8fac::t_d731d1bc8f9efb 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bbfdbaf24ef2a0c2b75a197d05339fc2c12e4a6e",
+  "prompts": {},
+  "sessions": {
+    "s_b081d01eaf8fac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60a35b35-90eb-4a7e-b6de-e8caa7a6fc70",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}
