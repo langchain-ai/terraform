@@ -12,6 +12,8 @@
 #   _parse_tfvar <key>              — Read a value from terraform.tfvars
 #   _parse_tfvar_quoted <key> <f>   — Read a quoted value, spaces intact, from <f>
 #   _tfvar_is_true <key>            — Return 0 if tfvar == true
+#   _set_tfvar <key> <value>        — Set one key in terraform.tfvars, editing only its line
+#   _confirm <prompt>               — Yes/no prompt that defaults to no
 #   _tf_out <name>                  — Read one terraform output, or return 1
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
@@ -23,10 +25,14 @@
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
 # ── Resolve INFRA_DIR ────────────────────────────────────────────────────────
-# Assumes this script lives in infra/scripts/. Consumers that live elsewhere
-# should override INFRA_DIR after sourcing.
+# INFRA_DIR is the Terraform root the deployment runs in: terraform.tfvars,
+# secrets.auto.tfvars, state, and outputs. It defaults to infra/ next to this
+# script. LANGSMITH_INFRA_DIR points it at a root outside this repo, such as a
+# wrapper module that sources modules/azure/infra; LANGSMITH_VALUES_DIR does the
+# same for the generated Helm values. Scripts, examples, and the base
+# values.yaml always come from this repo.
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
+INFRA_DIR="${INFRA_DIR:-${LANGSMITH_INFRA_DIR:-$(cd "$_COMMON_DIR/.." && pwd)}}"
 
 # ── terraform.tfvars parser ──────────────────────────────────────────────────
 _parse_tfvar() {
@@ -68,6 +74,31 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Replace the first uncommented `key = ...` line in terraform.tfvars, or append
+# one, so every other setting stays exactly as written. `cat >`, not mv, keeps
+# the file permissions.
+_set_tfvar() {
+  local _key="$1" _value="$2" _file="$INFRA_DIR/terraform.tfvars" _tmp
+  _tmp="$(mktemp)"
+  if awk -v key="$_key" -v value="$_value" '
+    !done && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { print key " = " value; done = 1; next }
+    { print }
+    END { exit done ? 0 : 3 }
+  ' "$_file" > "$_tmp"; then
+    cat "$_tmp" > "$_file"
+  else
+    [[ -s "$_file" && -n "$(tail -c 1 "$_file")" ]] && printf '\n' >> "$_file"
+    printf '%s = %s\n' "$_key" "$_value" >> "$_file"
+  fi
+  rm -f "$_tmp"
+}
+
+_confirm() {
+  local _answer
+  read -r -p "  $1 [y/N] " _answer
+  [[ "$_answer" =~ ^[Yy] ]]
 }
 
 # ── terraform output reader ──────────────────────────────────────────────────

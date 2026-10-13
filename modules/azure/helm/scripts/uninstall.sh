@@ -20,8 +20,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/../../infra"
-source "$INFRA_DIR/scripts/_common.sh"
+source "$SCRIPT_DIR/../../infra/scripts/_common.sh"
 
 # RELEASE_NAME and NAMESPACE from the environment if set, else
 # langsmith_release_name and langsmith_namespace from terraform.tfvars, else
