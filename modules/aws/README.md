@@ -640,6 +640,14 @@ The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmi
 
 For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. Pass 1 runs the Helm, Kubernetes, and kubectl providers, so Terraform needs a path to the API from the first apply. A private-only endpoint with neither `create_bastion` nor `eks_private_access_cidrs` fails the plan.
 
+To start from every private setting at once, copy the private profile:
+
+```bash
+cp infra/terraform.tfvars.private infra/terraform.tfvars
+```
+
+It keeps the API endpoint private, keeps nodes off the public subnets without public IPs, removes internet egress, and creates the VPC endpoints. Change `eks_private_access_cidrs` to the network Terraform runs from, then work through the sections below for the bastion, the endpoints, and the mirror.
+
 ### How it works
 
 If the endpoint must never be public, run Terraform from a host inside or connected to the VPC: a CI runner subnet, a VPN, or a peered VPC. Set `eks_private_access_cidrs` to its CIDR. Terraform opens 443 from that CIDR on the cluster security group before anything calls the cluster.
@@ -766,7 +774,7 @@ bastion_tools_s3_uri      = "s3://my-tools-bucket/bastion"
 ### Important notes
 
 - The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
-- The bastion lives in a **public subnet** (for SSM agent connectivity). It does not need a public IP if your VPC has VPC endpoints for SSM (`ssm`, `ssmmessages`, `ec2messages`).
+- The bastion runs in a private subnet and connects to SSM through the NAT gateway or the `ssm`, `ssmmessages`, and `ec2messages` endpoints. Only with `bastion_enable_ssh = true` does it run in a public subnet with a public IP.
 - When the EKS API is private, `terraform plan/apply` targeting EKS resources **must** be run from within the VPC (i.e., the bastion). Running from your laptop will timeout.
 
 ---

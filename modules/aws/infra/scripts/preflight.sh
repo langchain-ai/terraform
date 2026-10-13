@@ -353,6 +353,7 @@ if [[ ! -f "$TFVARS" ]]; then
   info "  cp terraform.tfvars.minimum terraform.tfvars     # minimum profile (cost parking, CI)"
   info "  cp terraform.tfvars.dev terraform.tfvars         # dev profile"
   info "  cp terraform.tfvars.production terraform.tfvars  # production profile"
+  info "  cp terraform.tfvars.private terraform.tfvars     # private API, no internet egress"
   info "  cp terraform.tfvars.example terraform.tfvars     # full reference"
   exit 1
 fi

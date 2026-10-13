@@ -944,3 +944,41 @@ run "customer_managed_keys_reach_every_resource" {
     error_message = "the SmithDB instance-store EC2NodeClass does not name ebs_kms_key_arn"
   }
 }
+
+# The network settings of terraform.tfvars.private, together, so a precondition
+# that rejects their combination fails here.
+run "private_profile_plans" {
+  command = plan
+
+  variables {
+    eks_private_access_cidrs             = ["10.100.0.0/16"]
+    enable_internet_egress               = false
+    create_vpc_endpoints                 = true
+    eks_node_groups_private_subnets_only = true
+    vpc_map_public_ip_on_launch          = false
+    alb_scheme                           = "internal"
+    enable_public_eks_cluster            = false
+    create_bastion                       = true
+    bastion_cluster_admin                = true
+    fix_bastion_names                    = true
+    bastion_tools_s3_uri                 = "s3://my-tools-bucket/bastion"
+    postgres_source                      = "external"
+    redis_source                         = "external"
+    tls_certificate_source               = "acm"
+    acm_certificate_arn                  = "arn:aws:acm:us-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+    langsmith_domain                     = "langsmith.internal.example.com"
+  }
+
+  assert {
+    condition     = module.vpc[0].nat_gateway_id == null
+    error_message = "the private profile planned a NAT gateway"
+  }
+  assert {
+    condition     = length(module.vpc_endpoints) == 1
+    error_message = "the private profile did not plan the VPC endpoints"
+  }
+  assert {
+    condition     = length(module.bastion) == 1
+    error_message = "the private profile did not plan the bastion"
+  }
+}
