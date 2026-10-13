@@ -52,15 +52,20 @@ resource "azapi_resource" "amr_db" {
   name      = "default"
   parent_id = azapi_resource.amr.id
 
-  # evictionPolicy is sent only when set, so an existing database's body, and
-  # the plan for it, stay unchanged. Azure's default is VolatileLRU.
+  # evictionPolicy and persistence are sent only when set, so an existing
+  # database's body, and the plan for it, stay unchanged. Azure's default
+  # eviction is VolatileLRU, and its default is no persistence.
   body = {
-    properties = merge({
-      clientProtocol           = "Encrypted"
-      port                     = 10000
-      clusteringPolicy         = var.clustering_policy
-      accessKeysAuthentication = "Enabled"
-    }, var.eviction_policy == null ? {} : { evictionPolicy = var.eviction_policy })
+    properties = merge(
+      {
+        clientProtocol           = "Encrypted"
+        port                     = 10000
+        clusteringPolicy         = var.clustering_policy
+        accessKeysAuthentication = "Enabled"
+      },
+      var.eviction_policy == null ? {} : { evictionPolicy = var.eviction_policy },
+      var.aof_persistence ? { persistence = { aofEnabled = true, aofFrequency = "1s" } } : {}
+    )
   }
 
   schema_validation_enabled = false

@@ -31,7 +31,7 @@ set -euo pipefail
 #   smithdb-taskdb-password                  — generated (hex)
 #   langsmith-sandbox-callback-signing-jwk   — generated (Ed25519 JWK), enable_sandboxes only
 #
-# The eight LangSmith secrets are deliberately NOT Terraform-managed: Terraform
+# The LangSmith secrets are deliberately NOT Terraform-managed: Terraform
 # would persist their plaintext in state. This mirrors the AWS module (writes SSM)
 # and the GCP module (writes Secret Manager). Terraform owns only the vault and
 # its RBAC.

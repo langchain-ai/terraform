@@ -1375,7 +1375,7 @@ variable "sandbox_juicefs_name" {
 
   # Blob container naming rules, since the container takes this name.
   validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", var.sandbox_juicefs_name))
+    condition     = length(var.sandbox_juicefs_name) <= 63 && can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", var.sandbox_juicefs_name))
     error_message = "sandbox_juicefs_name must be 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
   }
 }
@@ -1394,7 +1394,7 @@ variable "sandbox_juicefs_amr_sku" {
 
 variable "sandbox_juicefs_redis_high_availability" {
   type        = bool
-  description = "Zone-redundant HA for the JuiceFS metadata Redis. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
+  description = "Zone-redundant HA for the JuiceFS metadata Redis, plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
   default     = true
 }
 

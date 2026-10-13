@@ -71,6 +71,12 @@ variable "eviction_policy" {
   default     = null
 }
 
+variable "aof_persistence" {
+  type        = bool
+  description = "Write every change to an append-only file once a second, so the database survives losing its primary and replica together. Azure supports persistence only with high_availability = true."
+  default     = false
+}
+
 variable "create_private_dns_zone" {
   type        = bool
   description = "Create the privatelink.redis.azure.net zone and its VNet link here. false uses private_dns_zone_id."

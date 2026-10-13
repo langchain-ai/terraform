@@ -69,6 +69,11 @@ locals {
   sandbox_host_service_account = "${local.langsmith_release_fullname}-sandbox-host"
   sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
 
+  # JuiceFS reads the container from the first label of the bucket host and the
+  # account from access-key, so the bucket is https://<container>.core.windows.net,
+  # not the account's blob URL.
+  sandbox_juicefs_bucket = var.enable_sandboxes ? replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1") : null
+
   # A StorageClass is cluster-scoped, unlike everything else this module creates
   # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
   # the second apply fails on an object the first one owns. Suffix it the same
@@ -2009,7 +2014,8 @@ module "redis" {
 # ── Sandboxes ─────────────────────────────────────────────────────────────────
 # JuiceFS keeps sandbox filesystem metadata in Redis and the data in Blob.
 # Metadata loss loses every sandbox filesystem, so the Redis is dedicated, never
-# evicts, and runs NoCluster: JuiceFS issues multi-key transactions that a
+# evicts, and writes an append-only file whenever HA is on, the only mode Azure
+# persists in. It runs NoCluster: JuiceFS issues multi-key transactions that a
 # sharded database rejects. Its private endpoint goes in the AKS subnet beside
 # the Blob endpoints, so no Redis subnet is needed when redis_source is
 # in-cluster, and it shares the LangSmith Redis's DNS zone when there is one.
@@ -2029,6 +2035,7 @@ module "sandbox_juicefs_redis" {
   clustering_policy       = "NoCluster"
   eviction_policy         = "NoEviction"
   high_availability       = var.sandbox_juicefs_redis_high_availability
+  aof_persistence         = var.sandbox_juicefs_redis_high_availability
   cluster_location        = var.redis_location
 
   tags = local.common_tags
@@ -2337,11 +2344,8 @@ module "k8s_bootstrap" {
   resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
   resource_quota_extra_pods      = local.smithdb_quota_extra_pods
 
-  # Sandboxes. JuiceFS reads the container from the first label of the bucket
-  # host and the account from access-key, so the bucket is
-  # https://<container>.core.windows.net, not the account's blob URL. No account
-  # key: the format Job and sandbox-host reach Blob through workload identity.
-  # AMR serves database 0 only.
+  # Sandboxes. No account key: the format Job and sandbox-host reach Blob
+  # through workload identity. AMR serves database 0 only.
   enable_sandboxes            = var.enable_sandboxes
   platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
   sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
@@ -2349,7 +2353,7 @@ module "k8s_bootstrap" {
     name         = var.sandbox_juicefs_name
     metaurl      = "${module.sandbox_juicefs_redis[0].connection_url}/0"
     storage      = "wasb"
-    bucket       = replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1")
+    bucket       = local.sandbox_juicefs_bucket
     "access-key" = module.blob.storage_account_name
   } : {}
 

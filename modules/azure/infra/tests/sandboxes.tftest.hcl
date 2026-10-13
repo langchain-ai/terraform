@@ -225,3 +225,102 @@ run "sandboxes_rejected_in_azure_government" {
 
   expect_failures = [terraform_data.validate_network]
 }
+
+# The bucket is https://<container>.<blob suffix>, which JuiceFS splits into
+# the container name and the endpoint. A wrong suffix fails only at mount time.
+run "juicefs_bucket_is_the_container_host" {
+  command = plan
+
+  variables {
+    enable_sandboxes     = true
+    sandbox_juicefs_name = "sandbox-juicefs"
+  }
+
+  assert {
+    condition     = local.sandbox_juicefs_bucket == "https://sandbox-juicefs.core.windows.net"
+    error_message = "JuiceFS bucket is not https://<container>.core.windows.net: ${local.sandbox_juicefs_bucket}"
+  }
+}
+
+# The chart names the ServiceAccount after the release fullname, which appends
+# -langsmith to a release name without it.
+run "sandbox_host_subject_follows_the_release_name" {
+  command = plan
+
+  variables {
+    enable_sandboxes       = true
+    langsmith_release_name = "ls"
+  }
+
+  assert {
+    condition     = azurerm_federated_identity_credential.sandbox_host[0].subject == "system:serviceaccount:langsmith:ls-langsmith-sandbox-host"
+    error_message = "Federated credential subject did not follow langsmith_release_name: ${azurerm_federated_identity_credential.sandbox_host[0].subject}"
+  }
+}
+
+# The regex alone admits up to 125 characters, because each -x group counts once.
+run "sandbox_juicefs_name_over_63_characters_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes     = true
+    sandbox_juicefs_name = "ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-ab-a"
+  }
+
+  expect_failures = [var.sandbox_juicefs_name]
+}
+
+# Azure persists an AMR database only with HA on, so AOF follows HA.
+run "juicefs_redis_writes_aof_with_ha" {
+  command = plan
+
+  module {
+    source = "./modules/redis"
+  }
+
+  variables {
+    name                = "ls-juicefs-test"
+    location            = "eastus"
+    resource_group_name = "ls-rg"
+    resource_group_id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg"
+    subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg/providers/Microsoft.Network/virtualNetworks/ls-vnet/subnets/aks"
+    vnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg/providers/Microsoft.Network/virtualNetworks/ls-vnet"
+    amr_sku             = "Balanced_B1"
+    clustering_policy   = "NoCluster"
+    eviction_policy     = "NoEviction"
+    high_availability   = true
+    aof_persistence     = true
+  }
+
+  assert {
+    condition     = azapi_resource.amr_db.body.properties.persistence == { aofEnabled = true, aofFrequency = "1s" }
+    error_message = "aof_persistence = true did not send AOF persistence"
+  }
+}
+
+run "juicefs_redis_sends_no_persistence_without_it" {
+  command = plan
+
+  module {
+    source = "./modules/redis"
+  }
+
+  variables {
+    name                = "ls-juicefs-test"
+    location            = "eastus"
+    resource_group_name = "ls-rg"
+    resource_group_id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg"
+    subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg/providers/Microsoft.Network/virtualNetworks/ls-vnet/subnets/aks"
+    vnet_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg/providers/Microsoft.Network/virtualNetworks/ls-vnet"
+    amr_sku             = "Balanced_B0"
+    clustering_policy   = "NoCluster"
+    eviction_policy     = "NoEviction"
+    high_availability   = false
+    aof_persistence     = false
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.amr_db.body.properties), "persistence")
+    error_message = "aof_persistence = false still sent a persistence block"
+  }
+}

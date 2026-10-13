@@ -825,3 +825,81 @@ run "an_attached_cluster_with_the_system_zone_keeps_the_kubeconfig_host" {
     error_message = "An attached cluster with the System zone was told to fetch credentials with --public-fqdn"
   }
 }
+
+# ── Sandboxes on an attached cluster ─────────────────────────────────────────
+# The sandboxhost pool is an additional pool, so an attached cluster gets it only
+# with existing_cluster_node_pools_managed on. The README tells attach users to
+# set it or bring a pool with the sandbox label and taint.
+
+run "an_attached_cluster_gets_no_sandbox_pool_by_default" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = !contains(keys(local.aks_managed_node_pools), "sandboxhost")
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = false got the sandboxhost pool"
+  }
+}
+
+run "an_attached_cluster_gets_the_sandbox_pool_when_pools_are_managed" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    existing_cluster_node_pools_managed  = true
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = tolist(local.aks_managed_node_pools["sandboxhost"].node_taints) == tolist(["sandbox.langsmith.com/host=true:NoSchedule"])
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = true did not get the tainted sandboxhost pool"
+  }
+}
