@@ -1,0 +1,5 @@
+apiVersion: v2
+name: metallb-config
+description: MetalLB IPAddressPool and L2Advertisement for the bare-metal module.
+type: application
+version: 0.1.0

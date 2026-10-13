@@ -45,8 +45,11 @@ Not every provider has every file in that sketch. In particular:
 | `azure/` | Microsoft Azure |
 | `gcp/` | Google Cloud Platform |
 | `ocp/` | OpenShift Container Platform |
+| `baremetal/` | Self-managed Kubernetes on bare metal (preview) |
 
 ## Capabilities
+
+`baremetal/` is not in the table below: it doesn't create a cluster or use cloud services. It deploys in-cluster equivalents (MetalLB, Envoy Gateway, local-path storage, Postgres, Redis, RustFS) on an existing cluster. See [`baremetal/README.md`](baremetal/README.md).
 
 The rows below describe equivalent capabilities; the child-module directory names are not uniform across providers.
 

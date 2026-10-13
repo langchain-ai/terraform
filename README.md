@@ -18,6 +18,7 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 | Azure | [`modules/azure/`](modules/azure/README.md) | AKS | GA |
 | GCP | [`modules/gcp/`](modules/gcp/README.md) | GKE | GA |
 | OpenShift | [`modules/ocp/`](modules/ocp/README.md) | OCP / ROSA | Preview |
+| Bare metal | [`modules/baremetal/`](modules/baremetal/README.md) | any self-managed Kubernetes (kubeadm, k3s, RKE2…) | Preview |
 
 The AWS, Azure, and GCP directories are self-contained deployments with a `Makefile`, an `infra/` Terraform layout, Helm values, and provider-specific operator scripts. The OpenShift preview follows its own layout. See [`modules/README.md`](modules/README.md) for the differences between providers.
 

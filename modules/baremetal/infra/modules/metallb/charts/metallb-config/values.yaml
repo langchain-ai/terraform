@@ -1,0 +1,3 @@
+# Set by Terraform (modules/metallb/main.tf).
+addresses: []
+l2NodeSelector: {}

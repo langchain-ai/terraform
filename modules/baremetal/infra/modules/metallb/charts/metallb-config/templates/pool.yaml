@@ -1,0 +1,21 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: lan-pool
+spec:
+  addresses:
+    {{- required "addresses must not be empty" .Values.addresses | toYaml | nindent 4 }}
+  autoAssign: true
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: lan-l2
+spec:
+  ipAddressPools:
+    - lan-pool
+  {{- with .Values.l2NodeSelector }}
+  nodeSelectors:
+    - matchLabels:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
