@@ -1388,7 +1388,7 @@ variable "sandbox_juicefs_redis_name" {
 
 variable "sandbox_juicefs_amr_sku" {
   type        = string
-  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. InsufficientCapacity is regional, so use redis_location for it, not a larger SKU."
+  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
   default     = "Balanced_B1"
 }
 
