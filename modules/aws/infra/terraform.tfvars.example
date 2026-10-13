@@ -198,6 +198,12 @@ enable_public_eks_cluster = false
 #
 # eks_public_access_cidrs = ["0.0.0.0/0"]
 
+# CIDRs that reach the private EKS API endpoint on 443: the CI runner subnet,
+# VPN, or peered VPC that Terraform runs from. With enable_public_eks_cluster =
+# false, set this or create_bastion = true, or the plan fails.
+#
+# eks_private_access_cidrs = ["10.100.0.0/16"]
+
 # Pod networking. Set this at cluster creation; existing nodes keep their pod
 # IPs until they are replaced. See README.md "Pod networking".
 #

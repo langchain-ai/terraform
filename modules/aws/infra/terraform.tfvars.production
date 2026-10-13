@@ -32,6 +32,9 @@ create_vpc = true
 # EKS — private API endpoint (kubectl requires VPN or bastion)
 #------------------------------------------------------------------------------
 enable_public_eks_cluster = false
+create_bastion            = true
+# Or run Terraform from inside the network instead of a bastion:
+# eks_private_access_cidrs = ["10.100.0.0/16"]
 eks_cluster_version       = "1.34"
 
 # Production node group — 6 nodes min so all pods schedule immediately.

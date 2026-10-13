@@ -102,6 +102,17 @@ variable "eks_public_access_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "eks_private_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs inside or connected to the VPC (a CI runner subnet, a VPN, a peered VPC) that reach the private EKS API endpoint on 443. Set it to where Terraform runs when enable_public_eks_cluster = false, so the first apply can reach the cluster."
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.eks_private_access_cidrs : can(cidrhost(c, 0)) && c != "0.0.0.0/0"])
+    error_message = "Each eks_private_access_cidrs entry must be a CIDR other than 0.0.0.0/0."
+  }
+}
+
 variable "eks_cluster_version" {
   type        = string
   description = "The EKS version of the kubernetes cluster"

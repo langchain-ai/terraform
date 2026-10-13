@@ -716,3 +716,14 @@ run "eks_blueprints_telemetry_stack_can_be_skipped" {
     create_eks_blueprints_telemetry_stack = false
   }
 }
+
+# The runner rule sits inside the eks module, out of an assert's reach, so this
+# run proves only that a private endpoint with a runner CIDR plans.
+run "private_endpoint_with_a_runner_cidr_plans" {
+  command = plan
+
+  variables {
+    enable_public_eks_cluster = false
+    eks_private_access_cidrs  = ["10.100.0.0/16"]
+  }
+}

@@ -608,9 +608,19 @@ The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmi
 
 ## Private Cluster with Bastion Host
 
-For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. A bastion host provides the access point.
+For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. Pass 1 runs the Helm, Kubernetes, and kubectl providers, so Terraform needs a path to the API from the first apply. A private-only endpoint with neither `create_bastion` nor `eks_private_access_cidrs` fails the plan.
 
 ### How it works
+
+If the endpoint must never be public, run Terraform from a host inside or connected to the VPC: a CI runner subnet, a VPN, or a peered VPC. Set `eks_private_access_cidrs` to its CIDR. Terraform opens 443 from that CIDR on the cluster security group before anything calls the cluster.
+
+```hcl
+# terraform.tfvars
+enable_public_eks_cluster = false
+eks_private_access_cidrs  = ["10.100.0.0/16"]   # where Terraform runs
+```
+
+If the endpoint may be public during setup, use a bastion. Terraform creates the bastion after the cluster, so the bastion cannot run the first apply.
 
 1. **First run from your workstation** — Deploy infrastructure with `create_bastion = true` and `enable_public_eks_cluster = true` (temporarily). This creates the bastion alongside everything else.
 2. **Switch to private** — Set `enable_public_eks_cluster = false` and re-apply. The EKS API endpoint becomes private-only.
@@ -1164,6 +1174,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `vpc_cidr_block` | `null` | when !create_vpc | Existing VPC CIDR block |
 | `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
+| `eks_private_access_cidrs` | `[]` | no | CIDRs that reach the private EKS API endpoint on 443, such as the runner Terraform uses |
 | `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |

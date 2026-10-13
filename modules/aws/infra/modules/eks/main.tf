@@ -86,10 +86,24 @@ module "eks" {
 
   vpc_id                                   = var.vpc_id
   subnet_ids                               = var.subnet_ids
+  cluster_endpoint_private_access          = true
   cluster_endpoint_public_access           = var.public_cluster_enabled
   cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
   enable_cluster_creator_admin_permissions = true
   cluster_enabled_log_types                = var.cluster_enabled_log_types
+
+  # Inside module.eks, so everything that depends on the cluster also waits for
+  # the rule, and a runner in these CIDRs reaches the API on the first apply.
+  cluster_security_group_additional_rules = length(var.private_access_cidrs) > 0 ? {
+    private_api_from_cidrs = {
+      type        = "ingress"
+      protocol    = "tcp"
+      from_port   = 443
+      to_port     = 443
+      cidr_blocks = var.private_access_cidrs
+      description = "Kubernetes API from the Terraform runner"
+    }
+  } : {}
 
   create_iam_role               = local.existing_roles.cluster == null
   iam_role_arn                  = local.existing_roles.cluster

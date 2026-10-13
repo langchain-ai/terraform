@@ -179,6 +179,11 @@ resource "terraform_data" "validate_inputs" {
       error_message = "bastion_cluster_admin grants the bastion role cluster admin, so it needs create_bastion = true."
     }
 
+    precondition {
+      condition     = var.enable_public_eks_cluster || var.create_bastion || length(var.eks_private_access_cidrs) > 0
+      error_message = "A private-only EKS endpoint needs a way in. Set create_bastion = true, or set eks_private_access_cidrs to the CIDR your Terraform runs from."
+    }
+
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
     # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
     precondition {
@@ -284,6 +289,7 @@ module "eks" {
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
+  private_access_cidrs            = var.eks_private_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
   langsmith_namespace             = var.langsmith_namespace
   eks_addons                      = var.eks_addons

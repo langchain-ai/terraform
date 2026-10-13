@@ -128,6 +128,27 @@ run "bastion_cluster_admin_without_a_bastion_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+run "private_endpoint_without_a_way_in_is_rejected" {
+  command = plan
+
+  variables {
+    enable_public_eks_cluster = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "private_access_from_anywhere_is_rejected" {
+  command = plan
+
+  variables {
+    enable_public_eks_cluster = false
+    eks_private_access_cidrs  = ["0.0.0.0/0"]
+  }
+
+  expect_failures = [var.eks_private_access_cidrs]
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 # Two bring-your-own-VPC rules have no run here: create_vpc = false with none of

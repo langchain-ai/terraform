@@ -31,6 +31,12 @@ variable "public_access_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "private_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs allowed to reach the private EKS API endpoint on 443"
+  default     = []
+}
+
 variable "cluster_enabled_log_types" {
   type        = list(string)
   description = "EKS control plane log types to enable. Valid: api, audit, authenticator, controllerManager, scheduler."
