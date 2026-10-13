@@ -958,6 +958,8 @@ Managed Redis.
 **Requirements**
 
 - Chart 0.17 or later.
+- A LangSmith license with sandbox access. Without it, platform-backend crash-loops with `the LangSmith license does
+  not include sandbox access`.
 - A VM size with nested virtualization, so the node exposes `/dev/kvm`. The Dsv4, Ddsv4, Dsv5, Ddsv5, and Ddsv6
   families have it.
 - Regional vCPU quota in that family for `sandbox_host_max_count` nodes. `make preflight` counts the sandbox pool in its
@@ -1007,7 +1009,10 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
   in the AKS subnet, so it needs no Redis subnet. Size it with `sandbox_juicefs_amr_sku`; JuiceFS uses about 300 bytes
   of Redis memory per file.
 - sandbox-host runs on the host network and calls platform-backend from a node IP. The namespace's default-deny
-  NetworkPolicy leaves out platform-backend for that reason; every other LangSmith pod keeps it.
+  NetworkPolicy leaves out platform-backend for that reason; every other LangSmith pod keeps it. Any other Ingress
+  NetworkPolicy that selects platform-backend, such as a Prometheus scrape rule, cuts sandbox-host off, and its logs
+  show `dial tcp <ip>:1986: i/o timeout`. Leave platform-backend out of that policy's selector, or allow the AKS node
+  subnet on port 1986.
 - The namespace ResourceQuota caps requests only, and the LimitRange sets no default limits. sandbox-host runs the
   microVMs in child cgroups of its own pod, so a container limit would cap every sandbox on the node.
 - `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy.
@@ -1027,6 +1032,14 @@ A failed `juicefs-format` Job with a Blob `403` means the identity label or the 
 
 ```bash
 kubectl delete job -n langsmith -l app.kubernetes.io/component=juicefs-format
+```
+
+sandbox-host builds the default snapshot only at startup. If it starts before platform-backend is running, its logs show
+`system snapshot startup retries exhausted`, and every sandbox create fails with `default snapshot did not become ready`.
+Restart sandbox-host once platform-backend is running:
+
+```bash
+kubectl rollout restart deployment -n langsmith -l app=sandbox-host
 ```
 
 **Disable**
