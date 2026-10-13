@@ -6,12 +6,14 @@
 
 # quickstart.sh — Interactive setup wizard for LangSmith on Azure
 #
-# Generates infra/terraform.tfvars from a guided questionnaire.
-# Run from the azure/ directory:
+# Generates infra/terraform.tfvars from a guided questionnaire. A new deployment
+# starts with quick setup (a handful of questions, the profile's defaults for the
+# rest); answering no walks through all 10 sections. Run from the azure/ directory:
 #
 #   ./infra/scripts/quickstart.sh
+#   ./infra/scripts/quickstart.sh --yes [--profile prod] ...   (no prompts; --help)
 #
-# Also available as: make quickstart
+# Also available as: make quickstart [ARGS="--yes ..."]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +21,78 @@ source "$SCRIPT_DIR/_common.sh"
 # Normalize so the paths shown to the user are plain, not infra/scripts/../...
 INFRA_DIR="$(cd "$INFRA_DIR" && pwd)"
 OUTPUT="$INFRA_DIR/terraform.tfvars"
+
+# ── Arguments ─────────────────────────────────────────────────────────────────
+# --yes writes a new deployment from the profile's defaults without a prompt.
+# The other flags answer what a fresh deployment has no default for. Held in
+# _ARG_* until the section initializers below have run, then applied by
+# _run_noninteractive.
+
+_usage() {
+  cat << 'USAGE'
+Usage: quickstart.sh                 Quick setup, or all 10 sections if you decline it
+       quickstart.sh --yes [flags]   Write terraform.tfvars from the profile's defaults, no prompts
+
+Flags (all need --yes):
+  --profile dev|prod     Deployment profile (default: dev)
+  --subscription ID      Azure subscription ID (default: az account show)
+  --location REGION      Azure region (default: eastus)
+  --name NAME            Deployment name, or "none" for no suffix (default: the profile name)
+  --dns-label LABEL      Public DNS label, unique across the region (default: langsmith-<name>)
+  --domain FQDN          Custom domain: TLS from Let's Encrypt (HTTP-01) and an Azure DNS zone
+  --email ADDRESS        ACME account email, required with --domain
+
+Without --domain the deployment serves HTTP at <label>.<region>.cloudapp.azure.com.
+USAGE
+}
+
+# _red prints no newline, and --yes runs are read from logs, so errors go to stderr.
+_die() {
+  { _red "  ERROR: $1"; echo; } >&2
+  exit "${2:-1}"
+}
+
+# A domain and an ACME email land inside quoted HCL strings, so both are held to
+# an allow-list wherever they are read: the --yes flags and quick setup.
+_valid_domain() {
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]
+}
+_valid_email() {
+  [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+}
+
+NONINTERACTIVE="false"
+_ARG_PROFILE=""
+_ARG_SUBSCRIPTION=""
+_ARG_LOCATION=""
+_ARG_NAME=""
+_ARG_DNS_LABEL=""
+_ARG_DOMAIN=""
+_ARG_EMAIL=""
+while (( $# > 0 )); do
+  case "$1" in
+    -y|--yes) NONINTERACTIVE="true"; shift ;;
+    -h|--help) _usage; exit 0 ;;
+    --profile|--subscription|--location|--name|--dns-label|--domain|--email)
+      (( $# >= 2 )) || _die "$1 needs a value." 2
+      case "$1" in
+        --profile)      _ARG_PROFILE="$2" ;;
+        --subscription) _ARG_SUBSCRIPTION="$2" ;;
+        --location)     _ARG_LOCATION="$2" ;;
+        --name)         _ARG_NAME="$2" ;;
+        --dns-label)    _ARG_DNS_LABEL="$2" ;;
+        --domain)       _ARG_DOMAIN="$2" ;;
+        --email)        _ARG_EMAIL="$2" ;;
+      esac
+      shift 2 ;;
+    *)
+      _usage >&2
+      _die "unknown argument: $1" 2 ;;
+  esac
+done
+if [[ "$NONINTERACTIVE" != "true" && -n "${_ARG_PROFILE}${_ARG_SUBSCRIPTION}${_ARG_LOCATION}${_ARG_NAME}${_ARG_DNS_LABEL}${_ARG_DOMAIN}${_ARG_EMAIL}" ]]; then
+  _die "these flags answer the wizard's questions, so they need --yes." 2
+fi
 
 # The cloud this wizard is writing for. On a fresh run there is no tfvars and no
 # Terraform output for _common.sh's _azure_environment to read, so the wizard
@@ -493,7 +567,11 @@ trap _on_exit EXIT
 echo ""
 printf "${BOLD}  LangSmith on Azure — Quickstart Setup${RESET}\n"
 printf "${DIM}  Generates terraform.tfvars from a guided questionnaire.${RESET}\n"
-printf "${DIM}  Answer each question. Review and change any answer before writing.${RESET}\n"
+if [[ "$NONINTERACTIVE" == "true" ]]; then
+  printf "${DIM}  --yes: taking the profile's defaults, no prompts.${RESET}\n"
+else
+  printf "${DIM}  Answer each question. Review and change any answer before writing.${RESET}\n"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Section functions — each sets its own variables, callable on redo
@@ -634,7 +712,9 @@ OWNER=""
 ENVIRONMENT=""
 COST_CENTER=""
 
+# Quick setup passes "quick" to skip the three tag prompts.
 _run_section_2() {
+  local quick="${1:-}"
   _section "2. Subscription & Naming"
   _ask_azure_environment
   _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
@@ -734,19 +814,21 @@ _run_section_2() {
   LOCATION="$_REPLY"
 
   # Azure tags and nothing else: they name no resource and grant no access.
-  echo ""
-  _hint "The last three answers are Azure tags, used for cost reporting and policy."
-  _hint "None of them grants access or appears in a resource name. Blank omits the tag."
-  _hint "The environment tag defaults to the deployment name — set it only when the"
-  _hint "deployment name carries more (name \"prod-eastus\", environment tag \"prod\")."
-  _ask "Environment tag (blank = the deployment name)" "$ENVIRONMENT"
-  ENVIRONMENT="$_REPLY"
+  if [[ "$quick" != "quick" ]]; then
+    echo ""
+    _hint "The last three answers are Azure tags, used for cost reporting and policy."
+    _hint "None of them grants access or appears in a resource name. Blank omits the tag."
+    _hint "The environment tag defaults to the deployment name — set it only when the"
+    _hint "deployment name carries more (name \"prod-eastus\", environment tag \"prod\")."
+    _ask "Environment tag (blank = the deployment name)" "$ENVIRONMENT"
+    ENVIRONMENT="$_REPLY"
 
-  _ask "Owner tag (team or person, for cost attribution)" "$OWNER"
-  OWNER="$_REPLY"
+    _ask "Owner tag (team or person, for cost attribution)" "$OWNER"
+    OWNER="$_REPLY"
 
-  _ask "Cost center tag (billing code)" "$COST_CENTER"
-  COST_CENTER="$_REPLY"
+    _ask "Cost center tag (billing code)" "$COST_CENTER"
+    COST_CENTER="$_REPLY"
+  fi
 
   echo ""
   _derive_names
@@ -1560,6 +1642,151 @@ _run_section_10() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Profile defaults — quick setup, --yes, and any section skipped with a jump
+# ═══════════════════════════════════════════════════════════════════════════
+# Sets each section nobody has answered to the profile's values. Dev is the
+# section initializers, which is in-cluster Postgres, Redis and ClickHouse. Prod
+# mirrors the fresh-run prod defaults in sections 4, 7, 8 and 10, plus the
+# production sizing profile that section 9's hints pair with D8s_v5 x3 — keep
+# them in step. Both branches set every value, so switching the profile at the
+# review screen moves the unanswered sections with it. An answered section is
+# never touched.
+_apply_profile_defaults() {
+  local prod=false
+  [[ "$PROFILE" == "prod" ]] && prod=true
+  if ! _answered 4; then
+    if $prod; then NODE_VM_SIZE="Standard_D8s_v5"; NODE_MIN=3; NODE_MAX=10
+    else           NODE_VM_SIZE="Standard_D4s_v5"; NODE_MIN=2; NODE_MAX=5; fi
+  fi
+  if ! _answered 6 && [[ "$TLS_SOURCE" == "none" ]]; then
+    DNS_LABEL="langsmith${NAME_PREFIX:+-$NAME_PREFIX}"
+  fi
+  if ! _answered 7; then
+    if $prod; then PG_SOURCE="external";   REDIS_SOURCE="external";   AMR_SKU="Balanced_B3"; REDIS_HA="true"
+    else           PG_SOURCE="in-cluster"; REDIS_SOURCE="in-cluster"; AMR_SKU="Balanced_B1"; REDIS_HA="false"; fi
+    _gov_redis_in_cluster
+  fi
+  if ! _answered 8; then
+    KV_PURGE_PROTECTION="$prod"
+  fi
+  if ! _answered 9; then
+    if $prod; then SIZING_PROFILE="production"; else SIZING_PROFILE="dev"; fi
+  fi
+  if ! _answered 10; then
+    CREATE_WAF="false"; CREATE_DIAGNOSTICS="$prod"; CREATE_BASTION="false"; BASTION_SUBNET_ID=""
+  fi
+}
+
+# Quick setup's only question past sections 1 and 2. Blank is section 6's
+# "None"; a domain is its HTTP-01 answer with the DNS zone, the same pair --domain
+# writes.
+_ask_quick_domain() {
+  _section "Domain"
+  _hint "Blank serves HTTP at <label>.${LOCATION}.$(_azure_cloudapp_suffix), with no certificate."
+  _hint "A custom domain gets HTTPS from Let's Encrypt and an Azure DNS zone for it."
+  while true; do
+    _ask "Custom domain, e.g. langsmith.example.com (blank for HTTP only)" ""
+    [[ -z "$_REPLY" ]] && break
+    _valid_domain "$_REPLY" && break
+    _red "  ERROR: must be a lowercase hostname, e.g. langsmith.example.com."; echo
+  done
+  LANGSMITH_DOMAIN="$_REPLY"
+  DNS_LABEL=""
+  if [[ -z "$LANGSMITH_DOMAIN" ]]; then
+    TLS_SOURCE="none"; LE_EMAIL=""; CREATE_DNS_ZONE="false"
+    if [[ "$PROFILE" == "prod" ]]; then
+      _yellow "  WARNING"; printf ": Running production without TLS is not recommended.\n"
+    fi
+    return 0
+  fi
+  TLS_SOURCE="letsencrypt"; CREATE_DNS_ZONE="true"
+  _hint "Let's Encrypt registers an account under this email and sends expiry notices to it."
+  while true; do
+    _ask "Email for the Let's Encrypt account" ""
+    _valid_email "$_REPLY" && break
+    _red "  ERROR: must be an email address."; echo
+  done
+  LE_EMAIL="$_REPLY"
+  _hint "After make apply, delegate the zone's NS records at your registrar, then set"
+  _hint "ingress_ip in terraform.tfvars to the IP make status shows and run make apply again."
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Non-interactive — the profile's defaults, no prompts
+# ═══════════════════════════════════════════════════════════════════════════
+# Every flag value lands inside a double-quoted HCL string, so each is matched
+# against an allow-list here; ${ in a value would be Terraform interpolation.
+_run_noninteractive() {
+  local name_errors name_error_line
+  case "${_ARG_PROFILE:-dev}" in
+    dev|prod) PROFILE="${_ARG_PROFILE:-dev}" ;;
+    *)        _die "--profile must be dev or prod." 2 ;;
+  esac
+  _apply_profile_defaults
+
+  SUBSCRIPTION_ID="$_ARG_SUBSCRIPTION"
+  if [[ -z "$SUBSCRIPTION_ID" ]] && command -v az &>/dev/null; then
+    SUBSCRIPTION_ID=$(az account show --query id --output tsv 2>/dev/null) || SUBSCRIPTION_ID=""
+  fi
+  [[ "$SUBSCRIPTION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
+    || _die "no subscription ID: pass --subscription <GUID>, or run az login first." 2
+
+  LOCATION="${_ARG_LOCATION:-$LOCATION}"
+  [[ "$LOCATION" =~ ^[a-z0-9]+$ ]] || _die "--location must be an Azure region name, e.g. eastus." 2
+
+  # Same rule and "none" sentinel as section 2.
+  NAME_PREFIX="${_ARG_NAME:-$PROFILE}"
+  if [[ "$NAME_PREFIX" == "none" ]]; then
+    NAME_PREFIX=""
+  elif ! [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
+    _die "--name must be lowercase alphanumerics separated by single hyphens, or \"none\"." 2
+  fi
+  _derive_names
+  name_errors="$(_name_length_errors)"
+  if [[ -n "$name_errors" ]]; then
+    while IFS= read -r name_error_line; do
+      { _red "  ERROR: $name_error_line"; echo; } >&2
+    done <<< "$name_errors"
+    _die "shorten --name." 2
+  fi
+
+  if [[ -n "$_ARG_DOMAIN" ]]; then
+    [[ -z "$_ARG_DNS_LABEL" ]] || _die "--dns-label and --domain are alternatives; pass one." 2
+    _valid_domain "$_ARG_DOMAIN" \
+      || _die "--domain must be a lowercase hostname, e.g. langsmith.example.com." 2
+    _valid_email "$_ARG_EMAIL" \
+      || _die "--domain needs --email <address> for the Let's Encrypt account." 2
+    # Section 6's answers for a custom domain on HTTP-01, zone included.
+    TLS_SOURCE="letsencrypt"
+    LANGSMITH_DOMAIN="$_ARG_DOMAIN"
+    LE_EMAIL="$_ARG_EMAIL"
+    CREATE_DNS_ZONE="true"
+    DNS_LABEL=""
+  else
+    [[ -z "$_ARG_EMAIL" ]] || _die "--email is the Let's Encrypt account for --domain; pass both or neither." 2
+    TLS_SOURCE="none"
+    DNS_LABEL="${_ARG_DNS_LABEL:-langsmith${NAME_PREFIX:+-$NAME_PREFIX}}"
+    [[ "$DNS_LABEL" =~ ^[a-z][a-z0-9-]{1,61}[a-z0-9]$ ]] \
+      || _die "--dns-label must be 3-63 lowercase letters, digits and hyphens, starting with a letter." 2
+  fi
+
+  echo ""
+  printf "  Profile $(_green "$PROFILE") · subscription $(_cyan "$SUBSCRIPTION_ID") · region $(_cyan "$LOCATION")\n"
+  if [[ -n "$LANGSMITH_DOMAIN" ]]; then
+    printf "  HTTPS at $(_cyan "$LANGSMITH_DOMAIN") (Let's Encrypt HTTP-01, Azure DNS zone)\n"
+    _hint "After make apply, delegate the zone's NS records at your registrar, then set"
+    _hint "ingress_ip in terraform.tfvars to the IP make status shows and run make apply again."
+  else
+    printf "  HTTP at $(_cyan "${DNS_LABEL}.${LOCATION}.$(_azure_cloudapp_suffix)")\n"
+    _hint "The DNS label must be unique across the region. If apply reports"
+    _hint "DnsRecordCreateConflict, set another with --dns-label or dns_label in terraform.tfvars."
+    if [[ "$PROFILE" == "prod" ]]; then
+      _yellow "  WARNING"; printf ": Running production without TLS is not recommended. Pass --domain and --email.\n"
+    fi
+  fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Startup — resume an interrupted run, or seed from an existing tfvars
 # ═══════════════════════════════════════════════════════════════════════════
 # Runs here, after every section default has been initialized above, so loaded
@@ -1571,6 +1798,18 @@ SECTION=1
 # the checkpoint is read so a resumed run keeps its answer, and true by default
 # so an older checkpoint does not delete them.
 PRESERVE_UNKNOWN="true"
+
+# --yes writes new deployments only: editing a tfvars or finishing a checkpoint
+# means choosing which answers to keep, which is the interactive path. Refusing
+# both here also keeps the two prompting blocks below from firing.
+if [[ "$NONINTERACTIVE" == "true" ]]; then
+  for _f in "$OUTPUT" "$STATE_FILE"; do
+    if [[ -f "$_f" ]]; then
+      _die "$_f already exists. --yes writes a new deployment only; run make quickstart without it, or move the file aside."
+    fi
+  done
+  SECTION=$((TOTAL_SECTIONS + 1))
+fi
 
 if [[ -f "$STATE_FILE" ]]; then
   echo ""
@@ -1640,6 +1879,29 @@ fi
 
 _resolve_azure_environment
 _gov_redis_in_cluster
+# After the cloud is resolved, which the DNS suffix and the Redis rule read.
+if [[ "$NONINTERACTIVE" == "true" ]]; then
+  _run_noninteractive
+fi
+
+# A new deployment, including a fresh start over an old file, defaults to quick
+# setup. A resumed run and an edited tfvars already hold answers, so they walk
+# the sections. Quick setup writes no checkpoint until the review screen: it is
+# a handful of prompts, and a checkpoint from the middle of it would resume into
+# the full sections.
+if [[ "$NONINTERACTIVE" != "true" && -z "$ANSWERED" ]]; then
+  echo ""
+  _hint "Quick setup asks for the profile, subscription, name, region, and an optional"
+  _hint "domain, and takes the profile's defaults for networking, AKS, ingress, backend"
+  _hint "services, Key Vault, sizing, and add-ons. The review screen opens any of the 10"
+  _hint "sections before anything is written."
+  if _ask_yn "Use quick setup? (n walks through all 10 sections)" "y"; then
+    _run_section_1;       _mark_answered 1
+    _run_section_2 quick; _mark_answered 2
+    _ask_quick_domain
+    SECTION=$((TOTAL_SECTIONS + 1))
+  fi
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Run sections — Enter advances, b goes back, r jumps to review, q saves & quits
@@ -1678,7 +1940,9 @@ done
 # Review loop — show summary, let user redo any section
 # ═══════════════════════════════════════════════════════════════════════════
 
-while true; do
+while [[ "$NONINTERACTIVE" != "true" ]]; do
+  # Every pass, so a profile changed here moves the sections nobody answered.
+  _apply_profile_defaults
   echo ""
   printf "${BOLD}══════════════════════════════════════════════════════${RESET}\n"
   printf "${BOLD}  Review your configuration${RESET}\n"
@@ -2093,8 +2357,8 @@ printf "     ${CYAN}make init && make apply${RESET}\n"
 # kubernetes_manifest is left in the config, which is in flux.
 printf "     ${DIM}apply runs in three stages and asks you to confirm each plan.${RESET}\n"
 echo ""
-printf "  5. Get cluster credentials + create K8s secrets:\n"
-printf "     ${CYAN}make kubeconfig && make k8s-secrets${RESET}\n"
+printf "  5. Seed app secrets into Key Vault, get cluster credentials + create K8s secrets:\n"
+printf "     ${CYAN}make seed-secrets && make kubeconfig && make k8s-secrets${RESET}\n"
 echo ""
 printf "  6. Generate Helm values + deploy LangSmith (~10 min):\n"
 printf "     ${CYAN}make init-values && make deploy${RESET}\n"

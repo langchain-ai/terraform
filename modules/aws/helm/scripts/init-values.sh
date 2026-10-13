@@ -266,8 +266,8 @@ _tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
 # Fail fast rather than let this surface later as a CreateContainerConfigError.
 # apply-eso.sh gates the whole oauth block (client id/secret/issuer url) behind
 # a single existence check on oauth-client-secret and silently skips syncing
-# any of them if it's missing — but this script unconditionally disables
-# basicAuth the moment enable_sso_oidc is true, regardless of SSM state. With
+# any of them if it's missing — but the SSO values file disables basicAuth
+# whenever enable_sso_oidc is true, regardless of SSM state. With
 # no admin login path and secretKeyRef optional: false on the missing key,
 # backend/platformBackend would otherwise just fail to start with no message
 # pointing back at the actual cause.
@@ -302,6 +302,18 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
     echo "         ./infra/scripts/manage-ssm.sh set oauth-issuer-url '<value>'" >&2
     exit 1
   fi
+fi
+
+# The SSO overlay is a fixed file, kept out of the generated overrides so turning SSO on never rewrites them.
+_sso_file="$VALUES_DIR/langsmith-values-sso.yaml"
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  if [[ ! -f "$_sso_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-sso.yaml" "$_sso_file"
+    echo "  Created: langsmith-values-sso.yaml"
+  else
+    echo "  Existing: langsmith-values-sso.yaml"
+  fi
+  echo "  ✔ SSO login"
 fi
 
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
@@ -825,25 +837,6 @@ config:
   # for ingress/HTTPRoute/VirtualService host matching.
   hostname: "${_protocol}://${HOSTNAME}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
-$( [[ "$_enable_sso_oidc" == "true" ]] && cat <<'OAUTH'
-  # Client id/secret/issuer URL come from the ESO-synced langsmith-config secret
-  # (SSM: oauth-client-id, oauth-client-secret, oauth-issuer-url) — apply-eso.sh
-  # only adds those secretKeys when present in SSM. authType is already "mixed"
-  # in the base values file, which this requires for a client secret. Works
-  # with any standard OIDC provider (Entra ID, Okta, Auth0, Google Workspace,
-  # etc.) — nothing here is Entra-specific.
-  # Chart validation rejects basicAuth and oauth both enabled, so SSO-only.
-  # WARNING: only set enable_sso_oidc = true after the initial install —
-  # confirm org-admin login with basic auth first. Enabling this before an
-  # admin account exists locks you out of the UI the moment basicAuth is
-  # disabled below. Set up SCIM (if you're using it) after this, not
-  # before — SCIM's user matching depends on the OIDC provider this creates.
-  basicAuth:
-    enabled: false
-  oauth:
-    enabled: true
-OAUTH
-)
   deployment:
     # URL used by the operator to build agent deployment endpoints.
     # Must match config.hostname with correct protocol — wrong value keeps

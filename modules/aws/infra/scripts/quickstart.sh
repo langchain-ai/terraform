@@ -943,6 +943,8 @@ ALB_LOGS="$(_existing "alb_access_logs_enabled" "false")"
 CREATE_CLOUDTRAIL="$(_existing "create_cloudtrail" "false")"
 CREATE_WAF="$(_existing "create_waf" "false")"
 CREATE_FIREWALL="$(_existing "create_firewall" "false")"
+# No SSO question: `make sso` turns it on after checking its prerequisites, so keep the existing value instead of dropping it.
+ENABLE_SSO_OIDC="$(_existing "enable_sso_oidc" "false")"
 [[ "$CREATE_VPC" == "false" ]] && CREATE_FIREWALL="false"
 
 if [[ "$PROFILE" == "prod" ]]; then
@@ -1287,6 +1289,7 @@ _show_summary() {
   _summary_bool_row "WAF:" "$CREATE_WAF"
   _summary_bool_row "Network Firewall:" "$CREATE_FIREWALL"
   _summary_bool_row "Bastion:" "$CREATE_BASTION"
+  _summary_bool_row "SSO login:" "$ENABLE_SSO_OIDC"
 
   _summary_section "11. S3 Data Retention"
   _summary_bool_row "S3 TTL:" "$S3_TTL"
@@ -1494,6 +1497,7 @@ create_cloudtrail       = ${CREATE_CLOUDTRAIL}
 create_waf              = ${CREATE_WAF}
 create_firewall         = ${CREATE_FIREWALL}
 create_bastion          = ${CREATE_BASTION}
+enable_sso_oidc         = ${ENABLE_SSO_OIDC}
 
 #------------------------------------------------------------------------------
 # S3 Data Retention

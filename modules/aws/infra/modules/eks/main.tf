@@ -1,3 +1,46 @@
+data "aws_region" "current" {}
+
+locals {
+  custom_networking = length(var.pod_subnet_ids_by_az) > 0
+
+  # Custom networking owns the vpc-cni add-on, so a vpc-cni entry in eks_addons
+  # moves here instead of going to the Blueprints add-on, where it would be a
+  # second aws_eks_addon for the same add-on. Its settings carry over, and its
+  # configuration_values are merged with the custom networking ones, so prefix
+  # delegation or warm-pool tuning keeps working. Blueprints spells the conflict
+  # policy resolve_conflicts; the upstream module splits it in two.
+  user_vpc_cni        = try(var.eks_addons["vpc-cni"], {})
+  user_vpc_cni_config = try(jsondecode(local.user_vpc_cni.configuration_values), {})
+  vpc_cni_addon = merge(
+    { for k, v in local.user_vpc_cni : k => v if !contains(["configuration_values", "resolve_conflicts"], k) },
+    can(local.user_vpc_cni.resolve_conflicts) ? {
+      resolve_conflicts_on_create = local.user_vpc_cni.resolve_conflicts
+      resolve_conflicts_on_update = local.user_vpc_cni.resolve_conflicts
+    } : {},
+    {
+      # Create the add-on without waiting for compute. Node groups wait only on
+      # dataplane_wait_duration, not on this add-on, so that wait is what gives
+      # the CNI time to be configured before nodes join. Nodes that joined
+      # without it keep pod IPs in the node subnets until they are replaced.
+      before_compute = true
+      configuration_values = jsonencode(merge(local.user_vpc_cni_config, {
+        env = merge(try(local.user_vpc_cni_config.env, {}), {
+          AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG = "true"
+          ENI_CONFIG_LABEL_DEF               = "topology.kubernetes.io/zone"
+        })
+        # One ENIConfig per AZ, named after the AZ. securityGroups is omitted,
+        # so pod ENIs carry the node security group and every rule that admits
+        # nodes (the ALB target rules included) admits pods too.
+        eniConfig = {
+          create  = true
+          region  = data.aws_region.current.name
+          subnets = { for az, id in var.pod_subnet_ids_by_az : az => { id = id } }
+        }
+      }))
+    },
+  )
+}
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.37.2"
@@ -26,6 +69,11 @@ module "eks" {
     })
   }
 
+  cluster_addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
+  # 30s is the upstream default. Custom networking waits longer so the vpc-cni
+  # add-on is active before the first nodes join.
+  dataplane_wait_duration = local.custom_networking ? "2m" : "30s"
+
   tags = var.tags
 }
 
@@ -43,8 +91,6 @@ module "irsa-ebs-csi" {
   provider_url                  = module.eks.oidc_provider
   role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
-
-  depends_on = [module.eks]
 }
 
 # Create the EBS CSI Driver addon for volume provisioning.
@@ -92,9 +138,12 @@ module "eks_blueprints_addons" {
   # interruption queue. The SmithDB NodePools/EC2NodeClasses are created in the
   # infra root.
   enable_karpenter = var.enable_karpenter
-  karpenter = {
-    chart_version = var.karpenter_chart_version
-  }
+  karpenter = merge(
+    { chart_version = var.karpenter_chart_version },
+    # The primary ENI holds no pod IPs under custom networking, so Karpenter must
+    # leave it out of the max-pods calculation or it overcommits every node.
+    local.custom_networking ? { set = [{ name = "settings.reservedENIs", value = "1" }] } : {},
+  )
   # Stable node IAM role name (referenced by the SmithDB EC2NodeClass). The
   # controller itself runs on the core managed node group — SmithDB nodes are
   # tainted, so it never lands there.
@@ -108,9 +157,13 @@ module "eks_blueprints_addons" {
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
-  eks_addons = var.eks_addons
+  # One filter rather than a conditional: the two branches of a conditional are
+  # objects with different attributes, and differently shaped add-ons fail to
+  # unify into one type even when custom networking is off.
+  eks_addons = { for k, v in var.eks_addons : k => v if !(local.custom_networking && k == "vpc-cni") }
 
-  depends_on = [module.eks]
+  # Waits for node groups without a module-level depends_on, which defers this module's data sources and replaces (detaches) the Karpenter node role's policy attachments whenever module.eks changes.
+  create_delay_dependencies = [for ng in module.eks.eks_managed_node_groups : ng.node_group_arn]
 }
 
 # Karpenter node role access entry. The eks-blueprints add-on creates the

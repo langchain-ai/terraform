@@ -146,6 +146,7 @@ aws/
     ├── scripts/
     │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
     │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
+    │   ├── sso.sh                  ← Turn on SSO login after a working password install (make sso)
     │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
     │   ├── preflight-check.sh      ← Pre-deploy validation
     │   └── uninstall.sh            ← Helm uninstall + cleanup
@@ -261,6 +262,65 @@ terraform {
 
 ---
 
+## Pod networking
+
+By default each pod gets an IP address from its node's subnet, so the private
+subnets must hold an address for every pod as well as every node. To move pods
+onto dedicated pod subnets instead (VPC CNI custom networking), set:
+
+```hcl
+eks_network_mode = "custom-networking"
+eks_pod_cidr     = "100.64.0.0/16"   # default; create_vpc = true only
+```
+
+With `create_vpc = true`, Terraform adds `eks_pod_cidr` to the VPC as a
+secondary CIDR and splits it into one pod subnet per AZ (a /18 each from the
+default /16). The pod subnets carry only local routes. Traffic from a pod to a
+destination outside the VPC leaves with the node's IP address through the
+private subnet's NAT route.
+
+With `create_vpc = false`, create the pod subnets yourself and pass their IDs:
+
+```hcl
+eks_network_mode   = "custom-networking"
+eks_pod_subnet_ids = ["subnet-0aaa", "subnet-0bbb", "subnet-0ccc"]
+```
+
+Supply one pod subnet per AZ in `vpc_id`, covering every AZ that
+`private_subnets` and `public_subnets` are in. The plan fails if two pod
+subnets share an AZ, a pod subnet is in another VPC, or a cluster AZ has no
+pod subnet.
+
+Pod IPs stay routable VPC addresses, so the ALB still targets pods directly.
+Terraform adds the pod CIDRs to the ingress rules on the RDS and ElastiCache
+security groups and to the ALB's ingress and egress rules, so in-cluster
+callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configures the `vpc-cni`
+add-on with one ENIConfig per AZ and holds node group creation for two minutes
+after the cluster is active, so the add-on is configured before the first
+nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
+into that add-on. When `enable_smithdb = true`, it also sets Karpenter's
+`settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
+node's primary ENI.
+
+Choose the mode at cluster creation. Switching an existing cluster changes the
+add-on configuration only: nodes that joined before the switch keep their pod
+IPs in the node subnets until you replace them. If the cluster already sets
+`eks_addons["vpc-cni"]`, move that add-on's state before the first apply in
+the new mode, or the apply tries to create a second `vpc-cni` add-on next to
+the existing one:
+
+```bash
+terraform state mv \
+  'module.eks.module.eks_blueprints_addons.aws_eks_addon.this["vpc-cni"]' \
+  'module.eks.module.eks.aws_eks_addon.before_compute["vpc-cni"]'
+```
+
+Switching back to `node-subnet` does not turn custom networking off. Terraform
+removes the add-on with `preserve = true`, so the CNI keeps its custom
+networking settings. Treat the mode as fixed for the life of the cluster.
+
+---
+
 ## Bring your own security groups
 
 By default, every module that needs one creates a dedicated security group: ALB,
@@ -285,11 +345,14 @@ Each is independent: supply one, some, or all of them. Leave a variable unset
 
 For every component above, a supplied security group is **attach-only**. Terraform
 associates it with the resource but never writes an ingress or egress rule onto
-it. The group must already allow what that component needs before you apply:
+it. The group must already allow what that component needs before you apply.
+With `eks_network_mode = "custom-networking"`, every "VPC CIDR" rule in the
+table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
+`eks_pod_subnet_ids`):
 
 | Component | Your security group must allow |
 |-----------|-------------------------------|
-| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks`. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
+| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
 | Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
 | Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
 | Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |
@@ -790,6 +853,28 @@ The optional keys are dynamically included — `apply-eso.sh` probes SSM for eac
 
 ---
 
+### `make sso`
+
+**When to use:** Once the install works with password login and the org admin can log in, to switch to SSO through any OIDC provider (Entra ID, Okta, Auth0, Google Workspace, etc.).
+
+**One-way:** LangSmith does not support moving a self-hosted install from SSO back to password login.
+
+Runs `helm/scripts/sso.sh`. It stops with a clear message at the first check that fails, and changes `terraform.tfvars` only after all checks pass:
+
+1. Reads `name_prefix`, `environment`, and `region`, and requires the deployed hostname in `langsmith-values-overrides.yaml` to use HTTPS; LangSmith SSO only works over HTTPS.
+2. Checks AWS credentials, points kubectl at this deployment's cluster (as `deploy.sh` does), and checks the Helm release is deployed.
+3. Asks you to confirm the org admin can log in, and that the same email exists in your identity provider.
+4. Prints the redirect URI to register in your identity provider: `https://<host>/api/v1/oauth/custom-oidc/callback`.
+5. Checks SSM for `oauth-client-id`, `oauth-client-secret`, and `oauth-issuer-url`, and asks for any that are missing (the secret is typed hidden).
+6. Checks the issuer URL serves an OIDC discovery document.
+7. Runs `apply-eso.sh` and checks `langsmith-config` has the three OIDC keys.
+8. Sets `enable_sso_oidc = true` in `terraform.tfvars`, changing only that line.
+9. Copies `helm/values/examples/langsmith-values-sso.yaml` to `helm/values/` if it is not there yet, then asks before running `make deploy`.
+
+It never runs `init-values.sh`, so `langsmith-values-overrides.yaml` is not rewritten. `deploy.sh` layers `langsmith-values-sso.yaml` whenever `enable_sso_oidc = true`, and stops if that file is missing, or if SSO is already on in the cluster but `enable_sso_oidc` is not true, rather than deploying with password login.
+
+---
+
 ### `make status`
 
 **When to use:** At any point to check where you are in the deployment process.
@@ -989,6 +1074,9 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |
+| `eks_network_mode` | `node-subnet` | no | `node-subnet` or `custom-networking` (pods on dedicated pod subnets). See [pod networking](#pod-networking) |
+| `eks_pod_cidr` | `100.64.0.0/16` | no | Secondary VPC CIDR split into the pod subnets (custom networking with `create_vpc = true`) |
+| `eks_pod_subnet_ids` | `[]` | when custom networking and !create_vpc | Existing pod subnet IDs, one per cluster AZ |
 | `create_gp3_storage_class` | `true` | no | Create and set gp3 as default StorageClass |
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |

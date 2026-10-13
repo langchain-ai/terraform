@@ -273,6 +273,30 @@ run "a_default_route_to_none_is_refused" {
   expect_failures = [terraform_data.aks_outbound_guard]
 }
 
+# aks_network_owner_checks = false: the route table is not read at all (no
+# read permission needed), so a default route AKS would refuse no longer stops
+# the plan; Azure checks it at create.
+run "network_owner_checks_off_skips_the_route_table_read" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_route_table.byo_aks_subnet
+    values = {
+      route = [{ name = "default", address_prefix = "0.0.0.0/0", next_hop_type = "None", next_hop_in_ip_address = "" }]
+    }
+  }
+
+  variables {
+    aks_outbound_type        = "userDefinedRouting"
+    aks_network_owner_checks = false
+  }
+
+  assert {
+    condition     = length(data.azurerm_route_table.byo_aks_subnet) == 0
+    error_message = "aks_network_owner_checks = false still read the subnet's route table"
+  }
+}
+
 run "a_default_route_to_the_internet_is_refused" {
   command = plan
 
