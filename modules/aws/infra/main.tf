@@ -492,7 +492,7 @@ locals {
 locals {
   langsmith_s3_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid    = "S3Access"
         Effect = "Allow"
@@ -507,7 +507,12 @@ locals {
           "${module.storage.bucket_arn}/*",
         ]
       }
-    ]
+      ], var.s3_kms_key_arn != "" ? [{
+        Sid      = "S3Kms"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = var.s3_kms_key_arn
+    }] : [])
   })
 }
 

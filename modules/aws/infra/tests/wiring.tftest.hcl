@@ -880,6 +880,13 @@ run "no_customer_managed_keys_leaves_aws_managed_keys" {
     enable_smithdb = true
   }
 
+  # The S3 policy embeds the bucket ARN, which is unknown at plan without this.
+  override_resource {
+    target          = module.storage.aws_s3_bucket.bucket
+    override_during = plan
+    values          = { arn = "arn:aws:s3:::plantest-dev-langsmith" }
+  }
+
   assert {
     condition     = !strcontains(kubectl_manifest.smithdb_ec2nc_compute[0].yaml_body, "kmsKeyID")
     error_message = "with ebs_kms_key_arn unset, the SmithDB EC2NodeClass named a KMS key"
@@ -887,6 +894,10 @@ run "no_customer_managed_keys_leaves_aws_managed_keys" {
   assert {
     condition     = !strcontains(aws_iam_role_policy.eso_ssm[0].policy, "kms:")
     error_message = "with ssm_kms_key_arn unset, the ESO policy granted a KMS action"
+  }
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.langsmith_s3[0].policy, "kms:")
+    error_message = "with s3_kms_key_arn unset, the LangSmith S3 policy granted a KMS action"
   }
 }
 
@@ -906,11 +917,22 @@ run "customer_managed_keys_reach_every_resource" {
     ebs_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/mrk-0123456789abcdef0123456789abcdef"
     eks_secrets_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ae"
     ssm_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789af"
+    s3_kms_key_arn                   = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789b0"
+  }
+
+  override_resource {
+    target          = module.storage.aws_s3_bucket.bucket
+    override_during = plan
+    values          = { arn = "arn:aws:s3:::plantest-dev-langsmith" }
   }
 
   assert {
     condition     = strcontains(aws_iam_role_policy.eso_ssm[0].policy, var.ssm_kms_key_arn)
     error_message = "the ESO policy does not grant kms:Decrypt on ssm_kms_key_arn"
+  }
+  assert {
+    condition     = strcontains(aws_iam_role_policy.langsmith_s3[0].policy, var.s3_kms_key_arn)
+    error_message = "the LangSmith S3 policy does not grant the use of s3_kms_key_arn"
   }
 
   assert {

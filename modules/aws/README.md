@@ -495,6 +495,7 @@ ssm_kms_key_arn         = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
 
 - Set the RDS, ElastiCache, and EKS keys before the first apply. Each service takes its key at creation, so setting or changing one later replaces the database, the cache, or the cluster. Replacing the cluster also schedules the key the EKS module created for deletion.
 - Setting `ebs_kms_key_arn` rolls the managed node groups onto new launch templates and replaces the `gp3` storage class. Existing volumes keep their key.
+- Terraform grants the LangSmith and SmithDB IRSA roles `kms:Decrypt` and `kms:GenerateDataKey` on the S3 key.
 - Terraform grants the EBS CSI driver and Karpenter the use of the EBS key, and the EKS module grants the cluster role the use of the secrets key. A role you supply through `existing_iam_role_arns` needs the same access from your IAM team.
 - A parameter keeps the key it was written with until a script writes it again. The identity running the scripts needs `kms:Encrypt` and `kms:Decrypt` on the SSM key. Terraform grants the External Secrets Operator role `kms:Decrypt` on it.
 - The EBS key policy must let the `AWSServiceRoleForAutoScaling` service-linked role use the key and create grants on it, because that role launches the managed node group instances. A service-linked role takes no IAM policies, so only the key policy can grant this.
