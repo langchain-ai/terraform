@@ -178,7 +178,10 @@ warning: a nonzonal pool with SmithDB enabled gets a cache StorageClass no pod
 can bind to. Re-zoning means rebuilding the pool. With SmithDB on, plan also
 refuses an `additional_node_pools` entry that sets `zones = []`: SmithDB's
 components carry no `nodeSelector` by default, so a regional pool can receive
-them.
+them. That refusal reads the requested zones, not the live ones. An additional
+pool created regional before `availability_zones` reached additional pools, the
+default `large` pool included, passes it, and only the drift warning names it.
+Replace such a pool with a zonal one before turning SmithDB on.
 
 ## Pre-apply review
 

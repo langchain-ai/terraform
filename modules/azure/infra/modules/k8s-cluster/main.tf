@@ -800,7 +800,12 @@ check "aks_additional_node_pool_zone_drift" {
       "move the workloads to it, or drop zones from the ignore_changes block of ",
       "azurerm_kubernetes_cluster_node_pool.node_pool in ",
       "modules/k8s-cluster/main.tf and apply during a maintenance window, ",
-      "which rotates each pool named above and drains every node on it.",
+      "which rotates each pool named above and drains every node on it. To ",
+      "keep a regional pool as it is and silence this, set zones = [] on its ",
+      "additional_node_pools entry. For the default large pool, that means ",
+      "copying its default entry from variables.tf into additional_node_pools ",
+      "and adding zones = []. With SmithDB on, plan refuses zones = [], and the ",
+      "pool has to be replaced with a zonal one.",
     ])
   }
 }

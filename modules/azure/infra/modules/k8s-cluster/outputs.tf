@@ -165,7 +165,7 @@ output "node_pool_os_skus" {
 }
 
 output "node_pool_zones" {
-  description = "Availability zones each additional node pool is planned or created with, keyed by pool name. null for a regional pool."
+  description = "Availability zones each additional node pool is planned or created with, keyed by pool name. Empty for a regional pool, and null in the plan that creates one."
   value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.zones }
 }
 

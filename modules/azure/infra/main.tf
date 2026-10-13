@@ -958,12 +958,15 @@ resource "terraform_data" "validate_network" {
     # The rule above covers the default pool. An additional pool that sets
     # zones = [] is regional under a zoned availability_zones, and SmithDB's
     # components carry no nodeSelector by default, so they can land on it,
-    # where a Premium SSD v2 cache volume cannot attach. Refuse that too.
+    # where a Premium SSD v2 cache volume cannot attach. Refuse that too. This
+    # reads the requested zones, not the live ones: a pool created regional
+    # before availability_zones reached additional pools passes, and
+    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
     precondition {
       condition = !var.enable_smithdb || alltrue([
         for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
       ])
-      error_message = "enable_smithdb = true requires every node pool Terraform manages to be zonal, and these additional_node_pools entries set zones = []: ${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+      error_message = "enable_smithdb = true refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips
