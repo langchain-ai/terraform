@@ -192,7 +192,7 @@ locals {
   # - the tier replicas of each component (smithdb_replicas);
   # - one surge copy of the largest pod (a rolling update starts the new pod first);
   # - an Auth Proxy sidecar per pod when the proxy is on;
-  # - with the backfill, the migration Job and the taskdb.
+  # - with the backfill, each migration pod (smithdb_migration_parallelism) and the taskdb.
   # HPA scale-out above the tier replicas has only the surge room.
   # CPU is in millicores and memory in MiB, so the sums are exact.
   #----------------------------------------------------------------------------
@@ -236,7 +236,7 @@ locals {
     for k in local.smithdb_quota_keys : k => (
       sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * (local.smithdb_quota_numbers[c][k] + local.smithdb_quota_sidecar[k])]) +
       max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) + local.smithdb_quota_sidecar[k] +
-      (var.smithdb_migration_enabled ? local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_sidecar[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
+      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * (local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_sidecar[k]) + local.smithdb_quota_numbers.taskdb[k] : 0)
     )
   }
 
@@ -250,11 +250,11 @@ locals {
   ) : 0
 
   # The SmithDB pods at the tier replicas plus the metastore migration hook,
-  # doubled for rolling-update surge. The backfill adds 8 for the migration Job
-  # and its taskdb StatefulSet. With one replica each, this gives 12, or 20
-  # with the backfill.
+  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
+  # and its taskdb StatefulSet, plus 1 for each further migration pod. With one
+  # replica each and one migration pod, this gives 12, or 20 with the backfill.
   smithdb_quota_extra_pods = var.enable_smithdb ? (
-    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 8 : 0)
+    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
   ) : 0
 
   #----------------------------------------------------------------------------

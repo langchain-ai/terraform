@@ -15,7 +15,7 @@
 
 .PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
-        init-values deploy apply-eso uninstall clean deploy-all \
+        init-values deploy apply-eso sso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
@@ -149,6 +149,9 @@ deploy: ## Deploy LangSmith via Helm
 
 apply-eso: ## Re-apply ESO ClusterSecretStore + ExternalSecret (no Helm redeploy)
 	$(HELM_DIR)/scripts/apply-eso.sh
+
+sso: ## Turn on SSO (OIDC) login after a working password install — one-way
+	$(HELM_DIR)/scripts/sso.sh
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
