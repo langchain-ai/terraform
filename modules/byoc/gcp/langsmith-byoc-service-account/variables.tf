@@ -36,7 +36,7 @@ variable "enable_apis" {
 }
 
 variable "custom_role_id_prefix" {
-  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser)."
+  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager)."
   type        = string
   default     = "langsmithByoc"
 
@@ -44,4 +44,10 @@ variable "custom_role_id_prefix" {
     condition     = can(regex("^[a-zA-Z0-9_.]{3,40}$", var.custom_role_id_prefix))
     error_message = "custom_role_id_prefix must be 3 to 40 letters, digits, underscores or periods."
   }
+}
+
+variable "byo_iam" {
+  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Set it before you create data planes in the project."
+  type        = bool
+  default     = false
 }
