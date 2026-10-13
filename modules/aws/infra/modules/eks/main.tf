@@ -151,6 +151,9 @@ module "eks_blueprints_addons" {
   cluster_version   = module.eks.cluster_version
   oidc_provider_arn = module.eks.oidc_provider_arn
 
+  # The upstream default tag. Null skips its empty CloudFormation stack.
+  observability_tag = var.create_blueprints_telemetry ? "qs-1ubotj5kl" : null
+
   enable_aws_load_balancer_controller = true
   # Disable the ALB controller's cluster-wide Service mutating webhook
   # (mservice.elbv2.k8s.aws). This module uses ALB Ingress + TargetGroupBinding,

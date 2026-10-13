@@ -462,6 +462,14 @@ creates, so they start with a placeholder trust policy:
    set each policy as the trust policy of the role with the same key.
 3. Restart the pods that use those roles.
 
+EKS Blueprints also creates an empty CloudFormation stack named
+`<base>-eks-<hex>` that AWS uses to count Blueprints deployments. To deploy
+without granting the deployer CloudFormation permissions, skip it:
+
+```hcl
+create_eks_blueprints_telemetry_stack = false
+```
+
 ---
 
 ## Pass 1 — Infrastructure
@@ -1162,6 +1170,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
+| `create_eks_blueprints_telemetry_stack` | `true` | no | Create the EKS Blueprints usage-telemetry CloudFormation stack |
 | `existing_iam_role_arns` | `{}` | no | Roles your IAM team created, used instead of creating them. See [IAM permissions boundary, path, and role names](#iam-permissions-boundary-path-and-role-names) |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |

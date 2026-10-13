@@ -128,6 +128,8 @@ region = "us-west-2"
 # existing_iam_role_arns = {
 #   eso = "arn:aws:iam::<account-id>:role/<base>-eso"
 # }
+# Skip the EKS Blueprints telemetry stack, so the deployer needs no CloudFormation access.
+# create_eks_blueprints_telemetry_stack = false
 
 #------------------------------------------------------------------------------
 # NETWORKING — VPC configuration

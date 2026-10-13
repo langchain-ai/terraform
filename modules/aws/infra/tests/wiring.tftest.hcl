@@ -679,3 +679,13 @@ run "in_cluster_fleet_storage_plans_no_shared_credentials" {
     error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
   }
 }
+
+# The stack sits inside the Blueprints module, out of an assert's reach, so this
+# run proves only that the null tag plans.
+run "eks_blueprints_telemetry_stack_can_be_skipped" {
+  command = plan
+
+  variables {
+    create_eks_blueprints_telemetry_stack = false
+  }
+}

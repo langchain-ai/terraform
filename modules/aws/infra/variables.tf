@@ -649,6 +649,12 @@ variable "existing_iam_role_arns" {
   }
 }
 
+variable "create_eks_blueprints_telemetry_stack" {
+  type        = bool
+  description = "Create the empty CloudFormation stack EKS Blueprints uses to count deployments. Set false to skip it, so the deployer needs no CloudFormation permissions."
+  default     = true
+}
+
 # IRSA (IAM Roles for Service Accounts) settings
 variable "create_langsmith_irsa_role" {
   type        = bool

@@ -289,6 +289,7 @@ module "eks" {
   iam_role_path                   = var.iam_role_path
   iam_role_name_prefix            = var.prefix_iam_role_names ? local.base_name : null
   existing_iam_role_arns          = var.existing_iam_role_arns
+  create_blueprints_telemetry     = var.create_eks_blueprints_telemetry_stack
 }
 
 # State migration: adding count changes the module address.

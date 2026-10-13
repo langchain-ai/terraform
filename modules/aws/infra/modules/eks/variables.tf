@@ -165,3 +165,9 @@ variable "existing_iam_role_arns" {
   description = "ARNs of roles to use instead of creating them. Each one set skips creating that role, and no policies are attached to it."
   default     = {}
 }
+
+variable "create_blueprints_telemetry" {
+  type        = bool
+  description = "Create the EKS Blueprints usage-telemetry CloudFormation stack."
+  default     = true
+}
