@@ -106,7 +106,7 @@ _ctx=$(kubectl config current-context 2>/dev/null) || _ctx=""
 if [[ -z "$_ctx" ]]; then
   echo "ERROR: no active kubectl context, and no cluster resolvable from Terraform." >&2
   echo "       Point kubectl at the target cluster first:" >&2
-  echo "         aws eks update-kubeconfig --name <cluster> --region <region>" >&2
+  echo "         source infra/scripts/set-kubeconfig.sh" >&2
   exit 1
 fi
 echo "  Active context: $_ctx"
