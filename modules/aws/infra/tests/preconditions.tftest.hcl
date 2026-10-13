@@ -478,6 +478,17 @@ run "external_smithdb_metastore_without_connection_details_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+run "smithdb_subnet_selector_with_a_created_vpc_is_rejected" {
+  command = plan
+
+  variables {
+    enable_smithdb                    = true
+    smithdb_karpenter_subnet_selector = { "smithdb" = "true" }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 run "smithdb_integration_gates_without_smithdb_are_rejected" {
   command = plan
 

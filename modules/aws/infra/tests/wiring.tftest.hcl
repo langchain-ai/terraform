@@ -827,3 +827,48 @@ run "an_existing_s3_endpoint_replaces_the_created_one" {
     error_message = "the bucket policy does not admit the existing S3 endpoint"
   }
 }
+
+run "byo_vpc_smithdb_tags_the_private_subnets" {
+  command = plan
+
+  variables {
+    create_vpc      = false
+    vpc_id          = "vpc-00000000000000001"
+    vpc_cidr_block  = "10.0.0.0/16"
+    private_subnets = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets  = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    enable_smithdb  = true
+  }
+
+  assert {
+    condition     = length(aws_ec2_tag.smithdb_karpenter_subnet) == 2
+    error_message = "with smithdb_karpenter_subnet_selector unset, SmithDB did not tag each BYO private subnet"
+  }
+  assert {
+    condition     = local.smithdb_karpenter_subnet_tags == tomap({ "karpenter.sh/discovery" = "plantest-dev-eks" })
+    error_message = "with smithdb_karpenter_subnet_selector unset, the EC2NodeClasses do not select the discovery tag"
+  }
+}
+
+run "byo_vpc_smithdb_subnet_selector_skips_the_tags" {
+  command = plan
+
+  variables {
+    create_vpc                        = false
+    vpc_id                            = "vpc-00000000000000001"
+    vpc_cidr_block                    = "10.0.0.0/16"
+    private_subnets                   = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets                    = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    enable_smithdb                    = true
+    smithdb_karpenter_subnet_selector = { "smithdb" = "true" }
+  }
+
+  assert {
+    condition     = length(aws_ec2_tag.smithdb_karpenter_subnet) == 0
+    error_message = "smithdb_karpenter_subnet_selector still tagged the BYO private subnets"
+  }
+  assert {
+    condition     = local.smithdb_karpenter_subnet_tags == tomap({ "smithdb" = "true" })
+    error_message = "the EC2NodeClasses do not select smithdb_karpenter_subnet_selector"
+  }
+}

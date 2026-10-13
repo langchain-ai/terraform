@@ -232,6 +232,11 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = var.create_vpc ? length(var.smithdb_karpenter_subnet_selector) == 0 : true
+      error_message = "smithdb_karpenter_subnet_selector applies only with create_vpc = false. A module-created VPC tags its own private subnets."
+    }
+
+    precondition {
       condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
       error_message = "SmithDB integration gates require enable_smithdb = true."
     }
@@ -283,7 +288,7 @@ module "vpc" {
 
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
-  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+  extra_private_subnet_tags = var.enable_smithdb ? local.smithdb_karpenter_discovery : {}
 
   pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
@@ -1284,6 +1289,10 @@ locals {
   # private subnets at creation via the vpc module's extra_private_subnet_tags).
   smithdb_karpenter_discovery = { "karpenter.sh/discovery" = local.cluster_name }
 
+  # A bring-your-own VPC can supply subnets it tagged itself, so Terraform
+  # makes no tag calls on them.
+  smithdb_karpenter_subnet_tags = length(var.smithdb_karpenter_subnet_selector) > 0 ? var.smithdb_karpenter_subnet_selector : local.smithdb_karpenter_discovery
+
   # Security groups are discovered by the EKS-managed cluster tag
   # (kubernetes.io/cluster/<cluster> = owned), which is stable and always present
   # on the cluster security group. We deliberately do NOT put karpenter.sh/discovery
@@ -1297,7 +1306,7 @@ locals {
 # Terraform-created VPC the tag is applied at creation via the vpc module's
 # extra_private_subnet_tags (above).
 resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
-  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
+  for_each = var.enable_smithdb && !var.create_vpc && length(var.smithdb_karpenter_subnet_selector) == 0 ? toset(var.private_subnets) : toset([])
 
   resource_id = each.value
   key         = "karpenter.sh/discovery"
@@ -1314,7 +1323,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
     spec = {
       amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
       role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_subnet_tags }]
       securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
       associatePublicIPAddress   = false
       # Karpenter RAID0s the local NVMe and points kubelet at it — no userdata.
@@ -1349,7 +1358,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
     spec = {
       amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
       role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_subnet_tags }]
       securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
       associatePublicIPAddress   = false
       metadataOptions = {

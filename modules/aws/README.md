@@ -1329,6 +1329,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_karpenter_subnet_selector` | `{}` | no | Tags on existing private subnets you tagged yourself for SmithDB nodes. Empty tags `private_subnets` with `karpenter.sh/discovery`. Only with `create_vpc = false`. See [SMITHDB.md](SMITHDB.md#select-the-subnets-for-smithdb-nodes) |
 | `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
 | `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
 | `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |

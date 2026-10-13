@@ -1413,6 +1413,12 @@ variable "smithdb_compute_sizes" {
   default     = ["2xlarge", "4xlarge", "8xlarge"]
 }
 
+variable "smithdb_karpenter_subnet_selector" {
+  type        = map(string)
+  description = "Tags that select the existing private subnets for SmithDB's Karpenter nodes, which you apply yourself. Empty tags var.private_subnets with karpenter.sh/discovery = <cluster>, which needs ec2:CreateTags on them. Applies only with create_vpc = false."
+  default     = {}
+}
+
 variable "smithdb_compute_limits" {
   type = object({
     cpu    = number
