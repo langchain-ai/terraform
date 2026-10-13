@@ -20,8 +20,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/../../infra"
-source "$INFRA_DIR/scripts/_common.sh"
+source "$SCRIPT_DIR/../../infra/scripts/_common.sh"
 
 # RELEASE_NAME and NAMESPACE from the environment if set, else
 # langsmith_release_name and langsmith_namespace from terraform.tfvars, else
@@ -50,7 +49,7 @@ RESOURCE_GROUP=$(_tf_out aks_resource_group_name) || {
 info "Cluster: $CLUSTER_NAME"
 info "Resource group: $RESOURCE_GROUP"
 echo ""
-az aks get-credentials --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --overwrite-existing >/dev/null || {
+_aks_get_credentials "$CLUSTER_NAME" "$RESOURCE_GROUP" >/dev/null || {
   fail "Could not fetch credentials for cluster '${CLUSTER_NAME}'."
   action "make kubeconfig  (to retry once the error above is fixed)"
   exit 1

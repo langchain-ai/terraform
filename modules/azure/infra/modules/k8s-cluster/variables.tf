@@ -110,6 +110,7 @@ variable "additional_node_pools" {
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
+    zones             = optional(list(string), [])
   }))
   description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
   default = {
@@ -424,6 +425,12 @@ variable "control_plane_identity_id" {
 variable "control_plane_identity_manage_grants" {
   type        = bool
   description = "With control_plane_identity = \"user\": true grants the identity Network Contributor on subnet_id, or on vnet_id with a custom private_dns_zone_id, and Private DNS Zone Contributor on that zone; false checks the identity holds a role on subnet_id, on subnet_route_table_id when set, and on that zone, and stops before the cluster is created when it does not. The check skips the VNet, which a zone its owner already linked does not need."
+  default     = true
+}
+
+variable "control_plane_grant_check" {
+  type        = bool
+  description = "With control_plane_identity_manage_grants = false: whether plan checks the identity's direct role assignments before the cluster is created. False skips the check, for an owner who grants through group membership, which the check cannot see."
   default     = true
 }
 

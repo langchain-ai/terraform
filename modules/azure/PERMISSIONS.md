@@ -121,6 +121,8 @@ Who makes the grants follows `aks_control_plane_identity_manage_grants`, which d
 
 The check covers the subnet, its route table when it has one, and the zone. It does not check the VNet, which needs a grant only when the zone is not linked yet. It accepts any role at the scope or above it, so a custom role passes, and so does a grant on the VNet's resource group or subscription. A grant at management-group scope is reported missing, because a management group's path is not a prefix of the subscription's: grant at the subnet, the route table, and the zone as well. Azure decides whether the role carries enough permissions when it creates the cluster, and fails the create if it does not.
 
+The check reads only roles assigned to the identity itself. A network owner who grants it through group membership, which works for AKS, should set `aks_network_owner_checks = false`: the plan then skips the check, and Azure validates the grants at create.
+
 To deploy with `false`:
 
 1. Create the identity, and give its principal ID to the network's owner:
@@ -141,7 +143,7 @@ keyvault_manage_terraform_admin_assignment = false  # skip the self-grant
 keyvault_manage_secrets                    = false  # write no secrets
 ```
 
-The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all nine secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
+The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all ten secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
 
 This does not remove the deployment's need for `roleAssignments/write` altogether. `Storage Blob Data Contributor` on the storage account is not optional, because LangSmith pods need it at runtime, and it has no toggle. A deployer who holds no role-assignment rights at all still fails there.
 

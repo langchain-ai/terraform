@@ -151,6 +151,35 @@ output "smithdb_cache_storage_class_name" {
   value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_cache_storage_class_name : null
 }
 
+output "smithdb_sizing" {
+  description = "Resolved SmithDB size (minimal, small, medium, or large), or null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_sizing : null
+}
+
+output "smithdb_metastore_sku_name" {
+  description = "Flexible Server SKU of the SmithDB metastore, resolved from smithdb_metastore_sku_name and smithdb_sizing. Null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_metastore_sku_name : null
+}
+
+output "smithdb_helm_values" {
+  description = "SmithDB chart tier, replicas, and minimal-size resources as YAML. init-values.sh writes it to helm/values/langsmith-values-smithdb-sizing.yaml. Null when SmithDB is disabled."
+  value       = local.smithdb_helm_values
+}
+
+output "smithdb_migration_parallelism" {
+  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
+  value       = var.smithdb_migration_parallelism
+}
+
+output "smithdb_quota_extra" {
+  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
+  value = {
+    cpu       = local.smithdb_quota_extra_cpu
+    memory_gi = local.smithdb_quota_extra_memory_gi
+    pods      = local.smithdb_quota_extra_pods
+  }
+}
+
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true
@@ -201,7 +230,7 @@ output "envoy_gateway_image_pull_secret_name" {
 
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
-  value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing"
+  value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing${module.aks.api_server_public_fqdn == true ? " --public-fqdn" : ""}"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -317,4 +346,9 @@ output "storage_blob_endpoint" {
 output "smithdb_storage_blob_endpoint" {
   description = "Blob service endpoint of the SmithDB object-store account. Null when enable_smithdb = false."
   value       = var.enable_smithdb ? module.smithdb[0].storage_blob_endpoint : null
+}
+
+output "aks_kubeconfig_public_fqdn" {
+  description = "true when az aks get-credentials needs --public-fqdn: a private cluster with no private DNS zone, from aks_private_dns_zone_id = \"None\" or, when attaching, from the cluster. The helm scripts read it."
+  value       = module.aks.api_server_public_fqdn == true
 }
