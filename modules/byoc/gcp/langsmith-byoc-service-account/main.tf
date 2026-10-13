@@ -66,7 +66,10 @@ locals {
     "dns.managedZones.create",
     "dns.managedZones.delete",
     "dns.managedZones.get",
+    # cert-manager gets roles/dns.admin on the data plane's zones only.
+    "dns.managedZones.getIamPolicy",
     "dns.managedZones.list",
+    "dns.managedZones.setIamPolicy",
     "dns.managedZones.update",
     "dns.networks.bindPrivateDNSZone",
     "dns.resourceRecordSets.create",
@@ -124,7 +127,6 @@ locals {
     "roles/cloudsql.client",
     "roles/container.admin",
     "roles/container.defaultNodeServiceAccount",
-    "roles/dns.admin",
     "roles/redis.dbConnectionUser",
     "roles/secretmanager.secretAccessor",
   ]
