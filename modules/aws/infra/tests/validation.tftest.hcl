@@ -88,6 +88,11 @@ run "names_and_ids_reject_a_malformed_value" {
     langsmith_helm_chart_version = "0.15.0"
     iam_permissions_boundary_arn = "arn:aws:iam::123456789012:policy/*"
     iam_role_path                = "langsmith"
+    envoy_proxy_image            = "envoyproxy/envoy:v1 --debug"
+    bastion_tools_s3_uri         = "s3://tools-bucket/bastion/"
+    langsmith_helm_repository    = "http://charts.example.com"
+    langsmith_image_registry     = "registry.example.com/$(id)"
+    helm_chart_overrides         = { nginx = { repository = "https://charts.example.com" } }
   }
 
   expect_failures = [
@@ -101,6 +106,11 @@ run "names_and_ids_reject_a_malformed_value" {
     var.langsmith_helm_chart_version,
     var.iam_permissions_boundary_arn,
     var.iam_role_path,
+    var.envoy_proxy_image,
+    var.bastion_tools_s3_uri,
+    var.langsmith_helm_repository,
+    var.langsmith_image_registry,
+    var.helm_chart_overrides,
   ]
 }
 

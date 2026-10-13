@@ -90,6 +90,31 @@ variable "vpc_endpoint_subnet_ids" {
   default     = []
 }
 
+variable "helm_chart_overrides" {
+  type = map(object({
+    repository = optional(string)
+    values     = optional(string, "")
+  }))
+  description = "Chart repository and extra Helm values for each chart Terraform installs, keyed by release: keda, cert_manager, external_secrets, envoy_gateway, istio_base, istiod, istio_ingress, ingress_nginx, aws_load_balancer_controller, metrics_server, cluster_autoscaler, karpenter. repository replaces the upstream chart repository, such as an internal mirror or an OCI repository in ECR. values is a YAML string passed to the release; use it to point images at a pull-through cache. Settings this module sets itself win over the same keys in values."
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.helm_chart_overrides) : contains(["keda", "cert_manager", "external_secrets", "envoy_gateway", "istio_base", "istiod", "istio_ingress", "ingress_nginx", "aws_load_balancer_controller", "metrics_server", "cluster_autoscaler", "karpenter"], k)])
+    error_message = "helm_chart_overrides keys must be among: keda, cert_manager, external_secrets, envoy_gateway, istio_base, istiod, istio_ingress, ingress_nginx, aws_load_balancer_controller, metrics_server, cluster_autoscaler, karpenter."
+  }
+}
+
+variable "envoy_proxy_image" {
+  type        = string
+  description = "Image for the Envoy proxy pods that Envoy Gateway creates, such as a pull-through cache copy of docker.io/envoyproxy/envoy. Empty keeps the controller's default."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9./:@_-]*$", var.envoy_proxy_image))
+    error_message = "envoy_proxy_image must be an image reference: letters, digits, and . / : @ _ - only."
+  }
+}
+
 variable "dns_create_zone" {
   type        = bool
   description = "Create a dedicated public Route 53 hosted zone for langsmith_domain. Set to false to write DNS validation and ALB alias records into dns_existing_zone_id instead."
@@ -614,6 +639,17 @@ variable "bastion_root_volume_size_gb" {
   default     = 20
 }
 
+variable "bastion_tools_s3_uri" {
+  type        = string
+  description = "S3 prefix holding kubectl, helm, and terraform Linux amd64 binaries, such as s3://my-bucket/bastion-tools. When set, the bastion copies them from there instead of downloading them from the internet. Required with enable_internet_egress = false and create_bastion = true."
+  default     = ""
+
+  validation {
+    condition     = var.bastion_tools_s3_uri == "" || can(regex("^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/[A-Za-z0-9._-]+)*$", var.bastion_tools_s3_uri))
+    error_message = "bastion_tools_s3_uri must look like s3://bucket/prefix, with no trailing slash."
+  }
+}
+
 variable "bastion_existing_security_group_id" {
   type        = string
   description = "ID of an existing security group to attach to the bastion instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow the access this bastion needs. bastion_enable_ssh still controls subnet placement and public IP assignment, but no longer causes Terraform to add an SSH ingress rule to the supplied group."
@@ -826,6 +862,28 @@ variable "langsmith_helm_chart_version" {
   validation {
     condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.1[78]\\.", var.langsmith_helm_chart_version))
     error_message = "langsmith_helm_chart_version must be empty or a 0.17.x or 0.18.x version — deploy.sh refuses any other chart line."
+  }
+}
+
+variable "langsmith_helm_repository" {
+  type        = string
+  description = "LangSmith chart source for helm/scripts/deploy.sh: an HTTPS Helm repository or an oci:// registry path that holds the langsmith chart, such as an internal mirror. Empty uses https://langchain-ai.github.io/helm."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_helm_repository == "" || can(regex("^(https|oci)://[^\\s\"]+$", var.langsmith_helm_repository))
+    error_message = "langsmith_helm_repository must start with https:// or oci:// and contain no spaces or quotes."
+  }
+}
+
+variable "langsmith_image_registry" {
+  type        = string
+  description = "Registry that helm/scripts/deploy.sh prefixes every LangSmith image with, through the chart's images.registry, such as an ECR pull-through cache. Empty pulls from each image's own registry."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9./:_-]*$", var.langsmith_image_registry))
+    error_message = "langsmith_image_registry must be a registry host and optional path: letters, digits, and . / : _ - only."
   }
 }
 

@@ -696,13 +696,42 @@ alb_scheme             = "internal"
 create_vpc_endpoints   = true
 ```
 
-- The plan fails unless the ALB is internal, the bastion has no SSH (`bastion_enable_ssh = false`), and `create_firewall = false`.
+- The plan fails unless the ALB is internal, the bastion has no SSH (`bastion_enable_ssh = false`) and has `bastion_tools_s3_uri` set, and `create_firewall = false`.
 - `create_vpc_endpoints` creates an interface endpoint with private DNS for each service in `vpc_endpoint_services`: `ecr.api`, `ecr.dkr`, `sts`, `ec2`, `logs`, `ssm`, `ssmmessages`, `ec2messages`, `elasticloadbalancing`, `autoscaling`, `eks`, `eks-auth`, `kms`, and `sqs`. The storage module already adds the S3 gateway endpoint that ECR image layers come through.
 - The endpoints go in the private subnets. To use dedicated subnets, set `vpc_endpoint_subnet_ids`, one per AZ.
 - If your VPC already has endpoints for these services, leave `create_vpc_endpoints = false`. A second endpoint with private DNS for the same service collides with the first.
 - With your own VPC, `enable_internet_egress = false` applies the same checks but changes no routes. Removing the route to the internet is up to you.
 - LangSmith's license check calls `beacon.langchain.com`, so a cluster with no egress needs an offline license.
-- Images from registries outside ECR need a pull-through cache or an internal mirror.
+- Charts and images from outside your network need a mirror. Refer to [Pull charts and images from a mirror](#pull-charts-and-images-from-a-mirror).
+
+### Pull charts and images from a mirror
+
+Point the charts Terraform installs at a mirror with `helm_chart_overrides`, and the LangSmith chart that `make deploy` installs with `langsmith_helm_repository` and `langsmith_image_registry`:
+
+```hcl
+# terraform.tfvars
+helm_chart_overrides = {
+  keda = {
+    repository = "https://artifactory.example.com/api/helm/kedacore"
+    values     = <<-YAML
+      global:
+        image:
+          registry: 123456789012.dkr.ecr.us-east-2.amazonaws.com/ghcr.io
+    YAML
+  }
+}
+envoy_proxy_image         = "123456789012.dkr.ecr.us-east-2.amazonaws.com/docker.io/envoyproxy/envoy:distroless-v1.33.0"
+langsmith_helm_repository = "oci://123456789012.dkr.ecr.us-east-2.amazonaws.com/charts"
+langsmith_image_registry  = "123456789012.dkr.ecr.us-east-2.amazonaws.com"
+bastion_tools_s3_uri      = "s3://my-tools-bucket/bastion"
+```
+
+- `helm_chart_overrides` takes these keys: `keda`, `cert_manager`, `external_secrets`, `envoy_gateway`, `istio_base`, `istiod`, `istio_ingress`, `ingress_nginx`, `aws_load_balancer_controller`, `metrics_server`, `cluster_autoscaler`, and `karpenter`. `repository` replaces the chart repository, which must hold the same chart at the same version. `values` is YAML passed to the release; a setting this module makes itself wins over the same key.
+- Image keys differ per chart. Read the chart's `values.yaml` at the version pinned in `infra/modules/k8s-bootstrap/main.tf` or `infra/modules/eks/main.tf`.
+- `envoy_proxy_image` sets the image of the Envoy proxy pods. Envoy Gateway creates them at runtime, so no chart value reaches them.
+- An ECR pull-through cache serves an upstream image under the rule's prefix. Name each prefix after its upstream registry (`docker.io`, `ghcr.io`, `quay.io`, `registry.k8s.io`, `public.ecr.aws`), so an override replaces only the registry part of an image path. `langsmith_image_registry` relies on this: the chart prepends it to image paths that start with `docker.io/`.
+- For a private OCI repository, log Helm in on the machine that runs Terraform and `make deploy`: `aws ecr get-login-password --region <region> | helm registry login --username AWS --password-stdin <registry>`.
+- `bastion_tools_s3_uri` names an S3 prefix holding Linux amd64 `kubectl`, `helm`, and `terraform` binaries. The bastion copies them from there instead of downloading them, and its role can read that prefix and nothing else.
 
 ### Important notes
 
@@ -1210,6 +1239,10 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `create_vpc_endpoints` | `false` | no | Create interface endpoints with private DNS for `vpc_endpoint_services` |
 | `vpc_endpoint_services` | 14 services | no | Endpoint service suffixes, such as `ecr.api`. The default covers a cluster with no egress |
 | `vpc_endpoint_subnet_ids` | `[]` | no | Subnets for the endpoints, one per AZ. Empty uses the private subnets |
+| `helm_chart_overrides` | `{}` | no | Chart repository and extra values per release Terraform installs. See [pull charts and images from a mirror](#pull-charts-and-images-from-a-mirror) |
+| `envoy_proxy_image` | `""` | no | Image for the Envoy proxy pods. Empty keeps the controller's default |
+| `langsmith_helm_repository` | `""` | no | HTTPS or `oci://` source of the LangSmith chart for `make deploy`. Empty uses `https://langchain-ai.github.io/helm` |
+| `langsmith_image_registry` | `""` | no | Registry `make deploy` prefixes every LangSmith image with |
 | `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
 | `eks_private_access_cidrs` | `[]` | no | CIDRs that reach the private EKS API endpoint on 443, such as the runner Terraform uses |
@@ -1266,6 +1299,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `bastion_root_volume_size_gb` | `20` | no | Root EBS volume size for bastion |
 | `bastion_cluster_admin` | `false` | no | Give the bastion role cluster admin through an EKS access entry |
 | `fix_bastion_names` | `false` | no | Name the bastion resources `<base>-bastion` instead of `<base>-bastion-bastion` |
+| `bastion_tools_s3_uri` | `""` | no | S3 prefix the bastion copies `kubectl`, `helm`, and `terraform` from instead of downloading them. Required without internet egress |
 | `bastion_existing_security_group_id` | `null` | no | Attach an existing SG to the bastion instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `create_cloudtrail` | `false` | no | Create CloudTrail trail for AWS API audit |
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |

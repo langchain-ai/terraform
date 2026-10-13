@@ -88,3 +88,9 @@ variable "iam_role_path" {
   description = "IAM path for the IAM roles and instance profiles this module creates."
   default     = "/"
 }
+
+variable "tools_s3_uri" {
+  type        = string
+  description = "S3 prefix holding kubectl, helm, and terraform binaries. When set, user data copies them from there instead of downloading them, and the role can read that prefix."
+  default     = ""
+}

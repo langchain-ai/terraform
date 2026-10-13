@@ -209,6 +209,11 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = var.enable_internet_egress || !var.create_bastion || var.bastion_tools_s3_uri != ""
+      error_message = "enable_internet_egress = false with create_bastion = true requires bastion_tools_s3_uri. The bastion downloads kubectl, helm, and terraform from the internet otherwise."
+    }
+
+    precondition {
       condition     = length(var.vpc_endpoint_subnet_ids) == 0 || var.create_vpc_endpoints
       error_message = "vpc_endpoint_subnet_ids applies only with create_vpc_endpoints = true."
     }
@@ -346,6 +351,7 @@ module "eks" {
   iam_role_name_prefix            = var.prefix_iam_role_names ? local.base_name : null
   existing_iam_role_arns          = var.existing_iam_role_arns
   create_blueprints_telemetry     = var.create_eks_blueprints_telemetry_stack
+  chart_overrides                 = var.helm_chart_overrides
 }
 
 # State migration: adding count changes the module address.
@@ -802,6 +808,7 @@ module "bastion" {
   tags                = local.common_tags
 
   existing_security_group_id = var.bastion_existing_security_group_id
+  tools_s3_uri               = var.bastion_tools_s3_uri
 
   iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
   iam_role_path                = var.iam_role_path
@@ -910,6 +917,9 @@ module "k8s_bootstrap" {
   region                      = var.region
   cert_manager_hosted_zone_id = var.cert_manager_hosted_zone_id
   cluster_name                = local.cluster_name
+
+  chart_overrides   = var.helm_chart_overrides
+  envoy_proxy_image = var.envoy_proxy_image
 
   depends_on = [time_sleep.wait_for_alb_webhook, module.cert_manager]
 }

@@ -183,3 +183,12 @@ variable "create_blueprints_telemetry" {
   description = "Create the EKS Blueprints usage-telemetry CloudFormation stack."
   default     = true
 }
+
+variable "chart_overrides" {
+  type = map(object({
+    repository = optional(string)
+    values     = optional(string, "")
+  }))
+  description = "Chart repository and extra values for the EKS Blueprints add-ons, keyed by aws_load_balancer_controller, metrics_server, cluster_autoscaler, or karpenter. An add-on with no entry uses its upstream repository."
+  default     = {}
+}

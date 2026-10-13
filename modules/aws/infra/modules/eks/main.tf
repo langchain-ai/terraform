@@ -158,6 +158,13 @@ resource "aws_eks_addon" "ebs-csi" {
   depends_on = [module.eks]
 }
 
+# Chart repository and values overrides from the root, for a mirror or a
+# pull-through cache. A release with no entry keeps its upstream repository.
+locals {
+  chart_repository = { for k, v in var.chart_overrides : k => v.repository if v.repository != null }
+  chart_values     = { for k, v in var.chart_overrides : k => [v.values] if v.values != "" }
+}
+
 # Create some important addons for the EKS cluster.
 module "eks_blueprints_addons" {
   source  = "aws-ia/eks-blueprints-addons/aws"
@@ -184,6 +191,8 @@ module "eks_blueprints_addons" {
     role_name                     = local.role_names.alb_controller
     role_path                     = var.iam_role_path
     role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    repository                    = lookup(local.chart_repository, "aws_load_balancer_controller", "https://aws.github.io/eks-charts")
+    values                        = lookup(local.chart_values, "aws_load_balancer_controller", [])
     set = concat(
       [{
         name  = "enableServiceMutatorWebhook"
@@ -196,6 +205,12 @@ module "eks_blueprints_addons" {
   enable_metrics_server     = true
   enable_cluster_autoscaler = true
 
+  # The upstream repository and empty values are the add-on's own defaults.
+  metrics_server = {
+    repository = lookup(local.chart_repository, "metrics_server", "https://kubernetes-sigs.github.io/metrics-server/")
+    values     = lookup(local.chart_values, "metrics_server", [])
+  }
+
   # Karpenter provisions the SmithDB instance-store (local-NVMe, RAID0) and
   # compute pools. It coexists with cluster-autoscaler, which manages the core
   # managed node group; the two own disjoint nodes. When enabled, this installs
@@ -205,6 +220,8 @@ module "eks_blueprints_addons" {
   enable_karpenter = var.enable_karpenter
   karpenter = {
     chart_version                 = var.karpenter_chart_version
+    repository                    = lookup(local.chart_repository, "karpenter", "oci://public.ecr.aws/karpenter")
+    values                        = lookup(local.chart_values, "karpenter", [])
     create_role                   = local.existing_roles.karpenter == null
     role_name                     = local.role_names.karpenter
     role_path                     = var.iam_role_path
@@ -231,6 +248,8 @@ module "eks_blueprints_addons" {
   # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
   cluster_autoscaler = {
     chart_version                 = "9.56.0"
+    repository                    = lookup(local.chart_repository, "cluster_autoscaler", "https://kubernetes.github.io/autoscaler")
+    values                        = lookup(local.chart_values, "cluster_autoscaler", [])
     create_role                   = local.existing_roles.cluster_autoscaler == null
     role_name                     = local.role_names.cluster_autoscaler
     role_path                     = var.iam_role_path

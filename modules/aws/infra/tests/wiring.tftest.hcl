@@ -774,3 +774,42 @@ run "no_internet_egress_drops_the_nat_gateway" {
     error_message = "enable_internet_egress = false still planned a NAT gateway"
   }
 }
+
+run "no_internet_egress_with_a_bastion_copies_tools_from_s3" {
+  command = plan
+
+  variables {
+    enable_internet_egress = false
+    alb_scheme             = "internal"
+    create_vpc_endpoints   = true
+    create_bastion         = true
+    bastion_tools_s3_uri   = "s3://tools-bucket/bastion"
+  }
+
+  assert {
+    condition     = length(module.bastion) == 1
+    error_message = "a bastion with bastion_tools_s3_uri did not plan without internet egress"
+  }
+}
+
+# Every release key at once, with both fields, so a type mismatch in any lookup
+# fails the plan.
+run "helm_chart_overrides_accept_every_release" {
+  command = plan
+
+  variables {
+    envoy_proxy_image = "123456789012.dkr.ecr.us-east-2.amazonaws.com/docker.io/envoyproxy/envoy:distroless-v1.33.0"
+    helm_chart_overrides = {
+      for k in [
+        "keda", "cert_manager", "external_secrets", "envoy_gateway", "istio_base", "istiod",
+        "istio_ingress", "ingress_nginx", "aws_load_balancer_controller", "metrics_server",
+        "cluster_autoscaler", "karpenter",
+      ] : k => { repository = "oci://123456789012.dkr.ecr.us-east-2.amazonaws.com/charts", values = "image:\n  registry: mirror.example.com\n" }
+    }
+  }
+
+  assert {
+    condition     = length(var.helm_chart_overrides) == 12
+    error_message = "helm_chart_overrides did not accept every release key"
+  }
+}

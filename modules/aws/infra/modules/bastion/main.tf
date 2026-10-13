@@ -62,6 +62,23 @@ resource "aws_iam_role_policy" "eks_readonly" {
   })
 }
 
+# Read access to the tools prefix and nothing else in the bucket.
+resource "aws_iam_role_policy" "tools_read" {
+  count = var.tools_s3_uri != "" ? 1 : 0
+
+  name = "bastion-tools-read"
+  role = aws_iam_role.bastion.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "s3:GetObject"
+      Resource = "arn:aws:s3:::${trimprefix(var.tools_s3_uri, "s3://")}/*"
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "bastion" {
   name = "${var.name}-bastion"
   path = var.iam_role_path
@@ -139,9 +156,12 @@ resource "aws_instance" "bastion" {
     delete_on_termination = true
   }
 
-  user_data = base64encode(templatefile("${path.module}/user-data.sh", {
+  # The offline script is a separate file so the default one, and so the
+  # instance's user data, stays byte-identical when tools_s3_uri is unset.
+  user_data = base64encode(templatefile(var.tools_s3_uri != "" ? "${path.module}/user-data-offline.sh" : "${path.module}/user-data.sh", {
     cluster_name = var.cluster_name
     region       = var.region
+    tools_s3_uri = var.tools_s3_uri
   }))
 
   metadata_options {

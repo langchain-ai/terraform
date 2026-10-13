@@ -29,11 +29,13 @@ aws sts get-caller-identity
 echo "Checking kubectl connectivity..."
 kubectl cluster-info --request-timeout=5s
 
-echo "Checking Helm langchain repo..."
-if ! helm repo list 2>/dev/null | grep -q langchain; then
-  echo "Adding langchain Helm repo..."
-  helm repo add langchain https://langchain-ai.github.io/helm/
+# deploy.sh passes a mirror from langsmith_helm_repository. An oci:// registry
+# needs no repo entry; helm show chart in deploy.sh checks it instead.
+_helm_repo="${LANGSMITH_HELM_REPOSITORY:-https://langchain-ai.github.io/helm/}"
+if [[ "$_helm_repo" != oci://* ]]; then
+  echo "Checking Helm langchain repo..."
+  helm repo add langchain "$_helm_repo" --force-update >/dev/null
+  helm repo update langchain
 fi
-helm repo update langchain
 
 echo "All preflight checks passed."

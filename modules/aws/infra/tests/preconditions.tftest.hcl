@@ -206,6 +206,18 @@ run "no_egress_with_the_network_firewall_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+run "no_egress_with_a_downloading_bastion_is_rejected" {
+  command = plan
+
+  variables {
+    enable_internet_egress = false
+    alb_scheme             = "internal"
+    create_bastion         = true
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 run "endpoint_subnets_without_endpoints_are_rejected" {
   command = plan
 

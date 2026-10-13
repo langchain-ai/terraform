@@ -52,12 +52,20 @@ resource "kubernetes_secret" "redis" {
   type = "Opaque"
 }
 
+# Chart repository and values overrides from the root, for a mirror or a
+# pull-through cache. A release with no entry keeps its upstream repository.
+locals {
+  chart_repository = { for k, v in var.chart_overrides : k => v.repository if v.repository != null }
+  chart_values     = { for k, v in var.chart_overrides : k => [v.values] if v.values != "" }
+}
+
 # ── KEDA (Kubernetes Event-driven Autoscaling) ───────────────────────────────
 # Required for LangSmith Deployments feature.
 
 resource "helm_release" "keda" {
   name             = "keda"
-  repository       = "https://kedacore.github.io/charts"
+  repository       = lookup(local.chart_repository, "keda", "https://kedacore.github.io/charts")
+  values           = lookup(local.chart_values, "keda", null)
   chart            = "keda"
   namespace        = "keda"
   create_namespace = true
@@ -96,7 +104,8 @@ resource "helm_release" "cert_manager" {
   count = local.install_cert_manager ? 1 : 0
 
   name             = "cert-manager"
-  repository       = "https://charts.jetstack.io"
+  repository       = lookup(local.chart_repository, "cert_manager", "https://charts.jetstack.io")
+  values           = lookup(local.chart_values, "cert_manager", null)
   chart            = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
@@ -125,7 +134,8 @@ resource "helm_release" "cert_manager" {
 
 resource "helm_release" "external_secrets" {
   name             = "external-secrets"
-  repository       = "https://charts.external-secrets.io"
+  repository       = lookup(local.chart_repository, "external_secrets", "https://charts.external-secrets.io")
+  values           = lookup(local.chart_values, "external_secrets", null)
   chart            = "external-secrets"
   namespace        = "external-secrets"
   create_namespace = true
@@ -433,7 +443,8 @@ resource "helm_release" "envoy_gateway" {
   count = var.enable_envoy_gateway ? 1 : 0
 
   name             = "envoy-gateway"
-  repository       = "oci://docker.io/envoyproxy"
+  repository       = lookup(local.chart_repository, "envoy_gateway", "oci://docker.io/envoyproxy")
+  values           = lookup(local.chart_values, "envoy_gateway", null)
   chart            = "gateway-helm"
   namespace        = "envoy-gateway-system"
   create_namespace = true
@@ -471,9 +482,12 @@ resource "terraform_data" "envoy_gateway_resource" {
     region       = var.region
   }
 
-  triggers_replace = [
-    var.namespace,
-  ]
+  # The image joins the list only when set, so an unset one leaves the list
+  # unchanged and plans no replacement.
+  triggers_replace = concat(
+    [var.namespace],
+    var.envoy_proxy_image != "" ? [var.envoy_proxy_image] : [],
+  )
 
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
@@ -492,6 +506,11 @@ spec:
     kubernetes:
       envoyService:
         type: ClusterIP
+%{if var.envoy_proxy_image != ""~}
+      envoyDeployment:
+        container:
+          image: ${var.envoy_proxy_image}
+%{endif~}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
@@ -652,7 +671,8 @@ resource "helm_release" "istio_base" {
   count = var.enable_istio_gateway ? 1 : 0
 
   name             = "istio-base"
-  repository       = "https://istio-release.storage.googleapis.com/charts"
+  repository       = lookup(local.chart_repository, "istio_base", "https://istio-release.storage.googleapis.com/charts")
+  values           = lookup(local.chart_values, "istio_base", null)
   chart            = "base"
   namespace        = "istio-system"
   create_namespace = true
@@ -689,7 +709,8 @@ resource "helm_release" "istiod" {
   count = var.enable_istio_gateway ? 1 : 0
 
   name       = "istiod"
-  repository = "https://istio-release.storage.googleapis.com/charts"
+  repository = lookup(local.chart_repository, "istiod", "https://istio-release.storage.googleapis.com/charts")
+  values     = lookup(local.chart_values, "istiod", null)
   chart      = "istiod"
   namespace  = "istio-system"
   version    = "1.23.0"
@@ -710,7 +731,8 @@ resource "helm_release" "istio_ingress" {
   count = var.enable_istio_gateway ? 1 : 0
 
   name       = "istio-ingressgateway"
-  repository = "https://istio-release.storage.googleapis.com/charts"
+  repository = lookup(local.chart_repository, "istio_ingress", "https://istio-release.storage.googleapis.com/charts")
+  values     = lookup(local.chart_values, "istio_ingress", null)
   chart      = "gateway"
   namespace  = "istio-system"
   version    = "1.23.0"
@@ -837,7 +859,8 @@ resource "helm_release" "nginx_ingress" {
   count = var.enable_nginx_ingress ? 1 : 0
 
   name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
+  repository       = lookup(local.chart_repository, "ingress_nginx", "https://kubernetes.github.io/ingress-nginx")
+  values           = lookup(local.chart_values, "ingress_nginx", null)
   chart            = "ingress-nginx"
   namespace        = "ingress-nginx"
   create_namespace = true
