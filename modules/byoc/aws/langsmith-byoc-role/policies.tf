@@ -46,8 +46,8 @@ locals {
       [for statement in local.delete_statements_for_policy.vpc : statement if var.allow_vpc_creation_permissions],
       [for statement in local.delete_statements_for_policy.vpc_byovpc : statement if !var.allow_vpc_creation_permissions],
     )
-    iam                        = concat(local.iam_statements, local.delete_statements_for_policy.iam)
-    iam-karpenter-eks-profiles = concat(local.iam_karpenter_eks_profiles_statements, local.delete_statements_for_policy["iam-karpenter-eks-profiles"])
+    iam                        = local.iam_statements
+    iam-karpenter-eks-profiles = concat(local.iam_karpenter_eks_profiles_statements, local.delete_statements_for_policy["iam-karpenter-eks-profiles"], local.delete_statements_for_policy.iam)
     eks                        = concat(local.eks_statements, local.delete_statements_for_policy.eks)
     elbv2                      = concat(local.elbv2_statements, local.delete_statements_for_policy.elbv2)
     data                       = concat(local.rds_statements, local.secrets_manager_statements, local.kms_statements, local.delete_statements_for_policy.data, local.delete_statements_for_policy.storage)
