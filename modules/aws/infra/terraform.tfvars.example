@@ -148,6 +148,14 @@ create_vpc = true
 # Requires eks_node_groups_private_subnets_only = true.
 # vpc_map_public_ip_on_launch = false
 
+# No internet egress: no NAT or internet gateway in the created VPC. Requires
+# alb_scheme = "internal", bastion_enable_ssh = false, and create_firewall = false.
+# enable_internet_egress = false
+# Interface endpoints (ecr.api, ecr.dkr, sts, eks, ssm, ...) for a VPC without
+# them. Leave off if the VPC already has endpoints for these services.
+# create_vpc_endpoints    = true
+# vpc_endpoint_subnet_ids = []   # empty uses the private subnets
+
 # BRING YOUR OWN VPC (BYOV) — only fill these in if create_vpc = false.
 # To find these values:
 #   AWS Console → VPC → Your VPCs → copy the VPC ID

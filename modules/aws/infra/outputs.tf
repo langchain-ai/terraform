@@ -140,6 +140,11 @@ output "vpc_cidr_block" {
   value       = local.vpc_cidr_block
 }
 
+output "vpc_endpoint_ids" {
+  description = "Interface VPC endpoint IDs keyed by service, such as ecr.api. Empty when create_vpc_endpoints = false."
+  value       = var.create_vpc_endpoints ? module.vpc_endpoints[0].endpoint_ids : {}
+}
+
 #------------------------------------------------------------------------------
 # Network Firewall (populated only when create_firewall = true)
 #------------------------------------------------------------------------------

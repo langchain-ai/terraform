@@ -132,6 +132,7 @@ aws/
 │   │   └── status.sh           ← Deployment state checker
 │   └── modules/
 │       ├── vpc/            ← VPC, subnets, NAT gateway
+│       ├── vpc-endpoints/  ← Interface VPC endpoints for a cluster without egress (optional)
 │       ├── eks/            ← EKS cluster, managed node groups, IRSA role, GP3 storage class
 │       ├── postgres/       ← RDS PostgreSQL, subnet group, security group, IAM auth
 │       ├── redis/          ← ElastiCache Redis, subnet group, security group, auth token
@@ -684,6 +685,25 @@ vpc_map_public_ip_on_launch          = false   # create_vpc = true only
 
 On an existing cluster, `eks_node_groups_private_subnets_only` replaces each node group. The control plane stays where it is. `vpc_map_public_ip_on_launch = false` without it fails the plan, because a node in a public subnet without a public IP has no egress. With your own VPC, the public IP setting belongs to your subnets.
 
+### Run without internet egress
+
+`enable_internet_egress = false` builds the VPC with no NAT gateway and no internet gateway, so nothing in it reaches the internet. AWS APIs and ECR are reachable only through VPC endpoints:
+
+```hcl
+# terraform.tfvars
+enable_internet_egress = false
+alb_scheme             = "internal"
+create_vpc_endpoints   = true
+```
+
+- The plan fails unless the ALB is internal, the bastion has no SSH (`bastion_enable_ssh = false`), and `create_firewall = false`.
+- `create_vpc_endpoints` creates an interface endpoint with private DNS for each service in `vpc_endpoint_services`: `ecr.api`, `ecr.dkr`, `sts`, `ec2`, `logs`, `ssm`, `ssmmessages`, `ec2messages`, `elasticloadbalancing`, `autoscaling`, `eks`, `eks-auth`, `kms`, and `sqs`. The storage module already adds the S3 gateway endpoint that ECR image layers come through.
+- The endpoints go in the private subnets. To use dedicated subnets, set `vpc_endpoint_subnet_ids`, one per AZ.
+- If your VPC already has endpoints for these services, leave `create_vpc_endpoints = false`. A second endpoint with private DNS for the same service collides with the first.
+- With your own VPC, `enable_internet_egress = false` applies the same checks but changes no routes. Removing the route to the internet is up to you.
+- LangSmith's license check calls `beacon.langchain.com`, so a cluster with no egress needs an offline license.
+- Images from registries outside ECR need a pull-through cache or an internal mirror.
+
 ### Important notes
 
 - The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
@@ -1186,6 +1206,10 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `vpc_cidr_block` | `null` | when !create_vpc | Existing VPC CIDR block |
 | `vpc_map_public_ip_on_launch` | `true` | no | Give instances in the module-created VPC's public subnets a public IP. See [keep nodes off the public subnets](#keep-nodes-off-the-public-subnets) |
 | `eks_node_groups_private_subnets_only` | `false` | no | Place the managed node groups in the private subnets only. Replaces existing node groups |
+| `enable_internet_egress` | `true` | no | `false` creates no NAT or internet gateway. Requires an internal ALB, no SSH bastion, and no firewall. See [Run without internet egress](#run-without-internet-egress) |
+| `create_vpc_endpoints` | `false` | no | Create interface endpoints with private DNS for `vpc_endpoint_services` |
+| `vpc_endpoint_services` | 14 services | no | Endpoint service suffixes, such as `ecr.api`. The default covers a cluster with no egress |
+| `vpc_endpoint_subnet_ids` | `[]` | no | Subnets for the endpoints, one per AZ. Empty uses the private subnets |
 | `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
 | `eks_private_access_cidrs` | `[]` | no | CIDRs that reach the private EKS API endpoint on 443, such as the runner Terraform uses |

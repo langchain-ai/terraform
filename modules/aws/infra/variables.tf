@@ -63,6 +63,33 @@ variable "eks_node_groups_private_subnets_only" {
   default     = false
 }
 
+variable "enable_internet_egress" {
+  type        = bool
+  description = "Give the cluster a route to the internet. False creates no NAT gateway and no internet gateway in the module-created VPC, and requires an internal ALB, a bastion without SSH, and no Network Firewall. Pair it with create_vpc_endpoints."
+  default     = true
+}
+
+variable "create_vpc_endpoints" {
+  type        = bool
+  description = "Create interface VPC endpoints for vpc_endpoint_services, with private DNS on. Leave false when the VPC already has endpoints for these services, because their private DNS names would collide."
+  default     = false
+}
+
+variable "vpc_endpoint_services" {
+  type        = list(string)
+  description = "Services that get an interface endpoint when create_vpc_endpoints = true, as the suffix after com.amazonaws.<region>."
+  default = [
+    "ecr.api", "ecr.dkr", "sts", "ec2", "logs", "ssm", "ssmmessages", "ec2messages",
+    "elasticloadbalancing", "autoscaling", "eks", "eks-auth", "kms", "sqs",
+  ]
+}
+
+variable "vpc_endpoint_subnet_ids" {
+  type        = list(string)
+  description = "Subnets for the interface endpoints, at most one per AZ. Empty uses the private subnets."
+  default     = []
+}
+
 variable "dns_create_zone" {
   type        = bool
   description = "Create a dedicated public Route 53 hosted zone for langsmith_domain. Set to false to write DNS validation and ALB alias records into dns_existing_zone_id instead."

@@ -184,10 +184,33 @@ resource "terraform_data" "validate_inputs" {
       error_message = "A private-only EKS endpoint needs a way in. Set create_bastion = true, or set eks_private_access_cidrs to the CIDR your Terraform runs from."
     }
 
-    # A node in a public subnet without a public IP has no route out.
+    # A node in a public subnet without a public IP has no route out. Without
+    # internet egress no node has one, so the rule does not apply.
     precondition {
-      condition     = !var.create_vpc || var.vpc_map_public_ip_on_launch || var.eks_node_groups_private_subnets_only
+      condition     = !var.create_vpc || !var.enable_internet_egress || var.vpc_map_public_ip_on_launch || var.eks_node_groups_private_subnets_only
       error_message = "vpc_map_public_ip_on_launch = false leaves nodes in the public subnets without egress. Set eks_node_groups_private_subnets_only = true with it."
+    }
+
+    # Without internet egress nothing in the VPC is reachable from or can reach
+    # the internet, so every component has to stay private.
+    precondition {
+      condition     = var.enable_internet_egress || var.alb_scheme == "internal"
+      error_message = "enable_internet_egress = false requires alb_scheme = \"internal\". An internet-facing ALB needs an internet gateway."
+    }
+
+    precondition {
+      condition     = var.enable_internet_egress || !var.create_bastion || !var.bastion_enable_ssh
+      error_message = "enable_internet_egress = false requires bastion_enable_ssh = false. The SSH bastion sits in a public subnet with a public IP; without SSH it uses SSM through the ssm, ssmmessages, and ec2messages endpoints."
+    }
+
+    precondition {
+      condition     = var.enable_internet_egress || !var.create_firewall
+      error_message = "enable_internet_egress = false requires create_firewall = false. The Network Firewall filters traffic to the internet, and there is none."
+    }
+
+    precondition {
+      condition     = length(var.vpc_endpoint_subnet_ids) == 0 || var.create_vpc_endpoints
+      error_message = "vpc_endpoint_subnet_ids applies only with create_vpc_endpoints = true."
     }
 
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
@@ -245,6 +268,7 @@ module "vpc" {
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 
   map_public_ip_on_launch = var.vpc_map_public_ip_on_launch
+  enable_internet_egress  = var.enable_internet_egress
 
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
@@ -267,6 +291,18 @@ module "firewall" {
   tags                    = local.common_tags
 
   depends_on = [module.vpc]
+}
+
+module "vpc_endpoints" {
+  source = "./modules/vpc-endpoints"
+  count  = var.create_vpc_endpoints ? 1 : 0
+
+  name          = "${local.base_name}-vpce"
+  region        = var.region
+  vpc_id        = local.vpc_id
+  subnet_ids    = length(var.vpc_endpoint_subnet_ids) > 0 ? var.vpc_endpoint_subnet_ids : local.private_subnets
+  ingress_cidrs = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
+  services      = var.vpc_endpoint_services
 }
 
 # BYO VPC with custom networking: the pod subnets' AZs and CIDRs, and the AZs of

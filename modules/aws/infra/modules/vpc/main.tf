@@ -63,7 +63,10 @@ module "vpc" {
   intra_subnets         = local.pod_subnets
   intra_subnet_suffix   = "pods"
 
-  enable_nat_gateway   = true
+  # Without internet egress there is no NAT gateway and no internet gateway, so
+  # the public subnets route nowhere outside the VPC either.
+  enable_nat_gateway   = var.enable_internet_egress
+  create_igw           = var.enable_internet_egress
   single_nat_gateway   = true
   enable_dns_hostnames = true
 

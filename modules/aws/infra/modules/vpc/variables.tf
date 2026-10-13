@@ -34,6 +34,12 @@ variable "map_public_ip_on_launch" {
   default     = true
 }
 
+variable "enable_internet_egress" {
+  type        = bool
+  description = "Create the NAT gateway and internet gateway. False leaves the VPC with no route to the internet."
+  default     = true
+}
+
 variable "extra_public_subnet_tags" {
   type        = map(string)
   description = "The tags for the public subnets"

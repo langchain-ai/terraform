@@ -64,6 +64,10 @@ run "optional_modules_absent_when_flags_are_false" {
     condition     = length(module.smithdb) == 0
     error_message = "enable_smithdb = false still planned SmithDB"
   }
+  assert {
+    condition     = length(module.vpc_endpoints) == 0
+    error_message = "create_vpc_endpoints = false still planned the interface endpoints"
+  }
 }
 
 # ── Optional modules, one flag at a time ─────────────────────────────────────
@@ -736,5 +740,37 @@ run "private_subnet_node_groups_without_public_ips_plan" {
   variables {
     eks_node_groups_private_subnets_only = true
     vpc_map_public_ip_on_launch          = false
+  }
+}
+
+run "create_vpc_endpoints_adds_the_default_set" {
+  command = plan
+
+  variables {
+    create_vpc_endpoints = true
+  }
+
+  assert {
+    condition     = length(module.vpc_endpoints) == 1
+    error_message = "create_vpc_endpoints = true did not plan the interface endpoints"
+  }
+  assert {
+    condition     = length(output.vpc_endpoint_ids) == 14
+    error_message = "create_vpc_endpoints = true did not plan one endpoint per default service"
+  }
+}
+
+run "no_internet_egress_drops_the_nat_gateway" {
+  command = plan
+
+  variables {
+    enable_internet_egress = false
+    alb_scheme             = "internal"
+    create_vpc_endpoints   = true
+  }
+
+  assert {
+    condition     = module.vpc[0].nat_gateway_id == null
+    error_message = "enable_internet_egress = false still planned a NAT gateway"
   }
 }

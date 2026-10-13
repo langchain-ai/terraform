@@ -17,7 +17,7 @@ A custom policy needs these services. The **Required when** column is the config
 | Service | Actions | Needed for | Required when |
 |---------|---------|-----------|---------------|
 | EKS | `eks:*` | Cluster, managed node groups, add-ons, access entries | Always |
-| EC2 | `ec2:*` | VPC, subnets, NAT gateway, route tables, security groups, S3 gateway endpoint, launch templates | Always |
+| EC2 | `ec2:*` | VPC, subnets, NAT gateway, route tables, security groups, S3 gateway endpoint, interface endpoints, launch templates | Always |
 | IAM | See [IAM actions](#iam-actions) | Service roles, IRSA roles, the cluster's OIDC provider | Always |
 | KMS | `kms:CreateKey`, `kms:CreateAlias`, `kms:PutKeyPolicy`, `kms:TagResource`, `kms:DescribeKey`, `kms:GetKeyPolicy`, `kms:ScheduleKeyDeletion` | The EKS secrets encryption key | Always |
 | CloudWatch Logs | `logs:CreateLogGroup`, `logs:PutRetentionPolicy`, `logs:TagResource`, `logs:DescribeLogGroups`, `logs:DeleteLogGroup` | The EKS control plane log group | Always |
