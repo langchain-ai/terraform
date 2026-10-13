@@ -170,6 +170,43 @@ run "refuses_a_zone_azure_does_not_have" {
   expect_failures = [var.additional_node_pools]
 }
 
+# SmithDB's components carry no nodeSelector by default, so a regional pool
+# under a zoned request can receive them, where a Premium SSD v2 cache volume
+# cannot attach. The root precondition refuses the pair; a pool with zones of
+# its own passes.
+run "smithdb_refuses_a_regional_pool_under_zoned_availability_zones" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    additional_node_pools = {
+      platform = { vm_size = "Standard_D8s_v5", min_count = 1, max_count = 3 }
+      data     = { vm_size = "Standard_D16s_v5", min_count = 0, max_count = 2, zones = [] }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_accepts_pools_with_zones_of_their_own" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    additional_node_pools = {
+      platform = { vm_size = "Standard_D8s_v5", min_count = 1, max_count = 3 }
+      data     = { vm_size = "Standard_D16s_v5", min_count = 0, max_count = 2, zones = ["2"] }
+    }
+  }
+
+  assert {
+    condition     = toset(module.aks.node_pool_zones["data"]) == toset(["2"]) && toset(module.aks.node_pool_zones["platform"]) == toset(["1", "2", "3"])
+    error_message = "With SmithDB on, zonal pools (their own zones or availability_zones) should plan"
+  }
+}
+
 # ── An existing pool ─────────────────────────────────────────────────────────
 
 run "pools_are_created_in_the_requested_zones" {
