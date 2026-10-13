@@ -116,12 +116,14 @@ tags = {
 region = "us-west-2"
 
 #------------------------------------------------------------------------------
-# IAM ROLES — Only if your account mandates a boundary or path
+# IAM ROLES — Only if your account mandates a boundary, path, or name prefix
 #------------------------------------------------------------------------------
 # Applied to every IAM role and instance profile Terraform creates.
 # Set the path before the first apply: changing it later replaces every role.
 # iam_permissions_boundary_arn = "arn:aws:iam::<account-id>:policy/<boundary-policy>"
 # iam_role_path                = "/langsmith/"
+# Start every role name with <name_prefix>-<environment>- so one role/<base>-* grant covers them.
+# prefix_iam_role_names        = true
 
 #------------------------------------------------------------------------------
 # NETWORKING — VPC configuration

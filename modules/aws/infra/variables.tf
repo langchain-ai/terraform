@@ -620,6 +620,12 @@ variable "iam_role_path" {
   }
 }
 
+variable "prefix_iam_role_names" {
+  type        = bool
+  description = "Start the node group, ALB controller, cluster-autoscaler, Karpenter controller, Karpenter node, and EBS CSI role names with <name_prefix>-<environment>-, like every other role here, so one role/<name_prefix>-<environment>-* grant covers them all. Changing it on an existing deployment replaces those six roles."
+  default     = false
+}
+
 # IRSA (IAM Roles for Service Accounts) settings
 variable "create_langsmith_irsa_role" {
   type        = bool

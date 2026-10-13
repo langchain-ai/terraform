@@ -144,3 +144,9 @@ variable "iam_role_path" {
   description = "IAM path for the IAM roles and instance profiles this module creates."
   default     = "/"
 }
+
+variable "iam_role_name_prefix" {
+  type        = string
+  description = "Prefix for the role names that upstream modules otherwise choose (node groups, add-ons, Karpenter node, EBS CSI). Null keeps the upstream names."
+  default     = null
+}

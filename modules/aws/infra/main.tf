@@ -282,6 +282,7 @@ module "eks" {
   enable_istio_gateway            = var.enable_istio_gateway
   iam_permissions_boundary_arn    = var.iam_permissions_boundary_arn
   iam_role_path                   = var.iam_role_path
+  iam_role_name_prefix            = var.prefix_iam_role_names ? local.base_name : null
 }
 
 # State migration: adding count changes the module address.

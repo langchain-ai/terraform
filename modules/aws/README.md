@@ -391,7 +391,7 @@ not as a clear plan-time error. Double-check the ID and its rules before applyin
 
 ---
 
-## IAM permissions boundary and role path
+## IAM permissions boundary, path, and role names
 
 If your account requires a permissions boundary or a dedicated IAM path on every
 role, set both here:
@@ -410,6 +410,17 @@ instance profile. The defaults (no boundary, path `/`) plan no changes.
 Set `iam_role_path` before the first apply. A path change replaces every role
 above, and the pods and nodes using them lose AWS access until the new roles
 exist.
+
+Six role names come from upstream modules and do not start with
+`<name_prefix>-<environment>-`: the node group, ALB controller,
+cluster-autoscaler, Karpenter controller, Karpenter node, and EBS CSI roles. To
+cover every role with one `role/<name_prefix>-<environment>-*` grant, set:
+
+```hcl
+prefix_iam_role_names = true
+```
+
+Set it before the first apply too. Turning it on later replaces those six roles.
 
 ---
 

@@ -179,6 +179,14 @@ run "cert_manager_irsa_adds_only_cert_manager" {
 run "iam_roles_default_to_no_boundary_and_the_root_path" {
   command = plan
 
+  variables {
+    enable_smithdb = true
+  }
+
+  assert {
+    condition     = module.eks.karpenter_node_iam_role_name == "karpenter-plantest-dev-eks"
+    error_message = "With prefix_iam_role_names unset, the Karpenter node role lost its upstream name"
+  }
   assert {
     condition     = aws_iam_role.eso.permissions_boundary == null
     error_message = "With iam_permissions_boundary_arn unset, the ESO role planned a boundary"
@@ -211,6 +219,20 @@ run "iam_boundary_and_path_reach_the_roles" {
   assert {
     condition     = aws_iam_role.eso.path == "/langsmith/"
     error_message = "iam_role_path did not reach the ESO role"
+  }
+}
+
+run "prefix_iam_role_names_starts_the_upstream_names_with_the_base" {
+  command = plan
+
+  variables {
+    prefix_iam_role_names = true
+    enable_smithdb        = true
+  }
+
+  assert {
+    condition     = module.eks.karpenter_node_iam_role_name == "plantest-dev-karpenter-node"
+    error_message = "prefix_iam_role_names did not reach the Karpenter node role"
   }
 }
 

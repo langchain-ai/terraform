@@ -3,6 +3,19 @@ data "aws_region" "current" {}
 locals {
   custom_networking = length(var.pod_subnet_ids_by_az) > 0
 
+  # Role names that upstream modules choose for themselves. With a prefix, each
+  # starts with it like the roles this module names, so one role/<prefix>-*
+  # grant covers them all. Each fits a 15-character name_prefix plus "staging"
+  # under IAM's 38-character name_prefix limit.
+  prefixed_role_names = var.iam_role_name_prefix != null
+  role_names = {
+    alb_controller     = local.prefixed_role_names ? "${var.iam_role_name_prefix}-lb-controller" : "alb-controller"
+    cluster_autoscaler = local.prefixed_role_names ? "${var.iam_role_name_prefix}-autoscaler" : "cluster-autoscaler"
+    karpenter          = local.prefixed_role_names ? "${var.iam_role_name_prefix}-karpenter" : "karpenter"
+    karpenter_node     = local.prefixed_role_names ? "${var.iam_role_name_prefix}-karpenter-node" : "karpenter-${var.cluster_name}"
+    ebs_csi            = local.prefixed_role_names ? "${var.iam_role_name_prefix}-ebs-csi" : "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  }
+
   # Custom networking owns the vpc-cni add-on, so a vpc-cni entry in eks_addons
   # moves here instead of going to the Blueprints add-on, where it would be a
   # second aws_eks_addon for the same add-on. Its settings carry over, and its
@@ -43,8 +56,12 @@ locals {
   # try() covers extra groups, which are untyped and may omit either attribute.
   eks_managed_node_groups = {
     for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
-      desired_size                  = coalesce(try(v.desired_size, null), v.min_size)
-      iam_role_use_name_prefix      = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      desired_size             = coalesce(try(v.desired_size, null), v.min_size)
+      iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      # A node group name is user-chosen, so truncate it to the name_prefix limit.
+      iam_role_name = try(v.iam_role_name, null) != null || !local.prefixed_role_names ? try(v.iam_role_name, null) : (
+        coalesce(try(v.iam_role_use_name_prefix, null), true) ? substr("${var.iam_role_name_prefix}-${try(v.name, k)}", 0, 37) : "${var.iam_role_name_prefix}-${try(v.name, k)}"
+      )
       iam_role_permissions_boundary = var.iam_permissions_boundary_arn
       iam_role_path                 = var.iam_role_path
     })
@@ -95,7 +112,7 @@ module "irsa-ebs-csi" {
   version = "4.24.1"
 
   create_role                   = true
-  role_name                     = "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  role_name                     = local.role_names.ebs_csi
   role_path                     = var.iam_role_path
   role_permissions_boundary_arn = var.iam_permissions_boundary_arn
   provider_url                  = module.eks.oidc_provider
@@ -132,6 +149,7 @@ module "eks_blueprints_addons" {
   # "no endpoints available for service aws-load-balancer-webhook-service" if the
   # ALB controller pods aren't ready yet.
   aws_load_balancer_controller = {
+    role_name                     = local.role_names.alb_controller
     role_path                     = var.iam_role_path
     role_permissions_boundary_arn = var.iam_permissions_boundary_arn
     set = [{
@@ -153,6 +171,7 @@ module "eks_blueprints_addons" {
   karpenter = merge(
     {
       chart_version                 = var.karpenter_chart_version
+      role_name                     = local.role_names.karpenter
       role_path                     = var.iam_role_path
       role_permissions_boundary_arn = var.iam_permissions_boundary_arn
     },
@@ -165,6 +184,7 @@ module "eks_blueprints_addons" {
   # tainted, so it never lands there.
   karpenter_node = {
     iam_role_use_name_prefix      = false
+    iam_role_name                 = local.role_names.karpenter_node
     iam_role_path                 = var.iam_role_path
     iam_role_permissions_boundary = var.iam_permissions_boundary_arn
   }
@@ -172,6 +192,7 @@ module "eks_blueprints_addons" {
   # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
   cluster_autoscaler = {
     chart_version                 = "9.56.0"
+    role_name                     = local.role_names.cluster_autoscaler
     role_path                     = var.iam_role_path
     role_permissions_boundary_arn = var.iam_permissions_boundary_arn
   }
