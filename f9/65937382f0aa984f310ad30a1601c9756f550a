@@ -1,0 +1,27 @@
+modules/baremetal/ARCHITECTURE.md
+  s_b081d01eaf8fac::t_c871d2f2a837f8 145
+modules/baremetal/README.md
+  s_b081d01eaf8fac::t_c871d2f2a837f8 212
+modules/baremetal/infra/terraform.tfvars.example
+  s_b081d01eaf8fac::t_c871d2f2a837f8 16
+modules/baremetal/infra/variables.tf
+  s_b081d01eaf8fac::t_c871d2f2a837f8 54-55
+modules/baremetal/infra/locals.tf
+  s_b081d01eaf8fac::t_c871d2f2a837f8 183,326
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f965937382f0aa984f310ad30a1601c9756f550a",
+  "prompts": {},
+  "sessions": {
+    "s_b081d01eaf8fac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60a35b35-90eb-4a7e-b6de-e8caa7a6fc70",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}
