@@ -1836,7 +1836,7 @@ variable "envoy_gateway_version" {
 
 variable "envoy_gateway_image_registry" {
   type        = string
-  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, so the mirror keeps the source host as the first path segment, the layout LangSmith's images.registry expects. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, the layout LangSmith's images.registry expects, when the mirror keeps the source host as the first path segment (envoy_gateway_image_registry_keeps_source_host = true, the default). A mirror that drops it, as a Docker Hub proxy repository in Nexus or Artifactory does, takes envoy_gateway_image_registry_keeps_source_host = false and is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
   default     = ""
 
   validation {
@@ -1850,6 +1850,12 @@ variable "envoy_gateway_image_registry" {
     condition     = var.envoy_gateway_image_registry == "" || contains(keys(local.envoy_proxy_default_images), var.envoy_gateway_version)
     error_message = "envoy_gateway_image_registry needs the Envoy proxy image that Envoy Gateway uses by default, and the module knows it only for envoy_gateway_version v1.2.0. Set envoy_gateway_version = \"v1.2.0\", or leave envoy_gateway_image_registry empty."
   }
+}
+
+variable "envoy_gateway_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether envoy_gateway_image_registry keeps docker.io as the first path segment under the registry. true (default): the controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version>, the layout LangSmith's images.registry expects. false: the mirror serves Docker Hub's paths directly, as a Docker Hub proxy repository in Nexus or Artifactory does, and the controller is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. The proxy image follows the same rule. Ignored without envoy_gateway_image_registry."
+  default     = true
 }
 
 variable "envoy_gateway_image_pull_secret_name" {
