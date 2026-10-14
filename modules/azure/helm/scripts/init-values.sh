@@ -151,9 +151,13 @@ fi
 
 SANDBOX_WI_CLIENT_ID=""
 SANDBOX_JUICEFS_SECRET=""
+SANDBOX_MIN_REPLICAS=""
+SANDBOX_MAX_REPLICAS=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_WI_CLIENT_ID=$(_tf_out sandbox_host_workload_identity_client_id) || SANDBOX_WI_CLIENT_ID=""
   SANDBOX_JUICEFS_SECRET=$(_tf_out sandbox_juicefs_secret_name) || SANDBOX_JUICEFS_SECRET=""
+  SANDBOX_MIN_REPLICAS=$(_tf_out sandbox_host_min_replicas) || SANDBOX_MIN_REPLICAS=""
+  SANDBOX_MAX_REPLICAS=$(_tf_out sandbox_host_max_replicas) || SANDBOX_MAX_REPLICAS=""
 fi
 
 echo ""
@@ -826,9 +830,14 @@ fi
 # runs sandbox-host and its sandbox VMs. The format Job needs no KVM: it prefers
 # a sandbox node, but runs on any Linux node rather than wait for the sandbox
 # pool to scale up from 0.
+# The elected sandbox-host scales its own Deployment between the sandboxhost
+# pool's min_count (at least 1) and max_count, and each new replica's Pending
+# pod makes the cluster autoscaler add a node. To scale further, raise
+# sandbox_host_max_count, apply, and re-run make init-values and make deploy.
 _sandboxes_file="$VALUES_DIR/langsmith-values-sandboxes.yaml"
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ -z "$SANDBOX_WI_CLIENT_ID" || -z "$SANDBOX_JUICEFS_SECRET" ]]; then
+  if [[ -z "$SANDBOX_WI_CLIENT_ID" || -z "$SANDBOX_JUICEFS_SECRET" ]] \
+    || ! [[ "$SANDBOX_MIN_REPLICAS" =~ ^[0-9]+$ && "$SANDBOX_MAX_REPLICAS" =~ ^[0-9]+$ ]]; then
     fail "enable_sandboxes = true but the sandbox Terraform outputs are missing"
     action "Run terraform apply with enable_sandboxes = true, then re-run make init-values"
     exit 1
@@ -853,6 +862,10 @@ sandboxes:
         sandbox.langsmith.com/host: "true"
       podAnnotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    autoscaling:
+      enabled: true
+      minReplicas: ${SANDBOX_MIN_REPLICAS}
+      maxReplicas: ${SANDBOX_MAX_REPLICAS}
     serviceAccount:
       annotations:
         azure.workload.identity/client-id: "${SANDBOX_WI_CLIENT_ID}"

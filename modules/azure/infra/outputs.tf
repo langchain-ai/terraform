@@ -371,6 +371,18 @@ output "sandbox_juicefs_secret_name" {
   value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
 }
 
+# The chart runs one sandbox-host per node, so its autoscaler follows the
+# sandboxhost pool's bounds. The chart requires minReplicas >= 1.
+output "sandbox_host_min_replicas" {
+  description = "sandboxes.sandboxHost.autoscaling.minReplicas: the sandboxhost pool's min_count, raised to the chart minimum of 1."
+  value       = var.enable_sandboxes ? max(1, local.effective_node_pools["sandboxhost"].min_count) : null
+}
+
+output "sandbox_host_max_replicas" {
+  description = "sandboxes.sandboxHost.autoscaling.maxReplicas: the sandboxhost pool's max_count."
+  value       = var.enable_sandboxes ? local.effective_node_pools["sandboxhost"].max_count : null
+}
+
 output "sandbox_juicefs_container_name" {
   description = "Blob container holding JuiceFS sandbox data."
   value       = var.enable_sandboxes ? azurerm_storage_container.sandbox_juicefs[0].name : null

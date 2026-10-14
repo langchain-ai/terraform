@@ -992,8 +992,12 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
 | every other profile | `Standard_D8ds_v5` |
 
 - Set `sandbox_host_vm_size` when the region has no Dv5 quota, for example `Standard_D8ds_v4` or `Standard_D8ds_v6`.
-- `sandbox_host_min_count` defaults to `0` and `sandbox_host_max_count` to `5`. The cluster autoscaler adds a node when
-  a `sandbox-host` replica is Pending, and keeps one node for each replica.
+- `sandbox_host_min_count` defaults to `0` and `sandbox_host_max_count` to `5`. `sandbox-host` scales its own
+  replicas between those bounds, with a floor of 1. The cluster autoscaler adds a node for each Pending replica, and
+  keeps one node for each replica.
+- `sandbox-host` keeps one empty host above current demand, so the pool runs one node more than its sandboxes need, up
+  to `sandbox_host_max_count`.
+- To scale further, raise `sandbox_host_max_count`, then run `make apply`, `make init-values`, and `make deploy`.
 - `sandbox-host` has the pod annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so the autoscaler
   does not remove a node that runs sandboxes.
 - The `juicefs-format` Job prefers a sandbox node but runs on any Linux node, so it does not wait for the pool to scale

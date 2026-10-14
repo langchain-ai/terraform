@@ -64,6 +64,10 @@ run "sandboxes_absent_when_disabled" {
     condition     = alltrue([for v in values(module.k8s_bootstrap.network_policy_excluded_components) : length(v) == 0])
     error_message = "enable_sandboxes = false narrowed the default-deny selector"
   }
+  assert {
+    condition     = output.sandbox_host_min_replicas == null && output.sandbox_host_max_replicas == null
+    error_message = "enable_sandboxes = false still output sandbox-host replica bounds"
+  }
 }
 
 run "sandboxes_present_when_enabled" {
@@ -150,6 +154,40 @@ run "additional_node_pools_overrides_sandboxhost" {
   assert {
     condition     = local.effective_node_pools["sandboxhost"].vm_size == "Standard_D16ds_v6"
     error_message = "additional_node_pools.sandboxhost did not replace the generated pool"
+  }
+  assert {
+    condition     = output.sandbox_host_min_replicas == 1 && output.sandbox_host_max_replicas == 2
+    error_message = "Replica bounds did not follow the additional_node_pools.sandboxhost counts"
+  }
+}
+
+# The chart's sandbox-host autoscaler follows the pool: minReplicas is min_count
+# raised to the chart minimum of 1, and maxReplicas is max_count.
+run "sandbox_host_replicas_follow_the_pool_defaults" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+  }
+
+  assert {
+    condition     = output.sandbox_host_min_replicas == 1 && output.sandbox_host_max_replicas == 5
+    error_message = "Default pool (0 to 5) did not give replicas 1 to 5: ${output.sandbox_host_min_replicas} to ${output.sandbox_host_max_replicas}"
+  }
+}
+
+run "sandbox_host_replicas_follow_the_pool_counts" {
+  command = plan
+
+  variables {
+    enable_sandboxes       = true
+    sandbox_host_min_count = 2
+    sandbox_host_max_count = 8
+  }
+
+  assert {
+    condition     = output.sandbox_host_min_replicas == 2 && output.sandbox_host_max_replicas == 8
+    error_message = "Pool 2 to 8 did not give replicas 2 to 8: ${output.sandbox_host_min_replicas} to ${output.sandbox_host_max_replicas}"
   }
 }
 
