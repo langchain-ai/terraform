@@ -120,7 +120,9 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 # ── Resource Quota ────────────────────────────────────────────────────────────
 # Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
 # deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
-# Defaults: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods.
+# Base: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods. The
+# resource_quota_extra_* inputs add SmithDB's pods on top, once to requests and
+# twice to limits, so a plain install keeps the base figures.
 
 resource "kubernetes_resource_quota_v1" "langsmith" {
   metadata {
@@ -130,11 +132,11 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
 
   spec {
     hard = {
-      "requests.cpu"    = "40"
-      "requests.memory" = "80Gi"
-      "limits.cpu"      = "80"
-      "limits.memory"   = "160Gi"
-      pods              = "200"
+      "requests.cpu"    = tostring(40 + var.resource_quota_extra_cpu)
+      "requests.memory" = "${80 + var.resource_quota_extra_memory_gi}Gi"
+      "limits.cpu"      = tostring(80 + var.resource_quota_extra_cpu * 2)
+      "limits.memory"   = "${160 + var.resource_quota_extra_memory_gi * 2}Gi"
+      pods              = tostring(200 + var.resource_quota_extra_pods)
     }
   }
 }
@@ -259,7 +261,7 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
 # ── Kubernetes Secrets (infrastructure dependencies) ──────────────────────────
 # These are created here because they depend on Terraform outputs (connection URLs).
 # Application-level secrets (api_key_salt, jwt_secret, admin_password) are
-# written by helm/scripts/generate-secrets.sh from Azure Key Vault.
+# written by infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
 
 # PostgreSQL connection URL injected into the namespace so the Helm chart can
 # reference it via existingSecretName. Created here (not by Helm) because the

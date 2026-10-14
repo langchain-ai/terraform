@@ -329,6 +329,65 @@ run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# The other direction: the default pool stays nonzonal and a zonal additional
+# pool supplies SmithDB's nodes, which is how a running cluster gains zones
+# without a rebuild.
+run "smithdb_accepts_a_zonal_additional_pool" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D16s_v3"
+        min_count = 0
+        max_count = 3
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+}
+
+# A SmithDB pool pinned at its minimum has no node for the surge pod of a
+# rolling update. The zonal pool keeps the zone rule satisfied, so a failure
+# here can only be the headroom rule.
+run "smithdb_pool_rejects_max_count_equal_to_min_count" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D8s_v4"
+        min_count = 1
+        max_count = 1
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_pool_accepts_one_node_of_headroom" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D8s_v4"
+        min_count = 1
+        max_count = 2
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+}
+
 run "identifier_is_rejected_outright" {
   command = plan
 
@@ -770,6 +829,18 @@ run "smithdb_gates_require_smithdb" {
   expect_failures = [terraform_data.validate_network]
 }
 
+run "smithdb_sizing_rejects_an_unlisted_size" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    smithdb_sizing     = "xlarge"
+  }
+
+  expect_failures = [var.smithdb_sizing]
+}
+
 run "smithdb_migration_requires_ingestion" {
   command = plan
 
@@ -781,6 +852,36 @@ run "smithdb_migration_requires_ingestion" {
   }
 
   expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_migration_parallelism_rejects_zero" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 0
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
+}
+
+run "smithdb_migration_parallelism_rejects_more_than_30" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 31
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
+}
+
+run "smithdb_migration_parallelism_rejects_a_fraction" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 1.5
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
 }
 
 # ── Storage and ClusterIP rules ──────────────────────────────────────────────

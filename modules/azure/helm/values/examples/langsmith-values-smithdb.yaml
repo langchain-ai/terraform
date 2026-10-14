@@ -5,6 +5,19 @@
 
 smithdb:
   enabled: true
-  # Cache sizes and workload resources come from the chart's small tier. The
+  # The chart tier and replicas come from smithdb_sizing, in the generated
+  # langsmith-values-smithdb-sizing.yaml, which loads before this file. The
   # generated overrides select Terraform's Premium SSD v2 StorageClass.
-  resourceTier: small
+
+  # The backfill holds every task in the last N seconds before the job's end
+  # time until N seconds after it, so late updates to in-flight runs are not
+  # missed. The default is 7200 (2 hours) regardless of data volume, so the
+  # backfill takes at least that long. Uncomment to shorten it on a cluster with
+  # little traffic; a value shorter than your longest-running traces can miss
+  # their late updates. Set it before the backfill deploy. To change it on a
+  # running backfill, see SMITHDB.md, "Staged rollout".
+  # migration:
+  #   job:
+  #     extraEnv:
+  #       - name: SMITHDB_MIGRATION__WORKER_POOL__RECENT_RUNS_SAFETY_DELAY
+  #         value: "900"

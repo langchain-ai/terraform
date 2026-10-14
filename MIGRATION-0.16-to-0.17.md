@@ -10,8 +10,10 @@ Most of the 0.16 values schema carries over to 0.17. The modules absorb two chan
 - SmithDB on GCP: chart 0.17 changes the cache and migration values (section 3).
 
 On GCP, `make apply` also removes the project-wide Secret Manager grant (section 4)
-and upgrades Envoy Gateway (section 5). Otherwise, a deployment with
-`enable_sandboxes = false` and `enable_smithdb = false` only moves the chart pin.
+and upgrades Envoy Gateway (section 5). On Azure with SmithDB, `make apply` can
+change the metastore SKU, which restarts the metastore (section 6). Otherwise, a
+deployment with `enable_sandboxes = false` and `enable_smithdb = false` only moves
+the chart pin.
 
 ## Status of the 0.17 line
 
@@ -251,12 +253,58 @@ both outputs.
   and the two CRD files from the GitHub releases of `kubernetes-sigs/gateway-api`
   (v1.6.1) and `envoyproxy/gateway` (v1.9.2).
 
+## 6) SmithDB metastore SKU on Azure
+
+This section applies to `enable_smithdb = true` on Azure. The Azure module always
+creates the SmithDB metastore, an Azure Database for PostgreSQL Flexible Server.
+
+An unset `smithdb_metastore_sku_name` used to give `GP_Standard_D2ds_v5`. It now
+follows `smithdb_sizing`, and an unset `smithdb_sizing` follows `sizing_profile`.
+See [Sizing](modules/azure/SMITHDB.md#sizing).
+
+- Check the size. `sizing_profile` defaults to `production`, which resolves to
+  `medium`. `minimum` resolves to `minimal`, `dev` and `default` to `small`, and
+  `production-large` to `large`.
+- Check the SKU. For an unset `smithdb_metastore_sku_name`, the SKU goes from
+  `GP_Standard_D2ds_v5` (2 vCPU, 8 GiB) to `MO_Standard_E2ds_v5` (2 vCPU, 16 GiB)
+  for `small`, `MO_Standard_E4ds_v5` (4 vCPU, 32 GiB) for `medium`, and
+  `MO_Standard_E8ds_v5` (8 vCPU, 64 GiB) for `large`. `minimal` keeps
+  `GP_Standard_D2ds_v5`. The plan shows an in-place update of `sku_name` on
+  `module.smithdb[0].azurerm_postgresql_flexible_server.metastore`.
+- `make apply` then scales the server in its last stage, and Azure restarts it.
+  With near-zero downtime scaling, the default, clients can lose the metastore for
+  40 to 60 seconds. In some cases Azure uses regular scaling, which takes 2 to 10
+  minutes. Examples are a quota limit and a delegated subnet with no free IP
+  address. See
+  [Scaling resources](https://learn.microsoft.com/en-us/azure/postgresql/scale/concepts-scaling-resources).
+  Apply in a maintenance window.
+- Check the quota before `make apply`. The `MO_Standard_E*ds_v5` SKUs use the
+  Edsv5 vCPU family, and a subscription can have a quota of 0 for it. With a quota
+  that is too low, the last stage of `make apply` fails. Confirm that the region
+  offers the SKU, then read the family quota:
+
+  ```bash
+  az postgres flexible-server list-skus --location <region>
+  az rest --method get \
+    --url "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.DBforPostgreSQL/locations/<region>/resourceType/flexibleServers/usages?api-version=2025-08-01" \
+    --query "value[?name.value=='standardEDSv5Family']"
+  ```
+
+  `az rest` fills in `{subscriptionId}` from the current subscription. The `limit`
+  minus the `currentValue` must cover the vCPU count of the new SKU. To raise the
+  limit, see
+  [Request quota increases](https://learn.microsoft.com/en-us/azure/postgresql/configure-maintain/how-to-request-quota-increase).
+- To keep the old SKU, set `smithdb_metastore_sku_name = "GP_Standard_D2ds_v5"` in
+  `infra/terraform.tfvars` before `make apply`. A wrapper root must pass the same
+  value to the module.
+
 ## Upgrade path
 
 1) Take a database backup. Chart downgrades are not supported, so 0.17 to 0.16 is not
    a rollback path - see [Self-host upgrades](https://docs.langchain.com/langsmith/self-host-upgrades).
 2) Check out a `v0.17.*` tag. With SmithDB on GCP, make the `terraform.tfvars` and
-   overlay changes of section 3 before step 3. Steps 3 to 5 then run `make apply`,
+   overlay changes of section 3 before step 3. With SmithDB on Azure, do the SKU and
+   quota checks of section 6 before step 3. Steps 3 to 5 then run `make apply`,
    `make init-values`, and `make deploy`.
 3) Run `make apply`. On GCP with sandboxes, this adds the `langsmith-sandbox-host`
    Workload Identity binding and the bucket grant for the sandbox node service

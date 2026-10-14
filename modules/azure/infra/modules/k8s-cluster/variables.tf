@@ -110,8 +110,9 @@ variable "additional_node_pools" {
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
+    zones             = optional(list(string))
   }))
-  description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
+  description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku and zones to availability_zones; both are validated in the root module."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64GB RAM — Dsv5 family; matches the root module's production default
@@ -182,7 +183,7 @@ variable "workload_identity_name" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones for the default node pool. The default [] creates a non-zonal pool, which is required when the node VM size is not offered in every zone of the region. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
+  description = "Availability zones for the default node pool and for every additional node pool that sets no zones of its own. The default [] creates non-zonal pools, which is required when the node VM size is not offered in every zone of the region. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
   default     = []
 }
 
