@@ -314,6 +314,12 @@ variable "sandbox_juicefs_config" {
   default     = {}
 }
 
+variable "sandbox_juicefs_config_revision" {
+  type        = number
+  description = "Revision of the write-only JuiceFS config Secret. A change rewrites the Secret from sandbox_juicefs_config."
+  default     = 1
+}
+
 variable "platform_backend_component" {
   type        = string
   description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. The default-deny policies leave it out when sandboxes are on."

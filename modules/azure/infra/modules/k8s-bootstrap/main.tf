@@ -399,7 +399,9 @@ resource "kubernetes_secret_v1" "license" {
 # JuiceFS config for sandbox-host and the chart's juicefs-format Job, passed to
 # the chart as sandboxes.juicefs.existingSecretName. The format Job's name hashes
 # this Secret's name, not its data, so a changed value reaches an existing volume
-# only under a new Secret name.
+# only under a new Secret name. Write-only, so the metaurl's Redis key stays out
+# of this resource's state, and a new value is written only when the revision
+# changes.
 resource "kubernetes_secret_v1" "sandbox_juicefs" {
   count = var.enable_sandboxes ? 1 : 0
 
@@ -408,7 +410,8 @@ resource "kubernetes_secret_v1" "sandbox_juicefs" {
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
 
-  data = var.sandbox_juicefs_config
+  data_wo          = var.sandbox_juicefs_config
+  data_wo_revision = var.sandbox_juicefs_config_revision
 
   type = "Opaque"
 }

@@ -1056,7 +1056,8 @@ kubectl rollout restart deployment -n langsmith -l app=sandbox-host
 **Disable**
 
 1. Set `enable_sandboxes = false`, then run `make deploy`. The chart removes `sandbox-host` while the Redis and the
-   Secret still exist.
+   Secret still exist. If `sandbox_juicefs_redis_prevent_destroy = true`, set it to `false` too, or the plan in the
+   next step refuses.
 2. Run `make apply`. Terraform deletes the node pool, the JuiceFS Redis, the Blob container and its data, and the
    identity.
 

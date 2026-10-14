@@ -333,6 +333,31 @@ run "sandboxes_rejected_in_azure_government" {
   expect_failures = [terraform_data.validate_network]
 }
 
+run "disabling_sandboxes_is_refused_under_the_redis_guard" {
+  command = plan
+
+  variables {
+    enable_sandboxes                      = false
+    sandbox_juicefs_redis_prevent_destroy = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "the_redis_guard_allows_sandboxes_on" {
+  command = plan
+
+  variables {
+    enable_sandboxes                      = true
+    sandbox_juicefs_redis_prevent_destroy = true
+  }
+
+  assert {
+    condition     = length(module.sandbox_juicefs_redis) == 1
+    error_message = "The Redis guard blocked a plan with sandboxes on"
+  }
+}
+
 # The bucket is https://<container>.<blob suffix>, which JuiceFS splits into
 # the container name and the endpoint. A wrong suffix fails only at mount time.
 run "juicefs_bucket_is_the_container_host" {

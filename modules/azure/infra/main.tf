@@ -1038,6 +1038,14 @@ resource "terraform_data" "validate_network" {
       error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
     }
 
+    # A flag rather than lifecycle prevent_destroy, which takes only a literal:
+    # selecting between a guarded and an unguarded copy of the Redis would
+    # replace it whenever the flag changed.
+    precondition {
+      condition     = var.enable_sandboxes || !var.sandbox_juicefs_redis_prevent_destroy
+      error_message = "sandbox_juicefs_redis_prevent_destroy = true refuses enable_sandboxes = false, which deletes the JuiceFS metadata Redis and every sandbox filesystem with it. To disable sandboxes, set sandbox_juicefs_redis_prevent_destroy = false as well."
+    }
+
     # A Private Endpoint removes the public listener that storage_allowed_ips
     # writes rules for, so the allowlist stops granting anything. Say so at plan
     # time rather than leaving an operator to believe a CI runner still reaches
@@ -2386,6 +2394,7 @@ module "k8s_bootstrap" {
     bucket       = local.sandbox_juicefs_bucket
     "access-key" = module.blob.storage_account_name
   } : {}
+  sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.

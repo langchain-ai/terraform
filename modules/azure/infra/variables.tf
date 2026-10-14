@@ -1417,10 +1417,22 @@ variable "sandbox_juicefs_redis_high_availability" {
   default     = true
 }
 
+variable "sandbox_juicefs_redis_prevent_destroy" {
+  type        = bool
+  description = "While true, plan refuses enable_sandboxes = false, which would delete the JuiceFS metadata Redis and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes. It does not stop terraform destroy."
+  default     = false
+}
+
 variable "sandbox_juicefs_csi_config_secret_name" {
   type        = string
   description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket, access-key). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
   default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  type        = number
+  description = "Revision for the write-only sandbox JuiceFS config Secret. Increment to rewrite the Secret, for example after the JuiceFS Redis access key is regenerated. The chart does not restart sandbox-host for an in-place rewrite, so restart it after the apply."
+  default     = 1
 }
 
 # tflint-ignore: terraform_unused_declarations
