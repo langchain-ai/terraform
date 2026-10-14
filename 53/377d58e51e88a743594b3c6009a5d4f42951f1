@@ -1,0 +1,38 @@
+modules/baremetal/ARCHITECTURE.md
+  s_b081d01eaf8fac::t_f0b5c6f24b1140 138-143
+modules/baremetal/helm/values/examples/langsmith-values-fleet.yaml
+  s_b081d01eaf8fac::t_5a6f78cb286ad9 3-5
+  s_b081d01eaf8fac::t_be5f48eac1b330 42-43,68,81-82
+modules/baremetal/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_b081d01eaf8fac::t_5a6f78cb286ad9 3-5
+modules/baremetal/infra/locals.tf
+  s_b081d01eaf8fac::t_9427b3456b551a 214,227-228
+modules/baremetal/TROUBLESHOOTING.md
+  s_b081d01eaf8fac::t_f0b5c6f24b1140 38-39
+  s_b081d01eaf8fac::t_10b068def23af6 40
+modules/baremetal/helm/values/examples/langsmith-values-standalone-insights.yaml
+  s_b081d01eaf8fac::t_5a6f78cb286ad9 3-5
+  s_b081d01eaf8fac::t_0cee8c963e3b4f 67-76
+modules/baremetal/infra/tests/budget.tftest.hcl
+  s_b081d01eaf8fac::t_9427b3456b551a 395-399
+  s_b081d01eaf8fac::t_94a17bc733090e 376-394,400-410
+modules/baremetal/infra/helm_values.tf
+  s_b081d01eaf8fac::t_94a17bc733090e 38-42,48,50-52,57-80,113
+  s_b081d01eaf8fac::t_9427b3456b551a 43-47,49,53-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53377d58e51e88a743594b3c6009a5d4f42951f1",
+  "prompts": {},
+  "sessions": {
+    "s_b081d01eaf8fac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60a35b35-90eb-4a7e-b6de-e8caa7a6fc70",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}
