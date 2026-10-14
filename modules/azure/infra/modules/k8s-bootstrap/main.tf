@@ -409,6 +409,34 @@ resource "kubernetes_secret_v1" "smithdb_metastore" {
 
 # LangSmith license key secret — required for the application to start.
 # The Helm chart references this via config.licenseKeySecretName.
+# External ClickHouse connection, in the Secret the chart reads through
+# clickhouse.external.existingSecretName, with the chart's key names
+# (values.yaml at 0.16.39: hostSecretKey clickhouse_host, portSecretKey
+# clickhouse_port for HTTP, nativePortSecretKey clickhouse_native_port, and so
+# on). Written here only when clickhouse_host is set; otherwise init-values.sh
+# prompts for the connection and creates the same Secret, as before. The
+# cluster name is not a Secret key: init-values.sh writes it into the values.
+resource "kubernetes_secret_v1" "clickhouse" {
+  count = var.use_external_clickhouse && var.clickhouse_host != "" ? 1 : 0
+
+  metadata {
+    name      = "langsmith-clickhouse"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = {
+    clickhouse_host        = var.clickhouse_host
+    clickhouse_port        = tostring(var.clickhouse_http_port)
+    clickhouse_native_port = tostring(var.clickhouse_native_port)
+    clickhouse_user        = var.clickhouse_user
+    clickhouse_password    = var.clickhouse_password
+    clickhouse_db          = var.clickhouse_database
+    clickhouse_tls         = var.clickhouse_tls ? "true" : "false"
+  }
+
+  type = "Opaque"
+}
+
 resource "kubernetes_secret_v1" "license" {
   count = var.langsmith_license_key != "" ? 1 : 0
 

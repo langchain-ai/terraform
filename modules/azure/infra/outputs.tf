@@ -348,3 +348,8 @@ output "postgres_high_availability_mode" {
   description = "The PostgreSQL high availability mode the module configures (ZoneRedundant or SameZone), null when HA is off or postgres_source is not external."
   value       = var.postgres_source == "external" ? module.postgres[0].high_availability_mode : null
 }
+
+output "clickhouse_secret_name" {
+  description = "Name of the external ClickHouse connection Secret Terraform writes (langsmith-clickhouse), null when ClickHouse is in-cluster or when init-values.sh creates the Secret."
+  value       = module.k8s_bootstrap.clickhouse_secret_name
+}

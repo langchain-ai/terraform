@@ -67,3 +67,8 @@ output "langsmith_image_pull_secret_service_accounts" {
   description = "The service accounts in the LangSmith namespace that carry langsmith_image_pull_secret_name as imagePullSecrets. Empty without one."
   value       = local.langsmith_image_pull_secret_service_accounts
 }
+
+output "clickhouse_secret_name" {
+  description = "Name of the external ClickHouse connection Secret Terraform writes, null when ClickHouse is in-cluster or when init-values.sh creates the Secret (clickhouse_host empty)."
+  value       = var.use_external_clickhouse && var.clickhouse_host != "" ? kubernetes_secret_v1.clickhouse[0].metadata[0].name : null
+}

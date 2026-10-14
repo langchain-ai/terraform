@@ -715,6 +715,94 @@ variable "clickhouse_source" {
   }
 }
 
+# ── External ClickHouse connection ────────────────────────────────────────────
+# With clickhouse_source = "external" and clickhouse_host set, the k8s-bootstrap
+# module writes the langsmith-clickhouse Secret the chart reads (host, ports,
+# user, password, database, tls, the chart's own key names) and init-values.sh
+# skips its prompt for them. With clickhouse_host empty, init-values.sh prompts
+# as before and creates the Secret itself. A custom CA for the server goes
+# through langsmith_custom_ca_secret_name: the chart validates ClickHouse's
+# certificate against config.customCa, not a ClickHouse-specific secret.
+variable "clickhouse_host" {
+  type        = string
+  description = "Host of an external ClickHouse, with clickhouse_source = \"external\": a self-hosted cluster (for example the Altinity operator's service, <chi>-<cluster>.<namespace>.svc) or a managed endpoint. Set, Terraform writes the langsmith-clickhouse Secret from the clickhouse_* variables and make init-values skips its prompt; empty (default), init-values prompts for the connection and creates the Secret itself. A host without a port; the ports are clickhouse_http_port and clickhouse_native_port."
+  default     = ""
+
+  validation {
+    condition     = var.clickhouse_host == "" || var.clickhouse_source == "external"
+    error_message = "clickhouse_host only applies with clickhouse_source = \"external\". Set clickhouse_source = \"external\", or leave clickhouse_host empty."
+  }
+
+  validation {
+    condition     = var.clickhouse_host == "" || can(regex("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$", var.clickhouse_host))
+    error_message = "clickhouse_host must be a host name or address with no scheme, port or path (e.g. 'ch-repl-replicated.langsmith-data.svc' or 'abc.clickhouse.cloud')."
+  }
+}
+
+variable "clickhouse_http_port" {
+  type        = number
+  description = "HTTP port of the external ClickHouse (the chart's clickhouse_port): 8123 plain, 8443 with TLS. Applies with clickhouse_host."
+  default     = 8443
+
+  validation {
+    condition     = var.clickhouse_http_port >= 1 && var.clickhouse_http_port <= 65535
+    error_message = "clickhouse_http_port must be a port number from 1 to 65535."
+  }
+}
+
+variable "clickhouse_native_port" {
+  type        = number
+  description = "Native protocol port of the external ClickHouse (the chart's clickhouse_native_port): 9000 plain, 9440 with TLS. Applies with clickhouse_host."
+  default     = 9440
+
+  validation {
+    condition     = var.clickhouse_native_port >= 1 && var.clickhouse_native_port <= 65535
+    error_message = "clickhouse_native_port must be a port number from 1 to 65535."
+  }
+}
+
+variable "clickhouse_user" {
+  type        = string
+  description = "User LangSmith connects to the external ClickHouse as. Applies with clickhouse_host."
+  default     = "default"
+}
+
+variable "clickhouse_password" {
+  type        = string
+  description = "Password of clickhouse_user. Required with clickhouse_host. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars; it is written to the langsmith-clickhouse Secret and held in state, as the Postgres password is."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.clickhouse_host == "" || var.clickhouse_password != ""
+    error_message = "clickhouse_password is required with clickhouse_host: the chart reads every connection field from the Secret, and a missing key leaves every LangSmith pod in CreateContainerConfigError."
+  }
+}
+
+variable "clickhouse_database" {
+  type        = string
+  description = "Database LangSmith uses on the external ClickHouse. Applies with clickhouse_host."
+  default     = "default"
+}
+
+variable "clickhouse_tls" {
+  type        = bool
+  description = "Whether LangSmith connects to the external ClickHouse over TLS. The certificate is validated against the system CAs, plus the bundle in langsmith_custom_ca_secret_name when set. Applies with clickhouse_host."
+  default     = true
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "clickhouse_cluster" {
+  type        = string
+  description = "Name of the ClickHouse cluster (the cluster in the server's remote_servers, for example the Altinity operator's cluster name) that LangSmith's migrations create tables ON CLUSTER in, written as clickhouse.external.cluster. Set it before the first deploy against a replicated ClickHouse: the first migration decides whether tables are Replicated*MergeTree, and a standalone schema cannot be converted later. Empty (default) creates standalone tables. Applies with clickhouse_source = \"external\", whether or not Terraform writes the Secret."
+  default     = ""
+
+  validation {
+    condition     = var.clickhouse_cluster == "" || var.clickhouse_source == "external"
+    error_message = "clickhouse_cluster only applies with clickhouse_source = \"external\": the chart's own ClickHouse is a single server with no cluster."
+  }
+}
+
 variable "redis_subnet_address_prefix" {
   type        = list(string)
   description = "Prefix for the Redis subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
