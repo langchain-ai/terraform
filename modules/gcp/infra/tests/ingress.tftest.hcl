@@ -224,7 +224,7 @@ run "envoy_with_existing_tls_grants_the_secret_and_redirects" {
   }
 }
 
-run "envoy_with_letsencrypt_has_no_gateway_shim_annotation" {
+run "envoy_with_cert_manager_has_no_gateway_shim_annotation" {
   command = plan
 
   module {
@@ -232,7 +232,7 @@ run "envoy_with_letsencrypt_has_no_gateway_shim_annotation" {
   }
 
   variables {
-    tls_certificate_source = "letsencrypt"
+    tls_certificate_source = "cert-manager"
   }
 
   assert {
@@ -241,7 +241,7 @@ run "envoy_with_letsencrypt_has_no_gateway_shim_annotation" {
   }
   assert {
     condition     = length(null_resource.apply_reference_grant) == 1 && length(null_resource.apply_https_redirect) == 1
-    error_message = "Let's Encrypt on Envoy should plan the ReferenceGrant and the redirect"
+    error_message = "cert-manager on Envoy should plan the ReferenceGrant and the redirect"
   }
 }
 
@@ -301,21 +301,6 @@ run "gke_regional_class_reserves_no_static_ip" {
     condition     = !contains(keys(yamldecode(local_file.gke_gateway[0].content).spec), "addresses")
     error_message = "A regional class set spec.addresses"
   }
-}
-
-run "gke_rejects_letsencrypt" {
-  command = plan
-
-  module {
-    source = "./modules/ingress"
-  }
-
-  variables {
-    ingress_type           = "gke"
-    tls_certificate_source = "letsencrypt"
-  }
-
-  expect_failures = [local_file.gke_gateway]
 }
 
 # ── Input validation ─────────────────────────────────────────────────────────

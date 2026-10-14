@@ -183,7 +183,7 @@ LangSmith itself is **not** deployed by Terraform — it is deployed in Pass 2 v
 Internet (HTTPS :443)
   ↓
 Envoy Gateway  (envoy-gateway-system namespace, external LoadBalancer IP)
-  │  TLS terminated from a Secret (existing, cert-manager, or Let's Encrypt);
+  │  TLS terminated from a Secret (existing or cert-manager);
   │  with ingress_type = "gke", at the Google Cloud load balancer instead,
   │  optionally with a Google-managed certificate. HTTP :80 redirects to HTTPS.
   │

@@ -35,7 +35,7 @@ name_prefix                   = "yourname"      # lowercase, ≤ 11 chars
 environment                   = "dev"
 postgres_deletion_protection  = false           # required for clean terraform destroy after test
 gke_deletion_protection       = false           # required for clean terraform destroy after test
-tls_certificate_source        = "none"          # HTTP only — no cert-manager or Let's Encrypt needed
+tls_certificate_source        = "none"          # HTTP only — no certificate needed
 
 # Required when testing SmithDB with a Terraform-created metastore
 smithdb_metastore_deletion_protection = false
@@ -127,7 +127,7 @@ Expected `Running`: `coredns-*`, `fluentbit-*`, `kube-dns-*`, `kube-proxy-*`, `m
 ```bash
 kubectl get pods -n external-secrets   # ESO controller + cert-controller + webhook
 kubectl get pods -n keda               # KEDA controller (if enable_langsmith_deployment=true)
-kubectl get pods -n cert-manager       # cert-manager (if tls_certificate_source=letsencrypt)
+kubectl get pods -n cert-manager       # cert-manager (if tls_certificate_source=cert-manager)
 kubectl get pods -n envoy-gateway-system  # Envoy Gateway controller
 ```
 
@@ -207,20 +207,21 @@ Delegate the domain to the returned name servers. The certificate turns `ACTIVE`
 
 ---
 
-### Let's Encrypt TLS
+### cert-manager TLS (your own issuer)
 
 ```hcl
 # terraform.tfvars
-tls_certificate_source = "letsencrypt"
-letsencrypt_email      = "ops@example.com"
-langsmith_domain       = "langsmith.example.com"
+tls_certificate_source   = "cert-manager"
+cert_manager_issuer_name = "corp-pki"
+langsmith_domain         = "langsmith.example.com"
 ```
 
-**Expected plan**: the Gateway API CRDs applied ahead of cert-manager, the upgrade guard, the cert-manager v1.21.2 Helm release with `config.enableGatewayAPI`, the `letsencrypt-prod` ClusterIssuer, the Certificate, the ReferenceGrant, and the HTTP-to-HTTPS redirect route.
+Create the `corp-pki` ClusterIssuer before `make apply`. A self-signed CA issuer is enough for a test.
+
+**Expected plan**: the upgrade guard, the cert-manager v1.21.2 Helm release, the Certificate for `corp-pki`, and the HTTP-to-HTTPS redirect route. On Envoy Gateway, also the ReferenceGrant.
 
 **Verify**:
 ```bash
-kubectl get clusterissuer -n cert-manager
 kubectl get certificate -n langsmith
 ```
 

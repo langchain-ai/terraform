@@ -738,14 +738,14 @@ variable "tls_certificate_source" {
       'google-managed' - Certificate Manager certificate on the GKE Gateway load balancer. Requires ingress_type = 'gke' with a global class. Recommended for production on GKE Gateway.
       'existing'       - your own certificate in a Kubernetes TLS Secret. Recommended for production on Envoy Gateway; see tls_existing_secret_name.
       'cert-manager'   - cert-manager issues the certificate from your own Issuer or ClusterIssuer (cert_manager_issuer_name).
-      'letsencrypt'    - cert-manager with a public Let's Encrypt HTTP-01 issuer. Envoy Gateway only. For evaluation: it needs the domain reachable from the internet on port 80.
+    'letsencrypt' was removed. See "Moving off Let's Encrypt" in TLS.md.
   EOT
   type        = string
   default     = "none"
 
   validation {
-    condition     = contains(["none", "google-managed", "existing", "cert-manager", "letsencrypt"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be one of: none, google-managed, existing, cert-manager, letsencrypt."
+    condition     = contains(["none", "google-managed", "existing", "cert-manager"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be one of: none, google-managed, existing, cert-manager. 'letsencrypt' was removed: use 'google-managed' on the GKE Gateway, or keep your issued certificate with 'existing'. See \"Moving off Let's Encrypt\" in TLS.md."
   }
 }
 
@@ -767,7 +767,7 @@ variable "tls_google_managed_issuance_config" {
 }
 
 variable "install_cert_manager" {
-  description = "Install cert-manager even when tls_certificate_source does not need it. 'letsencrypt' and 'cert-manager' install it regardless."
+  description = "Install cert-manager even when tls_certificate_source does not need it. 'cert-manager' installs it regardless."
   type        = bool
   default     = false
 }
@@ -798,12 +798,6 @@ variable "cert_manager_issuer_kind" {
     condition     = contains(["ClusterIssuer", "Issuer"], var.cert_manager_issuer_kind)
     error_message = "cert_manager_issuer_kind must be ClusterIssuer or Issuer."
   }
-}
-
-variable "letsencrypt_email" {
-  description = "Email for Let's Encrypt notifications (required if tls_certificate_source is 'letsencrypt')"
-  type        = string
-  default     = ""
 }
 
 variable "tls_existing_secret_name" {

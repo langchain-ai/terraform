@@ -133,32 +133,21 @@ kubectl run redis-test --rm -it --image=redis:7 -n langsmith -- \
 
 ---
 
-### Issue #6 — cert-manager fails to issue Let's Encrypt certificate
+### Issue #6 — cert-manager does not issue the certificate
 
-**Symptom:** `kubectl get certificate -n langsmith` shows `READY=False`. ACME HTTP01 challenge failing.
+**Symptom:** With `tls_certificate_source = "cert-manager"`, `kubectl get certificate -n langsmith` shows `READY=False`, and the Gateway's HTTPS listener cannot find its Secret.
 
-**Cause:** The DNS A record does not point to the Envoy Gateway IP, or port 80 is blocked by a firewall rule on the load balancer.
+**Cause:** The issuer in `cert_manager_issuer_name` does not exist, is not Ready, or cannot issue for `langsmith_domain`.
 
 **Fix:**
 
 ```bash
-# Get Gateway external IP
-kubectl get svc -n envoy-gateway-system \
-  -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway \
-  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'
-
-# Check certificate and challenge status
-kubectl describe certificate <cert-name> -n langsmith
-kubectl get challenges -n langsmith
-kubectl describe challenge -n langsmith
-
-# Verify DNS resolution
-dig +short <your-langsmith-domain>
+kubectl describe certificate <tls_secret_name> -n langsmith
+kubectl get certificaterequest -n langsmith
+kubectl describe clusterissuer <cert_manager_issuer_name>   # or: kubectl describe issuer <name> -n langsmith
 ```
 
-The DNS A record must resolve to the Gateway IP before the certificate can be issued. cert-manager's HTTP01 solver needs port 80 to be accessible from the internet. If that is not possible on your network, Let's Encrypt is the wrong source: use `google-managed`, `existing`, or `cert-manager` with your own issuer ([TLS.md](TLS.md)).
-
-`kubectl get challenges` showing nothing at all, with the Certificate stuck, usually means cert-manager's Gateway API support is off. Terraform turns it on for `letsencrypt`; check `kubectl logs -n cert-manager deploy/cert-manager | grep -i gateway`.
+The events of the Certificate and of its CertificateRequest give the reason. An ACME issuer must use DNS-01: Terraform does not route HTTP-01 challenges to the Gateway ([TLS.md](TLS.md)).
 
 ---
 
@@ -486,7 +475,7 @@ kubectl logs -n langsmith deploy/langsmith-backend --tail=100 -f
 ```bash
 kubectl get certificate -n langsmith
 kubectl describe certificate <cert-name> -n langsmith
-kubectl get challenges -n langsmith
+kubectl get certificaterequest -n langsmith
 kubectl get clusterissuer
 
 # google-managed (GKE Gateway): the certificate is in Certificate Manager

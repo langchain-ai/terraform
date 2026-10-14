@@ -197,13 +197,13 @@ variable "install_keda" {
 # TLS / Certificate Configuration
 #------------------------------------------------------------------------------
 variable "tls_certificate_source" {
-  description = "Source of TLS certificates: 'none', 'google-managed', 'existing', 'cert-manager', or 'letsencrypt'. This module handles the Secret-based sources; 'google-managed' lives on the load balancer."
+  description = "Source of TLS certificates: 'none', 'google-managed', 'existing', or 'cert-manager'. This module handles the Secret-based sources; 'google-managed' lives on the load balancer."
   type        = string
   default     = "none"
 
   validation {
-    condition     = contains(["none", "google-managed", "existing", "cert-manager", "letsencrypt"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be one of: none, google-managed, existing, cert-manager, letsencrypt."
+    condition     = contains(["none", "google-managed", "existing", "cert-manager"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be one of: none, google-managed, existing, cert-manager."
   }
 }
 
@@ -224,23 +224,6 @@ variable "cert_manager_version" {
   }
 }
 
-variable "cert_manager_enable_gateway_api" {
-  description = "Turn on cert-manager's Gateway API support, which the Let's Encrypt HTTP-01 solver needs. Applies the Gateway API CRDs from gateway_api_crds_url before cert-manager starts."
-  type        = bool
-  default     = false
-}
-
-variable "gateway_api_crds_url" {
-  description = "Gateway API CRD bundle applied ahead of cert-manager when cert_manager_enable_gateway_api is true. Must match the ingress module's bundle."
-  type        = string
-  default     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
-
-  validation {
-    condition     = startswith(var.gateway_api_crds_url, "https://")
-    error_message = "gateway_api_crds_url must be an https:// URL."
-  }
-}
-
 variable "cert_manager_issuer_name" {
   description = "Issuer or ClusterIssuer for tls_certificate_source = 'cert-manager'. Created by the operator, not by this module."
   type        = string
@@ -256,18 +239,6 @@ variable "cert_manager_issuer_kind" {
     condition     = contains(["ClusterIssuer", "Issuer"], var.cert_manager_issuer_kind)
     error_message = "cert_manager_issuer_kind must be ClusterIssuer or Issuer."
   }
-}
-
-variable "letsencrypt_email" {
-  description = "Email for Let's Encrypt certificate notifications (required if tls_certificate_source is 'letsencrypt')"
-  type        = string
-  default     = ""
-}
-
-variable "gateway_name" {
-  description = "Name of the Gateway resource for cert-manager HTTP01 challenges (Envoy Gateway)"
-  type        = string
-  default     = "langsmith-gateway"
 }
 
 #------------------------------------------------------------------------------
@@ -288,7 +259,7 @@ variable "tls_certificate_key" {
 }
 
 variable "tls_secret_name" {
-  description = "Name of the TLS Secret the Gateway HTTPS listener reads, in the LangSmith namespace. Created here for 'existing' with PEM inputs, by cert-manager for 'letsencrypt' and 'cert-manager', or by the operator with tls_existing_secret_name. Empty when no Secret is used."
+  description = "Name of the TLS Secret the Gateway HTTPS listener reads, in the LangSmith namespace. Created here for 'existing' with PEM inputs, by cert-manager for 'cert-manager', or by the operator with tls_existing_secret_name. Empty when no Secret is used."
   type        = string
   default     = "langsmith-tls"
 

@@ -263,8 +263,8 @@ fi
 if [[ "$ENABLE_DNS" == "true" ]]; then
   CONDITIONAL_PERMISSIONS+=("dns.managedZones.create" "dns.resourceRecordSets.create")
 fi
-# Let's Encrypt and cert-manager issue in the cluster and need no Google Cloud
-# permission. A Google-managed certificate is four Certificate Manager objects.
+# cert-manager issues in the cluster and needs no Google Cloud permission. A
+# Google-managed certificate is four Certificate Manager objects.
 if [[ "$TLS_SOURCE" == "google-managed" ]]; then
   CONDITIONAL_PERMISSIONS+=(
     "certificatemanager.certs.create"

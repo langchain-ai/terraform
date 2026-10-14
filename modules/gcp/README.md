@@ -80,7 +80,7 @@ The identity running Terraform needs `roles/owner`, or a set of predefined roles
 
 LangSmith needs HTTPS egress from the cluster to **`beacon.langchain.com`** for license verification and usage reporting, unless it runs in [offline mode](https://docs.langchain.com/langsmith/self-host-egress). The module's nodes are private (`enable_private_nodes = true`) and reach the internet through the Cloud NAT it creates, and it adds no egress firewall rules, so a stock deployment works. What breaks it is an egress policy added around the module: a deny-by-default egress firewall rule or firewall policy, or a proxy. Permit `beacon.langchain.com:443` there before the first deploy.
 
-Beacon is not the only destination such a policy has to allow. The cluster also pulls images: LangSmith's from `docker.io`, and the add-ons Terraform installs from their own registries. It reaches Let's Encrypt when it issues certificates.
+Beacon is not the only destination such a policy has to allow. The cluster also pulls images: LangSmith's from `docker.io`, and the add-ons Terraform installs from their own registries. With `tls_certificate_source = "cert-manager"`, it also reaches your issuer.
 
 With an `lcl_` license key this is a startup dependency, not only a reporting one. `platform-backend` exchanges the key with Beacon before it starts and caches the result in Redis. A first install has no cache, so when Beacon is unreachable `platform-backend` refuses to start, logging `failed to fetch license and no cached license available`, and the services behind it crash-loop. A later outage falls back to the cached license, but only until that license expires: it carries its own expiry date, after which `platform-backend` needs Beacon again.
 
@@ -316,7 +316,7 @@ Set `ingress_type = "gke"` to use GKE's built-in Gateway controller instead of E
 
 ```hcl
 ingress_type           = "gke"
-tls_certificate_source = "google-managed"   # or "existing", "cert-manager", "none"; not "letsencrypt"
+tls_certificate_source = "google-managed"   # or "existing", "cert-manager", "none"
 ```
 
 What changes:
@@ -416,14 +416,13 @@ helm upgrade langsmith langchain/langsmith \
 | `install_ingress` | `true` | no | Install the Gateway via Terraform (Envoy Gateway by default, or the GKE Gateway) |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy` (default), `gke`, `istio`, or `other` |
 | `gke_gateway_class` | `gke-l7-global-external-managed` | no | GatewayClass when `ingress_type = "gke"`. Only this global class is supported. It reserves a static IP |
-| `tls_certificate_source` | `none` | no | `none`, `google-managed` (GKE Gateway), `existing`, `cert-manager`, or `letsencrypt` (Envoy, evaluation). See [TLS.md](TLS.md) |
+| `tls_certificate_source` | `none` | no | `none`, `google-managed` (GKE Gateway), `existing`, or `cert-manager`. See [TLS.md](TLS.md) |
 | `tls_existing_secret_name` | `""` | with `existing` | A `kubernetes.io/tls` Secret you create; keeps the key out of Terraform state |
 | `tls_google_managed_include_wildcard` | `false` | no | With `google-managed`, also cover `*.<langsmith_domain>` |
 | `tls_google_managed_issuance_config` | `""` | no | With `google-managed`, issue from your Certificate Authority Service pool |
 | `cert_manager_issuer_name` | `""` | with `cert-manager` | Your Issuer or ClusterIssuer |
 | `cert_manager_issuer_kind` | `ClusterIssuer` | no | `ClusterIssuer` or `Issuer` |
 | `cert_manager_version` | `v1.21.2` | no | cert-manager chart version. `make cert-manager-upgrade` steps an existing install up |
-| `letsencrypt_email` | `""` | when letsencrypt | Email for Let's Encrypt notifications |
 | `tls_certificate_crt` / `tls_certificate_key` | `""` | no | Deprecated: PEM for `existing`, stored in Terraform state. Use `tls_existing_secret_name` |
 | `tls_secret_name` | `langsmith-tls` | no | Secret that Terraform or cert-manager creates |
 | `enable_langsmith_deployment` | `true` | no | Enable LangSmith Deployments — installs KEDA |

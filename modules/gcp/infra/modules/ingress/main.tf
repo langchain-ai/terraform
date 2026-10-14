@@ -198,9 +198,7 @@ locals {
   tls_from_secret = local.tls_enabled && !local.tls_google_managed
 
   # The HTTP listener is always there. With no TLS it serves LangSmith. With TLS
-  # it only redirects to HTTPS (https_redirect below), and for Let's Encrypt it
-  # also carries the HTTP-01 challenge, whose exact-path route takes precedence
-  # over the redirect's prefix match.
+  # it only redirects to HTTPS (https_redirect below).
   gateway_http_listener = merge({
     name     = "http"
     protocol = "HTTP"
@@ -382,8 +380,8 @@ resource "null_resource" "delete_gateway_on_destroy" {
 # ReferenceGrant for cross-namespace secret access
 #------------------------------------------------------------------------------
 # The Envoy Gateway sits in envoy-gateway-system and its certificate Secret in the
-# LangSmith namespace, so every Secret-based source needs this grant, not only
-# Let's Encrypt. Without it the HTTPS listener reports RefNotPermitted.
+# LangSmith namespace, so every Secret-based source needs this grant. Without it
+# the HTTPS listener reports RefNotPermitted.
 locals {
   reference_grant_enabled = var.ingress_type == "envoy" && local.tls_from_secret
 
@@ -541,10 +539,6 @@ resource "local_file" "gke_gateway" {
   content  = local.gke_gateway_yaml
 
   lifecycle {
-    precondition {
-      condition     = var.tls_certificate_source != "letsencrypt"
-      error_message = "ingress_type = \"gke\" supports tls_certificate_source = \"none\", \"google-managed\", \"existing\", or \"cert-manager\". The Let's Encrypt HTTP-01 solver is wired to Envoy Gateway only."
-    }
     # Regional classes take regional Certificate Manager certificates, which
     # this module does not create yet.
     precondition {

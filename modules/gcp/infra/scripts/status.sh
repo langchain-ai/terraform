@@ -453,7 +453,7 @@ else
   fi
 
   # TLS certificate. Read-only: Certificate Manager for google-managed, the
-  # cert-manager Certificate for letsencrypt and cert-manager.
+  # cert-manager Certificate for cert-manager.
   case "${_tls:-none}" in
     google-managed)
       _cert_name=$(terraform -chdir="$INFRA_DIR" output -raw managed_certificate_name 2>/dev/null) || _cert_name=""
@@ -481,7 +481,7 @@ else
         fi
       fi
       ;;
-    letsencrypt|cert-manager)
+    cert-manager)
       _tls_secret=$(terraform -chdir="$INFRA_DIR" output -raw tls_secret_name 2>/dev/null) || _tls_secret=""
       _tls_secret="${_tls_secret:-langsmith-tls}"
       _cert_ready=$(kubectl get certificate "$_tls_secret" -n "$_NAMESPACE" \

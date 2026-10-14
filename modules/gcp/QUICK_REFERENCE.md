@@ -381,7 +381,7 @@ kubectl get svc -n envoy-gateway-system
 
 # TLS
 kubectl get certificate -n langsmith
-kubectl get challenges -n langsmith
+kubectl get certificaterequest -n langsmith
 kubectl describe certificate <cert-name> -n langsmith
 kubectl get clusterissuer
 

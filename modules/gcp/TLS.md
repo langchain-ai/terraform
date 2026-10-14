@@ -15,7 +15,6 @@ Gateway an HTTPS listener and makes its HTTP listener redirect to HTTPS
 | `google-managed` | Certificate Manager, on the Google Cloud load balancer | GKE Gateway (`ingress_type = "gke"`), global class | Production on GKE Gateway. No key in the cluster, no cert-manager, no inbound port 80 |
 | `existing` | A Kubernetes TLS Secret you create | Envoy or GKE | Production with a certificate from your own PKI |
 | `cert-manager` | A Secret that cert-manager writes, from your own Issuer | Envoy or GKE | Production with automated renewal from Vault, Venafi, Google CAS, or a private ACME server |
-| `letsencrypt` | A Secret that cert-manager writes, from Let's Encrypt | Envoy only | Evaluation. Needs the domain reachable from the internet on port 80 |
 | `none` | — | Envoy or GKE | HTTP only |
 
 ## google-managed
@@ -149,28 +148,7 @@ cert_manager_issuer_kind = "ClusterIssuer"   # or "Issuer" in the LangSmith name
 The issuer must be able to issue without an HTTP-01 challenge on this Gateway:
 a CA, Vault, or Venafi issuer, Google CAS through the
 [google-cas-issuer](https://github.com/jetstack/google-cas-issuer), or ACME with
-DNS-01.
-
-## letsencrypt (evaluation)
-
-cert-manager with a public Let's Encrypt issuer and an HTTP-01 challenge on the
-Envoy Gateway's HTTP listener.
-
-```hcl
-tls_certificate_source = "letsencrypt"
-letsencrypt_email      = "ops@example.com"
-```
-
-It needs the domain to resolve to the Gateway and be reachable from the internet
-on port 80, egress to `acme-v02.api.letsencrypt.org`, and a public CA, and every
-hostname appears in public Certificate Transparency logs. Most production
-networks rule out at least one of those, so the plan warns when it is used with
-`sizing_profile = "production"` or `"production-large"`. It does not work with
-the GKE Gateway.
-
-Terraform turns on cert-manager's Gateway API support for this source and
-applies the Gateway API CRDs before cert-manager starts. cert-manager exits at
-startup if that support is on and the CRDs are missing.
+DNS-01. Terraform does not route HTTP-01 challenges to the Gateway.
 
 ## HTTP to HTTPS redirect
 
@@ -179,9 +157,6 @@ With TLS on, the ingress module creates the HTTPRoute
 request with a 301 to the same URL over HTTPS. `make init-values` sets
 `gateway.sectionName: "https"` so the LangSmith HTTPRoute attaches only to the
 HTTPS listener.
-
-The Let's Encrypt challenge route matches its exact path, which takes precedence
-over the redirect's prefix match, so issuance and renewal keep working.
 
 The chart does not pass a section name to the Deployments operator, so the
 HTTPRoutes it creates for LangSmith Deployments attach to both listeners. A route
@@ -222,7 +197,8 @@ each step. The ones most likely to matter here:
 
 ## Upgrading from an earlier module version
 
-- **cert-manager installed** (`letsencrypt`, or `install_cert_manager = true`):
+- **`letsencrypt`**: removed. See [Moving off Let's Encrypt](#moving-off-lets-encrypt).
+- **cert-manager installed** (`cert-manager`, or `install_cert_manager = true`):
   run `make cert-manager-upgrade` before `make apply`, or the apply stops at the
   version check.
 - **`dns_create_certificate`**: the DNS module no longer creates a classic
@@ -239,7 +215,39 @@ each step. The ones most likely to matter here:
 - **Redirect**: run `make init-values` and `make deploy` after `make apply`, so
   the LangSmith HTTPRoute moves to the HTTPS listener. Until then HTTP keeps
   serving LangSmith instead of redirecting.
-- **Let's Encrypt to google-managed**: switch to the GKE Gateway
-  (`ingress_type = "gke"`), which gets a new IP. Apply, add the DNS authorization
-  record, wait for `ACTIVE`, then move the domain's A record to the new address.
-  cert-manager stays installed only if `install_cert_manager = true`.
+
+## Moving off Let's Encrypt
+
+Earlier module versions had `tls_certificate_source = "letsencrypt"`. This
+version removes it, and a plan that still sets it stops at the variable check.
+Those versions installed cert-manager v1.14.4 without Gateway API support, which
+the HTTP-01 solver on the Envoy Gateway needs, so check whether your certificate
+was ever issued: `kubectl get certificate -n langsmith`.
+
+Pick one of these:
+
+- **google-managed** (recommended): set `tls_certificate_source = "google-managed"`
+  on the GKE Gateway (`ingress_type = "gke"`). The GKE Gateway gets a new IP
+  address. Apply, add the DNS authorization record, and wait for `ACTIVE`. Then
+  move the domain's A record to `terraform -chdir=infra output -raw ingress_ip`.
+- **existing**: keep the Secret that cert-manager wrote. Set
+  `tls_certificate_source = "existing"` and set `tls_existing_secret_name` to
+  your `tls_secret_name` (default `langsmith-tls`). Nothing renews the
+  certificate after that. Replace the Secret before the certificate expires.
+- **cert-manager with your own ACME issuer**: to keep Let's Encrypt, create a
+  ClusterIssuer with a DNS-01 solver, for example for Cloud DNS. Set
+  `tls_certificate_source = "cert-manager"` and `cert_manager_issuer_name`.
+  Terraform creates the Certificate for that issuer.
+
+Then remove `letsencrypt_email` from `terraform.tfvars`. Until you do, Terraform
+warns about an undeclared variable.
+
+Terraform does not delete the `letsencrypt-prod` ClusterIssuer or the
+Certificate that it created before. With `google-managed` or `existing`, it
+uninstalls cert-manager unless `install_cert_manager = true`. The TLS Secret
+stays in both cases. Delete what you no longer use:
+
+```bash
+kubectl delete certificate langsmith-tls -n langsmith   # your tls_secret_name
+kubectl delete clusterissuer letsencrypt-prod
+```

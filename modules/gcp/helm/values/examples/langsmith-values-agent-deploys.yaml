@@ -14,7 +14,7 @@ config:
     # set in values-overrides.yaml — find the Envoy Gateway IP with:
     #   kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
     enabled: true
-    # Set to true if TLS is configured (tls_certificate_source = "letsencrypt" or "existing").
+    # Set to true if TLS is configured (any tls_certificate_source other than "none").
     # false = HTTP-only (tls_certificate_source = "none"). The operator uses this to
     # build agent deployment endpoint URLs — wrong value keeps deployments in DEPLOYING.
     tlsEnabled: false

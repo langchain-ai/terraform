@@ -284,7 +284,7 @@ output "keda_namespace" {
 # TLS / cert-manager Outputs
 #------------------------------------------------------------------------------
 output "tls_certificate_source" {
-  description = "TLS certificate source: none, google-managed, existing, cert-manager, or letsencrypt"
+  description = "TLS certificate source: none, google-managed, existing, or cert-manager"
   value       = var.tls_certificate_source
 }
 
@@ -321,11 +321,6 @@ output "tls_configured" {
 output "cert_manager_installed" {
   description = "Whether cert-manager is installed for automatic TLS"
   value       = module.k8s_bootstrap.cert_manager_installed
-}
-
-output "letsencrypt_issuer" {
-  description = "Let's Encrypt ClusterIssuer name (use in ingress annotations)"
-  value       = module.k8s_bootstrap.letsencrypt_issuer_name
 }
 
 #------------------------------------------------------------------------------

@@ -50,19 +50,14 @@ output "cert_manager_version" {
   value       = var.install_cert_manager ? var.cert_manager_version : null
 }
 
-output "letsencrypt_issuer_name" {
-  description = "Name of the Let's Encrypt ClusterIssuer"
-  value       = local.letsencrypt_enabled ? "letsencrypt-prod" : null
-}
-
 output "tls_certificate_source" {
-  description = "TLS certificate source: none, google-managed, existing, cert-manager, or letsencrypt"
+  description = "TLS certificate source: none, google-managed, existing, or cert-manager"
   value       = var.tls_certificate_source
 }
 
 output "tls_secret_name" {
   description = "Name of the TLS Secret the Gateway reads (null when no Secret is used)"
-  value       = var.tls_secret_name != "" && contains(["existing", "cert-manager", "letsencrypt"], var.tls_certificate_source) ? var.tls_secret_name : null
+  value       = var.tls_secret_name != "" && contains(["existing", "cert-manager"], var.tls_certificate_source) ? var.tls_secret_name : null
 }
 
 output "tls_configured" {

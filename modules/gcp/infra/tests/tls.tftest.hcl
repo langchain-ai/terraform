@@ -140,7 +140,7 @@ run "google_managed_with_the_example_domain_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-# ── Root: existing, cert-manager, letsencrypt ────────────────────────────────
+# ── Root: existing, cert-manager, letsencrypt (removed) ──────────────────────
 
 run "existing_with_a_precreated_secret_references_it" {
   command = plan
@@ -221,42 +221,29 @@ run "cert_manager_without_an_issuer_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "letsencrypt_without_a_domain_is_rejected" {
+run "cert_manager_without_a_domain_is_rejected" {
   command = plan
 
   variables {
-    tls_certificate_source = "letsencrypt"
-    letsencrypt_email      = "ops@example.com"
-    langsmith_domain       = ""
+    tls_certificate_source   = "cert-manager"
+    cert_manager_issuer_name = "corp-pki"
+    langsmith_domain         = ""
   }
 
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "letsencrypt_on_a_production_profile_warns" {
+# A terraform.tfvars from an earlier module version stops at plan time, with
+# the way out in the error message, instead of planning a Gateway with no
+# certificate.
+run "letsencrypt_is_rejected" {
   command = plan
 
   variables {
     tls_certificate_source = "letsencrypt"
-    letsencrypt_email      = "ops@example.com"
-    sizing_profile         = "production"
   }
 
-  expect_failures = [check.tls_settings]
-}
-
-run "letsencrypt_on_the_default_profile_does_not_warn" {
-  command = plan
-
-  variables {
-    tls_certificate_source = "letsencrypt"
-    letsencrypt_email      = "ops@example.com"
-  }
-
-  assert {
-    condition     = output.cert_manager_version == "v1.21.2"
-    error_message = "letsencrypt did not install cert-manager v1.21.2"
-  }
+  expect_failures = [var.tls_certificate_source]
 }
 
 run "deprecated_dns_create_certificate_warns" {
@@ -376,57 +363,7 @@ run "certificate_manager_rejects_an_empty_domain" {
 
 # ── modules/k8s-bootstrap: cert-manager ──────────────────────────────────────
 
-run "letsencrypt_installs_cert_manager_with_gateway_api_after_the_crds" {
-  command = plan
-
-  module {
-    source = "./modules/k8s-bootstrap"
-  }
-
-  variables {
-    region                          = "us-central1"
-    cluster_name                    = "langsmith-plan-tests-gke"
-    environment                     = "dev"
-    install_cert_manager            = true
-    tls_certificate_source          = "letsencrypt"
-    letsencrypt_email               = "ops@example.com"
-    langsmith_domain                = "langsmith.example.com"
-    gateway_name                    = "ls-prod-gateway"
-    cert_manager_enable_gateway_api = true
-  }
-
-  assert {
-    condition = (
-      helm_release.cert_manager[0].repository == "oci://quay.io/jetstack/charts" &&
-      helm_release.cert_manager[0].version == "v1.21.2"
-    )
-    error_message = "cert-manager should come from the OCI chart at v1.21.2"
-  }
-  assert {
-    condition = (
-      yamldecode(helm_release.cert_manager[0].values[0]).crds == { enabled = true, keep = true } &&
-      yamldecode(helm_release.cert_manager[0].values[0]).config.enableGatewayAPI == true
-    )
-    error_message = "cert-manager should install and keep its CRDs, and turn on Gateway API support for Let's Encrypt"
-  }
-  assert {
-    condition = (
-      length(null_resource.gateway_api_crds_for_cert_manager) == 1 &&
-      length(null_resource.cert_manager_upgrade_guard) == 1
-    )
-    error_message = "The Gateway API CRDs and the upgrade guard should run before cert-manager"
-  }
-  assert {
-    condition     = yamldecode(local_file.letsencrypt_issuer[0].content).spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName == "http"
-    error_message = "The HTTP-01 solver route should attach only to the http listener"
-  }
-  assert {
-    condition     = yamldecode(local_file.certificate[0].content).spec.issuerRef == { name = "letsencrypt-prod", kind = "ClusterIssuer" }
-    error_message = "The Let's Encrypt Certificate should use the letsencrypt-prod ClusterIssuer"
-  }
-}
-
-run "cert_manager_source_uses_your_issuer_and_no_gateway_api" {
+run "cert_manager_installs_the_supported_version_with_your_issuer" {
   command = plan
 
   module {
@@ -445,16 +382,26 @@ run "cert_manager_source_uses_your_issuer_and_no_gateway_api" {
   }
 
   assert {
-    condition     = yamldecode(local_file.certificate[0].content).spec.issuerRef == { name = "corp-pki", kind = "Issuer" }
-    error_message = "The Certificate should reference the operator's issuer"
+    condition = (
+      helm_release.cert_manager[0].repository == "oci://quay.io/jetstack/charts" &&
+      helm_release.cert_manager[0].version == "v1.21.2"
+    )
+    error_message = "cert-manager should come from the OCI chart at v1.21.2"
   }
   assert {
     condition = (
-      length(local_file.letsencrypt_issuer) == 0 &&
-      length(null_resource.gateway_api_crds_for_cert_manager) == 0 &&
+      yamldecode(helm_release.cert_manager[0].values[0]).crds == { enabled = true, keep = true } &&
       !contains(keys(yamldecode(helm_release.cert_manager[0].values[0])), "config")
     )
-    error_message = "Your own issuer needs no Let's Encrypt ClusterIssuer and no Gateway API support"
+    error_message = "cert-manager should install and keep its CRDs, with no Gateway API support"
+  }
+  assert {
+    condition     = length(null_resource.cert_manager_upgrade_guard) == 1
+    error_message = "The upgrade guard should run before cert-manager"
+  }
+  assert {
+    condition     = yamldecode(local_file.certificate[0].content).spec.issuerRef == { name = "corp-pki", kind = "Issuer" }
+    error_message = "The Certificate should reference the operator's issuer"
   }
 }
 
@@ -538,21 +485,4 @@ run "k8s_bootstrap_region_project_and_secret_name_with_shell_syntax_are_rejected
   }
 
   expect_failures = [var.region, var.project_id, var.tls_secret_name]
-}
-
-run "k8s_bootstrap_gateway_api_crds_url_must_be_https" {
-  command = plan
-
-  module {
-    source = "./modules/k8s-bootstrap"
-  }
-
-  variables {
-    region               = "us-central1"
-    cluster_name         = "langsmith-plan-tests-gke"
-    environment          = "dev"
-    gateway_api_crds_url = "http://example.com/standard-install.yaml"
-  }
-
-  expect_failures = [var.gateway_api_crds_url]
 }

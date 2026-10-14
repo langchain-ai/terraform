@@ -269,10 +269,7 @@ langsmith_helm_chart_version = ""
 #   "existing"       - your own certificate in a Kubernetes TLS Secret.
 #                      Recommended for production on Envoy Gateway.
 #   "cert-manager"   - cert-manager issues from your own Issuer or ClusterIssuer
-#                      (Vault, Venafi, Google CAS, private ACME).
-#   "letsencrypt"    - public Let's Encrypt via cert-manager, Envoy only. For
-#                      evaluation: the domain must be reachable from the
-#                      internet on port 80.
+#                      (Vault, Venafi, Google CAS, ACME with DNS-01).
 #
 # With any source other than "none", HTTP redirects to HTTPS.
 tls_certificate_source = "none"
@@ -307,9 +304,6 @@ tls_certificate_source = "none"
 # cert_manager_issuer_name = "corp-pki"
 # cert_manager_issuer_kind = "ClusterIssuer"   # or "Issuer" in the LangSmith namespace
 
-# --- letsencrypt (evaluation) ---
-# letsencrypt_email = "you@example.com"
-
 # cert-manager chart version, when a source installs it. An existing install
 # steps up one minor at a time: make cert-manager-upgrade, then make apply.
 # cert_manager_version = "v1.21.2"
@@ -325,7 +319,7 @@ ingress_type    = "envoy"  # "envoy" (default), "gke" (GKE Gateway), "istio" or 
 
 # ingress_type = "gke" uses the GKE Gateway controller instead of Envoy Gateway.
 #   - tls_certificate_source can be "none", "google-managed", "existing", or
-#     "cert-manager". "letsencrypt" is Envoy-only.
+#     "cert-manager".
 #   - The default class reserves a global static IP (<name>-gateway-ip) for DNS.
 #     The Envoy Gateway's IP is not reserved: do not delete and recreate its
 #     Gateway once DNS points at it, or the IP changes.

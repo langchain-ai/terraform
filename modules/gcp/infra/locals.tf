@@ -47,8 +47,8 @@ locals {
   tls_enabled        = var.tls_certificate_source != "none"
   tls_google_managed = var.tls_certificate_source == "google-managed"
 
-  # cert-manager writes the TLS Secret for these sources.
-  tls_cert_manager_issued = contains(["letsencrypt", "cert-manager"], var.tls_certificate_source)
+  # cert-manager writes the TLS Secret from your own issuer.
+  tls_cert_manager_issued = var.tls_certificate_source == "cert-manager"
 
   # 'existing' with a Secret the operator creates. Terraform only references it,
   # so the key stays out of state.
@@ -61,11 +61,8 @@ locals {
     local.tls_external_secret ? var.tls_existing_secret_name : var.tls_secret_name
   )
 
-  # Gateway API CRDs for Envoy Gateway. cert-manager with Gateway API support on
-  # (Let's Encrypt HTTP-01) needs them before it starts, so k8s-bootstrap applies
-  # the same file ahead of cert-manager. Keep one URL for both. Envoy Gateway v1.9
-  # needs Gateway API v1.6, and the upstream upgrade order is Gateway API first,
-  # then Envoy Gateway.
+  # Gateway API CRDs for Envoy Gateway. Envoy Gateway v1.9 needs Gateway API
+  # v1.6, and the upstream upgrade order is Gateway API first, then Envoy Gateway.
   gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
 
   # Cloud SQL
