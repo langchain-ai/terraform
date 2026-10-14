@@ -161,6 +161,12 @@ variable "smithdb_managed_identity_client_id" {
   default     = ""
 }
 
+variable "langsmith_image_pull_secret_name" {
+  type        = string
+  description = "Name of an existing kubernetes.io/dockerconfigjson Secret in the LangSmith namespace, attached as imagePullSecrets to the service accounts this module creates and to the namespace's default account. Empty attaches nothing."
+  default     = ""
+}
+
 variable "smithdb_cache_storage_class_name" {
   type        = string
   description = "Name of the StorageClass created for SmithDB cache volumes."

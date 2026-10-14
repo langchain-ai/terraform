@@ -2069,6 +2069,10 @@ module "k8s_bootstrap" {
   smithdb_service_account_name       = local.smithdb_service_account
   smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
+  # Pull Secret for the pods the operator creates: agent pods run as
+  # langsmith-ksa, each deployment's Redis and PostgreSQL as the default account.
+  langsmith_image_pull_secret_name = var.langsmith_image_pull_secret_name
+
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # helm/scripts/generate-secrets.sh from Azure Key Vault.
