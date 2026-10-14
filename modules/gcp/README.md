@@ -243,7 +243,7 @@ kubectl get ns
 ### Verify bootstrap components
 
 ```bash
-kubectl get pods -n cert-manager
+kubectl get pods -n cert-manager   # only with tls_certificate_source = "cert-manager" or install_cert_manager
 kubectl get pods -n keda
 kubectl get secrets -n langsmith
 ```
@@ -330,7 +330,7 @@ What it creates:
 
 `ingress_type = "envoy"` installs Envoy Gateway in `envoy-gateway-system` behind a passthrough Network Load Balancer, and terminates TLS in the cluster. It takes `existing`, `cert-manager`, or `none`, not `google-managed`. Its IP is not reserved.
 
-**Upgrading an install that did not set `ingress_type`.** Earlier module versions defaulted to `envoy`. To keep Envoy Gateway, add `ingress_type = "envoy"` to `terraform.tfvars` before `make apply`. Without it, the apply uninstalls Envoy Gateway and creates a GKE Gateway with a new IP address. Then run `make init-values` and `make deploy`, and move the DNS A record to `terraform output -raw ingress_ip`. LangSmith is unreachable from the apply until those steps finish.
+**Upgrading an install that did not set `ingress_type`.** Earlier module versions defaulted to `envoy`. A `terraform.tfvars` made from the earlier `terraform.tfvars.example` or `make quickstart` sets `ingress_type = "envoy"` and does not change. Without that line, the apply uninstalls Envoy Gateway and creates a GKE Gateway with a new IP address. Then you must run `make init-values` and `make deploy`, and move the DNS A record to `terraform output -raw ingress_ip`. LangSmith is unreachable from the apply until those steps finish. The move of a running install from Envoy Gateway to the GKE Gateway is not tested, so for an existing install, add `ingress_type = "envoy"` to `terraform.tfvars` before `make apply`.
 
 Things to know about the GKE Gateway:
 

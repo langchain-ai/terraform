@@ -257,7 +257,7 @@ kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system
 
 **Cause:** The Envoy Gateway external IP is tied to the `Gateway` Kubernetes resource managed by Terraform. If that resource is deleted and recreated (e.g. due to a `taint`, a module change that forces replacement, or a `terraform destroy` + re-apply), GCP issues a **new** IP address. There is no way to reserve the original IP. The GKE Gateway (`ingress_type = "gke"`, the default) uses a reserved static IP, which only `terraform destroy` releases.
 
-An install that did not set `ingress_type` moves from Envoy Gateway to the GKE Gateway on the first apply after the default changed, and gets a new IP. Set `ingress_type = "envoy"` to stay on Envoy Gateway.
+An install that did not set `ingress_type` moves from Envoy Gateway to the GKE Gateway on the first apply after the default changed, and gets a new IP. That move is not tested on a running install. Set `ingress_type = "envoy"` to stay on Envoy Gateway.
 
 **Prevention:**
 - Never `terraform taint` or manually delete the `Gateway` resource.

@@ -1,4 +1,4 @@
-# Ingress Module - Envoy Gateway (default) or GKE Gateway, both via Gateway API
+# Ingress Module - GKE Gateway (default) or Envoy Gateway, both via Gateway API
 
 #------------------------------------------------------------------------------
 # Gateway API CRDs

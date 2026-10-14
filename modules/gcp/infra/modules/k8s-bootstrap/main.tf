@@ -338,8 +338,9 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 #------------------------------------------------------------------------------
 # Network Policy (restrict traffic)
 #------------------------------------------------------------------------------
-# Default-deny-style ingress: only the langsmith and envoy-gateway namespaces may
-# reach LangSmith pods. Always created. When default_deny_excluded_component is set
+# Default-deny-style ingress: only the langsmith and envoy-gateway namespaces, and
+# for the GKE Gateway Google's load balancer ranges, may reach LangSmith pods.
+# Always created. When default_deny_excluded_component is set
 # (GKE Dataplane V2 + sandboxes), that one component (platform-backend) is excluded
 # from the selector so the host-networked, node-sourced sandbox-host can reach it —
 # a standard NetworkPolicy can't authorize node traffic on Cilium (an ipBlock does

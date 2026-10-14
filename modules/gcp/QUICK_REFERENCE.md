@@ -15,7 +15,7 @@ All commands run from `modules/gcp/`. Run `make help` to see all targets.
 
 | Pass | What gets deployed | Command |
 |------|-------------------|---------|
-| **1** | VPC + GKE + Cloud SQL + Memorystore + GCS + IAM + cert-manager + KEDA + GKE Gateway (or Envoy Gateway) | `make apply` |
+| **1** | VPC + GKE + Cloud SQL + Memorystore + GCS + IAM + KEDA + GKE Gateway (or Envoy Gateway), and cert-manager when a TLS source needs it | `make apply` |
 | **1.5** | Cluster credentials | `make kubeconfig` |
 | **2** | LangSmith base — frontend, backend, ingest, queue, clickhouse | `make init-values && make deploy` |
 | **3** | LangSmith Deployments — host-backend, listener, operator (optional LGP) | `make apply && make init-values && make deploy` |

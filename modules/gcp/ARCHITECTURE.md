@@ -15,7 +15,7 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 
 | Pass | Layer | What's added |
 |------|-------|-------------|
-| 1 | GCP Infrastructure | VPC, GKE, Cloud SQL, Memorystore, GCS, K8s bootstrap, cert-manager, KEDA, GKE Gateway (or Envoy Gateway) |
+| 1 | GCP Infrastructure | VPC, GKE, Cloud SQL, Memorystore, GCS, K8s bootstrap, KEDA, GKE Gateway (or Envoy Gateway), cert-manager (only for `tls_certificate_source = "cert-manager"`) |
 | 2 | LangSmith Base | frontend, backend, platform-backend, queue, ace-backend, clickhouse, playground |
 | 3 | LangSmith Deployments | host-backend, listener, operator + per-deployment pods |
 | 4 | Agent Builder | fleet-tool-server, fleet-trigger-server (agent-builder-tool-server/trigger-server on chart < 0.15) + deep-agent LGP |
@@ -57,7 +57,7 @@ GKE Cluster
 │   ├── postgres     (in-cluster)
 │   ├── redis        (in-cluster)
 │   └── Gateway      (GKE Gateway; envoy-gateway-system with ingress_type = "envoy")
-├── cert-manager
+├── cert-manager (only for tls_certificate_source = "cert-manager")
 └── keda
 
 GCS Bucket  (trace payloads — always external)
@@ -85,7 +85,7 @@ GKE Cluster
 │   ├── frontend / backend / platform-backend / queue / ace-backend
 │   ├── clickhouse (in-cluster)
 │   └── Gateway    (GKE Gateway; envoy-gateway-system with ingress_type = "envoy")
-├── cert-manager
+├── cert-manager (only for tls_certificate_source = "cert-manager")
 └── keda
 
 GCS Bucket  (Workload Identity — no static HMAC keys for GCS SA auth)

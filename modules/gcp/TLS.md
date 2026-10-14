@@ -197,14 +197,19 @@ each step. The ones most likely to matter here:
 
 ## Upgrading from an earlier module version
 
-- **`ingress_type` not set**: the default is now `gke`, not `envoy`. To keep
-  Envoy Gateway, set `ingress_type = "envoy"` before `make apply`. Otherwise the
-  apply replaces Envoy Gateway with a GKE Gateway on a new IP address. See the
-  README section "Ingress: GKE Gateway (default) or Envoy Gateway".
+- **`ingress_type` not set**: the default is now `gke`, not `envoy`. A
+  `terraform.tfvars` made from the earlier `terraform.tfvars.example` or
+  `make quickstart` sets `ingress_type = "envoy"` and does not change. Without
+  that line, the apply replaces Envoy Gateway with a GKE Gateway on a new IP
+  address. The move of a running install from Envoy Gateway to the GKE Gateway
+  is not tested, so for an existing install, set `ingress_type = "envoy"` before
+  `make apply`. See the README section "Ingress: GKE Gateway (default) or Envoy
+  Gateway".
 - **`letsencrypt`**: removed. See [Moving off Let's Encrypt](#moving-off-lets-encrypt).
-- **cert-manager installed** (`cert-manager`, or `install_cert_manager = true`):
-  run `make cert-manager-upgrade` before `make apply`, or the apply stops at the
-  version check.
+- **cert-manager installed** (by `letsencrypt` or `install_cert_manager = true`
+  in an earlier version, or by `cert-manager` now): when this version keeps
+  cert-manager, run `make cert-manager-upgrade` before `make apply`, or the apply
+  stops at the version check.
 - **`dns_create_certificate`**: the DNS module no longer creates a classic
   Google-managed SSL certificate. Nothing in the module attached it. Terraform
   forgets it without deleting it (a `removed` block). Delete it with
@@ -230,10 +235,14 @@ was ever issued: `kubectl get certificate -n langsmith`.
 
 Pick one of these:
 
-- **google-managed** (recommended): set `tls_certificate_source = "google-managed"`
-  on the GKE Gateway (`ingress_type = "gke"`, the default). The GKE Gateway gets
-  a new IP address. Apply, add the DNS authorization record, and wait for `ACTIVE`. Then
+- **google-managed** (recommended): set `tls_certificate_source = "google-managed"`,
+  and set `ingress_type = "gke"` or remove `ingress_type = "envoy"`. This also
+  moves the install from Envoy Gateway to the GKE Gateway, which is not tested
+  on a running install. The GKE Gateway gets a new IP address. Apply, add the
+  DNS authorization record, and wait for `ACTIVE`. Run `make init-values` and
+  `make deploy`, so the LangSmith HTTPRoute attaches to the GKE Gateway. Then
   move the domain's A record to `terraform -chdir=infra output -raw ingress_ip`.
+  LangSmith is unreachable from the apply until the deploy and the DNS change.
 - **existing**: keep the Secret that cert-manager wrote. Set
   `tls_certificate_source = "existing"` and set `tls_existing_secret_name` to
   your `tls_secret_name` (default `langsmith-tls`). Nothing renews the
@@ -241,15 +250,24 @@ Pick one of these:
 - **cert-manager with your own ACME issuer**: to keep Let's Encrypt, create a
   ClusterIssuer with a DNS-01 solver, for example for Cloud DNS. Set
   `tls_certificate_source = "cert-manager"` and `cert_manager_issuer_name`.
-  Terraform creates the Certificate for that issuer.
+  Run `make cert-manager-upgrade` before `make apply`. Terraform creates the
+  Certificate for that issuer.
 
 Then remove `letsencrypt_email` from `terraform.tfvars`. Until you do, Terraform
 warns about an undeclared variable.
 
-Terraform does not delete the `letsencrypt-prod` ClusterIssuer or the
-Certificate that it created before. With `google-managed` or `existing`, it
-uninstalls cert-manager unless `install_cert_manager = true`. The TLS Secret
-stays in both cases. Delete what you no longer use:
+With `google-managed` or `existing`, the apply uninstalls cert-manager unless
+`install_cert_manager = true`. The earlier versions installed cert-manager
+v1.14.4, which deletes its CRDs when it is uninstalled. That deletes every
+Certificate, Issuer, and ClusterIssuer in the cluster, not only the ones this
+module created. The TLS Secret stays. If anything else in the cluster uses
+cert-manager, set `install_cert_manager = true` and run
+`make cert-manager-upgrade` before `make apply`. The upgraded release keeps its
+CRDs.
+
+When cert-manager stays installed, Terraform does not delete the
+`letsencrypt-prod` ClusterIssuer or the Certificate that it created before.
+Delete them when you no longer use them:
 
 ```bash
 kubectl delete certificate langsmith-tls -n langsmith   # your tls_secret_name

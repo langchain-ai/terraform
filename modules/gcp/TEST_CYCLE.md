@@ -217,7 +217,7 @@ cert_manager_issuer_name = "corp-pki"
 langsmith_domain         = "langsmith.example.com"
 ```
 
-Create the `corp-pki` ClusterIssuer before `make apply`. A self-signed CA issuer is enough for a test.
+`make apply` installs cert-manager and creates the Certificate. Then create the `corp-pki` ClusterIssuer: a `selfSigned` issuer is enough for a test. The Certificate waits for it.
 
 **Expected plan**: the upgrade guard, the cert-manager v1.21.2 Helm release, the Certificate for `corp-pki`, and the HTTP-to-HTTPS redirect route. On Envoy Gateway, also the ReferenceGrant.
 

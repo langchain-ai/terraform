@@ -47,8 +47,11 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _region=$(_read_tfvar region)
   _region="${_region:-us-west2}"
   _tls=$(_read_tfvar tls_certificate_source)
-  _ingress_type=$(_read_tfvar ingress_type)
-  _ingress_type="${_ingress_type:-${TF_VAR_ingress_type:-gke}}"
+  # The Terraform output first, as init-values.sh does, then the tfvars order.
+  if ! _ingress_type=$(terraform -chdir="$INFRA_DIR" output -raw ingress_type 2>/dev/null); then
+    _ingress_type=$(_read_tfvar ingress_type)
+    _ingress_type="${_ingress_type:-${TF_VAR_ingress_type:-gke}}"
+  fi
   _pg_source=$(_read_tfvar postgres_source)
   _redis_source=$(_read_tfvar redis_source)
   _ch_source=$(_read_tfvar clickhouse_source)
