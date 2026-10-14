@@ -66,7 +66,10 @@ locals {
     "dns.managedZones.create",
     "dns.managedZones.delete",
     "dns.managedZones.get",
+    # cert-manager gets roles/dns.admin on the data plane's zones only.
+    "dns.managedZones.getIamPolicy",
     "dns.managedZones.list",
+    "dns.managedZones.setIamPolicy",
     "dns.managedZones.update",
     "dns.networks.bindPrivateDNSZone",
     "dns.resourceRecordSets.create",
@@ -141,7 +144,6 @@ locals {
     "roles/cloudsql.client",
     "roles/container.admin",
     "roles/container.defaultNodeServiceAccount",
-    "roles/dns.admin",
     "roles/redis.dbConnectionUser",
     "roles/secretmanager.secretAccessor",
   ]
@@ -308,16 +310,19 @@ locals {
       roles        = ["roles/cloudsql.client", "roles/redis.dbConnectionUser"]
       act_as       = false
     }
+    # Secret Manager access is the conditional grant below.
     "langsmith-external-secrets" = {
       display_name = "LangSmith External Secrets"
       description  = "External Secrets Operator in the data plane GKE clusters"
-      roles        = ["roles/secretmanager.secretAccessor"]
+      roles        = []
       act_as       = false
     }
+    # The data plane compositions grant roles/dns.admin on each data plane's
+    # DNS zones, not on the project.
     "langsmith-cert-manager" = {
       display_name = "LangSmith cert-manager"
       description  = "cert-manager DNS-01 challenges in the data plane GKE clusters"
-      roles        = ["roles/dns.admin"]
+      roles        = []
       act_as       = false
     }
     "langsmith-postgres-setup" = {
@@ -365,6 +370,23 @@ resource "google_project_iam_member" "byo_iam" {
   project = var.project_id
   role    = each.value.role
   member  = "serviceAccount:${google_service_account.byo_iam[each.value.account].email}"
+}
+
+# External Secrets reads only the data plane secrets, whose IDs start with
+# "ls-". The role grants only secretmanager.versions.access, which IAM
+# evaluates on the secret version.
+resource "google_project_iam_member" "byo_iam_external_secrets" {
+  count = var.byo_iam ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.byo_iam["langsmith-external-secrets"].email}"
+
+  condition {
+    title       = "langsmith-data-plane-secrets"
+    description = "LangSmith data plane secrets"
+    expression  = "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
+  }
 }
 
 # The control plane's Crossplane service account reaches the data plane GKE
