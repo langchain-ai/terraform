@@ -1,0 +1,1 @@
+This file is not a certificate. The suite passes it where a PEM file is expected.

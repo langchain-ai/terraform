@@ -596,6 +596,18 @@ resource "azurerm_kubernetes_cluster" "main" {
     zones = var.availability_zones
   }
 
+  # Internal CAs in every Linux node's trust store, so containerd on the node can
+  # pull from an image mirror whose certificate an internal CA signed. A change
+  # replaces every node: AKS creates new nodes, drains and deletes the old ones.
+  # Null when there are none, so a cluster created before this setting plans no
+  # change. The module sets it because the provider reads the live value back:
+  # a CA added by hand with az aks update would be removed by the next apply.
+  # Each entry is the certificate block the root validation checked, with one
+  # trailing newline, not the raw file: whitespace around the block, such as an
+  # editor adding or dropping a final newline, would otherwise change the value
+  # and replace every node for the same certificate.
+  custom_ca_trust_certificates_base64 = length(var.aks_custom_ca_trust_certificate_files) > 0 ? [for f in var.aks_custom_ca_trust_certificate_files : base64encode("${trimspace(file(f))}\n")] : null
+
   # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
   # configured), and interact with the node resource group. System-assigned,
   # or the user-assigned identity above, granted before the cluster exists.

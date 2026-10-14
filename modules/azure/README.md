@@ -1385,6 +1385,17 @@ decides what the cluster can reach, and nothing works until it allows:
   and `registry.k8s.io/sig-storage/csi-node-driver-registrar` when
   `config.sandboxes.enabled` is true. Point those at a proxy for their own
   registry.
+- **A mirror behind an internal CA** also needs that CA on the nodes, where
+  containerd does the pulling and trusts only public CAs; without it every pull
+  fails with `x509: certificate signed by unknown authority`.
+  `aks_custom_ca_trust_certificate_files` lists the PEM files (one CA each, up
+  to 10) that AKS installs in every Linux node's trust store. Set it before the
+  first apply where you can: a change to the list replaces every node (AKS
+  creates new nodes, drains and deletes the old). It is the nodes' trust store
+  only; LangSmith's own is `langsmith_custom_ca_secret_name`. Keep the files in
+  place for the life of the cluster: Terraform reads them at every plan, destroy
+  included, so a missing file blocks `terraform destroy` until it is back or off
+  the list.
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 

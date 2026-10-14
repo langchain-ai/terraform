@@ -825,3 +825,43 @@ run "an_attached_cluster_with_the_system_zone_keeps_the_kubeconfig_host" {
     error_message = "An attached cluster with the System zone was told to fetch credentials with --public-fqdn"
   }
 }
+
+# The custom CA file checks apply to a cluster this module creates. An attached
+# cluster ignores aks_custom_ca_trust_certificate_files, so a file that is not
+# there must not block its plan.
+run "an_attached_cluster_skips_the_custom_ca_file_checks" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+        { name = "user", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/AKS" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                        = false
+    existing_cluster_name                 = "platform-aks"
+    existing_cluster_resource_group_name  = "platform-aks-rg"
+    aks_subnet_id                         = "${var.vnet_id}/subnets/aks"
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/does-not-exist.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == null
+    error_message = "An attached cluster should set no custom CA trust certificates and run no file check, whatever the list names"
+  }
+}

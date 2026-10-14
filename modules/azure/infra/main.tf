@@ -1256,6 +1256,9 @@ module "aks" {
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
   default_node_pool_os_sku    = var.aks_os_sku
+  # Internal CAs for every node's trust store, such as the one behind an image
+  # mirror. A change to the list replaces every node.
+  aks_custom_ca_trust_certificate_files = var.aks_custom_ca_trust_certificate_files
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
