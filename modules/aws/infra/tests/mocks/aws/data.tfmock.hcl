@@ -3,10 +3,10 @@
 #
 # A mock provider invents a random string for every computed attribute, and
 # several of those attributes are parsed rather than passed through: the AWS
-# provider rejects a malformed ARN or a policy document that is not JSON, and the
-# vpc module has a postcondition on the availability-zone list. What follows
-# gives those attributes a shape the parsers accept. Everything else stays
-# generated.
+# provider rejects a malformed ARN, a policy document that is not JSON, or an EKS
+# add-on version that is not semver, and the vpc module has a postcondition on
+# the availability-zone list. What follows gives those attributes a shape the
+# parsers accept. Everything else stays generated.
 
 mock_data "aws_availability_zones" {
   defaults = {
@@ -20,6 +20,14 @@ mock_data "aws_caller_identity" {
     account_id = "123456789012"
     arn        = "arn:aws:iam::123456789012:role/plan-tests"
     user_id    = "AIDAPLANTESTSFIXTURE"
+  }
+}
+
+# eks-blueprints-addons copies this into aws_eks_addon.addon_version for every
+# add-on with most_recent = true, and that argument must be semver.
+mock_data "aws_eks_addon_version" {
+  defaults = {
+    version = "v1.0.0-eksbuild.1"
   }
 }
 

@@ -28,28 +28,6 @@ OVERRIDES_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
 SSO_FILE="$VALUES_DIR/langsmith-values-sso.yaml"
 OIDC_KEYS=(oauth-client-id oauth-client-secret oauth-issuer-url)
 
-_confirm() {
-  local _answer
-  read -r -p "  $1 [y/N] " _answer
-  [[ "$_answer" =~ ^[Yy] ]]
-}
-
-_ssm_exists() {
-  aws ssm get-parameter --region "$_region" --name "$1" --query Parameter.Name --output text >/dev/null 2>&1
-}
-
-# Passes the value through a private temp file so it never appears in the process list or shell history.
-_ssm_put() {
-  local _path="$1" _value="$2" _tmp _rc=0
-  _tmp="$(mktemp)"
-  chmod 600 "$_tmp"
-  printf '%s' "$_value" > "$_tmp"
-  aws ssm put-parameter --region "$_region" --name "$_path" --type SecureString \
-    --value "file://$_tmp" --overwrite --output text >/dev/null || _rc=$?
-  rm -f "$_tmp"
-  return $_rc
-}
-
 echo ""
 printf "%s SSO is one-way. Once it is on, users log in only through your identity provider, and going back to password login is not supported.\n" "$(_yellow "WARNING:")"
 
@@ -200,16 +178,7 @@ fi
 pass "langsmith-config has the 3 OIDC keys"
 
 header "8. terraform.tfvars"
-# Edit only the enable_sso_oidc line (or add it), so every other setting stays exactly as written.
-_tmp_tfvars="$(mktemp)"
-if grep -qE '^[[:space:]]*enable_sso_oidc[[:space:]]*=' "$TFVARS_FILE"; then
-  sed -E 's/^([[:space:]]*enable_sso_oidc[[:space:]]*=).*/\1 true/' "$TFVARS_FILE" > "$_tmp_tfvars"
-else
-  cat "$TFVARS_FILE" > "$_tmp_tfvars"
-  printf '\nenable_sso_oidc = true\n' >> "$_tmp_tfvars"
-fi
-cat "$_tmp_tfvars" > "$TFVARS_FILE"
-rm -f "$_tmp_tfvars"
+_set_tfvar "enable_sso_oidc" "true"
 pass "enable_sso_oidc = true"
 
 header "9. SSO values file"

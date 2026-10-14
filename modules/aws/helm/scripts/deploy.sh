@@ -553,6 +553,24 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
     exit 1
   fi
+  # Stop if the migration gate in the overrides differs from tfvars; make init-values was skipped after a migration start or end.
+  _smithdb_migration_enabled=false
+  _tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    echo "  ✗ langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration, but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled (terraform.tfvars is the source of truth) — run: make init-values, then make deploy" >&2
+    exit 1
+  fi
+  # Written by make smithdb-migration-job-start: TaskDB source and migration sizing.
+  _smithdb_migration="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
+  if _tfvar_is_true "smithdb_migration_enabled"; then
+    if [[ ! -f "$_smithdb_migration" ]]; then
+      echo "  ✗ langsmith-values-smithdb-migration.yaml (smithdb_migration_enabled = true but file not found — run: make smithdb-migration-job-start)" >&2
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
+  fi
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────
