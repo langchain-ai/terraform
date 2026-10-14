@@ -1375,6 +1375,15 @@ decides what the cluster can reach, and nothing works until it allows:
   Docker Hub proxy repository in Nexus or Artifactory), with an optional pull
   Secret in `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The
   machine running Terraform still pulls the chart from `oci://docker.io`.
+  For KEDA, `keda_image_registry` does the same for its three images (the
+  operator, the metrics API server and the admission webhooks, from
+  `ghcr.io/kedacore`), laid out as `<registry>/ghcr.io/kedacore/...`, or as
+  `<registry>/kedacore/...` with `keda_image_registry_keeps_source_host =
+  false`, with an optional pull Secret in `keda`
+  (`keda_image_pull_secret_name`, created with the namespace before the apply
+  that installs KEDA). The `keda_images` output lists the composed paths.
+  `keda_chart_repository` points the Helm fetch at a mirrored chart repository,
+  so the machine running Terraform stays off `kedacore.github.io`.
   LangSmith's own images are separate: the chart joins `images.registry` to
   repositories that mostly begin with `docker.io/`, so under a proxy-layout
   mirror leave `images.registry` empty and set each
@@ -1409,8 +1418,9 @@ load balancer.
 The Helm charts are not on this list when Terraform and `make deploy` run
 outside the VNet: the runner fetches them, not the cluster. From a jump host
 inside the VNet, its route has to reach `charts.jetstack.io`,
-`kedacore.github.io`, `langchain-ai.github.io`, `docker.io` (the Envoy Gateway
-chart), and the NGINX or Istio chart repository for the controller you choose.
+`kedacore.github.io` (or `keda_chart_repository`), `langchain-ai.github.io`,
+`docker.io` (the Envoy Gateway chart), and the NGINX or Istio chart repository
+for the controller you choose.
 
 **A public ingress and user-defined routes.** With `userDefinedRouting`, a
 public load balancer for the ingress controller receives traffic on its public
