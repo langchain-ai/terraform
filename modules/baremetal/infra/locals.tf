@@ -211,7 +211,7 @@ locals {
   # component so shared ones (host-backend: deployments + fleet) are counted
   # once. Agent Builder is gone: Fleet replaces it.
   #----------------------------------------------------------------------------
-  feature_pod_sizes = {
+  feature_pod_size_tiers = {
     slim = {
       deployments = { "host-backend" = { cpu_m = 100, mem_mi = 256 }, listener = { cpu_m = 250, mem_mi = 512 }, operator = { cpu_m = 100, mem_mi = 128 } }
       fleet       = { "fleet-api-server" = { cpu_m = 250, mem_mi = 512 }, "fleet-queue" = { cpu_m = 250, mem_mi = 512 }, "fleet-tool-server" = { cpu_m = 250, mem_mi = 512 }, "fleet-trigger-server" = { cpu_m = 250, mem_mi = 512 }, "host-backend" = { cpu_m = 100, mem_mi = 256 } }
@@ -224,7 +224,8 @@ locals {
       insights    = { "insights-api-server" = { cpu_m = 2000, mem_mi = 4096 }, "insights-queue" = { cpu_m = 1000, mem_mi = 2048 } }
       polly       = { "polly-api-server" = { cpu_m = 2000, mem_mi = 4096 }, "polly-queue" = { cpu_m = 1000, mem_mi = 2048 } }
     }
-  }[local.feature_class]
+  }
+  feature_pod_sizes = local.feature_pod_size_tiers[local.feature_class]
   enabled_features = [
     for f, on in {
       deployments = var.enable_deployments

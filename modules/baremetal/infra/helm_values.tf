@@ -35,6 +35,49 @@ locals {
 
   blob_bucket = "langsmith-blobs"
 
+  #----------------------------------------------------------------------------
+  # Optional feature components (Deployments, Fleet, Polly, Insights), sized
+  # from the table the budget counts (feature_pods = feature_pod_sizes for the
+  # enabled features), so the cluster gets what the budget reserved. The
+  # feature example files set no resources for these components.
+  # Limits come from the full-tier size (2x its request, at least 1 CPU), not
+  # the profile: on slim profiles a tight limit OOM-kills work-heavy services
+  # (insights-queue was killed at 1Gi when it took work). Limits don't count in
+  # the budget. fleet-tool-server keeps at least 2 CPU: it pegs the CPU on
+  # startup and crash-loops under a 1-CPU limit.
+  #----------------------------------------------------------------------------
+  feature_full_pods = merge(values(local.feature_pod_size_tiers.full)...)
+  feature_resources = {
+    for c, sz in local.feature_pods : c => {
+      requests = { cpu = "${sz.cpu_m}m", memory = "${sz.mem_mi}Mi" }
+      limits = {
+        cpu    = "${max(local.feature_full_pods[c].cpu_m * 2, c == "fleet-tool-server" ? 2000 : 1000)}m"
+        memory = "${local.feature_full_pods[c].mem_mi * 2}Mi"
+      }
+    }
+  }
+  _fr  = local.feature_resources
+  _has = { for c in keys(local.feature_resources) : c => true }
+  feature_values = merge(
+    can(local._has["host-backend"]) ? { hostBackend = { deployment = { resources = local._fr["host-backend"] } } } : {},
+    can(local._has["listener"]) ? { listener = { deployment = { resources = local._fr["listener"] } } } : {},
+    can(local._has["operator"]) ? { operator = { deployment = { resources = local._fr["operator"] } } } : {},
+    can(local._has["fleet-api-server"]) ? { fleet = {
+      apiServer = { deployment = { resources = local._fr["fleet-api-server"] } }
+      queue     = { deployment = { resources = local._fr["fleet-queue"] } }
+    } } : {},
+    can(local._has["fleet-tool-server"]) ? { fleetToolServer = { deployment = { resources = local._fr["fleet-tool-server"] } } } : {},
+    can(local._has["fleet-trigger-server"]) ? { fleetTriggerServer = { deployment = { resources = local._fr["fleet-trigger-server"] } } } : {},
+    can(local._has["insights-api-server"]) ? { engineInsightsAgent = {
+      apiServer = { deployment = { resources = local._fr["insights-api-server"] } }
+      queue     = { deployment = { resources = local._fr["insights-queue"] } }
+    } } : {},
+    can(local._has["polly-api-server"]) ? { polly = {
+      apiServer = { deployment = { resources = local._fr["polly-api-server"] } }
+      queue     = { deployment = { resources = local._fr["polly-queue"] } }
+    } } : {},
+  )
+
   langsmith_values = merge(
     {
       config = merge(
@@ -67,22 +110,7 @@ locals {
         namespace = module.envoy_gateway.gateway.namespace
       }
     },
-    # Deployments components, sized from the same table the budget counts
-    # (feature_pod_sizes), so the two can't drift. Limits are the chart defaults.
-    var.enable_deployments ? {
-      hostBackend = { deployment = { resources = {
-        requests = { cpu = "${local.feature_pod_sizes.deployments["host-backend"].cpu_m}m", memory = "${local.feature_pod_sizes.deployments["host-backend"].mem_mi}Mi" }
-        limits   = { cpu = "1000m", memory = "2Gi" }
-      } } }
-      listener = { deployment = { resources = {
-        requests = { cpu = "${local.feature_pod_sizes.deployments.listener.cpu_m}m", memory = "${local.feature_pod_sizes.deployments.listener.mem_mi}Mi" }
-        limits   = { cpu = "2000m", memory = "4Gi" }
-      } } }
-      operator = { deployment = { resources = {
-        requests = { cpu = "${local.feature_pod_sizes.deployments.operator.cpu_m}m", memory = "${local.feature_pod_sizes.deployments.operator.mem_mi}Mi" }
-        limits   = { cpu = "2000m", memory = "4Gi" }
-      } } }
-    } : {},
+    local.feature_values,
     # Same env var as modules/aws: extended usage reporting on every component.
     var.enable_usage_telemetry ? {
       commonEnv = [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }]

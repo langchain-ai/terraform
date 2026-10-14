@@ -35,6 +35,9 @@ Symptom → cause → fix. Commands assume `kubectl --context <your context>`.
 | Agent deployment stuck in `DEPLOYING` | `config.deployment.tlsEnabled` doesn't match the hostname scheme | Terraform sets it from `langsmith_url_scheme`; re-run `make init-values` and `make deploy` after changing the scheme |
 | Agent deployment pods crash on import (`TypeError: Cannot create a consistent method resolution order`) | the image pins a `langgraph` version older than the LangGraph server base image ships | don't pin `langgraph` in the agent's requirements, or pin a compatible version; rebuild with `langgraph build` |
 | Agent deployments never scale, or the operator logs ScaledObject errors | KEDA isn't installed | `enable_deployments = true` installs it; check `kubectl -n keda get pods` |
+| Fleet, Polly or Insights pods stay `Pending` after enabling them, though the plan passed | values from an older copy of an example file (copied once by `init-values`) set larger requests than the budget counted | replace the copied `helm/values/langsmith-values-<feature>.yaml` with the current example, then `make init-values` and `make deploy` |
+| A product's queue or API pod is `OOMKilled` when it starts work | a memory limit too low for the work (older values sized limits from the slim requests) | limits now come from the full-tier sizes; refresh the copied feature files as above |
+| Core `langsmith-queue` `OOMKilled` after enabling Insights | Insights clustering (`cluster_runs_job`) runs in the core queue, sized for 2 GiB by the dev profile | the Insights feature file raises the queue's memory limit to 4 GiB; refresh the copied `langsmith-values-standalone-insights.yaml` |
 | SDK got 202 but the trace isn't visible | 202 means queued in Redis, not stored yet | check ingest-queue backlog and logs, and smithdb-ingestion logs |
 
 ## Ingest and Redis

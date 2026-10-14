@@ -135,6 +135,12 @@ datastores, LangSmith at the chosen profile, SmithDB tier, enabled features, and
 deployment) and compares them with `cluster_nodes`, minus `node_reserved` per worker, times `max_request_ratio`
 (default 0.7). A profile that doesn't fit fails the plan with the numbers. `terraform output budget` shows the breakdown.
 
+So that the gate counts what actually runs, Terraform also writes the requests it budgeted into the Helm values: the
+SmithDB components, and every optional feature component (host-backend, listener, operator, the Fleet servers, and the
+Polly and Insights API and queue). Their limits come from the full-tier sizes whatever the profile, because limits don't
+count in the budget and work-heavy services need the headroom. The sizing and feature example files deliberately set no
+resources for these components. Settings in your own `langsmith-values-local.yaml` still override everything.
+
 Nodes with role `smithdb-cache` or `smithdb-compute` get labels and taints so SmithDB's cache-heavy or CPU-heavy
 components can be pinned to them; `sandbox-host` nodes are excluded from the LangSmith budget.
 

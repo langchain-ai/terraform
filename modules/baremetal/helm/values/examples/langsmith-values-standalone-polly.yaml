@@ -1,5 +1,8 @@
 # Copied from modules/gcp/helm/values/examples; keep in step with it.
 # Bare metal: the "Cloud SQL/Memorystore" notes below map to postgres-langsmith (database created by a Terraform Job) and redis-langsmith (logical DB index).
+#
+# Resources are not set here: Terraform writes them to langsmith-values-overrides.yaml from the
+# same table the budget gate counts (feature_pod_sizes in infra/locals.tf), so the two can't drift.
 
 # Polly — standalone path (chart v0.15+).
 #
@@ -38,28 +41,6 @@ polly:
 
   # Resources required — the langsmith-quota ResourceQuota in this namespace
   # rejects any pod that doesn't specify cpu/memory limits and requests.
-  # Sizing mirrors the legacy `config.polly.agent.resources` defaults
-  # (cpu: 2/4, memoryMb: 4096/8192) split between api-server and queue.
-  apiServer:
-    deployment:
-      resources:
-        requests:
-          cpu: "2"
-          memory: 4Gi
-        limits:
-          cpu: "4"
-          memory: 8Gi
-
-  queue:
-    deployment:
-      resources:
-        requests:
-          cpu: "1"
-          memory: 2Gi
-        limits:
-          cpu: "2"
-          memory: 4Gi
-
   postgres:
     external:
       enabled: true

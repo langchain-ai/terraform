@@ -373,6 +373,41 @@ run "deployments_tls_follows_url_scheme" {
   }
 }
 
+run "products_get_budget_sizing" {
+  command = plan
+
+  variables {
+    sizing_profile             = "minimum"
+    enable_fleet               = true
+    enable_standalone_polly    = true
+    enable_standalone_insights = true
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.polly.apiServer.deployment.resources.requests.cpu == "500m" && output.langsmith_helm_values.engineInsightsAgent.queue.deployment.resources.requests.cpu == "250m" && output.langsmith_helm_values.fleet.apiServer.deployment.resources.requests.memory == "512Mi"
+    error_message = "Fleet, Polly and Insights must get the budget's slim sizes on minimum and lab, not the chart or example defaults."
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.fleetToolServer.deployment.resources.limits.cpu == "2000m"
+    error_message = "fleet-tool-server needs a CPU limit of at least 2 (it crash-loops on startup under 1 CPU)."
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.engineInsightsAgent.queue.deployment.resources.limits.memory == "4096Mi" && output.langsmith_helm_values.polly.apiServer.deployment.resources.limits.memory == "8192Mi"
+    error_message = "Limits come from the full-tier sizes even on slim profiles (insights-queue OOMed at a 1Gi limit)."
+  }
+}
+
+run "no_products_no_product_sizing" {
+  command = plan
+
+  assert {
+    condition     = !can(output.langsmith_helm_values.polly) && !can(output.langsmith_helm_values.fleet) && !can(output.langsmith_helm_values.engineInsightsAgent)
+    error_message = "Without the product flags, the values carry no product sizing."
+  }
+}
+
 run "telemetry_off_by_default" {
   command = plan
 

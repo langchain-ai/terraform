@@ -126,60 +126,20 @@ aceBackend:
 hostBackend:
   deployment:
     replicas: 1
-    resources:
-      requests:
-        cpu: "250m"
-        memory: "512Mi"
-      limits:
-        cpu: "1"
-        memory: "1Gi"
-
 listener:
   deployment:
     replicas: 1
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
-
 operator:
   deployment:
     replicas: 1
-    resources:
-      requests:
-        cpu: "250m"
-        memory: "512Mi"
-      limits:
-        cpu: "500m"
-        memory: "1Gi"
-
 # -- Agent Builder infrastructure ----------------------------------------------
 
 fleetToolServer:
   deployment:
     replicas: 1
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
-
 fleetTriggerServer:
   deployment:
     replicas: 1
-    resources:
-      requests:
-        cpu: "250m"
-        memory: "512Mi"
-      limits:
-        cpu: "500m"
-        memory: "1Gi"
-
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # These apply when using in-cluster postgres, redis, and clickhouse.
 # If pointing at managed services (Cloud SQL, Memorystore, ClickHouse Cloud),

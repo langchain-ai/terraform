@@ -1,5 +1,8 @@
 # Copied from modules/gcp/helm/values/examples; keep in step with it.
 # Bare metal: the "Cloud SQL/Memorystore" notes below map to postgres-langsmith (database created by a Terraform Job) and redis-langsmith (logical DB index).
+#
+# Resources are not set here: Terraform writes them to langsmith-values-overrides.yaml from the
+# same table the budget gate counts (feature_pod_sizes in infra/locals.tf), so the two can't drift.
 
 # Insights — standalone path (chart v0.15+).
 #
@@ -48,26 +51,6 @@ engineInsightsAgent:
   # rejects any pod that doesn't specify cpu/memory limits and requests.
   # Sizing mirrors the legacy `config.insights.agent.resources` defaults
   # (cpu: 2/4, memoryMb: 4096/8192) split between api-server and queue.
-  apiServer:
-    deployment:
-      resources:
-        requests:
-          cpu: "2"
-          memory: 4Gi
-        limits:
-          cpu: "4"
-          memory: 8Gi
-
-  queue:
-    deployment:
-      resources:
-        requests:
-          cpu: "1"
-          memory: 2Gi
-        limits:
-          cpu: "2"
-          memory: 4Gi
-
   postgres:
     external:
       enabled: true
@@ -81,3 +64,13 @@ engineInsightsAgent:
       # Secret created by Terraform (infra/main.tf: kubernetes_secret.standalone_insights_redis).
       # Contains key: redis_connection_url = redis://<host>:<port>
       existingSecretName: "langsmith-insights-redis"
+
+# Insights clustering (cluster_runs_job / run_clustering) runs in the core queue,
+# which the dev sizing limits to 2Gi. It was OOMKilled there right after Insights
+# was enabled, so raise only its memory limit while Insights is on. Limits don't
+# count in the budget gate; requests and CPU stay as the sizing profile sets them.
+queue:
+  deployment:
+    resources:
+      limits:
+        memory: 4Gi

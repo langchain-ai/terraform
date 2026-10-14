@@ -140,14 +140,6 @@ aceBackend:
 # -- Deployments feature components --------------------------------------------
 
 hostBackend:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -157,14 +149,6 @@ hostBackend:
       targetMemoryUtilizationPercentage: 80
 
 listener:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -173,37 +157,7 @@ listener:
       targetCPUUtilizationPercentage: 50
       targetMemoryUtilizationPercentage: 80
 
-operator:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
-
 # -- Agent Builder infrastructure ----------------------------------------------
-
-fleetToolServer:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
-
-fleetTriggerServer:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
 
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 # Bare metal: StatefulSets use the default StorageClass (local-path on node NVMe).

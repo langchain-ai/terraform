@@ -143,14 +143,6 @@ aceBackend:
 # -- Deployments feature components --------------------------------------------
 
 hostBackend:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "2"
-        memory: "4Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -160,14 +152,6 @@ hostBackend:
       targetMemoryUtilizationPercentage: 80
 
 listener:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "2"
-        memory: "4Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -176,37 +160,7 @@ listener:
       targetCPUUtilizationPercentage: 50
       targetMemoryUtilizationPercentage: 80
 
-operator:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "2"
-        memory: "4Gi"
-
 # -- Agent Builder infrastructure ----------------------------------------------
-
-fleetToolServer:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "2"
-        memory: "4Gi"
-
-fleetTriggerServer:
-  deployment:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "2"
-        memory: "4Gi"
 
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 # High/High pattern: 14+ CPU / 24+ Gi per node, 3-node cluster recommended.
