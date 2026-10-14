@@ -52,3 +52,8 @@ output "keda_image_pull_secret_name" {
   description = "Pull Secret KEDA's pods use, empty without one."
   value       = var.install_keda ? var.keda_image_pull_secret_name : ""
 }
+
+output "keda_chart_repository_authenticated" {
+  description = "Whether the KEDA chart fetch sends a username and password. False without them or without KEDA."
+  value       = var.install_keda && var.keda_chart_repository_username != ""
+}

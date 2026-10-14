@@ -281,3 +281,16 @@ variable "keda_chart_repository" {
   description = "Helm repository the KEDA chart is fetched from."
   default     = "https://kedacore.github.io/charts"
 }
+
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for a chart repository that requires a login. Empty fetches anonymously."
+  default     = ""
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username."
+  default     = ""
+  sensitive   = true
+}

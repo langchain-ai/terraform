@@ -186,6 +186,10 @@ ingress_controller = "envoy-gateway"
 # keda_image_registry_keeps_source_host = false
 # keda_image_pull_secret_name           = "nexus-pull"
 # keda_chart_repository                 = "https://nexus.example.com/repository/helm-kedacore"
+# A chart mirror behind a login takes a username here and its password in
+# secrets.auto.tfvars (keda_chart_repository_password); without them the fetch
+# is anonymous, which the mirror must then allow.
+# keda_chart_repository_username        = "helm-reader"
 
 # A mirror whose certificate an internal CA signed also needs that CA on the
 # nodes, where containerd pulls images: one PEM file per CA, up to 10, paths

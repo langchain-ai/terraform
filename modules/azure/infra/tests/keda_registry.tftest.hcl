@@ -181,3 +181,41 @@ run "refuses_a_chart_repository_without_a_scheme" {
 
   expect_failures = [var.keda_chart_repository]
 }
+
+run "chart_repository_login_reaches_the_release" {
+  command = plan
+
+  variables {
+    keda_chart_repository          = "https://nexus.example.com/repository/helm-kedacore"
+    keda_chart_repository_username = "helm-reader"
+    keda_chart_repository_password = "fixture-not-a-real-secret"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.keda_chart_repository_authenticated
+    error_message = "A username and password for the chart mirror should reach the KEDA release"
+  }
+}
+
+run "no_login_keeps_the_chart_fetch_anonymous" {
+  command = plan
+
+  variables {
+    keda_chart_repository = "https://nexus.example.com/repository/helm-kedacore"
+  }
+
+  assert {
+    condition     = !module.k8s_bootstrap.keda_chart_repository_authenticated
+    error_message = "Without a username the chart fetch should stay anonymous"
+  }
+}
+
+run "refuses_a_chart_repository_username_without_its_password" {
+  command = plan
+
+  variables {
+    keda_chart_repository_username = "helm-reader"
+  }
+
+  expect_failures = [var.keda_chart_repository_username]
+}

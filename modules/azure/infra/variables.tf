@@ -1536,6 +1536,24 @@ variable "keda_chart_repository" {
   }
 }
 
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for keda_chart_repository when the mirror requires a login to read charts, as a Nexus or Artifactory Helm proxy behind authentication does; the machine running Terraform sends it with the chart fetch. Empty (default) fetches anonymously, which KEDA's own repository and an open mirror allow. Set with keda_chart_repository_password."
+  default     = ""
+
+  validation {
+    condition     = (var.keda_chart_repository_username == "") == (var.keda_chart_repository_password == "")
+    error_message = "keda_chart_repository_username and keda_chart_repository_password go together: set both for a chart mirror that requires a login, or neither."
+  }
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars."
+  default     = ""
+  sensitive   = true
+}
+
 variable "postgres_admin_username" {
   type        = string
   description = "The username of the Postgres administrator"

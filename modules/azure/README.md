@@ -1383,7 +1383,10 @@ decides what the cluster can reach, and nothing works until it allows:
   (`keda_image_pull_secret_name`, created with the namespace before the apply
   that installs KEDA). The `keda_images` output lists the composed paths.
   `keda_chart_repository` points the Helm fetch at a mirrored chart repository,
-  so the machine running Terraform stays off `kedacore.github.io`.
+  so the machine running Terraform stays off `kedacore.github.io`; a mirror
+  that requires a login takes `keda_chart_repository_username` and
+  `keda_chart_repository_password` (in `secrets.auto.tfvars`), and without
+  them the mirror must allow anonymous reads.
   LangSmith's own images are separate: the chart joins `images.registry` to
   repositories that mostly begin with `docker.io/`, so under a proxy-layout
   mirror leave `images.registry` empty and set each

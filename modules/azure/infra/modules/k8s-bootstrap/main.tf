@@ -483,10 +483,13 @@ resource "helm_release" "keda" {
   namespace        = "keda"
   create_namespace = true
   repository       = var.keda_chart_repository
-  chart            = "keda"
-  version          = var.keda_version
-  wait             = true
-  wait_for_jobs    = true
+  # A mirror behind a login takes the two; null keeps the fetch anonymous.
+  repository_username = var.keda_chart_repository_username != "" ? var.keda_chart_repository_username : null
+  repository_password = var.keda_chart_repository_password != "" ? var.keda_chart_repository_password : null
+  chart               = "keda"
+  version             = var.keda_version
+  wait                = true
+  wait_for_jobs       = true
 
   set {
     name  = "resources.operator.requests.cpu"
