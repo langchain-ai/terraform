@@ -1139,10 +1139,15 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # With envoy_gateway_image_registry, the controller (and its certgen job) pull
 # from the mirror through the chart's global image value, and the proxy image is
 # exported for deploy.sh, which sets it on the EnvoyProxy.
+# envoy_gateway_image_registry_keeps_source_host decides whether docker.io sits
+# between the registry and the image path: a mirror that keeps the source host
+# serves <registry>/docker.io/<path>, a Docker Hub proxy repository serves
+# <registry>/<path>.
 locals {
   envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
-  envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
-  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
+  envoy_mirror_prefix  = local.envoy_gateway_mirror ? (var.envoy_gateway_image_registry_keeps_source_host ? "${var.envoy_gateway_image_registry}/docker.io/" : "${var.envoy_gateway_image_registry}/") : ""
+  envoy_gateway_image  = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}envoyproxy/gateway:${var.envoy_gateway_version}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}${var.envoy_proxy_default_image}" : ""
 }
 
 resource "helm_release" "envoy_gateway" {
