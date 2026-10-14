@@ -98,7 +98,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
 - `aks_private_cluster_enabled`, `aks_private_dns_zone_id`, `aks_entra_only`, `aks_entra_admin_group_object_ids`, `aks_control_plane_identity`, `aks_control_plane_identity_id`, `aks_control_plane_identity_manage_grants`. Terraform makes no control-plane grants on an attached cluster, and detects Entra on the cluster itself and switches to `kubelogin` without `aks_entra_only`
-- `availability_zones`, for the cluster only — PostgreSQL still uses it
+- `availability_zones`, for the cluster's default pool only — additional pools Terraform manages still follow it, and PostgreSQL still uses it
 
 `istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
 
@@ -1327,7 +1327,7 @@ exactly one zone; otherwise Azure places them. The zones are set once, at
 creation: a later `availability_zones` edit leaves the NAT gateway and its
 public IP where they are, and plan warns about the drift. Changing them would
 replace both, changing the egress address and cutting the cluster's egress until
-the new one is attached. The cluster's node pool treats a zone edit the same way.
+the new one is attached. The cluster's node pools treat a zone edit the same way.
 `aks_nat_gateway_idle_timeout_minutes` (4 to 120, default 4) sets its TCP idle
 timeout. Traffic that leaves through the NAT gateway comes from its public IP,
 which is the address to allow in the firewall rules and
@@ -1583,7 +1583,7 @@ Plan it for a maintenance window, and read the plan before applying.
 ## Multi-AZ Support
 
 `availability_zones` defaults to `[]`, which leaves placement to Azure: the AKS
-node pool is non-zonal and the PostgreSQL server lands where the region has
+node pools are non-zonal and the PostgreSQL server lands where the region has
 room. That default is the only setting that deploys a VM or database size Azure
 does not offer in every zone. Pinning a zone that lacks the size fails with an
 error that names the zone rather than the size, so it reads as a capacity
@@ -1605,8 +1605,13 @@ Azure puts the standby in a zone other than the primary's, so HA works under the
 Pin zones when you want to choose the placement yourself:
 
 ```hcl
-# Spread AKS nodes across zones 1, 2, 3
+# Spread AKS nodes across zones 1, 2, 3: the default pool and every additional pool
 availability_zones = ["1", "2", "3"]
+
+# A pool whose VM size is not offered in every zone sets its own
+additional_node_pools = {
+  large = { vm_size = "Standard_D16s_v5", min_count = 0, max_count = 2, zones = ["1", "2"] }
+}
 
 # Pin the Postgres standby as well — optional, Azure picks one otherwise
 postgres_standby_availability_zone = "2"
@@ -1626,15 +1631,32 @@ can be the zone you pinned for the standby, which `ZoneRedundant` does not
 allow. Setting the standby zone still enables HA on its own, so a configuration
 written before `postgres_high_availability` keeps its standby.
 
-Set `availability_zones` before the first apply. The AKS node pool keeps the
-zones it was created with: `azurerm` re-zones a default node pool by cycling the
-system node pool, and that cycle does not cordon and drain, so the module ignores
-zone changes rather than disrupt running pods on a tfvars edit. Plan reports a
-mismatch as a `Check block assertion failed` warning naming both the live and the
-requested zones. The `[]` default is exempt: it requests no zone, so there is
-nothing to be out of sync with. To re-zone an existing cluster on purpose, remove
-`default_node_pool[0].zones` from the `ignore_changes` block in
-`infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
+Set `availability_zones` before the first apply. It covers the default node pool
+and every pool in `additional_node_pools` that sets no `zones` of its own; a pool
+sets `zones` for a VM size not offered in every zone, or `[]` to stay regional
+(refused while SmithDB is on; see [SMITHDB.md](SMITHDB.md)).
+Zones are set once, at creation, and a pool keeps the ones it was created with:
+`azurerm` re-zones a default node pool by cycling the system node pool, which
+does not cordon and drain, and an additional pool by rotating it through a
+temporary pool, which drains every node (4.5 to 6 minutes per pool on a test
+cluster), so the module ignores zone changes on both rather than disrupt running
+pods on a tfvars edit. Plan reports a mismatch as a `Check block assertion
+failed` warning naming the live and the requested zones:
+`aks_node_pool_zone_drift` for the default pool, and
+`aks_additional_node_pool_zone_drift` for the others, one warning naming every
+pool that differs. The `[]` default is exempt: it requests no zone, so there is
+nothing to be out of sync with.
+
+Additional pools created by an earlier version of this module are regional
+whatever `availability_zones` says, because the variable reached only the
+default pool then. Such a cluster plans no change after upgrading, and the
+warning names those pools. The way to zoned pools is new ones: add a pool with
+the zones to `additional_node_pools`, move the workloads to it, and remove the
+old pool. To re-zone an existing pool in place instead, remove
+`default_node_pool[0].zones` (the default pool) or `zones` on
+`azurerm_kubernetes_cluster_node_pool.node_pool` (an additional pool) from the
+`ignore_changes` block in `infra/modules/k8s-cluster/main.tf` and apply during a
+maintenance window.
 
 ### Storage security defaults
 

@@ -164,6 +164,11 @@ output "node_pool_os_skus" {
   value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.os_sku }
 }
 
+output "node_pool_zones" {
+  description = "Availability zones each additional node pool is planned or created with, keyed by pool name. Empty for a regional pool, and null in the plan that creates one."
+  value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.zones }
+}
+
 output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
