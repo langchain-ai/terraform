@@ -187,6 +187,12 @@ variable "s3_kms_key_arn" {
   default     = ""
 }
 
+variable "migration_source_bucket_arn" {
+  type        = string
+  description = "ARN of the LangSmith traces bucket the migration Job reads from. Empty grants no access."
+  default     = ""
+}
+
 variable "s3_versioning_enabled" {
   type        = bool
   description = "Enable versioning on the SmithDB object-store bucket."
