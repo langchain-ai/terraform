@@ -120,7 +120,7 @@ gcp/
 │       ├── redis/          ← Memorystore Redis, HA tier, private IP
 │       ├── storage/        ← GCS bucket with TTL lifecycle rules (ttl_s/ ttl_l/)
 │       ├── k8s-bootstrap/  ← Namespaces, K8s secrets, cert-manager, KEDA
-│       ├── ingress/        ← Envoy Gateway (default) or GKE Gateway (Gateway API), GatewayClass, HTTPRoute
+│       ├── ingress/        ← GKE Gateway (default) or Envoy Gateway (Gateway API), GatewayClass, HTTPRoute
 │       ├── iam/            ← Workload Identity service accounts and bindings (wired by default)
 │       ├── dns/            ← Cloud DNS managed zone (optional via flags)
 │       ├── certificate-manager/ ← Google-managed TLS certificate for the GKE Gateway (optional)
@@ -300,30 +300,26 @@ helm upgrade --install langsmith langchain/langsmith \
 ```bash
 kubectl get pods -n langsmith
 
-# Get Gateway external IP
-EXTERNAL_IP=$(kubectl get svc -n envoy-gateway-system \
-  -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway \
-  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}')
+# Gateway IP
+EXTERNAL_IP=$(terraform output -raw ingress_ip)
 
 echo "Create A record: $EXTERNAL_IP -> <your-langsmith-domain>"
-
-kubectl get certificate -n langsmith
 ```
 
-### Using the GKE Gateway instead of Envoy
+### Ingress: GKE Gateway (default) or Envoy Gateway
 
-Set `ingress_type = "gke"` to use GKE's built-in Gateway controller instead of Envoy Gateway. Envoy stays the default.
+`ingress_type = "gke"`, the default, uses GKE's built-in Gateway controller and a global external Application Load Balancer. It is the only option that takes a Google-managed certificate.
 
 ```hcl
-ingress_type           = "gke"
+ingress_type           = "gke"              # the default
 tls_certificate_source = "google-managed"   # or "existing", "cert-manager", "none"
 ```
 
-What changes:
+What it creates:
 
 - The cluster's Gateway API controller is turned on (`CHANNEL_STANDARD`). This is an in-place cluster update.
-- No Envoy Gateway release or CRD install. Terraform creates a `Gateway` in the LangSmith namespace, and with the default global class, a global static IP named `<name>-gateway-ip`.
-- The Gateway lives in the `langsmith` namespace, not `envoy-gateway-system`. `init-values.sh` writes `gateway.namespace` for you when `ingress_type = "gke"`.
+- A `Gateway` in the LangSmith namespace, and with the default global class, a global static IP named `<name>-gateway-ip`. No Envoy Gateway release or CRD install.
+- `init-values.sh` writes `gateway.namespace` (the LangSmith namespace) for the chart's HTTPRoute.
 - The namespace NetworkPolicy gets two extra sources for Google's load balancer ranges (`130.211.0.0/22`, `35.191.0.0/16`). Without them the backends report unhealthy and every request returns 503.
 - The IP comes from Terraform, not from a Service:
 
@@ -332,7 +328,11 @@ What changes:
   kubectl get gateway -n langsmith
   ```
 
-Things to know:
+`ingress_type = "envoy"` installs Envoy Gateway in `envoy-gateway-system` behind a passthrough Network Load Balancer, and terminates TLS in the cluster. It takes `existing`, `cert-manager`, or `none`, not `google-managed`. Its IP is not reserved.
+
+**Upgrading an install that did not set `ingress_type`.** Earlier module versions defaulted to `envoy`. To keep Envoy Gateway, add `ingress_type = "envoy"` to `terraform.tfvars` before `make apply`. Without it, the apply uninstalls Envoy Gateway and creates a GKE Gateway with a new IP address. Then run `make init-values` and `make deploy`, and move the DNS A record to `terraform output -raw ingress_ip`. LangSmith is unreachable from the apply until those steps finish.
+
+Things to know about the GKE Gateway:
 
 - The listener is bound to `langsmith_domain`. A request with any other `Host`, such as the bare IP, gets a 404 with the body `fault filter abort`. Use the hostname.
 - With `tls_certificate_source = "none"` the Gateway serves HTTP only, so use `http://`. With any other source, HTTP redirects to HTTPS.
@@ -413,8 +413,8 @@ helm upgrade langsmith langchain/langsmith \
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |
 | `langsmith_license_key` | `""` | no | License key — use `TF_VAR_langsmith_license_key` |
 | `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.17.0` line; must be on the 0.17 line) |
-| `install_ingress` | `true` | no | Install the Gateway via Terraform (Envoy Gateway by default, or the GKE Gateway) |
-| `ingress_type` | `envoy` | no | Ingress type: `envoy` (default), `gke`, `istio`, or `other` |
+| `install_ingress` | `true` | no | Install the Gateway via Terraform (the GKE Gateway by default, or Envoy Gateway) |
+| `ingress_type` | `gke` | no | Ingress type: `gke` (default), `envoy`, `istio`, or `other`. Earlier versions defaulted to `envoy` |
 | `gke_gateway_class` | `gke-l7-global-external-managed` | no | GatewayClass when `ingress_type = "gke"`. Only this global class is supported. It reserves a static IP |
 | `tls_certificate_source` | `none` | no | `none`, `google-managed` (GKE Gateway), `existing`, or `cert-manager`. See [TLS.md](TLS.md) |
 | `tls_existing_secret_name` | `""` | with `existing` | A `kubernetes.io/tls` Secret you create; keeps the key out of Terraform state |

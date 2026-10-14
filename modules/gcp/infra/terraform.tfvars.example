@@ -263,8 +263,8 @@ langsmith_helm_chart_version = ""
 #
 #   "none"           - HTTP only.
 #   "google-managed" - Certificate Manager certificate on the GKE Gateway load
-#                      balancer (ingress_type = "gke"). Recommended for
-#                      production on GKE Gateway: no key in the cluster, no
+#                      balancer (ingress_type = "gke", the default).
+#                      Recommended for production: no key in the cluster, no
 #                      cert-manager, no inbound port 80.
 #   "existing"       - your own certificate in a Kubernetes TLS Secret.
 #                      Recommended for production on Envoy Gateway.
@@ -274,7 +274,7 @@ langsmith_helm_chart_version = ""
 # With any source other than "none", HTTP redirects to HTTPS.
 tls_certificate_source = "none"
 
-# --- google-managed (set ingress_type = "gke" below) ---
+# --- google-managed (needs ingress_type = "gke", the default) ---
 # The certificate is issued once a DNS authorization CNAME resolves, before the
 # domain points at the Gateway. With enable_dns_module = true Terraform writes
 # the record; otherwise add it from: terraform output tls_dns_authorization_record
@@ -315,18 +315,23 @@ tls_secret_name = "langsmith-tls"
 # Optional: Ingress Configuration
 #------------------------------------------------------------------------------
 install_ingress = true
-ingress_type    = "envoy"  # "envoy" (default), "gke" (GKE Gateway), "istio" or "other" (reserved)
+ingress_type    = "gke"  # "gke" (GKE Gateway, default), "envoy" (Envoy Gateway), "istio" or "other" (reserved)
 
-# ingress_type = "gke" uses the GKE Gateway controller instead of Envoy Gateway.
+# ingress_type = "gke" uses the GKE Gateway controller and a global external
+# Application Load Balancer.
 #   - tls_certificate_source can be "none", "google-managed", "existing", or
 #     "cert-manager".
 #   - The default class reserves a global static IP (<name>-gateway-ip) for DNS.
-#     The Envoy Gateway's IP is not reserved: do not delete and recreate its
-#     Gateway once DNS points at it, or the IP changes.
 #   - Only the default class is supported. Regional classes such as
 #     "gke-l7-rilb" need a proxy-only subnet, and NetworkPolicy access from its
 #     range, which this stack does not create. Terraform rejects them.
 # gke_gateway_class = "gke-l7-global-external-managed"
+#
+# ingress_type = "envoy" installs Envoy Gateway instead. It was the default in
+# earlier module versions: set it to keep an existing Envoy Gateway install.
+#   - tls_certificate_source can be "none", "existing", or "cert-manager".
+#   - Its IP is not reserved: do not delete and recreate its Gateway once DNS
+#     points at it, or the IP changes.
 
 #------------------------------------------------------------------------------
 # Optional: AWS-parity module wiring

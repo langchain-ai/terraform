@@ -12,10 +12,10 @@ Gateway an HTTPS listener and makes its HTTP listener redirect to HTTPS
 
 | Source | Where the certificate lives | Gateway | Use it for |
 |---|---|---|---|
-| `google-managed` | Certificate Manager, on the Google Cloud load balancer | GKE Gateway (`ingress_type = "gke"`), global class | Production on GKE Gateway. No key in the cluster, no cert-manager, no inbound port 80 |
-| `existing` | A Kubernetes TLS Secret you create | Envoy or GKE | Production with a certificate from your own PKI |
-| `cert-manager` | A Secret that cert-manager writes, from your own Issuer | Envoy or GKE | Production with automated renewal from Vault, Venafi, Google CAS, or a private ACME server |
-| `none` | — | Envoy or GKE | HTTP only |
+| `google-managed` | Certificate Manager, on the Google Cloud load balancer | GKE Gateway (`ingress_type = "gke"`, the default), global class | Production. No key in the cluster, no cert-manager, no inbound port 80 |
+| `existing` | A Kubernetes TLS Secret you create | GKE or Envoy | Production with a certificate from your own PKI |
+| `cert-manager` | A Secret that cert-manager writes, from your own Issuer | GKE or Envoy | Production with automated renewal from Vault, Venafi, Google CAS, or a private ACME server |
+| `none` | — | GKE or Envoy | HTTP only |
 
 ## google-managed
 
@@ -24,7 +24,7 @@ A Google-managed certificate from
 attached to the GKE Gateway through a certificate map. Google renews it.
 
 ```hcl
-ingress_type           = "gke"
+ingress_type           = "gke"                              # the default
 gke_gateway_class      = "gke-l7-global-external-managed"   # the default
 tls_certificate_source = "google-managed"
 langsmith_domain       = "langsmith.example.com"
@@ -197,6 +197,10 @@ each step. The ones most likely to matter here:
 
 ## Upgrading from an earlier module version
 
+- **`ingress_type` not set**: the default is now `gke`, not `envoy`. To keep
+  Envoy Gateway, set `ingress_type = "envoy"` before `make apply`. Otherwise the
+  apply replaces Envoy Gateway with a GKE Gateway on a new IP address. See the
+  README section "Ingress: GKE Gateway (default) or Envoy Gateway".
 - **`letsencrypt`**: removed. See [Moving off Let's Encrypt](#moving-off-lets-encrypt).
 - **cert-manager installed** (`cert-manager`, or `install_cert_manager = true`):
   run `make cert-manager-upgrade` before `make apply`, or the apply stops at the
@@ -227,8 +231,8 @@ was ever issued: `kubectl get certificate -n langsmith`.
 Pick one of these:
 
 - **google-managed** (recommended): set `tls_certificate_source = "google-managed"`
-  on the GKE Gateway (`ingress_type = "gke"`). The GKE Gateway gets a new IP
-  address. Apply, add the DNS authorization record, and wait for `ACTIVE`. Then
+  on the GKE Gateway (`ingress_type = "gke"`, the default). The GKE Gateway gets
+  a new IP address. Apply, add the DNS authorization record, and wait for `ACTIVE`. Then
   move the domain's A record to `terraform -chdir=infra output -raw ingress_ip`.
 - **existing**: keep the Secret that cert-manager wrote. Set
   `tls_certificate_source = "existing"` and set `tls_existing_secret_name` to

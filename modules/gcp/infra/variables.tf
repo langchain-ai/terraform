@@ -632,9 +632,9 @@ variable "install_ingress" {
 }
 
 variable "ingress_type" {
-  description = "Type of ingress to install: 'envoy' or 'gke' (implemented), 'istio' or 'other' (reserved for future implementation)"
+  description = "Type of ingress to install: 'gke' (GKE Gateway, the default) or 'envoy' (Envoy Gateway). 'istio' and 'other' are reserved. Earlier module versions defaulted to 'envoy': to keep Envoy Gateway, set ingress_type = 'envoy'."
   type        = string
-  default     = "envoy"
+  default     = "gke"
 
   validation {
     condition     = contains(["envoy", "gke", "istio", "other"], var.ingress_type)

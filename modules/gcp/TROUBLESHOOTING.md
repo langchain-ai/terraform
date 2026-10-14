@@ -228,7 +228,7 @@ Create a new HMAC key in GCP Console: Storage > Settings > Interoperability > Cr
 
 ---
 
-### Issue #8 — Envoy Gateway webhook blocking GKE operations
+### Issue #8 — Envoy Gateway webhook blocking GKE operations (`ingress_type = "envoy"`)
 
 **Symptom:**
 ```
@@ -251,11 +251,13 @@ kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system
 
 ---
 
-### Issue #9 — Envoy Gateway external IP changed after re-apply
+### Issue #9 — Envoy Gateway external IP changed after re-apply (`ingress_type = "envoy"`)
 
 **Symptom:** DNS no longer resolves to the correct IP after Terraform re-apply, or existing firewall allowlists stop working.
 
-**Cause:** The Envoy Gateway external IP is tied to the `Gateway` Kubernetes resource managed by Terraform. If that resource is deleted and recreated (e.g. due to a `taint`, a module change that forces replacement, or a `terraform destroy` + re-apply), GCP issues a **new** IP address. There is no way to reserve the original IP.
+**Cause:** The Envoy Gateway external IP is tied to the `Gateway` Kubernetes resource managed by Terraform. If that resource is deleted and recreated (e.g. due to a `taint`, a module change that forces replacement, or a `terraform destroy` + re-apply), GCP issues a **new** IP address. There is no way to reserve the original IP. The GKE Gateway (`ingress_type = "gke"`, the default) uses a reserved static IP, which only `terraform destroy` releases.
+
+An install that did not set `ingress_type` moves from Envoy Gateway to the GKE Gateway on the first apply after the default changed, and gets a new IP. Set `ingress_type = "envoy"` to stay on Envoy Gateway.
 
 **Prevention:**
 - Never `terraform taint` or manually delete the `Gateway` resource.
@@ -487,14 +489,15 @@ gcloud certificate-manager certificates describe \
 ### Gateway and load balancer
 
 ```bash
-kubectl get gateway -n envoy-gateway-system
-kubectl get httproute -n langsmith
-kubectl get svc -n envoy-gateway-system -o wide
-kubectl get pods -n envoy-gateway-system
-
-# ingress_type = "gke": the Gateway is in the LangSmith namespace
+# GKE Gateway (ingress_type = "gke", the default): the Gateway is in the LangSmith namespace
 kubectl get gateway -n langsmith
 kubectl describe gateway -n langsmith
+kubectl get httproute -n langsmith
+
+# Envoy Gateway (ingress_type = "envoy")
+kubectl get gateway -n envoy-gateway-system
+kubectl get svc -n envoy-gateway-system -o wide
+kubectl get pods -n envoy-gateway-system
 ```
 
 ### Helm
@@ -565,7 +568,7 @@ echo "=== Context ===" && kubectl config current-context
 echo "=== Nodes ===" && kubectl get nodes
 echo "=== Pods ===" && kubectl get pods -n langsmith
 echo "=== Certificate ===" && kubectl get certificate -n langsmith
-echo "=== Gateway ===" && kubectl get gateway -n envoy-gateway-system
+echo "=== Gateway ===" && kubectl get gateway -A
 echo "=== Secrets ===" && kubectl get secrets -n langsmith | grep -E "langsmith-postgres|langsmith-redis"
 echo "=== Helm ===" && helm status langsmith -n langsmith 2>/dev/null | grep -E "STATUS|LAST DEPLOYED"
 ```

@@ -11,8 +11,8 @@
 config:
   deployment:
     # Enables the Deployments nav item in the UI. Also requires config.hostname to be
-    # set in values-overrides.yaml — find the Envoy Gateway IP with:
-    #   kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
+    # set in values-overrides.yaml — find the Gateway IP with:
+    #   terraform -chdir=infra output -raw ingress_ip
     enabled: true
     # Set to true if TLS is configured (any tls_certificate_source other than "none").
     # false = HTTP-only (tls_certificate_source = "none"). The operator uses this to

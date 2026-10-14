@@ -91,7 +91,7 @@ Review the plan. Expected resource categories:
 - GCP service account + IAM bindings (storage.objectAdmin; secretmanager.secretAccessor only with `grant_project_secret_accessor = true`)
 - Kubernetes namespace `langsmith`, K8s Secrets (`langsmith-postgres`, `langsmith-redis`)
 - Helm releases: ESO (external-secrets), optionally KEDA, optionally cert-manager
-- Envoy Gateway (GatewayClass + Gateway resources)
+- GKE Gateway (Gateway manifest, global static IP, Gateway API on the cluster). With `ingress_type = "envoy"`: the Envoy Gateway Helm release, GatewayClass, and Gateway
 - GCP API enablement (12 services)
 
 Confirm no unexpected `destroy` or `replace` actions on existing resources.
@@ -128,7 +128,7 @@ Expected `Running`: `coredns-*`, `fluentbit-*`, `kube-dns-*`, `kube-proxy-*`, `m
 kubectl get pods -n external-secrets   # ESO controller + cert-controller + webhook
 kubectl get pods -n keda               # KEDA controller (if enable_langsmith_deployment=true)
 kubectl get pods -n cert-manager       # cert-manager (if tls_certificate_source=cert-manager)
-kubectl get pods -n envoy-gateway-system  # Envoy Gateway controller
+kubectl get pods -n envoy-gateway-system  # Envoy Gateway controller (only with ingress_type=envoy)
 ```
 
 ### LangSmith namespace
@@ -147,9 +147,10 @@ Both must be non-null if `enable_gcp_iam_module = true` (default).
 
 ### Gateway
 ```bash
-kubectl get gateway -n envoy-gateway-system
+kubectl get gateway -n langsmith               # GKE Gateway (default)
+kubectl get gateway -n envoy-gateway-system    # with ingress_type = "envoy"
 ```
-Expected: `PROGRAMMED = True`. External IP may show as `pending` until a `HTTPRoute` (Helm) is deployed.
+Expected: `PROGRAMMED = True`. On Envoy Gateway, the external IP may show as `pending` until a `HTTPRoute` (Helm) is deployed. The GKE Gateway uses the reserved IP from `terraform -chdir=infra output -raw ingress_ip`.
 
 ### Terraform outputs
 ```bash
@@ -255,7 +256,7 @@ terraform -chdir=infra output keda_installed   # true
 | Cloud SQL private IP allocation fails | `Error: servicenetworking.services.addPeering ... quota exceeded` | The project may have hit the default limit for VPC peering connections. Check in GCP Console → VPC Network → VPC Network Peering. |
 | GKE node pool not ready during apply | Pods `Pending`, StorageClass creation fails | Wait for node pool to become active — typically resolves on re-apply. |
 | `redis_prevent_destroy = true` blocks destroy | `Error: Instance is protected from destroy` | Set `redis_prevent_destroy = false` in terraform.tfvars and re-apply before destroying. |
-| Envoy Gateway `Gateway` stuck Pending | `kubectl get gateway -n envoy-gateway-system` shows no address | No HTTPRoute deployed yet — install LangSmith via Helm (Pass 2) to trigger route creation and external IP assignment. |
+| Envoy Gateway `Gateway` stuck Pending (`ingress_type = "envoy"`) | `kubectl get gateway -n envoy-gateway-system` shows no address | No HTTPRoute deployed yet — install LangSmith via Helm (Pass 2) to trigger route creation and external IP assignment. |
 | GKE cluster deletion protection | `Error: Cluster has deletion protection enabled` | Set `gke_deletion_protection = false` in terraform.tfvars and re-apply before destroying. |
 
 ---
@@ -309,7 +310,7 @@ helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.17.0}
 helm uninstall external-secrets -n external-secrets 2>/dev/null || true
 helm uninstall keda -n keda 2>/dev/null || true
 helm uninstall cert-manager -n cert-manager 2>/dev/null || true
-helm uninstall envoy-gateway -n envoy-gateway-system 2>/dev/null || true
+helm uninstall envoy-gateway -n envoy-gateway-system 2>/dev/null || true   # ingress_type = "envoy" only
 
 # 2. Destroy all infrastructure
 terraform -chdir=infra destroy
@@ -322,7 +323,7 @@ terraform -chdir=infra destroy
 - With SmithDB enabled: `smithdb_metastore_deletion_protection = false` and `smithdb_bucket_force_destroy = true`
 - The tfvars change has been applied, not just edited — deletion protection is enforced by Cloud SQL, not only by Terraform
 
-**If destroy hangs on the VPC**: Envoy Gateway or other controllers may have created load balancer resources with forwarding rules attached to the VPC. Check GCP Console → Network Services → Load Balancing and delete any LangSmith-related forwarding rules manually, then re-run destroy.
+**If destroy hangs on the VPC**: the Gateway controller (GKE Gateway or Envoy Gateway) or other controllers may have created load balancer resources with forwarding rules attached to the VPC. Check GCP Console → Network Services → Load Balancing and delete any LangSmith-related forwarding rules manually, then re-run destroy.
 
 ---
 

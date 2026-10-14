@@ -401,8 +401,8 @@ module "gke_cluster" {
   deletion_protection        = var.gke_deletion_protection
   network_policy_provider    = var.gke_network_policy_provider
 
-  # The GKE Gateway controller is only needed for the opt-in ingress_type = "gke".
-  # The default (envoy) leaves this off, so the cluster is unchanged.
+  # The GKE Gateway controller, for ingress_type = "gke" (the default). With
+  # ingress_type = "envoy" it stays off.
   enable_gateway_api = var.install_ingress && var.ingress_type == "gke"
 
   # Dedicated sandbox-host nodes. Sandboxes run Firecracker through nested
@@ -780,8 +780,8 @@ module "k8s_bootstrap" {
   langsmith_namespace         = var.langsmith_namespace
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
 
-  # Only the opt-in GKE Gateway needs Google's load balancer ranges admitted. The
-  # default (envoy) leaves this off, so the NetworkPolicy is unchanged.
+  # Only the GKE Gateway needs Google's load balancer ranges admitted. With
+  # ingress_type = "envoy" this stays off.
   allow_gke_gateway_traffic = var.install_ingress && var.ingress_type == "gke"
 
   # sandbox-host manages Firecracker VMs in child cgroups and must not receive

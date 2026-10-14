@@ -101,6 +101,22 @@ run "google_managed_without_the_dns_module_outputs_the_record_to_add" {
   }
 }
 
+# ingress_type is not set: the default GKE Gateway takes a Google-managed
+# certificate with no other ingress setting.
+run "google_managed_on_the_default_ingress_plans_the_certificate" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "google-managed"
+    langsmith_domain       = "langsmith.acme.test"
+  }
+
+  assert {
+    condition     = length(module.certificate_manager) == 1 && output.tls_certificate_map_name == "ls-prod-langsmith-tls-map"
+    error_message = "google-managed on the default ingress_type did not plan the Certificate Manager module"
+  }
+}
+
 run "other_sources_plan_no_certificate_manager" {
   command = plan
 

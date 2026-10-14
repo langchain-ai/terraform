@@ -17,30 +17,9 @@ variables {
 }
 
 # ingress_type is deliberately not set: this run is the guarantee that the
-# default is Envoy and that none of the GKE resources exist without opting in.
-run "default_ingress_is_envoy_and_plans_no_gke_resources" {
-  command = plan
-
-  module {
-    source = "./modules/ingress"
-  }
-
-  assert {
-    condition     = length(helm_release.envoy_gateway) == 1 && length(null_resource.apply_gateway) == 1
-    error_message = "The default ingress_type did not plan Envoy Gateway"
-  }
-  assert {
-    condition = (
-      length(google_compute_global_address.gke_gateway) == 0 &&
-      length(local_file.gke_gateway) == 0 &&
-      length(null_resource.apply_gke_gateway) == 0 &&
-      length(null_resource.delete_gke_gateway_on_destroy) == 0
-    )
-    error_message = "The default ingress_type planned GKE Gateway resources"
-  }
-}
-
-run "gke_plans_the_gateway_and_no_envoy_resources" {
+# default is the GKE Gateway and that no Envoy Gateway resource exists unless
+# ingress_type = "envoy".
+run "default_ingress_is_gke_and_plans_no_envoy_resources" {
   command = plan
 
   module {
@@ -48,7 +27,6 @@ run "gke_plans_the_gateway_and_no_envoy_resources" {
   }
 
   variables {
-    ingress_type           = "gke"
     tls_certificate_source = "none"
   }
 
@@ -59,7 +37,7 @@ run "gke_plans_the_gateway_and_no_envoy_resources" {
       length(null_resource.apply_gke_gateway) == 1 &&
       length(null_resource.delete_gke_gateway_on_destroy) == 1
     )
-    error_message = "ingress_type = gke did not plan the address, manifest, apply, and delete steps"
+    error_message = "The default ingress_type did not plan the address, manifest, apply, and delete steps"
   }
   assert {
     condition = (
@@ -67,7 +45,7 @@ run "gke_plans_the_gateway_and_no_envoy_resources" {
       length(null_resource.apply_gateway) == 0 &&
       length(null_resource.delete_gateway_on_destroy) == 0
     )
-    error_message = "ingress_type = gke still planned Envoy Gateway resources"
+    error_message = "The default ingress_type planned Envoy Gateway resources"
   }
   assert {
     condition     = google_compute_global_address.gke_gateway[0].name == "langsmith-plan-tests-gateway-ip"
@@ -173,6 +151,32 @@ run "gke_google_managed_on_a_regional_class_is_rejected" {
 
 # ── Envoy Gateway TLS ────────────────────────────────────────────────────────
 
+run "envoy_plans_the_gateway_and_no_gke_resources" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    ingress_type = "envoy"
+  }
+
+  assert {
+    condition     = length(helm_release.envoy_gateway) == 1 && length(null_resource.apply_gateway) == 1
+    error_message = "ingress_type = envoy did not plan Envoy Gateway"
+  }
+  assert {
+    condition = (
+      length(google_compute_global_address.gke_gateway) == 0 &&
+      length(local_file.gke_gateway) == 0 &&
+      length(null_resource.apply_gke_gateway) == 0 &&
+      length(null_resource.delete_gke_gateway_on_destroy) == 0
+    )
+    error_message = "ingress_type = envoy planned GKE Gateway resources"
+  }
+}
+
 run "envoy_without_tls_serves_http_only" {
   command = plan
 
@@ -181,6 +185,7 @@ run "envoy_without_tls_serves_http_only" {
   }
 
   variables {
+    ingress_type           = "envoy"
     tls_certificate_source = "none"
   }
 
@@ -204,6 +209,7 @@ run "envoy_with_existing_tls_grants_the_secret_and_redirects" {
   }
 
   variables {
+    ingress_type           = "envoy"
     tls_certificate_source = "existing"
     tls_secret_name        = "corp-langsmith-tls"
   }
@@ -232,6 +238,7 @@ run "envoy_with_cert_manager_has_no_gateway_shim_annotation" {
   }
 
   variables {
+    ingress_type           = "envoy"
     tls_certificate_source = "cert-manager"
   }
 
@@ -253,6 +260,7 @@ run "envoy_rejects_google_managed" {
   }
 
   variables {
+    ingress_type           = "envoy"
     tls_certificate_source = "google-managed"
   }
 
@@ -361,6 +369,7 @@ run "gateway_api_crds_url_must_be_https" {
   }
 
   variables {
+    ingress_type         = "envoy"
     gateway_api_crds_url = "http://example.com/standard-install.yaml"
   }
 

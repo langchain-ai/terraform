@@ -124,6 +124,7 @@ _gateway_name="${_name_prefix}-${_environment}-gateway"
 # it in its own namespace, the GKE Gateway sits in the LangSmith namespace.
 if ! _ingress_type=$(terraform -chdir="$INFRA_DIR" output -raw ingress_type 2>/dev/null); then
   _ingress_type=$(_parse_tfvar "ingress_type") || _ingress_type=""
+  _ingress_type="${_ingress_type:-${TF_VAR_ingress_type:-gke}}"
 fi
 if [[ "$_ingress_type" == "gke" ]]; then
   _gateway_namespace=$(_parse_tfvar "langsmith_namespace")

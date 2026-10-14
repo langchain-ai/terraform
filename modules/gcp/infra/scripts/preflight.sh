@@ -138,6 +138,7 @@ TLS_SOURCE=$(_tfvar "tls_certificate_source")
 ENABLE_SANDBOXES=$(_tfvar "enable_sandboxes")
 INSTALL_INGRESS=$(_tfvar "install_ingress")
 INGRESS_TYPE=$(_tfvar "ingress_type")
+INGRESS_TYPE="${INGRESS_TYPE:-${TF_VAR_ingress_type:-gke}}"
 GKE_GATEWAY_CLASS=$(_tfvar "gke_gateway_class")
 ENABLE_SMITHDB=$(_tfvar "enable_smithdb")
 SMITHDB_METASTORE_SOURCE=$(_tfvar "smithdb_metastore_source")

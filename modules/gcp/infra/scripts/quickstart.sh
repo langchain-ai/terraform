@@ -322,25 +322,24 @@ _section "5. TLS / HTTPS"
 
 TLS_SOURCE="none"
 DOMAIN=""
-INGRESS_TYPE="envoy"
+INGRESS_TYPE="gke"
 TLS_EXISTING_SECRET=""
 CM_ISSUER_NAME=""
 CM_ISSUER_KIND=""
 
-# A Google-managed certificate lives on the Google Cloud load balancer, which
-# only the GKE Gateway creates, so it switches ingress_type to gke.
+# The quickstart uses the GKE Gateway (ingress_type = "gke"), which every
+# option supports. A Google-managed certificate needs it: the certificate lives
+# on the Google Cloud load balancer that the GKE Gateway creates.
 _ask_choice "TLS certificate:" \
   "Google-managed certificate — Certificate Manager on the GKE Gateway (recommended for production)" \
-  "Existing certificate — your own cert in a Kubernetes TLS Secret, on Envoy Gateway" \
+  "Existing certificate — your own cert in a Kubernetes TLS Secret" \
   "cert-manager with your own issuer — Vault, Venafi, Google CAS, or a private ACME CA" \
   "None — HTTP only"
 
 case "$_CHOICE" in
   1)
     TLS_SOURCE="google-managed"
-    INGRESS_TYPE="gke"
     echo ""
-    printf "  ${DIM}Uses ingress_type = \"gke\" (GKE Gateway with a global external load balancer).${RESET}\n"
     printf "  ${DIM}After make apply, add the DNS authorization CNAME from${RESET}\n"
     printf "  ${DIM}'terraform output tls_dns_authorization_record' unless the DNS module manages your zone.${RESET}\n"
     ;;

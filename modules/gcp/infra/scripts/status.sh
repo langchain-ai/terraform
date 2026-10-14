@@ -47,6 +47,8 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _region=$(_read_tfvar region)
   _region="${_region:-us-west2}"
   _tls=$(_read_tfvar tls_certificate_source)
+  _ingress_type=$(_read_tfvar ingress_type)
+  _ingress_type="${_ingress_type:-${TF_VAR_ingress_type:-gke}}"
   _pg_source=$(_read_tfvar postgres_source)
   _redis_source=$(_read_tfvar redis_source)
   _ch_source=$(_read_tfvar clickhouse_source)
@@ -435,8 +437,11 @@ else
     fi
   fi
 
-  # Gateway IP (Envoy Gateway)
-  _gateway_ip=$(kubectl get gateway -n "$_NAMESPACE" \
+  # Gateway IP. The GKE Gateway sits in the LangSmith namespace, the Envoy
+  # Gateway in envoy-gateway-system.
+  _gateway_ns="$_NAMESPACE"
+  [[ "${_ingress_type:-gke}" == "envoy" ]] && _gateway_ns="envoy-gateway-system"
+  _gateway_ip=$(kubectl get gateway -n "$_gateway_ns" \
     -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null) || _gateway_ip=""
   if [[ -n "$_gateway_ip" ]]; then
     pass "Gateway IP: ${_gateway_ip}"
@@ -444,11 +449,11 @@ else
       info "(Point your DNS A record for ${_hostname} to ${_gateway_ip})"
     fi
   else
-    _gateway_exists=$(kubectl get gateway -n "$_NAMESPACE" &>/dev/null && echo "yes" || echo "no")
+    _gateway_exists=$(kubectl get gateway -n "$_gateway_ns" &>/dev/null && echo "yes" || echo "no")
     if [[ "$_gateway_exists" == "yes" ]]; then
       warn "Gateway exists but IP not yet assigned (~2 min to provision)"
     else
-      skip "No gateway found in ${_NAMESPACE}"
+      skip "No gateway found in ${_gateway_ns}"
     fi
   fi
 

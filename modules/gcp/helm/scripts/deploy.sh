@@ -289,7 +289,7 @@ if kubectl get daemonset juicefs-csi-node -n "$NAMESPACE" >/dev/null 2>&1; then
 fi
 
 # ── Pre-deploy Gateway IP staleness check ────────────────────────────────────
-# If the Envoy Gateway IP has changed since last deploy (e.g. after Gateway
+# If the Gateway IP has changed since last deploy (e.g. after Gateway
 # resource recreation), warn the operator and update values-overrides.yaml
 # to prevent the Deployments operator from hitting stale endpoints.
 #

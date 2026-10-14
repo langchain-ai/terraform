@@ -33,9 +33,9 @@ variable "cluster_name" {
 }
 
 variable "ingress_type" {
-  description = "Type of ingress to install: 'envoy' or 'gke' (implemented), 'istio' or 'other' (reserved for future implementation)"
+  description = "Type of ingress to install: 'gke' (GKE Gateway, the default) or 'envoy' (Envoy Gateway). 'istio' and 'other' are reserved."
   type        = string
-  default     = "envoy"
+  default     = "gke"
 
   validation {
     condition     = contains(["envoy", "gke", "istio", "other"], var.ingress_type)

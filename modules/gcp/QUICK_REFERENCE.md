@@ -15,7 +15,7 @@ All commands run from `modules/gcp/`. Run `make help` to see all targets.
 
 | Pass | What gets deployed | Command |
 |------|-------------------|---------|
-| **1** | VPC + GKE + Cloud SQL + Memorystore + GCS + IAM + cert-manager + KEDA + Envoy Gateway | `make apply` |
+| **1** | VPC + GKE + Cloud SQL + Memorystore + GCS + IAM + cert-manager + KEDA + GKE Gateway (or Envoy Gateway) | `make apply` |
 | **1.5** | Cluster credentials | `make kubeconfig` |
 | **2** | LangSmith base — frontend, backend, ingest, queue, clickhouse | `make init-values && make deploy` |
 | **3** | LangSmith Deployments — host-backend, listener, operator (optional LGP) | `make apply && make init-values && make deploy` |
@@ -184,8 +184,7 @@ helm status langsmith -n langsmith
 kubectl get pods -n langsmith
 
 # Get Gateway IP for DNS
-kubectl get gateway -n envoy-gateway-system \
-  -o jsonpath='{.items[0].status.addresses[0].value}'
+terraform -chdir=infra output -raw ingress_ip
 ```
 
 ---
@@ -337,7 +336,7 @@ langsmith-standalone-insights-queue-xxx        1/1  Running    0
 
 ## Key Watchouts
 
-> **Uninstall Helm BEFORE `terraform destroy`.** The Envoy Gateway load balancer references the VPC — leaving it blocks VNet deletion. Always run `make uninstall` first.
+> **Uninstall Helm BEFORE `terraform destroy`.** The Gateway load balancer references the VPC — leaving it blocks VPC deletion. Always run `make uninstall` first.
 
 > **`config.deployment.url` must include `https://`.** Missing the protocol → operator-spawned agents stuck in `DEPLOYING` indefinitely.
 
@@ -347,7 +346,7 @@ langsmith-standalone-insights-queue-xxx        1/1  Running    0
 
 > **Chart 0.16 schema change.** `config.polly.*` and `config.insights.*` are rejected, and `config.agentBuilder.*` no longer deploys an agent runtime now that the bundled bootstrap Job is gone. Use the top-level `fleet.*`, `polly.*`, and `insights.*` standalone blocks instead — enabled via `enable_fleet`, `enable_standalone_polly`, and `enable_standalone_insights`.
 
-> **Envoy Gateway IP changes on teardown.** GCP releases the external IP when the Gateway is deleted. After `terraform destroy` + re-apply, a new IP is issued — update your DNS A record.
+> **Gateway IP changes on teardown.** `terraform destroy` releases the GKE Gateway's static IP, and GCP releases the Envoy Gateway's IP when its Gateway is deleted. After `terraform destroy` + re-apply, a new IP is issued — update your DNS A record.
 
 > **langsmith-ksa annotation is not permanent.** The operator creates `langsmith-ksa` at runtime — it does not survive namespace deletion. `deploy.sh` re-annotates it idempotently; re-run `make deploy` if operator pods lose GCS access after a cluster rebuild.
 
@@ -374,10 +373,9 @@ kubectl logs <pod-name> -n langsmith --previous --tail=50
 # Stream backend logs
 kubectl logs -n langsmith deploy/langsmith-backend --tail=100 -f
 
-# Gateway / HTTPRoute
-kubectl get gateway -n envoy-gateway-system
+# Gateway / HTTPRoute (GKE Gateway; with ingress_type = "envoy", the Gateway is in envoy-gateway-system)
+kubectl get gateway -n langsmith
 kubectl get httproute -n langsmith
-kubectl get svc -n envoy-gateway-system
 
 # TLS
 kubectl get certificate -n langsmith

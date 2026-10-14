@@ -123,8 +123,9 @@ kubectl delete namespace cert-manager
 helm uninstall keda -n keda
 kubectl delete namespace keda
 
-# Delete the Gateway before Envoy Gateway. Envoy Gateway then deletes the
-# LoadBalancer Service, and GKE deletes the load balancer and releases its IP.
+# ingress_type = "envoy" only. Delete the Gateway before Envoy Gateway. Envoy
+# Gateway then deletes the LoadBalancer Service, and GKE deletes the load
+# balancer and releases its IP.
 # Run the get command again until it shows no Service. GKE can still leave the
 # shared k8s-<cluster-id>-node-http-hc firewall rule. A8 checks for it.
 kubectl -n envoy-gateway-system delete gateway --all
@@ -135,7 +136,7 @@ helm uninstall envoy-gateway -n envoy-gateway-system
 kubectl delete namespace envoy-gateway-system
 ```
 
-For `ingress_type = "gke"`, there is no Envoy Gateway to uninstall. Delete the Gateway instead. The GKE controller holds a finalizer until it has removed the load balancer, so the command waits for that cleanup:
+For `ingress_type = "gke"` (the default), there is no Envoy Gateway to uninstall. Delete the Gateway instead. The GKE controller holds a finalizer until it has removed the load balancer, so the command waits for that cleanup:
 
 ```bash
 kubectl -n langsmith delete gateway --all --timeout=300s
@@ -145,7 +146,7 @@ The static IP (`<name>-gateway-ip`) is a Terraform resource, so `make destroy` r
 
 > **Envoy Gateway IP:** When you uninstall Envoy Gateway, GCP releases the external IP address. If you re-deploy later, a new IP is issued and you must update your DNS A record. Uninstall → reinstall cannot preserve the same IP unless you pre-allocate a static regional address and bind it to the Gateway (not currently wired in this stack).
 >
-> With `ingress_type = "gke"` and the default global class, the IP is reserved by Terraform, so it survives a Gateway delete and recreate. `make destroy` releases it.
+> With `ingress_type = "gke"` (the default) and the default global class, the IP is reserved by Terraform, so it survives a Gateway delete and recreate. `make destroy` releases it.
 
 ## A4 — Handle KEDA ScaledObject Finalizers (if namespace stuck)
 
@@ -578,7 +579,7 @@ gcloud container clusters delete "$PREFIX-gke" \
   --region "$REGION" --project "$PROJECT_ID" --quiet
 ```
 
-> GKE cluster deletion takes ~5 minutes. It automatically releases the external IP used by the Envoy Gateway.
+> GKE cluster deletion takes ~5 minutes. It automatically releases the external IP used by the Envoy Gateway. It does not release the GKE Gateway's global static IP (step 6b).
 
 Deleting the cluster also removes its node boot disks, the GKE-managed private-endpoint
 subnet (`gke-$PREFIX-gke-<hash>-pe-subnet`), and the `gke-$PREFIX-gke-<hash>-*` firewall
@@ -833,8 +834,8 @@ gcloud services vpc-peerings delete \
 gcloud compute addresses delete "$VPC_NAME-private-ip" \
   --global --project "$PROJECT_ID" --quiet
 
-# 6b. Release the Gateway's static IP, only if you used ingress_type = "gke" with a
-#     global class. Delete the Gateway first (B1) so the IP is no longer in use.
+# 6b. Release the Gateway's static IP, only if you used ingress_type = "gke" (the
+#     default) with a global class. Delete the Gateway first (B1) so the IP is no longer in use.
 gcloud compute addresses delete "$PREFIX-gateway-ip" \
   --global --project "$PROJECT_ID" --quiet 2>/dev/null || true
 
