@@ -894,15 +894,21 @@ if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
     fail "langsmith_image_registry_keeps_source_host = false, but the chart's images could not be read (helm show values $_chart_source --version $CHART_VERSION), so the module cannot tell whether every image has a mirror path."
     exit 1
   fi
+  # A repository passed through EXTRA_HELM_ARGS (--set images.<key>.repository=...)
+  # covers an image the list lacks, so those keys count as known here.
+  _extra_image_keys=$(printf '%s' "${EXTRA_HELM_ARGS:-}" | grep -oE 'images\.[A-Za-z0-9]+\.repository=' | sed -e 's/^images\.//' -e 's/\.repository=$//') || _extra_image_keys=""
   _unknown_images=""
   for _k in $_chart_image_keys; do
-    _langsmith_image_keys | grep -qx "$_k" || _unknown_images="$_unknown_images $_k"
+    _langsmith_image_keys | grep -qx "$_k" && continue
+    printf '%s\n' "$_extra_image_keys" | grep -qx "$_k" && continue
+    _unknown_images="$_unknown_images $_k"
   done
   if [[ -n "$_unknown_images" ]]; then
     fail "chart ${_resolved_chart} has images the module's mirror list does not know:${_unknown_images}."
     echo "       With langsmith_image_registry_keeps_source_host = false each image needs its mirror path," >&2
     echo "       and these would pull from their public registry. Until the module's list carries them" >&2
-    echo "       (_LANGSMITH_IMAGE_REPOSITORIES in infra/scripts/_common.sh), pass each one:" >&2
+    echo "       (_LANGSMITH_IMAGE_REPOSITORIES in infra/scripts/_common.sh), pass each one, which this" >&2
+    echo "       check then accepts:" >&2
     echo "         EXTRA_HELM_ARGS='--set images.<key>.repository=${_ls_image_registry}/<path without the source host>' make deploy" >&2
     exit 1
   fi
