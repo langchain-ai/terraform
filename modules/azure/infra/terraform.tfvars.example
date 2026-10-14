@@ -195,11 +195,15 @@ enable_sandboxes = false
 ingress_controller = "envoy-gateway"
 
 # Envoy Gateway's controller and proxy images from a registry that mirrors Docker
-# Hub with docker.io as the first path segment (<registry>/docker.io/envoyproxy/...),
-# the same layout LangSmith's images.registry uses. The pull Secret goes in the
-# envoy-gateway-system namespace, created before the apply that installs Envoy Gateway.
-# envoy_gateway_image_registry         = "nexus.example.com"
-# envoy_gateway_image_pull_secret_name = "nexus-pull"
+# Hub. By default the mirror keeps docker.io as the first path segment
+# (<registry>/docker.io/envoyproxy/...), the same layout LangSmith's images.registry
+# uses. A Docker Hub proxy repository in Nexus or Artifactory drops it
+# (<registry>/envoyproxy/...): set envoy_gateway_image_registry_keeps_source_host = false.
+# The pull Secret goes in the envoy-gateway-system namespace, created before the
+# apply that installs Envoy Gateway.
+# envoy_gateway_image_registry                   = "nexus.example.com"
+# envoy_gateway_image_registry_keeps_source_host = false
+# envoy_gateway_image_pull_secret_name           = "nexus-pull"
 
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
