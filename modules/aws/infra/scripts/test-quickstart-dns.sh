@@ -84,6 +84,7 @@ write_fresh_answers() {
     printf '\n'                    # Region
     printf '\n'                    # Owner
     printf '\n'                    # Cost center
+    printf '%s\n' "admin@example.com" # Initial org admin email
     printf '\n'                    # Create VPC: yes
     printf '\n'                    # EKS version
     printf '\n'                    # Node instance type
@@ -129,6 +130,7 @@ write_update_defaults() {
     printf '\n' # Deployment profile
     printf '\n' # Owner
     printf '\n' # Cost center
+    printf '\n' # Initial org admin email
     printf '\n' # EKS version
     printf '\n' # Node instance type
     printf '\n' # Node min
@@ -172,6 +174,8 @@ has_line "reuse choice is written" "$REUSE_INFRA/terraform.tfvars" \
   "dns_create_zone        = false"
 has_line "existing zone ID is written" "$REUSE_INFRA/terraform.tfvars" \
   "dns_existing_zone_id   = \"Z1ABCDEF123456\""
+has_line "admin email is written" "$REUSE_INFRA/terraform.tfvars" \
+  "langsmith_admin_email = \"admin@example.com\""
 log_has "invalid zone ID is rejected" "$TMP/reuse.log" \
   "ERROR: enter a valid Route 53 hosted zone ID starting with Z."
 log_has "summary shows reused zone" "$TMP/reuse.log" \
@@ -190,6 +194,8 @@ has_line "existing zone ID survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "dns_existing_zone_id   = \"Z1ABCDEF123456\""
 has_line "SSO setting survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "enable_sso_oidc         = true"
+has_line "admin email survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  "langsmith_admin_email = \"admin@example.com\""
 
 echo "3. Creating a new zone writes the choice without an existing ID"
 NEW_INFRA="$TMP/new"

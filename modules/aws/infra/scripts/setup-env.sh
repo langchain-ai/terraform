@@ -383,9 +383,6 @@ _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENS
 _ssm_secret "langsmith-admin-password" "$_SETUP_DIR/.admin_password" "LANGSMITH_ADMIN_PASSWORD" \
   "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true"
 
-_ssm_secret "langsmith-admin-email" "" "LANGSMITH_ADMIN_EMAIL" \
-  "" "Admin email" "false"
-
 # Validate admin password meets Helm chart requirements. Catching it here prevents
 # storing an invalid password in SSM and discovering the error 10 minutes later
 # when the Helm release times out.
@@ -469,7 +466,6 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
 fi
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
-echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-email)"
 echo "  deploy_key        = (hidden — SSM: ${_ssm_prefix}/deployments-encryption-key)"
 echo "  fleet_key         = (hidden — SSM: ${_ssm_prefix}/agent-builder-encryption-key; historical name)"
 echo "  insights_key      = (hidden — SSM: ${_ssm_prefix}/insights-encryption-key)"

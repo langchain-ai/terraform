@@ -13,8 +13,7 @@
 #   - aws/infra/terraform.tfvars    → name_prefix, environment, region, tls_certificate_source
 #   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs
 #
-# Prompts for (on first run):
-#   - Admin email
+# Falls back to prompting for the admin email when it is not in Terraform.
 #
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
@@ -198,13 +197,16 @@ HOSTNAME="${HOSTNAME#http://}"
 HOSTNAME="${HOSTNAME#https://}"
 
 # ── Admin email ───────────────────────────────────────────────────────────────
+ADMIN_EMAIL=$(_parse_tfvar "langsmith_admin_email") || ADMIN_EMAIL=""
 EXISTING_EMAIL=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_EMAIL=$(grep -E '^\s*initialOrgAdminEmail:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_EMAIL=""
 fi
 
-if [[ -n "$EXISTING_EMAIL" ]]; then
+if [[ -n "$ADMIN_EMAIL" ]]; then
+  echo "Admin email (from terraform.tfvars): $ADMIN_EMAIL"
+elif [[ -n "$EXISTING_EMAIL" ]]; then
   ADMIN_EMAIL="$EXISTING_EMAIL"
   echo "Reusing existing admin email: $ADMIN_EMAIL"
 elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then

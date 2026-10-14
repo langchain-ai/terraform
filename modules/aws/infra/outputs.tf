@@ -22,6 +22,11 @@ output "region" {
   value       = var.region
 }
 
+output "langsmith_admin_email" {
+  description = "Initial LangSmith organization admin email used in Helm values"
+  value       = var.langsmith_admin_email
+}
+
 output "naming_convention" {
   description = "Naming convention used: {name_prefix}-{environment}-{resource}"
   value       = "${var.name_prefix}-${var.environment}-{resource}"
