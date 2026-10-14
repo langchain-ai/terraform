@@ -11,6 +11,9 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
+#   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
+#   _ssm_exists / _ssm_put    — Check or write an SSM parameter in $_region
+#   _confirm <prompt>         — Yes/no prompt that defaults to no
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -47,6 +50,49 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Edits only KEY's line (or appends it), so every other setting stays exactly as written.
+_set_tfvar() {
+  local _key="$1" _value="$2" _file="${INFRA_DIR}/terraform.tfvars" _tmp
+  _tmp="$(mktemp)"
+  if grep -qE "^[[:space:]]*${_key}[[:space:]]*=" "$_file"; then
+    sed -E "s/^([[:space:]]*${_key}[[:space:]]*=).*/\1 ${_value}/" "$_file" > "$_tmp"
+  else
+    cat "$_file" > "$_tmp"
+    printf '\n%s = %s\n' "$_key" "$_value" >> "$_tmp"
+  fi
+  cat "$_tmp" > "$_file"
+  rm -f "$_tmp"
+}
+
+# _region is set by the calling script from terraform.tfvars.
+# shellcheck disable=SC2154
+_ssm_exists() {
+  local _err
+  _err=$(aws ssm get-parameter --region "$_region" --name "$1" --query Parameter.Name --output text 2>&1) && return 0
+  [[ "$_err" == *"(ParameterNotFound)"* ]] && return 1
+  # Callers use this in conditions, so returning an error would look like a missing parameter.
+  echo "ERROR: SSM check for $1 failed: $_err" >&2
+  exit 1
+}
+
+# Passes the value through a private temp file so it never appears in the process list or shell history.
+_ssm_put() {
+  local _path="$1" _value="$2" _tmp _rc=0
+  _tmp="$(mktemp)"
+  chmod 600 "$_tmp"
+  printf '%s' "$_value" > "$_tmp"
+  aws ssm put-parameter --region "$_region" --name "$_path" --type SecureString \
+    --value "file://$_tmp" --overwrite --output text >/dev/null || _rc=$?
+  rm -f "$_tmp"
+  return $_rc
+}
+
+_confirm() {
+  local _answer
+  read -r -p "  $1 [y/N] " _answer
+  [[ "$_answer" =~ ^[Yy] ]]
 }
 
 # Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway /

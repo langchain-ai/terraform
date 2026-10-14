@@ -266,6 +266,14 @@ locals {
   # Terraform doesn't attach pools to a cluster it doesn't manage.
   aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
+  # Additional pools this module creates that resolve to zones: their own, or
+  # availability_zones when they set none. One of these gives SmithDB zonal
+  # nodes for its Premium SSD v2 cache disks on a cluster whose default pool
+  # was built nonzonal.
+  zonal_node_pools = [
+    for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+  ]
+
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
   aks_demand_rows = [
@@ -619,6 +627,9 @@ data "azapi_resource" "byo_agic_subnet_delegations" {
 # for None, on a test cluster in eastus2), so such a route is refused here.
 # No 0.0.0.0/0 route at all is only a warning: a default route learned over
 # BGP from ExpressRoute or VPN never appears in the table.
+# aks_network_owner_checks = false skips the read, for a deploying identity
+# that may not read the route table; Azure still checks the next hop at create,
+# but nothing replaces the two warnings below that read it.
 locals {
   aks_outbound_custom   = var.aks_outbound_type != "loadBalancer"
   aks_subnet_route_tbl  = try(one(data.azurerm_subnet.byo_aks_subnet[*].route_table_id), null)
@@ -656,7 +667,7 @@ locals {
 }
 
 data "azurerm_route_table" "byo_aks_subnet" {
-  count               = var.create_cluster && var.aks_outbound_type == "userDefinedRouting" && local.aks_route_tbl_parts != null ? 1 : 0
+  count               = var.create_cluster && var.aks_network_owner_checks && var.aks_outbound_type == "userDefinedRouting" && local.aks_route_tbl_parts != null ? 1 : 0
   name                = local.aks_route_tbl_parts[1]
   resource_group_name = local.aks_route_tbl_parts[0]
 }
@@ -946,10 +957,43 @@ resource "terraform_data" "validate_network" {
     # after a clean apply, as SmithDB pods pending on a disk attach error.
     # default_node_pool[0].zones also carries ignore_changes and applies at
     # creation, so recovering from it means rebuilding the pool rather than
-    # editing a variable. Refuse at plan time instead.
+    # editing a variable. Refuse at plan time instead. A zonal additional pool
+    # also passes, because it is the non-disruptive way to add zonal nodes to a
+    # cluster built without them; the chart overrides then pin SmithDB there.
     precondition {
-      condition     = !var.enable_smithdb || length(var.availability_zones) > 0
-      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"]. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+      condition     = !var.enable_smithdb || length(var.availability_zones) > 0 || length(local.zonal_node_pools) > 0
+      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"], or an additional_node_pools entry with zones set. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+    }
+
+    # SmithDB's single-replica deployments start the new pod before stopping
+    # the old one, and the chart exposes no strategy for compaction. On a
+    # dedicated pool that cannot grow, the new pod stays Pending after any
+    # values change, including every staged gate flip. The pool is identified by
+    # the name the chart overrides pin to (kubernetes.azure.com/agentpool:
+    # smithdb). ?: rather than || so the index is skipped when the pool is absent.
+    precondition {
+      condition = (
+        var.enable_smithdb && (var.create_cluster || var.existing_cluster_node_pools_managed) && contains(keys(local.effective_node_pools), "smithdb")
+        ? local.effective_node_pools["smithdb"].max_count > local.effective_node_pools["smithdb"].min_count
+        : true
+      )
+      error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
+    }
+
+    # On a zoned cluster, a pool that sets zones = [] is regional, and SmithDB's
+    # components carry no nodeSelector by default, so they can land on it, where
+    # a Premium SSD v2 cache volume cannot attach. Refuse that. On a nonzonal
+    # cluster (availability_zones empty) the first SmithDB rule above already
+    # requires a zonal additional pool, and SMITHDB.md pins SmithDB to it; the other
+    # pools are regional by construction there, so this rule stands down. This
+    # reads the requested zones, not the live ones: a pool created regional
+    # before availability_zones reached additional pools passes, and
+    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
+    precondition {
+      condition = !var.enable_smithdb || length(var.availability_zones) == 0 || alltrue([
+        for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+      ])
+      error_message = "enable_smithdb = true with availability_zones set refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips
@@ -1195,6 +1239,15 @@ check "agic_with_overlay_unverified" {
   }
 }
 
+# The Envoy Gateway controller picks the proxy image itself, so mirroring it
+# needs that default for each chart version. envoy_gateway_image_registry
+# refuses a version missing from this map.
+locals {
+  envoy_proxy_default_images = {
+    "v1.2.0" = "envoyproxy/envoy:distroless-v1.32.1"
+  }
+}
+
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
 # AKS cluster with OIDC + Workload Identity enabled, ingress controller installed.
 # The OIDC issuer URL output is consumed by module.blob for federated credentials.
@@ -1248,12 +1301,28 @@ module "aks" {
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
-  ingress_controller   = var.ingress_controller
-  dns_label            = var.dns_label
+  ingress_controller = var.ingress_controller
+  dns_label          = var.dns_label
+
+  ingress_load_balancer                          = var.ingress_load_balancer
+  ingress_load_balancer_subnet_id                = var.ingress_load_balancer_subnet_id
+  ingress_load_balancer_ip                       = var.ingress_load_balancer_ip
+  ingress_load_balancer_manage_subnet_assignment = var.ingress_load_balancer_manage_subnet_assignment
+  # A ternary rather than &&, which below Terraform 1.14 evaluates both sides.
+  # A supplied node subnet is compared by ID. A carved one has no ID before
+  # apply, so it is compared by name: the load-balancer subnet is in the
+  # cluster's VNet, where the name alone identifies it.
+  ingress_load_balancer_needs_subnet_grant = var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? (
+    local.byo_aks_subnet
+    ? lower(var.ingress_load_balancer_subnet_id) != lower(var.aks_subnet_id)
+    : lower(element(split("/", var.ingress_load_balancer_subnet_id), length(split("/", var.ingress_load_balancer_subnet_id)) - 1)) != lower("${local.vnet_name}-subnet-0")
+  ) : false
   istio_version        = var.istio_version
   istio_addon_revision = var.istio_addon_revision
 
@@ -1272,7 +1341,10 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version = var.envoy_gateway_version
+  envoy_gateway_version                = var.envoy_gateway_version
+  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
+  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -1301,6 +1373,7 @@ module "aks" {
   control_plane_identity_id    = var.aks_control_plane_identity_id
 
   control_plane_identity_manage_grants = local.aks_control_plane_manage_grants
+  control_plane_grant_check            = var.aks_network_owner_checks
   vnet_id                              = local.vnet_id
   subnet_route_table_id                = local.aks_subnet_has_routes ? local.aks_subnet_route_tbl : ""
 
@@ -1652,6 +1725,201 @@ module "postgres" {
   tags = local.common_tags
 }
 
+# ── SmithDB sizing ───────────────────────────────────────────────────────────
+# One size sets the chart resource tier, the replicas, the default metastore
+# SKU, the namespace quota headroom, and the smithdb_helm_values output.
+
+locals {
+  smithdb_sizing_by_profile = {
+    minimum            = "minimal"
+    dev                = "small"
+    default            = "small"
+    production         = "medium"
+    "production-large" = "large"
+  }
+
+  # sizing_profile has no validation of its own, so an unlisted profile falls
+  # back to small, the same tier the chart picks when nothing is set.
+  smithdb_sizing  = coalesce(var.smithdb_sizing, lookup(local.smithdb_sizing_by_profile, var.sizing_profile, "small"))
+  smithdb_minimal = local.smithdb_sizing == "minimal"
+
+  # The chart has the small, medium, and large tiers. minimal uses small with
+  # explicit resources.
+  smithdb_resource_tier = local.smithdb_minimal ? "small" : local.smithdb_sizing
+
+  # Per-replica resources for each chart tier. Copied from chart 0.17.0-rc.42,
+  # templates/_helpers.tpl, "langsmith.smithdb.tierResources". The chart sets
+  # requests equal to limits. Update this table with the chart.
+  smithdb_tiers = {
+    small = {
+      query            = { cpu = "4", memory = "8Gi" }
+      ingestion        = { cpu = "4", memory = "8Gi" }
+      compactionWorker = { cpu = "8", memory = "16Gi" }
+      compaction       = { cpu = "2", memory = "4Gi" }
+      clusterManager   = { cpu = "250m", memory = "256Mi" }
+    }
+    medium = {
+      query            = { cpu = "28", memory = "48Gi" }
+      ingestion        = { cpu = "16", memory = "32Gi" }
+      compactionWorker = { cpu = "16", memory = "32Gi" }
+      compaction       = { cpu = "4", memory = "8Gi" }
+      clusterManager   = { cpu = "250m", memory = "256Mi" }
+    }
+    large = {
+      query            = { cpu = "28", memory = "50Gi" }
+      ingestion        = { cpu = "56", memory = "150Gi" }
+      compactionWorker = { cpu = "28", memory = "50Gi" }
+      compaction       = { cpu = "8", memory = "16Gi" }
+      clusterManager   = { cpu = "2", memory = "2Gi" }
+    }
+  }
+  smithdb_tier = local.smithdb_tiers[local.smithdb_resource_tier]
+
+  # Replicas for each tier, from the SmithDB sizing table in the LangSmith
+  # self-hosted docs. The chart tier sets only the per-replica resources, so the
+  # values set these counts as the HPA minReplicas of the three cache
+  # components. compaction and clusterManager have no HPA and one replica.
+  smithdb_tier_replicas = {
+    small  = { query = 1, ingestion = 1, compactionWorker = 1, compaction = 1, clusterManager = 1 }
+    medium = { query = 1, ingestion = 1, compactionWorker = 1, compaction = 1, clusterManager = 1 }
+    large  = { query = 4, ingestion = 2, compactionWorker = 4, compaction = 1, clusterManager = 1 }
+  }
+  smithdb_replicas = local.smithdb_tier_replicas[local.smithdb_resource_tier]
+
+  smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
+  smithdb_compute_components = ["compaction", "clusterManager"]
+
+  # minimal: explicit resources, limits 2x requests. A partial resources block
+  # keeps the chart default for each key that it omits. The chart Job default
+  # has 100Gi of ephemeral-storage, so the Job block sets every key.
+  # The taskdb keeps the chart default resources.
+  smithdb_minimal_resources = {
+    query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
+    clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
+    migration_job = {
+      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
+    }
+  }
+
+  # Default metastore SKU for each size. The docs section "Metastore capacity"
+  # (langsmith/self-host-smithdb-scale) gives a dedicated metastore 2 vCPU /
+  # 16 GiB for small, 4 / 32 for medium, and 8 / 64 for large, which is the
+  # memory-optimized Edsv5 shape. minimal keeps the earlier default. An explicit
+  # smithdb_metastore_sku_name wins.
+  smithdb_metastore_sku_defaults = {
+    minimal = "GP_Standard_D2ds_v5"
+    small   = "MO_Standard_E2ds_v5"
+    medium  = "MO_Standard_E4ds_v5"
+    large   = "MO_Standard_E8ds_v5"
+  }
+  smithdb_metastore_sku_name = coalesce(var.smithdb_metastore_sku_name, local.smithdb_metastore_sku_defaults[local.smithdb_sizing])
+
+  # SmithDB namespace quota headroom, from the resolved resources. It covers the
+  # tier replicas of each component, one surge copy of the largest pod (a
+  # rolling update starts the new pod first), and, with the backfill, each
+  # migration pod (smithdb_migration_parallelism) and the taskdb. HPA scale-out
+  # above the tier replicas has only the surge room. CPU is in millicores and
+  # memory in MiB, so the sums are exact.
+  smithdb_quota_inputs = merge(
+    {
+      for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
+        requests = { cpu = t.cpu, memory = t.memory }
+        limits   = { cpu = t.cpu, memory = t.memory }
+      }
+    },
+    {
+      # Chart values.yaml defaults for smithdb.migration.job.resources and
+      # smithdb.migration.taskdb.postgres.statefulSet.resources.
+      migration_job = local.smithdb_minimal ? local.smithdb_minimal_resources.migration_job : {
+        requests = { cpu = "8", memory = "32Gi" }
+        limits   = { cpu = "8", memory = "32Gi" }
+      }
+      taskdb = {
+        requests = { cpu = "2", memory = "4Gi" }
+        limits   = { cpu = "4", memory = "8Gi" }
+      }
+    },
+  )
+
+  # "250m" and "4" to millicores, "256Mi" and "8Gi" to MiB.
+  smithdb_quota_numbers = {
+    for name, r in local.smithdb_quota_inputs : name => merge([
+      for side in ["requests", "limits"] : {
+        "${side}_cpu_m"     = tonumber(trimsuffix(r[side].cpu, "m")) * (endswith(r[side].cpu, "m") ? 1 : 1000)
+        "${side}_memory_mi" = tonumber(trimsuffix(trimsuffix(r[side].memory, "Gi"), "Mi")) * (endswith(r[side].memory, "Gi") ? 1024 : 1)
+      }
+    ]...)
+  }
+  smithdb_quota_total = {
+    for k in ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"] : k => (
+      sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * local.smithdb_quota_numbers[c][k]]) +
+      max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) +
+      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
+    )
+  }
+
+  # k8s-bootstrap adds the extra once to requests and twice to limits, so it
+  # must cover the requests total and half of the limits total.
+  smithdb_quota_extra_cpu = var.enable_smithdb ? max(
+    ceil(local.smithdb_quota_total.requests_cpu_m / 1000), ceil(local.smithdb_quota_total.limits_cpu_m / 2000)
+  ) : 0
+  smithdb_quota_extra_memory_gi = var.enable_smithdb ? max(
+    ceil(local.smithdb_quota_total.requests_memory_mi / 1024), ceil(local.smithdb_quota_total.limits_memory_mi / 2048)
+  ) : 0
+
+  # The SmithDB pods at the tier replicas plus the metastore migration hook,
+  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
+  # and its taskdb StatefulSet, plus 1 for each further migration pod.
+  smithdb_quota_extra_pods = var.enable_smithdb ? (
+    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
+  ) : 0
+
+  # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
+  # to helm/values/langsmith-values-smithdb-sizing.yaml. The cache StorageClass,
+  # identity, and metastore stay in the overrides file.
+  #
+  # small, medium, and large: the chart tier, with the tier replicas as each
+  # cache component's HPA minReplicas. They also go to deployment.replicas,
+  # which the chart uses only when the HPA is off.
+  smithdb_values_tier = {
+    smithdb = merge(
+      { resourceTier = local.smithdb_resource_tier },
+      {
+        for c in local.smithdb_cache_components : c => {
+          deployment  = { replicas = local.smithdb_replicas[c] }
+          autoscaling = { hpa = { minReplicas = local.smithdb_replicas[c] } }
+        }
+      },
+    )
+  }
+
+  # minimal: the explicit resources, and one replica for each autoscaled
+  # component.
+  smithdb_values_minimal = {
+    smithdb = merge(
+      { resourceTier = "small" },
+      {
+        for c in local.smithdb_cache_components : c => {
+          deployment  = { resources = local.smithdb_minimal_resources[c] }
+          autoscaling = { hpa = { minReplicas = 1, maxReplicas = 1 } }
+        }
+      },
+      { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
+      { migration = { job = { resources = local.smithdb_minimal_resources.migration_job } } },
+    )
+  }
+
+  # yamlencode per branch: the two objects have different attributes, so ?: on
+  # the objects themselves is a type error.
+  smithdb_helm_values = !var.enable_smithdb ? null : (
+    local.smithdb_minimal ? yamlencode(local.smithdb_values_minimal) : yamlencode(local.smithdb_values_tier)
+  )
+}
+
 # ── SmithDB infrastructure (optional) ────────────────────────────────────────
 
 module "smithdb" {
@@ -1672,7 +1940,7 @@ module "smithdb" {
 
   metastore_admin_username        = var.smithdb_metastore_admin_username
   metastore_admin_password        = var.smithdb_metastore_admin_password
-  metastore_sku_name              = var.smithdb_metastore_sku_name
+  metastore_sku_name              = local.smithdb_metastore_sku_name
   metastore_storage_mb            = var.smithdb_metastore_storage_mb
   metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
   # The flag is derived from variables so the module's count can read it. The ID
@@ -1945,8 +2213,10 @@ module "keyvault" {
 #
 # LangSmith application deployment is handled outside Terraform:
 #   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
-#   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
-#             (deploy.sh also applies the letsencrypt-prod ClusterIssuer)
+#   Pass 2:   bash helm/scripts/deploy.sh
+#             (deploy.sh runs infra/scripts/create-k8s-secrets.sh when
+#             langsmith-config-secret is missing, and applies the
+#             letsencrypt-prod ClusterIssuer)
 #   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
 #
 # Note: This module configures its own kubernetes/helm providers internally,
@@ -1978,6 +2248,11 @@ module "k8s_bootstrap" {
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
 
+  # SmithDB's pods on top of the base namespace quota. Zero when disabled.
+  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
+  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
+  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.
   ingress_controller    = var.ingress_controller
@@ -1990,7 +2265,6 @@ module "k8s_bootstrap" {
   agic_subnet_cidrs = local.byo_agic_subnet ? data.azurerm_subnet.byo_agic_subnet[0].address_prefixes : var.agic_subnet_address_prefix
 
   # Backing services — connection URLs are injected as K8s secrets.
-  # generate-secrets.sh also writes these secrets with the full URL from KV.
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
   postgres_admin_password = var.postgres_source == "external" ? var.postgres_admin_password : ""
@@ -2015,7 +2289,7 @@ module "k8s_bootstrap" {
 
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
-  # helm/scripts/generate-secrets.sh from Azure Key Vault.
+  # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
   # Cluster components, off when the cluster already runs them, which is only
@@ -2107,6 +2381,29 @@ module "bastion" {
   tags                 = local.common_tags
 
   depends_on = [module.vnet]
+}
+
+# A public Azure DNS zone answers on the internet, so with an internal load
+# balancer its A record would publish a private address that resolves for
+# everyone and connects for no one outside the network. The record exists only
+# when ingress_ip is set; the zone alone is what DNS-01 needs. A warning rather
+# than a refusal: a split-horizon setup can want exactly that record.
+# Behind an internal load balancer there is no cloudapp label, so the hostname
+# can only come from langsmith_domain. Without one, init-values.sh has nothing
+# to write, and deploy.sh creates no Istio add-on Gateway. A warning, because
+# a hostname can still be supplied to init-values.sh another way.
+check "internal_ingress_hostname" {
+  assert {
+    condition     = var.ingress_load_balancer == "public" || var.langsmith_domain != ""
+    error_message = "ingress_load_balancer = \"internal\" with no langsmith_domain: there is no cloudapp label behind a private address, so set langsmith_domain to the name your DNS resolves to the load balancer's IP."
+  }
+}
+
+check "dns_zone_with_internal_ingress" {
+  assert {
+    condition     = !(var.create_dns_zone && var.ingress_load_balancer == "internal" && var.ingress_ip != "")
+    error_message = "create_dns_zone = true and ingress_ip set with ingress_load_balancer = \"internal\": the public zone's A record would carry the load balancer's private address. Leave ingress_ip empty so the zone serves only the DNS-01 challenge, and put the record in your own DNS or an Azure Private DNS zone linked to the VNet, unless you mean to publish it."
+  }
 }
 
 # ── DNS (optional) ────────────────────────────────────────────────────────────

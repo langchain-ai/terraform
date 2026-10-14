@@ -177,7 +177,10 @@ log_has "invalid zone ID is rejected" "$TMP/reuse.log" \
 log_has "summary shows reused zone" "$TMP/reuse.log" \
   "existing (Z1ABCDEF123456)"
 
-echo "2. Update mode preserves the zone choice and ID as defaults"
+echo "2. Update mode preserves the zone choice, the zone ID, and SSO"
+# Turn SSO on the way `make sso` does: by editing only that line.
+sed 's/^enable_sso_oidc[[:space:]]*=.*/enable_sso_oidc = true/' "$REUSE_INFRA/terraform.tfvars" > "$TMP/sso.tfvars"
+mv "$TMP/sso.tfvars" "$REUSE_INFRA/terraform.tfvars"
 write_update_defaults "$TMP/update.answers"
 run_wizard "existing-zone update run completes" "$REUSE_INFRA" \
   "$TMP/update.answers" "$TMP/update.log"
@@ -185,6 +188,8 @@ has_line "reuse choice survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "dns_create_zone        = false"
 has_line "existing zone ID survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "dns_existing_zone_id   = \"Z1ABCDEF123456\""
+has_line "SSO setting survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  "enable_sso_oidc         = true"
 
 echo "3. Creating a new zone writes the choice without an existing ID"
 NEW_INFRA="$TMP/new"

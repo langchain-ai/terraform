@@ -432,6 +432,25 @@ for entry in "${_addon_gate[@]}"; do
   fi
 done
 
+# SSO is one-way (LangSmith does not support going back to basic auth), so the deploy stops rather than redeploy a live SSO install with basic auth.
+_sso_file="$VALUES_DIR/langsmith-values-sso.yaml"
+if _tfvar_is_true "enable_sso_oidc"; then
+  if [[ ! -f "$_sso_file" ]]; then
+    echo "  ✗ langsmith-values-sso.yaml (enable_sso_oidc = true but file not found — run: make init-values)" >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(-f "$_sso_file")
+  echo "  ✔ langsmith-values-sso.yaml (SSO login)"
+else
+  # The chart sets BASIC_AUTH_ENABLED to "false" only when SSO is on, and names the ConfigMap <release>-config when the release name contains "langsmith".
+  _auth_cm="${RELEASE_NAME}-langsmith-config"
+  [[ "$RELEASE_NAME" == *langsmith* ]] && _auth_cm="${RELEASE_NAME}-config"
+  if [[ "$(kubectl get configmap "$_auth_cm" -n "$NAMESPACE" -o jsonpath='{.data.BASIC_AUTH_ENABLED}' 2>/dev/null)" == "false" ]]; then
+    echo "  ✗ SSO is on in the cluster, and LangSmith does not support turning it off — set enable_sso_oidc = true in terraform.tfvars" >&2
+    exit 1
+  fi
+fi
+
 # The chart defaults Chat to enabled. Force the product and storage contract so
 # skipping a stale values file cannot enable Chat or select the wrong database.
 if [[ "$_enable_polly" == "true" ]]; then
@@ -533,6 +552,24 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   else
     echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
     exit 1
+  fi
+  # Stop if the migration gate in the overrides differs from tfvars; make init-values was skipped after a migration start or end.
+  _smithdb_migration_enabled=false
+  _tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    echo "  ✗ langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration, but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled (terraform.tfvars is the source of truth) — run: make init-values, then make deploy" >&2
+    exit 1
+  fi
+  # Written by make smithdb-migration-job-start: TaskDB source and migration sizing.
+  _smithdb_migration="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
+  if _tfvar_is_true "smithdb_migration_enabled"; then
+    if [[ ! -f "$_smithdb_migration" ]]; then
+      echo "  ✗ langsmith-values-smithdb-migration.yaml (smithdb_migration_enabled = true but file not found — run: make smithdb-migration-job-start)" >&2
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
   fi
 fi
 

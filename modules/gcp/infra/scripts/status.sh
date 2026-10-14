@@ -38,8 +38,12 @@ header "1. Configuration (terraform.tfvars)"
 if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   pass "terraform.tfvars exists"
   _project_id=$(_read_tfvar project_id)
+  # Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
+  # variables.tf default. Keep identical across the GCP scripts.
   _name_prefix=$(_read_tfvar name_prefix)
+  _name_prefix="${_name_prefix:-${TF_VAR_name_prefix:-ls}}"
   _environment=$(_read_tfvar environment)
+  _environment="${_environment:-${TF_VAR_environment:-prod}}"
   _region=$(_read_tfvar region)
   _region="${_region:-us-west2}"
   _tls=$(_read_tfvar tls_certificate_source)
@@ -47,14 +51,14 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _redis_source=$(_read_tfvar redis_source)
   _ch_source=$(_read_tfvar clickhouse_source)
 
-  if [[ -n "$_project_id" && -n "$_name_prefix" && -n "$_environment" ]]; then
+  if [[ -n "$_project_id" ]]; then
     pass "Required fields: project_id=${_project_id}  name_prefix=${_name_prefix}  environment=${_environment}"
     _base_name="${_name_prefix}-${_environment}"
     _sm_prefix="langsmith-${_base_name}"
   else
-    fail "Missing required fields (project_id, name_prefix, or environment)"
-    action "Edit infra/terraform.tfvars — fill in project_id, name_prefix, environment"
-    set_next "Edit infra/terraform.tfvars — fill in project_id, name_prefix, environment"
+    fail "Missing required field: project_id"
+    action "Edit infra/terraform.tfvars — fill in project_id"
+    set_next "Edit infra/terraform.tfvars — fill in project_id"
   fi
   [[ -n "$_tls" ]] && info "TLS: ${_tls}" || info "TLS: not set (defaults to none)"
   info "Services: postgres=${_pg_source:-external}  redis=${_redis_source:-external}  clickhouse=${_ch_source:-in-cluster}"
@@ -133,7 +137,7 @@ header "4. Secret Manager (${_sm_prefix:-?})"
 if [[ "$QUICK" == "true" ]]; then
   skip "Skipped (--quick mode)"
 elif [[ -z "${_sm_prefix:-}" ]]; then
-  skip "Cannot check — terraform.tfvars missing project_id/name_prefix/environment"
+  skip "Cannot check — terraform.tfvars missing project_id"
 elif ! gcloud services list --project="$_project_id" --filter="NAME=secretmanager.googleapis.com" \
     --format="value(NAME)" 2>/dev/null | grep -q secretmanager; then
   skip "Secret Manager API not enabled yet (enabled by terraform apply)"

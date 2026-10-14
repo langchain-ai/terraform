@@ -215,6 +215,7 @@ Pass 1 — Infrastructure
       langsmith-agent-builder-encryption-key  — generated (Fernet)
       langsmith-insights-encryption-key       — generated (Fernet)
       langsmith-polly-encryption-key          — generated (Fernet)
+      smithdb-taskdb-password                 — generated
     Write-once — an existing secret is never overwritten, so it is safe to re-run.
 
 Pass 2 — Application
@@ -222,7 +223,7 @@ Pass 2 — Application
   kubectl create secret generic langsmith-config-secret
     Reads:  Key Vault secrets + terraform outputs (postgres/redis URLs, blob account)
     Writes: K8s secrets — langsmith-config-secret, langsmith-postgres-secret,
-                          langsmith-redis-secret
+                          langsmith-redis-secret, smithdb-taskdb
 
   helm upgrade --install langsmith ...
     chart reads config.existingSecretName = "langsmith-config-secret"
@@ -232,7 +233,7 @@ Pass 2 — Application
 **Key rules:**
 
 - `secrets.auto.tfvars` is never committed. Re-run `./setup-env.sh` on any machine to recreate it.
-- The seven app secrets exist only in Key Vault — there is no second copy to restore from. Rotating one is destructive: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable.
+- The eight app secrets exist only in Key Vault — there is no second copy to restore from. Rotating one is destructive: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable.
 - This matches the other two clouds. The AWS module's script writes SSM Parameter Store; the GCP module's writes Secret Manager. Terraform owns the vault and its access control, never its contents.
 
 ---

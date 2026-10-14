@@ -735,3 +735,93 @@ run "aks_kube_auth_rejects_an_unknown_mode" {
 
   expect_failures = [var.aks_kube_auth]
 }
+
+# An attached cluster's private DNS zone comes from Azure, not from the
+# aks_private_* settings, which attaching ignores. The two runs differ only in
+# the zone Azure reports.
+
+run "an_attached_cluster_with_no_private_zone_is_reached_through_its_public_fqdn" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      fqdn                = "platform-aks-abc.hcp.eastus.azmk8s.io"
+      kube_config         = [{ host = "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = {
+        securityProfile        = { workloadIdentity = { enabled = true } }
+        apiServerAccessProfile = { privateDNSZone = "none" }
+      } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://platform-aks-abc.hcp.eastus.azmk8s.io:443"
+    error_message = "An attached cluster with no private zone is not reached through its public FQDN"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == true && strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "An attached cluster with no private zone did not tell the scripts to fetch credentials with --public-fqdn"
+  }
+}
+
+run "an_attached_cluster_with_the_system_zone_keeps_the_kubeconfig_host" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      fqdn                = "platform-aks-abc.hcp.eastus.azmk8s.io"
+      kube_config         = [{ host = "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = {
+        securityProfile        = { workloadIdentity = { enabled = true } }
+        apiServerAccessProfile = { privateDNSZone = "system" }
+      } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443"
+    error_message = "An attached cluster with the System zone is not reached through the kubeconfig's host"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == false && !strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "An attached cluster with the System zone was told to fetch credentials with --public-fqdn"
+  }
+}
