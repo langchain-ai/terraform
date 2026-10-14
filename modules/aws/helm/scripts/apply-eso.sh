@@ -57,6 +57,15 @@ if [[ -z "$_region" ]]; then
   exit 1
 fi
 
+# Point kubectl at this deployment's cluster, as deploy.sh does, so a standalone
+# run never applies to whatever cluster ~/.kube/config has selected.
+_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || _cluster_name=""
+if [[ -z "$_cluster_name" ]]; then
+  echo "ERROR: Could not read cluster_name from Terraform outputs. Is 'terraform apply' complete?" >&2
+  exit 1
+fi
+_use_cluster_kubeconfig "$_cluster_name" "$_region" >/dev/null
+
 # ── Apply ClusterSecretStore ─────────────────────────────────────────────────
 echo "Configuring External Secrets Operator..."
 

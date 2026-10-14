@@ -188,7 +188,7 @@ _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/nu
   exit 1
 }
 echo "Updating kubeconfig for cluster: $_cluster_name..."
-aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
+_use_cluster_kubeconfig "$_cluster_name" "$_region"
 echo "  Active context: $(kubectl config current-context)"
 echo ""
 
@@ -828,6 +828,7 @@ fi
 
 echo ""
 echo "Access LangSmith:"
+echo "  Kubeconfig:    export KUBECONFIG=$KUBECONFIG"
 echo "  Port-forward:  kubectl port-forward svc/${RELEASE_NAME}-frontend -n ${NAMESPACE} 8080:80"
 echo "  Then open:     http://localhost:8080"
 if [[ -n "${_langsmith_domain:-}" ]]; then

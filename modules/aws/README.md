@@ -714,10 +714,10 @@ After apply, all outputs (cluster name, ALB DNS, S3 bucket, IRSA role ARN) are p
 
 **When to use:** After `make apply` to configure `kubectl`, or when switching between deployments.
 
-Runs `infra/scripts/set-kubeconfig.sh` which calls `aws eks update-kubeconfig` with the cluster name from Terraform outputs. Merges the cluster credentials into `~/.kube/config`.
+Prints the command to source `infra/scripts/set-kubeconfig.sh`, which writes the cluster credentials to `~/.kube/langsmith-<cluster>` and exports `KUBECONFIG` in your shell. `~/.kube/config` is left alone. Make runs in a subshell, so it can't export the variable for you.
 
 ```bash
-make kubeconfig
+source infra/scripts/set-kubeconfig.sh
 kubectl get nodes   # verify
 ```
 
@@ -783,7 +783,7 @@ Re-running is safe — it refreshes Terraform outputs and preserves your admin e
 
 Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here is the exact sequence:
 
-**Step 1 — Kubeconfig.** Reads `cluster_name` from `terraform output` and runs `aws eks update-kubeconfig`.
+**Step 1 — Kubeconfig.** Reads `cluster_name` from `terraform output` and runs `aws eks update-kubeconfig` into `~/.kube/langsmith-<cluster>`, the file `set-kubeconfig.sh` writes. `~/.kube/config` is left alone; the script prints the `export KUBECONFIG=...` line for your shell when it finishes.
 
 **Step 2 — Preflight checks** (`preflight-check.sh`). Confirms `aws`, `kubectl`, `helm`, `terraform` are installed; validates AWS credentials with `aws sts get-caller-identity`; verifies `kubectl` can reach the cluster; adds the `langchain` Helm repo if missing.
 
@@ -1050,9 +1050,11 @@ Exits non-zero on any failure so `deploy.sh` aborts before touching the cluster.
 
 ### `infra/scripts/set-kubeconfig.sh`
 
-Called by `make kubeconfig`. Reads `cluster_name` from `terraform output` and runs:
+Sourced, as `make kubeconfig` prints. Builds the cluster name from `name_prefix` and `environment` in `terraform.tfvars` and runs:
 ```bash
-aws eks update-kubeconfig --name <cluster_name> --region <region>
+aws eks update-kubeconfig --name <cluster_name> --region <region> \
+  --alias <cluster_name> --kubeconfig ~/.kube/langsmith-<cluster_name>
+export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 ```
 
 ---

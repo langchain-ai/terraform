@@ -501,7 +501,7 @@ variable "firewall_allowed_fqdns" {
 
 variable "firewall_subnet_cidr" {
   type        = string
-  description = "CIDR block for the firewall subnet. Must be within the VPC CIDR (default 10.0.0.0/16) and must not overlap with private_subnets (10.0.0.0/21–10.0.32.0/21) or public_subnets (10.0.40.0/21–10.0.56.0/21)."
+  description = "CIDR block for the firewall subnet. Must be within the VPC CIDR (default 10.0.0.0/16) and must not overlap with the default VPC subnets: private 10.0.0.0/21, 10.0.8.0/21, 10.0.16.0/21 and public 10.0.40.0/21, 10.0.48.0/21, 10.0.56.0/21."
   default     = "10.0.64.0/21"
 
   validation {
