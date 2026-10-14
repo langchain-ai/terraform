@@ -955,6 +955,20 @@ resource "terraform_data" "validate_network" {
       error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"]. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
     }
 
+    # The rule above covers the default pool. An additional pool that sets
+    # zones = [] is regional under a zoned availability_zones, and SmithDB's
+    # components carry no nodeSelector by default, so they can land on it,
+    # where a Premium SSD v2 cache volume cannot attach. Refuse that too. This
+    # reads the requested zones, not the live ones: a pool created regional
+    # before availability_zones reached additional pools passes, and
+    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
+    precondition {
+      condition = !var.enable_smithdb || alltrue([
+        for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+      ])
+      error_message = "enable_smithdb = true refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+    }
+
     # A Private Endpoint removes the public listener that storage_allowed_ips
     # writes rules for, so the allowlist stops granting anything. Say so at plan
     # time rather than leaving an operator to believe a CI runner still reaches
@@ -1260,7 +1274,9 @@ module "aks" {
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
