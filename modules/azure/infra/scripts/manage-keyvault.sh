@@ -43,6 +43,9 @@ OPTIONAL_SECRETS=(
   "langsmith-agent-builder-encryption-key"
   "langsmith-insights-encryption-key"
   "langsmith-polly-encryption-key"
+  "langsmith-oauth-client-id"
+  "langsmith-oauth-client-secret"
+  "langsmith-oauth-issuer-url"
 )
 
 # Stable secrets — changing them breaks active sessions/API keys
@@ -61,6 +64,9 @@ DIFF_KV_KEYS=(
   "langsmith-agent-builder-encryption-key"
   "langsmith-insights-encryption-key"
   "langsmith-polly-encryption-key"
+  "langsmith-oauth-client-id"
+  "langsmith-oauth-client-secret"
+  "langsmith-oauth-issuer-url"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -71,6 +77,9 @@ DIFF_K8S_KEYS=(
   "agent_builder_encryption_key"
   "insights_encryption_key"
   "polly_encryption_key"
+  "oauth_client_id"
+  "oauth_client_secret"
+  "oauth_issuer_url"
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

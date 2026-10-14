@@ -65,6 +65,23 @@ AGENT_KEY=$(_kv "langsmith-agent-builder-encryption-key")
 INSIGHTS_KEY=$(_kv "langsmith-insights-encryption-key")
 POLLY_KEY=$(_kv "langsmith-polly-encryption-key")
 
+# SSO/OIDC — optional, only present when enable_sso_oidc = true (see
+# manage-keyvault.sh). Fetched here unconditionally so this script stays the
+# single source of truth for langsmith-config-secret; the --from-literal args
+# below are built conditionally so a deployment that never sets these up is
+# unaffected.
+_OAUTH_ARGS=()
+if _kv_exists "langsmith-oauth-client-id"; then
+  OAUTH_CLIENT_ID=$(_kv "langsmith-oauth-client-id")
+  OAUTH_CLIENT_SECRET=$(_kv "langsmith-oauth-client-secret")
+  OAUTH_ISSUER_URL=$(_kv "langsmith-oauth-issuer-url")
+  _OAUTH_ARGS=(
+    "--from-literal=oauth_client_id=$OAUTH_CLIENT_ID"
+    "--from-literal=oauth_client_secret=$OAUTH_CLIENT_SECRET"
+    "--from-literal=oauth_issuer_url=$OAUTH_ISSUER_URL"
+  )
+fi
+
 # The license key is the one value here that nothing has checked since the
 # setup-env prompt (#250). Written as it stands, an empty or malformed value
 # surfaces inside platform-backend at startup as a base64 error that names
@@ -92,6 +109,7 @@ kubectl create secret generic langsmith-config-secret \
   --from-literal=agent_builder_encryption_key="$AGENT_KEY" \
   --from-literal=insights_encryption_key="$INSIGHTS_KEY" \
   --from-literal=polly_encryption_key="$POLLY_KEY" \
+  "${_OAUTH_ARGS[@]:+"${_OAUTH_ARGS[@]}"}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""
