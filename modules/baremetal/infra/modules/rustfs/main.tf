@@ -226,6 +226,15 @@ resource "kubernetes_stateful_set_v1" "this" {
   }
 
   wait_for_rollout = true
+
+  lifecycle {
+    # volumeClaimTemplates are immutable: a size change (sizing_profile, an
+    # enabled feature) would replace the StatefulSet and restart the datastore.
+    # The size is a request on local-path (not enforced), so it's set at
+    # creation only. A real resize means expanding the PVC on a CSI driver that
+    # supports expansion; a new StorageClass means migrating the data.
+    ignore_changes = [spec[0].volume_claim_template]
+  }
 }
 
 #------------------------------------------------------------------------------

@@ -236,11 +236,10 @@ locals {
   feature_pods = merge({}, [for f in local.enabled_features : local.feature_pod_sizes[f]]...)
 
   # Each agent deployment runs an API server, a queue worker, and its own
-  # Postgres and Redis, created at runtime by the operator. Rough estimate.
-  agent_deployment_estimate = {
-    slim = { cpu_m = 650, mem_mi = 1408, storage_gi = 8 }
-    full = { cpu_m = 2750, mem_mi = 5632, storage_gi = 10 }
-  }[local.feature_class]
+  # Postgres and Redis, created at runtime by the operator with its own sizes
+  # (not the sizing profile). Measured on chart 0.17.11 with operator defaults:
+  # agent 200m/512Mi, queue 1/2Gi, Redis 1/2Gi, Postgres 1/3840Mi + 20Gi PVC.
+  agent_deployment_estimate = { cpu_m = 3200, mem_mi = 8448, storage_gi = 20 }
 
   # Platform add-ons (same in every profile). MetalLB's speaker runs on every
   # worker, so its replicas follow the worker count.

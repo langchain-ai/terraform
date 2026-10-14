@@ -41,8 +41,21 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="langsmith"
 NAMESPACE="langsmith"
-# Exact pin: the values in this module are verified against this chart only.
-CHART_VERSION="${CHART_VERSION:-0.17.6}"
+# Line pin, like the other providers: Helm resolves ~0.17.0 to the newest 0.17
+# patch. Override with CHART_VERSION for an exact patch.
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
+
+# These values use the chart 0.17 schema (SmithDB per-component sizing, the
+# gateway HTTPRoute, standalone Insights/Polly wiring). Chart 0.18 has not been
+# validated against them, so refuse anything off the 0.17 line rather than
+# deploy a half-configured release.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "$_chart_line" != "0.17" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 line." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.17.10 make deploy" >&2
+  exit 1
+fi
 
 # ── Preconditions ────────────────────────────────────────────────────────────
 header "Preflight"

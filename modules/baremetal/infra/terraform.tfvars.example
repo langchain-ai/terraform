@@ -24,12 +24,13 @@ cluster_nodes = {
 # minimum | lab | dev | production | production-large (lab = dev app sizing + SmithDB minimal)
 sizing_profile = "lab"
 
-# LoadBalancer IPs for MetalLB (L2). Must be unused addresses on the nodes'
-# subnet and OUTSIDE your DHCP server's pool.
-metallb_addresses = ["10.20.0.50-10.20.0.59"]
-
-# Envoy Gateway proxy IP (LangSmith front door); must be inside metallb_addresses.
+# Unused addresses on the nodes' subnet, OUTSIDE your DHCP server's pool.
+# Envoy Gateway proxy IP (LangSmith front door). MetalLB serves it from its own
+# pool that never auto-assigns, so it must NOT be in metallb_addresses.
 envoy_gateway_lb_ip = "10.20.0.50"
+
+# LoadBalancer IPs MetalLB may hand to other Services on the cluster.
+metallb_addresses = ["10.20.0.51-10.20.0.59"]
 
 # ── Optional: LangSmith ───────────────────────────────────────────────────────
 

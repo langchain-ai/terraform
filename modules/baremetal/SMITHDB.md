@@ -1,7 +1,10 @@
 # SmithDB on bare metal
 
 SmithDB is LangSmith's trace store. It writes traces as columnar (Vortex) files to S3-compatible object storage and
-indexes them in a PostgreSQL metastore. This module runs it **without ClickHouse**. Behavior described here was observed
+indexes them in a PostgreSQL metastore. This example runs it **without ClickHouse**.
+
+This page covers only what is specific to running SmithDB on self-managed Kubernetes. For everything else, see the
+official [SmithDB troubleshooting](https://docs.langchain.com/langsmith/self-host-smithdb-troubleshooting) guide. Behavior described here was observed
 with LangSmith chart 0.17.x (SmithDB 0.17.33); later versions may differ.
 
 ## Components
@@ -55,8 +58,9 @@ with large SDK payloads). The cause:
    limit, on a small share of the pod's CPU.
 
 Idle projects have no L0 files, so they're unaffected, and adding query pods doesn't help. Reads return to normal
-speed once the project's files are merged, about 10–13 minutes after writing stops with the default settings. Contact
-LangChain support if this matters for your workload.
+speed once the project's files are merged, about 10–13 minutes after writing stops with the default settings. If it
+matters for your workload, raise it with LangChain support: SmithDB behavior is part of the LangSmith application, which
+is covered by your agreement.
 
 ## Operational risks
 

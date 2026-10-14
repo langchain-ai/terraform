@@ -7,7 +7,7 @@ mock_provider "random" {}
 
 variables {
   kube_context        = "test"
-  metallb_addresses   = ["10.20.0.50-10.20.0.59"]
+  metallb_addresses   = ["10.20.0.51-10.20.0.59"]
   envoy_gateway_lb_ip = "10.20.0.50"
   # A small reference cluster: three 6-core workers behind a tainted control plane.
   cluster_nodes = {
@@ -209,24 +209,33 @@ run "dev_fits_with_dedicated_smithdb_nodes" {
   }
 }
 
-run "envoy_ip_outside_pool_fails" {
+run "envoy_ip_inside_pool_fails" {
   command = plan
 
   variables {
     sizing_profile      = "lab"
-    envoy_gateway_lb_ip = "10.20.0.70"
+    envoy_gateway_lb_ip = "10.20.0.55"
   }
 
   expect_failures = [terraform_data.envoy_lb_ip_check]
 }
 
-run "envoy_ip_inside_cidr_pool_passes" {
+run "envoy_ip_outside_cidr_pool_passes" {
   command = plan
 
   variables {
     sizing_profile      = "lab"
     metallb_addresses   = ["10.20.0.48/29"]
-    envoy_gateway_lb_ip = "10.20.0.53"
+    envoy_gateway_lb_ip = "10.20.0.60"
+  }
+}
+
+run "metallb_announces_from_every_node_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(var.metallb_l2_node_selector) == 0
+    error_message = "The default L2 node selector must be empty: stock kubeadm, k3s and RKE2 don't label workers, and an unmatched selector leaves the gateway IP unanswered."
   }
 }
 
@@ -314,6 +323,54 @@ run "blob_threshold_must_be_whole_kib" {
   }
 
   expect_failures = [var.blob_storage_min_size_kb]
+}
+
+run "deployments_off_installs_no_keda" {
+  command = plan
+
+  assert {
+    condition     = length(helm_release.keda) == 0 && !can(output.langsmith_helm_values.config.deployment) && !can(output.langsmith_helm_values.operator)
+    error_message = "Without enable_deployments: no KEDA, no config.deployment, no Deployments sizing."
+  }
+}
+
+run "deployments_on_installs_keda_and_wires_the_chart" {
+  command = plan
+
+  variables {
+    sizing_profile     = "lab"
+    enable_deployments = true
+  }
+
+  assert {
+    condition     = length(helm_release.keda) == 1 && helm_release.keda[0].version == var.keda_chart_version
+    error_message = "enable_deployments must install KEDA at the pinned chart version."
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.config.deployment.enabled && !output.langsmith_helm_values.config.deployment.tlsEnabled
+    error_message = "config.deployment.enabled is set, and tlsEnabled is false for an http URL."
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.operator.deployment.resources.requests.cpu == "100m" && output.langsmith_helm_values.listener.deployment.resources.requests.memory == "512Mi"
+    error_message = "Deployments sizing must come from the budget's feature_pod_sizes (slim on lab)."
+  }
+}
+
+run "deployments_tls_follows_url_scheme" {
+  command = plan
+
+  variables {
+    enable_deployments   = true
+    langsmith_domain     = "langsmith.example.com"
+    langsmith_url_scheme = "https"
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.config.deployment.tlsEnabled
+    error_message = "With an https URL, config.deployment.tlsEnabled must be true or agent deployments stay in DEPLOYING."
+  }
 }
 
 run "telemetry_off_by_default" {

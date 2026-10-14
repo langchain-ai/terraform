@@ -47,6 +47,7 @@ module "metallb" {
   source = "./modules/metallb"
 
   chart_version    = var.metallb_chart_version
+  gateway_ip       = var.envoy_gateway_lb_ip
   addresses        = var.metallb_addresses
   l2_node_selector = var.metallb_l2_node_selector
   controller_resources = {
@@ -103,8 +104,8 @@ resource "terraform_data" "envoy_lb_ip_check" {
 
   lifecycle {
     precondition {
-      condition     = local.lb_ip_in_pool
-      error_message = "envoy_gateway_lb_ip ${var.envoy_gateway_lb_ip} is outside metallb_addresses (${join(", ", var.metallb_addresses)}). MetalLB would never assign it."
+      condition     = !local.lb_ip_in_pool
+      error_message = "envoy_gateway_lb_ip ${var.envoy_gateway_lb_ip} is inside metallb_addresses (${join(", ", var.metallb_addresses)}). The gateway gets its own pool; keep its IP out of metallb_addresses so no other Service can take it."
     }
   }
 }
@@ -123,6 +124,42 @@ module "cloudflared" {
     requests = { cpu = "${local.addon_pods["cloudflared"].cpu_m}m", memory = "${local.addon_pods["cloudflared"].mem_mi}Mi" }
     limits   = { memory = "256Mi" }
   }
+
+  depends_on = [terraform_data.budget]
+}
+
+# KEDA, for LangSmith Deployments only: the operator creates a ScaledObject per
+# agent deployment (chart default operator.kedaEnabled: true). Sized from the
+# same addon_pods entries the budget counts.
+resource "helm_release" "keda" {
+  count = local.install_keda ? 1 : 0
+
+  name             = "keda"
+  repository       = "https://kedacore.github.io/charts"
+  chart            = "keda"
+  version          = var.keda_chart_version
+  namespace        = "keda"
+  create_namespace = true
+  wait             = true
+
+  values = [
+    yamlencode({
+      resources = {
+        operator = {
+          requests = { cpu = "${local.addon_pods["keda-operator"].cpu_m}m", memory = "${local.addon_pods["keda-operator"].mem_mi}Mi" }
+          limits   = { cpu = "500m", memory = "512Mi" }
+        }
+        metricServer = {
+          requests = { cpu = "${local.addon_pods["keda-metrics-server"].cpu_m}m", memory = "${local.addon_pods["keda-metrics-server"].mem_mi}Mi" }
+          limits   = { cpu = "500m", memory = "512Mi" }
+        }
+        webhooks = {
+          requests = { cpu = "${local.addon_pods["keda-webhooks"].cpu_m}m", memory = "${local.addon_pods["keda-webhooks"].mem_mi}Mi" }
+          limits   = { cpu = "200m", memory = "256Mi" }
+        }
+      }
+    })
+  ]
 
   depends_on = [terraform_data.budget]
 }

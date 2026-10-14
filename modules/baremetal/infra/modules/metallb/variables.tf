@@ -9,6 +9,11 @@ variable "chart_version" {
   description = "MetalLB Helm chart version (exact pin)."
 }
 
+variable "gateway_ip" {
+  type        = string
+  description = "The LangSmith gateway's IP, in its own pool with autoAssign off. Must not be in addresses."
+}
+
 variable "addresses" {
   type        = list(string)
   description = "LAN addresses MetalLB may hand to LoadBalancer Services: ranges (a.b.c.d-a.b.c.e) or CIDRs. Must be outside the router's DHCP pool."

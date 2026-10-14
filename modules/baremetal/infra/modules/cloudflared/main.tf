@@ -59,7 +59,6 @@ resource "kubernetes_deployment_v1" "this" {
       spec {
         # cloudflared never calls the Kubernetes API.
         automount_service_account_token = false
-        node_selector                   = { "node-role.kubernetes.io/worker" = "" }
 
         security_context {
           run_as_user     = local.uid

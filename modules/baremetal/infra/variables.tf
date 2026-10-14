@@ -235,8 +235,14 @@ variable "metallb_addresses" {
 
 variable "metallb_l2_node_selector" {
   type        = map(string)
-  default     = { "node-role.kubernetes.io/worker" = "" }
-  description = "Nodes allowed to answer ARP for LoadBalancer IPs. Default: workers only (keeps the control plane out of the data path)."
+  default     = {}
+  description = "Nodes allowed to answer ARP for LoadBalancer IPs. Default {}: every node except those labeled node.kubernetes.io/exclude-from-external-load-balancers, which kubeadm puts on control-plane nodes. Set a label here only if your workers carry it (stock kubeadm, k3s and RKE2 don't label workers)."
+}
+
+variable "keda_chart_version" {
+  type        = string
+  default     = "2.21.0"
+  description = "KEDA Helm chart version (https://kedacore.github.io/charts). Installed only with enable_deployments: the LangSmith operator scales agent deployments with KEDA ScaledObjects."
 }
 
 variable "envoy_gateway_chart_version" {
@@ -247,7 +253,7 @@ variable "envoy_gateway_chart_version" {
 
 variable "envoy_gateway_lb_ip" {
   type        = string
-  description = "LAN IP pinned to the Envoy proxy LoadBalancer Service. Must be inside metallb_addresses."
+  description = "LAN IP pinned to the Envoy proxy LoadBalancer Service. MetalLB serves it from its own pool (autoAssign off), so it must be an unused address on the node subnet OUTSIDE metallb_addresses."
 
   validation {
     condition     = can(regex("^\\d{1,3}(\\.\\d{1,3}){3}$", var.envoy_gateway_lb_ip))

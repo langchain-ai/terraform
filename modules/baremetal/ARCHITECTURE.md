@@ -52,10 +52,11 @@ flowchart LR
 |---|---|---|
 | metrics-server | pod CPU/memory for HPAs and `kubectl top` | the chart's HPAs need it; bare clusters don't ship it |
 | local-path provisioner | two StorageClasses: `local-path` (Delete) and `local-path-retain` (Retain), directories on node disk | simplest dynamic provisioning without a storage system; Retain for datastores so data survives a deleted claim |
-| MetalLB (L2) | hands out `LoadBalancer` IPs from your range and answers ARP for them | the bare-metal equivalent of a cloud load balancer |
+| MetalLB (L2) | answers ARP for `LoadBalancer` IPs. The gateway IP sits alone in pool `langsmith-gateway` with auto-assign off, so no other Service can take it; `lan-pool` (`metallb_addresses`) serves other Services. Speakers run on every node except those labeled `node.kubernetes.io/exclude-from-external-load-balancers` (kubeadm's control plane) | the bare-metal equivalent of a cloud load balancer |
 | Envoy Gateway | Gateway API implementation; the chart attaches its `HTTPRoute` to the `langsmith-gateway` Gateway | Gateway API is the chart's supported ingress path; one proxy, one IP |
 | Route timeout policy | `BackendTrafficPolicy` on the Gateway, default 60 s | Envoy's 15 s default returns 504 on slow trace reads |
 | LAN catch-all route | extra `HTTPRoute` with no hostname, on when `langsmith_domain` is set | keeps `http://<gateway IP>` working when the chart's route matches only the domain |
+| KEDA (only with `enable_deployments`) | scales each agent deployment through a ScaledObject the LangSmith operator creates | the chart's operator expects it (`operator.kedaEnabled`) |
 | cloudflared (optional) | 2-replica Cloudflare Tunnel connector pointing at the Envoy Service | public HTTPS with no inbound ports or public IP |
 | Postgres 18 `langsmith` | orgs, projects, datasets, feedback config, run metadata | separate from the metastore so neither starves the other |
 | Postgres 18 `smithdb` | SmithDB metastore: the index of every file in object storage | write-heavy during ingest; back it up with the object store |

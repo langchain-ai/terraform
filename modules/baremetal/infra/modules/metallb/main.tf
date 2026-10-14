@@ -62,6 +62,7 @@ resource "helm_release" "config" {
 
   values = [
     yamlencode({
+      gatewayIP      = var.gateway_ip
       addresses      = var.addresses
       l2NodeSelector = var.l2_node_selector
     })

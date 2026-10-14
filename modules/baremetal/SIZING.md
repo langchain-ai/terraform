@@ -1,8 +1,8 @@
 # Sizing
 
-The sizing profiles are starting points. This page gives the formulas to size for a specific workload. The coefficients
-were measured on a small bare-metal cluster (6-core nodes, NVMe, 1 GbE) with chart 0.17.x; treat them as planning
-estimates, keep the safety factors, and validate with a load test at your own trace shape before ordering hardware.
+LangChain's sizing guidance is [self-host-scale](https://docs.langchain.com/langsmith/self-host-scale). The numbers on
+this page are observations from one lab cluster (6-core nodes, NVMe, 1 GbE, chart 0.17.x). Use them as planning
+estimates: keep the safety factors, and validate with a load test at your own trace shape before ordering hardware.
 
 ## Inputs to collect
 

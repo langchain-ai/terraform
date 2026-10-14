@@ -1,31 +1,48 @@
-# LangSmith on bare-metal Kubernetes (preview)
+# Reference example: LangSmith with SmithDB on self-managed Kubernetes
 
-> **Preview. Not officially supported by LangChain.** This module is an **example deployment**: one complete, working
-> way to run self-hosted LangSmith with **SmithDB** (no ClickHouse) on a plain, self-managed Kubernetes cluster, with no
-> cloud provider. It was built and load-tested on a small multi-node cluster. Use it as a starting point and a reference
-> for your own deployment, not as a turnkey product: the sizes, IP addresses and settings in it are examples to adapt.
+**Status: Example.** Tested on kubeadm. Not a supported deployment path.
 
-This module deploys everything LangSmith needs that a cloud would otherwise provide (load balancer, ingress, storage
-classes, Postgres, Redis, S3-compatible object storage), then installs LangSmith and SmithDB with Helm.
+## What this example is, and what it is not
 
-## Using this as an example
+- It **is** one tested way to run self-hosted LangSmith with SmithDB (no ClickHouse) on an existing Kubernetes cluster,
+  with no cloud provider. Terraform deploys what a cloud would otherwise provide, then Helm installs LangSmith.
+- It is **not** an installer that LangChain supports, and it is **not** a production blueprint. The sizes, IP addresses
+  and settings in it are examples to adapt.
+- **Support boundary:** LangChain supports the LangSmith application under your agreement. You own every layer this
+  example adds: load balancing, ingress, storage, Postgres, Redis, object storage, backups and upgrades.
 
-Every layer is a separate, replaceable piece. Run it as is to get a working LangSmith on a test or small cluster, or keep
-the parts that fit your environment and swap the rest:
+## What LangSmith needs, and how this example meets it
 
-| Layer in this example | Keep it when | Replace it with, for example |
+| Need | This example | For production |
 |---|---|---|
-| MetalLB (L2) | the nodes share one LAN and you have spare IPs | your existing load balancer (BGP, F5, kube-vip, a cloud LB) |
-| Envoy Gateway | you have no ingress yet | your ingress controller or Gateway; set the chart's `ingress` or `gateway` values |
-| local-path storage | evaluation and small installs | your storage system's StorageClass (Ceph, Longhorn, a SAN CSI driver) |
-| In-cluster Postgres ×2 and Redis | evaluation and small production | managed or HA services, wired through the chart's `postgres.external` and `redis.external` |
-| RustFS | you have no object storage yet | any S3-compatible store (MinIO, Ceph RGW, an enterprise object store, AWS S3) |
-| Cloudflare Tunnel | you want public HTTPS without inbound ports | TLS on your own load balancer or ingress |
-| Sizing profiles and the budget gate | always: they size the LangSmith and SmithDB pods for your nodes | — |
+| LoadBalancer IPs | MetalLB (L2): one dedicated IP for the gateway, a pool for other Services | your existing load balancer (BGP, F5, kube-vip) |
+| Ingress | Envoy Gateway (Gateway API), 60 s route timeout | your ingress controller or Gateway, through the chart's `ingress` or `gateway` values |
+| Volumes | local-path: node-local, no replication | a replicated StorageClass (Ceph, Longhorn, SAN CSI) |
+| Postgres (LangSmith and SmithDB metastore) | one pod each | managed or HA Postgres with point-in-time recovery, through `postgres.external` and `smithdb.config.metastore` |
+| Redis | one pod | managed or HA Redis or Valkey, through `redis.external` |
+| S3-compatible storage | one RustFS pod (SmithDB data and payload blobs) | a replicated object store (Ceph RGW, an enterprise S3, AWS S3) |
+| Pod metrics for autoscaling | metrics-server | your cluster's metrics-server |
+| Autoscaling for agent deployments (only with LangSmith Deployments) | KEDA | your cluster's KEDA |
+| TLS | none at the gateway; optional Cloudflare Tunnel | TLS at your load balancer or Gateway |
+| Backups | not covered | metastore and bucket backups taken at the same point in time |
 
-What carries over to any Kubernetes deployment regardless of these choices: the Helm values layering, the SmithDB sizing
-and recommended settings ([SMITHDB.md](SMITHDB.md)), the sizing formulas ([SIZING.md](SIZING.md)), and the operational
-checks in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+What carries over to any Kubernetes deployment, whatever you swap: the Helm values layering, the SmithDB settings
+([SMITHDB.md](SMITHDB.md)), the sizing method ([SIZING.md](SIZING.md)) and the checks in
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+## Tested
+
+| Distribution | Kubernetes | Runtime | CNI | Nodes | Chart | Tested |
+|---|---|---|---|---|---|---|
+| kubeadm on Ubuntu 22.04 | v1.36.5 | containerd 2.4.1 | Calico v3.33.0 | 4 (1 control plane, 3 workers) | langsmith 0.17.11 (app and SmithDB 0.17.38); earlier load tests on 0.17.6 | install, upgrade, deploy, load test, blob offload, an agent deployment |
+
+Add-ons as tested: MetalLB 0.16.1, Envoy Gateway v1.9.2, metrics-server chart 3.14.0, KEDA 2.21.0.
+
+**Other distributions need changes.** k3s ships servicelb, local-storage and metrics-server by default
+([packaged components](https://docs.k3s.io/installation/packaged-components)), which collide with the MetalLB, local-path
+and metrics-server this example installs: start k3s with `--disable servicelb --disable local-storage --disable
+metrics-server`. RKE2 ships its own metrics-server, so the same collision applies there: disable it, or remove
+`module.metrics_server` from this example.
 
 ## Architecture
 
@@ -94,21 +111,23 @@ SmithDB specifics and tuning: [SMITHDB.md](SMITHDB.md). Sizing formulas: [SIZING
 | Layer | Component | Managed by |
 |---|---|---|
 | Cluster add-ons | metrics-server (for HPAs), local-path StorageClasses (`local-path`, `local-path-retain`) | Terraform |
-| Load balancing | MetalLB in L2 mode, one IP pool | Terraform |
+| Load balancing | MetalLB in L2 mode: the gateway IP in its own pool (never auto-assigned), a pool for other Services | Terraform |
 | Ingress | Envoy Gateway (Gateway API): one Gateway, route timeout policy, optional LAN catch-all route | Terraform |
 | Public access (optional) | Cloudflare Tunnel connector (`cloudflared`, 2 replicas) | Terraform |
 | Datastores | Postgres 18 ×2 (LangSmith, SmithDB metastore), Redis 7, RustFS (S3 API) with buckets | Terraform |
 | Secrets | Datastore credentials as Kubernetes Secrets; app secrets in a local `infra/.secrets.env` (mode 600) | Terraform + scripts |
-| Application | LangSmith chart 0.17.x with SmithDB (ClickHouse disabled) | Helm (`deploy.sh`) |
+| Application | LangSmith chart 0.17.x (line-pinned) with SmithDB (ClickHouse disabled) | Helm (`deploy.sh`) |
+| Agent deployments (optional) | KEDA, plus the chart's host-backend, listener and operator | Terraform + Helm |
 | Guardrails | Budget gate: requested CPU/memory checked against your nodes before anything is applied | Terraform |
 
 ## Assumptions
 
 This module is opinionated. It assumes:
 
-- **A working Kubernetes cluster** (1.30 or newer) you can reach with `kubectl`, with at least three schedulable worker
-  nodes. It doesn't create the cluster. kubeadm, k3s, RKE2, Talos or similar all work, with containerd as the runtime.
-- **One Layer 2 network** for the nodes, with a small range of unused IP addresses outside your DHCP pool for MetalLB.
+- **A working Kubernetes cluster** you can reach with `kubectl`, with at least three schedulable worker nodes. It doesn't
+  create the cluster. Tested on kubeadm; other distributions need the changes under [Tested](#tested).
+- **One Layer 2 network** for the nodes, with unused IP addresses outside your DHCP pool: one for the gateway, and a
+  range for MetalLB that doesn't include it.
 - **Node-local storage.** local-path volumes are directories on one node's disk: fast (NVMe recommended), but each volume
   is pinned to its node and has **no replication**. Back up Postgres and the object store yourself.
 - **Single-instance datastores.** Postgres, Redis and RustFS each run as one pod. That fits evaluation, development and
@@ -186,11 +205,11 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 |---|---|---|
 | `kubeconfig_path`, `kube_context` | yes | the cluster; the context is required so the module never acts on your current context |
 | `cluster_nodes` | yes | node names, allocatable CPU/memory/disk and roles, for the budget gate and optional SmithDB node pools |
-| `metallb_addresses`, `envoy_gateway_lb_ip` | yes | LoadBalancer IP range and the gateway's IP in it |
+| `envoy_gateway_lb_ip`, `metallb_addresses` | yes | the gateway's IP (its own pool), and a separate range for other LoadBalancer Services |
 | `sizing_profile` | no (`minimum`) | see above |
 | `langsmith_domain`, `langsmith_url_scheme` | no | hostname and scheme (default `http://<gateway IP>`) |
 | `envoy_gateway_route_timeout` | no (`60s`) | request timeout on every route; Envoy's own default of 15 s cuts off slow trace reads |
-| `enable_deployments`, `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sandboxes`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules |
+| `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sandboxes`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules |
 | `enable_cloudflare_tunnel` + `TF_VAR_cloudflare_tunnel_token` | no | public HTTPS through a Cloudflare Tunnel |
 | `node_reserved`, `max_request_ratio` | no | budget gate headroom |
 | `*_image`, `*_chart_version` | no | pinned versions |
@@ -241,6 +260,21 @@ make deploy                                          # Terraform settings: make 
 To tune with confidence, measure: send traces shaped like your production ones (runs per trace, payload sizes) at your
 expected rate, and watch Redis memory, the ingest queue backlog, and pod CPU and memory (`kubectl top`). The formulas in
 [SIZING.md](SIZING.md) tell you which setting moves which number.
+
+## LangSmith Deployments (optional)
+
+With `enable_deployments = true` (and the Deployments entitlement in your license), `make apply` installs KEDA and
+`make deploy` turns on host-backend, listener and operator. Agent deployments then run in the `langsmith` namespace:
+
+- **Image:** build your agent with `langgraph build` (we recommend the Wolfi base: `"image_distro": "wolfi"` in
+  `langgraph.json`) and push it to a registry your nodes can pull from. Create the deployment from that image in the UI
+  or with the `/api-host/v2/deployments` API (`source: "external_docker"`).
+- **Routing:** the operator adds an HTTPRoute per deployment on the module's Gateway, at
+  `<LangSmith URL>/lgp/<deployment>`, and KEDA ScaledObjects for the agent and its queue worker.
+- **Resources:** with the operator's defaults, each deployment requests about **3.2 CPU and 8.25 GiB**: the agent
+  (200m/512Mi), a queue worker (1 CPU/2 GiB), Redis (1 CPU/2 GiB) and a Postgres StatefulSet (1 CPU/3.75 GiB, named
+  `lg-<id>`) with a 20 GiB volume on the default StorageClass. `expected_agent_deployments` reserves that much each in
+  the budget gate.
 
 ## Verify
 

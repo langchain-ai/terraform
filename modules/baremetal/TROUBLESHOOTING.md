@@ -15,7 +15,9 @@ Symptom → cause → fix. Commands assume `kubectl --context <your context>`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| LoadBalancer IP assigned but unreachable | the range overlaps DHCP, or is on a different subnet than the nodes, or no speaker runs on a ready node | use unused addresses on the node subnet, outside the DHCP pool; `kubectl -n metallb-system get pods -o wide` |
+| LoadBalancer IP assigned but unreachable | the range overlaps DHCP, or is on a different subnet than the nodes, or no speaker runs on a ready node (e.g. `metallb_l2_node_selector` set to a label your nodes don't carry) | use unused addresses on the node subnet, outside the DHCP pool; keep the selector `{}` unless your nodes are labeled; `kubectl -n metallb-system get pods -o wide` |
+| Plan fails: `envoy_gateway_lb_ip … is inside metallb_addresses` | the gateway IP has its own pool and must not be in the shared range | move it out of `metallb_addresses` (e.g. gateway `.50`, range `.51–.59`) |
+| Apply fails: `pool "langsmith-gateway" overlaps with already defined CIDR` | upgrading an install whose `lan-pool` still contains the gateway IP: Helm creates the new pool before shrinking the old one | shrink `lan-pool` first (`kubectl -n metallb-system patch ipaddresspool lan-pool --type merge -p '{"spec":{"addresses":[...]}}'` without the gateway IP), then `make apply` again |
 | `http://<gateway IP>` returns 404 after setting `langsmith_domain` | the chart's route matches only the domain | the module adds a LAN catch-all route when a domain is set; check `kubectl -n langsmith get httproute` |
 | HTTP **504** after ~15 s on slow reads | Envoy Gateway's default route timeout | `envoy_gateway_route_timeout` (default 60 s); check `kubectl -n langsmith get backendtrafficpolicy` |
 | SDK loses runs at process exit; frontend logs **413** | the SDK flushes its whole queue as one large multipart request on shutdown | raise the frontend body size limit, or flush more often in the client |
@@ -30,6 +32,9 @@ Symptom → cause → fix. Commands assume `kubectl --context <your context>`.
 | `helm template` fails after adding `extraEnv` | the chart rejects duplicate env names | only add names the chart doesn't set already |
 | Multipart batches return **500** `error enriching feedback meta … clickhouse` and their runs are lost | SmithDB-only install: feedback on recent runs falls back to ClickHouse | `ENABLE_EVALUATE_EXPIRED_EXPERIMENTS=false` on platform-backend (in the example values) |
 | `POST /api/v1/runs/query` returns **501** | v1 run query needs ClickHouse | use `POST /api/v2/runs/query` |
+| Agent deployment stuck in `DEPLOYING` | `config.deployment.tlsEnabled` doesn't match the hostname scheme | Terraform sets it from `langsmith_url_scheme`; re-run `make init-values` and `make deploy` after changing the scheme |
+| Agent deployment pods crash on import (`TypeError: Cannot create a consistent method resolution order`) | the image pins a `langgraph` version older than the LangGraph server base image ships | don't pin `langgraph` in the agent's requirements, or pin a compatible version; rebuild with `langgraph build` |
+| Agent deployments never scale, or the operator logs ScaledObject errors | KEDA isn't installed | `enable_deployments = true` installs it; check `kubectl -n keda get pods` |
 | SDK got 202 but the trace isn't visible | 202 means queued in Redis, not stored yet | check ingest-queue backlog and logs, and smithdb-ingestion logs |
 
 ## Ingest and Redis

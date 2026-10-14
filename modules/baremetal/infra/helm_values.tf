@@ -39,6 +39,15 @@ locals {
     {
       config = merge(
         { hostname = local.langsmith_url },
+        # Deployments: the operator builds each agent's endpoint URL from the
+        # hostname, so tlsEnabled must match its scheme (a mismatch leaves agent
+        # deployments stuck in DEPLOYING).
+        var.enable_deployments ? {
+          deployment = {
+            enabled    = true
+            tlsEnabled = var.langsmith_url_scheme == "https"
+          }
+        } : {},
         # Payload offload to the same RustFS as SmithDB, separate bucket. Keys
         # come from langsmith-config (deploy.sh copies them from smithdb-config).
         var.enable_blob_storage ? {
@@ -58,6 +67,22 @@ locals {
         namespace = module.envoy_gateway.gateway.namespace
       }
     },
+    # Deployments components, sized from the same table the budget counts
+    # (feature_pod_sizes), so the two can't drift. Limits are the chart defaults.
+    var.enable_deployments ? {
+      hostBackend = { deployment = { resources = {
+        requests = { cpu = "${local.feature_pod_sizes.deployments["host-backend"].cpu_m}m", memory = "${local.feature_pod_sizes.deployments["host-backend"].mem_mi}Mi" }
+        limits   = { cpu = "1000m", memory = "2Gi" }
+      } } }
+      listener = { deployment = { resources = {
+        requests = { cpu = "${local.feature_pod_sizes.deployments.listener.cpu_m}m", memory = "${local.feature_pod_sizes.deployments.listener.mem_mi}Mi" }
+        limits   = { cpu = "2000m", memory = "4Gi" }
+      } } }
+      operator = { deployment = { resources = {
+        requests = { cpu = "${local.feature_pod_sizes.deployments.operator.cpu_m}m", memory = "${local.feature_pod_sizes.deployments.operator.mem_mi}Mi" }
+        limits   = { cpu = "2000m", memory = "4Gi" }
+      } } }
+    } : {},
     # Same env var as modules/aws: extended usage reporting on every component.
     var.enable_usage_telemetry ? {
       commonEnv = [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }]
