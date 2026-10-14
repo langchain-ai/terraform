@@ -142,6 +142,8 @@ locals {
     "roles/artifactregistry.reader",
     "roles/cloudsql.admin",
     "roles/cloudsql.client",
+    # The app logs in to Cloud SQL as its IAM database user.
+    "roles/cloudsql.instanceUser",
     "roles/container.admin",
     "roles/container.defaultNodeServiceAccount",
     "roles/redis.dbConnectionUser",
@@ -307,7 +309,7 @@ locals {
     "langsmith-workload" = {
       display_name = "LangSmith workload"
       description  = "LangSmith application workloads in the data plane GKE clusters"
-      roles        = ["roles/cloudsql.client", "roles/redis.dbConnectionUser"]
+      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/redis.dbConnectionUser"]
       act_as       = false
     }
     # Secret Manager access is the conditional grant below.
