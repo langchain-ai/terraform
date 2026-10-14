@@ -56,6 +56,11 @@ _kv() {
   az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query value -o tsv
 }
 
+# True when the secret exists in Key Vault; nothing is printed.
+_kv_exists() {
+  az keyvault secret show --vault-name "$KV_NAME" --name "$1" --output none 2>/dev/null
+}
+
 API_KEY_SALT=$(_kv "langsmith-api-key-salt")
 JWT_SECRET=$(_kv "langsmith-jwt-secret")
 LICENSE_KEY=$(_kv "langsmith-license-key")
