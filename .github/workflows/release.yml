@@ -131,12 +131,18 @@ jobs:
           LINE: ${{ steps.line.outputs.line }}
           PROVIDERS: ${{ steps.msg.outputs.providers }}
           SUBJECT: ${{ steps.msg.outputs.subject }}
+          REF: ${{ github.ref_name }}
         run: |
           notes="Changed: ${PROVIDERS}
           ${SUBJECT}
 
           Chart line: ${LINE} (deploys the latest ${LINE}.x)."
-          gh release create "$NEXT" --title "$NEXT" --notes "$notes"
+          # GitHub moves the "Latest" badge to every new release unless told
+          # otherwise. Only main carries the current chart line, so a release/*
+          # branch must never take the badge from it.
+          latest=false
+          if [[ "$REF" == "main" ]]; then latest=true; fi
+          gh release create "$NEXT" --title "$NEXT" --notes "$notes" --latest="$latest"
 
       - name: Dry-run summary
         if: steps.skipcheck.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.dry_run
