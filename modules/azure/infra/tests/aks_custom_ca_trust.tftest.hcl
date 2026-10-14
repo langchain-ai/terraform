@@ -217,3 +217,54 @@ run "refuses_a_key_before_the_certificate" {
 
   expect_failures = [var.aks_custom_ca_trust_certificate_files]
 }
+
+# A file that passes the checks but puts no working CA on the nodes is the
+# worst outcome: every node is replaced and pulls still fail with an unknown
+# authority. The node's PEM decoder takes a block only as whole lines, the
+# BEGIN and END markers alone on theirs and base64 between, so the file
+# checks do the same. Each of the next three refusals is a file that AKS
+# would accept and never load.
+run "refuses_a_commented_out_certificate" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-commented-out.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_note_after_the_end_marker" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-note-after-end.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_block_whose_body_is_not_base64" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-not-base64-body.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+# A comment line above a five-certificate bundle with one trailing newline is
+# the shape a cluster already holds; it must keep passing as one entry.
+run "accepts_a_comment_line_above_a_five_certificate_bundle" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-bundle-five-with-comment.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == tolist([filebase64("tests/fixtures/ca-bundle-five-with-comment.pem")])
+    error_message = "A comment line above a five-certificate bundle should pass as one entry equal to the file"
+  }
+}

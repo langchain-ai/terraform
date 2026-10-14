@@ -1399,7 +1399,11 @@ decides what the cluster can reach, and nothing works until it allows:
   the list. A file becomes one entry, its content trimmed of surrounding
   whitespace with one trailing newline, and may hold one certificate or a
   bundle, with `#` comment lines and blank lines at most around the blocks; a
-  key, a byte-order mark, or an openssl Bag Attributes preamble is refused. To
+  key, a byte-order mark, an openssl Bag Attributes preamble, a note after a
+  marker or a certificate commented out line by line is refused: a block is
+  the BEGIN and END markers alone on their lines with base64 between, as the
+  node's PEM decoder reads it, and anything else would replace every node for
+  a CA that never loads. To
   adopt an entry a cluster already holds with no node change, write the file
   from the cluster's value (`az aks show`,
   `securityProfile.customCATrustCertificates`, base64-decoded), bundle and

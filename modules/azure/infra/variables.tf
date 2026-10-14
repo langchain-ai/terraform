@@ -1015,7 +1015,7 @@ variable "aks_os_sku" {
 
 variable "aks_custom_ca_trust_certificate_files" {
   type        = list(string)
-  description = "Paths to PEM files, one entry each, that AKS installs in the trust store of every Linux node: for example the internal CA that signs an image mirror's certificate. containerd on the node does the pulling and trusts only public CAs, so a mirror behind an internal CA fails every pull with 'x509: certificate signed by unknown authority' until its CA is here. Up to 10. Paths are relative to the directory Terraform runs in (infra/) or absolute, and the files are read at plan. Empty (default) leaves the cluster's custom CA trust unset. A change replaces every node: AKS creates new nodes, drains and deletes the old ones. The module owns the setting because the provider reads it back from the cluster, so a CA added by hand with az aks update is removed by the next apply. Nodes only: pods keep their own trust store, and LangSmith's is langsmith_custom_ca_secret_name. Each file becomes one entry, its content trimmed of surrounding whitespace with one trailing newline, and an entry may hold one certificate or a bundle of several. A cluster that already holds an entry keeps it, and the nodes plan no change, only when that stored value equals the file's trimmed content plus one newline, so to adopt an existing entry write the file from the cluster's value (az aks show, securityProfile.customCATrustCertificates, base64-decoded), bundle and comment lines included; an entry stored with no trailing newline, or more than one, cannot be matched by any file and is replaced once, with every node. A file holds certificate blocks, with comment lines starting with # and blank lines around them at most; a key, a byte-order mark, or an openssl Bag Attributes preamble is refused. A bundle file is one entry toward the limit of 10. Ignored when create_cluster = false, and the file checks are skipped then. The files must stay in place for the life of the cluster: Terraform reads them at every plan, including the one for destroy, so a file that has gone blocks destroy until it is restored or removed from the list."
+  description = "Paths to PEM files, one entry each, that AKS installs in the trust store of every Linux node: for example the internal CA that signs an image mirror's certificate. containerd on the node does the pulling and trusts only public CAs, so a mirror behind an internal CA fails every pull with 'x509: certificate signed by unknown authority' until its CA is here. Up to 10. Paths are relative to the directory Terraform runs in (infra/) or absolute, and the files are read at plan. Empty (default) leaves the cluster's custom CA trust unset. A change replaces every node: AKS creates new nodes, drains and deletes the old ones. The module owns the setting because the provider reads it back from the cluster, so a CA added by hand with az aks update is removed by the next apply. Nodes only: pods keep their own trust store, and LangSmith's is langsmith_custom_ca_secret_name. Each file becomes one entry, its content trimmed of surrounding whitespace with one trailing newline, and an entry may hold one certificate or a bundle of several. A cluster that already holds an entry keeps it, and the nodes plan no change, only when that stored value equals the file's trimmed content plus one newline, so to adopt an existing entry write the file from the cluster's value (az aks show, securityProfile.customCATrustCertificates, base64-decoded), bundle and comment lines included; an entry stored with no trailing newline, or more than one, cannot be matched by any file and is replaced once, with every node. A file holds certificate blocks (the BEGIN and END markers alone on their lines, base64 between, as the node's PEM decoder reads them), with comment lines starting with # and blank lines around them at most; a key, a byte-order mark, an openssl Bag Attributes preamble, a note after a marker or a commented-out certificate is refused. A bundle file is one entry toward the limit of 10. Ignored when create_cluster = false, and the file checks are skipped then. The files must stay in place for the life of the cluster: Terraform reads them at every plan, including the one for destroy, so a file that has gone blocks destroy until it is restored or removed from the list."
   default     = []
 
   validation {
@@ -1037,7 +1037,9 @@ variable "aks_custom_ca_trust_certificate_files" {
   }
 
   validation {
-    # At least one certificate per file. AKS takes each list element as one
+    # At least one certificate per file, counted by BEGIN markers that stand
+    # alone on their line, as the node's PEM decoder reads them: a commented-out
+    # certificate counts for nothing. AKS takes each list element as one
     # entry and the node's trust store loads every certificate in it, so a
     # bundle is one entry; the module never splits a file, it sends the file's
     # trimmed content plus one newline as one entry, which is what lets a
@@ -1045,8 +1047,8 @@ variable "aks_custom_ca_trust_certificate_files" {
     # split a file at blank lines into several entries; the module does not.)
     # try() rather than || : Terraform 1.11 evaluates both operands, so an
     # unreadable file would error here instead of failing the check above.
-    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) >= 1]) : true
-    error_message = "aks_custom_ca_trust_certificate_files names files that hold no certificate: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length(regexall("-----BEGIN CERTIFICATE-----", file(f))), 1) < 1])}. Each file holds one or more PEM certificates (-----BEGIN CERTIFICATE----- blocks); a private key, a CSR or an empty file is not a certificate."
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("(?m)^-----BEGIN CERTIFICATE-----$", file(f))), 1) >= 1]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files that hold no certificate: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length(regexall("(?m)^-----BEGIN CERTIFICATE-----$", file(f))), 1) < 1])}. Each file holds one or more PEM certificates (-----BEGIN CERTIFICATE----- blocks); a private key, a CSR or an empty file is not a certificate."
   }
 
   validation {
@@ -1058,8 +1060,12 @@ variable "aks_custom_ca_trust_certificate_files" {
 
   validation {
     # Certificate blocks, comment lines (#) and blank lines, and nothing else,
-    # anywhere in the file. With the blocks and the comment lines removed,
-    # only whitespace may remain. A server PEM that also holds the key passes
+    # anywhere in the file. A block is what the node's PEM decoder takes: the
+    # BEGIN and END markers alone on their lines and base64 lines between, so
+    # a marker with a note after it, a body that is not base64, or a block
+    # commented out line by line is not a block, and the file is refused
+    # rather than replace every node for a CA that never loads. With the
+    # blocks and the comment lines removed, only whitespace may remain. A server PEM that also holds the key passes
     # the count above, and the cluster module would then put the key in plan
     # output, in state and in the request to AKS; the key block remains here, so it
     # is refused, before or after the certificate. A byte-order mark remains
@@ -1070,8 +1076,8 @@ variable "aks_custom_ca_trust_certificate_files" {
     # from such a file, and stripping it would change the encoded value and
     # replace every node once. try() so a missing file is reported by the
     # check above.
-    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(trimspace(replace(replace(file(f), "/-----BEGIN CERTIFICATE-----[^-]*-----END CERTIFICATE-----/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)]) : true
-    error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate blocks: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(trimspace(replace(replace(file(f), "/-----BEGIN CERTIFICATE-----[^-]*-----END CERTIFICATE-----/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)])}. A private key, a byte-order mark, or an openssl Bag Attributes preamble all count; comment lines starting with # and blank lines are fine. On a cluster that already holds the entry with that extra content, a stripped file encodes to a different value, and the next apply replaces every node once. Otherwise keep the -----BEGIN CERTIFICATE----- blocks, with comment lines at most: openssl x509 -in <file> -out <file>.crt writes a single certificate alone."
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate blocks, or a block that is not whole lines (the BEGIN and END markers alone on theirs, base64 between): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)])}. A private key, a byte-order mark, an openssl Bag Attributes preamble, a note after an END marker, or a certificate commented out line by line all count; comment lines starting with # and blank lines are fine. On a cluster that already holds the entry with that extra content, a stripped file encodes to a different value, and the next apply replaces every node once. Otherwise keep every block and drop the rest: sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' <file> > <file>.crt keeps every certificate of a bundle, where openssl x509 -in <file> -out <file>.crt writes only the first."
   }
 }
 
