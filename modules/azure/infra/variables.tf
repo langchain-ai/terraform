@@ -1394,7 +1394,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins for Azure. enable_smithdb requires an explicit chart line selection; see SMITHDB.md, 'Version requirements'."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x; see SMITHDB.md, 'Version requirements'."
   default     = ""
 }
 
@@ -1411,6 +1411,11 @@ variable "tls_certificate_source" {
   validation {
     condition     = var.tls_certificate_source != "dns01" || var.install_cert_manager
     error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
+  }
+
+  validation {
+    condition     = var.tls_certificate_source != "letsencrypt" || !contains(["istio-addon", "agic"], var.ingress_controller)
+    error_message = "tls_certificate_source = \"letsencrypt\" does not work with ingress_controller = \"${var.ingress_controller}\": the HTTP-01 challenge never reaches cert-manager (istio-addon registers no IngressClass, and Application Gateway rewrites the challenge path). Use \"dns01\" with langsmith_domain set, \"existing\", or \"none\". See INGRESS_CONTROLLERS.md."
   }
 }
 
