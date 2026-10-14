@@ -1,0 +1,77 @@
+README.md
+  s_b081d01eaf8fac::t_67283a32a3995d 24-32
+  s_b081d01eaf8fac::t_8702f52f4c8685 33
+modules/baremetal/infra/modules/metallb/charts/metallb-config/templates/pool.yaml
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 1-14,30
+modules/baremetal/infra/modules/redis/main.tf
+  s_b081d01eaf8fac::t_ebbdb918ec1784 215-223
+modules/baremetal/infra/modules/metallb/charts/metallb-config/Chart.yaml
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 5
+modules/baremetal/helm/scripts/deploy.sh
+  s_b081d01eaf8fac::t_af316c7283ec97 44-58
+modules/baremetal/ARCHITECTURE.md
+  s_b081d01eaf8fac::t_c45a4b0a27b70e 55,59
+modules/baremetal/TROUBLESHOOTING.md
+  s_b081d01eaf8fac::t_c45a4b0a27b70e 18-20,35-37
+modules/baremetal/infra/modules/metallb/variables.tf
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 12-16
+modules/baremetal/infra/modules/postgres/main.tf
+  s_b081d01eaf8fac::t_ebbdb918ec1784 172-180
+.github/scripts/chart-line.sh
+  s_b081d01eaf8fac::t_af316c7283ec97 16
+modules/baremetal/infra/modules/rustfs/main.tf
+  s_b081d01eaf8fac::t_ebbdb918ec1784 229-237
+modules/baremetal/infra/variables.tf
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 256
+  s_b081d01eaf8fac::t_7fc899dee1dd54 242-245
+  s_b081d01eaf8fac::t_ebbdb918ec1784 238-239
+  s_b081d01eaf8fac::t_bfc5168f7f2bde 240-241
+modules/baremetal/infra/locals.tf
+  s_b081d01eaf8fac::t_c46e357d898438 239-242
+modules/baremetal/infra/modules/metallb/main.tf
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 65
+modules/baremetal/infra/tests/budget.tftest.hcl
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 10,212,217,223,229-236,238
+  s_b081d01eaf8fac::t_1aa3f8b82701b3 328-375
+  s_b081d01eaf8fac::t_6d2da53f6c727d 237
+modules/baremetal/SIZING.md
+  s_b081d01eaf8fac::t_67283a32a3995d 3-5
+modules/baremetal/helm/values/examples/langsmith-values-agent-deploys.yaml
+  s_b081d01eaf8fac::t_a2a5e9a9aa1426 1-3,6-17
+  s_b081d01eaf8fac::t_6935417c63e7ac 18-22
+modules/baremetal/infra/modules/metallb/charts/metallb-config/values.yaml
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 2
+modules/README.md
+  s_b081d01eaf8fac::t_67283a32a3995d 49-51,53-57
+modules/baremetal/infra/terraform.tfvars.example
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 27-29,32-33
+  s_b081d01eaf8fac::t_4d81c8f8764506 34
+modules/baremetal/SMITHDB.md
+  s_b081d01eaf8fac::t_67283a32a3995d 4-7,61-63
+modules/baremetal/infra/helm_values.tf
+  s_b081d01eaf8fac::t_7fc899dee1dd54 42-50
+  s_b081d01eaf8fac::t_a2a5e9a9aa1426 70-85
+modules/baremetal/infra/main.tf
+  s_b081d01eaf8fac::t_aaf0ce9254f6fe 50,107-108
+  s_b081d01eaf8fac::t_7fc899dee1dd54 131-166
+modules/baremetal/README.md
+  s_b081d01eaf8fac::t_051ed827a659fc 1,3,5,7-12,14,16,18-45,114,119-120,127-130,208,212,264-268
+  s_b081d01eaf8fac::t_6935417c63e7ac 269-277
+  s_b081d01eaf8fac::t_0df4b9da3229e3 278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1ecff47d158200ed7fe51a025df73da6f8f4e295",
+  "prompts": {},
+  "sessions": {
+    "s_b081d01eaf8fac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60a35b35-90eb-4a7e-b6de-e8caa7a6fc70",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}
