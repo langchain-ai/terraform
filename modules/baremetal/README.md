@@ -209,7 +209,7 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 | `sizing_profile` | no (`minimum`) | see above |
 | `langsmith_domain`, `langsmith_url_scheme` | no | hostname and scheme (default `http://<gateway IP>`) |
 | `envoy_gateway_route_timeout` | no (`60s`) | request timeout on every route; Envoy's own default of 15 s cuts off slow trace reads |
-| `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sandboxes`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules |
+| `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules |
 | `enable_cloudflare_tunnel` + `TF_VAR_cloudflare_tunnel_token` | no | public HTTPS through a Cloudflare Tunnel |
 | `node_reserved`, `max_request_ratio` | no | budget gate headroom |
 | `*_image`, `*_chart_version` | no | pinned versions |

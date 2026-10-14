@@ -92,10 +92,6 @@ locals {
   #   redis-langsmith     one logical DB per product (standalone Redis, not Cluster)
   #   postgres-smithdb    SmithDB metastore only
   #   rustfs-smithdb      SmithDB trace data (RustFS, S3-compatible)
-  # Sandboxes get their own redis-sandbox (JuiceFS metadata, AOF) and
-  # rustfs-sandbox (JuiceFS data): their loss corrupts sandbox filesystems, so
-  # they never share with the rest.
-  #
   # production* start from the chart's own in-cluster defaults; tune after
   # measuring real load.
   #----------------------------------------------------------------------------
@@ -184,17 +180,7 @@ locals {
       }) : d
     )
   }
-  datastores_sandbox = var.enable_sandboxes ? {
-    slim = {
-      redis_sandbox  = { cpu_m = 100, mem_mi = 256, lim_cpu_m = 500, lim_mem_mi = 1024, storage_gi = 5 }
-      rustfs_sandbox = { cpu_m = 250, mem_mi = 512, lim_cpu_m = 1000, lim_mem_mi = 2048, storage_gi = 50 }
-    }
-    full = {
-      redis_sandbox  = { cpu_m = 250, mem_mi = 1024, lim_cpu_m = 1000, lim_mem_mi = 4096, storage_gi = 20 }
-      rustfs_sandbox = { cpu_m = 1000, mem_mi = 2048, lim_cpu_m = 2000, lim_mem_mi = 4096, storage_gi = 200 }
-    }
-  }[local.feature_class] : {}
-  datastores = merge(local.datastores_core, local.datastores_sandbox)
+  datastores = local.datastores_core
 
   # Kubernetes strings for the resources that will consume these sizes.
   datastores_k8s = {
@@ -337,7 +323,7 @@ locals {
 
   #----------------------------------------------------------------------------
   # Budget per pool: what its pods ask for vs what its nodes can give.
-  # control-plane and sandbox-host nodes are in no pool.
+  # control-plane nodes are in no pool.
   #----------------------------------------------------------------------------
   pool_pods = {
     for pool, nodes in local.node_pools : pool => [for p in local.pods_parsed : p if p.pool == pool]
@@ -380,7 +366,6 @@ locals {
     smithdb_pools      = local.smithdb_pool
     features           = local.enabled_features
     keda               = local.install_keda
-    sandboxes          = var.enable_sandboxes
     agent_deployments  = var.expected_agent_deployments
     postgres_databases = local.postgres_databases
     # Top-level numbers are the workers pool, where LangSmith itself runs.

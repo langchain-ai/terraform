@@ -134,37 +134,6 @@ run "agent_estimate_requires_deployments" {
   expect_failures = [var.expected_agent_deployments]
 }
 
-run "sandboxes_require_sandbox_host_node" {
-  command = plan
-
-  variables {
-    sizing_profile   = "lab"
-    enable_sandboxes = true
-  }
-
-  expect_failures = [var.enable_sandboxes]
-}
-
-run "sandbox_host_node_is_outside_the_budget" {
-  command = plan
-
-  variables {
-    sizing_profile   = "lab"
-    enable_sandboxes = true
-    cluster_nodes = {
-      worker-1  = { cpu = 6, memory_gi = 15.4, disk_gi = 208 }
-      worker-2  = { cpu = 6, memory_gi = 15.3, disk_gi = 208 }
-      worker-3  = { cpu = 6, memory_gi = 23.2, disk_gi = 208 }
-      gpu-tower = { cpu = 16, memory_gi = 38, disk_gi = 400, role = "sandbox-host" }
-    }
-  }
-
-  assert {
-    condition     = output.budget.ceiling.cpu == 11.55
-    error_message = "sandbox-host capacity must not raise the LangSmith ceiling."
-  }
-}
-
 run "small_cluster_creates_no_smithdb_node_labels_or_taints" {
   command = plan
 

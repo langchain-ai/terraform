@@ -13,7 +13,7 @@ kube_context    = "my-cluster" # required on purpose: never the current context
 # Nodes as Kubernetes sees them (the budget gate checks the profile against
 # these). Keys must be the Kubernetes node names. Allocatable values from:
 #   kubectl --context my-cluster get nodes -o custom-columns=NODE:.metadata.name,CPU:.status.allocatable.cpu,MEM:.status.allocatable.memory,EPH:.status.allocatable.ephemeral-storage
-# Roles: worker (default) | control-plane | sandbox-host | smithdb-cache | smithdb-compute
+# Roles: worker (default) | control-plane | smithdb-cache | smithdb-compute
 cluster_nodes = {
   cp-1     = { cpu = 4, memory_gi = 15.5, disk_gi = 200, role = "control-plane" }
   worker-a = { cpu = 8, memory_gi = 31.0, disk_gi = 400 }
@@ -46,7 +46,6 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # enable_fleet               = true # Fleet (replaces Agent Builder): db langsmith_fleet, Redis DB 1
 # enable_standalone_polly    = true # db langsmith_polly, Redis DB 2
 # enable_standalone_insights = true # db langsmith_insights, Redis DB 3
-# enable_sandboxes           = true # needs a cluster_nodes entry with role = "sandbox-host"
 # enable_sso_oidc            = true # enable only after the first admin login works
 # enable_usage_telemetry     = true
 

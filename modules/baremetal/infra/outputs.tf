@@ -79,7 +79,6 @@ output "features" {
     deployments  = var.enable_deployments
     blob_storage = var.enable_blob_storage
     keda         = local.install_keda
-    sandboxes    = var.enable_sandboxes
     sso_oidc     = var.enable_sso_oidc
     standalone = {
       for name, db in local.standalone_features : name => {

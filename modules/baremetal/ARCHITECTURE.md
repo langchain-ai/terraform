@@ -142,7 +142,7 @@ count in the budget and work-heavy services need the headroom. The sizing and fe
 resources for these components. Settings in your own `langsmith-values-local.yaml` still override everything.
 
 Nodes with role `smithdb-cache` or `smithdb-compute` get labels and taints so SmithDB's cache-heavy or CPU-heavy
-components can be pinned to them; `sandbox-host` nodes are excluded from the LangSmith budget.
+components can be pinned to them.
 
 ## Security notes
 

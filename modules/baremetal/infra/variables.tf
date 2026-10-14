@@ -40,7 +40,6 @@ variable "cluster_nodes" {
     Nodes as Kubernetes sees them: allocatable CPU (cores), memory (GiB), and
     ephemeral storage (GiB) from `kubectl get nodes -o custom-columns=...`.
     Only role = "worker" nodes count toward the LangSmith budget.
-    role = "sandbox-host" marks KVM nodes reserved for sandbox VMs.
     role = "smithdb-cache" / "smithdb-compute" dedicates nodes to SmithDB
     (labeled and tainted by Terraform), like the cloud modules' node pools.
     Map keys must be the Kubernetes node names.
@@ -52,8 +51,8 @@ variable "cluster_nodes" {
   }
 
   validation {
-    condition     = alltrue([for n in values(var.cluster_nodes) : contains(["worker", "control-plane", "sandbox-host", "smithdb-cache", "smithdb-compute"], n.role)])
-    error_message = "role must be one of: worker, control-plane, sandbox-host, smithdb-cache, smithdb-compute."
+    condition     = alltrue([for n in values(var.cluster_nodes) : contains(["worker", "control-plane", "smithdb-cache", "smithdb-compute"], n.role)])
+    error_message = "role must be one of: worker, control-plane, smithdb-cache, smithdb-compute."
   }
 }
 
@@ -123,17 +122,6 @@ variable "enable_standalone_polly" {
   type        = bool
   default     = false
   description = "Polly standalone deployment. Uses database langsmith_polly on postgres-langsmith and Redis DB 2."
-}
-
-variable "enable_sandboxes" {
-  type        = bool
-  default     = false
-  description = "LangSmith Sandboxes: dedicated redis-sandbox and rustfs-sandbox for JuiceFS, and at least one sandbox-host node with KVM."
-
-  validation {
-    condition     = !var.enable_sandboxes || length([for n in values(var.cluster_nodes) : n if n.role == "sandbox-host"]) > 0
-    error_message = "enable_sandboxes requires at least one cluster_nodes entry with role = \"sandbox-host\" (a KVM node kept out of the LangSmith budget)."
-  }
 }
 
 variable "enable_sso_oidc" {
