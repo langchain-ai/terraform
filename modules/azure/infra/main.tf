@@ -285,6 +285,7 @@ locals {
       kubelet_disk_type = "OS"
       zones             = var.availability_zones
       os_sku            = null
+      os_disk_size_gb   = var.sandbox_host_os_disk_size_gb
     }
   } : {}
 
@@ -2038,6 +2039,16 @@ module "redis" {
 # sharded database rejects. Its private endpoint goes in the AKS subnet beside
 # the Blob endpoints, so no Redis subnet is needed when redis_source is
 # in-cluster, and it shares the LangSmith Redis's DNS zone when there is one.
+
+# On an attached cluster whose pools the customer owns, Terraform adds no
+# sandboxhost pool, and sandbox-host stays Pending until one exists. A warning
+# rather than a precondition, because bringing that pool is a supported path.
+check "sandbox_pool_on_attached_cluster" {
+  assert {
+    condition     = !var.enable_sandboxes || var.create_cluster || var.existing_cluster_node_pools_managed
+    error_message = "enable_sandboxes = true on an attached cluster with existing_cluster_node_pools_managed = false: Terraform does not create the sandboxhost pool. Add a pool with nested virtualization, the sandbox.langsmith.com/host=true label, and the sandbox.langsmith.com/host=true:NoSchedule taint, and set sandbox_host_min_count and sandbox_host_max_count to its bounds, which init-values.sh writes as the sandbox-host replica bounds. Or set existing_cluster_node_pools_managed = true so Terraform adds the pool."
+  }
+}
 
 module "sandbox_juicefs_redis" {
   count                   = var.enable_sandboxes ? 1 : 0

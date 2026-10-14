@@ -208,6 +208,44 @@ run "sandboxhost_follows_availability_zones" {
   }
 }
 
+run "sandboxhost_os_disk_defaults_to_200_gb" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+  }
+
+  assert {
+    condition     = local.aks_managed_node_pools["sandboxhost"].os_disk_size_gb == 200
+    error_message = "The sandboxhost pool did not default to a 200 GB OS disk"
+  }
+}
+
+run "sandboxhost_os_disk_follows_the_variable" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_host_os_disk_size_gb = 512
+  }
+
+  assert {
+    condition     = local.aks_managed_node_pools["sandboxhost"].os_disk_size_gb == 512
+    error_message = "The sandboxhost pool did not take sandbox_host_os_disk_size_gb"
+  }
+}
+
+run "sandbox_host_os_disk_below_30_gb_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_host_os_disk_size_gb = 20
+  }
+
+  expect_failures = [var.sandbox_host_os_disk_size_gb]
+}
+
 run "sandboxhost_is_regional_without_availability_zones" {
   command = plan
 

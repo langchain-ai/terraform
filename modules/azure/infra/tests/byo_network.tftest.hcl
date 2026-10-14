@@ -861,6 +861,9 @@ run "an_attached_cluster_gets_no_sandbox_pool_by_default" {
     enable_sandboxes                     = true
   }
 
+  # The plan warns that there is no pool, so sandbox-host does not sit Pending unexplained.
+  expect_failures = [check.sandbox_pool_on_attached_cluster]
+
   assert {
     condition     = !contains(keys(local.aks_managed_node_pools), "sandboxhost")
     error_message = "An attached cluster with existing_cluster_node_pools_managed = false got the sandboxhost pool"

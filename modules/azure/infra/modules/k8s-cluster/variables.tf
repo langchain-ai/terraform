@@ -111,6 +111,7 @@ variable "additional_node_pools" {
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
     zones             = optional(list(string))
+    os_disk_size_gb   = optional(number)
   }))
   description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku and zones to availability_zones; both are validated in the root module."
   default = {

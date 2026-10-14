@@ -968,7 +968,8 @@ Managed Redis.
   that ships with macOS has no Ed25519, so run `brew install openssl@3` and put it first on `PATH`.
 - On an attached cluster (`create_cluster = false`), `existing_cluster_node_pools_managed = true`, so Terraform adds the
   `sandboxhost` pool. Otherwise, add a pool with nested virtualization yourself, with the `sandbox.langsmith.com/host=true`
-  label and the `sandbox.langsmith.com/host=true:NoSchedule` taint.
+  label and the `sandbox.langsmith.com/host=true:NoSchedule` taint, and set `sandbox_host_min_count` and
+  `sandbox_host_max_count` to its bounds. In that setup, every plan warns that Terraform adds no pool.
 - Azure commercial cloud. Azure Government has no Azure Managed Redis, so the plan fails with
   `azure_environment = "usgovernment"`.
 
@@ -998,6 +999,8 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
 - `sandbox-host` keeps one empty host above current demand, so the pool runs one node more than its sandboxes need, up
   to `sandbox_host_max_count`.
 - To scale further, raise `sandbox_host_max_count`, then run `make apply`, `make init-values`, and `make deploy`.
+- `sandbox_host_os_disk_size_gb` sets each node's OS disk, which holds the JuiceFS cache, and defaults to `200`. A
+  change rotates the pool through a temporary pool.
 - `sandbox-host` has the pod annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so the autoscaler
   does not remove a node that runs sandboxes.
 - The `juicefs-format` Job prefers a sandbox node but runs on any Linux node, so it does not wait for the pool to scale

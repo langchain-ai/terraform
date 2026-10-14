@@ -1044,8 +1044,9 @@ variable "additional_node_pools" {
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
     zones             = optional(list(string))
+    os_disk_size_gb   = optional(number)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones is the pool's availability zones, each \"1\", \"2\" or \"3\"; unset (default) means availability_zones. Set it for a pool whose VM size is not offered in every zone, or [] for a regional pool under a zoned availability_zones. Zones apply at creation only: an existing pool keeps the zones it was created with, and plan warns when they differ from the request. A pool with zones of its own satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md)."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones is the pool's availability zones, each \"1\", \"2\" or \"3\"; unset (default) means availability_zones. Set it for a pool whose VM size is not offered in every zone, or [] for a regional pool under a zoned availability_zones. Zones apply at creation only: an existing pool keeps the zones it was created with, and plan warns when they differ from the request. A pool with zones of its own satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md). os_disk_size_gb sets the OS disk in GB; unset means the AKS default for the VM size, and a change rotates the pool through a temporary pool."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
@@ -1372,6 +1373,17 @@ variable "sandbox_host_max_count" {
   validation {
     condition     = var.sandbox_host_max_count >= 1
     error_message = "sandbox_host_max_count must be 1 or greater."
+  }
+}
+
+variable "sandbox_host_os_disk_size_gb" {
+  type        = number
+  description = "OS disk size in GB for sandbox-host nodes. The JuiceFS cache and sandbox images live on this disk. A change rotates the pool through a temporary pool, so the region needs vCPU quota for one more node, or drain the pool to 0 nodes first."
+  default     = 200
+
+  validation {
+    condition     = var.sandbox_host_os_disk_size_gb >= 30 && var.sandbox_host_os_disk_size_gb <= 2048
+    error_message = "sandbox_host_os_disk_size_gb must be between 30 and 2048."
   }
 }
 
