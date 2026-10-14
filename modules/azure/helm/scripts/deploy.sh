@@ -944,6 +944,57 @@ else
 fi
 echo ""
 
+# ── Long-running streams through Envoy Gateway ───────────────────────────
+# Envoy Gateway applies an effective 15 s response timeout to the chart's
+# catch-all HTTPRoute, which has no timeouts field. Fleet run streams and the
+# Deployments proxy on host-backend run longer than that, and Envoy resets
+# the stream mid-response (response_flags=UT; the browser shows
+# net::ERR_HTTP2_PROTOCOL_ERROR). A second HTTPRoute on the same Gateway and
+# hostname with only those path prefixes and timeouts.request: 0s takes
+# precedence for them, since the longer prefix wins, and every other path
+# keeps the default. The same route as the AWS module's
+# langsmith-fleet-streams. Applied with Fleet or Deployments on, removed when
+# both are off, so a feature turned off takes its route with it.
+if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  if [[ "$_enable_fleet" == "true" || "$_enable_deployments" == "true" ]]; then
+    if [[ -z "$_configured_hostname" ]]; then
+      warn "Fleet or Deployments is on, but values-overrides.yaml has no hostname, so the long-running-stream HTTPRoute was not created"
+    else
+      kubectl apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: langsmith-fleet-streams
+  namespace: ${NAMESPACE}
+spec:
+  parentRefs:
+  - name: langsmith-gateway
+  hostnames:
+  - "${_configured_hostname}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /api/v1/fleet/threads
+    - path:
+        type: PathPrefix
+        value: /api/v1/fleet/lg
+    - path:
+        type: PathPrefix
+        value: /api-host/v2
+    backendRefs:
+    - name: ${CHART_FULLNAME}-frontend
+      port: 80
+    timeouts:
+      request: 0s
+EOF
+      pass "HTTPRoute langsmith-fleet-streams: no request timeout on /api/v1/fleet/threads, /api/v1/fleet/lg and /api-host/v2"
+    fi
+  else
+    kubectl delete httproute langsmith-fleet-streams -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+fi
+
 # ── Post-deploy Envoy Gateway: LoadBalancer IP ────────────────────────────
 # The EnvoyProxy (pre-deploy block above) put the DNS label on the proxy Service;
 # this only reports the address Azure gave it.
