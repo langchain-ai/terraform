@@ -113,6 +113,13 @@ locals {
     "storage.buckets.getIamPolicy",
     "storage.buckets.setIamPolicy",
     "storage.buckets.update",
+    # The sandbox hosts' grant is on the bucket's smithbox/ managed folder.
+    "storage.managedFolders.create",
+    "storage.managedFolders.delete",
+    "storage.managedFolders.get",
+    "storage.managedFolders.getIamPolicy",
+    "storage.managedFolders.list",
+    "storage.managedFolders.setIamPolicy",
     "storage.objects.delete",
     "storage.objects.list",
   ]
