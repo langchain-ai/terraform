@@ -1042,10 +1042,10 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
-    zones             = optional(list(string), [])
     os_sku            = optional(string)
+    zones             = optional(list(string))
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones places a pool in availability zones independently of availability_zones; set it when the pool is created. A zonal pool satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md)."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones is the pool's availability zones, each \"1\", \"2\" or \"3\"; unset (default) means availability_zones. Set it for a pool whose VM size is not offered in every zone, or [] for a regional pool under a zoned availability_zones. Zones apply at creation only: an existing pool keeps the zones it was created with, and plan warns when they differ from the request. A pool with zones of its own satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md)."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
@@ -1059,6 +1059,13 @@ variable "additional_node_pools" {
   validation {
     condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null ? true : contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], pool.os_sku)])
     error_message = "additional_node_pools: os_sku must be one of AzureLinux, AzureLinux3, Ubuntu or Ubuntu2204, or left unset to follow aks_os_sku."
+  }
+
+  # The same ternary: [for z in pool.zones] on a pool that sets none would fail
+  # on the null before 1.12. The message names each pool with a bad value.
+  validation {
+    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.zones == null ? true : alltrue([for z in pool.zones : contains(["1", "2", "3"], z)])])
+    error_message = "additional_node_pools: zones must list only \"1\", \"2\" or \"3\", the names Azure gives availability zones in every region that has them (${join(", ", [for name, pool in var.additional_node_pools : "${name} = [${join(",", pool.zones)}]" if(pool.zones == null ? false : !alltrue([for z in pool.zones : contains(["1", "2", "3"], z)]))])}). Leave zones unset to follow availability_zones."
   }
 }
 
@@ -1638,7 +1645,7 @@ variable "ingress_ip" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pool and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Applies at creation only."
+  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pools and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Covers the default node pool and every additional pool, unless a pool sets its own zones in additional_node_pools. Applies at creation only: a pool keeps the zones it was created with, and plan warns when they differ from the request."
   default     = []
 }
 

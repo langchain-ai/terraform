@@ -191,6 +191,37 @@ run "sandbox_host_replicas_follow_the_pool_counts" {
   }
 }
 
+# The sandbox-host pool takes availability_zones like any other pool, so
+# SmithDB's rule against regional pools on a zoned cluster accepts it.
+run "sandboxhost_follows_availability_zones" {
+  command = plan
+
+  variables {
+    enable_sandboxes   = true
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+  }
+
+  assert {
+    condition     = toset(module.aks.node_pool_zones["sandboxhost"]) == toset(["1", "2", "3"])
+    error_message = "The sandboxhost pool did not follow availability_zones"
+  }
+}
+
+run "sandboxhost_is_regional_without_availability_zones" {
+  command = plan
+
+  variables {
+    enable_sandboxes   = true
+    availability_zones = []
+  }
+
+  assert {
+    condition     = module.aks.node_pool_zones["sandboxhost"] == null
+    error_message = "The sandboxhost pool planned zones on a nonzonal cluster"
+  }
+}
+
 # With redis_source = external the JuiceFS Redis registers in the LangSmith
 # Redis's private DNS zone: Azure rejects a second privatelink.redis.azure.net
 # link in the same VNet. With in-cluster Redis it creates the zone itself. Each

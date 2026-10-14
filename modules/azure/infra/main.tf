@@ -283,7 +283,7 @@ locals {
       }
       node_taints       = ["sandbox.langsmith.com/host=true:NoSchedule"]
       kubelet_disk_type = "OS"
-      zones             = []
+      zones             = var.availability_zones
       os_sku            = null
     }
   } : {}
@@ -294,11 +294,12 @@ locals {
   # Terraform doesn't attach pools to a cluster it doesn't manage.
   aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
-  # Additional pools this module creates with zones set. One of these gives
-  # SmithDB zonal nodes for its Premium SSD v2 cache disks on a cluster whose
-  # default pool was built nonzonal.
+  # Additional pools this module creates that resolve to zones: their own, or
+  # availability_zones when they set none. One of these gives SmithDB zonal
+  # nodes for its Premium SSD v2 cache disks on a cluster whose default pool
+  # was built nonzonal.
   zonal_node_pools = [
-    for name, pool in local.aks_managed_node_pools : name if length(pool.zones) > 0
+    for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) > 0
   ]
 
   # One row per pool, so an operator can see which pool dominates the total
@@ -1008,6 +1009,22 @@ resource "terraform_data" "validate_network" {
       error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
     }
 
+    # On a zoned cluster, a pool that sets zones = [] is regional, and SmithDB's
+    # components carry no nodeSelector by default, so they can land on it, where
+    # a Premium SSD v2 cache volume cannot attach. Refuse that. On a nonzonal
+    # cluster (availability_zones empty) the first SmithDB rule above already
+    # requires a zonal additional pool, and SMITHDB.md pins SmithDB to it; the other
+    # pools are regional by construction there, so this rule stands down. This
+    # reads the requested zones, not the live ones: a pool created regional
+    # before availability_zones reached additional pools passes, and
+    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
+    precondition {
+      condition = !var.enable_smithdb || length(var.availability_zones) == 0 || alltrue([
+        for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+      ])
+      error_message = "enable_smithdb = true with availability_zones set refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+    }
+
     precondition {
       condition     = !var.enable_sandboxes || var.sandbox_host_max_count >= var.sandbox_host_min_count
       error_message = "sandbox_host_max_count (${var.sandbox_host_max_count}) must be at least sandbox_host_min_count (${var.sandbox_host_min_count})."
@@ -1325,7 +1342,9 @@ module "aks" {
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
