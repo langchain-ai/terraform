@@ -76,21 +76,3 @@ variable "existing_security_group_id" {
   description = "ID of an existing security group to attach to the bastion instead of creating one. Terraform does not manage rules on a supplied group; it must already allow the access this bastion needs. enable_ssh/ssh_allowed_cidrs then only gate the SSH ingress rule Terraform would otherwise write, which is skipped for a supplied group."
   default     = null
 }
-
-variable "iam_permissions_boundary_arn" {
-  type        = string
-  description = "Permissions boundary policy ARN for the IAM roles this module creates. Null sets no boundary."
-  default     = null
-}
-
-variable "iam_role_path" {
-  type        = string
-  description = "IAM path for the IAM roles and instance profiles this module creates."
-  default     = "/"
-}
-
-variable "tools_s3_uri" {
-  type        = string
-  description = "S3 prefix holding kubectl, helm, and terraform binaries. When set, user data copies them from there instead of downloading them, and the role can read that prefix."
-  default     = ""
-}

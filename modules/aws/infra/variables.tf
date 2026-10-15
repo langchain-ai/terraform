@@ -65,7 +65,7 @@ variable "eks_node_groups_private_subnets_only" {
 
 variable "enable_internet_egress" {
   type        = bool
-  description = "Give the cluster a route to the internet. False creates no NAT gateway and no internet gateway in the module-created VPC, and requires an internal ALB, a bastion without SSH, and no Network Firewall. Pair it with create_vpc_endpoints."
+  description = "Give the cluster a route to the internet. False creates no NAT gateway and no internet gateway in the module-created VPC, and requires an internal ALB, no bastion, and no Network Firewall. Pair it with create_vpc_endpoints."
   default     = true
 }
 
@@ -597,18 +597,6 @@ variable "create_bastion" {
   default     = false
 }
 
-variable "fix_bastion_names" {
-  type        = bool
-  description = "Name the bastion role, instance profile, and security group <name_prefix>-<environment>-bastion instead of <name_prefix>-<environment>-bastion-bastion. Changing it on an existing bastion replaces them."
-  default     = false
-}
-
-variable "bastion_cluster_admin" {
-  type        = bool
-  description = "Give the bastion role cluster admin through an EKS access entry, so you can run kubectl, helm, and Terraform from the bastion. Anyone who can open a session on the bastion gets cluster admin. Requires create_bastion = true."
-  default     = false
-}
-
 variable "bastion_instance_type" {
   type        = string
   description = "EC2 instance type for the bastion host."
@@ -637,17 +625,6 @@ variable "bastion_root_volume_size_gb" {
   type        = number
   description = "Root EBS volume size in GB for the bastion host."
   default     = 20
-}
-
-variable "bastion_tools_s3_uri" {
-  type        = string
-  description = "S3 prefix holding kubectl, helm, and terraform Linux amd64 binaries, such as s3://my-bucket/bastion-tools. When set, the bastion copies them from there instead of downloading them from the internet. Required with enable_internet_egress = false and create_bastion = true."
-  default     = ""
-
-  validation {
-    condition     = var.bastion_tools_s3_uri == "" || can(regex("^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9](/[A-Za-z0-9._-]+)*$", var.bastion_tools_s3_uri))
-    error_message = "bastion_tools_s3_uri must look like s3://bucket/prefix, with no trailing slash."
-  }
 }
 
 variable "bastion_existing_security_group_id" {
@@ -770,7 +747,7 @@ variable "s3_versioning_enabled" {
 # IAM roles
 variable "iam_permissions_boundary_arn" {
   type        = string
-  description = "IAM policy ARN set as the permissions boundary on every IAM role this module creates: the EKS cluster and node roles, the Karpenter node role, each add-on and IRSA role, and the bastion role. Leave null for no boundary."
+  description = "IAM policy ARN set as the permissions boundary on every IAM role this module creates: the EKS cluster and node roles, the Karpenter node role, and each add-on and IRSA role. The bastion role takes none. Leave null for no boundary."
   default     = null
 
   validation {
@@ -781,7 +758,7 @@ variable "iam_permissions_boundary_arn" {
 
 variable "iam_role_path" {
   type        = string
-  description = "IAM path for every IAM role and instance profile this module creates. Changing it on an existing deployment replaces those roles."
+  description = "IAM path for every IAM role and instance profile this module creates except the bastion's. Changing it on an existing deployment replaces those roles."
   default     = "/"
 
   validation {

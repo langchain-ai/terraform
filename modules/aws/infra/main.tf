@@ -175,11 +175,6 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = !var.bastion_cluster_admin || var.create_bastion
-      error_message = "bastion_cluster_admin grants the bastion role cluster admin, so it needs create_bastion = true."
-    }
-
-    precondition {
       condition     = var.enable_public_eks_cluster || var.create_bastion || length(var.eks_private_access_cidrs) > 0
       error_message = "A private-only EKS endpoint needs a way in. Set create_bastion = true, or set eks_private_access_cidrs to the CIDR your Terraform runs from."
     }
@@ -199,18 +194,13 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = var.enable_internet_egress || !var.create_bastion || !var.bastion_enable_ssh
-      error_message = "enable_internet_egress = false requires bastion_enable_ssh = false. The SSH bastion sits in a public subnet with a public IP; without SSH it uses SSM through the ssm, ssmmessages, and ec2messages endpoints."
+      condition     = var.enable_internet_egress || !var.create_bastion
+      error_message = "enable_internet_egress = false requires create_bastion = false. The bastion downloads kubectl, helm, and terraform from the internet. Set eks_private_access_cidrs to reach the cluster instead."
     }
 
     precondition {
       condition     = var.enable_internet_egress || !var.create_firewall
       error_message = "enable_internet_egress = false requires create_firewall = false. The Network Firewall filters traffic to the internet, and there is none."
-    }
-
-    precondition {
-      condition     = var.enable_internet_egress || !var.create_bastion || var.bastion_tools_s3_uri != ""
-      error_message = "enable_internet_egress = false with create_bastion = true requires bastion_tools_s3_uri. The bastion downloads kubectl, helm, and terraform from the internet otherwise."
     }
 
     precondition {
@@ -825,7 +815,7 @@ module "bastion" {
   source = "./modules/bastion"
   count  = var.create_bastion ? 1 : 0
 
-  name                = var.fix_bastion_names ? local.base_name : local.bastion_name
+  name                = local.bastion_name
   vpc_id              = local.vpc_id
   subnet_id           = var.bastion_enable_ssh ? local.public_subnets[0] : local.private_subnets[0]
   associate_public_ip = var.bastion_enable_ssh
@@ -839,44 +829,8 @@ module "bastion" {
   tags                = local.common_tags
 
   existing_security_group_id = var.bastion_existing_security_group_id
-  tools_s3_uri               = var.bastion_tools_s3_uri
-
-  iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
-  iam_role_path                = var.iam_role_path
 
   depends_on = [module.vpc]
-}
-
-# The bastion reaches the private API endpoint through the cluster security group.
-resource "aws_security_group_rule" "bastion_to_cluster_api" {
-  count = var.create_bastion ? 1 : 0
-
-  type                     = "ingress"
-  from_port                = 443
-  to_port                  = 443
-  protocol                 = "tcp"
-  security_group_id        = module.eks.cluster_security_group_id
-  source_security_group_id = module.bastion[0].security_group_id
-  description              = "Kubernetes API from the bastion"
-}
-
-resource "aws_eks_access_entry" "bastion" {
-  count = var.create_bastion && var.bastion_cluster_admin ? 1 : 0
-
-  cluster_name  = module.eks.cluster_name
-  principal_arn = module.bastion[0].iam_role_arn
-}
-
-resource "aws_eks_access_policy_association" "bastion" {
-  count = var.create_bastion && var.bastion_cluster_admin ? 1 : 0
-
-  cluster_name  = module.eks.cluster_name
-  principal_arn = aws_eks_access_entry.bastion[0].principal_arn
-  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-
-  access_scope {
-    type = "cluster"
-  }
 }
 
 # The ALB controller (installed by EKS blueprints) registers a mutating webhook

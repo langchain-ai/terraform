@@ -157,33 +157,6 @@ run "create_bastion_adds_only_the_bastion" {
     condition     = length(module.waf) == 0
     error_message = "create_bastion = true also planned the WAF"
   }
-  assert {
-    condition     = length(aws_security_group_rule.bastion_to_cluster_api) == 1
-    error_message = "create_bastion = true did not open 443 from the bastion to the cluster"
-  }
-  assert {
-    condition     = length(aws_eks_access_entry.bastion) == 0
-    error_message = "create_bastion = true granted cluster admin without bastion_cluster_admin"
-  }
-}
-
-run "bastion_cluster_admin_adds_the_access_entry" {
-  command = plan
-
-  variables {
-    create_bastion        = true
-    bastion_cluster_admin = true
-    fix_bastion_names     = true
-  }
-
-  assert {
-    condition     = length(aws_eks_access_entry.bastion) == 1
-    error_message = "bastion_cluster_admin = true did not plan the access entry"
-  }
-  assert {
-    condition     = aws_eks_access_policy_association.bastion[0].policy_arn == "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-    error_message = "bastion_cluster_admin = true did not associate the cluster admin policy"
-  }
 }
 
 # The DNS-01 Let's Encrypt path. The hosted zone and the contact address are
@@ -244,7 +217,6 @@ run "iam_boundary_and_path_reach_the_roles" {
   variables {
     iam_permissions_boundary_arn = "arn:aws:iam::123456789012:policy/plantest-boundary"
     iam_role_path                = "/langsmith/"
-    create_bastion               = true
     create_cert_manager_irsa     = true
     cert_manager_hosted_zone_id  = "Z00000000000000000001"
     letsencrypt_email            = "plan-tests@example.com"
@@ -824,23 +796,6 @@ run "no_internet_egress_drops_the_nat_gateway" {
   }
 }
 
-run "no_internet_egress_with_a_bastion_copies_tools_from_s3" {
-  command = plan
-
-  variables {
-    enable_internet_egress = false
-    alb_scheme             = "internal"
-    create_vpc_endpoints   = true
-    create_bastion         = true
-    bastion_tools_s3_uri   = "s3://tools-bucket/bastion"
-  }
-
-  assert {
-    condition     = length(module.bastion) == 1
-    error_message = "a bastion with bastion_tools_s3_uri did not plan without internet egress"
-  }
-}
-
 # Every release key at once, with both fields, so a type mismatch in any lookup
 # fails the plan.
 run "helm_chart_overrides_accept_every_release" {
@@ -1007,10 +962,6 @@ run "private_profile_plans" {
     vpc_map_public_ip_on_launch          = false
     alb_scheme                           = "internal"
     enable_public_eks_cluster            = false
-    create_bastion                       = true
-    bastion_cluster_admin                = true
-    fix_bastion_names                    = true
-    bastion_tools_s3_uri                 = "s3://my-tools-bucket/bastion"
     postgres_source                      = "external"
     redis_source                         = "external"
     tls_certificate_source               = "acm"
@@ -1027,7 +978,7 @@ run "private_profile_plans" {
     error_message = "the private profile did not plan the VPC endpoints"
   }
   assert {
-    condition     = length(module.bastion) == 1
-    error_message = "the private profile did not plan the bastion"
+    condition     = length(module.bastion) == 0
+    error_message = "the private profile planned a bastion"
   }
 }

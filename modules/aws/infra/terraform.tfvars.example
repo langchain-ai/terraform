@@ -149,8 +149,7 @@ create_vpc = true
 # vpc_map_public_ip_on_launch = false
 
 # No internet egress: no NAT or internet gateway in the created VPC. Requires
-# alb_scheme = "internal", bastion_enable_ssh = false, and create_firewall = false.
-# A bastion also needs bastion_tools_s3_uri.
+# alb_scheme = "internal", create_bastion = false, and create_firewall = false.
 # enable_internet_egress = false
 # Interface endpoints (ecr.api, ecr.dkr, sts, eks, ssm, ...) for a VPC without
 # them. Leave off if the VPC already has endpoints for these services.
@@ -169,7 +168,6 @@ create_vpc = true
 # envoy_proxy_image         = "<ecr>/docker.io/envoyproxy/envoy:distroless-v1.33.0"
 # langsmith_helm_repository = "oci://<ecr>/charts"   # read by make deploy
 # langsmith_image_registry  = "<ecr>"                # read by make deploy
-# bastion_tools_s3_uri      = "s3://my-tools-bucket/bastion"
 
 # BRING YOUR OWN VPC (BYOV) — only fill these in if create_vpc = false.
 # To find these values:

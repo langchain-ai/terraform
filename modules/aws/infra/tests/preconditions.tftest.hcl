@@ -118,16 +118,6 @@ run "existing_cert_manager_role_without_cert_manager_irsa_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "bastion_cluster_admin_without_a_bastion_is_rejected" {
-  command = plan
-
-  variables {
-    bastion_cluster_admin = true
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
 run "private_endpoint_without_a_way_in_is_rejected" {
   command = plan
 
@@ -171,14 +161,13 @@ run "no_egress_with_an_internet_facing_alb_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "no_egress_with_an_ssh_bastion_is_rejected" {
+run "no_egress_with_a_bastion_is_rejected" {
   command = plan
 
   variables {
     enable_internet_egress = false
     alb_scheme             = "internal"
     create_bastion         = true
-    bastion_enable_ssh     = true
   }
 
   expect_failures = [terraform_data.validate_inputs]
@@ -201,18 +190,6 @@ run "no_egress_with_the_network_firewall_is_rejected" {
       firewall_arn         = "arn:aws:network-firewall:us-east-2:123456789012:firewall/plan-tests"
       firewall_endpoint_id = "vpce-00000000000000001"
     }
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
-run "no_egress_with_a_downloading_bastion_is_rejected" {
-  command = plan
-
-  variables {
-    enable_internet_egress = false
-    alb_scheme             = "internal"
-    create_bastion         = true
   }
 
   expect_failures = [terraform_data.validate_inputs]

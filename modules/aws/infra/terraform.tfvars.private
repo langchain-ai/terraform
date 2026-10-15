@@ -62,14 +62,6 @@ eks_managed_node_groups = {
 }
 
 #------------------------------------------------------------------------------
-# Bastion — SSM only, for people working with the cluster after setup
-#------------------------------------------------------------------------------
-create_bastion        = true
-bastion_cluster_admin = true
-fix_bastion_names     = true
-bastion_tools_s3_uri  = "s3://my-tools-bucket/bastion" # ← change: kubectl, helm, terraform binaries
-
-#------------------------------------------------------------------------------
 # External Postgres + Redis
 #------------------------------------------------------------------------------
 postgres_source              = "external"

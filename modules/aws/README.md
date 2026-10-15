@@ -405,8 +405,8 @@ iam_role_path                = "/langsmith/"
 Both apply to every IAM role this module creates: the EKS cluster role, each
 node group role, the Karpenter node role and its instance profile, the EBS CSI,
 ALB controller, cluster-autoscaler, and Karpenter controller roles, the
-LangSmith, ESO, SmithDB, and cert-manager IRSA roles, and the bastion role and
-instance profile. The defaults (no boundary, path `/`) plan no changes.
+LangSmith, ESO, SmithDB, and cert-manager IRSA roles. The bastion role takes
+neither. The defaults (no boundary, path `/`) plan no changes.
 
 Set `iam_role_path` before the first apply. A path change replaces every role
 above, and the pods and nodes using them lose AWS access until the new roles
@@ -648,7 +648,7 @@ To start from every private setting at once, copy the private profile:
 cp infra/terraform.tfvars.private infra/terraform.tfvars
 ```
 
-It keeps the API endpoint private, keeps nodes off the public subnets without public IPs, removes internet egress, and creates the VPC endpoints. Change `eks_private_access_cidrs` to the network Terraform runs from, then work through the sections below for the bastion, the endpoints, and the mirror.
+It keeps the API endpoint private, keeps nodes off the public subnets without public IPs, removes internet egress, and creates the VPC endpoints. Change `eks_private_access_cidrs` to the network Terraform runs from, then work through the sections below for the endpoints and the mirror.
 
 ### How it works
 
@@ -660,8 +660,6 @@ enable_public_eks_cluster = false
 eks_private_access_cidrs  = ["10.100.0.0/16"]   # where Terraform runs
 ```
 
-If the endpoint may be public during setup, use a bastion. Terraform creates the bastion after the cluster, so the bastion cannot run the first apply.
-
 1. **First run from your workstation** — Deploy infrastructure with `create_bastion = true` and `enable_public_eks_cluster = true` (temporarily). This creates the bastion alongside everything else.
 2. **Switch to private** — Set `enable_public_eks_cluster = false` and re-apply. The EKS API endpoint becomes private-only.
 3. **All future work happens on the bastion** — SSM into the bastion, clone the repo, copy your `terraform.tfvars` and secrets, and run Pass 1/2 from there.
@@ -672,8 +670,6 @@ If the endpoint may be public during setup, use a bastion. Terraform creates the
 # terraform.tfvars
 enable_public_eks_cluster = false   # private API endpoint
 create_bastion            = true    # bastion for access
-bastion_cluster_admin     = true    # let the bastion role use the cluster
-fix_bastion_names         = true    # <base>-bastion, not <base>-bastion-bastion
 
 # Optional SSH (SSM is the default — no key needed):
 # bastion_key_name          = "my-keypair"
@@ -695,9 +691,7 @@ aws ssm start-session --target <instance-id> --region us-west-2
 
 ### Working from the bastion
 
-The bastion comes pre-installed with kubectl, helm, terraform, git, and jq. Kubeconfig is pre-configured for the EKS cluster. Terraform opens 443 from the bastion to the cluster API, and `bastion_cluster_admin = true` gives the bastion role cluster admin through an EKS access entry. Without it, `kubectl` on the bastion gets `Unauthorized`. Anyone who can open a session on the bastion gets that access.
-
-Set `fix_bastion_names` on a new bastion. On an existing one it replaces the role, instance profile, and security group.
+The bastion comes pre-installed with kubectl, helm, terraform, git, and jq. Kubeconfig is pre-configured for the EKS cluster.
 
 ```bash
 # After SSM-ing in:
@@ -735,7 +729,7 @@ alb_scheme             = "internal"
 create_vpc_endpoints   = true
 ```
 
-- The plan fails unless the ALB is internal, the bastion has no SSH (`bastion_enable_ssh = false`) and has `bastion_tools_s3_uri` set, and `create_firewall = false`.
+- The plan fails unless the ALB is internal, `create_bastion = false`, and `create_firewall = false`. Reach the cluster through `eks_private_access_cidrs`.
 - `create_vpc_endpoints` creates an interface endpoint with private DNS for each service in `vpc_endpoint_services`: `ecr.api`, `ecr.dkr`, `sts`, `ec2`, `logs`, `ssm`, `ssmmessages`, `ec2messages`, `elasticloadbalancing`, `autoscaling`, `eks`, `eks-auth`, `kms`, and `sqs`. The storage module already adds the S3 gateway endpoint that ECR image layers come through.
 - The endpoints go in the private subnets. To use dedicated subnets, set `vpc_endpoint_subnet_ids`, one per AZ.
 - If your VPC already has endpoints for these services, leave `create_vpc_endpoints = false`. A second endpoint with private DNS for the same service collides with the first.
@@ -763,7 +757,6 @@ helm_chart_overrides = {
 envoy_proxy_image         = "123456789012.dkr.ecr.us-east-2.amazonaws.com/docker.io/envoyproxy/envoy:distroless-v1.33.0"
 langsmith_helm_repository = "oci://123456789012.dkr.ecr.us-east-2.amazonaws.com/charts"
 langsmith_image_registry  = "123456789012.dkr.ecr.us-east-2.amazonaws.com"
-bastion_tools_s3_uri      = "s3://my-tools-bucket/bastion"
 ```
 
 - `helm_chart_overrides` takes these keys: `keda`, `cert_manager`, `external_secrets`, `envoy_gateway`, `istio_base`, `istiod`, `istio_ingress`, `ingress_nginx`, `aws_load_balancer_controller`, `metrics_server`, `cluster_autoscaler`, and `karpenter`. `repository` replaces the chart repository, which must hold the same chart at the same version. `values` is YAML passed to the release; a setting this module makes itself wins over the same key.
@@ -771,12 +764,11 @@ bastion_tools_s3_uri      = "s3://my-tools-bucket/bastion"
 - `envoy_proxy_image` sets the image of the Envoy proxy pods. Envoy Gateway creates them at runtime, so no chart value reaches them.
 - An ECR pull-through cache serves an upstream image under the rule's prefix. Name each prefix after its upstream registry (`docker.io`, `ghcr.io`, `quay.io`, `registry.k8s.io`, `public.ecr.aws`), so an override replaces only the registry part of an image path. `langsmith_image_registry` relies on this: the chart prepends it to image paths that start with `docker.io/`.
 - For a private OCI repository, log Helm in on the machine that runs Terraform and `make deploy`: `aws ecr get-login-password --region <region> | helm registry login --username AWS --password-stdin <registry>`.
-- `bastion_tools_s3_uri` names an S3 prefix holding Linux amd64 `kubectl`, `helm`, and `terraform` binaries. The bastion copies them from there instead of downloading them, and its role can read that prefix and nothing else.
 
 ### Important notes
 
 - The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
-- The bastion runs in a private subnet and connects to SSM through the NAT gateway or the `ssm`, `ssmmessages`, and `ec2messages` endpoints. Only with `bastion_enable_ssh = true` does it run in a public subnet with a public IP.
+- The bastion lives in a **public subnet** (for SSM agent connectivity). It does not need a public IP if your VPC has VPC endpoints for SSM (`ssm`, `ssmmessages`, `ec2messages`).
 - When the EKS API is private, `terraform plan/apply` targeting EKS resources **must** be run from within the VPC (i.e., the bastion). Running from your laptop will timeout.
 
 ---
@@ -1275,7 +1267,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `vpc_cidr_block` | `null` | when !create_vpc | Existing VPC CIDR block |
 | `vpc_map_public_ip_on_launch` | `true` | no | Give instances in the module-created VPC's public subnets a public IP. See [keep nodes off the public subnets](#keep-nodes-off-the-public-subnets) |
 | `eks_node_groups_private_subnets_only` | `false` | no | Place the managed node groups in the private subnets only. Replaces existing node groups |
-| `enable_internet_egress` | `true` | no | `false` creates no NAT or internet gateway. Requires an internal ALB, no SSH bastion, and no firewall. See [Run without internet egress](#run-without-internet-egress) |
+| `enable_internet_egress` | `true` | no | `false` creates no NAT or internet gateway. Requires an internal ALB, no bastion, and no firewall. See [Run without internet egress](#run-without-internet-egress) |
 | `create_vpc_endpoints` | `false` | no | Create interface endpoints with private DNS for `vpc_endpoint_services` |
 | `vpc_endpoint_services` | 14 services | no | Endpoint service suffixes, such as `ecr.api`. The default covers a cluster with no egress |
 | `vpc_endpoint_subnet_ids` | `[]` | no | Subnets for the endpoints, one per AZ. Empty uses the private subnets |
@@ -1344,9 +1336,6 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `bastion_enable_ssh` | `false` | no | Open port 22 on bastion security group |
 | `bastion_ssh_allowed_cidrs` | `[]` | no | CIDRs allowed to SSH to bastion |
 | `bastion_root_volume_size_gb` | `20` | no | Root EBS volume size for bastion |
-| `bastion_cluster_admin` | `false` | no | Give the bastion role cluster admin through an EKS access entry |
-| `fix_bastion_names` | `false` | no | Name the bastion resources `<base>-bastion` instead of `<base>-bastion-bastion` |
-| `bastion_tools_s3_uri` | `""` | no | S3 prefix the bastion copies `kubectl`, `helm`, and `terraform` from instead of downloading them. Required without internet egress |
 | `bastion_existing_security_group_id` | `null` | no | Attach an existing SG to the bastion instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `create_cloudtrail` | `false` | no | Create CloudTrail trail for AWS API audit |
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |
