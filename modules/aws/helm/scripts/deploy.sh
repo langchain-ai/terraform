@@ -105,13 +105,13 @@ _validate_sandbox_values_file() {
 # top-level insights/polly, no backend.agentBootstrap) plus the sandbox-host
 # JuiceFS mount that replaced sandboxes.juicefs.csi. Chart 0.16 has no host-mount
 # keys, and chart 0.15 silently drops the external Insights Postgres/Redis wiring.
-# Chart 0.18 has not been validated against them. Refuse anything off the 0.17
-# line rather than deploy a half-configured release.
+# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
+# Refuse any other line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.17" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 line." >&2
-  echo "       These values require chart 0.17 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 patch explicitly:" >&2
+if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
+  echo "       These values require chart 0.17 or 0.18 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 or 0.18 patch explicitly:" >&2
   echo "         CHART_VERSION=0.17.0 make deploy" >&2
   exit 1
 fi
@@ -620,6 +620,24 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   else
     echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
     exit 1
+  fi
+  # Stop if the migration gate in the overrides differs from tfvars; make init-values was skipped after a migration start or end.
+  _smithdb_migration_enabled=false
+  _tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    echo "  ✗ langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration, but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled (terraform.tfvars is the source of truth) — run: make init-values, then make deploy" >&2
+    exit 1
+  fi
+  # Written by make smithdb-migration-job-start: TaskDB source and migration sizing.
+  _smithdb_migration="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
+  if _tfvar_is_true "smithdb_migration_enabled"; then
+    if [[ ! -f "$_smithdb_migration" ]]; then
+      echo "  ✗ langsmith-values-smithdb-migration.yaml (smithdb_migration_enabled = true but file not found — run: make smithdb-migration-job-start)" >&2
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
   fi
 fi
 

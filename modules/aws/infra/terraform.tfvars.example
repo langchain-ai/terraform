@@ -563,7 +563,7 @@ langsmith_namespace = "langsmith"
 #------------------------------------------------------------------------------
 # Pin the chart to an exact patch for reproducible deploys. Empty deploys the
 # latest patch on the pinned 0.17 line, so a rebuild months apart can land on a
-# different chart. Must be a 0.17.x version — deploy.sh refuses anything else.
+# different chart. Must be a 0.17.x or 0.18.x version — deploy.sh refuses anything else.
 #
 # The CHART_VERSION environment variable still overrides this when set:
 #   CHART_VERSION=0.17.0 make deploy
