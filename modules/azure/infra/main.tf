@@ -2056,6 +2056,17 @@ module "k8s_bootstrap" {
   redis_cluster_node_uris = var.redis_source == "external" ? module.redis[0].cluster_node_uris : ""
   redis_cluster_password  = var.redis_source == "external" ? module.redis[0].cluster_password : ""
 
+  # External ClickHouse — the connection Secret, when clickhouse_host is set;
+  # otherwise init-values.sh prompts for it. The cluster name goes to the values.
+  use_external_clickhouse = var.clickhouse_source == "external"
+  clickhouse_host         = var.clickhouse_host
+  clickhouse_http_port    = var.clickhouse_http_port
+  clickhouse_native_port  = var.clickhouse_native_port
+  clickhouse_user         = var.clickhouse_user
+  clickhouse_password     = var.clickhouse_password
+  clickhouse_database     = var.clickhouse_database
+  clickhouse_tls          = var.clickhouse_tls
+
   # Standalone Fleet — creates the langsmith-fleet-postgres secret pointing at the
   # dedicated langsmith_fleet database. No fleet Redis secret: Fleet uses the chart's
   # in-cluster bundled Redis (Azure Managed Redis can't do the logical-DB isolation

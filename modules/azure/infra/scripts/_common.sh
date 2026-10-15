@@ -250,7 +250,7 @@ _validate_license_key() {
 # enable_sso_oidc is the exception: it is baked into the generated auth block
 # (basicAuth off, oauth on), so a flip after init-values would deploy the old
 # login path.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source clickhouse_cluster langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
 # ── LangSmith images from a mirror ────────────────────────────────────────────
 # The chart's images and their repositories for the 0.16 chart line (chart
