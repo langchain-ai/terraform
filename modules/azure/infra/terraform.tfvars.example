@@ -228,6 +228,17 @@ ingress_controller = "envoy-gateway"
 # that creates the namespace and before the first deployment.
 # langsmith_image_pull_secret_name = "nexus-pull"
 
+# LangSmith's images from a mirror. langsmith_image_registry becomes images.registry
+# in values-overrides.yaml (<registry>/docker.io/langchain/...). A proxy repository
+# that serves Docker Hub's paths directly (<registry>/langchain/...) takes
+# langsmith_image_registry_keeps_source_host = false: init-values.sh then writes a
+# repository per image for the 0.16 chart line, and deploy.sh stops on a chart
+# image the module does not know. The pull Secret above is written as
+# images.imagePullSecrets as well. All three are stamped into values-overrides.yaml,
+# so deploy.sh stops if one changed since make init-values.
+# langsmith_image_registry                   = "nexus.example.com"
+# langsmith_image_registry_keeps_source_host = false
+
 # A mirror whose certificate an internal CA signed also needs that CA on the
 # nodes, where containerd pulls images: one PEM file per entry (one certificate
 # or a bundle, sent verbatim), up to 10, paths
