@@ -39,6 +39,14 @@ locals {
       }))
     },
   )
+
+  # try() covers extra groups, which are untyped and may omit either attribute.
+  eks_managed_node_groups = {
+    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
+      desired_size             = coalesce(try(v.desired_size, null), v.min_size)
+      iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+    })
+  }
 }
 
 module "eks" {
@@ -62,12 +70,7 @@ module "eks" {
   # terraform apply. If plan shows no changes after modifying min/max, run
   # `terraform refresh` first — the ASG may have been changed out-of-band (e.g. via
   # AWS CLI or console) and the state already reflects the new values.
-  eks_managed_node_groups = {
-    for k, v in var.eks_managed_node_groups : k => merge(v, {
-      desired_size             = coalesce(v.desired_size, v.min_size)
-      iam_role_use_name_prefix = coalesce(v.iam_role_use_name_prefix, true)
-    })
-  }
+  eks_managed_node_groups = local.eks_managed_node_groups
 
   cluster_addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
   # 30s is the upstream default. Custom networking waits longer so the vpc-cni
