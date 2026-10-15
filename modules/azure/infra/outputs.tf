@@ -228,6 +228,16 @@ output "envoy_gateway_image_pull_secret_name" {
   value       = module.aks.envoy_gateway_image_pull_secret_name
 }
 
+output "keda_images" {
+  description = "The three images KEDA's pods pull, keyed by name, from keda_image_registry when set and ghcr.io otherwise. Empty when install_keda is false."
+  value       = module.k8s_bootstrap.keda_images
+}
+
+output "keda_image_pull_secret_name" {
+  description = "Pull Secret KEDA's pods use, empty without one."
+  value       = module.k8s_bootstrap.keda_image_pull_secret_name
+}
+
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
   value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing${module.aks.api_server_public_fqdn == true ? " --public-fqdn" : ""}"
