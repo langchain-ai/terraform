@@ -1136,6 +1136,83 @@ else
 fi
 echo ""
 
+# ── Long-running streams through Envoy Gateway ───────────────────────────
+# Envoy Gateway applies an effective 15 s response timeout to the chart's
+# catch-all HTTPRoute, which has no timeouts field. Fleet run streams and the
+# Deployments proxy on host-backend run longer than that, and Envoy resets
+# the stream mid-response (response_flags=UT; the browser shows
+# net::ERR_HTTP2_PROTOCOL_ERROR). A second HTTPRoute on the same Gateway and
+# hostname with only those path prefixes and timeouts.request: 0s takes
+# precedence for them, since the longer prefix wins, and every other path
+# keeps the default. The same route as the AWS module's
+# langsmith-fleet-streams. Applied with Fleet or Deployments on, removed when
+# both are off, so a feature turned off takes its route with it.
+# The hostname and base path come from the release's effective values, not
+# from values-overrides.yaml alone: the chart takes config.hostname from every
+# values file it merges, and its own route matches that host and, with
+# config.basePath, that prefix. Reading the same values keeps this route on
+# the host and paths the chart's route uses. The hostname is checked as a DNS
+# name after the scheme is dropped, the chart's own rule; one that does not
+# pass is reported and the route skipped, never applied to fail after helm has
+# already upgraded. A failed apply is reported the same way: the deploy is
+# done by then, and the steps after this one still run.
+if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  if [[ "$_enable_fleet" == "true" || "$_enable_deployments" == "true" ]]; then
+    _streams_values=$(helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all -o json 2>/dev/null) || _streams_values=""
+    _streams_host=""; _streams_base=""
+    if [[ -n "$_streams_values" ]]; then
+      read -r _streams_host _streams_base < <(printf '%s' "$_streams_values" | python3 -c '
+import json, re, sys
+cfg = (json.load(sys.stdin) or {}).get("config") or {}
+host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", str(cfg.get("hostname") or "").strip(), flags=re.I).rstrip("/")
+base = "/" + str(cfg.get("basePath") or "").strip("/ ")
+print(host, base if base != "/" else "")
+' 2>/dev/null) || { _streams_host=""; _streams_base=""; }
+    fi
+    if [[ -z "$_streams_host" ]]; then
+      warn "Fleet or Deployments is on, but the release's values carry no config.hostname, so the long-running-stream HTTPRoute (langsmith-fleet-streams) was not created; streams on /api/v1/fleet and /api-host/v2 keep Envoy Gateway's 15 s timeout"
+    elif ! [[ "$_streams_host" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+      warn "config.hostname resolves to '${_streams_host}', which is not a DNS name, so the long-running-stream HTTPRoute (langsmith-fleet-streams) was not created; fix the hostname in the values and re-run make deploy"
+    else
+      if kubectl apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: langsmith-fleet-streams
+  namespace: ${NAMESPACE}
+spec:
+  parentRefs:
+  - name: langsmith-gateway
+  hostnames:
+  - "${_streams_host}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api/v1/fleet/threads
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api/v1/fleet/lg
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api-host/v2
+    backendRefs:
+    - name: ${CHART_FULLNAME}-frontend
+      port: 80
+    timeouts:
+      request: 0s
+EOF
+      then
+        pass "HTTPRoute langsmith-fleet-streams on ${_streams_host}: no request timeout on ${_streams_base}/api/v1/fleet/threads, ${_streams_base}/api/v1/fleet/lg and ${_streams_base}/api-host/v2"
+      else
+        warn "kubectl could not apply the long-running-stream HTTPRoute (langsmith-fleet-streams, written by this script, not by the operator); streams on ${_streams_base}/api/v1/fleet and ${_streams_base}/api-host/v2 keep Envoy Gateway's 15 s timeout until it applies. Re-run make deploy after fixing the error above."
+      fi
+    fi
+  else
+    kubectl delete httproute langsmith-fleet-streams -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+fi
+
 # ── Post-deploy Envoy Gateway: LoadBalancer IP ────────────────────────────
 # The EnvoyProxy (pre-deploy block above) put the DNS label on the proxy Service;
 # this only reports the address Azure gave it.
