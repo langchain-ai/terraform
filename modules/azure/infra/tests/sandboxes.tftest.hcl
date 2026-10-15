@@ -505,3 +505,59 @@ run "juicefs_redis_sends_no_persistence_without_it" {
     error_message = "aof_persistence = false still sent a persistence block"
   }
 }
+
+# preflight.sh runs before terraform init, so it copies the sandboxhost pool's
+# defaults. These runs read the script and fail when a copy drifts from
+# local.sandbox_host_vm_size or a variable default.
+run "preflight_sandbox_defaults_match_terraform" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+  }
+
+  assert {
+    condition     = strcontains(file("${path.module}/scripts/preflight.sh"), "_tfvar sizing_profile || echo ${var.sizing_profile})")
+    error_message = "preflight.sh falls back to a sizing_profile other than the variable default, ${var.sizing_profile}"
+  }
+  assert {
+    condition     = strcontains(file("${path.module}/scripts/preflight.sh"), "production|production-large) SB_SIZE=\"${local.sandbox_host_vm_size}\" ;;")
+    error_message = "preflight.sh sizes the production sandboxhost pool differently from local.sandbox_host_vm_size, ${local.sandbox_host_vm_size}"
+  }
+  assert {
+    condition     = strcontains(file("${path.module}/scripts/preflight.sh"), "_tfvar sandbox_host_min_count || echo \"${var.sandbox_host_min_count}\")")
+    error_message = "preflight.sh defaults sandbox_host_min_count to something other than ${var.sandbox_host_min_count}"
+  }
+  assert {
+    condition     = strcontains(file("${path.module}/scripts/preflight.sh"), "_tfvar sandbox_host_max_count || echo \"${var.sandbox_host_max_count}\")")
+    error_message = "preflight.sh defaults sandbox_host_max_count to something other than ${var.sandbox_host_max_count}"
+  }
+}
+
+run "preflight_sandbox_size_matches_terraform_for_production_large" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "production-large"
+  }
+
+  assert {
+    condition     = strcontains(file("${path.module}/scripts/preflight.sh"), "production|production-large) SB_SIZE=\"${local.sandbox_host_vm_size}\" ;;")
+    error_message = "preflight.sh sizes the production-large sandboxhost pool differently from local.sandbox_host_vm_size, ${local.sandbox_host_vm_size}"
+  }
+}
+
+run "preflight_sandbox_size_matches_terraform_for_dev" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "dev"
+  }
+
+  assert {
+    condition     = strcontains(file("${path.module}/scripts/preflight.sh"), "*) SB_SIZE=\"${local.sandbox_host_vm_size}\" ;;")
+    error_message = "preflight.sh sizes the dev sandboxhost pool differently from local.sandbox_host_vm_size, ${local.sandbox_host_vm_size}"
+  }
+}

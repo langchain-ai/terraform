@@ -1139,13 +1139,15 @@ EOF
     fi
 
     # enable_sandboxes adds the sandboxhost pool, unless additional_node_pools
-    # already defines one (it replaces the generated pool). Sizes and counts
-    # mirror local.sandbox_host_vm_size and the variable defaults; keep in step.
+    # already defines one (it replaces the generated pool). Preflight runs
+    # before terraform init, so the sizes and counts below copy
+    # local.sandbox_host_vm_size and the variable defaults, sizing_profile's
+    # included, and tests/sandboxes.tftest.hcl fails when they drift.
     if [ "$(_tfvar enable_sandboxes || echo false)" = "true" ] \
       && ! printf '%s\n' "${EXTRA_POOLS:-}" | cut -f1 | grep -qx sandboxhost; then
       SB_SIZE=$(_tfvar sandbox_host_vm_size || echo "")
       if [ -z "$SB_SIZE" ] || [ "$SB_SIZE" = "null" ]; then
-        case "$(_tfvar sizing_profile || echo default)" in
+        case "$(_tfvar sizing_profile || echo production)" in
           production|production-large) SB_SIZE="Standard_D32ds_v5" ;;
           *) SB_SIZE="Standard_D8ds_v5" ;;
         esac

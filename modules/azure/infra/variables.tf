@@ -1710,7 +1710,7 @@ variable "langsmith_custom_ca_secret_key" {
 
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing."
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing and the default sandbox_host_vm_size."
   default     = "production"
 }
 
