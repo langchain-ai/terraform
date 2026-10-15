@@ -504,6 +504,13 @@ if [[ "$_clickhouse_source" == "external" ]]; then
   external:
     enabled: true
     existingSecretName: "langsmith-clickhouse"'
+  # clickhouse_cluster is a value, not a Secret key: the chart passes it to the
+  # pods as CLICKHOUSE_CLUSTER and the first migration creates tables ON CLUSTER.
+  _clickhouse_cluster=$(_parse_tfvar "clickhouse_cluster") || _clickhouse_cluster=""
+  if [[ -n "$_clickhouse_cluster" ]]; then
+    _clickhouse_block+="
+    cluster: \"${_clickhouse_cluster}\""
+  fi
 else
   _clickhouse_block='# clickhouse: in-cluster (managed by Helm chart)'
 fi
@@ -885,9 +892,14 @@ fi
 if [[ "$_clickhouse_source" == "external" ]]; then
   header "External ClickHouse"
 
+  _clickhouse_tf_host=$(_parse_tfvar "clickhouse_host") || _clickhouse_tf_host=""
   # Probe before prompting — discovering an unreachable cluster after the
   # operator has typed a password is a bad trade.
-  if ! kubectl auth can-i create secret -n "$NAMESPACE" &>/dev/null; then
+  if [[ -n "$_clickhouse_tf_host" ]]; then
+    pass "langsmith-clickhouse secret is Terraform's: clickhouse_host = ${_clickhouse_tf_host} in terraform.tfvars, so make apply writes it from the clickhouse_* variables"
+    info "To change the connection, edit the clickhouse_* variables and run make apply; deploy.sh checks the secret's keys before deploying."
+    info "If this install's secret predates clickhouse_host (an earlier init-values.sh created it), make preflight says so and prints the import that adopts it; apply cannot adopt it on its own."
+  elif ! kubectl auth can-i create secret -n "$NAMESPACE" &>/dev/null; then
     warn "clickhouse_source = \"external\" needs a langsmith-clickhouse secret, but kubectl cannot create secrets in namespace $NAMESPACE."
     info "Values files are written and complete — only the secret is outstanding."
     action "Run: make kubeconfig   (then re-run: make init-values)"

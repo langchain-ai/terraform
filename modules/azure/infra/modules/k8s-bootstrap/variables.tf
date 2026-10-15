@@ -300,3 +300,53 @@ variable "keda_chart_repository_password" {
   default     = ""
   sensitive   = true
 }
+
+# ── External ClickHouse ───────────────────────────────────────────────────────
+variable "use_external_clickhouse" {
+  type        = bool
+  description = "Whether LangSmith uses a ClickHouse outside the chart (clickhouse_source = external)."
+  default     = false
+}
+
+variable "clickhouse_host" {
+  type        = string
+  description = "Host of the external ClickHouse. Empty leaves the langsmith-clickhouse Secret to init-values.sh."
+  default     = ""
+}
+
+variable "clickhouse_http_port" {
+  type        = number
+  description = "HTTP port of the external ClickHouse."
+  default     = 8443
+}
+
+variable "clickhouse_native_port" {
+  type        = number
+  description = "Native port of the external ClickHouse."
+  default     = 9440
+}
+
+variable "clickhouse_user" {
+  type        = string
+  description = "User for the external ClickHouse."
+  default     = "default"
+}
+
+variable "clickhouse_password" {
+  type        = string
+  description = "Password for the external ClickHouse."
+  default     = ""
+  sensitive   = true
+}
+
+variable "clickhouse_database" {
+  type        = string
+  description = "Database on the external ClickHouse."
+  default     = "default"
+}
+
+variable "clickhouse_tls" {
+  type        = bool
+  description = "Whether the connection to the external ClickHouse uses TLS."
+  default     = true
+}

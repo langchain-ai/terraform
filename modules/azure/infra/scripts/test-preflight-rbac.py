@@ -1595,6 +1595,40 @@ CASES = [
         "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 1900m / 5039Mi"],
     },
     {
+        "name": "external ClickHouse without clickhouse_host never looks for the Secret",
+        "tfvars_extra": 'clickhouse_source = "external"',
+        "kube_ctx": "platform-aks",
+        "reject_calls": ["kubectl get secret"],
+    },
+    {
+        "name": "clickhouse_host on a first install: no Secret, Terraform writes it",
+        "tfvars_extra": 'clickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks' — Terraform writes it from clickhouse_host"],
+    },
+    {
+        "name": "clickhouse_host with Terraform's own Secret passes",
+        "tfvars_extra": 'clickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "ch_secret": {"metadata": {"name": "langsmith-clickhouse",
+                                   "labels": {"app.kubernetes.io/managed-by": "terraform"}}},
+        "expect": ["[✓] langsmith/langsmith-clickhouse on 'platform-aks' is Terraform's"],
+    },
+    {
+        "name": "clickhouse_host with an init-values Secret fails and prints the import",
+        "tfvars_extra": 'clickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "ch_secret": {"metadata": {"name": "langsmith-clickhouse"}},
+        "expect": ["[✗] langsmith/langsmith-clickhouse already exists on 'platform-aks' and was not written by Terraform",
+                   "terraform import 'module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]' langsmith/langsmith-clickhouse"],
+    },
+    {
+        "name": "clickhouse_host with no kubectl context warns instead of guessing",
+        "tfvars_extra": 'clickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "expect": ["[!] No kubectl context — if this is an existing install, point kubectl at its cluster and re-run"],
+        "reject_calls": ["kubectl get secret"],
+    },
+    {
         "name": "a kubectl context on another cluster skips the ClickHouse capacity check",
         "tfvars_extra": ATTACHED,
         "ca_all": ALL_GOOD,
@@ -1688,6 +1722,8 @@ def build_case(case, index):
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
     if "nodes" in case:
         (fixture / "nodes.json").write_text(json.dumps({"items": case["nodes"]}))
+    if "ch_secret" in case:
+        (fixture / "ch_secret.json").write_text(json.dumps(case["ch_secret"]))
     for key, name in (
         ("role_assignments", "role_assignments.json"),
         ("direct_assignments", "direct_assignments.json"),

@@ -48,8 +48,21 @@ postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexibl
 redis_source      = "external"    # "external" = Azure Managed Redis
 clickhouse_source = "in-cluster"  # "in-cluster" = chart-managed StatefulSet (dev/POC)
                                   # "external"   = LangChain Managed ClickHouse, Altinity,
-                                  #                or any reachable ClickHouse. init-values.sh
-                                  #                prompts for the connection details.
+                                  #                or any reachable ClickHouse. With the
+                                  #                clickhouse_* lines below, make apply writes
+                                  #                the connection secret; without clickhouse_host,
+                                  #                init-values.sh prompts for the details.
+# External ClickHouse connection (clickhouse_source = "external"). The password goes
+# in secrets.auto.tfvars as clickhouse_password. clickhouse_cluster names the cluster
+# a replicated ClickHouse's migrations create tables ON CLUSTER in; set it before the
+# first deploy, it cannot be added to a standalone schema later.
+# clickhouse_host        = "ch-repl-replicated.langsmith-data.svc"
+# clickhouse_http_port   = 8123
+# clickhouse_native_port = 9000
+# clickhouse_user        = "default"
+# clickhouse_database    = "default"
+# clickhouse_tls         = false
+# clickhouse_cluster     = "replicated"
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 postgres_admin_username      = "langsmith"
