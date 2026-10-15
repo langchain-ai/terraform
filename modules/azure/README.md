@@ -477,6 +477,8 @@ matching. Set `environment = "dev"` explicitly to keep the old tag.
 | **4** | + Fleet (`enable_fleet = true`) — or the deprecated Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
 | **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
 
+**SSO (OIDC) comes after the first login, not in a pass.** Once the org admin can sign in with basic auth, put the client ID, client secret and issuer URL in Key Vault (`make keyvault set langsmith-oauth-client-id '<value>'`, and the same for `langsmith-oauth-client-secret` and `langsmith-oauth-issuer-url`; for Entra ID the issuer is `https://login.microsoftonline.com/<tenant-id>/v2.0`, or `https://login.microsoftonline.us/<tenant-id>/v2.0` in Azure Government), set `enable_sso_oidc = true` in `terraform.tfvars`, then `make init-values && make k8s-secrets && make deploy`. `init-values` refuses to run with the flag on and a secret missing; `k8s-secrets` carries the three into `langsmith-config-secret` as `oauth_client_id`, `oauth_client_secret` and `oauth_issuer_url`, which the chart reads; the generated values turn `config.basicAuth` off and `config.oauth` on. The flag is stamped into `values-overrides.yaml`, so `deploy.sh` stops if it changed since the file was generated. Any standard OIDC provider works; nothing here is Entra-specific. Turning it on before an admin exists locks you out of the UI.
+
 ---
 
 ## Ingress Controllers
