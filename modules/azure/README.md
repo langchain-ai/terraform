@@ -1590,16 +1590,22 @@ decides what the cluster can reach, and nothing works until it allows:
   that the module attaches to those accounts, and to the backend and SmithDB
   accounts it creates, so every apply keeps it. Create the Secret after the
   apply that creates the namespace and before the first deployment.
-  LangSmith's own images are separate: the chart joins `images.registry` to
-  repositories that mostly begin with `docker.io/`, so under a proxy-layout
-  mirror leave `images.registry` empty and set each
-  `images.<name>Image.repository` in `values-overrides.yaml` to the mirror's
-  path, for example `<registry>/langchain/langsmith-backend`. Two come from
-  other registries, which a Docker Hub proxy does not serve:
-  `mcr.microsoft.com/presidio-analyzer` when `presidioAnalyzer.enabled` is true,
-  and `registry.k8s.io/sig-storage/csi-node-driver-registrar` when
-  `config.sandboxes.enabled` is true. Point those at a proxy for their own
-  registry.
+  LangSmith's own images take `langsmith_image_registry`, which `make
+  init-values` writes as `images.registry` in `values-overrides.yaml`, so the
+  chart composes `<registry>/docker.io/langchain/<name>`. A mirror that serves
+  each source registry's paths directly, as a proxy repository in Nexus or
+  Artifactory does, takes `langsmith_image_registry_keeps_source_host = false`:
+  `init-values` then leaves `images.registry` empty and writes
+  `images.<name>Image.repository` as `<registry>/<path>` for every image of
+  the 0.16 chart line (`<registry>/langchain/langsmith-backend`, and
+  `<registry>/presidio-analyzer` and
+  `<registry>/sig-storage/csi-node-driver-registrar` for the two from
+  `mcr.microsoft.com` and `registry.k8s.io`, which a group repository that
+  proxies those registries serves the same way), and `make deploy` compares the
+  chart's images with that list and stops on one the module does not know.
+  `langsmith_image_pull_secret_name` is written as `images.imagePullSecrets`
+  too. The three are stamped into `values-overrides.yaml`, so a change after
+  `init-values` stops the deploy until the file is regenerated.
 - **A mirror behind an internal CA** also needs that CA on the nodes, where
   containerd does the pulling and trusts only public CAs; without it every pull
   fails with `x509: certificate signed by unknown authority`.
