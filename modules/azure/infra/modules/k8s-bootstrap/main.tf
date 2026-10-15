@@ -425,7 +425,13 @@ resource "kubernetes_secret_v1" "license" {
 # this Secret's name, not its data, so a changed value reaches an existing volume
 # only under a new Secret name. Write-only, so the metaurl's Redis key stays out
 # of this resource's state, and a new value is written only when the revision
-# changes.
+# changes or the Redis is replaced: a new Redis has a new host and key, and
+# replacing the Secret writes them without a revision bump.
+resource "terraform_data" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes ? 1 : 0
+  input = var.sandbox_juicefs_redis_id
+}
+
 resource "kubernetes_secret_v1" "sandbox_juicefs" {
   count = var.enable_sandboxes ? 1 : 0
 
@@ -438,6 +444,10 @@ resource "kubernetes_secret_v1" "sandbox_juicefs" {
   data_wo_revision = var.sandbox_juicefs_config_revision
 
   type = "Opaque"
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.sandbox_juicefs_redis]
+  }
 }
 
 # ── cert-manager ──────────────────────────────────────────────────────────────

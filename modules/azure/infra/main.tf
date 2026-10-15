@@ -1031,6 +1031,17 @@ resource "terraform_data" "validate_network" {
       error_message = "sandbox_host_max_count (${var.sandbox_host_max_count}) must be at least sandbox_host_min_count (${var.sandbox_host_min_count})."
     }
 
+    # An additional_node_pools entry named sandboxhost replaces the generated
+    # pool whole. Without the label the chart's nodeSelector matches no node,
+    # and sandbox-host stays Pending with nothing naming the cause.
+    precondition {
+      condition = var.enable_sandboxes && contains(keys(var.additional_node_pools), "sandboxhost") ? (
+        lookup(var.additional_node_pools["sandboxhost"].node_labels, "sandbox.langsmith.com/host", "") == "true"
+        && contains(var.additional_node_pools["sandboxhost"].node_taints, "sandbox.langsmith.com/host=true:NoSchedule")
+      ) : true
+      error_message = "additional_node_pools.sandboxhost replaces the generated sandbox-host pool, so it needs node_labels \"sandbox.langsmith.com/host\" = \"true\" and node_taints \"sandbox.langsmith.com/host=true:NoSchedule\". Without them sandbox-host never schedules."
+    }
+
     # JuiceFS metadata lives in Azure Managed Redis, which Azure Government does
     # not offer; see redis_source.
     precondition {
@@ -2397,6 +2408,7 @@ module "k8s_bootstrap" {
     "access-key" = module.blob.storage_account_name
   } : {}
   sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id        = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].id : null
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.

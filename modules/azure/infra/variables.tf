@@ -1431,7 +1431,7 @@ variable "sandbox_juicefs_csi_config_secret_name" {
 
 variable "sandbox_juicefs_csi_config_secret_revision" {
   type        = number
-  description = "Revision for the write-only sandbox JuiceFS config Secret. Increment to rewrite the Secret, for example after the JuiceFS Redis access key is regenerated. The chart does not restart sandbox-host for an in-place rewrite, so restart it after the apply."
+  description = "Revision for the sandbox JuiceFS config Secret, which is written write-only so the Redis access key stays out of that resource's state. The key is still in state through the JuiceFS Redis outputs, as the LangSmith Redis key is. Increment to rewrite the Secret after the access key is regenerated. A replaced Redis, from a new sandbox_juicefs_redis_name or redis_location, rewrites the Secret on its own. The chart does not restart sandbox-host for a rewrite, so restart it after the apply."
   default     = 1
 }
 

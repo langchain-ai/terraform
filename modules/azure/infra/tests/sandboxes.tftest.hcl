@@ -192,6 +192,24 @@ run "additional_node_pools_overrides_sandboxhost" {
   }
 }
 
+# An override that drops the label leaves sandbox-host with no node to match.
+run "additional_node_pools_sandboxhost_without_label_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    additional_node_pools = {
+      sandboxhost = {
+        vm_size   = "Standard_D16ds_v6"
+        min_count = 1
+        max_count = 2
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
 # The chart's sandbox-host autoscaler follows the pool: minReplicas is min_count
 # raised to the chart minimum of 1, and maxReplicas is max_count.
 run "sandbox_host_replicas_follow_the_pool_defaults" {

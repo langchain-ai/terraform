@@ -320,6 +320,12 @@ variable "sandbox_juicefs_config_revision" {
   default     = 1
 }
 
+variable "sandbox_juicefs_redis_id" {
+  type        = string
+  description = "Resource ID of the JuiceFS Redis. A replaced Redis replaces the JuiceFS config Secret, which writes the new host and key."
+  default     = null
+}
+
 variable "platform_backend_component" {
   type        = string
   description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. Selects the pods the node subnet may reach when sandboxes are on."
