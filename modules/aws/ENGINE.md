@@ -22,7 +22,8 @@ model credentials.
 - `config.hostname` served with TLS at an address that the sandboxes can reach. Set
   `langsmith_domain`. The chart rejects `localhost` and in-cluster addresses.
 - Outbound HTTPS from the cluster to `beacon.langchain.com` and to the Bedrock
-  Mantle endpoint of the region that Engine uses (`bedrock-mantle.<region>.api.aws`).
+  Mantle endpoint of the region that Engine uses (`bedrock-mantle.<region>.api.aws`,
+  `bedrock-mantle.us-east-1.api.aws` by default).
   For LangSmith Intelligence, the cluster also needs `beacon.aws.langchain.com`. The
   NAT gateway gives this access by default. With `create_firewall = true`, add these
   names to `firewall_allowed_fqdns`.
@@ -102,20 +103,43 @@ Engine calls Amazon Bedrock through the Bedrock Mantle API
   and `aws-marketplace:ViewSubscriptions` for calls through Bedrock Mantle, so the
   first model call can create the Marketplace subscription. An SCP that denies
   these actions, or denies the region, blocks the first call.
-- **Region.** Engine uses `us-east-1` unless an Organization Admin saves another
-  region under **Settings > Engine > Model providers > Amazon Bedrock**. Engine does
-  not use the cluster region. Save a region that has a Bedrock Mantle endpoint.
+- **Region.** Engine uses `us-east-1` unless the organization has an
+  `AWS_BEDROCK_REGION` secret. Engine does not use the cluster region, so a cluster
+  in another region also calls `us-east-1`. Keep `us-east-1` unless **Test
+  connection** passes in the other region. Bedrock Mantle does not serve every model
+  in every region, and Amazon Bedrock can report a model as available in a region
+  where Bedrock Mantle does not serve it. With IRSA, the Amazon Bedrock
+  credentials dialog cannot save the region: each of its methods also requires a
+  credential. Add the region as a custom organization secret (see
+  [Set the Bedrock region](#set-the-bedrock-region)).
 - **Credentials.** The chart lists `bedrock` in `engine.workloadIdentityProviders`, so
   LangSmith treats Amazon Bedrock as configured with no saved credentials. Any
-  Organization Admin can select it.
+  Organization Admin can select it. Do not add Amazon Bedrock credentials in
+  LangSmith. Saved access keys or a saved bearer token replace the Engine role.
+
+### Set the Bedrock region
+
+Do this step only for a region other than `us-east-1`.
+
+1. As an Organization Admin, open **Settings > Provider secrets** for the
+   organization, not for a workspace.
+2. Add a secret, and select **Custom** as the provider.
+3. Set the key to `AWS_BEDROCK_REGION`. Set the value to the region name only, in
+   the same form as `us-east-1`. Do not use a URL.
+4. Save the secret. Then run **Test connection** under
+   **Settings > Engine > Model providers**.
+5. If the test says that a model is not available, delete the secret. Engine then
+   uses `us-east-1` again.
 
 ## Choose how Engine runs its models
 
 An Organization Admin chooses under **Settings > Engine > Model providers**.
 Engine starts no runs until the admin saves this choice.
 
-- **Amazon Bedrock in your account.** Select Amazon Bedrock, save the region, and
-  run **Test connection**. Engine authenticates as the Engine role through IRSA.
+- **Amazon Bedrock in your account.** Select Amazon Bedrock and run
+  **Test connection**. Engine authenticates as the Engine role through IRSA, and
+  calls `us-east-1` unless you set another region (see
+  [Set the Bedrock region](#set-the-bedrock-region)).
 - **Provider API keys.** Add keys for Anthropic, OpenAI, or the other supported
   providers on the same page. Terraform does not change.
 - **LangSmith Intelligence.** LangChain runs the models. Set
@@ -194,9 +218,14 @@ kubectl get secret langsmith-config -n langsmith \
   page shows only a contact form, but the license and the Helm values include
   Engine. Contact LangChain support with your organization ID.
 - **Test connection fails for Amazon Bedrock.** Check that the pods run with the
-  Engine role (see [Verify](#verify)). Check model access and the saved region (see
-  [Amazon Bedrock](#amazon-bedrock)). With `create_firewall = true`, check that
-  `firewall_allowed_fqdns` has the Bedrock Mantle endpoint of that region.
+  Engine role (see [Verify](#verify)). Check model access and the
+  `AWS_BEDROCK_REGION` organization secret (see [Amazon Bedrock](#amazon-bedrock)).
+  With `create_firewall = true`, check that `firewall_allowed_fqdns` has the Bedrock
+  Mantle endpoint of that region.
+- **Test connection says "AWS Bedrock does not have `<model>` available".**
+  Bedrock Mantle does not serve that model in the region of `AWS_BEDROCK_REGION`.
+  Model access in the Amazon Bedrock console does not change this. Delete the secret
+  to use `us-east-1`, or set a region where **Test connection** passes.
 
 ## Keys
 
