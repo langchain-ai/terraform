@@ -407,8 +407,6 @@ resource "kubernetes_secret_v1" "smithdb_metastore" {
   type = "Opaque"
 }
 
-# LangSmith license key secret — required for the application to start.
-# The Helm chart references this via config.licenseKeySecretName.
 # External ClickHouse connection, in the Secret the chart reads through
 # clickhouse.external.existingSecretName, with the chart's key names
 # (values.yaml at 0.16.39: hostSecretKey clickhouse_host, portSecretKey
@@ -443,6 +441,8 @@ resource "kubernetes_secret_v1" "clickhouse" {
   type = "Opaque"
 }
 
+# LangSmith license key secret — required for the application to start.
+# The Helm chart references this via config.licenseKeySecretName.
 resource "kubernetes_secret_v1" "license" {
   count = var.langsmith_license_key != "" ? 1 : 0
 
