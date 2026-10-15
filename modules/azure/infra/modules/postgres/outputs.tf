@@ -43,3 +43,8 @@ output "server_private_dns_zone_id" {
   description = "The private DNS zone ID the Flexible Server is configured with."
   value       = azurerm_postgresql_flexible_server.db.private_dns_zone_id
 }
+
+output "high_availability_mode" {
+  description = "The high availability mode the server is configured with (ZoneRedundant or SameZone), null when HA is off."
+  value       = one(azurerm_postgresql_flexible_server.db.high_availability[*].mode)
+}
