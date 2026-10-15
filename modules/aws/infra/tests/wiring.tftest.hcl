@@ -237,6 +237,33 @@ run "sandbox_host_node_group_keeps_metadata_options_and_overrides" {
   }
 }
 
+run "sandbox_host_node_group_null_overrides_fall_back" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_node_count          = 2
+    sandbox_host_node_group_overrides = {
+      desired_size             = null
+      iam_role_use_name_prefix = null
+    }
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].desired_size == 2
+    error_message = "a null desired_size override no longer falls back to min_size"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_use_name_prefix == true
+    error_message = "a null iam_role_use_name_prefix override no longer falls back to true"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_put_response_hop_limit == 1
+    error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
+  }
+}
+
 run "enable_smithdb_adds_only_smithdb" {
   command = plan
 

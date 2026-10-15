@@ -40,15 +40,13 @@ locals {
     },
   )
 
-  eks_managed_node_groups = merge(
-    {
-      for k, v in var.eks_managed_node_groups : k => merge(v, {
-        desired_size             = coalesce(v.desired_size, v.min_size)
-        iam_role_use_name_prefix = coalesce(v.iam_role_use_name_prefix, true)
-      })
-    },
-    var.extra_eks_managed_node_groups,
-  )
+  # try() covers extra groups, which are untyped and may omit either attribute.
+  eks_managed_node_groups = {
+    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
+      desired_size             = coalesce(try(v.desired_size, null), v.min_size)
+      iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+    })
+  }
 }
 
 module "eks" {
