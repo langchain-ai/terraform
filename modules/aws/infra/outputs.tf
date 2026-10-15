@@ -167,6 +167,14 @@ output "langsmith_irsa_role_arn" {
 }
 
 #------------------------------------------------------------------------------
+# Engine (populated only when enable_engine = true)
+#------------------------------------------------------------------------------
+output "engine_irsa_role_arn" {
+  description = "IAM role ARN for Engine's API server and queue service accounts, IRSA (null when enable_engine = false). init-values.sh writes it as the eks.amazonaws.com/role-arn annotation on engineInsightsAgent.apiServer and engineInsightsAgent.queue."
+  value       = var.enable_engine ? aws_iam_role.engine[0].arn : null
+}
+
+#------------------------------------------------------------------------------
 # SmithDB (populated only when enable_smithdb = true)
 #------------------------------------------------------------------------------
 output "enable_smithdb" {
