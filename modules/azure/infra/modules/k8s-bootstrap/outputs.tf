@@ -82,3 +82,13 @@ output "keda_chart_repository_authenticated" {
   description = "Whether the KEDA chart fetch sends a username and password. False without them or without KEDA."
   value       = var.install_keda && var.keda_chart_repository_username != ""
 }
+
+output "langsmith_image_pull_secret_name" {
+  description = "Pull Secret attached to the service accounts in the LangSmith namespace, empty without one."
+  value       = var.langsmith_image_pull_secret_name
+}
+
+output "langsmith_image_pull_secret_service_accounts" {
+  description = "The service accounts in the LangSmith namespace that carry langsmith_image_pull_secret_name as imagePullSecrets. Empty without one."
+  value       = local.langsmith_image_pull_secret_service_accounts
+}
