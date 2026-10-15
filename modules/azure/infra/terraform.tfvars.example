@@ -191,6 +191,15 @@ ingress_controller = "envoy-gateway"
 # is anonymous, which the mirror must then allow.
 # keda_chart_repository_username        = "helm-reader"
 
+# LangSmith's own pods take their pull Secret from the chart (images.imagePullSecrets
+# in values-overrides.yaml). The pods the operator creates for each deployment do
+# not: the agent pod runs as langsmith-ksa, and the deployment's Redis and PostgreSQL
+# as the namespace's default account. langsmith_image_pull_secret_name attaches a
+# Secret in the LangSmith namespace to those accounts (and to the backend's and
+# SmithDB's), and every apply keeps it there. Create the Secret after the apply
+# that creates the namespace and before the first deployment.
+# langsmith_image_pull_secret_name = "nexus-pull"
+
 # A mirror whose certificate an internal CA signed also needs that CA on the
 # nodes, where containerd pulls images: one PEM file per entry (one certificate
 # or a bundle, sent verbatim), up to 10, paths

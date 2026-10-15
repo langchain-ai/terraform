@@ -54,10 +54,22 @@ resource "kubernetes_namespace_v1" "langsmith" {
   }
 }
 
-# ── Service Account (Workload Identity) ───────────────────────────────────────
+# ── Service Accounts (Workload Identity, pull Secret) ─────────────────────────
 # langsmith-ksa is used by LangSmith pods and LGP operator deployments.
 # The azure.workload.identity/client-id annotation binds it to the managed
 # identity that has Storage Blob Data Contributor on the blob account.
+#
+# With langsmith_image_pull_secret_name set, every account here carries the
+# Secret as imagePullSecrets. The chart's own pods pull with
+# images.imagePullSecrets from the values file; the pods the operator creates
+# for each deployment do not, and run as langsmith-ksa (the agent pod) or as
+# the namespace's default account (its Redis and PostgreSQL). The provider
+# reads imagePullSecrets back, so a Secret attached by hand is removed at the
+# next apply; declared here, it stays.
+
+locals {
+  langsmith_image_pull_secrets = var.langsmith_image_pull_secret_name == "" ? [] : [var.langsmith_image_pull_secret_name]
+}
 
 resource "kubernetes_service_account_v1" "langsmith" {
   metadata {
@@ -65,6 +77,13 @@ resource "kubernetes_service_account_v1" "langsmith" {
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
     annotations = {
       "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
+    }
+  }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
     }
   }
 }
@@ -79,6 +98,13 @@ resource "kubernetes_service_account_v1" "backend" {
       "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
     }
   }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
 }
 
 resource "kubernetes_service_account_v1" "smithdb" {
@@ -91,6 +117,41 @@ resource "kubernetes_service_account_v1" "smithdb" {
       "azure.workload.identity/client-id" = var.smithdb_managed_identity_client_id
     }
   }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
+}
+
+# Kubernetes creates the default service account in the namespace. With a pull
+# Secret set, the module adopts it (the provider's resource for exactly that)
+# and attaches the Secret, because the operator's Redis and PostgreSQL pods run
+# as it. Clearing the setting destroys the resource, which deletes the account;
+# Kubernetes recreates it, without the Secret, within seconds.
+resource "kubernetes_default_service_account_v1" "langsmith" {
+  count = var.langsmith_image_pull_secret_name == "" ? 0 : 1
+
+  metadata {
+    name      = "default"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  image_pull_secret {
+    name = var.langsmith_image_pull_secret_name
+  }
+}
+
+locals {
+  # The accounts that carry the pull Secret, for the output and the tests.
+  langsmith_image_pull_secret_service_accounts = var.langsmith_image_pull_secret_name == "" ? [] : compact([
+    "langsmith-ksa",
+    var.backend_service_account_name,
+    var.enable_smithdb ? var.smithdb_service_account_name : "",
+    "default",
+  ])
 }
 
 # SmithDB's disk-backed caches use per-pod generic ephemeral PVCs. Premium SSD

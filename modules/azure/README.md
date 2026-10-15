@@ -824,7 +824,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Guards against a stuck Helm release: auto-rolls back `pending-upgrade` state before proceeding
 - Runs `helm upgrade --install langsmith langchain/langsmith --timeout 20m`
 - Waits for core deployments to roll out (`frontend`, `backend`, `platform-backend`, `ingest-queue`, `queue`, and Deployments pods if enabled)
-- Annotates the `langsmith-ksa` service account with the Workload Identity client ID (used by operator-spawned agent pods)
+- Annotates the `langsmith-ksa` service account with the Workload Identity client ID (used by operator-spawned agent pods); a pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
 - Prints the access URL, login email, and the `az keyvault` command to retrieve the admin password
 
 ---
@@ -942,7 +942,7 @@ These are copied to `helm/values/` by `make init-values` when the corresponding 
 
 **`langsmith-values-agent-deploys.yaml`** — Pass 3 (`enable_deployments = true`)
 
-Enables the LangGraph Platform: the Deployments nav item in the UI, the `listener` pod (watches for new deployment requests), and the `operator` pod (spawns and manages agent pods). Also includes the operator's deployment template — the spec used when it creates agent pods. `make init-values` automatically injects `config.deployment.url` (your FQDN with protocol) and `config.deployment.tlsEnabled` so the operator builds correct endpoint URLs.
+Enables the LangGraph Platform: the Deployments nav item in the UI, the `listener` pod (watches for new deployment requests), and the `operator` pod (spawns and manages agent pods). Also includes the operator's deployment template — the spec used when it creates agent pods. That template runs agent pods as `langsmith-ksa`; each deployment's Redis and PostgreSQL run as the namespace's `default` account, and none of them takes the chart's `images.imagePullSecrets`, so a mirror that needs credentials also needs `langsmith_image_pull_secret_name`. `make init-values` automatically injects `config.deployment.url` (your FQDN with protocol) and `config.deployment.tlsEnabled` so the operator builds correct endpoint URLs.
 
 > Without the correct `url` and `tlsEnabled`, agent deployments will get stuck in `DEPLOYING` state indefinitely.
 
@@ -1389,6 +1389,13 @@ decides what the cluster can reach, and nothing works until it allows:
   that requires a login takes `keda_chart_repository_username` and
   `keda_chart_repository_password` (in `secrets.auto.tfvars`), and without
   them the mirror must allow anonymous reads.
+  The pods the operator creates for each deployment (the agent pod, as
+  `langsmith-ksa`, and its Redis and PostgreSQL, as the namespace's `default`
+  account) do not take the chart's `images.imagePullSecrets`;
+  `langsmith_image_pull_secret_name` names a Secret in the LangSmith namespace
+  that the module attaches to those accounts, and to the backend and SmithDB
+  accounts it creates, so every apply keeps it. Create the Secret after the
+  apply that creates the namespace and before the first deployment.
   LangSmith's own images are separate: the chart joins `images.registry` to
   repositories that mostly begin with `docker.io/`, so under a proxy-layout
   mirror leave `images.registry` empty and set each

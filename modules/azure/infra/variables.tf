@@ -1596,6 +1596,17 @@ variable "postgres_admin_password" {
   }
 }
 
+variable "langsmith_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in langsmith_namespace that the pods the LangGraph operator creates pull with. The chart's own pods take images.imagePullSecrets from the values file; the pods the operator creates for each deployment do not: the agent pod runs as the langsmith-ksa service account, and the deployment's Redis and PostgreSQL pods as the namespace's default account. The module attaches the Secret to those two accounts, and to the backend and SmithDB accounts it creates, so every apply keeps it. Create the Secret in the namespace after the apply that creates the namespace and before the first deployment; the accounts reference it by name. Empty (default) attaches nothing."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_image_pull_secret_name == "" || (length(var.langsmith_image_pull_secret_name) <= 253 && can(regex("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", var.langsmith_image_pull_secret_name)))
+    error_message = "langsmith_image_pull_secret_name must be a Secret name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit, at most 253 characters."
+  }
+}
+
 # ── LangSmith secrets ─────────────────────────────────────────────────────────
 # Only the license key is a Terraform variable: the k8s_bootstrap module needs
 # it to create the langsmith-license K8s secret.
