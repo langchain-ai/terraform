@@ -1532,7 +1532,7 @@ variable "install_cert_manager" {
 
 variable "install_keda" {
   type        = bool
-  description = "Install KEDA into the cluster. Set false when the cluster already runs it. KEDA scales the LangSmith queue workers on Redis queue depth, so something has to provide it."
+  description = "Install KEDA into the cluster. Set false when the cluster already runs it. The LangSmith Deployments operator scales agent deployments through KEDA, so something has to provide it when Deployments are enabled."
   default     = true
 }
 

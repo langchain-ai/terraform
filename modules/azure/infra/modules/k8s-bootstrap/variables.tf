@@ -283,7 +283,7 @@ variable "cert_manager_identity_client_id" {
 # Defaults true for the same reason install_cert_manager does.
 variable "install_keda" {
   type        = bool
-  description = "Install KEDA, which scales the LangSmith queue workers on Redis queue depth. Set false when attaching to a cluster that already runs it."
+  description = "Install KEDA, which the LangSmith Deployments operator uses to scale agent deployments. Set false when attaching to a cluster that already runs it."
   default     = true
 }
 
