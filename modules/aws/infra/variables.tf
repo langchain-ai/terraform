@@ -655,6 +655,12 @@ variable "langsmith_namespace" {
   }
 }
 
+variable "langsmith_admin_email" {
+  type        = string
+  description = "Initial LangSmith organization admin email. Stored as configuration and written to initialOrgAdminEmail in Helm values."
+  default     = ""
+}
+
 variable "tls_certificate_source" {
   type        = string
   default     = "acm"

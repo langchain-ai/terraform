@@ -83,6 +83,9 @@ name_prefix = "myco"
 # SSM parameter lookups, IRSA trust policies, and S3 bucket references.
 environment = "dev"
 
+# Initial organization admin account. This is configuration, not a secret.
+langsmith_admin_email = "admin@example.com"
+
 #------------------------------------------------------------------------------
 # TAGGING — For cost tracking and ownership in AWS
 #------------------------------------------------------------------------------

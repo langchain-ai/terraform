@@ -267,7 +267,6 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   _require_env "TF_VAR_langsmith_jwt_secret"
   _require_env "LANGSMITH_LICENSE_KEY"
   _require_env "LANGSMITH_ADMIN_PASSWORD"
-  _require_env "LANGSMITH_ADMIN_EMAIL"
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
@@ -322,7 +321,6 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=api_key_salt="${TF_VAR_langsmith_api_key_salt}" \
     --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
-    --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
     ${_sandbox_secret_literals[@]+"${_sandbox_secret_literals[@]}"} \
     ${_polly_secret_literals[@]+"${_polly_secret_literals[@]}"} \
     ${_insights_secret_literals[@]+"${_insights_secret_literals[@]}"} \

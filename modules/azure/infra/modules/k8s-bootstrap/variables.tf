@@ -283,7 +283,7 @@ variable "cert_manager_identity_client_id" {
 # Defaults true for the same reason install_cert_manager does.
 variable "install_keda" {
   type        = bool
-  description = "Install KEDA, which scales the LangSmith queue workers on Redis queue depth. Set false when attaching to a cluster that already runs it."
+  description = "Install KEDA, which the LangSmith Deployments operator uses to scale agent deployments. Set false when attaching to a cluster that already runs it."
   default     = true
 }
 
@@ -291,4 +291,55 @@ variable "keda_version" {
   type        = string
   description = "KEDA Helm chart version"
   default     = "2.14.0"
+}
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Shape the namespace for sandbox-host: the quota and LimitRange drop CPU and memory limits, the node subnet reaches platform-backend's API port where the policy engine is not Cilium, and the JuiceFS config Secret is created."
+  default     = false
+}
+
+variable "sandbox_juicefs_secret_name" {
+  type        = string
+  description = "Name of the JuiceFS config Secret, passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_config" {
+  type        = map(string)
+  description = "JuiceFS config Secret data: name, metaurl, storage, bucket, access-key."
+  sensitive   = true
+  default     = {}
+}
+
+variable "sandbox_juicefs_config_revision" {
+  type        = number
+  description = "Revision of the write-only JuiceFS config Secret. A change rewrites the Secret from sandbox_juicefs_config."
+  default     = 1
+}
+
+variable "sandbox_juicefs_redis_id" {
+  type        = string
+  description = "Resource ID of the JuiceFS Redis. A replaced Redis replaces the JuiceFS config Secret, which writes the new host and key."
+  default     = null
+}
+
+variable "platform_backend_component" {
+  type        = string
+  description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. Selects the pods the node subnet may reach when sandboxes are on."
+  default     = "langsmith-platform-backend"
+}
+
+variable "network_policy_engine" {
+  type        = string
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. On cilium, helm/scripts/deploy.sh admits the nodes to platform-backend instead of this module."
+  default     = "azure"
+}
+
+variable "node_subnet_cidrs" {
+  type        = list(string)
+  description = "Address prefixes of the AKS node subnet, admitted to platform-backend's API port when sandboxes are on and the engine is not cilium."
+  default     = []
 }

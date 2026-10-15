@@ -268,7 +268,8 @@ module "eks" {
   tags                            = local.common_tags
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
-  eks_managed_node_groups         = local.eks_managed_node_groups
+  eks_managed_node_groups         = var.eks_managed_node_groups
+  extra_eks_managed_node_groups   = local.extra_eks_managed_node_groups
   enable_karpenter                = var.enable_smithdb
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster

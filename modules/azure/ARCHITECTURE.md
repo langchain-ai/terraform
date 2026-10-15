@@ -215,6 +215,7 @@ Pass 1 — Infrastructure
       langsmith-insights-encryption-key       — generated (Fernet)
       langsmith-polly-encryption-key          — generated (Fernet)
       smithdb-taskdb-password                 — generated
+      langsmith-sandbox-callback-signing-jwk  — generated (Ed25519 JWK), enable_sandboxes only
     Write-once — an existing secret is never overwritten, so it is safe to re-run.
 
 Pass 2 — Application
@@ -232,7 +233,7 @@ Pass 2 — Application
 **Key rules:**
 
 - `secrets.auto.tfvars` is never committed. Re-run `./setup-env.sh` on any machine to recreate it.
-- The eight app secrets exist only in Key Vault — there is no second copy to restore from. Rotating one is destructive: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable.
+- The app secrets exist only in Key Vault — there is no second copy to restore from. Rotating one is destructive: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable.
 - This matches the other two clouds. The AWS module's script writes SSM Parameter Store; the GCP module's writes Secret Manager. Terraform owns the vault and its access control, never its contents.
 
 ---
@@ -254,6 +255,7 @@ Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/
 |------|---------|------|-----|-----|-----|---------|
 | default | Standard_D8s_v5 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
 | large | Standard_D16s_v5 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
+| sandboxhost | Standard_D8ds_v5 (`production`: Standard_D32ds_v5) | 8 (32) | 32 GB (128 GB) | 0 | 5 | sandbox-host and its Firecracker microVMs; tainted, only with `enable_sandboxes = true` |
 > ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
 >
 > SmithDB workloads schedule on ordinary AKS nodes by default. Cache data uses per-pod Premium SSD v2 volumes rather than node-local temporary disks. Use `additional_node_pools` and chart scheduling overrides when workload isolation is required.
@@ -271,6 +273,7 @@ Optional modules are count-controlled — 0 = disabled, 1 = enabled. Enable any 
 | `bastion` | `create_bastion = true` | Azure Bastion (Standard tier). Secure browser-based SSH to node VMs without a public IP. |
 | `dns` | `create_dns_zone = true` | Azure DNS zone + A record. Required for DNS-01 cert issuance with a custom domain. |
 | `smithdb` | `enable_smithdb = true` | SmithDB metastore, object store, workload identity, and node pools. Needs an explicit chart line — see [SMITHDB.md](SMITHDB.md#version-requirements). |
+| sandboxes | `enable_sandboxes = true` | Sandbox-host node pool, JuiceFS metadata Redis, JuiceFS Blob container, and the sandbox-host workload identity. Chart 0.17; refer to [Sandboxes](README.md#sandboxes). |
 
 ### SmithDB (`enable_smithdb = true`)
 
@@ -364,6 +367,7 @@ Every pod that reads blob storage env vars (`langsmith.commonEnv` in the Helm ch
 | `langsmith-agent-builder-trigger-server` | 4 | yes |
 | `langsmith-agent-gateway` | LLM Gateway (`enable_llm_gateway`) | yes |
 | `langsmith-presidio-analyzer` | LLM Gateway PII redaction (`enable_gateway_pii_redaction`) | yes |
+| `langsmith-sandbox-host`, `langsmith-juicefs-format-*` | Sandboxes (`enable_sandboxes`) | yes, with the separate sandbox-host identity that can write only the JuiceFS container |
 | `langsmith-frontend` | 2 | no |
 | `langsmith-playground` | 2 | no |
 | `langsmith-ace-backend` | 2 | no |

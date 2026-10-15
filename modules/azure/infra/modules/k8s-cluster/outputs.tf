@@ -204,6 +204,11 @@ output "node_subnet_ids" {
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
 }
 
+output "network_policy_engine" {
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. A created cluster runs network_policy; an attached one reports its own."
+  value       = var.create_cluster ? var.network_policy : coalesce(try(data.azurerm_kubernetes_cluster.existing[0].network_profile[0].network_policy, null), "none")
+}
+
 output "control_plane_grants" {
   description = "The role assignments the module makes for the user-assigned control-plane identity, as role and scope. Empty with a system-assigned identity, and when the grants are left to the network's owner."
   value = [

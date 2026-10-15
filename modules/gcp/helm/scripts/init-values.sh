@@ -16,8 +16,8 @@
 #   - terraform output              → storage_bucket_name, workload_identity_annotation,
 #                                     cluster_name, ingress_ip
 #
+# Falls back to prompting for the admin email when it is not in Terraform.
 # Prompts for (on first run):
-#   - Admin email
 #   - Sizing profile (ha / light / none)
 #   - Product tier (LangSmith only / +Deployments / +Agent Builder / +Insights)
 #
@@ -273,13 +273,16 @@ else
 fi
 
 # ── Admin email ───────────────────────────────────────────────────────────────
+ADMIN_EMAIL=$(_parse_tfvar "langsmith_admin_email") || ADMIN_EMAIL=""
 EXISTING_EMAIL=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_EMAIL=$(grep -E '^\s*initialOrgAdminEmail:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_EMAIL=""
 fi
 
-if [[ -n "$EXISTING_EMAIL" ]]; then
+if [[ -n "$ADMIN_EMAIL" ]]; then
+  echo "Admin email (from terraform.tfvars): $ADMIN_EMAIL"
+elif [[ -n "$EXISTING_EMAIL" ]]; then
   ADMIN_EMAIL="$EXISTING_EMAIL"
   echo "Reusing existing admin email: $ADMIN_EMAIL"
 elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
