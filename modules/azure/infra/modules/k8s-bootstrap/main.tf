@@ -422,6 +422,12 @@ resource "kubernetes_secret_v1" "clickhouse" {
   metadata {
     name      = "langsmith-clickhouse"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    # preflight.sh reads this label to tell a Secret Terraform wrote from one
+    # init-values.sh created before clickhouse_host was set; the provider cannot
+    # adopt the latter, and preflight prints the import that does.
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
   }
 
   data = {

@@ -11,6 +11,10 @@ case "$ARGS" in
   "config current-context"*)
     if [ -f "$FIX/kube_ctx" ]; then cat "$FIX/kube_ctx"; exit 0; fi
     echo "error: current-context is not set" >&2; exit 1 ;;
+  "get secret langsmith-clickhouse"*)
+    printf 'kubectl %s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/ch_secret.json" ]; then cat "$FIX/ch_secret.json"; exit 0; fi
+    echo 'Error from server (NotFound): secrets "langsmith-clickhouse" not found' >&2; exit 1 ;;
   "get nodes"*)
     printf 'kubectl %s\n' "$ARGS" >> "$FIX/calls.log"
     if [ -f "$FIX/nodes.json" ]; then cat "$FIX/nodes.json"; exit 0; fi

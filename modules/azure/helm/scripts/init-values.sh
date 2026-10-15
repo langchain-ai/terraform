@@ -898,6 +898,7 @@ if [[ "$_clickhouse_source" == "external" ]]; then
   if [[ -n "$_clickhouse_tf_host" ]]; then
     pass "langsmith-clickhouse secret is Terraform's: clickhouse_host = ${_clickhouse_tf_host} in terraform.tfvars, so make apply writes it from the clickhouse_* variables"
     info "To change the connection, edit the clickhouse_* variables and run make apply; deploy.sh checks the secret's keys before deploying."
+    info "If this install's secret predates clickhouse_host (an earlier init-values.sh created it), make preflight says so and prints the import that adopts it; apply cannot adopt it on its own."
   elif ! kubectl auth can-i create secret -n "$NAMESPACE" &>/dev/null; then
     warn "clickhouse_source = \"external\" needs a langsmith-clickhouse secret, but kubectl cannot create secrets in namespace $NAMESPACE."
     info "Values files are written and complete — only the secret is outstanding."

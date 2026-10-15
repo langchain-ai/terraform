@@ -50,6 +50,11 @@ run "external_with_a_host_writes_the_secret" {
     condition     = output.clickhouse_secret_name == "langsmith-clickhouse"
     error_message = "With clickhouse_host set, Terraform should write the langsmith-clickhouse Secret, got ${coalesce(output.clickhouse_secret_name, "null")}"
   }
+
+  assert {
+    condition     = module.k8s_bootstrap.clickhouse_secret_labels["app.kubernetes.io/managed-by"] == "terraform"
+    error_message = "The Secret Terraform writes should carry app.kubernetes.io/managed-by = terraform, the label preflight.sh reads to tell it from one init-values.sh created"
+  }
 }
 
 run "external_without_a_host_leaves_the_secret_to_init_values" {
