@@ -447,7 +447,7 @@ make quickdeploy-auto
 ```bash
 cd terraform/aws
 
-make init-values       # prompts: admin email; reads sizing + addons from terraform.tfvars
+make init-values       # reads admin email, sizing, and addons from Terraform
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
