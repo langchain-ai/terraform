@@ -451,6 +451,30 @@ resource "helm_release" "cert_manager" {
 # ── KEDA ──────────────────────────────────────────────────────────────────────
 # Kubernetes Event-Driven Autoscaling. Scales LangSmith queue workers
 # based on Redis queue depth.
+#
+# With keda_image_registry, the chart's global.image.registry puts the mirror
+# in front of each image's repository, whose default carries the ghcr.io host
+# (ghcr.io/kedacore/<name>), so the pull is <registry>/ghcr.io/kedacore/<name>.
+# keda_image_registry_keeps_source_host = false drops that segment by setting
+# the three repositories to kedacore/<name>. The tag is the chart's appVersion,
+# which KEDA keeps equal to the chart version. local.keda_images composes the
+# same paths for the keda_images output, so a plan shows what the nodes pull.
+locals {
+  keda_mirror       = var.install_keda && var.keda_image_registry != ""
+  keda_image_prefix = local.keda_mirror ? (var.keda_image_registry_keeps_source_host ? "${var.keda_image_registry}/ghcr.io/kedacore/" : "${var.keda_image_registry}/kedacore/") : "ghcr.io/kedacore/"
+  keda_images = var.install_keda ? {
+    for name in ["keda", "keda-metrics-apiserver", "keda-admission-webhooks"] : name => "${local.keda_image_prefix}${name}:${var.keda_version}"
+  } : {}
+  keda_mirror_sets = merge(
+    local.keda_mirror ? { "global.image.registry" = var.keda_image_registry } : {},
+    local.keda_mirror && !var.keda_image_registry_keeps_source_host ? {
+      "image.keda.repository"             = "kedacore/keda"
+      "image.metricsApiServer.repository" = "kedacore/keda-metrics-apiserver"
+      "image.webhooks.repository"         = "kedacore/keda-admission-webhooks"
+    } : {},
+    var.install_keda && var.keda_image_pull_secret_name != "" ? { "imagePullSecrets[0].name" = var.keda_image_pull_secret_name } : {},
+  )
+}
 
 resource "helm_release" "keda" {
   count = var.install_keda ? 1 : 0
@@ -458,11 +482,14 @@ resource "helm_release" "keda" {
   name             = "keda"
   namespace        = "keda"
   create_namespace = true
-  repository       = "https://kedacore.github.io/charts"
-  chart            = "keda"
-  version          = var.keda_version
-  wait             = true
-  wait_for_jobs    = true
+  repository       = var.keda_chart_repository
+  # A mirror behind a login takes the two; null keeps the fetch anonymous.
+  repository_username = var.keda_chart_repository_username != "" ? var.keda_chart_repository_username : null
+  repository_password = var.keda_chart_repository_password != "" ? var.keda_chart_repository_password : null
+  chart               = "keda"
+  version             = var.keda_version
+  wait                = true
+  wait_for_jobs       = true
 
   set {
     name  = "resources.operator.requests.cpu"
@@ -495,5 +522,14 @@ resource "helm_release" "keda" {
   set {
     name  = "resources.metricServer.limits.memory"
     value = "512Mi"
+  }
+
+  # The mirror, the repository layout and the pull Secret, only when set.
+  dynamic "set" {
+    for_each = local.keda_mirror_sets
+    content {
+      name  = set.key
+      value = set.value
+    }
   }
 }

@@ -177,6 +177,20 @@ ingress_controller = "envoy-gateway"
 # envoy_gateway_image_registry_keeps_source_host = false
 # envoy_gateway_image_pull_secret_name           = "nexus-pull"
 
+# KEDA's three images come from ghcr.io/kedacore. keda_image_registry points them
+# at a mirror the same way: <registry>/ghcr.io/kedacore/... by default, or
+# <registry>/kedacore/... with keda_image_registry_keeps_source_host = false. The
+# pull Secret goes in the keda namespace, created before the apply that installs
+# KEDA. keda_chart_repository points the Helm fetch at a mirrored repository.
+# keda_image_registry                   = "nexus.example.com"
+# keda_image_registry_keeps_source_host = false
+# keda_image_pull_secret_name           = "nexus-pull"
+# keda_chart_repository                 = "https://nexus.example.com/repository/helm-kedacore"
+# A chart mirror behind a login takes a username here and its password in
+# secrets.auto.tfvars (keda_chart_repository_password); without them the fetch
+# is anonymous, which the mirror must then allow.
+# keda_chart_repository_username        = "helm-reader"
+
 # A mirror whose certificate an internal CA signed also needs that CA on the
 # nodes, where containerd pulls images: one PEM file per CA, up to 10, paths
 # relative to this directory or absolute. A change to the list replaces every
