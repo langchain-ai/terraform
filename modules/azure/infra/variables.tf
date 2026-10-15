@@ -1703,6 +1703,22 @@ variable "postgres_standby_availability_zone" {
   default     = ""
 }
 
+variable "postgres_high_availability_mode" {
+  type        = string
+  description = "How PostgreSQL high availability places the standby when postgres_high_availability is true or postgres_standby_availability_zone is set. \"ZoneRedundant\" (default): the standby in a zone other than the primary's; survives a zone loss; the 99.99% SLA mode. \"SameZone\": the standby in the primary's zone; survives a node loss and shortens planned maintenance, not a zone loss; the 99.95% SLA mode, and the only one a region offers when it has no zone-redundant capacity for the SKU, as usgovvirginia does for the General Purpose SKUs. Azure sets the mode at the server, so a server already set to one mode by hand must be told the same mode here, or the next apply changes it. SameZone takes no postgres_standby_availability_zone: the standby shares the primary's zone."
+  default     = "ZoneRedundant"
+
+  validation {
+    condition     = contains(["ZoneRedundant", "SameZone"], var.postgres_high_availability_mode)
+    error_message = "postgres_high_availability_mode must be \"ZoneRedundant\" or \"SameZone\"."
+  }
+
+  validation {
+    condition     = var.postgres_high_availability_mode != "SameZone" || var.postgres_standby_availability_zone == ""
+    error_message = "postgres_high_availability_mode = \"SameZone\" places the standby in the primary's zone, so postgres_standby_availability_zone cannot pin it elsewhere. Leave postgres_standby_availability_zone empty, or use \"ZoneRedundant\"."
+  }
+}
+
 variable "postgres_geo_redundant_backup" {
   type        = bool
   description = "Enable geo-redundant backups for PostgreSQL."

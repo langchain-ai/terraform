@@ -246,7 +246,7 @@ The zone names are Microsoft's recommended names from the [private endpoint DNS 
 Limits in Azure Government:
 
 - **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
-- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true`; a region with only `SameZone` takes `postgres_high_availability_mode = "SameZone"` (#291)
 - **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
 
 **The state backend needs the cloud too.** `azure_environment` configures the providers, not the `azurerm` backend, which Terraform initializes before it reads any variable. A state storage account in Government needs `environment = "usgovernment"` in the `backend "azurerm"` block, or `ARM_ENVIRONMENT=usgovernment` in the shell that runs `terraform init`.
@@ -1614,6 +1614,27 @@ postgres_high_availability = true
 
 Azure puts the standby in a zone other than the primary's, so HA works under the
 `[]` default and does not force you to pin anything.
+
+A region that offers no zone-redundant capacity for the SKU, as `usgovvirginia`
+does for the General Purpose sizes (`az postgres flexible-server list-skus
+--location <region>` shows `supportedHaMode: ["SameZone"]` and
+`zoneRedundantHaSupported: Disabled`), takes same-zone HA instead: the standby
+in the primary's zone, which survives a node loss and shortens planned
+maintenance but not a zone loss (Microsoft's 99.95% mode, against 99.99% for
+zone-redundant and 99.9% with no standby):
+
+```hcl
+postgres_high_availability      = true
+postgres_high_availability_mode = "SameZone"
+```
+
+`SameZone` takes no `postgres_standby_availability_zone`. Azure sets the mode on
+the server, so a server already switched to one mode by hand (the ARM call is
+`PATCH .../flexibleServers/<name>?api-version=2024-08-01` with
+`{"properties":{"highAvailability":{"mode":"SameZone"}}}`; the CLI has no
+flag for it) must be told the same mode here, or the next apply changes it:
+with the default, the plan changes `SameZone` to `ZoneRedundant` and the apply
+fails in a region without zone-redundant capacity.
 
 Pin zones when you want to choose the placement yourself:
 
