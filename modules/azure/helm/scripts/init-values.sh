@@ -284,6 +284,19 @@ _enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
 _enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
 _enable_sso_oidc=$(_parse_tfvar "enable_sso_oidc") || _enable_sso_oidc="false"
 
+# ── LangSmith images from a mirror — read from terraform.tfvars ───────────
+_ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
+_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="true"
+_ls_pull_secret=$(_parse_tfvar "langsmith_image_pull_secret_name") || _ls_pull_secret=""
+if [[ -n "$_ls_image_registry" || -n "$_ls_pull_secret" ]]; then
+  echo ""
+  echo "  Images (from terraform.tfvars):"
+  info "langsmith_image_registry                   = ${_ls_image_registry:-<docker.io>}"
+  info "langsmith_image_registry_keeps_source_host = $_ls_image_keeps_host"
+  info "langsmith_image_pull_secret_name           = ${_ls_pull_secret:-<none>}"
+fi
+_images_block=$(_langsmith_images_block "$_ls_image_registry" "$_ls_image_keeps_host" "$_ls_pull_secret")
+
 echo ""
 echo "  Product tier (from terraform.tfvars enable_* flags):"
 info "enable_deployments   = $_enable_deployments"
@@ -553,6 +566,8 @@ ${_blob_endpoint_line}
     # Full URL used by the operator to build agent deployment endpoints.
     # Must include protocol — wrong value keeps deployments stuck in DEPLOYING state.
     url: "${_protocol}://${HOSTNAME}"${_custom_ca_block}
+
+${_images_block}
 
 ${_postgres_block}
 
