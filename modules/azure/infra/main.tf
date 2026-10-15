@@ -2464,6 +2464,15 @@ module "k8s_bootstrap" {
   install_cert_manager = var.install_cert_manager
   install_keda         = var.install_keda
 
+  # KEDA's images and chart from a mirror. Composed paths are in the
+  # keda_images output.
+  keda_image_registry                   = var.keda_image_registry
+  keda_image_registry_keeps_source_host = var.keda_image_registry_keeps_source_host
+  keda_image_pull_secret_name           = var.keda_image_pull_secret_name
+  keda_chart_repository                 = var.keda_chart_repository
+  keda_chart_repository_username        = var.keda_chart_repository_username
+  keda_chart_repository_password        = var.keda_chart_repository_password
+
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and
   # subscription_id straight from terraform.tfvars.

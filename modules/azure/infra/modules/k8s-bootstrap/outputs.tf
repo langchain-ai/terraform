@@ -62,3 +62,23 @@ output "platform_backend_node_ingress" {
     }
   ])
 }
+
+output "keda_images" {
+  description = "The three images KEDA's pods pull, keyed by name, composed as the chart composes them from keda_image_registry and keda_image_registry_keeps_source_host. Empty when install_keda is false."
+  value       = local.keda_images
+}
+
+output "keda_helm_sets" {
+  description = "The chart values the mirror settings add to the KEDA release, as name = value. Empty without a mirror."
+  value       = local.keda_mirror_sets
+}
+
+output "keda_image_pull_secret_name" {
+  description = "Pull Secret KEDA's pods use, empty without one."
+  value       = var.install_keda ? var.keda_image_pull_secret_name : ""
+}
+
+output "keda_chart_repository_authenticated" {
+  description = "Whether the KEDA chart fetch sends a username and password. False without them or without KEDA."
+  value       = var.install_keda && var.keda_chart_repository_username != ""
+}

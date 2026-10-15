@@ -1648,6 +1648,63 @@ variable "install_keda" {
   default     = true
 }
 
+variable "keda_image_registry" {
+  type        = string
+  description = "Registry that mirrors ghcr.io for KEDA's three images (the operator, the metrics API server and the admission webhooks), as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). They are pulled as <registry>/ghcr.io/kedacore/<name>:<keda chart version> when the mirror keeps the source host, the layout LangSmith's images.registry expects, or as <registry>/kedacore/<name>:<version> with keda_image_registry_keeps_source_host = false. Empty (default) pulls from ghcr.io. Applies when install_keda is true."
+  default     = ""
+
+  validation {
+    condition     = var.keda_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.keda_image_registry))
+    error_message = "keda_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+  }
+}
+
+variable "keda_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether keda_image_registry keeps ghcr.io as the first path segment under the registry. true (default): the images are pulled as <registry>/ghcr.io/kedacore/<name>, the layout LangSmith's images.registry expects. false: the mirror serves ghcr.io's paths directly, as a proxy repository for ghcr.io in Nexus or Artifactory does, and the images are pulled as <registry>/kedacore/<name>."
+  default     = true
+}
+
+variable "keda_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the keda namespace that KEDA's pods pull with. Create the namespace and the Secret before the apply that installs KEDA, as for envoy_gateway_image_pull_secret_name. Empty (default) pulls without credentials. Requires keda_image_registry."
+  default     = ""
+
+  validation {
+    condition     = var.keda_image_pull_secret_name == "" || var.keda_image_registry != ""
+    error_message = "keda_image_pull_secret_name only applies with a mirror. Set keda_image_registry, or leave keda_image_pull_secret_name empty."
+  }
+}
+
+variable "keda_chart_repository" {
+  type        = string
+  description = "Helm repository the KEDA chart is fetched from, by the machine running Terraform. The default is KEDA's own; a mirrored repository (a Helm proxy in Nexus or Artifactory, or an OCI registry as oci://<host>/<path>) keeps that machine off kedacore.github.io. The chart name and version do not change."
+  default     = "https://kedacore.github.io/charts"
+
+  validation {
+    condition     = can(regex("^(https?|oci)://[^/]+(/[^/]+)*$", var.keda_chart_repository))
+    error_message = "keda_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'https://kedacore.github.io/charts' or 'oci://nexus.example.com/helm-kedacore')."
+  }
+}
+
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for keda_chart_repository when the mirror requires a login to read charts, as a Nexus or Artifactory Helm proxy behind authentication does; the machine running Terraform sends it with the chart fetch. Empty (default) fetches anonymously, which KEDA's own repository and an open mirror allow. Set with keda_chart_repository_password."
+  default     = ""
+
+  validation {
+    condition     = (var.keda_chart_repository_username == "") == (var.keda_chart_repository_password == "")
+    error_message = "keda_chart_repository_username and keda_chart_repository_password go together: set both for a chart mirror that requires a login, or neither."
+  }
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars."
+  default     = ""
+  sensitive   = true
+}
+
 variable "postgres_admin_username" {
   type        = string
   description = "The username of the Postgres administrator"
