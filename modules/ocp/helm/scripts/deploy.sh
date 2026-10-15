@@ -27,13 +27,14 @@ CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 # engineInsightsAgent, the top-level insights/polly blocks, and no
 # backend.agentBootstrap. Chart 0.15 ignores those keys instead of rejecting them,
 # so it renders cleanly while silently dropping the external Insights
-# Postgres/Redis wiring. Chart 0.18 has not been validated against them. Refuse
-# anything off the 0.17 line rather than deploy a half-configured release.
+# Postgres/Redis wiring. Chart 0.18 keeps that layout and only adds keys, so it
+# is accepted too. Refuse any other line rather than deploy a half-configured
+# release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.17" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 line." >&2
-  echo "       These values require chart 0.17 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 patch explicitly:" >&2
+if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
+  echo "       These values require chart 0.17 or 0.18 (engineInsightsAgent, top-level insights/polly)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 or 0.18 patch explicitly:" >&2
   echo "         CHART_VERSION=0.17.0 $0" >&2
   exit 1
 fi
