@@ -809,6 +809,7 @@ variable "existing_iam_role_arns" {
     eso                = optional(string)
     smithdb            = optional(string)
     cert_manager       = optional(string)
+    engine             = optional(string)
   })
   description = "ARNs of roles your IAM team created, for accounts where the deployer cannot create roles. Each one set skips creating that role, and the module attaches no policies to it. node_group covers every managed node group. The iam_role_trust_policies output gives the trust policy each IRSA role needs once the cluster exists."
   default     = {}

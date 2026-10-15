@@ -185,7 +185,7 @@ The deployment creates the following roles. IRSA roles trust the cluster's OIDC 
 
 The LangSmith role also gets `rds-db:connect` for one database user when `postgres_iam_database_authentication_enabled = true` and `postgres_iam_database_user` is set.
 
-`create_langsmith_irsa_role = false` is not a way to deploy without creating IAM, because `make init-values` annotates the LangSmith service accounts with this role's ARN. To use roles your IAM team created, set `existing_iam_role_arns`. It covers every role above except the sandbox host and bastion roles, and the module attaches no policies to a role you supply. The `iam_role_trust_policies` output gives the trust policy each supplied IRSA role needs. See [use existing IAM roles](README.md#iam-permissions-boundary-path-and-role-names).
+`create_langsmith_irsa_role = false` is not a way to deploy without creating IAM, because `make init-values` annotates the LangSmith service accounts with this role's ARN. To use roles your IAM team created, set `existing_iam_role_arns`. It covers every role above except the bastion role, with `node_group` covering the sandbox host too, and the module attaches no policies to a role you supply. The `iam_role_trust_policies` output gives the trust policy each supplied IRSA role needs. See [use existing IAM roles](README.md#iam-permissions-boundary-path-and-role-names).
 
 ## Resolve AccessDenied during apply
 

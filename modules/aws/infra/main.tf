@@ -484,6 +484,7 @@ locals {
     eso                = "system:serviceaccount:external-secrets:external-secrets"
     cert_manager       = "system:serviceaccount:cert-manager:cert-manager"
     smithdb            = var.enable_smithdb ? module.smithdb[0].service_account_subject : null
+    engine             = var.enable_engine ? [for sa in local.engine_service_accounts : "system:serviceaccount:${var.langsmith_namespace}:${sa}"] : null
   }
 }
 

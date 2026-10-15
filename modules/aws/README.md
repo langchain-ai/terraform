@@ -440,12 +440,14 @@ existing_iam_role_arns = {
   eso                = "arn:aws:iam::<account-id>:role/<base>-eso"
   smithdb            = "arn:aws:iam::<account-id>:role/<base>-smithdb-irsa"
   cert_manager       = "arn:aws:iam::<account-id>:role/<base>-cert-manager"
+  engine             = "arn:aws:iam::<account-id>:role/<base>-engine-irsa"
 }
 ```
 
 Set only the keys you need. `node_group` covers every managed node group,
 `karpenter`, `karpenter_node`, and `smithdb` apply with `enable_smithdb = true`,
-and `cert_manager` needs `create_cert_manager_irsa = true`.
+`cert_manager` needs `create_cert_manager_irsa = true`, and `engine` applies with
+`enable_engine = true`.
 
 Each role needs the permissions the module would otherwise attach. To see them,
 run `terraform plan` without `existing_iam_role_arns` and read the policy

@@ -199,7 +199,7 @@ output "iam_role_trust_policies" {
 #------------------------------------------------------------------------------
 output "engine_irsa_role_arn" {
   description = "IAM role ARN for Engine's API server and queue service accounts, IRSA (null when enable_engine = false). init-values.sh writes it as the eks.amazonaws.com/role-arn annotation on engineInsightsAgent.apiServer and engineInsightsAgent.queue."
-  value       = var.enable_engine ? aws_iam_role.engine[0].arn : null
+  value       = !var.enable_engine ? null : var.existing_iam_role_arns.engine != null ? var.existing_iam_role_arns.engine : aws_iam_role.engine[0].arn
 }
 
 #------------------------------------------------------------------------------

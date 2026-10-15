@@ -395,6 +395,55 @@ run "sandbox_host_node_group_keeps_metadata_options_and_overrides" {
   }
 }
 
+# The sandbox-host group reaches the EKS module outside the typed input, so check
+# that the IAM and EBS key settings every node group gets still reach it.
+run "sandbox_host_node_group_gets_the_iam_and_ebs_key_settings" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    iam_permissions_boundary_arn     = "arn:aws:iam::123456789012:policy/plantest-boundary"
+    iam_role_path                    = "/langsmith/"
+    ebs_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ab"
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary"
+    error_message = "iam_permissions_boundary_arn did not reach the sandbox-host node group"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_path == "/langsmith/"
+    error_message = "iam_role_path did not reach the sandbox-host node group"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].block_device_mappings.xvda.ebs.kms_key_id == var.ebs_kms_key_arn
+    error_message = "ebs_kms_key_arn did not reach the sandbox-host root volume"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].block_device_mappings.xvda.ebs.volume_size == 200
+    error_message = "the EBS key replaced the sandbox-host root volume size instead of adding to it"
+  }
+}
+
+run "sandbox_host_node_group_uses_the_existing_node_role" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    existing_iam_role_arns           = { node_group = "arn:aws:iam::123456789012:role/plantest-node" }
+  }
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["sandbox_host"].create_iam_role == false &&
+      module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_arn == "arn:aws:iam::123456789012:role/plantest-node"
+    )
+    error_message = "existing_iam_role_arns.node_group did not reach the sandbox-host node group"
+  }
+}
+
 run "sandbox_host_node_group_null_overrides_fall_back" {
   command = plan
 
