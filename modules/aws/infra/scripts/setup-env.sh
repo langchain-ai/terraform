@@ -428,6 +428,18 @@ _ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_k
 _ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
 
+# ── Engine keys ───────────────────────────────────────────────────────────────
+# engine-encryption-key is a Fernet key for the payloads LangSmith passes to
+# Engine. engine-usage-signing-secret is 64 hex characters that sign Engine's
+# usage reports (the chart needs 32 or more). The script creates both like the
+# add-on keys above, also while enable_engine = false. apply-eso.sh syncs both
+# into the langsmith-config Secret. Keep both stable; see ENGINE.md for rotation.
+_ssm_secret "engine-encryption-key" "" "TF_VAR_langsmith_engine_encryption_key" \
+  "$_fernet_gen" "" "true"
+
+_ssm_secret "engine-usage-signing-secret" "" "TF_VAR_langsmith_engine_usage_signing_secret" \
+  "openssl rand -hex 32" "" "true"
+
 # ── Non-interactive failure ───────────────────────────────────────────────────
 # Only populated when stdin is not a tty and a secret was in neither the
 # environment nor SSM. Reported here, once, on stdout — and before the summary,
@@ -473,6 +485,8 @@ echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-emai
 echo "  deploy_key        = (hidden — SSM: ${_ssm_prefix}/deployments-encryption-key)"
 echo "  fleet_key         = (hidden — SSM: ${_ssm_prefix}/agent-builder-encryption-key; historical name)"
 echo "  insights_key      = (hidden — SSM: ${_ssm_prefix}/insights-encryption-key)"
+echo "  engine_key        = (hidden — SSM: ${_ssm_prefix}/engine-encryption-key)"
+echo "  engine_signing    = (hidden — SSM: ${_ssm_prefix}/engine-usage-signing-secret)"
 echo "  ssm_prefix        = $_ssm_prefix"
 echo ""
 echo "Next:  terraform -chdir=infra apply"

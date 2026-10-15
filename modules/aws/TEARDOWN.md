@@ -203,7 +203,7 @@ Terraform will destroy in dependency order:
 - ElastiCache Redis cluster
 - S3 bucket
 - ALB (pre-provisioned)
-- IAM roles (IRSA, ESO)
+- IAM roles (IRSA, ESO, Engine)
 - EKS node groups and cluster
 - VPC, subnets, NAT gateway, route tables
 
@@ -546,6 +546,9 @@ delete_iam_role "$PREFIX-eso"
 
 # IRSA role
 delete_iam_role "$PREFIX-eks-irsa-role"
+
+# Engine role (enable_engine = true)
+delete_iam_role "$PREFIX-engine-irsa"
 
 # EKS cluster role (name has a timestamp suffix)
 delete_iam_role "$(aws iam list-roles --query "Roles[?starts_with(RoleName, \`$PREFIX-eks-cluster\`)].RoleName" --output text)"
