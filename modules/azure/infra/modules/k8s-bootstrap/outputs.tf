@@ -53,10 +53,12 @@ output "limit_range_default_limits" {
   value       = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
 }
 
-output "network_policy_excluded_components" {
-  description = "app.kubernetes.io/component values each default-deny policy leaves out, keyed by policy name. Empty lists with sandboxes off."
-  value = {
-    for p in [kubernetes_network_policy_v1.langsmith_default_deny, kubernetes_network_policy_v1.langsmith_allow_internal] :
-    p.metadata[0].name => flatten([for e in p.spec[0].pod_selector[0].match_expressions : e.values])
-  }
+output "platform_backend_node_ingress" {
+  description = "Address prefixes and ports the node-subnet NetworkPolicy admits to platform-backend, or null when this module creates none."
+  value = one([
+    for p in kubernetes_network_policy_v1.platform_backend_from_nodes : {
+      cidrs = [for f in p.spec[0].ingress[0].from : f.ip_block[0].cidr]
+      ports = [for port in p.spec[0].ingress[0].ports : "${port.protocol}/${port.port}"]
+    }
+  ])
 }

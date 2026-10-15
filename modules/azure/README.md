@@ -1019,11 +1019,13 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
   `sandbox_juicefs_redis_high_availability = false`, which turns off both. Losing it loses every sandbox file system.
   Its private endpoint is in the AKS subnet, so it needs no Redis subnet. Size it with `sandbox_juicefs_amr_sku`;
   JuiceFS uses about 300 bytes of Redis memory per file.
-- `sandbox-host` runs on the host network and calls platform-backend from a node IP. The namespace's default-deny
-  NetworkPolicy leaves out platform-backend for that reason; every other LangSmith pod keeps it. Any other Ingress
-  NetworkPolicy that selects platform-backend, such as a Prometheus scrape rule, cuts `sandbox-host` off, and its logs
-  show `dial tcp <ip>:1986: i/o timeout`. Leave platform-backend out of that policy's selector, or allow the AKS node
-  subnet on port 1986.
+- `sandbox-host` runs on the host network and calls platform-backend on port 1986 from a node IP. platform-backend
+  stays under the namespace's default-deny NetworkPolicy, and one more policy admits the nodes on port 1986 alone:
+  - With Azure Network Policy Manager, Terraform creates `allow-nodes-to-platform-backend`, which admits the AKS node
+    subnet. In node-subnet mode pods draw their addresses from that subnet too, so any pod can reach platform-backend
+    on port 1986. Only overlay mode limits it to the nodes.
+  - With Cilium, which never matches a node IP by `ipBlock`, `deploy.sh` applies a CiliumNetworkPolicy of the same
+    name that admits the `host` and `remote-node` entities, and deletes it when sandboxes are off.
 - The namespace ResourceQuota caps requests only, and the LimitRange sets no default limits. `sandbox-host` runs the
   microVMs in child cgroups of its own pod, so a container limit would cap every sandbox on the node.
 - `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy.
@@ -1438,7 +1440,9 @@ Cilium) enforces NetworkPolicy with eBPF, needs overlay mode and Kubernetes
 Manager loses Linux support on 2028-09-30. The one NetworkPolicy this module
 creates, the namespace rule that admits the ingress gateway by its subnet,
 works on both. Cilium's documented limitation is that `ipBlock` rules cannot
-select node or pod addresses, which that rule does not do.
+select node or pod addresses, which that rule does not do. The sandbox rule
+that admits the nodes to platform-backend does, so it takes a different form
+on each engine (see [Sandboxes](#sandboxes)).
 
 **Changing the network profile of an existing cluster is refused.** At plan
 time Terraform reads the profile the cluster runs (mode, data plane, policy

@@ -324,6 +324,11 @@ output "aks_network" {
   }
 }
 
+output "network_policy_engine" {
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. Read for an attached cluster too. deploy.sh applies the sandbox-host CiliumNetworkPolicy when it is cilium."
+  value       = module.aks.network_policy_engine
+}
+
 output "aks_nat_gateway_public_ip" {
   description = "Public IP of the NAT gateway Terraform created on the AKS subnet (aks_nat_gateway = \"create\"): the source address of traffic that leaves through it, for firewall rules and aks_authorized_ip_ranges. null otherwise."
   value       = one(azurerm_public_ip.aks_nat[*].ip_address)

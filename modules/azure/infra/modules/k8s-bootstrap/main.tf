@@ -180,12 +180,6 @@ resource "kubernetes_limit_range_v1" "langsmith" {
 # Default-deny blocks all ingress to LangSmith pods unless explicitly allowed.
 # This is defense-in-depth: even if a pod is compromised, it cannot receive
 # lateral traffic from other namespaces. Egress is unrestricted (external DBs).
-#
-# With sandboxes on, both policies leave out platform-backend. sandbox-host runs
-# on the host network and calls platform-backend from a node IP, which no
-# NetworkPolicy peer matches on Cilium, and which an ipBlock on Azure NPM can
-# admit only as the whole node subnet: every pod's subnet too under node-subnet
-# IPAM. Every other pod keeps the default-deny.
 
 resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
   metadata {
@@ -194,16 +188,7 @@ resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
   }
 
   spec {
-    pod_selector {
-      dynamic "match_expressions" {
-        for_each = var.enable_sandboxes ? [1] : []
-        content {
-          key      = "app.kubernetes.io/component"
-          operator = "NotIn"
-          values   = [var.platform_backend_component]
-        }
-      }
-    }
+    pod_selector {}
     policy_types = ["Ingress"]
   }
 }
@@ -234,16 +219,7 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
   }
 
   spec {
-    pod_selector {
-      dynamic "match_expressions" {
-        for_each = var.enable_sandboxes ? [1] : []
-        content {
-          key      = "app.kubernetes.io/component"
-          operator = "NotIn"
-          values   = [var.platform_backend_component]
-        }
-      }
-    }
+    pod_selector {}
 
     # Ingress controller namespace — skipped for controllers that do not run as
     # in-cluster pods (e.g. agic), where ingress_namespace resolves to "".
@@ -287,6 +263,54 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
     }
 
     policy_types = ["Ingress"]
+  }
+}
+
+# sandbox-host runs on the host network, so its calls to platform-backend come
+# from a node IP, which no namespace rule above matches. Azure NPM matches node
+# IPs by ipBlock, so this admits the node subnet to platform-backend's API port
+# alone. Under node-subnet IPAM, pods draw from the same range and reach that port
+# too; under overlay, only nodes do. Cilium on AKS never matches a node IP by
+# ipBlock, so there helm/scripts/deploy.sh applies a CiliumNetworkPolicy instead.
+resource "kubernetes_network_policy_v1" "platform_backend_from_nodes" {
+  count = var.enable_sandboxes && var.network_policy_engine != "cilium" ? 1 : 0
+
+  metadata {
+    name      = "allow-nodes-to-platform-backend"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/component" = var.platform_backend_component
+      }
+    }
+
+    ingress {
+      dynamic "from" {
+        for_each = var.node_subnet_cidrs
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
+      ports {
+        port     = "1986"
+        protocol = "TCP"
+      }
+    }
+
+    policy_types = ["Ingress"]
+  }
+
+  lifecycle {
+    precondition {
+      # An ingress rule with ports and no peers admits every source.
+      condition     = length(var.node_subnet_cidrs) > 0
+      error_message = "The NetworkPolicy admitting sandbox-host to platform-backend needs the AKS node subnet's address prefixes, and none were found."
+    }
   }
 }
 

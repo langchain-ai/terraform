@@ -978,6 +978,47 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
 fi
 
+# sandbox-host runs on the host network, so it calls platform-backend from a node
+# IP. On other engines Terraform admits the node subnet by ipBlock, which Cilium
+# on AKS never matches against a node IP, so on Cilium this policy admits the
+# nodes by entity instead. It is a CRD object, applied here for the same reason
+# as the ClusterIssuer. Applied before the release so sandbox-host's first call,
+# the default snapshot build, gets through.
+_policy_engine=$(_tf_out network_policy_engine) || _policy_engine=""
+if [[ "$_policy_engine" == "cilium" && "$_enable_sandboxes" == "true" ]]; then
+  if ! kubectl apply -f - >/dev/null <<EOF
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-nodes-to-platform-backend
+  namespace: ${NAMESPACE}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: ${CHART_FULLNAME}-platform-backend
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "1986"
+              protocol: TCP
+EOF
+  then
+    fail "Could not apply the CiliumNetworkPolicy that admits sandbox-host to platform-backend"
+    exit 1
+  fi
+  pass "CiliumNetworkPolicy allow-nodes-to-platform-backend applied (sandbox-host to platform-backend :1986)"
+elif [[ "$_policy_engine" == "cilium" ]]; then
+  if ! kubectl delete ciliumnetworkpolicy allow-nodes-to-platform-backend -n "$NAMESPACE" --ignore-not-found >/dev/null; then
+    warn "Could not delete CiliumNetworkPolicy allow-nodes-to-platform-backend; the nodes can still reach platform-backend :1986"
+  fi
+elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" ]]; then
+  warn "Terraform has no network_policy_engine output yet. On a Cilium cluster, sandbox-host cannot reach platform-backend until it does."
+  action "Run: make apply, then make deploy"
+fi
+
 # --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
 # whole invocation with "unknown flag: --server-side" (verified on v3.21.4), so
 # passing it unconditionally blocks the deploy on the Helm 3 the docs require.

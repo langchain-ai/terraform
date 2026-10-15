@@ -297,7 +297,7 @@ variable "keda_version" {
 
 variable "enable_sandboxes" {
   type        = bool
-  description = "Shape the namespace for sandbox-host: the quota and LimitRange drop CPU and memory limits, the default-deny policies leave platform-backend reachable, and the JuiceFS config Secret is created."
+  description = "Shape the namespace for sandbox-host: the quota and LimitRange drop CPU and memory limits, the node subnet reaches platform-backend's API port where the policy engine is not Cilium, and the JuiceFS config Secret is created."
   default     = false
 }
 
@@ -322,6 +322,18 @@ variable "sandbox_juicefs_config_revision" {
 
 variable "platform_backend_component" {
   type        = string
-  description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. The default-deny policies leave it out when sandboxes are on."
+  description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. Selects the pods the node subnet may reach when sandboxes are on."
   default     = "langsmith-platform-backend"
+}
+
+variable "network_policy_engine" {
+  type        = string
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. On cilium, helm/scripts/deploy.sh admits the nodes to platform-backend instead of this module."
+  default     = "azure"
+}
+
+variable "node_subnet_cidrs" {
+  type        = list(string)
+  description = "Address prefixes of the AKS node subnet, admitted to platform-backend's API port when sandboxes are on and the engine is not cilium."
+  default     = []
 }

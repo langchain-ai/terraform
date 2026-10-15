@@ -61,8 +61,8 @@ run "sandboxes_absent_when_disabled" {
     error_message = "enable_sandboxes = false dropped limits from the namespace quota"
   }
   assert {
-    condition     = alltrue([for v in values(module.k8s_bootstrap.network_policy_excluded_components) : length(v) == 0])
-    error_message = "enable_sandboxes = false narrowed the default-deny selector"
+    condition     = module.k8s_bootstrap.platform_backend_node_ingress == null
+    error_message = "enable_sandboxes = false still admitted the node subnet to platform-backend"
   }
   assert {
     condition     = output.sandbox_host_min_replicas == null && output.sandbox_host_max_replicas == null
@@ -113,8 +113,39 @@ run "sandboxes_present_when_enabled" {
     error_message = "enable_sandboxes = true kept default limits in the LimitRange"
   }
   assert {
-    condition     = module.k8s_bootstrap.network_policy_excluded_components == { "default-deny-ingress" = ["langsmith-platform-backend"], "allow-from-ingress" = ["langsmith-platform-backend"] }
-    error_message = "enable_sandboxes = true did not leave platform-backend out of both default-deny policies"
+    condition     = tolist(module.k8s_bootstrap.platform_backend_node_ingress.cidrs) == tolist(var.aks_subnet_address_prefix) && tolist(module.k8s_bootstrap.platform_backend_node_ingress.ports) == tolist(["TCP/1986"])
+    error_message = "enable_sandboxes = true under Azure NPM did not admit the node subnet to platform-backend :1986 alone"
+  }
+}
+
+# Cilium on AKS never matches a node IP by ipBlock, so the node-subnet policy is
+# left to deploy.sh's CiliumNetworkPolicy there, and kept on overlay with NPM.
+run "node_subnet_policy_skipped_on_cilium" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    aks_network_mode = "overlay"
+  }
+
+  assert {
+    condition     = output.network_policy_engine == "cilium" && module.k8s_bootstrap.platform_backend_node_ingress == null
+    error_message = "Cilium still planned the node-subnet NetworkPolicy, or the engine output is not cilium: ${output.network_policy_engine}"
+  }
+}
+
+run "node_subnet_policy_kept_on_overlay_npm" {
+  command = plan
+
+  variables {
+    enable_sandboxes      = true
+    aks_network_mode      = "overlay"
+    aks_network_dataplane = "azure"
+  }
+
+  assert {
+    condition     = output.network_policy_engine == "azure" && tolist(module.k8s_bootstrap.platform_backend_node_ingress.cidrs) == tolist(var.aks_subnet_address_prefix) && tolist(module.k8s_bootstrap.platform_backend_node_ingress.ports) == tolist(["TCP/1986"])
+    error_message = "Overlay with Azure NPM did not admit the node subnet to platform-backend :1986"
   }
 }
 

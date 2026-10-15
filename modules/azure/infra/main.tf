@@ -2386,6 +2386,8 @@ module "k8s_bootstrap" {
   # through workload identity. AMR serves database 0 only.
   enable_sandboxes            = var.enable_sandboxes
   platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
+  network_policy_engine       = module.aks.network_policy_engine
+  node_subnet_cidrs           = local.aks_subnet_prefixes
   sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
   sandbox_juicefs_config = var.enable_sandboxes ? {
     name         = var.sandbox_juicefs_name
