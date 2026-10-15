@@ -101,9 +101,6 @@ spec:
     - secretKey: initial_org_admin_password
       remoteRef:
         key: ${_ssm_prefix}/langsmith-admin-password
-    - secretKey: initial_org_admin_email
-      remoteRef:
-        key: ${_ssm_prefix}/langsmith-admin-email
 $(if _ssm_key_exists "${_ssm_prefix}/agent-builder-encryption-key"; then cat <<ABEOF
     - secretKey: agent_builder_encryption_key
       remoteRef:
@@ -127,6 +124,24 @@ $(if _ssm_key_exists "${_ssm_prefix}/polly-encryption-key"; then cat <<PEOF
       remoteRef:
         key: ${_ssm_prefix}/polly-encryption-key
 PEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/engine-encryption-key"; then cat <<EEKEOF
+    - secretKey: engine_encryption_key
+      remoteRef:
+        key: ${_ssm_prefix}/engine-encryption-key
+EEKEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/engine-usage-signing-secret"; then cat <<EUSEOF
+    - secretKey: engine_usage_signing_secret
+      remoteRef:
+        key: ${_ssm_prefix}/engine-usage-signing-secret
+EUSEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/engine-encryption-key-previous"; then cat <<EPKEOF
+    - secretKey: engine_encryption_key_previous
+      remoteRef:
+        key: ${_ssm_prefix}/engine-encryption-key-previous
+EPKEOF
 fi)
 $(if [[ "$_enable_sandboxes" == "true" ]]; then cat <<SEOF
     - secretKey: sandbox_callback_signing_jwk

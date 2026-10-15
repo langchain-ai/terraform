@@ -1,0 +1,70 @@
+# Engine (chart v0.17+). See ENGINE.md.
+#
+# init-values.sh copies this file to ../langsmith-values-engine.yaml when
+# enable_engine = true in terraform.tfvars, and deploy.sh loads it only while
+# enable_engine = true. Engine finds recurring failures in your traces, diagnoses
+# them against your code, and proposes fixes. Every Engine run executes in a
+# sandbox.
+#
+# Prerequisites:
+#   - chart >= 0.17.0
+#   - Engine entitlement in your LangSmith license
+#   - enable_sandboxes = true
+#   - config.hostname reachable from the sandboxes, served with TLS
+#   - SSM parameters engine-encryption-key and engine-usage-signing-secret
+#     (infra/scripts/setup-env.sh creates both)
+#
+# Keys: apply-eso.sh syncs both SSM parameters into the langsmith-config Secret as
+# engine_encryption_key and engine_usage_signing_secret, and the chart reads them
+# from there (config.existingSecretName). Do not set engine.encryptionKey or
+# engine.usageSigningSecret in any values file. The chart rejects
+# engine.usageSigningSecret next to config.existingSecretName.
+#
+# init-values.sh writes these into langsmith-values-overrides.yaml (gitignored):
+#   - the eks.amazonaws.com/role-arn annotation for the Engine IRSA role
+#     (terraform output engine_irsa_role_arn) on the two service accounts below
+#   - engine.sandboxTenantId and engine.intelligenceBaseUrl, when set in
+#     terraform.tfvars
+engine:
+  enabled: true
+  # Engine calls Amazon Bedrock with the IRSA role of its pods, so an organization
+  # admin can select Amazon Bedrock under Settings > Engine > Model providers with
+  # no saved credentials.
+  workloadIdentityProviders:
+    - bedrock
+
+# Engine and Insights run from one image on one deployment. The deployment's two
+# service accounts are <fullname>-standalone-insights-api-server and
+# <fullname>-standalone-insights-queue. <fullname> is the release name when it
+# contains "langsmith", and <release>-langsmith otherwise. The Engine IRSA role
+# trusts only these two names, so keep this namePrefix.
+engineInsightsAgent:
+  namePrefix: "standalone-insights"
+
+  # The same sizing as langsmith-values-standalone-insights.yaml. deploy.sh loads
+  # the Insights files after this file, so their settings win when Insights is on.
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 8Gi
+
+  queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+
+  # No postgres or redis block: Engine uses the chart's in-cluster PostgreSQL and
+  # Redis StatefulSets (an 8Gi PVC each on the default StorageClass). Insights can
+  # use external storage (insights_storage = "external"). Then deploy.sh points
+  # this shared deployment at the langsmith_insights database on the shared RDS
+  # and at a Redis DB on the shared ElastiCache. Engine uses them too.
