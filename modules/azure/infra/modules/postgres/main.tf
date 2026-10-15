@@ -49,10 +49,14 @@ resource "azurerm_postgresql_flexible_server" "db" {
   # other than the primary's. Naming one is a pin, not the switch. A non-empty
   # zone still enables HA by itself so that configurations predating
   # var.high_availability keep the standby they already have.
+  # The mode is the root's postgres_high_availability_mode: ZoneRedundant, or
+  # SameZone where the region offers no zone-redundant capacity for the SKU.
+  # With SameZone, Azure reports the primary's zone as the standby's, which the
+  # ignore_changes below covers as it covers an Azure-chosen zone.
   dynamic "high_availability" {
     for_each = var.high_availability || var.standby_availability_zone != "" ? [1] : []
     content {
-      mode                      = "ZoneRedundant"
+      mode                      = var.high_availability_mode
       standby_availability_zone = var.standby_availability_zone != "" ? var.standby_availability_zone : null
     }
   }
