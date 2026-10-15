@@ -1400,14 +1400,28 @@ decides what the cluster can reach, and nothing works until it allows:
 - **A mirror behind an internal CA** also needs that CA on the nodes, where
   containerd does the pulling and trusts only public CAs; without it every pull
   fails with `x509: certificate signed by unknown authority`.
-  `aks_custom_ca_trust_certificate_files` lists the PEM files (one CA each, up
-  to 10) that AKS installs in every Linux node's trust store. Set it before the
+  `aks_custom_ca_trust_certificate_files` lists the PEM files (one entry each,
+  one certificate or a bundle, up to 10) that AKS installs in every Linux
+  node's trust store. Set it before the
   first apply where you can: a change to the list replaces every node (AKS
   creates new nodes, drains and deletes the old). It is the nodes' trust store
   only; LangSmith's own is `langsmith_custom_ca_secret_name`. Keep the files in
   place for the life of the cluster: Terraform reads them at every plan, destroy
   included, so a missing file blocks `terraform destroy` until it is back or off
-  the list.
+  the list. A file becomes one entry, its content trimmed of surrounding
+  whitespace with one trailing newline, and may hold one certificate or a
+  bundle, with `#` comment lines and blank lines at most around the blocks; a
+  key, a byte-order mark, an openssl Bag Attributes preamble, a note after a
+  marker or a certificate commented out line by line is refused: a block is
+  the BEGIN and END markers alone on their lines with base64 between, as the
+  node's PEM decoder reads it, and anything else would replace every node for
+  a CA that never loads. To
+  adopt an entry a cluster already holds with no node change, write the file
+  from the cluster's value (`az aks show`,
+  `securityProfile.customCATrustCertificates`, base64-decoded), bundle and
+  comment lines included: the nodes plan no change only when that stored value
+  is the file's trimmed content plus one newline. An entry stored with no
+  trailing newline, or more than one, is replaced once, with every node.
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 
