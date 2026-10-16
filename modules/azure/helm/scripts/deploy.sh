@@ -1029,7 +1029,7 @@ _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_regis
 _ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="true"
 if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
   _chart_image_keys=$(helm show values "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-    | awk '/^images:/{p=1; next} p && /^[^ ]/{exit} p && /^  [A-Za-z0-9]+Image:/{sub(":", "", $1); print $1}') || _chart_image_keys=""
+    | _chart_image_keys_from_stdin) || _chart_image_keys=""
   if [[ -z "$_chart_image_keys" ]]; then
     fail "langsmith_image_registry_keeps_source_host = false, but the chart's images could not be read (helm show values $_chart_source --version $CHART_VERSION), so the module cannot tell whether every image has a mirror path."
     exit 1
