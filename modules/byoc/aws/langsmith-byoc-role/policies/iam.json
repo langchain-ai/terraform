@@ -123,6 +123,7 @@
     "Condition": {
       "ArnEquals": {
         "iam:PolicyARN": [
+          "arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess",
           "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
           "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
           "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
