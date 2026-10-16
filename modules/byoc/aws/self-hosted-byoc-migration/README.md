@@ -1,17 +1,18 @@
-# Self-hosted to BYOC migration network
+# Self-hosted to BYOC migration
 
 Customer-run Terraform that connects a self-hosted LangSmith VPC to a BYOC
 data plane VPC for the duration of a migration.
 
-The module runs in the account that hosts the self-hosted installation. It
-creates the peering request and the routes from the self-hosted VPC to the
+The module runs in the account that hosts the self-hosted installation.
+
+It creates the peering request and the routes from the self-hosted VPC to the
 data plane VPC in one apply. By default every route table in the self-hosted
 VPC gets the route; pass `self_hosted_route_table_ids` to limit it to the
 subnets that run the LangSmith pods. The routes stay blackhole until the peering
 is accepted and carry traffic from then on.
 
 LangChain accepts the request,
-adds the return routes, and opens the metastore security group to the
+adds the return routes, and opens the data plane security group to the
 self-hosted CIDR from the data plane side.
 
 ## Requirements
@@ -25,11 +26,8 @@ self-hosted CIDR from the data plane side.
 
 ## Usage
 
-1. Fill in the data plane VPC ID, CIDR, account, and region shown in the
-   LangSmith migration data plane step, the data plane SmithDB role from the
-   trust step, the role your LangSmith pods run as, and, when your blob
-   storage bucket uses a customer-managed KMS key, that key with the data
-   plane workload role.
+1. Fill in the data plane VPC ID, CIDR, account, region, and data plane SmithDB role
+   provided by the LangChain team, and the role your self-hosted installation runs as.
 2. Run `terraform apply`. Share the `peering_connection_id` and
    `self_hosted_vpc_cidr_block` outputs with LangChain. LangChain accepts
    the peering from the data plane side; `peering_status` reports `active`
@@ -65,29 +63,13 @@ module "byoc_migration" {
 | `self_hosted_route_table_ids` | Optional. Route tables that get the route; defaults to every route table in the VPC. |
 | `data_plane_vpc_id` | Data plane VPC to peer with. |
 | `data_plane_vpc_cidr_block` | Data plane VPC CIDR used for the routes. |
-| `data_plane_account_id` | Data plane account when it differs from the self-hosted account. |
-| `data_plane_region` | Data plane region when it differs from the self-hosted region. |
+| `data_plane_account_id` | Account that owns the data plane. |
+| `data_plane_region` | Region of the data plane VPC. |
 | `data_plane_smithdb_role_arn` | Data plane SmithDB role the self-hosted role may assume. |
 | `self_hosted_blob_kms_key_arn` | Optional. Customer-managed KMS key of the blob storage bucket. The data plane role gets a decrypt grant on it. |
 | `data_plane_workload_role_arn` | Data plane workload role that receives the grant. Required with `self_hosted_blob_kms_key_arn`. |
 | `name` | Name prefix for the created resources. |
 | `tags` | Extra tags. `managed_by` is set to `customer`. |
-
-## Run attachments
-
-The SmithDB migration keeps run attachments at their original storage keys.
-LangChain copies them from the self-hosted blob storage bucket into the data
-plane blob bucket under the same keys, so the data plane only needs to read
-the self-hosted bucket. The module does not touch the bucket policy, because
-a bucket has a single policy document and replacing it would drop any TLS,
-network, or principal restrictions already on it. Add the statements that
-LangSmith shows in the migration network step to the bucket policy instead.
-
-If the bucket uses SSE-KMS with a customer-managed key, pass it as
-`self_hosted_blob_kms_key_arn` with `data_plane_workload_role_arn`. The
-module creates a KMS grant that lets the data plane role decrypt with the
-key. A grant is additive, so the key policy stays untouched; the data plane
-limits its own decrypt permission to objects of the blob bucket.
 
 ## Network egress
 

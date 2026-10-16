@@ -3,20 +3,32 @@ variable "role_name" {
   type        = string
 }
 
+variable "control_plane_reconcile_role_arn" {
+  description = "ARN of the LangChain control plane reconciliation role."
+  type        = string
+}
+
 variable "external_id" {
   description = "External ID copied from Settings > Data Planes in the LangSmith UI, required to assume this role."
   type        = string
 }
 
-variable "tags" {
-  description = "Tags to apply to the IAM role"
-  type        = map(string)
-  default     = {}
+variable "allow_break_glass_access" {
+  description = "Allow trusted LangSmith Identity Center users to assume the customer-side break-glass role."
+  type        = bool
+  default     = false
 }
 
-variable "control_plane_reconcile_role_arn" {
-  description = "ARN of the LangChain control plane reconciliation role."
-  type        = string
+variable "break_glass_identitystore_user_ids" {
+  description = "IAM Identity Center user IDs allowed to assume the customer-side break-glass role."
+  type        = list(string)
+  default     = []
+}
+
+variable "break_glass_source_identities" {
+  description = "SourceIdentity values allowed when assuming the customer-side break-glass role."
+  type        = list(string)
+  default     = []
 }
 
 variable "langsmith_control_plane_account_id" {
@@ -32,24 +44,6 @@ variable "langsmith_byoc_break_glass_principal_arn_patterns" {
     "arn:aws:iam::808407022534:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_BYOCBreakGlass_442d99d086ecd3c8",
     "arn:aws:iam::808407022534:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_BYOCBreakGlass_442d99d086ecd3c8",
   ]
-}
-
-variable "break_glass_identitystore_user_ids" {
-  description = "IAM Identity Center user IDs allowed to assume the customer-side break-glass role."
-  type        = list(string)
-  default     = []
-}
-
-variable "break_glass_source_identities" {
-  description = "SourceIdentity values allowed when assuming the customer-side break-glass role."
-  type        = list(string)
-  default     = []
-}
-
-variable "allow_break_glass_access" {
-  description = "Allow trusted LangSmith Identity Center users to assume the customer-side break-glass role."
-  type        = bool
-  default     = false
 }
 
 variable "allow_public_ingress" {
@@ -70,18 +64,6 @@ variable "allow_vpc_creation_permissions" {
   default     = true
 }
 
-variable "allow_iam_management_permissions" {
-  description = "Grant IAM creation, mutation, and deletion permissions. Disable when the customer supplies roles, policies, instance profiles, and service-linked roles; IAM reads, scoped PassRole, and policy simulation remain available."
-  type        = bool
-  default     = true
-}
-
-variable "allow_self_hosted_migration_permissions" {
-  description = "Grant the role permissions to accept a VPC peering connection from a self-hosted LangSmith VPC into the data plane VPC, update the SmithDB role trust policy, and remove the migration routes afterwards. Enable for the duration of a self-hosted to BYOC migration."
-  type        = bool
-  default     = false
-}
-
 variable "vpc_ids" {
   description = "VPC IDs in which Crossplane may create tagged workload security groups when base VPC creation permissions are disabled."
   type        = set(string)
@@ -91,4 +73,22 @@ variable "vpc_ids" {
     condition     = alltrue([for vpc_id in var.vpc_ids : can(regex("^vpc-[0-9a-f]+$", vpc_id))])
     error_message = "Every vpc_ids entry must be a valid VPC ID."
   }
+}
+
+variable "allow_iam_management_permissions" {
+  description = "Grant IAM creation, mutation, and deletion permissions. Disable when the customer supplies roles, policies, instance profiles, and service-linked roles; IAM reads, scoped PassRole, and policy simulation remain available."
+  type        = bool
+  default     = true
+}
+
+variable "allow_self_hosted_migration_permissions" {
+  description = "Self-hosted to BYOC migration only. Grants permissions needed for the migration. Enable for the duration of a self-hosted to BYOC migration."
+  type        = bool
+  default     = false
+}
+
+variable "tags" {
+  description = "Tags to apply to the IAM role"
+  type        = map(string)
+  default     = {}
 }

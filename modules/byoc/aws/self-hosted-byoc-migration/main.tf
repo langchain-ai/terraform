@@ -7,10 +7,6 @@ data "aws_route_tables" "self_hosted" {
   vpc_id = var.self_hosted_vpc_id
 }
 
-# AWS rejects a peering when any CIDR on either VPC overlaps, including
-# partial overlaps and secondary CIDRs. Terraform has no overlap function, so
-# each CIDR becomes [first address as an integer, address count] and ranges
-# are compared, which fails at plan and names the conflicting CIDRs.
 locals {
   self_hosted_cidrs = data.aws_vpc.self_hosted.cidr_block_associations[*].cidr_block
   self_hosted_route_table_ids = (
@@ -47,8 +43,6 @@ resource "aws_vpc_peering_connection" "data_plane" {
   })
 
   lifecycle {
-    # A same-account peering shares one tag set with the data plane accepter,
-    # which adds provider tracking tags. Ignore them instead of fighting over them.
     ignore_changes = [tags, tags_all]
 
     precondition {
@@ -58,8 +52,6 @@ resource "aws_vpc_peering_connection" "data_plane" {
   }
 }
 
-# Routes toward a pending peering are blackhole until the data plane accepts
-# it, so they can be created in the same apply as the request.
 resource "aws_route" "to_data_plane" {
   for_each = local.self_hosted_route_table_ids
 
@@ -83,10 +75,6 @@ resource "aws_iam_role_policy" "assume_data_plane_smithdb_role" {
   })
 }
 
-# A grant adds decrypt authorization for the data plane role without
-# replacing the customer's key policy. The data plane side limits the
-# decrypt to objects of the self-hosted bucket through the S3 encryption
-# context, so the grant itself carries no constraint.
 resource "aws_kms_grant" "self_hosted_blob_decrypt" {
   count = var.self_hosted_blob_kms_key_arn == null ? 0 : 1
 

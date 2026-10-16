@@ -45,18 +45,39 @@ variable "self_hosted_role_arn" {
   }
 }
 
-variable "data_plane_smithdb_role_arn" {
-  description = "SmithDB IAM role of the BYOC data plane, shown by LangChain in the migration trust step. The self-hosted role assumes it to write migration data."
+variable "self_hosted_blob_kms_key_arn" {
+  description = "Customer-managed KMS key that encrypts the self-hosted blob storage bucket. Leave null when the bucket uses SSE-S3."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.self_hosted_blob_kms_key_arn == null || can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", var.self_hosted_blob_kms_key_arn))
+    error_message = "self_hosted_blob_kms_key_arn must be null or a KMS key ARN."
+  }
+}
+
+variable "data_plane_account_id" {
+  description = "AWS account ID that owns the BYOC data plane, provided by LangChain team. Required even when it matches the self-hosted account."
   type        = string
 
   validation {
-    condition     = can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", var.data_plane_smithdb_role_arn))
-    error_message = "data_plane_smithdb_role_arn must be an IAM role ARN."
+    condition     = can(regex("^[0-9]{12}$", var.data_plane_account_id))
+    error_message = "data_plane_account_id must be a 12-digit AWS account ID."
+  }
+}
+
+variable "data_plane_region" {
+  description = "AWS region of the BYOC data plane VPC, provided by LangChain team. Required even when it matches the self-hosted region."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]$", var.data_plane_region))
+    error_message = "data_plane_region must be an AWS region name."
   }
 }
 
 variable "data_plane_vpc_id" {
-  description = "VPC of the BYOC data plane, shown by LangChain in the migration data plane step."
+  description = "VPC of the BYOC data plane, provided by LangChain team."
   type        = string
 
   validation {
@@ -75,42 +96,13 @@ variable "data_plane_vpc_cidr_block" {
   }
 }
 
-variable "data_plane_account_id" {
-  description = "AWS account ID that owns the data plane VPC. Leave null when the data plane runs in the same account as the self-hosted installation."
+variable "data_plane_smithdb_role_arn" {
+  description = "SmithDB IAM role for the BYOC data plane, provided by LangChain team."
   type        = string
-  default     = null
 
   validation {
-    condition     = var.data_plane_account_id == null || can(regex("^[0-9]{12}$", var.data_plane_account_id))
-    error_message = "data_plane_account_id must be null or a 12-digit AWS account ID."
-  }
-}
-
-variable "data_plane_region" {
-  description = "AWS region of the data plane VPC. Leave null when the data plane runs in the same region as the self-hosted installation."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.data_plane_region == null || can(regex("^[a-z]{2}(-gov)?-[a-z]+-[0-9]$", var.data_plane_region))
-    error_message = "data_plane_region must be null or an AWS region name."
-  }
-}
-
-variable "tags" {
-  description = "Tags applied to every resource this module creates."
-  type        = map(string)
-  default     = {}
-}
-
-variable "self_hosted_blob_kms_key_arn" {
-  description = "Customer-managed KMS key that encrypts the self-hosted blob storage bucket. The data plane workload role receives a decrypt grant on it so LangChain can copy run attachments. Leave null when the bucket uses SSE-S3."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.self_hosted_blob_kms_key_arn == null || can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", var.self_hosted_blob_kms_key_arn))
-    error_message = "self_hosted_blob_kms_key_arn must be null or a KMS key ARN."
+    condition     = can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", var.data_plane_smithdb_role_arn))
+    error_message = "data_plane_smithdb_role_arn must be an IAM role ARN."
   }
 }
 
@@ -123,4 +115,10 @@ variable "data_plane_workload_role_arn" {
     condition     = var.data_plane_workload_role_arn == null || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", var.data_plane_workload_role_arn))
     error_message = "data_plane_workload_role_arn must be null or an IAM role ARN."
   }
+}
+
+variable "tags" {
+  description = "Tags applied to every resource this module creates."
+  type        = map(string)
+  default     = {}
 }

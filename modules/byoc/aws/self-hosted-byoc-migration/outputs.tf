@@ -4,7 +4,7 @@ output "peering_connection_id" {
 }
 
 output "self_hosted_vpc_cidr_block" {
-  description = "IPv4 CIDR block of the self-hosted VPC. Give it to LangChain so the data plane allows metastore traffic from it."
+  description = "IPv4 CIDR block of the self-hosted VPC. Give it to LangChain so the data plane allows traffic from it."
   value       = data.aws_vpc.self_hosted.cidr_block
 }
 

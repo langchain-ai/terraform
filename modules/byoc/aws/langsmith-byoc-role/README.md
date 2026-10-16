@@ -118,12 +118,11 @@ When using this configuration, you will need to pre-create the required roles, p
 
 When migrating a self-hosted LangSmith installation into a BYOC data plane, set
 `allow_self_hosted_migration_permissions = true` for the duration of the
-migration. The data plane management role can then accept a VPC peering
-connection whose accepter is the data plane VPC, and update the trust policy of
-the SmithDB role so the self-hosted installation can assume it. The role never
-creates or deletes peering connections. The self-hosted side requests the
-peering with the [self-hosted migration module](../self-hosted-byoc-migration/README.md)
-and deletes it after the migration. Set the flag back to `false` once LangChain
+migration.
+
+The data plane can then accept a VPC peering connection from the SH instance.
+
+Set the flag back to `false` once LangChain
 confirms the migration is complete.
 
 ### Enabling break-glass assume-role access

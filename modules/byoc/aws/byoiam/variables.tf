@@ -45,7 +45,7 @@ variable "tags" {
 }
 
 variable "smithdb_migration_writer_principal_arns" {
-  description = "IAM role or user ARNs of self-hosted LangSmith installations that may assume the SmithDB role to write SmithDB data and the metastore during a migration. Set to [] after the migration."
+  description = "Self-hosted to BYOC migration only. IAM role ARNs of self-hosted LangSmith installations that may assume the SmithDB role to write data into the BYOC data plane. Set to [] after the migration."
   type        = list(string)
   default     = []
 
@@ -56,7 +56,7 @@ variable "smithdb_migration_writer_principal_arns" {
 }
 
 variable "workload_migration_source_blob_bucket_arns" {
-  description = "S3 bucket ARNs of self-hosted LangSmith installations whose run attachments migrate to this data plane. The workload role may read them so the attachment copy job can bring the attachments into the blob bucket. Set to [] after the migration."
+  description = "Self-hosted to BYOC migration only. S3 bucket ARNs of self-hosted LangSmith installations that will migrate into this data plane. The BYOC role may read these attachments to copy into the data plane. Set to [] after the migration."
   type        = list(string)
   default     = []
 
@@ -67,7 +67,7 @@ variable "workload_migration_source_blob_bucket_arns" {
 }
 
 variable "workload_migration_source_blob_kms_key_arns" {
-  description = "KMS key ARNs that encrypt objects in workload_migration_source_blob_bucket_arns. The workload role may decrypt with them for objects in those buckets; the key owner must also authorize the role on each key. Set to [] after the migration."
+  description = "Self-hosted to BYOC migration only. KMS key ARNs that encrypt objects in workload_migration_source_blob_bucket_arns. The workload role may decrypt with them for objects in those buckets; the key owner must also authorize the role on each key. Set to [] after the migration."
   type        = list(string)
   default     = []
 

@@ -36,8 +36,6 @@ locals {
       object_prefix  = ""
     }
   }
-  # Self-hosted blob buckets live in another account, so the account condition
-  # that guards the data plane buckets cannot apply here.
   migration_source_blob_statements = length(var.workload_migration_source_blob_bucket_arns) == 0 ? [] : concat([
     {
       Sid      = "ReadMigrationSourceBlobObjects"
