@@ -56,6 +56,9 @@ unique_suffix = true
 # Environment name
 environment = "test"  # dev, staging, prod, test, uat
 
+# Initial organization admin account. This is configuration, not a secret.
+langsmith_admin_email = "admin@example.com"
+
 #------------------------------------------------------------------------------
 # Optional: Regional Configuration
 #------------------------------------------------------------------------------

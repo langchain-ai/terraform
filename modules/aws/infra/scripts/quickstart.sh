@@ -442,6 +442,9 @@ OWNER="$_REPLY"
 _ask "$(_choice_arg "cost_center")" "$(_numbered_prompt "2.5" "Cost center" " — billing label, leave blank to skip")" "$(_existing "cost_center" "")"
 COST_CENTER="$_REPLY"
 
+_ask_required "$(_choice_arg "langsmith_admin_email")" "$(_numbered_prompt "2.6" "Initial org admin email")" "$(_existing "langsmith_admin_email" "")"
+ADMIN_EMAIL="$_REPLY"
+
 echo ""
 printf "  Resources will be named: $(_cyan "${NAME_PREFIX}-${ENVIRONMENT}")-{resource}\n"
 
@@ -1222,6 +1225,7 @@ _show_summary() {
   _summary_row "Name prefix:" "$NAME_PREFIX"
   _summary_row "Environment:" "$ENVIRONMENT"
   _summary_row "AWS region:" "$REGION"
+  _summary_row "Initial org admin email:" "$ADMIN_EMAIL"
   _summary_row "Owner:" "$OWNER"
   [[ -n "$COST_CENTER" ]] && _summary_row "Cost center:" "$COST_CENTER"
 
@@ -1352,6 +1356,7 @@ name_prefix = "${NAME_PREFIX}"
 environment = "${ENVIRONMENT}"
 region      = "${REGION}"
 owner       = "${OWNER}"
+langsmith_admin_email = "${ADMIN_EMAIL}"
 TFVARS
 
 [[ -n "$COST_CENTER" ]] && echo "cost_center = \"${COST_CENTER}\"" >> "$OUTPUT"

@@ -60,6 +60,12 @@ variable "name_prefix" {
   }
 }
 
+variable "langsmith_admin_email" {
+  description = "Initial LangSmith organization admin email. Stored as configuration and written to initialOrgAdminEmail in Helm values."
+  type        = string
+  default     = ""
+}
+
 variable "unique_suffix" {
   description = "Add a unique random suffix to resource names (recommended for multi-tenant projects)"
   type        = bool

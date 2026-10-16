@@ -79,6 +79,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
 | **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`) — needs a stable chart release on the 0.17 line; see [SMITHDB.md](SMITHDB.md#version-requirements) | `terraform -chdir=infra apply` | ~15–30 min |
+| **Optional** | Sandboxes (`enable_sandboxes = true`), chart 0.17; see [Sandboxes](#sandboxes) | `make apply && make seed-secrets && make init-values && make deploy` | ~15–30 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
@@ -159,7 +160,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
 - `aks_private_cluster_enabled`, `aks_private_dns_zone_id`, `aks_entra_only`, `aks_entra_admin_group_object_ids`, `aks_control_plane_identity`, `aks_control_plane_identity_id`, `aks_control_plane_identity_manage_grants`. Terraform makes no control-plane grants on an attached cluster, and detects Entra on the cluster itself and switches to `kubelogin` without `aks_entra_only`
-- `availability_zones`, for the cluster only — PostgreSQL still uses it
+- `availability_zones`, for the cluster's default pool only — additional pools Terraform manages still follow it, and PostgreSQL still uses it
 
 `istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
 
@@ -227,7 +228,7 @@ install_cert_manager = false   # cluster already runs cert-manager
 install_keda         = false   # cluster already runs KEDA
 ```
 
-Both default to `true`. Something still has to provide the component: KEDA is what scales the LangSmith queue workers on Redis queue depth, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
+Both default to `true`. Something still has to provide the component: the LangSmith Deployments operator scales agent deployments through KEDA, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
 
@@ -624,7 +625,7 @@ Guided questionnaire that generates `infra/terraform.tfvars` from scratch. Mirro
 - Auto-detects Azure subscription ID from `az account show`
 - Validates deployment name format (`prod`, `staging`, `myco`)
 - Supports all 5 ingress options: `envoy-gateway` (default), `nginx`, `istio-addon`, `istio`, `agic`
-- Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
+- Sends you back to the TLS choice on `istio-addon + letsencrypt` or `agic + letsencrypt`, which Terraform rejects
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 - `ARGS="--yes"` is for CI and scripts: it skips the prompts and writes the profile's defaults. Dev runs Postgres, Redis, and ClickHouse in-cluster over HTTP at `langsmith-<name>.<region>.cloudapp.azure.com`; `--profile prod` uses external Postgres and Redis with production sizing. `--subscription`, `--location`, `--name`, `--dns-label`, and `--domain` with `--email` override the defaults; `--help` lists them. It writes new deployments only and refuses to run over an existing `terraform.tfvars` or checkpoint
 
@@ -691,7 +692,7 @@ Only two secrets reach Terraform, because Terraform needs them to build somethin
 
 Writes the LangSmith application secrets directly into Key Vault via `az`, after `make apply` has created the vault. These never pass through Terraform, so they never land in Terraform state — the same split the AWS module uses with SSM and the GCP module uses with Secret Manager.
 
-Seeds the eight secrets Terraform never sees:
+Seeds these secrets, which Terraform never sees:
 
 | Secret | Source |
 |---|---|
@@ -703,6 +704,7 @@ Seeds the eight secrets Terraform never sees:
 | `langsmith-insights-encryption-key` | Generated (Fernet) |
 | `langsmith-polly-encryption-key` | Generated (Fernet) |
 | `smithdb-taskdb-password` | Generated (`openssl rand -hex 32`) |
+| `langsmith-sandbox-callback-signing-jwk` | Generated (Ed25519 JWK), only with `enable_sandboxes = true`. Needs OpenSSL 3, as [Sandboxes](#sandboxes) describes |
 
 It also seeds `postgres-admin-password` and `langsmith-license-key`, from `secrets.auto.tfvars` or the environment, when the vault does not already hold them. That is what `keyvault_manage_secrets = false` relies on. On the default path Terraform wrote both and the script skips them.
 
@@ -808,9 +810,9 @@ Same as `make clean` but skips the interactive confirmation — useful in non-in
 Bridges Key Vault (Terraform's output) to Kubernetes (Helm's input). Safe to re-run — uses `--dry-run=client | kubectl apply` so it updates in place without recreating the secret.
 
 - Resolves Key Vault name from `terraform output keyvault_name`
-- Reads 8 secrets from Key Vault: `api_key_salt`, `jwt_secret`, `langsmith_license_key`, `initial_org_admin_password`, `deployments_encryption_key`, `agent_builder_encryption_key`, `insights_encryption_key`, `polly_encryption_key`
+- Reads 8 secrets from Key Vault: `api_key_salt`, `jwt_secret`, `langsmith_license_key`, `initial_org_admin_password`, `deployments_encryption_key`, `agent_builder_encryption_key`, `insights_encryption_key`, `polly_encryption_key`, plus `sandbox_callback_signing_jwk` with `enable_sandboxes = true`
 - Creates or updates `langsmith-config-secret` in the `langsmith` namespace
-- Verifies all 8 keys are present and prints a pass/fail for each
+- Verifies every key is present and prints a pass/fail for each
 
 > Helm reads this secret via `config.existingSecretName: langsmith-config-secret`. No secrets are stored in Helm values files.
 
@@ -904,6 +906,7 @@ enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed a
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
 enable_llm_gateway   = false          # LLM Gateway, private beta (chart 0.17)
 enable_gateway_pii_redaction = false  # Presidio PII redaction for gateway traffic (requires enable_llm_gateway)
+enable_sandboxes     = false          # Sandboxes (chart 0.17); needs make apply first, see Sandboxes below
 ```
 
 **Pass 3** requires a node pool scale-up before deploying — operator-spawned pods need headroom. Set `default_node_pool_min_count = 5` and run `make apply` first, then `make init-values && make deploy`.
@@ -944,6 +947,122 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   mirror.
 - **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
   organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
+
+#### Sandboxes
+
+`enable_sandboxes = true` turns on LangSmith Sandboxes (chart 0.17), which run agent code in Firecracker microVMs. A
+privileged `sandbox-host` pod runs the microVMs on a dedicated `sandboxhost` node pool. The sandbox file system is
+JuiceFS: its data goes to a Blob container in the LangSmith storage account, and its metadata goes to a dedicated Azure
+Managed Redis.
+
+**Requirements**
+
+- Chart 0.17 or later.
+- A LangSmith license with sandbox access. Without it, platform-backend crash-loops with `the LangSmith license does
+  not include sandbox access`.
+- A VM size with nested virtualization, so the node exposes `/dev/kvm`. The Dsv4, Ddsv4, Dsv5, Ddsv5, and Ddsv6
+  families have it.
+- Regional vCPU quota in that family for `sandbox_host_max_count` nodes. `make preflight` counts the sandbox pool in its
+  quota check.
+- OpenSSL 3 on the machine that runs `make seed-secrets`, which generates an Ed25519 callback signing key. The LibreSSL
+  that ships with macOS has no Ed25519, so run `brew install openssl@3` and put it first on `PATH`.
+- On an attached cluster (`create_cluster = false`), `existing_cluster_node_pools_managed = true`, so Terraform adds the
+  `sandboxhost` pool. Otherwise, add a pool with nested virtualization yourself, with the `sandbox.langsmith.com/host=true`
+  label and the `sandbox.langsmith.com/host=true:NoSchedule` taint, and set `sandbox_host_min_count` and
+  `sandbox_host_max_count` to its bounds. In that setup, every plan warns that Terraform adds no pool.
+- Azure commercial cloud. Azure Government has no Azure Managed Redis, so the plan fails with
+  `azure_environment = "usgovernment"`.
+
+**Enable**
+
+1. Set `enable_sandboxes = true` in `infra/terraform.tfvars`.
+2. Run `make apply`. Terraform adds the node pool, the JuiceFS Redis, the Blob container, the `sandbox-host` identity, and
+   the `juicefs-csi-config` Secret.
+3. Run `make seed-secrets`. The script writes `langsmith-sandbox-callback-signing-jwk` to Key Vault.
+4. Run `make init-values && make deploy`. `init-values.sh` writes `helm/values/langsmith-values-sandboxes.yaml`.
+   `deploy.sh` adds the signing key to `langsmith-config-secret`, then waits for the `juicefs-format` Job and the
+   `sandbox-host` rollout.
+
+**Host size**
+
+The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
+
+| `sizing_profile` | `sandbox_host_vm_size` |
+|---|---|
+| `production`, `production-large` | `Standard_D32ds_v5` |
+| every other profile | `Standard_D8ds_v5` |
+
+- Set `sandbox_host_vm_size` when the region has no Dv5 quota, for example `Standard_D8ds_v4` or `Standard_D8ds_v6`.
+- `sandbox_host_min_count` defaults to `0` and `sandbox_host_max_count` to `5`. `sandbox-host` scales its own
+  replicas between those bounds, with a floor of 1. The cluster autoscaler adds a node for each Pending replica, and
+  keeps one node for each replica.
+- `sandbox-host` keeps one empty host above current demand, so the pool runs one node more than its sandboxes need, up
+  to `sandbox_host_max_count`.
+- To scale further, raise `sandbox_host_max_count`, then run `make apply`, `make init-values`, and `make deploy`.
+- `sandbox_host_os_disk_size_gb` sets each node's OS disk, which holds the JuiceFS cache, and defaults to `200`. A
+  change rotates the pool through a temporary pool.
+- `sandbox-host` has the pod annotation `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so the autoscaler
+  does not remove a node that runs sandboxes.
+- The `juicefs-format` Job prefers a sandbox node but runs on any Linux node, so it does not wait for the pool to scale
+  up from 0.
+- For pool settings these variables do not cover, add an `additional_node_pools` entry named `sandboxhost`. It
+  replaces the generated pool, so keep the `sandbox.langsmith.com/host=true` label and the
+  `sandbox.langsmith.com/host=true:NoSchedule` taint.
+
+**Identity and network**
+
+- `sandbox-host` and the `juicefs-format` Job use their own Workload Identity, `<cluster>-sandbox-host-identity`,
+  federated to the `<release>-sandbox-host` ServiceAccount. It holds `Storage Blob Data Contributor` on the JuiceFS
+  container and nothing else, because sandbox nodes run untrusted code and the storage account also holds trace data.
+  The JuiceFS Secret holds no storage account key.
+- The JuiceFS Redis runs with `NoCluster` and `NoEviction`, and with zone-redundant HA and AOF persistence unless
+  `sandbox_juicefs_redis_high_availability = false`, which turns off both. Losing it loses every sandbox file system.
+  Its private endpoint is in the AKS subnet, so it needs no Redis subnet. Size it with `sandbox_juicefs_amr_sku`;
+  JuiceFS uses about 300 bytes of Redis memory per file.
+- `sandbox-host` runs on the host network and calls platform-backend on port 1986 from a node IP. platform-backend
+  stays under the namespace's default-deny NetworkPolicy, and one more policy admits the nodes on port 1986 alone:
+  - With Azure Network Policy Manager, Terraform creates `allow-nodes-to-platform-backend`, which admits the AKS node
+    subnet. In node-subnet mode pods draw their addresses from that subnet too, so any pod can reach platform-backend
+    on port 1986. Only overlay mode limits it to the nodes.
+  - With Cilium, which never matches a node IP by `ipBlock`, `deploy.sh` applies a CiliumNetworkPolicy of the same
+    name that admits the `host` and `remote-node` entities, and deletes it when sandboxes are off.
+- The namespace ResourceQuota caps requests only, and the LimitRange sets no default limits. `sandbox-host` runs the
+  microVMs in child cgroups of its own pod, so a container limit would cap every sandbox on the node.
+- `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy. This replaces any tag set
+  in a values file, so the image always follows the chart.
+- `sandbox_service_url_base_url` sets the base URL for HTTP services that run inside sandboxes. It needs wildcard DNS
+  and TLS for that host.
+
+**Verify**
+
+```bash
+kubectl get jobs -n langsmith -l app.kubernetes.io/component=juicefs-format
+kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
+kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -i "juicefs mount ready"
+```
+
+A failed `juicefs-format` Job with a Blob `403` means the identity label or the federated credential is wrong. Run
+`make apply` and `make init-values`, delete the Job, and run `make deploy` again:
+
+```bash
+kubectl delete job -n langsmith -l app.kubernetes.io/component=juicefs-format
+```
+
+`sandbox-host` builds the default snapshot only at startup. If it starts before platform-backend is running, its logs show
+`system snapshot startup retries exhausted`, and every sandbox create fails with `default snapshot did not become ready`.
+Restart `sandbox-host` once platform-backend is running:
+
+```bash
+kubectl rollout restart deployment -n langsmith -l app=sandbox-host
+```
+
+**Disable**
+
+1. Set `enable_sandboxes = false`, then run `make deploy`. The chart removes `sandbox-host` while the Redis and the
+   Secret still exist. If `sandbox_juicefs_redis_prevent_destroy = true`, set it to `false` too, or the plan in the
+   next step refuses.
+2. Run `make apply`. Terraform deletes the node pool, the JuiceFS Redis, the Blob container and its data, and the
+   identity.
 
 ---
 
@@ -1035,6 +1154,10 @@ Enables Polly, the AI-powered evaluation and monitoring agent. On chart 0.16 Pol
 
 > Requires `enable_deployments = true`.
 
+**`langsmith-values-sandboxes.yaml`** (`enable_sandboxes = true`)
+
+`make init-values` generates this file instead of copying it, because it holds the `sandbox-host` Workload Identity client ID from Terraform. It points the chart at the Terraform-managed JuiceFS Secret, pins `sandbox-host` to the sandbox pool, and gives `sandbox-host` and the `juicefs-format` Job the Workload Identity label. It holds no secret. Refer to [Sandboxes](#sandboxes).
+
 ---
 
 ## Repository Layout
@@ -1068,6 +1191,7 @@ azure/
     └── values/
         ├── values.yaml                              # Azure base (fallback Ingress class, Blob WI, external secrets)
         ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
+        ├── langsmith-values-sandboxes.yaml          # Gitignored, generated by init-values.sh when enable_sandboxes = true
         └── examples/
             ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
             ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
@@ -1317,7 +1441,9 @@ Cilium) enforces NetworkPolicy with eBPF, needs overlay mode and Kubernetes
 Manager loses Linux support on 2028-09-30. The one NetworkPolicy this module
 creates, the namespace rule that admits the ingress gateway by its subnet,
 works on both. Cilium's documented limitation is that `ipBlock` rules cannot
-select node or pod addresses, which that rule does not do.
+select node or pod addresses, which that rule does not do. The sandbox rule
+that admits the nodes to platform-backend does, so it takes a different form
+on each engine (see [Sandboxes](#sandboxes)).
 
 **Changing the network profile of an existing cluster is refused.** At plan
 time Terraform reads the profile the cluster runs (mode, data plane, policy
@@ -1391,7 +1517,7 @@ exactly one zone; otherwise Azure places them. The zones are set once, at
 creation: a later `availability_zones` edit leaves the NAT gateway and its
 public IP where they are, and plan warns about the drift. Changing them would
 replace both, changing the egress address and cutting the cluster's egress until
-the new one is attached. The cluster's node pool treats a zone edit the same way.
+the new one is attached. The cluster's node pools treat a zone edit the same way.
 `aks_nat_gateway_idle_timeout_minutes` (4 to 120, default 4) sets its TCP idle
 timeout. Traffic that leaves through the NAT gateway comes from its public IP,
 which is the address to allow in the firewall rules and
@@ -1624,7 +1750,7 @@ Plan it for a maintenance window, and read the plan before applying.
 ## Multi-AZ Support
 
 `availability_zones` defaults to `[]`, which leaves placement to Azure: the AKS
-node pool is non-zonal and the PostgreSQL server lands where the region has
+node pools are non-zonal and the PostgreSQL server lands where the region has
 room. That default is the only setting that deploys a VM or database size Azure
 does not offer in every zone. Pinning a zone that lacks the size fails with an
 error that names the zone rather than the size, so it reads as a capacity
@@ -1646,8 +1772,13 @@ Azure puts the standby in a zone other than the primary's, so HA works under the
 Pin zones when you want to choose the placement yourself:
 
 ```hcl
-# Spread AKS nodes across zones 1, 2, 3
+# Spread AKS nodes across zones 1, 2, 3: the default pool and every additional pool
 availability_zones = ["1", "2", "3"]
+
+# A pool whose VM size is not offered in every zone sets its own
+additional_node_pools = {
+  large = { vm_size = "Standard_D16s_v5", min_count = 0, max_count = 2, zones = ["1", "2"] }
+}
 
 # Pin the Postgres standby as well — optional, Azure picks one otherwise
 postgres_standby_availability_zone = "2"
@@ -1667,15 +1798,32 @@ can be the zone you pinned for the standby, which `ZoneRedundant` does not
 allow. Setting the standby zone still enables HA on its own, so a configuration
 written before `postgres_high_availability` keeps its standby.
 
-Set `availability_zones` before the first apply. The AKS node pool keeps the
-zones it was created with: `azurerm` re-zones a default node pool by cycling the
-system node pool, and that cycle does not cordon and drain, so the module ignores
-zone changes rather than disrupt running pods on a tfvars edit. Plan reports a
-mismatch as a `Check block assertion failed` warning naming both the live and the
-requested zones. The `[]` default is exempt: it requests no zone, so there is
-nothing to be out of sync with. To re-zone an existing cluster on purpose, remove
-`default_node_pool[0].zones` from the `ignore_changes` block in
-`infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
+Set `availability_zones` before the first apply. It covers the default node pool
+and every pool in `additional_node_pools` that sets no `zones` of its own; a pool
+sets `zones` for a VM size not offered in every zone, or `[]` to stay regional
+(refused on a zoned cluster with SmithDB on; see [SMITHDB.md](SMITHDB.md)).
+Zones are set once, at creation, and a pool keeps the ones it was created with:
+`azurerm` re-zones a default node pool by cycling the system node pool, which
+does not cordon and drain, and an additional pool by rotating it through a
+temporary pool, which drains every node (4.5 to 6 minutes per pool on a test
+cluster), so the module ignores zone changes on both rather than disrupt running
+pods on a tfvars edit. Plan reports a mismatch as a `Check block assertion
+failed` warning naming the live and the requested zones:
+`aks_node_pool_zone_drift` for the default pool, and
+`aks_additional_node_pool_zone_drift` for the others, one warning naming every
+pool that differs. The `[]` default is exempt: it requests no zone, so there is
+nothing to be out of sync with.
+
+Additional pools created by an earlier version of this module are regional
+whatever `availability_zones` says, because the variable reached only the
+default pool then. Such a cluster plans no change after upgrading, and the
+warning names those pools. The way to zoned pools is new ones: add a pool with
+the zones to `additional_node_pools`, move the workloads to it, and remove the
+old pool. To re-zone an existing pool in place instead, remove
+`default_node_pool[0].zones` (the default pool) or `zones` on
+`azurerm_kubernetes_cluster_node_pool.node_pool` (an additional pool) from the
+`ignore_changes` block in `infra/modules/k8s-cluster/main.tf` and apply during a
+maintenance window.
 
 ### Storage redundancy
 

@@ -127,6 +127,19 @@ run "chart_version_accepts_the_pinned_line" {
   }
 }
 
+run "chart_version_accepts_the_0_18_line" {
+  command = plan
+
+  variables {
+    langsmith_helm_chart_version = "0.18.0-rc.28"
+  }
+
+  assert {
+    condition     = var.langsmith_helm_chart_version == "0.18.0-rc.28"
+    error_message = "a 0.18.x langsmith_helm_chart_version failed validation"
+  }
+}
+
 run "cidrs_reject_a_non_cidr" {
   command = plan
 

@@ -169,6 +169,11 @@ output "node_pool_os_skus" {
   value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.os_sku }
 }
 
+output "node_pool_zones" {
+  description = "Availability zones each additional node pool is planned or created with, keyed by pool name. Empty for a regional pool, and null in the plan that creates one."
+  value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.zones }
+}
+
 output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
@@ -197,6 +202,11 @@ output "envoy_gateway_image_pull_secret_name" {
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
+}
+
+output "network_policy_engine" {
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. A created cluster runs network_policy; an attached one reports its own."
+  value       = var.create_cluster ? var.network_policy : coalesce(try(data.azurerm_kubernetes_cluster.existing[0].network_profile[0].network_policy, null), "none")
 }
 
 output "control_plane_grants" {
