@@ -1022,7 +1022,7 @@ fi
 
 # With langsmith_image_registry_keeps_source_host = false, init-values.sh wrote
 # a repository for every image the module knows (_LANGSMITH_IMAGE_REPOSITORIES
-# in infra/scripts/_common.sh, the 0.16 chart line). An image the chart has and
+# in infra/scripts/_common.sh, the 0.17 and 0.18 chart lines). An image the chart has and
 # the list does not would keep its public repository and fail to pull on a
 # cluster that reaches only the mirror, so compare the two before installing.
 _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""

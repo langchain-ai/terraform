@@ -18,7 +18,7 @@
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
 #   _langsmith_images_block         — images: block for values-overrides.yaml from a mirror
-#   _langsmith_image_keys           — the chart images the module knows (0.16 line)
+#   _langsmith_image_keys           — the chart images the module knows (0.17 and 0.18 lines)
 #   _read_values_stamp <f> <k>      — Read one stamped value back out
 #   _name_suffix                    — Resource-name suffix derived from name_prefix
 #   _derive_kv_name                 — Key Vault name, mirroring local.keyvault_name
