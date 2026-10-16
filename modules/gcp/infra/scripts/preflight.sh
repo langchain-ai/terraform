@@ -98,7 +98,8 @@ success "Required tools: $(printf '%s ' "${REQUIRED_TOOLS[@]}")"
 
 # ── terraform.tfvars check ────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TFVARS="$SCRIPT_DIR/../terraform.tfvars"
+INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TFVARS="$INFRA_DIR/terraform.tfvars"
 
 if [[ ! -f "$TFVARS" ]]; then
   error "terraform.tfvars not found at $TFVARS"
@@ -110,34 +111,19 @@ fi
 success "terraform.tfvars found"
 
 # ── Parse key values from tfvars ──────────────────────────────────────────────
-# Inline comments are legal in tfvars and the examples use them heavily, so the
-# value has to be cut at the closing quote (quoted values, which may contain a
-# literal #) or at the # (bare booleans and numbers). Splitting on = and keeping
-# the rest of the line would silently yield "external#CloudSQL,privateIP" and
-# every comparison against it would fail. Keep this function identical to the
-# _parse_tfvar in infra/scripts/_tfvars.sh.
-_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$TFVARS" 2>/dev/null || true
-}
+source "$SCRIPT_DIR/_tfvars.sh"
 
-PROJECT_ID=$(_tfvar "project_id")
-REGION=$(_tfvar "region")
+PROJECT_ID=$(_parse_tfvar "project_id")
+REGION=$(_parse_tfvar "region")
 REGION="${REGION:-us-west2}"
-POSTGRES_SOURCE=$(_tfvar "postgres_source")
-REDIS_SOURCE=$(_tfvar "redis_source")
-ENABLE_SECRET_MANAGER=$(_tfvar "enable_secret_manager_module")
-ENABLE_DNS=$(_tfvar "enable_dns_module")
-DNS_CREATE_CERT=$(_tfvar "dns_create_certificate")
-ENABLE_SANDBOXES=$(_tfvar "enable_sandboxes")
-ENABLE_SMITHDB=$(_tfvar "enable_smithdb")
-SMITHDB_METASTORE_SOURCE=$(_tfvar "smithdb_metastore_source")
+POSTGRES_SOURCE=$(_parse_tfvar "postgres_source")
+REDIS_SOURCE=$(_parse_tfvar "redis_source")
+ENABLE_SECRET_MANAGER=$(_parse_tfvar "enable_secret_manager_module")
+ENABLE_DNS=$(_parse_tfvar "enable_dns_module")
+DNS_CREATE_CERT=$(_parse_tfvar "dns_create_certificate")
+ENABLE_SANDBOXES=$(_parse_tfvar "enable_sandboxes")
+ENABLE_SMITHDB=$(_parse_tfvar "enable_smithdb")
+SMITHDB_METASTORE_SOURCE=$(_parse_tfvar "smithdb_metastore_source")
 SMITHDB_METASTORE_SOURCE="${SMITHDB_METASTORE_SOURCE:-create}"
 
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "your-gcp-project-id" ]]; then
@@ -283,7 +269,7 @@ fi
 # that binding, well after the instance exists, without it. The proxy is the
 # default for a created metastore, and Terraform rejects it for an external one.
 if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" \
-  && "$(_tfvar "smithdb_metastore_use_auth_proxy")" != "false" ]]; then
+  && "$(_parse_tfvar "smithdb_metastore_use_auth_proxy")" != "false" ]]; then
   case " ${CONDITIONAL_PERMISSIONS[*]-} " in
     *" resourcemanager.projects.setIamPolicy "*) ;;
     *) CONDITIONAL_PERMISSIONS+=("resourcemanager.projects.setIamPolicy") ;;
@@ -420,9 +406,9 @@ _check_quota "CPUS" 8 "any 2-node cluster"
 # terraform output shows the last apply, not a pending tfvars change, so this
 # repeats local.smithdb_sizing_by_profile and local.smithdb_pool_defaults from
 # infra/locals.tf. Keep them in step.
-_tfvar_or() { local v; v=$(_tfvar "$1"); [[ -z "$v" || "$v" == "null" ]] && v="$2"; printf '%s' "$v"; }
+_tfvar_or() { local v; v=$(_parse_tfvar "$1"); [[ -z "$v" || "$v" == "null" ]] && v="$2"; printf '%s' "$v"; }
 _sdb_default_sizing=small
-case "$(_tfvar "sizing_profile")" in
+case "$(_parse_tfvar "sizing_profile")" in
   minimum)          _sdb_default_sizing=minimal ;;
   production)       _sdb_default_sizing=medium ;;
   production-large) _sdb_default_sizing=large ;;
@@ -446,13 +432,13 @@ elif [[ "$ENABLE_SMITHDB" == "true" ]]; then
   read -r _def_is_type _def_ssd_count _def_cm_type <<< "$_sdb_pools"
   _is_type=$(_tfvar_or "smithdb_instance_store_machine_type" "$_def_is_type")
   _cm_type=$(_tfvar_or "smithdb_compute_machine_type" "$_def_cm_type")
-  _is_max=$(_tfvar "smithdb_instance_store_max_nodes");      _is_max="${_is_max:-3}"
-  _cm_max=$(_tfvar "smithdb_compute_max_nodes");             _cm_max="${_cm_max:-3}"
+  _is_max=$(_parse_tfvar "smithdb_instance_store_max_nodes");      _is_max="${_is_max:-3}"
+  _cm_max=$(_parse_tfvar "smithdb_compute_max_nodes");             _cm_max="${_cm_max:-3}"
   _ssd_count=$(_tfvar_or "smithdb_instance_store_local_ssd_count" "$_def_ssd_count")
 
   # Counts entries in the smithdb_node_locations list; unset means the pools span
   # every zone the region has, which is 3 for all current regions.
-  _zones=$(_tfvar "smithdb_node_locations")
+  _zones=$(_parse_tfvar "smithdb_node_locations")
   if [[ -n "$_zones" ]]; then
     _zones=$(awk -v s="$_zones" 'BEGIN{ n=gsub(/"[^"]*"/, "", s); print (n > 0) ? n : 3 }')
   else

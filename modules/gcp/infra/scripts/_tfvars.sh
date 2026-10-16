@@ -21,8 +21,7 @@
 # Values are cut at the closing quote (quoted strings, which may contain a
 # literal #) or at an inline # (bare booleans and numbers). The previous
 # grep/sed pair kept trailing comments, so `enable_smithdb = true  # step 9`
-# compared as "true#step9" and read as false. Keep this function identical to
-# _tfvar in infra/scripts/preflight.sh.
+# compared as "true#step9" and read as false.
 _parse_tfvar() {
   awk -v key="$1" '
     $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
