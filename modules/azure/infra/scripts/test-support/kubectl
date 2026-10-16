@@ -13,7 +13,9 @@ case "$ARGS" in
     echo "error: current-context is not set" >&2; exit 1 ;;
   "get secret langsmith-clickhouse"*)
     printf 'kubectl %s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/ch_secret_error" ]; then cat "$FIX/ch_secret_error" >&2; exit 1; fi
     if [ -f "$FIX/ch_secret.json" ]; then cat "$FIX/ch_secret.json"; exit 0; fi
+    case "$ARGS" in *--ignore-not-found*) exit 0 ;; esac
     echo 'Error from server (NotFound): secrets "langsmith-clickhouse" not found' >&2; exit 1 ;;
   "get nodes"*)
     printf 'kubectl %s\n' "$ARGS" >> "$FIX/calls.log"

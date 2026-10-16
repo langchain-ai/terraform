@@ -801,6 +801,11 @@ variable "clickhouse_cluster" {
     condition     = var.clickhouse_cluster == "" || var.clickhouse_source == "external"
     error_message = "clickhouse_cluster only applies with clickhouse_source = \"external\": the chart's own ClickHouse is a single server with no cluster."
   }
+
+  validation {
+    condition     = var.clickhouse_cluster == "" || can(regex("^[A-Za-z0-9_.-]+$", var.clickhouse_cluster))
+    error_message = "clickhouse_cluster must match ^[A-Za-z0-9_.-]+$: init-values.sh writes it into values-overrides.yaml inside double quotes with no escaping."
+  }
 }
 
 variable "redis_subnet_address_prefix" {
