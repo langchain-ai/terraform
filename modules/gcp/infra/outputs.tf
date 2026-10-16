@@ -23,6 +23,11 @@ output "langsmith_namespace" {
   value       = var.langsmith_namespace
 }
 
+output "langsmith_admin_email" {
+  description = "Initial LangSmith organization admin email used in Helm values"
+  value       = var.langsmith_admin_email
+}
+
 output "name_prefix" {
   description = "Name prefix used for all resources"
   value       = var.name_prefix

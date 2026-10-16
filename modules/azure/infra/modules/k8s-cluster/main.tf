@@ -832,6 +832,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   node_labels           = each.value.node_labels
   node_taints           = each.value.node_taints
   kubelet_disk_type     = each.value.kubelet_disk_type
+  os_disk_size_gb       = each.value.os_disk_size_gb
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
 
   # Follows the default pool unless the pool sets its own. In place between any

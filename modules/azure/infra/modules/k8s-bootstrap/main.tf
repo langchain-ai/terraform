@@ -123,6 +123,10 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 # Base: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods. The
 # resource_quota_extra_* inputs add SmithDB's pods on top, once to requests and
 # twice to limits, so a plain install keeps the base figures.
+#
+# With sandboxes on, the quota caps requests only. sandbox-host runs Firecracker
+# VMs in child cgroups beneath its own pod cgroup, so a container limit would cap
+# every sandbox on the node, and a limits.* quota would force one onto it.
 
 resource "kubernetes_resource_quota_v1" "langsmith" {
   metadata {
@@ -131,13 +135,14 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
   }
 
   spec {
-    hard = {
+    hard = merge({
       "requests.cpu"    = tostring(40 + var.resource_quota_extra_cpu)
       "requests.memory" = "${80 + var.resource_quota_extra_memory_gi}Gi"
-      "limits.cpu"      = tostring(80 + var.resource_quota_extra_cpu * 2)
-      "limits.memory"   = "${160 + var.resource_quota_extra_memory_gi * 2}Gi"
       pods              = tostring(200 + var.resource_quota_extra_pods)
-    }
+      }, var.enable_sandboxes ? {} : {
+      "limits.cpu"    = tostring(80 + var.resource_quota_extra_cpu * 2)
+      "limits.memory" = "${160 + var.resource_quota_extra_memory_gi * 2}Gi"
+    })
   }
 }
 
@@ -148,6 +153,8 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
 # agent features) ship without resource stanzas, so without defaults they're rejected
 # with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
 # This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
+# With sandboxes on it supplies requests only: a default 1 CPU limit lands below
+# sandbox-host's 2 CPU request, and the API server rejects the pod.
 resource "kubernetes_limit_range_v1" "langsmith" {
   metadata {
     name      = "langsmith-defaults"
@@ -157,7 +164,7 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
-      default = {
+      default = var.enable_sandboxes ? null : {
         cpu    = "1"
         memory = "1Gi"
       }
@@ -256,6 +263,54 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
     }
 
     policy_types = ["Ingress"]
+  }
+}
+
+# sandbox-host runs on the host network, so its calls to platform-backend come
+# from a node IP, which no namespace rule above matches. Azure NPM matches node
+# IPs by ipBlock, so this admits the node subnet to platform-backend's API port
+# alone. Under node-subnet IPAM, pods draw from the same range and reach that port
+# too; under overlay, only nodes do. Cilium on AKS never matches a node IP by
+# ipBlock, so there helm/scripts/deploy.sh applies a CiliumNetworkPolicy instead.
+resource "kubernetes_network_policy_v1" "platform_backend_from_nodes" {
+  count = var.enable_sandboxes && var.network_policy_engine != "cilium" ? 1 : 0
+
+  metadata {
+    name      = "allow-nodes-to-platform-backend"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/component" = var.platform_backend_component
+      }
+    }
+
+    ingress {
+      dynamic "from" {
+        for_each = var.node_subnet_cidrs
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
+      ports {
+        port     = "1986"
+        protocol = "TCP"
+      }
+    }
+
+    policy_types = ["Ingress"]
+  }
+
+  lifecycle {
+    precondition {
+      # An ingress rule with ports and no peers admits every source.
+      condition     = length(var.node_subnet_cidrs) > 0
+      error_message = "The NetworkPolicy admitting sandbox-host to platform-backend needs the AKS node subnet's address prefixes, and none were found."
+    }
   }
 }
 
@@ -363,6 +418,36 @@ resource "kubernetes_secret_v1" "license" {
   }
 
   type = "Opaque"
+}
+
+# JuiceFS config for sandbox-host and the chart's juicefs-format Job, passed to
+# the chart as sandboxes.juicefs.existingSecretName. The format Job's name hashes
+# this Secret's name, not its data, so a changed value reaches an existing volume
+# only under a new Secret name. Write-only, so the metaurl's Redis key stays out
+# of this resource's state, and a new value is written only when the revision
+# changes or the Redis is replaced: a new Redis has a new host and key, and
+# replacing the Secret writes them without a revision bump.
+resource "terraform_data" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes ? 1 : 0
+  input = var.sandbox_juicefs_redis_id
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_secret_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data_wo          = var.sandbox_juicefs_config
+  data_wo_revision = var.sandbox_juicefs_config_revision
+
+  type = "Opaque"
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.sandbox_juicefs_redis]
+  }
 }
 
 # ── cert-manager ──────────────────────────────────────────────────────────────

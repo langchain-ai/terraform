@@ -57,6 +57,15 @@ if [[ -z "$_region" ]]; then
   exit 1
 fi
 
+# Point kubectl at this deployment's cluster, as deploy.sh does, so a standalone
+# run never applies to whatever cluster ~/.kube/config has selected.
+_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || _cluster_name=""
+if [[ -z "$_cluster_name" ]]; then
+  echo "ERROR: Could not read cluster_name from Terraform outputs. Is 'terraform apply' complete?" >&2
+  exit 1
+fi
+_use_cluster_kubeconfig "$_cluster_name" "$_region" >/dev/null
+
 # ── Apply ClusterSecretStore ─────────────────────────────────────────────────
 echo "Configuring External Secrets Operator..."
 
@@ -101,9 +110,6 @@ spec:
     - secretKey: initial_org_admin_password
       remoteRef:
         key: ${_ssm_prefix}/langsmith-admin-password
-    - secretKey: initial_org_admin_email
-      remoteRef:
-        key: ${_ssm_prefix}/langsmith-admin-email
 $(if _ssm_key_exists "${_ssm_prefix}/agent-builder-encryption-key"; then cat <<ABEOF
     - secretKey: agent_builder_encryption_key
       remoteRef:
@@ -127,6 +133,24 @@ $(if _ssm_key_exists "${_ssm_prefix}/polly-encryption-key"; then cat <<PEOF
       remoteRef:
         key: ${_ssm_prefix}/polly-encryption-key
 PEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/engine-encryption-key"; then cat <<EEKEOF
+    - secretKey: engine_encryption_key
+      remoteRef:
+        key: ${_ssm_prefix}/engine-encryption-key
+EEKEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/engine-usage-signing-secret"; then cat <<EUSEOF
+    - secretKey: engine_usage_signing_secret
+      remoteRef:
+        key: ${_ssm_prefix}/engine-usage-signing-secret
+EUSEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/engine-encryption-key-previous"; then cat <<EPKEOF
+    - secretKey: engine_encryption_key_previous
+      remoteRef:
+        key: ${_ssm_prefix}/engine-encryption-key-previous
+EPKEOF
 fi)
 $(if [[ "$_enable_sandboxes" == "true" ]]; then cat <<SEOF
     - secretKey: sandbox_callback_signing_jwk

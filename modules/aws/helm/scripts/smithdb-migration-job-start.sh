@@ -141,7 +141,7 @@ if [[ "$_taskdb_source" == "chart" ]]; then
     fail "Could not read cluster_name from Terraform outputs. Is terraform apply complete?"
     exit 1
   fi
-  aws eks update-kubeconfig --name "$_cluster_name" --region "$_region" >/dev/null
+  _use_cluster_kubeconfig "$_cluster_name" "$_region" >/dev/null
   _secret=$(kubectl get secret smithdb-migration-taskdb -n "$NAMESPACE" --ignore-not-found -o name)
   _taskdb_secret="langsmith-config"
   _taskdb_password_key="smithdb_taskdb_password"

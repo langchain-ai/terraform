@@ -81,7 +81,7 @@ if [[ -z "$_cluster_name" ]]; then
   fail "Could not read cluster_name from Terraform outputs. Is terraform apply complete?"
   exit 1
 fi
-aws eks update-kubeconfig --name "$_cluster_name" --region "$_region" >/dev/null
+_use_cluster_kubeconfig "$_cluster_name" "$_region" >/dev/null
 pass "Cluster: $_cluster_name"
 
 header "3. LangSmith install"
@@ -93,8 +93,7 @@ fi
 pass "Release $RELEASE_NAME is deployed"
 
 header "4. Admin login"
-_admin_email=$(aws ssm get-parameter --region "$_region" --name "${_ssm_prefix}/langsmith-admin-email" \
-  --query Parameter.Value --output text --with-decryption 2>/dev/null) || _admin_email=""
+_admin_email=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || _admin_email=""
 echo "  After the switch, an existing user must log in through your identity provider with the same email they used for password login."
 echo "  Otherwise nobody can get into the existing org."
 [[ -n "$_admin_email" ]] && echo "  Org admin email: $_admin_email"

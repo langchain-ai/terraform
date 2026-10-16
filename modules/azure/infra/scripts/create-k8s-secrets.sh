@@ -20,6 +20,8 @@ set -euo pipefail
 #   langsmith-config-secret — license key, API salt, JWT secret, admin password,
 #                             and four Fernet encryption keys. Read by all LangSmith
 #                             pods via config.existingSecretName in Helm values.
+#                             With enable_sandboxes = true it also carries
+#                             sandbox_callback_signing_jwk.
 #   smithdb-taskdb          — postgres_password for the SmithDB backfill's taskdb,
 #                             when Key Vault holds smithdb-taskdb-password. Read
 #                             through smithdb.migration.taskdb.postgres.auth.
@@ -89,6 +91,18 @@ if _kv_exists "langsmith-oauth-client-id"; then
   )
 fi
 
+# Sandboxes: platform-backend and sandbox-host read sandbox_callback_signing_jwk
+# from this secret, and neither starts without it. Copied whenever the vault
+# holds it, so turning enable_sandboxes off and on again keeps the same key.
+_SANDBOX_ARGS=()
+if _kv_exists "langsmith-sandbox-callback-signing-jwk"; then
+  _SANDBOX_ARGS=("--from-literal=sandbox_callback_signing_jwk=$(_kv "langsmith-sandbox-callback-signing-jwk")")
+elif _tfvar_is_true "enable_sandboxes"; then
+  echo "  ERROR: enable_sandboxes = true but Key Vault '$KV_NAME' has no langsmith-sandbox-callback-signing-jwk." >&2
+  echo "         Run: make seed-secrets, then re-run this script." >&2
+  exit 1
+fi
+
 # The license key is the one value here that nothing has checked since the
 # setup-env prompt (#250). Written as it stands, an empty or malformed value
 # surfaces inside platform-backend at startup as a base64 error that names
@@ -117,6 +131,7 @@ kubectl create secret generic langsmith-config-secret \
   --from-literal=insights_encryption_key="$INSIGHTS_KEY" \
   --from-literal=polly_encryption_key="$POLLY_KEY" \
   "${_OAUTH_ARGS[@]:+"${_OAUTH_ARGS[@]}"}" \
+  "${_SANDBOX_ARGS[@]:+"${_SANDBOX_ARGS[@]}"}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""
@@ -132,6 +147,9 @@ REQUIRED_KEYS=(
   "insights_encryption_key"
   "polly_encryption_key"
 )
+if _tfvar_is_true "enable_sandboxes"; then
+  REQUIRED_KEYS+=("sandbox_callback_signing_jwk")
+fi
 
 echo "  Verifying keys in langsmith-config-secret..."
 echo ""

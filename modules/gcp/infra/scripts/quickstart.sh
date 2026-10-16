@@ -178,6 +178,14 @@ OWNER="$_REPLY"
 _ask "Cost center (for billing, leave blank to skip)" ""
 COST_CENTER="$_REPLY"
 
+while true; do
+  _ask "Initial org admin email" "${LANGSMITH_ADMIN_EMAIL:-}"
+  ADMIN_EMAIL="$_REPLY"
+  [[ -n "$ADMIN_EMAIL" ]] && break
+  _red "  ERROR: this value is required. Try again."
+  echo ""
+done
+
 echo ""
 printf "  Resources will be named: $(_cyan "${NAME_PREFIX}-${ENVIRONMENT}")-{resource}\n"
 
@@ -483,6 +491,7 @@ environment = "${ENVIRONMENT}"
 region      = "${REGION}"
 zone        = "${ZONE}"
 owner       = "${OWNER}"
+langsmith_admin_email = "${ADMIN_EMAIL}"
 TFVARS
 
 if [[ -n "$COST_CENTER" ]]; then
@@ -629,6 +638,7 @@ printf "  %-22s %s\n" "Profile:"    "$PROFILE"
 printf "  %-22s %s\n" "Project:"    "$PROJECT_ID"
 printf "  %-22s %s\n" "Name:"       "${NAME_PREFIX}-${ENVIRONMENT}"
 printf "  %-22s %s\n" "Region:"     "${REGION} / ${ZONE}"
+printf "  %-22s %s\n" "Admin email:" "$ADMIN_EMAIL"
 printf "  %-22s %s\n" "GKE:"        "$( [[ "$USE_AUTOPILOT" == "true" ]] && echo "Autopilot" || echo "Standard (${MACHINE_TYPE})" )"
 printf "  %-22s %s\n" "PostgreSQL:" "$PG_SOURCE"
 printf "  %-22s %s\n" "Redis:"      "$REDIS_SOURCE"

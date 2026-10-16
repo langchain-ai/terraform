@@ -475,7 +475,6 @@ if ! _langsmith_config_env=$(
   printf 'api_key_salt=%s\n' "${TF_VAR_langsmith_api_key_salt:?}"
   printf 'jwt_secret=%s\n' "${TF_VAR_langsmith_jwt_secret:?}"
   printf 'initial_org_admin_password=%s\n' "${TF_VAR_langsmith_admin_password:?}"
-  printf 'initial_org_admin_email=%s\n' "${LANGSMITH_ADMIN_EMAIL:?}"
   if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ]]; then
     printf 'agent_builder_encryption_key=%s\n' "${TF_VAR_langsmith_agent_builder_encryption_key:?}"
   fi

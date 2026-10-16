@@ -544,7 +544,7 @@ Secrets already in SSM (postgres password, redis token, api key salt, jwt secret
 
 ---
 
-### Issue #20 — manage-ssm.sh set fails: invalid choice 'none'
+### Issue #20 — manage-ssm.sh set or migrate-ssm.sh fails: invalid choice 'none'
 
 **Symptom:**
 ```
@@ -552,7 +552,9 @@ Secrets already in SSM (postgres password, redis token, api key salt, jwt secret
 aws: [ERROR]: An error occurred (ParamValidation): argument --output: Found invalid choice 'none'
 ```
 
-**Cause:** The script passes `--output none` to `aws ssm put-parameter`. The AWS CLI accepts `json`, `text`, `table`, `yaml`, and `yaml-stream` — `none` is not valid, so the call fails before anything is written to SSM.
+`migrate-ssm.sh` hides that error and prints `FAILED` for every parameter instead.
+
+**Cause:** The script passes `--output none` to `aws ssm put-parameter`. The AWS CLI accepts `json`, `text`, `table`, `yaml`, and `yaml-stream`; `none` is not valid, so the call fails before anything is written to SSM. `manage-ssm.sh` is fixed from v0.16.53 and `migrate-ssm.sh` from the release after v0.17.18.
 
 **Fix:** Write the parameter with the CLI directly, then verify:
 
@@ -566,8 +568,6 @@ aws ssm put-parameter \
 
 ./infra/scripts/manage-ssm.sh list
 ```
-
-In the script itself, `--output none` should be replaced with `--output text >/dev/null`.
 
 ---
 
