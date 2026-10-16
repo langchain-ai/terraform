@@ -193,6 +193,8 @@ _valid_tags "team"                              && bad "a bare key was accepted"
 _valid_tags "=platform"                         && bad "an empty key was accepted"   || ok "an empty key is rejected"
 _valid_tags "Team=a,team=b"                     && bad "a repeated key was accepted" || ok "a repeated key is rejected, case-insensitively"
 _valid_tags 'team="a"'                          && bad "a quote was accepted"        || ok "a quote is rejected"
+_valid_tags 'owner=DOMAIN\user'                 && bad "a backslash was accepted"    || ok "a backslash is rejected"
+_valid_tags 'team=a${b}'                        && bad "an interpolation was accepted" || ok "an interpolation is rejected"
 eq "tags render as an HCL map" "$(_tags_hcl "team=platform, owner = a@b.com,")" \
   '{ "team" = "platform", "owner" = "a@b.com" }'
 printf 'subscription_id = "sub-1"\ntags            = %s\n' "$(_tags_hcl "team=platform,cost center=x=y")" > "$OUTPUT"
@@ -222,6 +224,10 @@ printf 'tags = { team = "a,b" }\n' > "$OUTPUT"
 TAGS_KEPT="false"
 _load_tfvars
 eq "a comma in a value is kept as written" "$TAGS_KEPT" "true"
+printf 'tags = { owner = "DOMAIN\\\\user" }\n' > "$OUTPUT"
+TAGS_KEPT="false"
+_load_tfvars
+eq "an escape in a value is kept as written" "$TAGS_KEPT" "true"
 TAGS_KEPT="false"
 
 echo "6. tfvars to checkpoint and back keeps the deployment name"

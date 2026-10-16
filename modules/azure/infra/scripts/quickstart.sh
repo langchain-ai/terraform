@@ -400,14 +400,14 @@ _tfvar_line() {
 
 # Read the tags map back in the key=value,key=value form the prompt takes, on one
 # line or several. Returns 1 for a map it cannot read exactly (a comment, a comma
-# inside a value), so the caller keeps the assignment as written instead.
+# inside a value, an escape), so the caller keeps the assignment as written instead.
 _tfvar_tags() {
   local body item out="" re='^[[:space:]]*"?([^"=]*[^"=[:space:]])"?[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*$'
   local -a items
   body=$(awk '!open && /^[[:space:]]*tags[[:space:]]*=/ { open = 1; sub(/^[^=]*=[[:space:]]*/, "") }
               open { print; if (index($0, "}")) exit }' "$OUTPUT" 2>/dev/null | tr '\n' ',')
   [[ -n "$body" ]] || return 0
-  [[ "$body" == "{"*"}"* && "$body" != *"#"* && "$body" != *"//"* ]] || return 1
+  [[ "$body" == "{"*"}"* && "$body" != *"#"* && "$body" != *"//"* && "$body" != *'\'* && "$body" != *'${'* && "$body" != *'%{'* ]] || return 1
   body="${body#\{}"
   body="${body%\}*}"
   IFS=',' read -ra items <<< "$body"
@@ -427,7 +427,7 @@ _valid_tags() {
   IFS=',' read -ra items <<< "$1"
   for item in ${items[@]+"${items[@]}"}; do
     [[ -z "${item//[[:space:]]/}" ]] && continue
-    [[ "$item" == *=* && "$item" != *'"'* && "$item" != *'#'* && "$item" != *'%{'* ]] || return 1
+    [[ "$item" == *=* && "$item" != *'"'* && "$item" != *'\'* && "$item" != *'#'* && "$item" != *'${'* && "$item" != *'%{'* ]] || return 1
     key=$(printf '%s' "${item%%=*}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
     # Azure tag names are case-insensitive, so Team and team are one tag.
     [[ -n "$key" && "$seen" != *",$key,"* ]] || return 1
@@ -892,7 +892,7 @@ _run_section_2() {
 
     if [[ "$TAGS_KEPT" == "true" ]]; then
       _hint "terraform.tfvars sets tags in a form this wizard does not edit (a comment,"
-      _hint "or a comma inside a value), so it is kept exactly as written."
+      _hint "a comma inside a value, or an escape), so it is kept exactly as written."
     else
       _hint "Any other tags your Azure Policy requires, as key=value pairs separated by"
       _hint "commas (team=platform,product=langsmith). A value cannot hold a comma here,"
@@ -900,7 +900,7 @@ _run_section_2() {
       while true; do
         _ask "Other tags" "$EXTRA_TAGS"
         _valid_tags "$_REPLY" && break
-        _red "  ERROR: use key=value pairs separated by commas, each key once, no \", #, or %{."
+        _red "  ERROR: use key=value pairs separated by commas, each key once, no \", \\, #, \${, or %{."
       done
       EXTRA_TAGS="$_REPLY"
     fi
