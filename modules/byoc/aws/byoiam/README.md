@@ -25,6 +25,9 @@ module "byoiam" {
 | `regions` | AWS regions where data planes are to be deployed. |
 | `permissions_boundary_arn` | Optional boundary for all roles. |
 | `service_linked_roles_to_create` | Missing service-linked roles to create. Defaults to none. Import existing roles or leave them out. |
+| `smithdb_migration_writer_principal_arns` | Optional. Self-hosted LangSmith roles or users that may assume the SmithDB role during a self-hosted to BYOC migration. Set to `[]` after the migration. |
+| `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |
+| `workload_migration_source_blob_kms_key_arns` | Optional. KMS keys of those buckets. The workload role may decrypt objects of those buckets only. |
 | `tags` | Customer tags. `managed_by` is reserved and enforced as `customer`. |
 
 ## Provisioning requirements

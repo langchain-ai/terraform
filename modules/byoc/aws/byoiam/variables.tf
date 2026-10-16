@@ -43,3 +43,36 @@ variable "tags" {
     error_message = "Do not label customer-owned IAM resources managed_by=langsmith; that tag authorizes provisioning-role mutations."
   }
 }
+
+variable "smithdb_migration_writer_principal_arns" {
+  description = "IAM role or user ARNs of self-hosted LangSmith installations that may assume the SmithDB role to write SmithDB data and the metastore during a migration. Set to [] after the migration."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.smithdb_migration_writer_principal_arns) <= 5 && alltrue([for arn in var.smithdb_migration_writer_principal_arns : can(regex("^arn:aws:iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]{1,512}$", arn))])
+    error_message = "Provide at most five IAM role or user ARNs."
+  }
+}
+
+variable "workload_migration_source_blob_bucket_arns" {
+  description = "S3 bucket ARNs of self-hosted LangSmith installations whose run attachments migrate to this data plane. The workload role may read them so the attachment copy job can bring the attachments into the blob bucket. Set to [] after the migration."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.workload_migration_source_blob_bucket_arns) <= 5 && alltrue([for arn in var.workload_migration_source_blob_bucket_arns : can(regex("^arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", arn))])
+    error_message = "Provide at most five S3 bucket ARNs."
+  }
+}
+
+variable "workload_migration_source_blob_kms_key_arns" {
+  description = "KMS key ARNs that encrypt objects in workload_migration_source_blob_bucket_arns. The workload role may decrypt with them for objects in those buckets; the key owner must also authorize the role on each key. Set to [] after the migration."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.workload_migration_source_blob_kms_key_arns) <= 5 && alltrue([for arn in var.workload_migration_source_blob_kms_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Provide at most five KMS key ARNs."
+  }
+}

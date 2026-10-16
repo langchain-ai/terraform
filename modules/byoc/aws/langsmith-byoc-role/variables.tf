@@ -76,6 +76,12 @@ variable "allow_iam_management_permissions" {
   default     = true
 }
 
+variable "allow_self_hosted_migration_permissions" {
+  description = "Grant the role permissions to accept a VPC peering connection from a self-hosted LangSmith VPC into the data plane VPC, update the SmithDB role trust policy, and remove the migration routes afterwards. Enable for the duration of a self-hosted to BYOC migration."
+  type        = bool
+  default     = false
+}
+
 variable "vpc_ids" {
   description = "VPC IDs in which Crossplane may create tagged workload security groups when base VPC creation permissions are disabled."
   type        = set(string)
