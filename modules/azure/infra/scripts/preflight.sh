@@ -2394,6 +2394,76 @@ else:
   fi
 fi
 
+# ── 10b. External ClickHouse Secret ────────────────────────────────────────────
+# With clickhouse_host set, Terraform writes the langsmith-clickhouse Secret.
+# An install that ran init-values.sh before the variable existed already has
+# that Secret, created by kubectl, and the kubernetes provider does not adopt
+# an existing object: apply stops with 'secrets "langsmith-clickhouse" already
+# exists'. Terraform labels the Secret it writes, so a Secret without the label
+# is init-values.sh's, and the fix is an import, not a delete.
+#
+# The inputs are read the way Terraform resolves them, *.auto.tfvars (the last
+# in lexical order wins) before terraform.tfvars, because a host set in an auto
+# file is just as real to apply. The check runs only against the cluster apply
+# targets, and only a confirmed absence passes: a Forbidden, an unreachable API
+# server or a timeout is inconclusive and says so, since apply would still stop.
+_tfvar_any() {
+  local _f _val
+  for _f in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
+    _val=$(TFVARS="$_f" _tfvar "$1" 2>/dev/null) && { printf '%s\n' "$_val"; return 0; }
+  done
+  _tfvar "$1"
+}
+CH_SOURCE_ANY=$(_tfvar_any clickhouse_source || echo "in-cluster")
+CH_HOST=$(_tfvar_any clickhouse_host || echo "")
+LS_NS=$(_tfvar_any langsmith_namespace || echo "langsmith")
+if [ "$CH_SOURCE_ANY" = "external" ] && [ -n "$CH_HOST" ]; then
+  echo ""
+  echo "── External ClickHouse Secret ────────────────────────"
+  CH_SECRET_ADDR="module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]"
+  # The cluster apply targets: the attached one, or the one Terraform names
+  # (cluster_name, else the naming scheme). get-credentials names the context
+  # after the cluster, with -admin appended for --admin.
+  if [ "$CREATE_CLUSTER" = "false" ]; then
+    CH_EXPECTED_CTX="$CLUSTER_NAME"
+  else
+    CH_EXPECTED_CTX=$(_tfvar_any cluster_name || echo "${NAME_BASE}-aks${NAME_SUFFIX}")
+  fi
+  if ! command -v kubectl &>/dev/null; then
+    warn "kubectl not found — cannot tell whether ${LS_NS}/langsmith-clickhouse already exists. On a first install it does not; on an install that ran init-values.sh with clickhouse_source = external before clickhouse_host was set, apply would stop on it (see the README's external ClickHouse note)"
+  elif ! KUBE_CTX=$(kubectl config current-context 2>/dev/null) || [ -z "$KUBE_CTX" ]; then
+    warn "No kubectl context — if this is an existing install, point kubectl at '${CH_EXPECTED_CTX}' and re-run, because a langsmith-clickhouse Secret that init-values.sh created would stop apply. On a first install there is none and Terraform writes it from clickhouse_host"
+  elif [ "$KUBE_CTX" != "$CH_EXPECTED_CTX" ] && [ "$KUBE_CTX" != "${CH_EXPECTED_CTX}-admin" ]; then
+    warn "kubectl context is '${KUBE_CTX}', not '${CH_EXPECTED_CTX}', so the langsmith-clickhouse Secret check did not run: a verdict from another cluster would be wrong either way. Point kubectl at ${CH_EXPECTED_CTX} (az aks get-credentials) and re-run; on a first install there is no cluster yet and nothing to check"
+  else
+    CH_SECRET_ERR=$(mktemp)
+    # set -e: capture the exit code without letting a failed read end the script.
+    CH_SECRET_RC=0
+    CH_SECRET_JSON=$(kubectl get secret langsmith-clickhouse -n "$LS_NS" -o json --ignore-not-found --request-timeout=10s 2>"$CH_SECRET_ERR") || CH_SECRET_RC=$?
+    CH_SECRET_MSG=$(head -1 "$CH_SECRET_ERR" 2>/dev/null || true)
+    rm -f "$CH_SECRET_ERR"
+    if [ "$CH_SECRET_RC" -ne 0 ]; then
+      warn "Could not read ${LS_NS}/langsmith-clickhouse on '${KUBE_CTX}' (${CH_SECRET_MSG:-no error text}), so the check is inconclusive: if init-values.sh created that Secret before clickhouse_host was set, apply stops on it. Fix the read (RBAC, or the network path to the API server) and re-run, or look by hand: kubectl get secret langsmith-clickhouse -n ${LS_NS} -o jsonpath='{.metadata.labels}'"
+    elif [ -z "$CH_SECRET_JSON" ]; then
+      pass "No langsmith-clickhouse Secret in ${LS_NS} on '${KUBE_CTX}' — Terraform writes it from clickhouse_host"
+    else
+      CH_SECRET_OWNER=$(printf '%s' "$CH_SECRET_JSON" | python3 -c '
+import json, sys
+try:
+    labels = json.load(sys.stdin).get("metadata", {}).get("labels") or {}
+except Exception:
+    labels = {}
+print("TERRAFORM" if labels.get("app.kubernetes.io/managed-by") == "terraform" else "FOREIGN")
+' 2>/dev/null || echo "FOREIGN")
+      if [ "$CH_SECRET_OWNER" = "TERRAFORM" ]; then
+        pass "${LS_NS}/langsmith-clickhouse on '${KUBE_CTX}' is Terraform's (app.kubernetes.io/managed-by = terraform) — apply updates it in place"
+      else
+        fail "${LS_NS}/langsmith-clickhouse already exists on '${KUBE_CTX}' and was not written by Terraform (init-values.sh created it before clickhouse_host was set). The kubernetes provider does not adopt existing objects, so apply would stop with 'secrets \"langsmith-clickhouse\" already exists'. Adopt it, then apply rewrites it from the clickhouse_* variables: terraform import '${CH_SECRET_ADDR}' ${LS_NS}/langsmith-clickhouse   Deleting it and applying also works but drops the connection until apply finishes: kubectl delete secret langsmith-clickhouse -n ${LS_NS}"
+      fi
+    fi
+  fi
+fi
+
 # ── 11. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"

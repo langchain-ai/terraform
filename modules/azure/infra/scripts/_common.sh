@@ -84,6 +84,24 @@ _tf_out() {
   printf '%s' "$val"
 }
 
+# ── external ClickHouse: which signal makes the Secret Terraform's ──────────
+# Prints the detail init-values.sh shows beside its verdict: the
+# clickhouse_secret_name output when set (what the last apply did), else the
+# clickhouse_host read from terraform.tfvars (what the next apply will do).
+# Exactly one of the two, never both, which is what a bare ${x:+a}${x:-b}
+# got wrong. Returns 1 when neither is set, so the caller prompts instead.
+#   _clickhouse_owner_detail <secret_name_output> <clickhouse_host_tfvar>
+_clickhouse_owner_detail() {
+  local secret="$1" host="$2"
+  if [[ -n "$secret" ]]; then
+    printf 'clickhouse_secret_name output = %s' "$secret"
+  elif [[ -n "$host" ]]; then
+    printf 'clickhouse_host = %s in terraform.tfvars' "$host"
+  else
+    return 1
+  fi
+}
+
 # ── Azure cloud ──────────────────────────────────────────────────────────────
 # The cloud this deployment targets. Once applied, the azure_environment output
 # is the value Terraform actually used, whichever of terraform.tfvars,
@@ -250,7 +268,7 @@ _validate_license_key() {
 # enable_sso_oidc is the exception: it is baked into the generated auth block
 # (basicAuth off, oauth on), so a flip after init-values would deploy the old
 # login path.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source clickhouse_cluster langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
 # ── LangSmith images from a mirror ────────────────────────────────────────────
 # The chart's images and their repositories for the 0.16 chart line (chart
