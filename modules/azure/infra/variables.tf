@@ -1043,8 +1043,10 @@ variable "additional_node_pools" {
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
+    zones             = optional(list(string))
+    os_disk_size_gb   = optional(number)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones is the pool's availability zones, each \"1\", \"2\" or \"3\"; unset (default) means availability_zones. Set it for a pool whose VM size is not offered in every zone, or [] for a regional pool under a zoned availability_zones. Zones apply at creation only: an existing pool keeps the zones it was created with, and plan warns when they differ from the request. A pool with zones of its own satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md). os_disk_size_gb sets the OS disk in GB; unset means the AKS default for the VM size, and a change rotates the pool through a temporary pool."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
@@ -1058,6 +1060,13 @@ variable "additional_node_pools" {
   validation {
     condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null ? true : contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], pool.os_sku)])
     error_message = "additional_node_pools: os_sku must be one of AzureLinux, AzureLinux3, Ubuntu or Ubuntu2204, or left unset to follow aks_os_sku."
+  }
+
+  # The same ternary: [for z in pool.zones] on a pool that sets none would fail
+  # on the null before 1.12. The message names each pool with a bad value.
+  validation {
+    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.zones == null ? true : alltrue([for z in pool.zones : contains(["1", "2", "3"], z)])])
+    error_message = "additional_node_pools: zones must list only \"1\", \"2\" or \"3\", the names Azure gives availability zones in every region that has them (${join(", ", [for name, pool in var.additional_node_pools : "${name} = [${join(",", pool.zones)}]" if(pool.zones == null ? false : !alltrue([for z in pool.zones : contains(["1", "2", "3"], z)]))])}). Leave zones unset to follow availability_zones."
   }
 }
 
@@ -1206,14 +1215,38 @@ variable "smithdb_ingestion_enabled" {
 
 variable "smithdb_migration_enabled" {
   type        = bool
-  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled."
+  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled. make smithdb-migration-job-start sets it to true, and make smithdb-migration-job-end sets it to false."
   default     = false
+}
+
+variable "smithdb_migration_parallelism" {
+  type        = number
+  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
+  default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
+    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
+  }
 }
 
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
   default     = false
+}
+
+variable "smithdb_sizing" {
+  type        = string
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = contains(["minimal", "small", "medium", "large"], coalesce(var.smithdb_sizing, "small"))
+    error_message = "smithdb_sizing must be minimal, small, medium, or large."
+  }
 }
 
 variable "smithdb_metastore_admin_username" {
@@ -1232,8 +1265,9 @@ variable "smithdb_metastore_admin_password" {
 
 variable "smithdb_metastore_sku_name" {
   type        = string
-  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore."
-  default     = "GP_Standard_D2ds_v5"
+  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore. Null follows smithdb_sizing: GP_Standard_D2ds_v5 for minimal, then MO_Standard_E2ds_v5, E4ds_v5, and E8ds_v5 for small, medium, and large."
+  default     = null
+  nullable    = true
 }
 
 variable "smithdb_metastore_storage_mb" {
@@ -1303,6 +1337,111 @@ variable "smithdb_cache_disk_throughput_mbps" {
   }
 }
 
+# ── Sandboxes (optional) ─────────────────────────────────────────────────────
+# LangSmith Sandboxes run Firecracker microVMs in a privileged sandbox-host pod,
+# one per node, on a dedicated pool whose VMs expose /dev/kvm. Requires chart
+# 0.17 or later; see the README, "Sandboxes".
+
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Azure Managed Redis for JuiceFS metadata, a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
+  default     = false
+}
+
+variable "sandbox_host_vm_size" {
+  type        = string
+  description = "VM size for sandbox-host nodes. The size must support nested virtualization so the node exposes /dev/kvm; the Dsv4, Ddsv4, Dsv5, Ddsv5 and Ddsv6 families do. null follows sizing_profile: production and production-large use Standard_D32ds_v5, every other profile uses Standard_D8ds_v5. Confirm the family's regional vCPU quota covers sandbox_host_max_count nodes."
+  default     = null
+}
+
+variable "sandbox_host_min_count" {
+  type        = number
+  description = "Minimum sandbox-host node count. The default of 0 lets the autoscaler keep only the nodes sandbox-host replicas need; a Pending replica adds one."
+  default     = 0
+
+  validation {
+    condition     = var.sandbox_host_min_count >= 0
+    error_message = "sandbox_host_min_count must be 0 or greater."
+  }
+}
+
+variable "sandbox_host_max_count" {
+  type        = number
+  description = "Maximum sandbox-host node count. Must be at least 1 and at least sandbox_host_min_count."
+  default     = 5
+
+  validation {
+    condition     = var.sandbox_host_max_count >= 1
+    error_message = "sandbox_host_max_count must be 1 or greater."
+  }
+}
+
+variable "sandbox_host_os_disk_size_gb" {
+  type        = number
+  description = "OS disk size in GB for sandbox-host nodes. The JuiceFS cache and sandbox images live on this disk. A change rotates the pool through a temporary pool, so the region needs vCPU quota for one more node, or drain the pool to 0 nodes first."
+  default     = 200
+
+  validation {
+    condition     = var.sandbox_host_os_disk_size_gb >= 30 && var.sandbox_host_os_disk_size_gb <= 2048
+    error_message = "sandbox_host_os_disk_size_gb must be between 30 and 2048."
+  }
+}
+
+variable "sandbox_juicefs_name" {
+  type        = string
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state. Also the name of the Blob container that holds the volume's data."
+  default     = "sandbox-juicefs"
+
+  # Blob container naming rules, since the container takes this name.
+  validation {
+    condition     = length(var.sandbox_juicefs_name) <= 63 && can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", var.sandbox_juicefs_name))
+    error_message = "sandbox_juicefs_name must be 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
+  }
+}
+
+variable "sandbox_juicefs_redis_name" {
+  type        = string
+  description = "Name for the JuiceFS metadata Redis. Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
+  default     = ""
+}
+
+variable "sandbox_juicefs_amr_sku" {
+  type        = string
+  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
+  default     = "Balanced_B1"
+}
+
+variable "sandbox_juicefs_redis_high_availability" {
+  type        = bool
+  description = "Zone-redundant HA for the JuiceFS metadata Redis, plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
+  default     = true
+}
+
+variable "sandbox_juicefs_redis_prevent_destroy" {
+  type        = bool
+  description = "While true, plan refuses enable_sandboxes = false, which would delete the JuiceFS metadata Redis and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes. It does not stop terraform destroy."
+  default     = false
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  type        = string
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket, access-key). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  type        = number
+  description = "Revision for the sandbox JuiceFS config Secret, which is written write-only so the Redis access key stays out of that resource's state. The key is still in state through the JuiceFS Redis outputs, as the LangSmith Redis key is. Increment to rewrite the Secret after the access key is regenerated. A replaced Redis, from a new sandbox_juicefs_redis_name or redis_location, rewrites the Secret on its own. The chart does not restart sandbox-host for a rewrite, so restart it after the apply."
+  default     = 1
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL init-values.sh uses to generate browser and programmatic service URLs for HTTP services running inside sandboxes. Needs wildcard DNS and TLS for the host when set. Read by helm/scripts/; Terraform ignores this value."
+  default     = ""
+}
+
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
@@ -1361,7 +1500,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins for Azure. enable_smithdb requires an explicit chart line selection; see SMITHDB.md, 'Version requirements'."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'."
   default     = ""
 }
 
@@ -1379,6 +1518,11 @@ variable "tls_certificate_source" {
     condition     = var.tls_certificate_source != "dns01" || var.install_cert_manager
     error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
   }
+
+  validation {
+    condition     = var.tls_certificate_source != "letsencrypt" || !contains(["istio-addon", "agic"], var.ingress_controller)
+    error_message = "tls_certificate_source = \"letsencrypt\" does not work with ingress_controller = \"${var.ingress_controller}\": the HTTP-01 challenge never reaches cert-manager (istio-addon registers no IngressClass, and Application Gateway rewrites the challenge path). Use \"dns01\" with langsmith_domain set, \"existing\", or \"none\". See INGRESS_CONTROLLERS.md."
+  }
 }
 
 # Both default true, which is what this module did before the flags existed. Set
@@ -1393,7 +1537,7 @@ variable "install_cert_manager" {
 
 variable "install_keda" {
   type        = bool
-  description = "Install KEDA into the cluster. Set false when the cluster already runs it. KEDA scales the LangSmith queue workers on Redis queue depth, so something has to provide it."
+  description = "Install KEDA into the cluster. Set false when the cluster already runs it. The LangSmith Deployments operator scales agent deployments through KEDA, so something has to provide it when Deployments are enabled."
   default     = true
 }
 
@@ -1431,7 +1575,7 @@ variable "postgres_admin_password" {
 # The admin password, API key salt, JWT secret and Fernet encryption keys are
 # NOT Terraform variables by design — Terraform would persist them in plaintext
 # in state. scripts/seed-keyvault-secrets.sh writes them directly to Key Vault
-# after apply, and helm/scripts/generate-secrets.sh reads them back from KV.
+# after apply, and scripts/create-k8s-secrets.sh reads them back from KV.
 
 variable "langsmith_release_name" {
   type        = string
@@ -1530,7 +1674,7 @@ variable "ingress_ip" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pool and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Applies at creation only."
+  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pools and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Covers the default node pool and every additional pool, unless a pool sets its own zones in additional_node_pools. Applies at creation only: a pool keeps the zones it was created with, and plan warns when they differ from the request."
   default     = []
 }
 
@@ -1569,10 +1713,9 @@ variable "langsmith_custom_ca_secret_key" {
   default     = "ca.crt"
 }
 
-# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing and the default sandbox_host_vm_size."
   default     = "production"
 }
 

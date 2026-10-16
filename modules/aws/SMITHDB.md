@@ -67,6 +67,15 @@ For the scripts path, set `smithdb_ingestion_enabled`,
 `infra/terraform.tfvars`; the app path exposes the same flags. Apply each stage
 separately and keep ClickHouse enabled throughout LangSmith v16.
 
+To run the historical migration, run `make smithdb-migration-job-start`, then `make apply`, `make init-values`, and `make deploy`.
+It asks whether TaskDB is chart-managed or an external Postgres, how many runs to migrate in how many days, and how many migration pods to run (suggesting a count from the LangSmith formula plus 50% headroom), then stores the TaskDB settings in SSM, writes `helm/values/langsmith-values-smithdb-migration.yaml`, and sets `smithdb_migration_enabled = true`.
+Existing chart-managed migrations keep using `smithdb-migration-taskdb/postgres_password` when that Secret exists, so the helper does not change the Job's immutable secret reference.
+With the flag on, Terraform grants the SmithDB role read access to the traces bucket, and the deploy starts the migration Job.
+Once the Job is Complete, run `make smithdb-migration-job-end`, then the same three commands, to remove the grant, TaskDB, and its settings.
+An external TaskDB Postgres is not deleted.
+If migration pods are OOMKilled, raise their memory in `langsmith-values-smithdb-migration.yaml` (keep requests equal to limits).
+Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `make deploy`. Kubernetes cannot update an existing Job's pod template; the recreated Job resumes from progress saved in TaskDB.
+
 ## Production notes
 
 - Keep RDS deletion protection, backups, and final snapshots enabled.

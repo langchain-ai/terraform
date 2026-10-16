@@ -41,6 +41,7 @@ run "enums_reject_an_unlisted_value" {
     fleet_storage            = "rds"
     insights_storage         = "rds"
     polly_storage            = "rds"
+    eks_network_mode         = "overlay"
   }
 
   expect_failures = [
@@ -56,6 +57,7 @@ run "enums_reject_an_unlisted_value" {
     var.fleet_storage,
     var.insights_storage,
     var.polly_storage,
+    var.eks_network_mode,
   ]
 }
 
@@ -125,18 +127,45 @@ run "chart_version_accepts_the_pinned_line" {
   }
 }
 
+run "chart_version_accepts_the_0_18_line" {
+  command = plan
+
+  variables {
+    langsmith_helm_chart_version = "0.18.0-rc.28"
+  }
+
+  assert {
+    condition     = var.langsmith_helm_chart_version == "0.18.0-rc.28"
+    error_message = "a 0.18.x langsmith_helm_chart_version failed validation"
+  }
+}
+
 run "cidrs_reject_a_non_cidr" {
   command = plan
 
   variables {
     vpc_cidr_block       = "10.0.0.0"
     firewall_subnet_cidr = "10.0.32.0"
+    eks_pod_cidr         = "100.64.0.0"
   }
 
   expect_failures = [
     var.vpc_cidr_block,
     var.firewall_subnet_cidr,
+    var.eks_pod_cidr,
   ]
+}
+
+# eks_pod_cidr is a valid CIDR here, but its pod subnets would be /29s, which
+# AWS rejects.
+run "eks_pod_cidr_rejects_a_prefix_longer_than_26" {
+  command = plan
+
+  variables {
+    eks_pod_cidr = "100.64.0.0/27"
+  }
+
+  expect_failures = [var.eks_pod_cidr]
 }
 
 run "sizes_and_counts_reject_a_value_below_the_floor" {

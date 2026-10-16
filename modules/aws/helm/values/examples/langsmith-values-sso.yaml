@@ -1,0 +1,9 @@
+# SSO (OIDC) values. deploy.sh adds this file only when enable_sso_oidc = true; turn it on with `make sso`.
+# The client ID, client secret, and issuer URL come from the langsmith-config Secret, which ESO syncs from SSM.
+# basicAuth must be off, because the chart rejects basicAuth and oauth both enabled.
+# One-way: LangSmith does not support moving a self-hosted install from SSO back to basic auth.
+config:
+  basicAuth:
+    enabled: false
+  oauth:
+    enabled: true

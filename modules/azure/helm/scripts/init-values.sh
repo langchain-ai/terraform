@@ -32,11 +32,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-INFRA_DIR="$HELM_DIR/../infra"
-VALUES_DIR="$HELM_DIR/values"
-EXAMPLES_DIR="$VALUES_DIR/examples"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+EXAMPLES_DIR="$HELM_DIR/values/examples"
 
-source "$INFRA_DIR/scripts/_common.sh"
+source "$HELM_DIR/../infra/scripts/_common.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
@@ -57,6 +57,8 @@ _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
 _enable_smithdb=$(_parse_tfvar "enable_smithdb") || _enable_smithdb="false"
+_enable_sandboxes=$(_parse_tfvar "enable_sandboxes") || _enable_sandboxes="false"
+_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 _langsmith_release_name=$(_parse_tfvar "langsmith_release_name") || _langsmith_release_name="langsmith"
 if [[ "$_langsmith_release_name" == *langsmith* ]]; then
   _langsmith_release_fullname="$_langsmith_release_name"
@@ -132,6 +134,7 @@ SMITHDB_METASTORE_AUTH_MODE="password"
 SMITHDB_METASTORE_USERNAME=""
 SMITHDB_CACHE_STORAGE_CLASS=""
 SMITHDB_STORAGE_BLOB_ENDPOINT=""
+SMITHDB_HELM_VALUES=""
 if [[ "${_enable_smithdb:-false}" == "true" ]]; then
   SMITHDB_STORAGE_ACCOUNT=$(_tf_out smithdb_storage_account_name) || SMITHDB_STORAGE_ACCOUNT=""
   SMITHDB_STORAGE_CONTAINER=$(_tf_out smithdb_storage_container_name) || SMITHDB_STORAGE_CONTAINER=""
@@ -140,9 +143,21 @@ if [[ "${_enable_smithdb:-false}" == "true" ]]; then
   SMITHDB_METASTORE_AUTH_MODE=$(_tf_out smithdb_metastore_auth_mode) || SMITHDB_METASTORE_AUTH_MODE="password"
   SMITHDB_METASTORE_USERNAME=$(_tf_out smithdb_metastore_username) || SMITHDB_METASTORE_USERNAME=""
   SMITHDB_CACHE_STORAGE_CLASS=$(_tf_out smithdb_cache_storage_class_name) || SMITHDB_CACHE_STORAGE_CLASS=""
+  SMITHDB_HELM_VALUES=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_helm_values 2>/dev/null) || SMITHDB_HELM_VALUES=""
   if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
     SMITHDB_STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_blob_endpoint 2>/dev/null) || SMITHDB_STORAGE_BLOB_ENDPOINT=""
   fi
+fi
+
+SANDBOX_WI_CLIENT_ID=""
+SANDBOX_JUICEFS_SECRET=""
+SANDBOX_MIN_REPLICAS=""
+SANDBOX_MAX_REPLICAS=""
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  SANDBOX_WI_CLIENT_ID=$(_tf_out sandbox_host_workload_identity_client_id) || SANDBOX_WI_CLIENT_ID=""
+  SANDBOX_JUICEFS_SECRET=$(_tf_out sandbox_juicefs_secret_name) || SANDBOX_JUICEFS_SECRET=""
+  SANDBOX_MIN_REPLICAS=$(_tf_out sandbox_host_min_replicas) || SANDBOX_MIN_REPLICAS=""
+  SANDBOX_MAX_REPLICAS=$(_tf_out sandbox_host_max_replicas) || SANDBOX_MAX_REPLICAS=""
 fi
 
 echo ""
@@ -294,6 +309,7 @@ info "enable_insights      = $_enable_insights"
 info "enable_polly         = $_enable_polly"
 info "enable_fleet         = $_enable_fleet"
 info "enable_smithdb       = $_enable_smithdb"
+info "enable_sandboxes     = $_enable_sandboxes"
 info "enable_sso_oidc      = $_enable_sso_oidc"
 info "enable_llm_gateway   = $_enable_llm_gateway"
 info "enable_gateway_pii_redaction = $_enable_gateway_pii_redaction"
@@ -802,6 +818,75 @@ LLMGW_EOF
   fi
 fi
 
+# ── Sandboxes ─────────────────────────────────────────────────────────────
+# Generated rather than copied, because it carries the sandbox-host Workload
+# Identity client ID. The JuiceFS format Job runs under the sandbox-host
+# ServiceAccount, so both pods take the identity label: sandbox-host mounts the
+# JuiceFS Blob container with that identity, and the Job formats it. The JuiceFS
+# Secret and the callback signing key come from Terraform and langsmith-config-
+# secret, so this file holds no secret. images.sandboxHostImage.tag is not
+# written here: deploy.sh sets it from the appVersion of the chart it resolves.
+# safe-to-evict=false stops the cluster autoscaler from removing a node that
+# runs sandbox-host and its sandbox VMs. The format Job needs no KVM: it prefers
+# a sandbox node, but runs on any Linux node rather than wait for the sandbox
+# pool to scale up from 0.
+# The elected sandbox-host scales its own Deployment between the sandboxhost
+# pool's min_count (at least 1) and max_count, and each new replica's Pending
+# pod makes the cluster autoscaler add a node. To scale further, raise
+# sandbox_host_max_count, apply, and re-run make init-values and make deploy.
+_sandboxes_file="$VALUES_DIR/langsmith-values-sandboxes.yaml"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if [[ -z "$SANDBOX_WI_CLIENT_ID" || -z "$SANDBOX_JUICEFS_SECRET" ]] \
+    || ! [[ "$SANDBOX_MIN_REPLICAS" =~ ^[0-9]+$ && "$SANDBOX_MAX_REPLICAS" =~ ^[0-9]+$ ]]; then
+    fail "enable_sandboxes = true but the sandbox Terraform outputs are missing"
+    action "Run terraform apply with enable_sandboxes = true, then re-run make init-values"
+    exit 1
+  fi
+  _sandbox_service_url_line=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_line="
+  serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
+  cat > "$_sandboxes_file" << SANDBOXES_EOF
+# Sandboxes (chart sandboxes, sandbox-host with JuiceFS on Blob). Auto-generated
+# by init-values.sh from enable_sandboxes in terraform.tfvars.
+sandboxes:
+  enabled: true${_sandbox_service_url_line}
+  juicefs:
+    existingSecretName: "${SANDBOX_JUICEFS_SECRET}"
+  sandboxHost:
+    deployment:
+      labels:
+        azure.workload.identity/use: "true"
+      nodeSelector:
+        sandbox.langsmith.com/host: "true"
+      podAnnotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    autoscaling:
+      enabled: true
+      minReplicas: ${SANDBOX_MIN_REPLICAS}
+      maxReplicas: ${SANDBOX_MAX_REPLICAS}
+    serviceAccount:
+      annotations:
+        azure.workload.identity/client-id: "${SANDBOX_WI_CLIENT_ID}"
+  juicefsFormatJob:
+    labels:
+      azure.workload.identity/use: "true"
+    nodeSelector:
+      kubernetes.io/os: linux
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: sandbox.langsmith.com/host
+                  operator: In
+                  values: ["true"]
+SANDBOXES_EOF
+  pass "Generated: langsmith-values-sandboxes.yaml"
+fi
+
 # Patch tlsEnabled in agent-deploys — derive from tls_certificate_source.
 # Example file defaults to false; patch so operator builds https:// agent URLs.
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
@@ -812,19 +897,45 @@ if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
 fi
 
 # ── SmithDB ───────────────────────────────────────────────────────────────
+# Three files, in the order deploy.sh loads them: the sizing file (written every
+# run from terraform output smithdb_helm_values), the overlay (copied once from
+# examples/, safe to hand-edit), and the overrides file (written every run from
+# the other Terraform outputs). A later file wins.
 if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_sizing="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
-
-  if [[ ! -f "$_smithdb_base" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_base"
-    pass "Generated: langsmith-values-smithdb.yaml"
-  fi
 
   if [[ -z "$SMITHDB_STORAGE_ACCOUNT" || -z "$SMITHDB_STORAGE_CONTAINER" || -z "$SMITHDB_WI_CLIENT_ID" || -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
     fail "enable_smithdb = true but the SmithDB Terraform outputs are missing"
     action "Run terraform apply with enable_smithdb = true, then re-run make init-values"
     exit 1
+  fi
+
+  # terraform output -raw can exit 0 with a warning on stdout, so check the
+  # content rather than the exit code. yamlencode quotes keys: "smithdb":
+  if [[ "$SMITHDB_HELM_VALUES" != '"smithdb":'* ]]; then
+    fail "enable_smithdb = true but the smithdb_helm_values Terraform output is missing"
+    action "The state is older than this module. Run terraform apply, then re-run make init-values"
+    exit 1
+  fi
+
+  {
+    echo "# Auto-generated by init-values.sh from terraform output smithdb_helm_values."
+    echo "# Do not edit. To change the size, set smithdb_sizing in infra/terraform.tfvars."
+    echo ""
+    printf '%s\n' "$SMITHDB_HELM_VALUES"
+  } > "$_smithdb_sizing"
+  pass "Generated: langsmith-values-smithdb-sizing.yaml"
+
+  if [[ ! -f "$_smithdb_base" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_base"
+    pass "Generated: langsmith-values-smithdb.yaml"
+  elif grep -qE '^[[:space:]]+resourceTier:' "$_smithdb_base"; then
+    # Overlays copied before smithdb_sizing existed set resourceTier: small,
+    # which loads after the sizing file and would win over it.
+    warn "langsmith-values-smithdb.yaml sets resourceTier, which overrides smithdb_sizing"
+    action "Delete the resourceTier line from $_smithdb_base"
   fi
 
   # Outside the public cloud the chart needs the account's blob endpoint: left
@@ -905,6 +1016,9 @@ smithdb:
     job:
       labels:
         azure.workload.identity/use: "true"
+    # The TaskDB credential and the migration pod count are in
+    # langsmith-values-smithdb-migration.yaml, which make
+    # smithdb-migration-job-start writes and deploy.sh loads after this file.
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}

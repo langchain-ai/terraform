@@ -52,6 +52,28 @@ data "aws_iam_policy_document" "s3_access" {
     resources = ["${local.bucket_arn}/*"]
   }
 
+  # The migration Job runs as this service account and reads historical trace blobs from the LangSmith bucket.
+  # ListBucket makes S3 return 404 rather than 403 for blobs the lifecycle rules already expired, which the migration skips instead of failing on.
+  dynamic "statement" {
+    for_each = var.migration_source_bucket_arn != "" ? [var.migration_source_bucket_arn] : []
+    content {
+      sid       = "MigrationSourceList"
+      effect    = "Allow"
+      actions   = ["s3:ListBucket"]
+      resources = [statement.value]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.migration_source_bucket_arn != "" ? [var.migration_source_bucket_arn] : []
+    content {
+      sid       = "MigrationSourceRead"
+      effect    = "Allow"
+      actions   = ["s3:GetObject"]
+      resources = ["${statement.value}/*"]
+    }
+  }
+
   dynamic "statement" {
     for_each = var.s3_kms_key_arn != "" ? [var.s3_kms_key_arn] : []
     content {

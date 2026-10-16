@@ -8,7 +8,7 @@ set -euo pipefail
 # seed-keyvault-secrets.sh — Write LangSmith app secrets straight into Key Vault
 #
 # Usage:
-#   cd terraform/azure/infra
+#   cd terraform/modules/azure/infra
 #   ./scripts/seed-keyvault-secrets.sh
 #
 # Prerequisites:
@@ -28,21 +28,24 @@ set -euo pipefail
 #   langsmith-agent-builder-encryption-key   — generated (Fernet)
 #   langsmith-insights-encryption-key        — generated (Fernet)
 #   langsmith-polly-encryption-key           — generated (Fernet)
+#   smithdb-taskdb-password                  — generated (hex)
+#   langsmith-sandbox-callback-signing-jwk   — generated (Ed25519 JWK), enable_sandboxes only
 #
-# The seven LangSmith secrets are deliberately NOT Terraform-managed: Terraform
+# The LangSmith secrets are deliberately NOT Terraform-managed: Terraform
 # would persist their plaintext in state. This mirrors the AWS module (writes SSM)
 # and the GCP module (writes Secret Manager). Terraform owns only the vault and
 # its RBAC.
 #
 # postgres-admin-password and langsmith-license-key are Terraform's on the
 # default path, and seeded here for keyvault_manage_secrets = false, where apply
-# left them out. Write-once means both paths end with the same nine. They go
-# last, so a value this script cannot resolve never costs the seven above.
+# left them out. Write-once means both paths end with the same ten. They go
+# last, so a value this script cannot resolve never costs the eight above.
 #
 # WRITE-ONCE: an existing secret is never overwritten. Rotating any of these
 # breaks running deployments — a new API key salt invalidates every API key, a
 # new JWT secret drops every session, a new Fernet key makes existing encrypted
-# data unreadable. Rotate deliberately via `make keyvault` instead.
+# data unreadable, and a new taskdb password locks the migration Job out of a
+# taskdb that already initialized with the old one. Rotate deliberately via `make keyvault` instead.
 #
 # Safe to re-run: it seeds only what is missing.
 
@@ -196,13 +199,57 @@ _seed "langsmith-insights-encryption-key" "$(_gen_fernet)" \
 _seed "langsmith-polly-encryption-key" "$(_gen_fernet)" \
   "component=polly stability=critical module=seed-script"
 
+# ── SmithDB taskdb password ───────────────────────────────────────────────────
+# The chart refuses to render the backfill without a taskdb credential.
+# create-k8s-secrets.sh copies it into the smithdb-taskdb secret. Seeded
+# unconditionally, like the Fernet keys, so the backfill phase needs no extra
+# step. Hex, because it carries no character a connection string would need
+# escaped.
+
+_seed "smithdb-taskdb-password" "$(openssl rand -hex 32)" \
+  "component=smithdb stability=critical module=seed-script"
+
+# ── Sandbox callback signing key ──────────────────────────────────────────────
+# An Ed25519 private JWK. platform-backend signs sandbox callbacks with it and
+# sandbox-host verifies them; create-k8s-secrets.sh copies it into
+# langsmith-config-secret as sandbox_callback_signing_jwk. Seeded only with
+# enable_sandboxes = true, because it needs OpenSSL 3: the LibreSSL that macOS
+# ships has no Ed25519. Rotating it drops the callbacks of running sandboxes.
+
+_b64url_nopad() {
+  base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+# The last 32 bytes of the PKCS#8 private key are the seed (d) and of the SPKI
+# public key the point (x). Same generator as the GCP module's setup-env.sh.
+_gen_ed25519_jwk() {
+  local tmpdir d x
+  tmpdir=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/langsmith-jwk.XXXXXX") || return 1
+  if openssl genpkey -algorithm ED25519 -out "$tmpdir/key.pem" >/dev/null 2>&1 \
+    && openssl pkey -in "$tmpdir/key.pem" -outform DER -out "$tmpdir/private.der" >/dev/null 2>&1 \
+    && openssl pkey -in "$tmpdir/key.pem" -pubout -outform DER -out "$tmpdir/public.der" >/dev/null 2>&1; then
+    d=$(tail -c 32 "$tmpdir/private.der" | _b64url_nopad)
+    x=$(tail -c 32 "$tmpdir/public.der" | _b64url_nopad)
+  fi
+  rm -rf "$tmpdir"
+  [[ -n "${d:-}" && -n "${x:-}" ]] || return 1
+  printf '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"sandbox-callback-%s","x":"%s","d":"%s"}' \
+    "$(openssl rand -hex 8)" "$x" "$d"
+}
+
+if _tfvar_is_true "enable_sandboxes"; then
+  _seed "langsmith-sandbox-callback-signing-jwk" "$(_gen_ed25519_jwk || true)" \
+    "component=sandboxes stability=critical module=seed-script" \
+    "Generating it needs OpenSSL 3 with Ed25519 (openssl version; on macOS: brew install openssl@3)."
+fi
+
 # ── Terraform's two secrets ───────────────────────────────────────────────────
 # Skips on the default path; written here when keyvault_manage_secrets = false
 # left them out. create-k8s-secrets.sh needs langsmith-license-key to build
 # langsmith-config-secret.
 #
 # Last on purpose: resolving either value can fail (secrets.auto.tfvars is
-# gitignored), and nothing else writes the seven above.
+# gitignored), and nothing else writes the eight above.
 
 _pg_password="${LANGSMITH_PG_PASSWORD:-${TF_VAR_postgres_admin_password:-}}"
 if [[ -z "$_pg_password" ]]; then

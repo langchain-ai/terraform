@@ -65,6 +65,15 @@ locals {
   langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
+  # The chart names sandbox-host's service account <fullname>-sandbox-host.
+  sandbox_host_service_account = "${local.langsmith_release_fullname}-sandbox-host"
+  sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+
+  # JuiceFS reads the container from the first label of the bucket host and the
+  # account from access-key, so the bucket is https://<container>.core.windows.net,
+  # not the account's blob URL.
+  sandbox_juicefs_bucket = var.enable_sandboxes ? replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1") : null
+
   # A StorageClass is cluster-scoped, unlike everything else this module creates
   # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
   # the second apply fails on an object the first one owns. Suffix it the same
@@ -260,11 +269,39 @@ locals {
   aks_node_total             = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes]))
   aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
-  effective_node_pools = var.additional_node_pools
+  # enable_sandboxes adds the sandbox-host pool. An additional_node_pools entry
+  # named sandboxhost replaces it whole, for a pool that needs other settings.
+  sandbox_host_vm_size = var.sandbox_host_vm_size != null ? var.sandbox_host_vm_size : (contains(["production", "production-large"], var.sizing_profile) ? "Standard_D32ds_v5" : "Standard_D8ds_v5")
+  sandbox_node_pools = var.enable_sandboxes ? {
+    sandboxhost = {
+      vm_size   = local.sandbox_host_vm_size
+      min_count = var.sandbox_host_min_count
+      max_count = var.sandbox_host_max_count
+      node_labels = {
+        "sandbox.langsmith.com/host"      = "true"
+        "sandbox.langsmith.com/node-pool" = "host"
+      }
+      node_taints       = ["sandbox.langsmith.com/host=true:NoSchedule"]
+      kubelet_disk_type = "OS"
+      zones             = var.availability_zones
+      os_sku            = null
+      os_disk_size_gb   = var.sandbox_host_os_disk_size_gb
+    }
+  } : {}
+
+  effective_node_pools = merge(local.sandbox_node_pools, var.additional_node_pools)
 
   # On a pre-existing cluster whose node pools the customer owns, an empty map, so
   # Terraform doesn't attach pools to a cluster it doesn't manage.
   aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
+
+  # Additional pools this module creates that resolve to zones: their own, or
+  # availability_zones when they set none. One of these gives SmithDB zonal
+  # nodes for its Premium SSD v2 cache disks on a cluster whose default pool
+  # was built nonzonal.
+  zonal_node_pools = [
+    for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+  ]
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -444,6 +481,7 @@ locals {
     !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24) ? "" : "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly.",
     length(local.postgres_name) <= 63 ? "" : "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly.",
     length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
+    !var.enable_sandboxes || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
     !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
   ])
 }
@@ -949,10 +987,74 @@ resource "terraform_data" "validate_network" {
     # after a clean apply, as SmithDB pods pending on a disk attach error.
     # default_node_pool[0].zones also carries ignore_changes and applies at
     # creation, so recovering from it means rebuilding the pool rather than
-    # editing a variable. Refuse at plan time instead.
+    # editing a variable. Refuse at plan time instead. A zonal additional pool
+    # also passes, because it is the non-disruptive way to add zonal nodes to a
+    # cluster built without them; the chart overrides then pin SmithDB there.
     precondition {
-      condition     = !var.enable_smithdb || length(var.availability_zones) > 0
-      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"]. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+      condition     = !var.enable_smithdb || length(var.availability_zones) > 0 || length(local.zonal_node_pools) > 0
+      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"], or an additional_node_pools entry with zones set. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+    }
+
+    # SmithDB's single-replica deployments start the new pod before stopping
+    # the old one, and the chart exposes no strategy for compaction. On a
+    # dedicated pool that cannot grow, the new pod stays Pending after any
+    # values change, including every staged gate flip. The pool is identified by
+    # the name the chart overrides pin to (kubernetes.azure.com/agentpool:
+    # smithdb). ?: rather than || so the index is skipped when the pool is absent.
+    precondition {
+      condition = (
+        var.enable_smithdb && (var.create_cluster || var.existing_cluster_node_pools_managed) && contains(keys(local.effective_node_pools), "smithdb")
+        ? local.effective_node_pools["smithdb"].max_count > local.effective_node_pools["smithdb"].min_count
+        : true
+      )
+      error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
+    }
+
+    # On a zoned cluster, a pool that sets zones = [] is regional, and SmithDB's
+    # components carry no nodeSelector by default, so they can land on it, where
+    # a Premium SSD v2 cache volume cannot attach. Refuse that. On a nonzonal
+    # cluster (availability_zones empty) the first SmithDB rule above already
+    # requires a zonal additional pool, and SMITHDB.md pins SmithDB to it; the other
+    # pools are regional by construction there, so this rule stands down. This
+    # reads the requested zones, not the live ones: a pool created regional
+    # before availability_zones reached additional pools passes, and
+    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
+    precondition {
+      condition = !var.enable_smithdb || length(var.availability_zones) == 0 || alltrue([
+        for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+      ])
+      error_message = "enable_smithdb = true with availability_zones set refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_count >= var.sandbox_host_min_count
+      error_message = "sandbox_host_max_count (${var.sandbox_host_max_count}) must be at least sandbox_host_min_count (${var.sandbox_host_min_count})."
+    }
+
+    # An additional_node_pools entry named sandboxhost replaces the generated
+    # pool whole. Without the label the chart's nodeSelector matches no node,
+    # and sandbox-host stays Pending with nothing naming the cause.
+    precondition {
+      condition = var.enable_sandboxes && contains(keys(var.additional_node_pools), "sandboxhost") ? (
+        lookup(var.additional_node_pools["sandboxhost"].node_labels, "sandbox.langsmith.com/host", "") == "true"
+        && contains(var.additional_node_pools["sandboxhost"].node_taints, "sandbox.langsmith.com/host=true:NoSchedule")
+      ) : true
+      error_message = "additional_node_pools.sandboxhost replaces the generated sandbox-host pool, so it needs node_labels \"sandbox.langsmith.com/host\" = \"true\" and node_taints \"sandbox.langsmith.com/host=true:NoSchedule\". Without them sandbox-host never schedules."
+    }
+
+    # JuiceFS metadata lives in Azure Managed Redis, which Azure Government does
+    # not offer; see redis_source.
+    precondition {
+      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment")
+      error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
+    }
+
+    # A flag rather than lifecycle prevent_destroy, which takes only a literal:
+    # selecting between a guarded and an unguarded copy of the Redis would
+    # replace it whenever the flag changed.
+    precondition {
+      condition     = var.enable_sandboxes || !var.sandbox_juicefs_redis_prevent_destroy
+      error_message = "sandbox_juicefs_redis_prevent_destroy = true refuses enable_sandboxes = false, which deletes the JuiceFS metadata Redis and every sandbox filesystem with it. To disable sandboxes, set sandbox_juicefs_redis_prevent_destroy = false as well."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips
@@ -1260,7 +1362,9 @@ module "aks" {
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
@@ -1682,6 +1786,201 @@ module "postgres" {
   tags = local.common_tags
 }
 
+# ── SmithDB sizing ───────────────────────────────────────────────────────────
+# One size sets the chart resource tier, the replicas, the default metastore
+# SKU, the namespace quota headroom, and the smithdb_helm_values output.
+
+locals {
+  smithdb_sizing_by_profile = {
+    minimum            = "minimal"
+    dev                = "small"
+    default            = "small"
+    production         = "medium"
+    "production-large" = "large"
+  }
+
+  # sizing_profile has no validation of its own, so an unlisted profile falls
+  # back to small, the same tier the chart picks when nothing is set.
+  smithdb_sizing  = coalesce(var.smithdb_sizing, lookup(local.smithdb_sizing_by_profile, var.sizing_profile, "small"))
+  smithdb_minimal = local.smithdb_sizing == "minimal"
+
+  # The chart has the small, medium, and large tiers. minimal uses small with
+  # explicit resources.
+  smithdb_resource_tier = local.smithdb_minimal ? "small" : local.smithdb_sizing
+
+  # Per-replica resources for each chart tier. Copied from chart 0.17.0-rc.42,
+  # templates/_helpers.tpl, "langsmith.smithdb.tierResources". The chart sets
+  # requests equal to limits. Update this table with the chart.
+  smithdb_tiers = {
+    small = {
+      query            = { cpu = "4", memory = "8Gi" }
+      ingestion        = { cpu = "4", memory = "8Gi" }
+      compactionWorker = { cpu = "8", memory = "16Gi" }
+      compaction       = { cpu = "2", memory = "4Gi" }
+      clusterManager   = { cpu = "250m", memory = "256Mi" }
+    }
+    medium = {
+      query            = { cpu = "28", memory = "48Gi" }
+      ingestion        = { cpu = "16", memory = "32Gi" }
+      compactionWorker = { cpu = "16", memory = "32Gi" }
+      compaction       = { cpu = "4", memory = "8Gi" }
+      clusterManager   = { cpu = "250m", memory = "256Mi" }
+    }
+    large = {
+      query            = { cpu = "28", memory = "50Gi" }
+      ingestion        = { cpu = "56", memory = "150Gi" }
+      compactionWorker = { cpu = "28", memory = "50Gi" }
+      compaction       = { cpu = "8", memory = "16Gi" }
+      clusterManager   = { cpu = "2", memory = "2Gi" }
+    }
+  }
+  smithdb_tier = local.smithdb_tiers[local.smithdb_resource_tier]
+
+  # Replicas for each tier, from the SmithDB sizing table in the LangSmith
+  # self-hosted docs. The chart tier sets only the per-replica resources, so the
+  # values set these counts as the HPA minReplicas of the three cache
+  # components. compaction and clusterManager have no HPA and one replica.
+  smithdb_tier_replicas = {
+    small  = { query = 1, ingestion = 1, compactionWorker = 1, compaction = 1, clusterManager = 1 }
+    medium = { query = 1, ingestion = 1, compactionWorker = 1, compaction = 1, clusterManager = 1 }
+    large  = { query = 4, ingestion = 2, compactionWorker = 4, compaction = 1, clusterManager = 1 }
+  }
+  smithdb_replicas = local.smithdb_tier_replicas[local.smithdb_resource_tier]
+
+  smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
+  smithdb_compute_components = ["compaction", "clusterManager"]
+
+  # minimal: explicit resources, limits 2x requests. A partial resources block
+  # keeps the chart default for each key that it omits. The chart Job default
+  # has 100Gi of ephemeral-storage, so the Job block sets every key.
+  # The taskdb keeps the chart default resources.
+  smithdb_minimal_resources = {
+    query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
+    clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
+    migration_job = {
+      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
+    }
+  }
+
+  # Default metastore SKU for each size. The docs section "Metastore capacity"
+  # (langsmith/self-host-smithdb-scale) gives a dedicated metastore 2 vCPU /
+  # 16 GiB for small, 4 / 32 for medium, and 8 / 64 for large, which is the
+  # memory-optimized Edsv5 shape. minimal keeps the earlier default. An explicit
+  # smithdb_metastore_sku_name wins.
+  smithdb_metastore_sku_defaults = {
+    minimal = "GP_Standard_D2ds_v5"
+    small   = "MO_Standard_E2ds_v5"
+    medium  = "MO_Standard_E4ds_v5"
+    large   = "MO_Standard_E8ds_v5"
+  }
+  smithdb_metastore_sku_name = coalesce(var.smithdb_metastore_sku_name, local.smithdb_metastore_sku_defaults[local.smithdb_sizing])
+
+  # SmithDB namespace quota headroom, from the resolved resources. It covers the
+  # tier replicas of each component, one surge copy of the largest pod (a
+  # rolling update starts the new pod first), and, with the backfill, each
+  # migration pod (smithdb_migration_parallelism) and the taskdb. HPA scale-out
+  # above the tier replicas has only the surge room. CPU is in millicores and
+  # memory in MiB, so the sums are exact.
+  smithdb_quota_inputs = merge(
+    {
+      for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
+        requests = { cpu = t.cpu, memory = t.memory }
+        limits   = { cpu = t.cpu, memory = t.memory }
+      }
+    },
+    {
+      # Chart values.yaml defaults for smithdb.migration.job.resources and
+      # smithdb.migration.taskdb.postgres.statefulSet.resources.
+      migration_job = local.smithdb_minimal ? local.smithdb_minimal_resources.migration_job : {
+        requests = { cpu = "8", memory = "32Gi" }
+        limits   = { cpu = "8", memory = "32Gi" }
+      }
+      taskdb = {
+        requests = { cpu = "2", memory = "4Gi" }
+        limits   = { cpu = "4", memory = "8Gi" }
+      }
+    },
+  )
+
+  # "250m" and "4" to millicores, "256Mi" and "8Gi" to MiB.
+  smithdb_quota_numbers = {
+    for name, r in local.smithdb_quota_inputs : name => merge([
+      for side in ["requests", "limits"] : {
+        "${side}_cpu_m"     = tonumber(trimsuffix(r[side].cpu, "m")) * (endswith(r[side].cpu, "m") ? 1 : 1000)
+        "${side}_memory_mi" = tonumber(trimsuffix(trimsuffix(r[side].memory, "Gi"), "Mi")) * (endswith(r[side].memory, "Gi") ? 1024 : 1)
+      }
+    ]...)
+  }
+  smithdb_quota_total = {
+    for k in ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"] : k => (
+      sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * local.smithdb_quota_numbers[c][k]]) +
+      max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) +
+      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
+    )
+  }
+
+  # k8s-bootstrap adds the extra once to requests and twice to limits, so it
+  # must cover the requests total and half of the limits total.
+  smithdb_quota_extra_cpu = var.enable_smithdb ? max(
+    ceil(local.smithdb_quota_total.requests_cpu_m / 1000), ceil(local.smithdb_quota_total.limits_cpu_m / 2000)
+  ) : 0
+  smithdb_quota_extra_memory_gi = var.enable_smithdb ? max(
+    ceil(local.smithdb_quota_total.requests_memory_mi / 1024), ceil(local.smithdb_quota_total.limits_memory_mi / 2048)
+  ) : 0
+
+  # The SmithDB pods at the tier replicas plus the metastore migration hook,
+  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
+  # and its taskdb StatefulSet, plus 1 for each further migration pod.
+  smithdb_quota_extra_pods = var.enable_smithdb ? (
+    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
+  ) : 0
+
+  # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
+  # to helm/values/langsmith-values-smithdb-sizing.yaml. The cache StorageClass,
+  # identity, and metastore stay in the overrides file.
+  #
+  # small, medium, and large: the chart tier, with the tier replicas as each
+  # cache component's HPA minReplicas. They also go to deployment.replicas,
+  # which the chart uses only when the HPA is off.
+  smithdb_values_tier = {
+    smithdb = merge(
+      { resourceTier = local.smithdb_resource_tier },
+      {
+        for c in local.smithdb_cache_components : c => {
+          deployment  = { replicas = local.smithdb_replicas[c] }
+          autoscaling = { hpa = { minReplicas = local.smithdb_replicas[c] } }
+        }
+      },
+    )
+  }
+
+  # minimal: the explicit resources, and one replica for each autoscaled
+  # component.
+  smithdb_values_minimal = {
+    smithdb = merge(
+      { resourceTier = "small" },
+      {
+        for c in local.smithdb_cache_components : c => {
+          deployment  = { resources = local.smithdb_minimal_resources[c] }
+          autoscaling = { hpa = { minReplicas = 1, maxReplicas = 1 } }
+        }
+      },
+      { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
+      { migration = { job = { resources = local.smithdb_minimal_resources.migration_job } } },
+    )
+  }
+
+  # yamlencode per branch: the two objects have different attributes, so ?: on
+  # the objects themselves is a type error.
+  smithdb_helm_values = !var.enable_smithdb ? null : (
+    local.smithdb_minimal ? yamlencode(local.smithdb_values_minimal) : yamlencode(local.smithdb_values_tier)
+  )
+}
+
 # ── SmithDB infrastructure (optional) ────────────────────────────────────────
 
 module "smithdb" {
@@ -1702,7 +2001,7 @@ module "smithdb" {
 
   metastore_admin_username        = var.smithdb_metastore_admin_username
   metastore_admin_password        = var.smithdb_metastore_admin_password
-  metastore_sku_name              = var.smithdb_metastore_sku_name
+  metastore_sku_name              = local.smithdb_metastore_sku_name
   metastore_storage_mb            = var.smithdb_metastore_storage_mb
   metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
   # The flag is derived from variables so the module's count can read it. The ID
@@ -1749,6 +2048,85 @@ module "redis" {
   cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
+}
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# JuiceFS keeps sandbox filesystem metadata in Redis and the data in Blob.
+# Metadata loss loses every sandbox filesystem, so the Redis is dedicated, never
+# evicts, and writes an append-only file whenever HA is on, the only mode Azure
+# persists in. It runs NoCluster: JuiceFS issues multi-key transactions that a
+# sharded database rejects. Its private endpoint goes in the AKS subnet beside
+# the Blob endpoints, so no Redis subnet is needed when redis_source is
+# in-cluster, and it shares the LangSmith Redis's DNS zone when there is one.
+
+# On an attached cluster whose pools the customer owns, Terraform adds no
+# sandboxhost pool, and sandbox-host stays Pending until one exists. A warning
+# rather than a precondition, because bringing that pool is a supported path.
+check "sandbox_pool_on_attached_cluster" {
+  assert {
+    condition     = !var.enable_sandboxes || var.create_cluster || var.existing_cluster_node_pools_managed
+    error_message = "enable_sandboxes = true on an attached cluster with existing_cluster_node_pools_managed = false: Terraform does not create the sandboxhost pool. Add a pool with nested virtualization, the sandbox.langsmith.com/host=true label, and the sandbox.langsmith.com/host=true:NoSchedule taint, and set sandbox_host_min_count and sandbox_host_max_count to its bounds, which init-values.sh writes as the sandbox-host replica bounds. Or set existing_cluster_node_pools_managed = true so Terraform adds the pool."
+  }
+}
+
+module "sandbox_juicefs_redis" {
+  count                   = var.enable_sandboxes ? 1 : 0
+  source                  = "./modules/redis"
+  name                    = local.sandbox_juicefs_redis_name
+  location                = var.location
+  resource_group_name     = local.rg_name
+  resource_group_id       = local.rg_id
+  subnet_id               = local.aks_subnet_id
+  vnet_id                 = local.vnet_id
+  create_private_dns_zone = var.redis_source != "external"
+  private_dns_zone_id     = var.redis_source == "external" ? module.redis[0].private_dns_zone_id : null
+  amr_sku                 = var.sandbox_juicefs_amr_sku
+  clustering_policy       = "NoCluster"
+  eviction_policy         = "NoEviction"
+  high_availability       = var.sandbox_juicefs_redis_high_availability
+  aof_persistence         = var.sandbox_juicefs_redis_high_availability
+  cluster_location        = var.redis_location
+
+  tags = local.common_tags
+}
+
+# JuiceFS data goes in its own container in the LangSmith Blob account, and
+# sandbox-host gets its own identity with access to that container alone. The
+# container is outside the ttl_s/ and ttl_l/ prefixes the lifecycle rules
+# delete from.
+resource "azurerm_storage_container" "sandbox_juicefs" {
+  count                 = var.enable_sandboxes ? 1 : 0
+  name                  = var.sandbox_juicefs_name
+  storage_account_id    = module.blob.storage_account_id
+  container_access_type = "private"
+}
+
+resource "azurerm_user_assigned_identity" "sandbox_host" {
+  count               = var.enable_sandboxes ? 1 : 0
+  name                = "${local.aks_name}-sandbox-host-identity"
+  resource_group_name = local.rg_name
+  location            = var.location
+  tags                = local.common_tags
+}
+
+resource "azurerm_federated_identity_credential" "sandbox_host" {
+  count                     = var.enable_sandboxes ? 1 : 0
+  name                      = "langsmith-federated-${local.sandbox_host_service_account}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.sandbox_host[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.langsmith_namespace}:${local.sandbox_host_service_account}"
+}
+
+# principal_type is explicit for the same ABAC reason as the storage module's
+# grant. The scope is the container's ARM ID, built rather than read, because
+# the provider's id attribute for a container is its data-plane URL.
+resource "azurerm_role_assignment" "sandbox_host_blob" {
+  count                = var.enable_sandboxes ? 1 : 0
+  principal_id         = azurerm_user_assigned_identity.sandbox_host[0].principal_id
+  principal_type       = "ServicePrincipal"
+  role_definition_name = "Storage Blob Data Contributor"
+  scope                = "${module.blob.storage_account_id}/blobServices/default/containers/${azurerm_storage_container.sandbox_juicefs[0].name}"
 }
 
 # ── Blob private DNS ──────────────────────────────────────────────────────────
@@ -1975,8 +2353,10 @@ module "keyvault" {
 #
 # LangSmith application deployment is handled outside Terraform:
 #   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
-#   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
-#             (deploy.sh also applies the letsencrypt-prod ClusterIssuer)
+#   Pass 2:   bash helm/scripts/deploy.sh
+#             (deploy.sh runs infra/scripts/create-k8s-secrets.sh when
+#             langsmith-config-secret is missing, and applies the
+#             letsencrypt-prod ClusterIssuer)
 #   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
 #
 # Note: This module configures its own kubernetes/helm providers internally,
@@ -2008,6 +2388,28 @@ module "k8s_bootstrap" {
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
 
+  # SmithDB's pods on top of the base namespace quota. Zero when disabled.
+  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
+  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
+  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+
+  # Sandboxes. No account key: the format Job and sandbox-host reach Blob
+  # through workload identity. AMR serves database 0 only.
+  enable_sandboxes            = var.enable_sandboxes
+  platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
+  network_policy_engine       = module.aks.network_policy_engine
+  node_subnet_cidrs           = local.aks_subnet_prefixes
+  sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
+  sandbox_juicefs_config = var.enable_sandboxes ? {
+    name         = var.sandbox_juicefs_name
+    metaurl      = "${module.sandbox_juicefs_redis[0].connection_url}/0"
+    storage      = "wasb"
+    bucket       = local.sandbox_juicefs_bucket
+    "access-key" = module.blob.storage_account_name
+  } : {}
+  sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id        = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].id : null
+
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.
   ingress_controller    = var.ingress_controller
@@ -2020,7 +2422,6 @@ module "k8s_bootstrap" {
   agic_subnet_cidrs = local.byo_agic_subnet ? data.azurerm_subnet.byo_agic_subnet[0].address_prefixes : var.agic_subnet_address_prefix
 
   # Backing services — connection URLs are injected as K8s secrets.
-  # generate-secrets.sh also writes these secrets with the full URL from KV.
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
   postgres_admin_password = var.postgres_source == "external" ? var.postgres_admin_password : ""
@@ -2045,7 +2446,7 @@ module "k8s_bootstrap" {
 
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
-  # helm/scripts/generate-secrets.sh from Azure Key Vault.
+  # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
   # Cluster components, off when the cluster already runs them, which is only

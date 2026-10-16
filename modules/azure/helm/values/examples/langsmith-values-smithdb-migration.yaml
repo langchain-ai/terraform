@@ -1,0 +1,36 @@
+# Example of helm/values/langsmith-values-smithdb-migration.yaml (chart 0.17).
+#
+# make smithdb-migration-job-start writes the real file from your answers. Do
+# not copy this example by hand; rerun the script to change the answers.
+# deploy.sh loads the real file after the other SmithDB values files, and only
+# while smithdb_migration_enabled = true. See SMITHDB.md#staged-rollout.
+#
+# The file sets no migration pod or TaskDB resources. The SmithDB size sets
+# them (langsmith-values-smithdb-sizing.yaml), and Terraform sizes the
+# namespace quota for the same values. Keep parallelism equal to
+# smithdb_migration_parallelism in infra/terraform.tfvars.
+
+smithdb:
+  migration:
+    job:
+      parallelism: 4
+    taskdb:
+      postgres:
+        maxConnectionsPerMigrationPod: 10   # server limit is (parallelism + 1) x this
+        # Chart-managed TaskDB (answer 1): make seed-secrets generates the
+        # password in Key Vault, and make k8s-secrets copies it to this Secret.
+        auth:
+          existingSecretName: "smithdb-taskdb"
+          passwordSecretKey: "postgres_password"
+        # External TaskDB (answer 2): the script writes this block instead of
+        # auth, and puts the connection settings in the smithdb-taskdb-external
+        # Secret.
+        # external:
+        #   enabled: true
+        #   port: "5432"
+        #   useSsl: true
+        #   existingSecretName: "smithdb-taskdb-external"
+        #   hostSecretKey: "smithdb_taskdb_host"
+        #   databaseSecretKey: "smithdb_taskdb_database"
+        #   usernameSecretKey: "smithdb_taskdb_username"
+        #   passwordSecretKey: "smithdb_taskdb_password"
