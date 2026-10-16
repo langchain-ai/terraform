@@ -4,7 +4,7 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# _tfvars.sh — terraform.tfvars readers shared by _common.sh and setup-env.sh.
+# _tfvars.sh — terraform.tfvars readers shared by the GCP infra and helm scripts.
 #
 # Usage: set INFRA_DIR, then source this file. Each function reads
 # "$INFRA_DIR/terraform.tfvars" when called, so INFRA_DIR may change after
@@ -22,7 +22,7 @@
 # literal #) or at an inline # (bare booleans and numbers). The previous
 # grep/sed pair kept trailing comments, so `enable_smithdb = true  # step 9`
 # compared as "true#step9" and read as false. Keep this function identical to
-# the copies in helm/scripts/*.sh and infra/scripts/preflight.sh.
+# _tfvar in infra/scripts/preflight.sh.
 _parse_tfvar() {
   awk -v key="$1" '
     $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
