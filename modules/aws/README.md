@@ -261,6 +261,25 @@ terraform {
 }
 ```
 
+### Tagging
+
+`environment`, `owner`, `cost_center`, and `tags` merge into one tag set. Put any tag your tag policy requires in `tags`, for example `team`, an owner email, or `product`. `make quickstart` asks for them as `key=value` pairs.
+
+Terraform applies the tag set to its own resources through the provider's `default_tags`. It also hands the set to every controller that creates AWS resources outside Terraform, so the tags are in each create call a tag-enforcing SCP evaluates:
+
+| Created by | Resources | Setting |
+|---|---|---|
+| EKS managed node groups | Instances, root volumes, ENIs | Launch template `tag_specifications` |
+| Karpenter (SmithDB pools) | Instances, volumes, ENIs, launch templates | EC2NodeClass `spec.tags` |
+| EBS CSI driver | PVC volumes and snapshots, for every StorageClass | Add-on `controller.extraVolumeTags` |
+| AWS Load Balancer Controller | ALB, target groups, security groups | Chart `defaultTags` |
+| VPC CNI | Pod ENIs | Add-on `ADDITIONAL_ENI_TAGS` |
+| RDS | Automated and final snapshots | `copy_tags_to_snapshot` |
+
+The VPC CNI row applies only where this module manages the add-on: under custom networking, or when `eks_addons` lists `vpc-cni`. Otherwise EKS installs the CNI itself and the ENIs it adds for pod IPs carry no tags. If an SCP requires tags on `ec2:CreateNetworkInterface`, add `"vpc-cni" = { most_recent = true }` to `eks_addons`.
+
+EKS creates each managed node group's Auto Scaling group with only its own `eks:*` tags. It does so through a service-linked role, which SCPs do not restrict, so the create succeeds, but a tag policy compliance report lists the group.
+
 ---
 
 ## Pod networking
@@ -1167,7 +1186,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `langsmith_engine_usage_signing_secret` | `""` | no | Engine usage signing secret, at least 32 characters. Set by `setup-env.sh` |
 | `owner` | `""` | no | Owner tag applied to all resources |
 | `cost_center` | `""` | no | Cost center tag for billing |
-| `tags` | `{}` | no | Additional tags applied to all resources |
+| `tags` | `{}` | no | Additional tags, such as `team`, an owner email, or `product`. Reach every AWS resource the install creates, including the ones Karpenter and the EKS controllers create. See [Tagging](#tagging) |
 
 ---
 

@@ -62,6 +62,8 @@ resource "aws_db_instance" "this" {
   deletion_protection     = var.deletion_protection
   storage_encrypted       = true
   backup_retention_period = var.backup_retention_period
+  # Automated and final snapshots carry the instance's tags, default_tags included.
+  copy_tags_to_snapshot = true
 
   iam_database_authentication_enabled = var.iam_database_authentication_enabled
   skip_final_snapshot                 = var.skip_final_snapshot
