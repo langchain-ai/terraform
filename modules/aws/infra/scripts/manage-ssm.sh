@@ -50,6 +50,9 @@ OPTIONAL_PARAMS=(
   "polly-encryption-key"
   "sandbox-juicefs-redis-auth-token"
   "sandbox-callback-signing-jwk"
+  "engine-encryption-key"
+  "engine-usage-signing-secret"
+  "engine-encryption-key-previous"
 )
 
 # Stable secrets that should never be changed after first deploy
@@ -57,6 +60,8 @@ STABLE_PARAMS=(
   "langsmith-api-key-salt"
   "langsmith-jwt-secret"
   "sandbox-callback-signing-jwk"
+  "engine-encryption-key"
+  "engine-usage-signing-secret"
 )
 
 # SSM key → K8s secret data key (parallel arrays for diff subcommand)
@@ -70,6 +75,8 @@ DIFF_SSM_KEYS=(
   "deployments-encryption-key"
   "polly-encryption-key"
   "sandbox-callback-signing-jwk"
+  "engine-encryption-key"
+  "engine-usage-signing-secret"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -81,6 +88,8 @@ DIFF_K8S_KEYS=(
   "deployments_encryption_key"
   "polly_encryption_key"
   "sandbox_callback_signing_jwk"
+  "engine_encryption_key"
+  "engine_usage_signing_secret"
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -196,6 +205,10 @@ cmd_set() {
       echo "  Changing this invalidates ALL existing API keys."
     elif [[ "$key" == "langsmith-jwt-secret" ]]; then
       echo "  Changing this invalidates ALL active user sessions."
+    elif [[ "$key" == "engine-encryption-key" ]]; then
+      echo "  Engine cannot decrypt payloads made with the old key. Set engine-encryption-key-previous first (ENGINE.md, Keys)."
+    elif [[ "$key" == "engine-usage-signing-secret" ]]; then
+      echo "  Engine usage reports fail until every Engine component uses the new value (ENGINE.md, Keys)."
     fi
     printf "  Are you sure? [y/N] "
     read -r confirm

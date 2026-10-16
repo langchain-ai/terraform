@@ -194,6 +194,76 @@ run "enable_sandboxes_adds_the_juicefs_redis" {
   }
 }
 
+# The sandbox-host group carries attributes outside the eks_managed_node_groups
+# object type. A typed path drops them silently, and the upstream module then
+# falls back to its own metadata_options default of hop limit 2, which lets pods
+# reach the node's IMDS credentials.
+run "sandbox_host_node_group_keeps_metadata_options_and_overrides" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_node_group_overrides = {
+      capacity_type = "SPOT"
+      ami_type      = "AL2023_x86_64_NVIDIA"
+      cpu_options   = { core_count = 24 }
+    }
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_tokens == "required"
+    error_message = "the sandbox-host node group lost http_tokens = required on the way to the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_put_response_hop_limit == 1
+    error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].capacity_type == "SPOT"
+    error_message = "sandbox_host_node_group_overrides.capacity_type did not reach the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].ami_type == "AL2023_x86_64_NVIDIA"
+    error_message = "sandbox_host_node_group_overrides.ami_type did not reach the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.core_count == 24
+    error_message = "sandbox_host_node_group_overrides.cpu_options did not reach the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["default"].desired_size == 3
+    error_message = "the default node group no longer gets desired_size from min_size"
+  }
+}
+
+run "sandbox_host_node_group_null_overrides_fall_back" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_node_count          = 2
+    sandbox_host_node_group_overrides = {
+      desired_size             = null
+      iam_role_use_name_prefix = null
+    }
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].desired_size == 2
+    error_message = "a null desired_size override no longer falls back to min_size"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_use_name_prefix == true
+    error_message = "a null iam_role_use_name_prefix override no longer falls back to true"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_put_response_hop_limit == 1
+    error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
+  }
+}
+
 run "enable_smithdb_adds_only_smithdb" {
   command = plan
 

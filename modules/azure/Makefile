@@ -137,7 +137,7 @@ seed-secrets: ## Write LangSmith app secrets into Key Vault (run after apply; ne
 kubeconfig: ## Fetch AKS credentials into ~/.kube/config
 	$(HELM_DIR)/scripts/get-kubeconfig.sh
 
-k8s-secrets: ## Create langsmith-config-secret from Key Vault (all 8 keys)
+k8s-secrets: ## Create langsmith-config-secret from Key Vault
 	cd $(INFRA_DIR) && bash scripts/create-k8s-secrets.sh
 
 # ── Pass 2+: Helm Deployment ─────────────────────────────────────────────────

@@ -164,6 +164,24 @@ smithdb_query_enabled     = false
 # smithdb_cache_storage_class_name   = "smithdb-cache-premium-v2"
 # smithdb_cache_disk_iops            = 7000
 # smithdb_cache_disk_throughput_mbps = 1000
+
+# ── Sandboxes (optional) ─────────────────────────────────────────────────────
+# Chart 0.17. Adds a tainted sandbox-host node pool, a dedicated Azure Managed
+# Redis for JuiceFS metadata, a Blob container for JuiceFS data, and a Workload
+# Identity scoped to that container. Then run make seed-secrets (needs OpenSSL 3)
+# and make init-values. See README, "Sandboxes".
+enable_sandboxes = false
+
+# The VM size needs nested virtualization (Dsv4, Ddsv4, Dsv5, Ddsv5, Ddsv6).
+# Unset follows sizing_profile: Standard_D32ds_v5 for production and
+# production-large, Standard_D8ds_v5 otherwise.
+# sandbox_host_vm_size   = "Standard_D8ds_v5"
+# sandbox_host_min_count = 0
+# sandbox_host_max_count = 5
+# sandbox_juicefs_amr_sku                 = "Balanced_B1"
+# sandbox_juicefs_redis_high_availability = true
+# sandbox_juicefs_redis_name              = "" # empty derives from the naming scheme
+# sandbox_service_url_base_url            = "" # needs wildcard DNS and TLS
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API, uses Gateway/HTTPRoute; start here)
 # "nginx"         — NGINX ingress via Helm (legacy Ingress compatibility)

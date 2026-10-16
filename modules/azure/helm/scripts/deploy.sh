@@ -461,6 +461,20 @@ else
   pass "langsmith-config-secret exists"
 fi
 
+# platform-backend and sandbox-host read sandbox_callback_signing_jwk from that
+# secret, and a secret created before enable_sandboxes lacks it. Re-sync from Key
+# Vault, which fails naming make seed-secrets when the vault lacks it too.
+if _tfvar_is_true "enable_sandboxes"; then
+  # go-template over key names only, so the key never leaves the API server.
+  if ! kubectl get secret langsmith-config-secret -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
+    | grep -qx "sandbox_callback_signing_jwk"; then
+    warn "langsmith-config-secret has no sandbox_callback_signing_jwk — syncing from Key Vault..."
+    bash "$HELM_DIR/../infra/scripts/create-k8s-secrets.sh"
+  fi
+  pass "langsmith-config-secret has sandbox_callback_signing_jwk"
+fi
+
 # ── Ensure langsmith-clickhouse secret exists (external ClickHouse only) ──
 # With clickhouse_source = "external" the chart skips its own ClickHouse
 # StatefulSet and resolves all seven connection fields through secretKeyRef with
@@ -548,6 +562,7 @@ _enable_llm_gateway=false
 _enable_gateway_pii_redaction=false
 _enable_fleet=false
 _enable_smithdb=false
+_enable_sandboxes=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
@@ -556,6 +571,7 @@ _tfvar_is_true "enable_llm_gateway"   && _enable_llm_gateway=true  || true
 _tfvar_is_true "enable_gateway_pii_redaction" && _enable_gateway_pii_redaction=true || true
 _tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
 _tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
+_tfvar_is_true "enable_sandboxes"      && _enable_sandboxes=true     || true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -575,6 +591,13 @@ fi
 # no fleet database, so the deploy would fail later resolving the missing secret.
 if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
+  exit 1
+fi
+# The overlay carries the sandbox-host identity, so a deploy without it would
+# turn sandboxes off rather than fail.
+if [[ "$_enable_sandboxes" == "true" && ! -f "$VALUES_DIR/langsmith-values-sandboxes.yaml" ]]; then
+  fail "enable_sandboxes = true but langsmith-values-sandboxes.yaml is missing"
+  action "Run: make init-values"
   exit 1
 fi
 
@@ -603,6 +626,7 @@ _addon_gate=(
   "polly:polly:$_enable_polly"
   "llm-gateway:llm_gateway:$_enable_llm_gateway"
   "gateway-pii:gateway_pii_redaction:$_enable_gateway_pii_redaction"
+  "sandboxes:sandboxes:$_enable_sandboxes"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -711,12 +735,13 @@ CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 _required_chart_line="0.17"
 
 # These values target chart 0.17, where the SmithDB Azure values first appear.
+# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
 # Refuse any other line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "$_required_chart_line" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
-  echo "       These values require chart ${_required_chart_line} (SmithDB values, engineInsightsAgent)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
+if [[ "$_chart_line" != "$_required_chart_line" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} or 0.18 line." >&2
+  echo "       These values require chart ${_required_chart_line} or 0.18 (SmithDB values, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} or 0.18 patch explicitly:" >&2
   echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
   exit 1
 fi
@@ -932,12 +957,67 @@ echo ""
 
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain &>/dev/null
-_resolved_chart=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-  | awk '/^version:/{print $2}') || _resolved_chart=""
+_chart_metadata=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
 echo "Chart: $_chart_source  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
+fi
+
+# Chart 0.17 fails the release when images.sandboxHostImage.tag is empty, and a
+# tag pinned in a file lags every chart upgrade. Set it from the appVersion of
+# the chart resolved above, which helm upgrade installs, as the AWS and GCP
+# modules do. The JuiceFS format Job runs the same image.
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d '"')
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: chart $_resolved_chart does not declare an appVersion for the sandbox-host image." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
+  echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
+fi
+
+# sandbox-host runs on the host network, so it calls platform-backend from a node
+# IP. On other engines Terraform admits the node subnet by ipBlock, which Cilium
+# on AKS never matches against a node IP, so on Cilium this policy admits the
+# nodes by entity instead. It is a CRD object, applied here for the same reason
+# as the ClusterIssuer. Applied before the release so sandbox-host's first call,
+# the default snapshot build, gets through.
+_policy_engine=$(_tf_out network_policy_engine) || _policy_engine=""
+if [[ "$_policy_engine" == "cilium" && "$_enable_sandboxes" == "true" ]]; then
+  if ! kubectl apply -f - >/dev/null <<EOF
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-nodes-to-platform-backend
+  namespace: ${NAMESPACE}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: ${CHART_FULLNAME}-platform-backend
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "1986"
+              protocol: TCP
+EOF
+  then
+    fail "Could not apply the CiliumNetworkPolicy that admits sandbox-host to platform-backend"
+    exit 1
+  fi
+  pass "CiliumNetworkPolicy allow-nodes-to-platform-backend applied (sandbox-host to platform-backend :1986)"
+elif [[ "$_policy_engine" == "cilium" ]]; then
+  if ! kubectl delete ciliumnetworkpolicy allow-nodes-to-platform-backend -n "$NAMESPACE" --ignore-not-found >/dev/null; then
+    warn "Could not delete CiliumNetworkPolicy allow-nodes-to-platform-backend; the nodes can still reach platform-backend :1986"
+  fi
+elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" ]]; then
+  warn "Terraform has no network_policy_engine output yet. On a Cilium cluster, sandbox-host cannot reach platform-backend until it does."
+  action "Run: make apply, then make deploy"
 fi
 
 # --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
@@ -996,6 +1076,58 @@ for dep in "${_core_deployments[@]}"; do
     _all_ready=false
   fi
 done
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  # The format Job name carries a hash, so select it by label. It reaches Blob
+  # through the sandbox-host Workload Identity. Helm does not run a failed Job
+  # again when the manifest is unchanged, so a failed Job must be deleted before
+  # the next deploy.
+  _format_selector="app.kubernetes.io/instance=${RELEASE_NAME},app.kubernetes.io/component=juicefs-format"
+  _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+    -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  _format_waited=true
+  if [[ "$_format_failed" != *True* ]] \
+    && ! kubectl wait --for=condition=complete job -n "$NAMESPACE" -l "$_format_selector" --timeout=5m 2>/dev/null; then
+    _format_waited=false
+    _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  fi
+  if [[ "$_format_failed" == *True* ]]; then
+    _format_reason=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].reason}' 2>/dev/null) || _format_reason=""
+    warn "The JuiceFS format Job failed (${_format_reason:-no reason})"
+    case "$_format_reason" in
+      *DeadlineExceeded*)
+        info "It did not finish in 300 s. Look for FailedScheduling or a slow image pull:"
+        info "kubectl describe job -n $NAMESPACE -l $_format_selector"
+        ;;
+      *)
+        info "A 403 from Blob means the identity label or federated credential is wrong (run: make apply, make init-values):"
+        info "kubectl logs -n $NAMESPACE -l $_format_selector"
+        ;;
+    esac
+    action "kubectl delete job -n $NAMESPACE -l $_format_selector && make deploy"
+    _all_ready=false
+  elif ! kubectl get job -n "$NAMESPACE" -l "$_format_selector" -o name 2>/dev/null | grep -q .; then
+    warn "No JuiceFS format Job found for release ${RELEASE_NAME}"
+    _all_ready=false
+  elif [[ "$_format_waited" == "false" ]]; then
+    warn "The JuiceFS format Job is not complete within 5m"
+    info "kubectl get jobs -n $NAMESPACE -l $_format_selector"
+    _all_ready=false
+  fi
+
+  # rollout status exits 0 when nothing matches, so check first.
+  _sandbox_host_selector="app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host"
+  if ! kubectl get deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" -o name 2>/dev/null | grep -q .; then
+    warn "No sandbox-host Deployment found for release ${RELEASE_NAME}"
+    _all_ready=false
+  elif ! kubectl rollout status deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" --timeout=10m 2>/dev/null; then
+    warn "sandbox-host not ready within 10m (the sandboxhost pool may still be scaling up from 0)"
+    info "kubectl logs -n $NAMESPACE -l $_sandbox_host_selector -c sandbox-host --tail=50"
+    _all_ready=false
+  fi
+fi
 
 if [[ "$_all_ready" == "true" ]]; then
   pass "All core deployments ready"

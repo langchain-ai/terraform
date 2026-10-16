@@ -1138,6 +1138,33 @@ EOF
       warn "terraform.tfvars: additional_node_pools is not in a shape preflight can read — checking the default node pool only"
     fi
 
+    # enable_sandboxes adds the sandboxhost pool, unless additional_node_pools
+    # already defines one (it replaces the generated pool). Preflight runs
+    # before terraform init, so the sizes and counts below copy
+    # local.sandbox_host_vm_size and the variable defaults, sizing_profile's
+    # included, and tests/sandboxes.tftest.hcl fails when they drift.
+    if [ "$(_tfvar enable_sandboxes || echo false)" = "true" ] \
+      && ! printf '%s\n' "${EXTRA_POOLS:-}" | cut -f1 | grep -qx sandboxhost; then
+      SB_SIZE=$(_tfvar sandbox_host_vm_size || echo "")
+      if [ -z "$SB_SIZE" ] || [ "$SB_SIZE" = "null" ]; then
+        case "$(_tfvar sizing_profile || echo production)" in
+          production|production-large) SB_SIZE="Standard_D32ds_v5" ;;
+          *) SB_SIZE="Standard_D8ds_v5" ;;
+        esac
+      fi
+      SB_MIN=$(_tfvar sandbox_host_min_count || echo "0")
+      SB_MAX=$(_tfvar sandbox_host_max_count || echo "5")
+      SB_FAMILY=$(_quota_family "$SB_SIZE")
+      SB_VCPUS=$(_sku_vcpus "$SB_SIZE")
+      if [ -z "$SB_FAMILY" ] || [ -z "$SB_VCPUS" ] \
+        || ! printf '%s|%s\n' "$SB_MIN" "$SB_MAX" | grep -qE '^[0-9]+\|[0-9]+$'; then
+        warn "Could not read the sandboxhost pool (${SB_SIZE}, ${SB_MIN}-${SB_MAX}) — it is left out of the checks below"
+      else
+        POOL_ROWS="${POOL_ROWS}
+$(printf '%s\t%s\t%s\t%s' "$SB_FAMILY" $((SB_MIN * SB_VCPUS)) $((SB_MAX * SB_VCPUS)) "sandboxhost ${SB_MIN}-${SB_MAX} × ${SB_SIZE}")"
+      fi
+    fi
+
     # Pools that share a family share its quota. Postgres adds to the family it
     # shares, and to the regional total always.
     POOL_FAMILIES=$(printf '%s\n' "$POOL_ROWS" | cut -f1 | awk '!seen[$0]++')
