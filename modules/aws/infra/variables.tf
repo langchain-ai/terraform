@@ -177,6 +177,12 @@ variable "eks_private_access_cidrs" {
   }
 }
 
+variable "eks_private_access_managed_externally" {
+  type        = bool
+  description = "Set true when Terraform already reaches the private EKS API endpoint through access you manage, such as a VPN or transit gateway and your own cluster security group rule. It lets enable_public_eks_cluster = false plan without create_bastion or eks_private_access_cidrs."
+  default     = false
+}
+
 variable "eks_cluster_version" {
   type        = string
   description = "The EKS version of the kubernetes cluster"

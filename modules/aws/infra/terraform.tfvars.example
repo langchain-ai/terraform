@@ -232,6 +232,11 @@ enable_public_eks_cluster = false
 #
 # eks_private_access_cidrs = ["10.100.0.0/16"]
 
+# Set true instead when Terraform already reaches the private endpoint through a
+# VPN or transit gateway and a cluster security group rule you manage.
+#
+# eks_private_access_managed_externally = true
+
 # Pod networking. Set this at cluster creation; existing nodes keep their pod
 # IPs until they are replaced. See README.md "Pod networking".
 #

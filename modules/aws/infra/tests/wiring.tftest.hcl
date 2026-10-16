@@ -398,6 +398,30 @@ run "sandbox_host_node_group_gets_the_iam_and_ebs_key_settings" {
   }
 }
 
+# Upstream takes a key the group sets over eks_managed_node_group_defaults, even
+# a null one, so unset root inputs must leave the IAM keys off the group.
+run "node_group_iam_defaults_apply_when_the_root_inputs_are_unset" {
+  command = plan
+
+  variables {
+    eks_managed_node_group_defaults = {
+      ami_type                      = "AL2023_x86_64_STANDARD"
+      create_iam_role               = false
+      iam_role_arn                  = "arn:aws:iam::123456789012:role/plantest-node"
+      iam_role_permissions_boundary = "arn:aws:iam::123456789012:policy/plantest-boundary"
+      iam_role_path                 = "/langsmith/"
+    }
+  }
+
+  assert {
+    condition = length(setintersection(
+      keys(module.eks.eks_managed_node_group_inputs["default"]),
+      ["create_iam_role", "iam_role_arn", "iam_role_permissions_boundary", "iam_role_path"],
+    )) == 0
+    error_message = "the default node group sets IAM keys that override eks_managed_node_group_defaults"
+  }
+}
+
 run "sandbox_host_node_group_uses_the_existing_node_role" {
   command = plan
 

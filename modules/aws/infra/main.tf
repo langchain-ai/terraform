@@ -175,8 +175,8 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = var.enable_public_eks_cluster || var.create_bastion || length(var.eks_private_access_cidrs) > 0
-      error_message = "A private-only EKS endpoint needs a way in. Set create_bastion = true, or set eks_private_access_cidrs to the CIDR your Terraform runs from."
+      condition     = var.enable_public_eks_cluster || var.create_bastion || length(var.eks_private_access_cidrs) > 0 || var.eks_private_access_managed_externally
+      error_message = "A private-only EKS endpoint needs a way in. Set create_bastion = true, or set eks_private_access_cidrs to the CIDR your Terraform runs from. If you already reach the endpoint through a VPN or your own security group rule, set eks_private_access_managed_externally = true."
     }
 
     # A node in a public subnet without a public IP has no route out. Without

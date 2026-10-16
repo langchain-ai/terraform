@@ -77,19 +77,24 @@ locals {
   )
 
   # try() covers extra groups, which are untyped and may omit either attribute.
+  # Each IAM key is set only when its root input is. Upstream resolves a key the
+  # group sets ahead of eks_managed_node_group_defaults, even when it is null.
   eks_managed_node_groups = {
     for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
       desired_size             = coalesce(try(v.desired_size, null), v.min_size)
       iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      },
       # A node group name is user-chosen, so truncate it to the name_prefix limit.
-      iam_role_name = try(v.iam_role_name, null) != null || !local.prefixed_role_names ? try(v.iam_role_name, null) : (
-        coalesce(try(v.iam_role_use_name_prefix, null), true) ? substr("${var.iam_role_name_prefix}-${try(v.name, k)}", 0, 37) : "${var.iam_role_name_prefix}-${try(v.name, k)}"
-      )
-      create_iam_role               = local.existing_roles.node_group == null
-      iam_role_arn                  = local.existing_roles.node_group
-      iam_role_permissions_boundary = var.iam_permissions_boundary_arn
-      iam_role_path                 = var.iam_role_path
-    }, var.ebs_kms_key_arn != "" ? { block_device_mappings = local.node_group_block_devices[k] } : {})
+      local.prefixed_role_names && try(v.iam_role_name, null) == null ? {
+        iam_role_name = coalesce(try(v.iam_role_use_name_prefix, null), true) ? substr("${var.iam_role_name_prefix}-${try(v.name, k)}", 0, 37) : "${var.iam_role_name_prefix}-${try(v.name, k)}"
+      } : {},
+      # One key per conditional, since {} and a mixed-type object unify to map(string).
+      local.existing_roles.node_group != null ? { create_iam_role = false } : {},
+      local.existing_roles.node_group != null ? { iam_role_arn = local.existing_roles.node_group } : {},
+      var.iam_permissions_boundary_arn != null ? { iam_role_permissions_boundary = var.iam_permissions_boundary_arn } : {},
+      var.iam_role_path != "/" ? { iam_role_path = var.iam_role_path } : {},
+      var.ebs_kms_key_arn != "" ? { block_device_mappings = local.node_group_block_devices[k] } : {},
+    )
   }
 }
 

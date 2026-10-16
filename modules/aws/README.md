@@ -640,7 +640,7 @@ The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmi
 
 ## Private Cluster with Bastion Host
 
-For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. Pass 1 runs the Helm, Kubernetes, and kubectl providers, so Terraform needs a path to the API from the first apply. A private-only endpoint with neither `create_bastion` nor `eks_private_access_cidrs` fails the plan.
+For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. Pass 1 runs the Helm, Kubernetes, and kubectl providers, so Terraform needs a path to the API from the first apply. A private-only endpoint with neither `create_bastion` nor `eks_private_access_cidrs` fails the plan. If Terraform already reaches the endpoint through a VPN or transit gateway and a cluster security group rule you manage, set `eks_private_access_managed_externally = true` instead.
 
 To start from every private setting at once, copy the private profile:
 
@@ -1280,6 +1280,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
 | `eks_private_access_cidrs` | `[]` | no | CIDRs that reach the private EKS API endpoint on 443, such as the runner Terraform uses |
+| `eks_private_access_managed_externally` | `false` | no | Terraform reaches the private EKS API endpoint through access you manage, so the plan needs no bastion or `eks_private_access_cidrs` |
 | `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |
