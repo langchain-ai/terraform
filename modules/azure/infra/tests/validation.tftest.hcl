@@ -54,7 +54,6 @@ run "enums_reject_an_unlisted_value" {
     redis_source                   = "elasticache"
     clickhouse_source              = "clickhouse-cloud"
     ingress_controller             = "traefik"
-    tls_certificate_source         = "acm"
     keyvault_default_action        = "allow"
     agw_sku_tier                   = "Standard"
     agic_network_contributor_scope = "resourcegroup"
@@ -67,13 +66,24 @@ run "enums_reject_an_unlisted_value" {
     var.redis_source,
     var.clickhouse_source,
     var.ingress_controller,
-    var.tls_certificate_source,
     var.keyvault_default_action,
     var.agw_sku_tier,
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
     var.redis_clustering_policy,
   ]
+}
+
+# Separate from the run above: the letsencrypt rule reads ingress_controller, and
+# Terraform skips a variable's validations while one it references is invalid.
+run "tls_certificate_source_rejects_an_unlisted_value" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "acm"
+  }
+
+  expect_failures = [var.tls_certificate_source]
 }
 
 run "postgres_password_rejects_a_double_quote" {
@@ -511,6 +521,7 @@ run "moved_vnet_address_space_plans_with_moved_prefixes" {
     agic_subnet_address_prefix     = ["172.16.96.0/24"]
     bastion_subnet_address_prefix  = ["172.16.80.0/27"]
     ingress_controller             = "agic"
+    tls_certificate_source         = "none"
     create_bastion                 = true
   }
 }
@@ -534,6 +545,7 @@ run "moved_vnet_address_space_rejects_a_default_agic_prefix" {
     postgres_subnet_address_prefix = ["172.16.32.0/20"]
     redis_subnet_address_prefix    = ["172.16.48.0/20"]
     ingress_controller             = "agic"
+    tls_certificate_source         = "none"
   }
 
   expect_failures = [terraform_data.validate_network]
@@ -562,6 +574,7 @@ run "created_vnet_rejects_a_subnet_on_the_service_cidr" {
 
   variables {
     ingress_controller         = "agic"
+    tls_certificate_source     = "none"
     agic_subnet_address_prefix = ["10.0.64.0/24"]
   }
 
@@ -573,6 +586,7 @@ run "created_vnet_plans_a_subnet_beside_a_moved_service_cidr" {
 
   variables {
     ingress_controller         = "agic"
+    tls_certificate_source     = "none"
     agic_subnet_address_prefix = ["10.0.64.0/24"]
     aks_service_cidr           = "10.0.112.0/20"
   }
@@ -1037,4 +1051,41 @@ run "dns01_rejects_a_cert_manager_this_module_did_not_install" {
   }
 
   expect_failures = [var.tls_certificate_source]
+}
+
+# HTTP-01 cannot complete behind istio-addon (no IngressClass for the solver's
+# Ingress) or AGIC (Application Gateway rewrites the challenge path), so the
+# certificate stays Pending forever. Both directions: the pair is refused, and
+# DNS-01 on the same controller still plans.
+run "letsencrypt_rejects_istio_addon" {
+  command = plan
+
+  variables {
+    ingress_controller     = "istio-addon"
+    tls_certificate_source = "letsencrypt"
+  }
+
+  expect_failures = [var.tls_certificate_source]
+}
+
+run "letsencrypt_rejects_agic" {
+  command = plan
+
+  variables {
+    ingress_controller     = "agic"
+    tls_certificate_source = "letsencrypt"
+  }
+
+  expect_failures = [var.tls_certificate_source]
+}
+
+run "dns01_plans_with_istio_addon" {
+  command = plan
+
+  variables {
+    ingress_controller     = "istio-addon"
+    tls_certificate_source = "dns01"
+    langsmith_domain       = "langsmith.example.com"
+    letsencrypt_email      = "fixture@example.com"
+  }
 }
