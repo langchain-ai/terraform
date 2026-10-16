@@ -151,6 +151,35 @@ output "smithdb_cache_storage_class_name" {
   value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_cache_storage_class_name : null
 }
 
+output "smithdb_sizing" {
+  description = "Resolved SmithDB size (minimal, small, medium, or large), or null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_sizing : null
+}
+
+output "smithdb_metastore_sku_name" {
+  description = "Flexible Server SKU of the SmithDB metastore, resolved from smithdb_metastore_sku_name and smithdb_sizing. Null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_metastore_sku_name : null
+}
+
+output "smithdb_helm_values" {
+  description = "SmithDB chart tier, replicas, and minimal-size resources as YAML. init-values.sh writes it to helm/values/langsmith-values-smithdb-sizing.yaml. Null when SmithDB is disabled."
+  value       = local.smithdb_helm_values
+}
+
+output "smithdb_migration_parallelism" {
+  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
+  value       = var.smithdb_migration_parallelism
+}
+
+output "smithdb_quota_extra" {
+  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
+  value = {
+    cpu       = local.smithdb_quota_extra_cpu
+    memory_gi = local.smithdb_quota_extra_memory_gi
+    pods      = local.smithdb_quota_extra_pods
+  }
+}
+
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true
@@ -295,6 +324,11 @@ output "aks_network" {
   }
 }
 
+output "network_policy_engine" {
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. Read for an attached cluster too. deploy.sh applies the sandbox-host CiliumNetworkPolicy when it is cilium."
+  value       = module.aks.network_policy_engine
+}
+
 output "aks_nat_gateway_public_ip" {
   description = "Public IP of the NAT gateway Terraform created on the AKS subnet (aks_nat_gateway = \"create\"): the source address of traffic that leaves through it, for firewall rules and aks_authorized_ip_ranges. null otherwise."
   value       = one(azurerm_public_ip.aks_nat[*].ip_address)
@@ -322,4 +356,44 @@ output "smithdb_storage_blob_endpoint" {
 output "aks_kubeconfig_public_fqdn" {
   description = "true when az aks get-credentials needs --public-fqdn: a private cluster with no private DNS zone, from aks_private_dns_zone_id = \"None\" or, when attaching, from the cluster. The helm scripts read it."
   value       = module.aks.api_server_public_fqdn == true
+}
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# Read by init-values.sh for the sandboxes overlay. Null when enable_sandboxes = false.
+
+output "enable_sandboxes" {
+  description = "Whether sandboxes are provisioned; gates the sandboxes values overlay."
+  value       = var.enable_sandboxes
+}
+
+output "sandbox_host_workload_identity_client_id" {
+  description = "Client ID to annotate on the sandbox-host Kubernetes ServiceAccount (sandboxes.sandboxHost.serviceAccount.annotations)."
+  value       = var.enable_sandboxes ? azurerm_user_assigned_identity.sandbox_host[0].client_id : null
+}
+
+output "sandbox_juicefs_secret_name" {
+  description = "Kubernetes Secret holding the JuiceFS config, for sandboxes.juicefs.existingSecretName."
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+# The chart runs one sandbox-host per node, so its autoscaler follows the
+# sandboxhost pool's bounds. The chart requires minReplicas >= 1.
+output "sandbox_host_min_replicas" {
+  description = "sandboxes.sandboxHost.autoscaling.minReplicas: the sandboxhost pool's min_count, raised to the chart minimum of 1."
+  value       = var.enable_sandboxes ? max(1, local.effective_node_pools["sandboxhost"].min_count) : null
+}
+
+output "sandbox_host_max_replicas" {
+  description = "sandboxes.sandboxHost.autoscaling.maxReplicas: the sandboxhost pool's max_count."
+  value       = var.enable_sandboxes ? local.effective_node_pools["sandboxhost"].max_count : null
+}
+
+output "sandbox_juicefs_container_name" {
+  description = "Blob container holding JuiceFS sandbox data."
+  value       = var.enable_sandboxes ? azurerm_storage_container.sandbox_juicefs[0].name : null
+}
+
+output "sandbox_juicefs_redis_name" {
+  description = "Azure Managed Redis cluster holding JuiceFS metadata."
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
 }

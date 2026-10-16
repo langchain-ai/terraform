@@ -22,11 +22,12 @@
 #------------------------------------------------------------------------------
 # REQUIRED — Change these
 #------------------------------------------------------------------------------
-project_id  = "your-gcp-project-id"
-name_prefix = "myco"          # 1-11 chars, lowercase. Your company/team name.
-environment = "dev"
-region      = "us-west2"
-zone        = "us-west2-a"
+project_id            = "your-gcp-project-id"
+name_prefix           = "myco" # 1-11 chars, lowercase. Your company/team name.
+environment           = "dev"
+region                = "us-west2"
+zone                  = "us-west2-a"
+langsmith_admin_email = "admin@example.com"
 
 #------------------------------------------------------------------------------
 # GKE — single node, autoscales to 2 during deploys

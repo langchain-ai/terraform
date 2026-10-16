@@ -92,6 +92,7 @@ The deployment creates the following assignments. Each one requires `Microsoft.A
 | `Key Vault Secrets Officer` | `b86a8fe4-44ce-4948-aee5-eccb2c155cd7` | Key Vault | The deploying identity | Always |
 | `Key Vault Secrets User` | `4633458b-17de-408a-b874-0445c86b69e6` | Key Vault | Pod managed identity | Always |
 | `Storage Blob Data Contributor` | `ba92f5b4-2d11-453d-a403-e96b0029c9fe` | Storage account | Pod managed identity | Always |
+| `Storage Blob Data Contributor` | `ba92f5b4-2d11-453d-a403-e96b0029c9fe` | JuiceFS Blob container | Sandbox-host managed identity | `enable_sandboxes = true` |
 | `DNS Zone Contributor` | `befefa01-2a29-4197-83a8-272ff33ce314` | DNS zone | cert-manager identity | `cert_manager_principal_id` is set |
 | `Reader` | `acdd72a7-3385-48ef-bd42-f606fba81ae7` | Resource group | AGIC identity | `ingress_controller = "agic"` |
 | `Contributor` | `b24988ac-6180-42a0-ab88-20f7382dd24c` | Application Gateway | AGIC identity | `ingress_controller = "agic"` |
@@ -143,7 +144,7 @@ keyvault_manage_terraform_admin_assignment = false  # skip the self-grant
 keyvault_manage_secrets                    = false  # write no secrets
 ```
 
-The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all nine secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
+The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all ten secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
 
 This does not remove the deployment's need for `roleAssignments/write` altogether. `Storage Blob Data Contributor` on the storage account is not optional, because LangSmith pods need it at runtime, and it has no toggle. A deployer who holds no role-assignment rights at all still fails there.
 

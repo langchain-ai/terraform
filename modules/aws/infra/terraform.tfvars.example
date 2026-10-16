@@ -83,6 +83,9 @@ name_prefix = "myco"
 # SSM parameter lookups, IRSA trust policies, and S3 bucket references.
 environment = "dev"
 
+# Initial organization admin account. This is configuration, not a secret.
+langsmith_admin_email = "admin@example.com"
+
 #------------------------------------------------------------------------------
 # TAGGING — For cost tracking and ownership in AWS
 #------------------------------------------------------------------------------
@@ -178,6 +181,21 @@ enable_public_eks_cluster = false
 #   eks_public_access_cidrs = ["203.0.113.0/24", "10.0.0.0/8"]  # multiple ranges
 #
 # eks_public_access_cidrs = ["0.0.0.0/0"]
+
+# Pod networking. Set this at cluster creation; existing nodes keep their pod
+# IPs until they are replaced. See README.md "Pod networking".
+#
+# "node-subnet" (default): pods get IPs from the node's private subnet.
+# "custom-networking": pods get IPs from dedicated pod subnets (VPC CNI custom
+#   networking), so the private subnets only need room for nodes.
+#
+# eks_network_mode = "custom-networking"
+#
+# create_vpc = true: secondary VPC CIDR, split into one pod subnet per AZ.
+# eks_pod_cidr = "100.64.0.0/16"
+#
+# create_vpc = false: your pod subnets, one per AZ the cluster subnets are in.
+# eks_pod_subnet_ids = ["subnet-fff", "subnet-ggg", "subnet-hhh"]
 
 # Node group sizing — controls the EC2 instances that run your pods.
 #
@@ -363,6 +381,33 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox_service_url_base_url = "https://sandbox-services.example.com"
 
 #------------------------------------------------------------------------------
+# ENGINE (chart 0.17+) — see ../ENGINE.md
+#------------------------------------------------------------------------------
+# Engine finds recurring failures in your traces, diagnoses them against your
+# code, and proposes fixes. It needs enable_sandboxes = true and a license with
+# the Engine entitlement. It shares a deployment with Insights. Its two keys come
+# from infra/scripts/setup-env.sh (SSM), and apply-eso.sh syncs them into the
+# langsmith-config Secret.
+#
+# enable_engine = true creates the IAM role <name_prefix>-<environment>-engine-irsa
+# for Engine's API server and queue, with the AWS managed policy
+# AmazonBedrockMantleInferenceAccess. Engine then calls Amazon Bedrock with no
+# stored credentials. To use provider API keys (Anthropic, OpenAI, and others)
+# instead, add them in LangSmith under Settings > Engine > Model providers.
+# enable_engine = true
+#
+# Optional: a customer-managed policy that grants less than the managed policy.
+# engine_bedrock_policy_arn = "arn:aws:iam::123456789012:policy/langsmith-engine-bedrock"
+#
+# Required when the shared organization has more than one workspace: the
+# workspace that owns Engine's sandboxes. Use a workspace reserved for Engine.
+# engine_sandbox_tenant_id = "00000000-0000-0000-0000-000000000000"
+#
+# Empty keeps the chart default, which only records usage. To run Engine's models
+# on LangSmith Intelligence instead:
+# engine_intelligence_base_url = "https://beacon.aws.langchain.com/intelligence"
+
+#------------------------------------------------------------------------------
 # CLICKHOUSE
 #------------------------------------------------------------------------------
 # Controls where ClickHouse runs. ClickHouse is the analytics database for
@@ -521,7 +566,7 @@ langsmith_namespace = "langsmith"
 #------------------------------------------------------------------------------
 # Pin the chart to an exact patch for reproducible deploys. Empty deploys the
 # latest patch on the pinned 0.17 line, so a rebuild months apart can land on a
-# different chart. Must be a 0.17.x version — deploy.sh refuses anything else.
+# different chart. Must be a 0.17.x or 0.18.x version — deploy.sh refuses anything else.
 #
 # The CHART_VERSION environment variable still overrides this when set:
 #   CHART_VERSION=0.17.0 make deploy
@@ -749,9 +794,7 @@ enable_usage_telemetry = false
 # SSO login via any standard OIDC provider — Entra ID (Azure AD), Okta,
 # Auth0, Google Workspace, etc. all work through the same generic
 # client_id/secret/issuer_url. Default is off (basic auth). When enabled,
-# disables config.basicAuth and requires the client ID/secret/issuer URL to
-# already be populated in SSM before the first deploy — see
-# infra/scripts/setup-env.sh — under:
+# disables config.basicAuth and requires the client ID/secret/issuer URL in SSM (`make sso` asks for any that are missing) under:
 #   /langsmith/<name_prefix>-<environment>/oauth-client-id
 #   /langsmith/<name_prefix>-<environment>/oauth-client-secret
 #   /langsmith/<name_prefix>-<environment>/oauth-issuer-url
@@ -759,10 +802,10 @@ enable_usage_telemetry = false
 # — the /v2.0 suffix is required, not the tenant-specific /common/ endpoint;
 # other providers publish their own issuer URL in their OIDC discovery doc).
 #
-# WARNING: leave this false for the initial install. Deploy first with
-# basic auth and confirm you can log in as the org admin, then flip this to
-# true and redeploy. Turning it on before an admin account exists locks you
-# out of the UI, since basicAuth is disabled the moment oauth is enabled.
+# Leave this false for the initial install.
+# Once you can log in as the org admin with basic auth, run `make sso`: it checks the prerequisites, sets this to true, and deploys.
+# Turning it on before an admin account exists locks you out of the UI, since basicAuth is disabled the moment oauth is enabled.
+# One-way: LangSmith does not support moving from SSO back to basic auth.
 # Set up SCIM (if you're using it) after this, not before — SCIM's user
 # matching depends on the OIDC provider this creates.
 enable_sso_oidc = false
