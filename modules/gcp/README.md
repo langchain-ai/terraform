@@ -127,7 +127,8 @@ gcp/
 │       ├── smithdb/        ← SmithDB metastore, object-store bucket, Workload Identity SA (optional)
 │       └── smithdb-nodes/  ← SmithDB cache + compute GKE node pools (optional)
 │   └── scripts/
-│       ├── _common.sh          ← Shared helpers (tfvar parser, color/status helpers)
+│       ├── _common.sh          ← Shared helpers (sources _tfvars.sh, color/status helpers)
+│       ├── _tfvars.sh          ← tfvar parser and secret labels, shared with setup-env.sh
 │       ├── preflight.sh        ← Pre-Terraform tooling/auth/API checks
 │       ├── quickstart.sh       ← Interactive setup wizard — generates terraform.tfvars
 │       ├── setup-env.sh        ← Exports TF_VAR_* secrets from Secret Manager (source it)

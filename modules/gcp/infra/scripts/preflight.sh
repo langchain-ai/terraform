@@ -115,7 +115,7 @@ success "terraform.tfvars found"
 # literal #) or at the # (bare booleans and numbers). Splitting on = and keeping
 # the rest of the line would silently yield "external#CloudSQL,privateIP" and
 # every comparison against it would fail. Keep this function identical to the
-# copies in infra/scripts/_common.sh and helm/scripts/*.sh.
+# copies in infra/scripts/_tfvars.sh and helm/scripts/*.sh.
 _tfvar() {
   awk -v key="$1" '
     $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
