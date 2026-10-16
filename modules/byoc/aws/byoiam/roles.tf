@@ -30,7 +30,8 @@ locals {
       namespace = "langsmith"
       service_accounts = concat(
         [for component in ["backend", "host-backend", "listener", "platform-backend", "ingest-queue", "queue", "agent-gateway"] : "*-langsmith-${component}"],
-        ["*-fleet-tool-server", "*-fleet-trigger-server"]
+        ["*-fleet-tool-server", "*-fleet-trigger-server"],
+        ["*-standalone-insights-api-server", "*-standalone-insights-queue"]
       )
     }
     postgres-setup-iam-role    = { namespace = "langsmith", service_accounts = ["*-langsmith-postgres-setup"] }
@@ -42,6 +43,7 @@ locals {
 
   node_policy_names = ["AmazonEKSWorkerNodePolicy", "AmazonEKS_CNI_Policy", "AmazonEC2ContainerRegistryReadOnly", "AmazonSSMManagedInstanceCore"]
   managed_policy_names = {
+    workload-iam-role                 = ["AmazonBedrockMantleInferenceAccess"]
     eks-cluster-role                  = ["AmazonEKSClusterPolicy"]
     eks-node-role                     = local.node_policy_names
     karpenter-node-role               = local.node_policy_names
