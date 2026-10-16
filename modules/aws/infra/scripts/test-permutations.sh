@@ -162,7 +162,7 @@ _tf() {
 _kubeconfig() {
   _step "Updating kubeconfig for $_cluster_name"
   [[ "$DRY_RUN" == "true" ]] && return 0
-  aws eks update-kubeconfig --name "$_cluster_name" --region "$_region" >/dev/null 2>&1
+  _use_cluster_kubeconfig "$_cluster_name" "$_region" >/dev/null 2>&1
 }
 
 _helm_uninstall() {

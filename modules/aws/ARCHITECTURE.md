@@ -53,9 +53,9 @@ LangSmith on AWS is deployed in three passes.
 │  Cache:      ElastiCache Redis (cache.m6g.xlarge, private subnets)          │
 │  Storage:    S3 bucket (VPC Gateway Endpoint — no public internet)          │
 │  Add-ons:    ALB controller + EBS CSI driver + metrics server               │
-│  Bootstrap:  k8s-bootstrap (KEDA, ESO, Envoy Gateway [opt-in]),            │
+│  Bootstrap:  k8s-bootstrap (KEDA, ESO, Envoy Gateway),                      │
 │              cert-manager (standalone, active when tls=letsencrypt)         │
-│  Ingress:    ALB (default) or Envoy Gateway (opt-in, enable_envoy_gateway)  │
+│  Ingress:    ALB → Envoy Gateway (default), or ALB Ingress, Istio, NGINX    │
 │  Opt-in:     Network Firewall (FQDN-based egress filtering)                 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
