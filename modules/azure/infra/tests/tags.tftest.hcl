@@ -123,3 +123,44 @@ run "smithdb_cache_disks_carry_the_tags" {
     error_message = "The SmithDB cache StorageClass should list every tag as key=value pairs separated by commas"
   }
 }
+
+# The driver splits on the first = in each pair, so a value may hold one.
+run "an_equals_sign_in_a_value_plans_with_smithdb" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    tags               = { query = "a=b" }
+  }
+
+  assert {
+    condition     = strcontains(module.k8s_bootstrap.smithdb_cache_disk_tags, "query=a=b")
+    error_message = "A value holding = should reach the StorageClass as written"
+  }
+}
+
+run "a_comma_in_a_tag_value_fails_the_plan_with_smithdb" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    cost_center        = "finance, emea"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "a_comma_in_a_tag_value_plans_without_smithdb" {
+  command = plan
+
+  variables {
+    cost_center = "finance, emea"
+  }
+
+  assert {
+    condition     = azurerm_resource_group.resource_group[0].tags["cost_center"] == "finance, emea"
+    error_message = "Without SmithDB, nothing splits the tags, so a comma in a value should plan"
+  }
+}

@@ -512,8 +512,14 @@ in place of `deny` there. The policy also needs to allow the `aks-managed` and
 
 Private DNS zones and Key Vault secrets accept at most 15 tags, and the module uses up
 to 7 of them, so keep `tags` to 8 new keys or fewer. The plan fails above that.
-Keep commas and `=` out of tag values: the StorageClass `tags` parameter is a
-`key=value,key=value` string, and either character breaks it.
+With SmithDB on, no tag key can hold a comma or `=`, and no tag value a comma,
+because the StorageClass `tags` parameter is a `key=value,key=value` string. The
+plan fails on one.
+
+The StorageClass always carries `environment`, `project`, and `managed_by`, so the
+first apply of this version replaces the SmithDB cache StorageClass on an existing
+deployment, whether or not `tags` is set. The name stays the same, bound volumes
+are unaffected, and disks already provisioned stay untagged.
 
 ### Keeping deployment config outside this repo
 

@@ -895,8 +895,8 @@ _run_section_2() {
       _hint "or a comma inside a value), so it is kept exactly as written."
     else
       _hint "Any other tags your Azure Policy requires, as key=value pairs separated by"
-      _hint "commas (team=platform,product=langsmith). A value cannot hold a comma; set"
-      _hint "one that does in terraform.tfvars instead. Blank adds none."
+      _hint "commas (team=platform,product=langsmith). A value cannot hold a comma here,"
+      _hint "or at all with SmithDB on; otherwise set it in terraform.tfvars. Blank adds none."
       while true; do
         _ask "Other tags" "$EXTRA_TAGS"
         _valid_tags "$_REPLY" && break
