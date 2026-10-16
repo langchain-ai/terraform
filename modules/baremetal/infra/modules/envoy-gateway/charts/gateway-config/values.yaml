@@ -1,0 +1,14 @@
+# Set by Terraform (modules/envoy-gateway/main.tf).
+envoyProxyName: langsmith-proxy
+gatewayClassName: langsmith-eg
+gatewayName: langsmith-gateway
+gatewayNamespace: ""
+loadBalancerIP: ""
+proxyReplicas: 1
+proxyResources: {}
+# Request timeout for routes on the Gateway (BackendTrafficPolicy); empty = Envoy default (15 s).
+routeTimeout: "60s"
+lanRoute:
+  enabled: false
+  backendService: langsmith-frontend
+  backendPort: 80

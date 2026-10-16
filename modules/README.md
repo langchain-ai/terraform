@@ -46,6 +46,14 @@ Not every provider has every file in that sketch. In particular:
 | `gcp/` | Google Cloud Platform |
 | `ocp/` | OpenShift Container Platform |
 
+## Reference examples
+
+Worked examples of one way to run LangSmith outside the supported providers. LangChain supports the LangSmith application under your agreement, not the infrastructure these examples add.
+
+| Directory | Example | Status |
+|---|---|---|
+| `baremetal/` | LangSmith with SmithDB on an existing self-managed Kubernetes cluster (tested on kubeadm): in-cluster load balancing, ingress, storage, Postgres, Redis and S3-compatible storage | Example |
+
 ## Capabilities
 
 The rows below describe equivalent capabilities; the child-module directory names are not uniform across providers.
