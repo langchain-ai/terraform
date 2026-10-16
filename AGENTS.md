@@ -27,7 +27,7 @@ before the PR does, not a separate standard.
   `k8s-cluster`, and `smithdb`), so the gate identifies a child module by its
   path, not by depth.
 - `modules/<provider>/infra/tests/*.tftest.hcl` — plan tests for that root, run
-  by `agents/plan-tests.sh`. Mocked providers, so no credentials and no state.
+  by `scripts/plan-tests.sh`. Mocked providers, so no credentials and no state.
   Shared provider fixtures live in
   `modules/<provider>/infra/tests/mocks/<provider>/*.tfmock.hcl`.
 - Not gated for terraform: `modules/ocp`. It has provider requirements in
@@ -48,14 +48,14 @@ before the PR does, not a separate standard.
 - **Work in small units**: one resource or module, run the checks below, then
   continue. Don't write 300 lines and hand back a correction cycle.
 - **Machine-graded before handing back**, and fix what it reports:
-  - HCL edit → `bash agents/check.sh <dir>`: `terraform validate` plus `tflint`
+  - HCL edit → `bash scripts/check.sh <dir>`: `terraform validate` plus `tflint`
     with the provider's pinned ruleset from `modules/<provider>/.tflint.hcl`,
     for every root at or beneath the directory you name.
-  - Shell edit → `bash agents/check.sh --scripts`: `shellcheck` over every
+  - Shell edit → `bash scripts/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
   - No argument → both, across every root.
   - Conditional wiring, a `validation` block, or a precondition →
-    `bash agents/plan-tests.sh modules/<provider>`: `terraform test` plans the
+    `bash scripts/plan-tests.sh modules/<provider>`: `terraform test` plans the
     root against mocked providers, so `length(module.waf) == 0` is assertable
     with no credentials and no state. `validate` resolves no conditionals and
     passes a module gated on a variable nothing sets, which is the gap this
@@ -71,9 +71,9 @@ before the PR does, not a separate standard.
 - **CI runs the same scripts**, a check job and a plan-tests job per provider
   plus one for the scripts, so a green local run is a green PR. On a PR, only
   the providers whose `modules/<provider>/` the PR touches get legs; a change
-  to `agents/` or the workflow runs them all, and a push to `main` always does.
-  If you change what the gate covers, change `agents/check.sh` or
-  `agents/plan-tests.sh` rather than the workflow. A new root under an existing
+  to `scripts/` or the workflow runs them all, and a push to `main` always does.
+  If you change what the gate covers, change `scripts/check.sh` or
+  `scripts/plan-tests.sh` rather than the workflow. A new root under an existing
   `modules/<provider>/` needs no workflow edit; a brand-new provider directory
   needs an entry in `PROVIDERS` in `.github/scripts/changed-providers.sh`, and
   a test suite — `plan-tests.sh` exits 2 on a provider that has neither a suite

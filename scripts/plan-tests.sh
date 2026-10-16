@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Terraform plan tests for one or more providers:
-#   bash agents/plan-tests.sh                        # every provider
-#   bash agents/plan-tests.sh modules/azure
-#   bash agents/plan-tests.sh modules/aws modules/gcp
+#   bash scripts/plan-tests.sh                       # every provider
+#   bash scripts/plan-tests.sh modules/azure
+#   bash scripts/plan-tests.sh modules/aws modules/gcp
 #
 # terraform validate parses the HCL but resolves no conditionals. A module gated
 # on a variable nothing ever sets validates clean, and so does one gated on the

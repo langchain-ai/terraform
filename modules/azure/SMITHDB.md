@@ -540,7 +540,7 @@ smithdb:
 Run the normal local gate:
 
 ```bash
-bash agents/check.sh modules/azure/infra
+bash scripts/check.sh modules/azure/infra
 ```
 
 Before a real apply, also confirm:

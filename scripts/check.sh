@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Machine grading for HCL and shell edits. Enforced in CI by
 # .github/workflows/checks.yaml, and run locally before handing back:
-#   bash agents/check.sh                    # every root, plus every script
-#   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
-#   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
+#   bash scripts/check.sh                   # every root, plus every script
+#   bash scripts/check.sh modules/aws       # the roots under one dir, terraform only
+#   bash scripts/check.sh --scripts         # every tracked *.sh, no terraform
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
 # state) and tflint with the provider's pinned ruleset. Scripts are linted
@@ -33,7 +33,7 @@ mkdir -p "$TF_PLUGIN_CACHE_DIR"
 
 # Every tracked *.sh at one bar, whole repo, once. Not scoped per provider:
 # the sweep takes about a second, and scoping it left the scripts outside a
-# provider tree (agents/, .github/scripts/, modules/ocp/) with no cover at all.
+# provider tree (scripts/, .github/scripts/, modules/ocp/) with no cover at all.
 # git ls-files rather than find, so ignored trees (.terraform/, a worktree under
 # .claude/) drop out without an exclude list.
 lint_scripts() {
