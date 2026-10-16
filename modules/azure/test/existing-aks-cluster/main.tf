@@ -117,10 +117,10 @@ resource "azurerm_kubernetes_cluster" "customer" {
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
 
-  // The kubernetes and helm providers authenticate with the cluster's kube_config,
-  // passed into k8s-bootstrap as variables. Azure returns that empty for an
-  // AAD-only cluster and there is no kubelogin exec path, so disabling local
-  // accounts is a hard blocker.
+  // No Entra ID integration, so the kubernetes and helm providers sign in with the
+  // kube_config client certificate (aks_kube_auth resolves to "certificate"). An
+  // Entra-integrated cluster goes through kubelogin instead, which this fixture
+  // does not exercise.
   local_account_disabled            = false
   role_based_access_control_enabled = true
 

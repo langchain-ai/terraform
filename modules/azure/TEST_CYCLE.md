@@ -312,11 +312,11 @@ regions.
 create_waf = true
 ```
 
-**Expected plan**: `+1` resource — `azurerm_cdn_frontdoor_firewall_policy.waf`.
+**Expected plan**: `+1` resource — `azurerm_web_application_firewall_policy.waf`.
 
 **Verify**:
 ```bash
-az network front-door waf-policy list -g <resource-group> --query '[].name'
+az network application-gateway waf-policy list -g <resource-group> --query '[].name'
 ```
 
 ---
@@ -371,12 +371,12 @@ zone to Azure.
 > Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
 
 > Set `availability_zones` before the first apply. On an existing cluster the
-> AKS node pool keeps the zones it was created with: the module ignores zone
+> AKS node pools keep the zones they were created with: the module ignores zone
 > changes so the provider cannot cycle the system node pool out from under
-> running pods. Plan reports the mismatch as a `Check block assertion failed`
-> warning naming both the live and the requested zones, and exits 0. Expect that
-> warning here rather than a node pool change. The `[]` default requests no zone
-> and never warns.
+> running pods, or rotate an additional pool and drain it. Plan reports the
+> mismatch as a `Check block assertion failed` warning naming both the live and
+> the requested zones, and exits 0. Expect that warning here rather than a node
+> pool change. The `[]` default requests no zone and never warns.
 
 ---
 

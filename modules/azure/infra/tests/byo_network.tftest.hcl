@@ -35,10 +35,12 @@ mock_provider "time" {}
 # A /18 holds the default carve prefixes (10.0.0.0/19, 10.0.32.0/20 and
 # 10.0.48.0/20) and stops short of 10.0.64.0/20, the create-path ClusterIP
 # default, so leaving aks_service_cidr empty trips only the rule requiring it.
+# In the default location, so only a run that moves it trips the region rule.
 override_data {
   target = data.azurerm_virtual_network.byo_vnet
   values = {
     address_space = ["10.0.0.0/18"]
+    location      = "eastus"
   }
 }
 
@@ -187,6 +189,30 @@ run "the_same_subnet_twice_is_refused" {
   expect_failures = [terraform_data.validate_network]
 }
 
+run "a_vnet_in_another_region_is_refused" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = {
+      address_space = ["10.0.0.0/18"]
+      location      = "westus2"
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# Azure accepts a region's display name as well as its name, so location can
+# hold either form.
+run "a_region_display_name_matches_its_name" {
+  command = plan
+
+  variables {
+    location = "East US"
+  }
+}
+
 # ── Address space ────────────────────────────────────────────────────────────
 
 run "a_carved_prefix_outside_the_vnet_is_refused" {
@@ -252,6 +278,50 @@ run "an_aks_subnet_without_service_endpoints_is_refused" {
 
   variables {
     aks_subnet_id = "${var.vnet_id}/subnets/aks"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# With the Key Vault on a private endpoint its firewall drops the subnet rule,
+# so Microsoft.KeyVault is no longer needed on the subnet. Microsoft.Storage
+# still is: both accounts keep their default-deny rule for the AKS subnet.
+run "a_keyvault_private_endpoint_drops_only_the_keyvault_endpoint_requirement" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/19"]
+      service_endpoints = ["Microsoft.Storage"]
+    }
+  }
+
+  variables {
+    aks_subnet_id                     = "${var.vnet_id}/subnets/aks"
+    keyvault_private_endpoint_enabled = true
+  }
+
+  assert {
+    condition     = length(module.keyvault.firewall_subnet_ids) == 0
+    error_message = "With the Key Vault private endpoint on, the AKS subnet is still allowlisted on the vault firewall"
+  }
+}
+
+run "a_keyvault_private_endpoint_still_needs_the_storage_endpoint" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/19"]
+      service_endpoints = ["Microsoft.KeyVault"]
+    }
+  }
+
+  variables {
+    aks_subnet_id                     = "${var.vnet_id}/subnets/aks"
+    keyvault_private_endpoint_enabled = true
   }
 
   expect_failures = [terraform_data.validate_network]
@@ -324,8 +394,9 @@ run "a_delegated_agic_subnet_plans_clean" {
   command = plan
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 }
 
@@ -342,8 +413,9 @@ run "an_undelegated_agic_subnet_warns" {
   }
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 
   expect_failures = [check.agic_subnet_delegation]
@@ -411,6 +483,10 @@ run "subnet_nsgs_plan_on_an_attached_cluster_in_one_subnet" {
     condition     = module.vnet.subnet_nsg_rules.postgres != null
     error_message = "enable_subnet_nsgs = true on an attached cluster in one subnet did not plan the Postgres NSG"
   }
+  assert {
+    condition     = output.aks_resource_group_name == "platform-aks-rg" && output.aks_resource_group_name != output.resource_group_name
+    error_message = "the aks_resource_group_name output is not the attached cluster's resource group"
+  }
 }
 
 run "subnet_nsgs_are_refused_on_an_attached_cluster_across_subnets" {
@@ -445,4 +521,478 @@ run "subnet_nsgs_are_refused_on_an_attached_cluster_across_subnets" {
   }
 
   expect_failures = [terraform_data.validate_network]
+}
+
+# An attached cluster reports its own policy engine, which decides whether the
+# node-subnet NetworkPolicy for sandbox-host is created here or left to deploy.sh.
+# The two runs differ only in the engine the cluster reports.
+
+run "attached_cilium_cluster_leaves_the_sandbox_policy_to_deploy" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      network_profile     = [{ network_policy = "cilium" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    existing_cluster_node_pools_managed  = true
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = output.network_policy_engine == "cilium"
+    error_message = "the network_policy_engine output is not the attached cluster's engine"
+  }
+  assert {
+    condition     = module.k8s_bootstrap.platform_backend_node_ingress == null
+    error_message = "an attached Cilium cluster planned the ipBlock NetworkPolicy, which Cilium never matches against a node IP"
+  }
+}
+
+run "attached_npm_cluster_admits_the_supplied_node_subnet" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      network_profile     = [{ network_policy = "azure" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    existing_cluster_node_pools_managed  = true
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = output.network_policy_engine == "azure"
+    error_message = "the network_policy_engine output is not the attached cluster's engine"
+  }
+  assert {
+    condition     = tolist(module.k8s_bootstrap.platform_backend_node_ingress.cidrs) == tolist(["10.0.0.0/19"]) && tolist(module.k8s_bootstrap.platform_backend_node_ingress.ports) == tolist(["TCP/1986"])
+    error_message = "an attached NPM cluster did not admit the supplied AKS subnet's prefixes to platform-backend on TCP 1986"
+  }
+}
+
+# ── Subnet capacity on an attached cluster ───────────────────────────────────
+# Terraform never creates the default pool on an attached cluster, and adds the
+# additional pools only when existing_cluster_node_pools_managed is on. In
+# node-subnet mode the default pool asks for 11 x 61 = 671 addresses and the
+# large pool for 3 x 31 = 93, so a /23 (507 usable) passes only when the default
+# pool is left out, and a /26 (59 usable) fails once the large pool is counted.
+
+run "an_attached_cluster_does_not_count_the_default_pool" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/23"]
+      service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+    }
+  }
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+}
+
+run "an_attached_cluster_counts_the_pools_terraform_adds" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/26"]
+      service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+    }
+  }
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    existing_cluster_node_pools_managed  = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# On a cluster with Entra ID integration azurerm returns an empty client
+# certificate, so the providers must sign in through kubelogin instead. The
+# choice is module.aks.kube_auth, which feeds all three provider blocks. On an
+# attached cluster it follows the cluster whatever aks_entra_only says, and the
+# create-path access variables plan nothing.
+
+run "kube_auth_is_certificate_on_an_attached_cluster_without_entra" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                                               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location                                         = "eastus"
+      oidc_issuer_enabled                              = true
+      kube_config                                      = [{ host = "https://platform-aks.example", client_certificate = "Y2VydA==", client_key = "a2V5", cluster_ca_certificate = "Y2E=" }]
+      azure_active_directory_role_based_access_control = []
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_entra_only                       = true
+  }
+
+  assert {
+    condition     = module.aks.kube_auth == "certificate"
+    error_message = "an attached cluster without an Entra profile did not choose certificate sign-in"
+  }
+}
+
+run "kube_auth_is_entra_on_an_attached_entra_cluster" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                                               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location                                         = "eastus"
+      oidc_issuer_enabled                              = true
+      kube_config                                      = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "Y2E=" }]
+      azure_active_directory_role_based_access_control = [{ azure_rbac_enabled = true, tenant_id = "00000000-0000-0000-0000-000000000000", admin_group_object_ids = [] }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_private_cluster_enabled          = true
+  }
+
+  assert {
+    condition     = module.aks.kube_auth == "entra"
+    error_message = "an attached Entra ID cluster did not choose kubelogin sign-in"
+  }
+  assert {
+    condition     = module.aks.access_profile == null && module.aks.live_access_profile == null
+    error_message = "The access variables planned something on an attached cluster"
+  }
+}
+
+run "kube_auth_override_wins_over_detection" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                                               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location                                         = "eastus"
+      oidc_issuer_enabled                              = true
+      kube_config                                      = [{ host = "https://platform-aks.example", client_certificate = "Y2VydA==", client_key = "a2V5", cluster_ca_certificate = "Y2E=" }]
+      azure_active_directory_role_based_access_control = []
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_kube_auth                        = "entra"
+  }
+
+  assert {
+    condition     = module.aks.kube_auth == "entra"
+    error_message = "aks_kube_auth = \"entra\" did not override detection"
+  }
+}
+
+run "aks_kube_auth_rejects_an_unknown_mode" {
+  command = plan
+
+  variables {
+    aks_kube_auth = "token"
+  }
+
+  expect_failures = [var.aks_kube_auth]
+}
+
+# An attached cluster's private DNS zone comes from Azure, not from the
+# aks_private_* settings, which attaching ignores. The two runs differ only in
+# the zone Azure reports.
+
+run "an_attached_cluster_with_no_private_zone_is_reached_through_its_public_fqdn" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      fqdn                = "platform-aks-abc.hcp.eastus.azmk8s.io"
+      kube_config         = [{ host = "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = {
+        securityProfile        = { workloadIdentity = { enabled = true } }
+        apiServerAccessProfile = { privateDNSZone = "none" }
+      } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://platform-aks-abc.hcp.eastus.azmk8s.io:443"
+    error_message = "An attached cluster with no private zone is not reached through its public FQDN"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == true && strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "An attached cluster with no private zone did not tell the scripts to fetch credentials with --public-fqdn"
+  }
+}
+
+run "an_attached_cluster_with_the_system_zone_keeps_the_kubeconfig_host" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      fqdn                = "platform-aks-abc.hcp.eastus.azmk8s.io"
+      kube_config         = [{ host = "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = {
+        securityProfile        = { workloadIdentity = { enabled = true } }
+        apiServerAccessProfile = { privateDNSZone = "system" }
+      } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443"
+    error_message = "An attached cluster with the System zone is not reached through the kubeconfig's host"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == false && !strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "An attached cluster with the System zone was told to fetch credentials with --public-fqdn"
+  }
+}
+
+# ── Sandboxes on an attached cluster ─────────────────────────────────────────
+# The sandboxhost pool is an additional pool, so an attached cluster gets it only
+# with existing_cluster_node_pools_managed on. The README tells attach users to
+# set it or bring a pool with the sandbox label and taint.
+
+run "an_attached_cluster_gets_no_sandbox_pool_by_default" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  # The plan warns that there is no pool, so sandbox-host does not sit Pending unexplained.
+  expect_failures = [check.sandbox_pool_on_attached_cluster]
+
+  assert {
+    condition     = !contains(keys(local.aks_managed_node_pools), "sandboxhost")
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = false got the sandboxhost pool"
+  }
+}
+
+run "an_attached_cluster_gets_the_sandbox_pool_when_pools_are_managed" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    existing_cluster_node_pools_managed  = true
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = tolist(local.aks_managed_node_pools["sandboxhost"].node_taints) == tolist(["sandbox.langsmith.com/host=true:NoSchedule"])
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = true did not get the tainted sandboxhost pool"
+  }
 }

@@ -47,3 +47,13 @@ output "storage_replication_type" {
   description = "Replication the SmithDB account is planned or created with."
   value       = azurerm_storage_account.smithdb.account_replication_type
 }
+
+output "metastore_private_dns_zone_created" {
+  description = "Whether this module created a private DNS zone for the metastore (false when it shares LangSmith's server zone or a supplied central zone)."
+  value       = local.create_private_dns_zone
+}
+
+output "metastore_private_dns_zone_id" {
+  description = "The private DNS zone ID the metastore Flexible Server is configured with."
+  value       = azurerm_postgresql_flexible_server.metastore.private_dns_zone_id
+}

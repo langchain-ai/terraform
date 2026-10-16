@@ -135,6 +135,9 @@ case "$ARGS" in
       echo "ERROR: unexpected service response" >&2
     fi
     ;;
+  "aks show"*)
+    # The attached cluster exists; the capacity cases are about its nodes.
+    exit 0 ;;
   *)
     echo "STUB: unhandled az invocation: $ARGS" >&2
     exit 1 ;;

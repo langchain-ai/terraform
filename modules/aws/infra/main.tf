@@ -98,6 +98,36 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !local.custom_networking || var.create_vpc || length(var.eks_pod_subnet_ids) > 0
+      error_message = "eks_network_mode = \"custom-networking\" with create_vpc = false requires eks_pod_subnet_ids: one pod subnet per AZ the cluster subnets are in."
+    }
+
+    precondition {
+      condition     = length(var.eks_pod_subnet_ids) == 0 || (local.custom_networking && !var.create_vpc)
+      error_message = "eks_pod_subnet_ids is only used when eks_network_mode = \"custom-networking\" and create_vpc = false. With create_vpc = true, set eks_pod_cidr instead."
+    }
+
+    precondition {
+      condition     = length(distinct([for s in data.aws_subnet.pod : s.availability_zone])) == length(data.aws_subnet.pod)
+      error_message = "eks_pod_subnet_ids has two subnets in the same AZ. The VPC CNI uses one pod subnet per AZ, so list exactly one for each."
+    }
+
+    precondition {
+      condition     = alltrue([for s in data.aws_subnet.pod : s.vpc_id == var.vpc_id])
+      error_message = "Every subnet in eks_pod_subnet_ids must be in vpc_id. A node cannot attach a pod ENI in another VPC's subnet."
+    }
+
+    # A node in an AZ with no pod subnet has no ENIConfig, so the VPC CNI can
+    # attach no pod ENIs and every pod scheduled there waits for an IP forever.
+    precondition {
+      condition = length(data.aws_subnet.pod) == 0 || length(setsubtract(
+        [for s in data.aws_subnet.cluster : s.availability_zone],
+        [for s in data.aws_subnet.pod : s.availability_zone],
+      )) == 0
+      error_message = "eks_pod_subnet_ids must include a subnet in every AZ that private_subnets and public_subnets are in."
+    }
+
+    precondition {
       condition     = !var.create_firewall || var.create_vpc
       error_message = "create_firewall = true requires create_vpc = true. Bring-your-own-VPC deployments must configure firewall routing manually."
     }
@@ -161,6 +191,13 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
 
+    # Engine runs every analysis in a sandbox, and the chart rejects Engine
+    # without Sandboxes.
+    precondition {
+      condition     = !var.enable_engine || var.enable_sandboxes
+      error_message = "enable_engine requires enable_sandboxes = true. Every Engine run executes in a sandbox, and the chart rejects Engine without Sandboxes."
+    }
+
     # Two gateway controllers share one ALB target group (all three
     # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
     # gateway_target_port can only describe one of them, so a second controller
@@ -189,6 +226,8 @@ module "vpc" {
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
   extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+
+  pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
 
 module "firewall" {
@@ -207,6 +246,18 @@ module "firewall" {
   depends_on = [module.vpc]
 }
 
+# BYO VPC with custom networking: the pod subnets' AZs and CIDRs, and the AZs of
+# the cluster subnets they must cover. Both sets are empty otherwise.
+data "aws_subnet" "pod" {
+  for_each = local.custom_networking && !var.create_vpc ? toset(var.eks_pod_subnet_ids) : toset([])
+  id       = each.value
+}
+
+data "aws_subnet" "cluster" {
+  for_each = local.custom_networking && !var.create_vpc ? toset(concat(var.private_subnets, var.public_subnets)) : toset([])
+  id       = each.value
+}
+
 module "eks" {
   source = "./modules/eks"
 
@@ -217,7 +268,8 @@ module "eks" {
   tags                            = local.common_tags
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
-  eks_managed_node_groups         = local.eks_managed_node_groups
+  eks_managed_node_groups         = var.eks_managed_node_groups
+  extra_eks_managed_node_groups   = local.extra_eks_managed_node_groups
   enable_karpenter                = var.enable_smithdb
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
@@ -225,6 +277,7 @@ module "eks" {
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
   langsmith_namespace             = var.langsmith_namespace
   eks_addons                      = var.eks_addons
+  pod_subnet_ids_by_az            = local.pod_subnet_ids_by_az
   cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
   enable_istio_gateway            = var.enable_istio_gateway
 }
@@ -249,7 +302,7 @@ module "redis" {
   vpc_id               = local.vpc_id
   subnet_ids           = local.private_subnets
   instance_type        = var.redis_instance_type
-  ingress_cidrs        = [local.vpc_cidr_block]
+  ingress_cidrs        = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
   parameter_group_name = "default.redis7"
@@ -278,7 +331,7 @@ module "sandbox_juicefs_redis" {
   vpc_id                   = local.vpc_id
   subnet_ids               = local.private_subnets
   instance_type            = var.sandbox_juicefs_redis_instance_type
-  ingress_cidrs            = [local.vpc_cidr_block]
+  ingress_cidrs            = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
   vpc_cidr_block           = local.vpc_cidr_block
   auth_token               = var.sandbox_juicefs_redis_auth_token
   parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
@@ -308,7 +361,7 @@ module "postgres" {
   engine_version = var.postgres_engine_version
   vpc_id         = local.vpc_id
   subnet_ids     = local.private_subnets
-  ingress_cidrs  = [local.vpc_cidr_block]
+  ingress_cidrs  = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
   vpc_cidr_block = local.vpc_cidr_block
   instance_type  = var.postgres_instance_type
   storage_gb     = var.postgres_storage_gb
@@ -324,17 +377,12 @@ module "postgres" {
   backup_retention_period             = var.postgres_backup_retention_period
 
   existing_security_group_id = var.postgres_existing_security_group_id
-
-  depends_on = [module.eks]
 }
 
-resource "aws_iam_role_policy" "langsmith_s3" {
-  count = var.create_langsmith_irsa_role ? 1 : 0
-
-  name = "langsmith-s3-access"
-  role = module.eks.langsmith_irsa_role_name
-
-  policy = jsonencode({
+# engine.tf also attaches this policy to the Engine role, because Engine and
+# Insights run under that role when enable_engine = true.
+locals {
+  langsmith_s3_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -355,6 +403,15 @@ resource "aws_iam_role_policy" "langsmith_s3" {
   })
 }
 
+resource "aws_iam_role_policy" "langsmith_s3" {
+  count = var.create_langsmith_irsa_role ? 1 : 0
+
+  name = "langsmith-s3-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = local.langsmith_s3_policy
+}
+
 # Lets backend/platformBackend/queue/etc. pods (all sharing the langsmith IRSA
 # role) call Bedrock models directly via workload identity instead of static
 # AWS keys. Not scoped to specific model IDs, since self-hosted customers pick
@@ -368,13 +425,11 @@ resource "aws_iam_role_policy" "langsmith_s3" {
 # ARN outside var.region. inference-profile is also wildcarded across regions
 # for the same reason (covers "global." profiles alongside geography-scoped
 # ones like "us.", "eu.").
-resource "aws_iam_role_policy" "langsmith_bedrock" {
-  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
-
-  name = "langsmith-bedrock-access"
-  role = module.eks.langsmith_irsa_role_name
-
-  policy = jsonencode({
+#
+# engine.tf also attaches this policy to the Engine role, because Engine and
+# Insights run under that role when enable_engine = true.
+locals {
+  langsmith_bedrock_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -400,6 +455,15 @@ resource "aws_iam_role_policy" "langsmith_bedrock" {
       }
     ]
   })
+}
+
+resource "aws_iam_role_policy" "langsmith_bedrock" {
+  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+
+  name = "langsmith-bedrock-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = local.langsmith_bedrock_policy
 }
 
 # ── ESO IRSA role (External Secrets Operator) ─────────────────────────────
@@ -462,8 +526,6 @@ module "cert_manager" {
   oidc_provider_arn = module.eks.oidc_provider_arn
   hosted_zone_id    = var.cert_manager_hosted_zone_id
   tags              = local.common_tags
-
-  depends_on = [module.eks]
 }
 
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
@@ -528,9 +590,10 @@ module "alb" {
   name                   = local.alb_name
   vpc_id                 = local.vpc_id
   vpc_cidr_block         = local.vpc_cidr_block
+  pod_cidr_blocks        = local.pod_cidr_blocks
   subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
   internal               = var.alb_scheme == "internal"
-  allowed_cidr_blocks    = var.alb_allowed_cidr_blocks
+  allowed_cidr_blocks    = local.alb_ingress_cidr_blocks
   tls_certificate_source = var.tls_certificate_source
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
@@ -627,7 +690,7 @@ module "bastion" {
   vpc_id              = local.vpc_id
   subnet_id           = var.bastion_enable_ssh ? local.public_subnets[0] : local.private_subnets[0]
   associate_public_ip = var.bastion_enable_ssh
-  cluster_name        = local.cluster_name
+  cluster_name        = module.eks.cluster_name
   region              = var.region
   instance_type       = var.bastion_instance_type
   key_name            = var.bastion_key_name
@@ -638,7 +701,7 @@ module "bastion" {
 
   existing_security_group_id = var.bastion_existing_security_group_id
 
-  depends_on = [module.vpc, module.eks]
+  depends_on = [module.vpc]
 }
 
 # The ALB controller (installed by EKS blueprints) registers a mutating webhook
@@ -786,7 +849,8 @@ resource "terraform_data" "postgres_connection_url_revision" {
 # Idempotent: skips CREATE DATABASE if the database already exists. Sources the
 # admin connection URL from the langsmith-postgres Secret created by k8s-bootstrap
 # so the master password is not embedded in the Job manifest.
-resource "kubernetes_job_v1" "standalone_db" {
+# Applied via kubectl local-exec rather than kubernetes_job_v1: that resource drops the Job from state once ttl_seconds_after_finished deletes it, so every later plan showed it as a new resource.
+resource "terraform_data" "standalone_db" {
   for_each = {
     for k, v in {
       fleet    = var.enable_fleet && var.fleet_storage == "external"
@@ -795,62 +859,74 @@ resource "kubernetes_job_v1" "standalone_db" {
     } : k => v if v && var.postgres_source == "external"
   }
 
-  metadata {
-    name      = "langsmith-standalone-${each.key}-db-init"
-    namespace = var.langsmith_namespace
-  }
-
-  spec {
-    backoff_limit = 6
-    # Keep the result available briefly, then let Kubernetes remove this
-    # Terraform-managed, idempotent database bootstrap Job.
-    ttl_seconds_after_finished = 3600
-    template {
-      metadata {
-        labels = {
-          app     = "langsmith-standalone-db-init"
-          feature = each.key
-        }
-      }
-      spec {
-        restart_policy = "Never"
-        container {
-          name  = "create-db"
-          image = "postgres:16"
-          command = [
-            "/bin/sh",
-            "-c",
-            <<-EOT
-              set -e
-              DB="langsmith_${each.key}"
-              if psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1; then
-                echo "Database $DB already exists — nothing to do."
-              else
-                echo "Creating database $DB..."
-                psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$DB\""
-                echo "Created database $DB."
-              fi
-            EOT
-          ]
-          env {
-            name = "ADMIN_URL"
-            value_from {
-              secret_key_ref {
-                name = "langsmith-postgres"
-                key  = "connection_url"
-              }
-            }
+  triggers_replace = jsonencode({
+    apiVersion = "batch/v1"
+    kind       = "Job"
+    metadata = {
+      name      = "langsmith-standalone-${each.key}-db-init"
+      namespace = var.langsmith_namespace
+    }
+    spec = {
+      backoffLimit = 6
+      # Keep the result available briefly, then let Kubernetes remove this
+      # Terraform-managed, idempotent database bootstrap Job.
+      ttlSecondsAfterFinished = 3600
+      template = {
+        metadata = {
+          labels = {
+            app     = "langsmith-standalone-db-init"
+            feature = each.key
           }
+        }
+        spec = {
+          restartPolicy = "Never"
+          containers = [{
+            name  = "create-db"
+            image = "postgres:16"
+            command = [
+              "/bin/sh",
+              "-c",
+              <<-EOT
+                set -e
+                DB="langsmith_${each.key}"
+                if psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1; then
+                  echo "Database $DB already exists — nothing to do."
+                else
+                  echo "Creating database $DB..."
+                  psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$DB\""
+                  echo "Created database $DB."
+                fi
+              EOT
+            ]
+            env = [{
+              name = "ADMIN_URL"
+              valueFrom = {
+                secretKeyRef = {
+                  name = "langsmith-postgres"
+                  key  = "connection_url"
+                }
+              }
+            }]
+          }]
         }
       }
     }
-  }
+  })
 
-  wait_for_completion = true
-
-  timeouts {
-    create = "5m"
-    update = "5m"
+  # Deletes any Job left from the last run first, because a Job with an unchanged spec does not rerun on apply.
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    environment = {
+      MANIFEST = self.triggers_replace
+    }
+    command = <<-EOT
+      set -euo pipefail
+      export KUBECONFIG="$HOME/.kube/langsmith-${local.cluster_name}"
+      aws eks update-kubeconfig --name ${local.cluster_name} --region ${var.region} --alias ${local.cluster_name} --kubeconfig "$KUBECONFIG" > /dev/null
+      kubectl delete job langsmith-standalone-${each.key}-db-init -n ${var.langsmith_namespace} --ignore-not-found --wait
+      printf '%s' "$MANIFEST" | kubectl apply -f -
+      kubectl wait --for=condition=complete job/langsmith-standalone-${each.key}-db-init -n ${var.langsmith_namespace} --timeout=300s
+    EOT
   }
 
   lifecycle {
@@ -860,6 +936,15 @@ resource "kubernetes_job_v1" "standalone_db" {
   }
 
   depends_on = [module.postgres, module.k8s_bootstrap]
+}
+
+# Forget the earlier kubernetes_job_v1 without deleting the Job, so its destroy cannot race the provisioner above, which deletes and recreates the Job itself.
+removed {
+  from = kubernetes_job_v1.standalone_db
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── Per-feature connection-URL Secrets ────────────────────────────────────────
@@ -878,7 +963,7 @@ resource "kubernetes_secret" "fleet_postgres" {
     postgres_connection_url = local.standalone_fleet_pg_url
   }
   type       = "Opaque"
-  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+  depends_on = [terraform_data.standalone_db, module.k8s_bootstrap]
 }
 
 resource "kubernetes_secret" "fleet_redis" {
@@ -904,7 +989,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
     postgres_connection_url = local.standalone_polly_pg_url
   }
   type       = "Opaque"
-  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+  depends_on = [terraform_data.standalone_db, module.k8s_bootstrap]
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
@@ -930,7 +1015,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
     postgres_connection_url = local.standalone_insights_pg_url
   }
   type       = "Opaque"
-  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+  depends_on = [terraform_data.standalone_db, module.k8s_bootstrap]
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
@@ -996,10 +1081,10 @@ module "smithdb" {
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
 
+  migration_source_bucket_arn = var.smithdb_migration_enabled ? module.storage.bucket_arn : ""
+
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
-
-  depends_on = [module.eks]
 }
 
 # Metastore connection secret consumed by smithdb.config.existingSecretName.

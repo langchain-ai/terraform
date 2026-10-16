@@ -235,6 +235,36 @@ run "smithdb_migration_start_time_rejects_an_impossible_date" {
   expect_failures = [var.smithdb_migration_start_time]
 }
 
+run "smithdb_migration_parallelism_rejects_zero" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 0
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
+}
+
+run "smithdb_migration_parallelism_rejects_more_than_30" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 31
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
+}
+
+run "smithdb_migration_parallelism_rejects_a_fraction" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 1.5
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
+}
+
 # smithdb_migration_start_time has nullable = false, so null takes the default "".
 run "smithdb_null_start_time_keeps_the_chart_window" {
   command = plan

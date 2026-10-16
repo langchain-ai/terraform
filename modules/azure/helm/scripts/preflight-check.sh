@@ -11,8 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/../../infra"
-source "$INFRA_DIR/scripts/_common.sh"
+source "$SCRIPT_DIR/../../infra/scripts/_common.sh"
 
 echo "Helm preflight checks..."
 echo ""

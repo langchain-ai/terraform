@@ -70,6 +70,12 @@ variable "eks_managed_node_groups" {
   }
 }
 
+variable "extra_eks_managed_node_groups" {
+  type        = any
+  description = "EKS managed node groups passed to the upstream module as given, merged after eks_managed_node_groups. Attributes outside the eks_managed_node_groups object type (metadata_options, capacity_type, ami_type) survive here, and no defaults are applied."
+  default     = {}
+}
+
 variable "enable_karpenter" {
   type        = bool
   description = "Install the Karpenter controller (via eks-blueprints-addons): controller IRSA, node IAM role, and the SQS interruption queue. Required for the SmithDB instance-store/compute pools. Coexists with cluster-autoscaler (disjoint nodes)."
@@ -118,5 +124,11 @@ variable "enable_istio_gateway" {
 variable "eks_addons" {
   type        = any
   description = "Map of EKS managed add-on configurations to enable for the cluster (coredns, kube-proxy, vpc-cni, etc.)"
+  default     = {}
+}
+
+variable "pod_subnet_ids_by_az" {
+  type        = map(string)
+  description = "VPC CNI custom networking: pod subnet ID keyed by availability zone name. Empty leaves pods in the node subnets."
   default     = {}
 }

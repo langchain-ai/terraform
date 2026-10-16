@@ -54,7 +54,6 @@ run "enums_reject_an_unlisted_value" {
     redis_source                   = "elasticache"
     clickhouse_source              = "clickhouse-cloud"
     ingress_controller             = "traefik"
-    tls_certificate_source         = "acm"
     keyvault_default_action        = "allow"
     agw_sku_tier                   = "Standard"
     agic_network_contributor_scope = "resourcegroup"
@@ -67,13 +66,24 @@ run "enums_reject_an_unlisted_value" {
     var.redis_source,
     var.clickhouse_source,
     var.ingress_controller,
-    var.tls_certificate_source,
     var.keyvault_default_action,
     var.agw_sku_tier,
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
     var.redis_clustering_policy,
   ]
+}
+
+# Separate from the run above: the letsencrypt rule reads ingress_controller, and
+# Terraform skips a variable's validations while one it references is invalid.
+run "tls_certificate_source_rejects_an_unlisted_value" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "acm"
+  }
+
+  expect_failures = [var.tls_certificate_source]
 }
 
 run "postgres_password_rejects_a_double_quote" {
@@ -329,6 +339,65 @@ run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# The other direction: the default pool stays nonzonal and a zonal additional
+# pool supplies SmithDB's nodes, which is how a running cluster gains zones
+# without a rebuild.
+run "smithdb_accepts_a_zonal_additional_pool" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D16s_v3"
+        min_count = 0
+        max_count = 3
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+}
+
+# A SmithDB pool pinned at its minimum has no node for the surge pod of a
+# rolling update. The zonal pool keeps the zone rule satisfied, so a failure
+# here can only be the headroom rule.
+run "smithdb_pool_rejects_max_count_equal_to_min_count" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D8s_v4"
+        min_count = 1
+        max_count = 1
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_pool_accepts_one_node_of_headroom" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D8s_v4"
+        min_count = 1
+        max_count = 2
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+}
+
 run "identifier_is_rejected_outright" {
   command = plan
 
@@ -452,6 +521,7 @@ run "moved_vnet_address_space_plans_with_moved_prefixes" {
     agic_subnet_address_prefix     = ["172.16.96.0/24"]
     bastion_subnet_address_prefix  = ["172.16.80.0/27"]
     ingress_controller             = "agic"
+    tls_certificate_source         = "none"
     create_bastion                 = true
   }
 }
@@ -475,6 +545,7 @@ run "moved_vnet_address_space_rejects_a_default_agic_prefix" {
     postgres_subnet_address_prefix = ["172.16.32.0/20"]
     redis_subnet_address_prefix    = ["172.16.48.0/20"]
     ingress_controller             = "agic"
+    tls_certificate_source         = "none"
   }
 
   expect_failures = [terraform_data.validate_network]
@@ -503,6 +574,7 @@ run "created_vnet_rejects_a_subnet_on_the_service_cidr" {
 
   variables {
     ingress_controller         = "agic"
+    tls_certificate_source     = "none"
     agic_subnet_address_prefix = ["10.0.64.0/24"]
   }
 
@@ -514,6 +586,7 @@ run "created_vnet_plans_a_subnet_beside_a_moved_service_cidr" {
 
   variables {
     ingress_controller         = "agic"
+    tls_certificate_source     = "none"
     agic_subnet_address_prefix = ["10.0.64.0/24"]
     aks_service_cidr           = "10.0.112.0/20"
   }
@@ -535,7 +608,7 @@ run "byo_vnet_plans_beside_a_clear_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings
@@ -559,7 +632,7 @@ run "byo_vnet_rejects_a_prefix_on_a_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   # Inside the default aks_subnet_address_prefix, 10.0.0.0/19.
   override_data {
@@ -583,7 +656,7 @@ run "byo_vnet_skips_the_subnets_terraform_carved" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings
@@ -770,6 +843,18 @@ run "smithdb_gates_require_smithdb" {
   expect_failures = [terraform_data.validate_network]
 }
 
+run "smithdb_sizing_rejects_an_unlisted_size" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    smithdb_sizing     = "xlarge"
+  }
+
+  expect_failures = [var.smithdb_sizing]
+}
+
 run "smithdb_migration_requires_ingestion" {
   command = plan
 
@@ -781,6 +866,36 @@ run "smithdb_migration_requires_ingestion" {
   }
 
   expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_migration_parallelism_rejects_zero" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 0
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
+}
+
+run "smithdb_migration_parallelism_rejects_more_than_30" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 31
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
+}
+
+run "smithdb_migration_parallelism_rejects_a_fraction" {
+  command = plan
+
+  variables {
+    smithdb_migration_parallelism = 1.5
+  }
+
+  expect_failures = [var.smithdb_migration_parallelism]
 }
 
 # ── Storage and ClusterIP rules ──────────────────────────────────────────────
@@ -907,7 +1022,7 @@ run "additional_pool_os_sku_rejects_an_unknown_value" {
   expect_failures = [var.additional_node_pools]
 }
 
-# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.59.0, where the
+# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.65.0, where the
 # provider rejects it; refused here until the floor moves.
 run "aks_os_sku_rejects_ubuntu2404_below_the_provider_floor" {
   command = plan
@@ -936,4 +1051,41 @@ run "dns01_rejects_a_cert_manager_this_module_did_not_install" {
   }
 
   expect_failures = [var.tls_certificate_source]
+}
+
+# HTTP-01 cannot complete behind istio-addon (no IngressClass for the solver's
+# Ingress) or AGIC (Application Gateway rewrites the challenge path), so the
+# certificate stays Pending forever. Both directions: the pair is refused, and
+# DNS-01 on the same controller still plans.
+run "letsencrypt_rejects_istio_addon" {
+  command = plan
+
+  variables {
+    ingress_controller     = "istio-addon"
+    tls_certificate_source = "letsencrypt"
+  }
+
+  expect_failures = [var.tls_certificate_source]
+}
+
+run "letsencrypt_rejects_agic" {
+  command = plan
+
+  variables {
+    ingress_controller     = "agic"
+    tls_certificate_source = "letsencrypt"
+  }
+
+  expect_failures = [var.tls_certificate_source]
+}
+
+run "dns01_plans_with_istio_addon" {
+  command = plan
+
+  variables {
+    ingress_controller     = "istio-addon"
+    tls_certificate_source = "dns01"
+    langsmith_domain       = "langsmith.example.com"
+    letsencrypt_email      = "fixture@example.com"
+  }
 }

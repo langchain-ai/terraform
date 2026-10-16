@@ -12,6 +12,8 @@
 #   _parse_tfvar <key>              — Read a value from terraform.tfvars
 #   _parse_tfvar_quoted <key> <f>   — Read a quoted value, spaces intact, from <f>
 #   _tfvar_is_true <key>            — Return 0 if tfvar == true
+#   _set_tfvar <key> <value>        — Set one key in terraform.tfvars, editing only its line
+#   _confirm <prompt>               — Yes/no prompt that defaults to no
 #   _tf_out <name>                  — Read one terraform output, or return 1
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
@@ -23,10 +25,14 @@
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
 # ── Resolve INFRA_DIR ────────────────────────────────────────────────────────
-# Assumes this script lives in infra/scripts/. Consumers that live elsewhere
-# should override INFRA_DIR after sourcing.
+# INFRA_DIR is the Terraform root the deployment runs in: terraform.tfvars,
+# secrets.auto.tfvars, state, and outputs. It defaults to infra/ next to this
+# script. LANGSMITH_INFRA_DIR points it at a root outside this repo, such as a
+# wrapper module that sources modules/azure/infra; LANGSMITH_VALUES_DIR does the
+# same for the generated Helm values. Scripts, examples, and the base
+# values.yaml always come from this repo.
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
+INFRA_DIR="${INFRA_DIR:-${LANGSMITH_INFRA_DIR:-$(cd "$_COMMON_DIR/.." && pwd)}}"
 
 # ── terraform.tfvars parser ──────────────────────────────────────────────────
 _parse_tfvar() {
@@ -68,6 +74,31 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Replace the first uncommented `key = ...` line in terraform.tfvars, or append
+# one, so every other setting stays exactly as written. `cat >`, not mv, keeps
+# the file permissions.
+_set_tfvar() {
+  local _key="$1" _value="$2" _file="$INFRA_DIR/terraform.tfvars" _tmp
+  _tmp="$(mktemp)"
+  if awk -v key="$_key" -v value="$_value" '
+    !done && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { print key " = " value; done = 1; next }
+    { print }
+    END { exit done ? 0 : 3 }
+  ' "$_file" > "$_tmp"; then
+    cat "$_tmp" > "$_file"
+  else
+    [[ -s "$_file" && -n "$(tail -c 1 "$_file")" ]] && printf '\n' >> "$_file"
+    printf '%s = %s\n' "$_key" "$_value" >> "$_file"
+  fi
+  rm -f "$_tmp"
+}
+
+_confirm() {
+  local _answer
+  read -r -p "  $1 [y/N] " _answer
+  [[ "$_answer" =~ ^[Yy] ]]
 }
 
 # ── terraform output reader ──────────────────────────────────────────────────
@@ -115,6 +146,45 @@ _cert_manager_azure_environment() {
     usgovernment) echo "AzureUSGovernmentCloud" ;;
     *) echo "AzurePublicCloud" ;;
   esac
+}
+
+# ── Cluster credentials ──────────────────────────────────────────────────────
+# az aks get-credentials for the deployed cluster. With no private DNS zone
+# ("None"), only the public FQDN resolves (to the private IP), so the kubeconfig
+# has to name it: the aks_kubeconfig_public_fqdn output says when.
+_aks_get_credentials() {
+  local cluster="$1" rg="$2" flags=()
+  [[ "$(_tf_out aks_kubeconfig_public_fqdn || true)" == "true" ]] && flags=(--public-fqdn)
+  az aks get-credentials --name "$cluster" --resource-group "$rg" \
+    --overwrite-existing ${flags[@]+"${flags[@]}"}
+}
+
+# ── Entra ID sign-in for kubectl and Helm ───────────────────────────────────
+# On a cluster with Entra ID integration, `az aks get-credentials` writes a
+# kubeconfig whose user signs in interactively. Convert it to reuse the caller's
+# az session, the same sign-in the Terraform providers use (aks_kube_auth), so
+# scripts run unattended from a workstation, a pipeline, or a managed identity.
+# Run it right after get-credentials, which rewrites the user entry each time.
+# --context limits the conversion to this cluster's user: without it kubelogin
+# rewrites every kubelogin or legacy Azure user in the kubeconfig, switching the
+# operator's other AKS contexts to azurecli sign-in. get-credentials (without
+# --admin or --context) names the context after the cluster.
+# Returns 1 when the cluster needs kubelogin and it is not installed.
+_aks_kubelogin_convert() {
+  local cluster="$1" rg="$2" mode aad
+  mode=$(_parse_tfvar aks_kube_auth) || mode="auto"
+  [[ "$mode" == "certificate" ]] && return 0
+  if [[ "$mode" == "auto" ]]; then
+    # Same test as aks_kube_auth = "auto" in Terraform: any Entra profile,
+    # AKS-managed or legacy, is what makes azurerm drop the client certificate.
+    aad=$(az aks show --name "$cluster" --resource-group "$rg" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null) || aad=""
+    [[ "$aad" == "true" ]] || return 0
+  fi
+  if ! command -v kubelogin >/dev/null 2>&1; then
+    fail "Cluster '${cluster}' uses Entra ID and kubelogin is not on the PATH. Install it with 'az aks install-cli'"
+    return 1
+  fi
+  kubelogin convert-kubeconfig -l azurecli --context "$cluster"
 }
 
 # ── Admin password rules ─────────────────────────────────────────────────────
@@ -206,7 +276,7 @@ _validate_license_key() {
 # Keys deploy.sh re-reads from terraform.tfvars on every run — sizing_profile and
 # the enable_* flags, which select whole values files — are deliberately absent.
 # Those cannot go stale, so listing them would fail a deploy that is fine.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location"
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count"
 
 # Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
 # leaves it empty when the key is absent — never the default a caller substitutes,
@@ -228,6 +298,17 @@ _read_values_stamp() {
   line=$(grep -E "^#   ${key} =" "$file" 2>/dev/null | head -1) || return 1
   [[ -n "$line" ]] || return 1
   printf '%s' "$line" | sed "s/^#   ${key} =[[:space:]]*//"
+}
+
+# Print ingress.ingressClassName from a values file, quotes stripped; nothing when
+# unset or empty. With ingress_controller = "none" this is the only place a class
+# comes from, so init-values.sh keeps it on re-run and deploy.sh checks it.
+_values_ingress_class() {
+  awk '
+    /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
+    top == "ingress" && /^  ingressClassName:/ { v = $2; gsub(/["\047]/, "", v); cls = v }
+    END { print cls }
+  ' "$1" 2>/dev/null
 }
 
 # Resource-name suffix, mirroring local.name_suffix in main.tf.

@@ -178,6 +178,14 @@ OWNER="$_REPLY"
 _ask "Cost center (for billing, leave blank to skip)" ""
 COST_CENTER="$_REPLY"
 
+while true; do
+  _ask "Initial org admin email" "${LANGSMITH_ADMIN_EMAIL:-}"
+  ADMIN_EMAIL="$_REPLY"
+  [[ -n "$ADMIN_EMAIL" ]] && break
+  _red "  ERROR: this value is required. Try again."
+  echo ""
+done
+
 echo ""
 printf "  Resources will be named: $(_cyan "${NAME_PREFIX}-${ENVIRONMENT}")-{resource}\n"
 
@@ -479,6 +487,7 @@ environment = "${ENVIRONMENT}"
 region      = "${REGION}"
 zone        = "${ZONE}"
 owner       = "${OWNER}"
+langsmith_admin_email = "${ADMIN_EMAIL}"
 TFVARS
 
 if [[ -n "$COST_CENTER" ]]; then
@@ -591,8 +600,8 @@ enable_insights      = ${ENABLE_INSIGHTS}
 #------------------------------------------------------------------------------
 # SmithDB
 # The three gates below are a staged rollout, and a new install starts with
-# ingestion (dual write). Move on with make smithdb-phase PHASE=backfill, then
-# PHASE=cutover. ClickHouse stays enabled throughout.
+# ingestion (dual write). For the backfill, run make smithdb-migration-job-start;
+# for cutover, set smithdb_query_enabled = true. ClickHouse stays enabled throughout.
 #------------------------------------------------------------------------------
 enable_smithdb            = ${ENABLE_SMITHDB}
 smithdb_ingestion_enabled = ${ENABLE_SMITHDB}
@@ -623,6 +632,7 @@ printf "  %-22s %s\n" "Profile:"    "$PROFILE"
 printf "  %-22s %s\n" "Project:"    "$PROJECT_ID"
 printf "  %-22s %s\n" "Name:"       "${NAME_PREFIX}-${ENVIRONMENT}"
 printf "  %-22s %s\n" "Region:"     "${REGION} / ${ZONE}"
+printf "  %-22s %s\n" "Admin email:" "$ADMIN_EMAIL"
 printf "  %-22s %s\n" "GKE:"        "$( [[ "$USE_AUTOPILOT" == "true" ]] && echo "Autopilot" || echo "Standard (${MACHINE_TYPE})" )"
 printf "  %-22s %s\n" "PostgreSQL:" "$PG_SOURCE"
 printf "  %-22s %s\n" "Redis:"      "$REDIS_SOURCE"
@@ -649,7 +659,7 @@ printf "  4. Deploy LangSmith:\n"
 printf "     ${CYAN}make init-values && make deploy${RESET}\n"
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
-  printf "  ${DIM}SmithDB phase, pods, and backfill progress:${RESET}\n"
-  printf "     ${CYAN}make smithdb-status${RESET}\n"
+  printf "  ${DIM}SmithDB historical migration (backfill), after the deploy:${RESET}\n"
+  printf "     ${CYAN}make smithdb-migration-job-start${RESET}\n"
 fi
 echo ""

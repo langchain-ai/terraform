@@ -2,15 +2,17 @@ terraform {
   required_version = ">= 1.11.0"
 
   required_providers {
-    # 4.59 is the release on which the two network changes the guard permits are
-    # in-place updates rather than replacements: 4.58.0 made network_data_plane and
-    # network_policy updatable to cilium, 4.59.0 added calico to cilium. On an
-    # older 4.x, aks_allow_network_upgrade = true would replace the cluster, the
-    # outcome the guard exists to stop. (4.27 was the previous floor: the release
-    # that accepts Microsoft.Network/applicationGateways as a subnet delegation.)
+    # 4.65.0 renamed azurerm_federated_identity_credential's parent_id to
+    # user_assigned_identity_id, the argument k8s-cluster uses, so nothing older
+    # validates. It also covers the guard's need: 4.58.0 made network_data_plane
+    # and network_policy updatable to cilium and 4.59.0 added calico to cilium,
+    # so on those releases aks_allow_network_upgrade = true updates in place
+    # rather than replacing the cluster. (4.59.0 was the previous floor, and 4.27
+    # before it: the release that accepts Microsoft.Network/applicationGateways
+    # as a subnet delegation.)
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 4.59.0, < 5.0.0"
+      version = ">= 4.65.0, < 5.0.0"
     }
     # Azure Managed Redis (Microsoft.Cache/redisEnterprise) Balanced SKUs aren't
     # reliably exposed by azurerm yet — the redis module provisions AMR via azapi.

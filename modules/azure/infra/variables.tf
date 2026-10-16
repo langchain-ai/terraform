@@ -286,6 +286,124 @@ variable "aks_authorized_ip_ranges" {
   default     = []
 }
 
+# Private API server, Entra-only access, and a user-assigned control-plane
+# identity, for landing zones whose Azure Policy requires them. All off by
+# default and ignored when create_cluster = false. private_cluster_enabled and
+# private_dns_zone_id are fixed at creation: Azure has no in-place update, so
+# terraform_data.aks_access_guard refuses either edit on an existing cluster
+# rather than letting the provider replace it. It refuses an identity change
+# too, which Azure does make in place, because grants held by the old identity
+# do not follow the control plane to the new one.
+variable "aks_private_cluster_enabled" {
+  type        = bool
+  description = "Give the AKS API server a private endpoint in the cluster VNet and no public address. The apply host needs a network path to it (a jumpbox, VPN, or a runner in a peered VNet) and DNS that resolves the private zone. Set before the first apply."
+  default     = false
+
+  validation {
+    # Authorized IP ranges filter the public endpoint, which a private cluster
+    # does not have; Azure rejects the pair.
+    condition     = !var.aks_private_cluster_enabled || length(var.aks_authorized_ip_ranges) == 0
+    error_message = "aks_authorized_ip_ranges filters the public API server endpoint, which a private cluster does not have. Clear aks_authorized_ip_ranges, or set aks_private_cluster_enabled = false."
+  }
+}
+
+variable "aks_private_dns_zone_id" {
+  type        = string
+  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and the module turns on the public FQDN, which Azure requires with None: the API server's name then resolves through public DNS to its private IP, so the nodes' and operators' DNS must resolve public names. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity = \"user\" with Private DNS Zone Contributor on the zone. Set before the first apply."
+  default     = ""
+
+  validation {
+    condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/[^/]+$", var.aks_private_dns_zone_id))
+    error_message = "aks_private_dns_zone_id must be empty, \"System\", \"None\", or a private DNS zone resource ID (/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/<zone>)."
+  }
+
+  validation {
+    condition     = var.aks_private_dns_zone_id == "" || var.aks_private_cluster_enabled
+    error_message = "aks_private_dns_zone_id only applies to a private API server. Set aks_private_cluster_enabled = true, or leave aks_private_dns_zone_id empty."
+  }
+
+  validation {
+    # A system-assigned identity does not exist until the cluster does, so
+    # nothing can grant it rights on the zone before AKS needs them.
+    condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || var.aks_control_plane_identity == "user"
+    error_message = "A custom aks_private_dns_zone_id requires aks_control_plane_identity = \"user\": AKS registers the API server in the zone as the control-plane identity, which needs Private DNS Zone Contributor on it before the cluster is created."
+  }
+}
+
+variable "aks_entra_only" {
+  type        = bool
+  description = "Entra-only access to AKS: Entra ID integration with Azure RBAC for Kubernetes authorization, and local accounts disabled. Terraform's Helm and Kubernetes providers then authenticate through kubelogin, which must be on the apply host's PATH, as the az CLI identity, which needs cluster-admin through aks_entra_admin_group_object_ids or the Azure Kubernetes Service RBAC Cluster Admin role. Azure cannot turn Entra integration off once it is on."
+  default     = false
+}
+
+variable "aks_entra_admin_group_object_ids" {
+  type        = list(string)
+  description = "Object IDs of Entra groups granted cluster-admin on an Entra-only cluster. Requires aks_entra_only = true."
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.aks_entra_admin_group_object_ids : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))])
+    error_message = "Each aks_entra_admin_group_object_ids entry must be an Entra group object ID (a GUID)."
+  }
+
+  validation {
+    condition     = length(var.aks_entra_admin_group_object_ids) == 0 || var.aks_entra_only
+    error_message = "aks_entra_admin_group_object_ids only applies to an Entra-only cluster. Set aks_entra_only = true, or leave the list empty."
+  }
+}
+
+variable "aks_control_plane_identity" {
+  type        = string
+  description = "Identity the AKS control plane runs as. \"system\" (default): a system-assigned identity, which exists only once the cluster does, so its grants on a VNet you supply can only be made after creation. \"user\": a user-assigned identity, aks_control_plane_identity_id or, when that is empty, <cluster_name>-control-plane created in the deployment resource group before the cluster. Set before the first apply: a change on an existing cluster is refused."
+  default     = "system"
+
+  validation {
+    condition     = contains(["system", "user"], var.aks_control_plane_identity)
+    error_message = "aks_control_plane_identity must be \"system\" or \"user\"."
+  }
+}
+
+variable "aks_control_plane_identity_id" {
+  type        = string
+  description = "Resource ID of an existing user-assigned identity for the AKS control plane, with aks_control_plane_identity = \"user\". Empty (default): the module creates one, which requires aks_control_plane_identity_manage_grants to resolve to true. Set before the first apply."
+  default     = ""
+
+  validation {
+    condition     = var.aks_control_plane_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.aks_control_plane_identity_id))
+    error_message = "aks_control_plane_identity_id must be a user-assigned identity resource ID (/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>)."
+  }
+
+  validation {
+    condition     = var.aks_control_plane_identity_id == "" || var.aks_control_plane_identity == "user"
+    error_message = "aks_control_plane_identity_id only applies to a user-assigned control plane. Set aks_control_plane_identity = \"user\", or leave aks_control_plane_identity_id empty."
+  }
+
+  # An identity created in the same apply has no principal ID at plan, so the
+  # grant check could only fail partway through the apply. A supplied one is
+  # checked at plan, before anything is created.
+  validation {
+    condition     = !var.create_cluster || var.aks_control_plane_identity != "user" || coalesce(var.aks_control_plane_identity_manage_grants, var.create_vnet) || var.aks_control_plane_identity_id != ""
+    error_message = "With aks_control_plane_identity = \"user\" and aks_control_plane_identity_manage_grants = false, the default when create_vnet = false, set aks_control_plane_identity_id. Create the identity and have the network's owner grant it first, so the plan can check its grants. If Terraform can make the grants, set aks_control_plane_identity_manage_grants = true instead."
+  }
+}
+
+variable "aks_control_plane_identity_manage_grants" {
+  type        = bool
+  description = "Whether Terraform grants the user-assigned control-plane identity Network Contributor on the AKS subnet and, with a custom aks_private_dns_zone_id, Network Contributor on the VNet and Private DNS Zone Contributor on the zone. Null (default) follows create_vnet, so a VNet Terraform creates gets the grants and a VNet you supply does not. With false, whoever owns the network makes the grants before the first apply, on an identity supplied in aks_control_plane_identity_id: the plan checks the identity holds a role, built-in or custom, on the subnet, its route table if it has one, and the zone (not the VNet, which a zone already linked to it does not need), and fails naming the principal ID and the az commands to run when it does not. Set before the first apply: a change on an existing cluster is refused, and the refusal names the state moves that make it."
+  default     = null
+
+  validation {
+    condition     = var.aks_control_plane_identity_manage_grants == null || var.aks_control_plane_identity == "user"
+    error_message = "aks_control_plane_identity_manage_grants only applies to a user-assigned control plane. Set aks_control_plane_identity = \"user\", or leave aks_control_plane_identity_manage_grants unset."
+  }
+}
+
+variable "aks_network_owner_checks" {
+  type        = bool
+  description = "Whether plan reads two things on a network you supply, to catch at plan what Azure would otherwise refuse at cluster create: the node subnet's route table (with aks_outbound_type = \"userDefinedRouting\", to check its 0.0.0.0/0 next hop, and to warn on a missing default route or service-tag-only egress; needs read on the route table), and, with aks_control_plane_identity_manage_grants = false, the control-plane identity's direct role assignments on the subnet, route table and private DNS zone. Set false where the deploying identity cannot read the route table, or where the network owner grants the control-plane identity its roles through group membership, which the direct-assignment check cannot see. Azure still checks the grants and the next hop when it creates the cluster; the two warnings have no counterpart there."
+  default     = true
+}
+
 variable "location" {
   type        = string
   description = "The location of the LangSmith deployment"
@@ -356,8 +474,29 @@ variable "vnet_address_space" {
 #   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
 #     --enable-workload-identity) — required for the federated credentials below.
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
-#   • Local accounts NOT disabled — the kubernetes/helm providers authenticate via
-#     the cluster's kube_config, which Azure returns empty for AAD-only clusters.
+#   • On a cluster with Entra ID integration (local accounts on or off), the
+#     kubernetes/helm providers sign in through kubelogin with the caller's az
+#     session (aks_kube_auth): kubelogin on the PATH, and cluster-admin rights for
+#     whoever runs the apply. With Azure RBAC on the cluster that is an Azure role
+#     (Azure Kubernetes Service RBAC Cluster Admin); with Kubernetes RBAC it is
+#     membership in one of the cluster's admin_group_object_ids or a
+#     ClusterRoleBinding to cluster-admin, since Azure roles grant nothing there.
+
+variable "aks_kube_auth" {
+  type        = string
+  description = "How Terraform's Kubernetes and Helm providers sign in to the cluster. 'auto' (default) uses Entra ID through kubelogin when the cluster has Entra ID integration, where azurerm returns no client certificate, and the kube_config certificate otherwise. Entra sign-in needs kubelogin on the PATH and an az login with cluster-admin rights: an Azure role such as Azure Kubernetes Service RBAC Cluster Admin when the cluster uses Azure RBAC, or membership in one of the cluster's admin_group_object_ids or a ClusterRoleBinding to cluster-admin when it uses Kubernetes RBAC (azure_rbac_enabled = false), where Azure roles grant nothing."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "entra", "certificate"], var.aks_kube_auth)
+    error_message = "aks_kube_auth must be 'auto', 'entra', or 'certificate'."
+  }
+
+  validation {
+    condition     = !var.create_cluster || !var.aks_entra_only || var.aks_kube_auth != "certificate"
+    error_message = "aks_kube_auth = 'certificate' cannot sign in to a cluster with aks_entra_only = true, which disables local accounts. Use 'auto' or 'entra'."
+  }
+}
 
 variable "create_cluster" {
   type        = bool
@@ -700,6 +839,84 @@ variable "storage_private_dns_zone_id" {
   }
 }
 
+# ── Central private DNS zones: PostgreSQL ─────────────────────────────────────
+# In hub-and-spoke networks the network team owns every privatelink zone and
+# links it to the hub's resolvers. A second zone of the same name in the
+# deployment group either fails its VNet link or splits resolution, so a
+# supplied zone replaces the one the module would create, and its VNet links
+# stay the zone owner's.
+
+variable "postgres_private_dns_zone_id" {
+  type        = string
+  description = "Existing private DNS zone for the PostgreSQL Flexible Servers (LangSmith's and, with enable_smithdb, the SmithDB metastore): typically privatelink.postgres.database.azure.com, or privatelink.postgres.database.usgovcloudapi.net in Azure Government. Empty creates one in the deployment resource group and links it to the VNet. When set, Terraform creates no zone and no VNet link: the zone's owner links it to the networks that must resolve the servers. A zone in another subscription needs the Microsoft.DBforPostgreSQL resource provider registered in that subscription, or the server create does not complete."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/[^/]+\\.postgres\\.database\\.${var.azure_environment == "usgovernment" ? "usgovcloudapi\\.net" : "azure\\.com"}$", var.postgres_private_dns_zone_id))
+    error_message = "postgres_private_dns_zone_id must be the full resource ID of a private DNS zone whose name ends in .postgres.database.azure.com (public) or .postgres.database.usgovcloudapi.net (usgovernment), for example /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com. Flexible Server in VNet-integration mode accepts only zones with that suffix."
+  }
+
+  validation {
+    condition     = var.postgres_private_dns_zone_id == "" || var.postgres_source == "external" || var.enable_smithdb
+    error_message = "postgres_private_dns_zone_id is set, but nothing would use it: the module creates a PostgreSQL Flexible Server only with postgres_source = \"external\" or enable_smithdb = true. Clear it, or enable one of those."
+  }
+}
+
+# ── Key Vault Private Endpoint ────────────────────────────────────────────────
+# The vault's data plane otherwise stays on a public endpoint, filtered by the
+# firewall to the AKS subnet and keyvault_allowed_ips. With the endpoint, public
+# network access is off and the vault is reachable only from networks that
+# resolve its privatelink zone — which includes whatever runs terraform apply
+# and `make seed-secrets`.
+
+variable "keyvault_private_endpoint_enabled" {
+  type        = bool
+  description = "Reach the Key Vault the module creates over a Private Endpoint and turn off its public network access. Terraform writes two secrets into the vault on every apply and reads them on every plan, and `make seed-secrets` writes the rest, so with this on all three must run from a machine that reaches the endpoint (a jump host or self-hosted runner in the VNet or a peered network). The endpoint bills hourly and uses one address in its subnet. Requires create_keyvault = true: a vault you supply keeps the network settings its owner gave it."
+  default     = false
+
+  validation {
+    condition     = !var.keyvault_private_endpoint_enabled || var.create_keyvault
+    error_message = "keyvault_private_endpoint_enabled = true requires create_keyvault = true. The module never changes the network settings of a Key Vault you supply (create_keyvault = false); give that vault its private endpoint where it is managed."
+  }
+
+  validation {
+    condition     = !var.keyvault_private_endpoint_enabled || length(var.keyvault_allowed_ips) == 0
+    error_message = "keyvault_allowed_ips cannot be combined with keyvault_private_endpoint_enabled = true: the vault has no public endpoint for those rules to apply to. Clear keyvault_allowed_ips and reach the vault from inside the network, or leave the private endpoint off."
+  }
+}
+
+variable "keyvault_private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet that holds the Key Vault Private Endpoint. Empty uses the blob endpoints' subnet (storage_private_endpoint_subnet_id, itself defaulting to the AKS subnet)."
+  default     = ""
+
+  validation {
+    condition     = var.keyvault_private_endpoint_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.keyvault_private_endpoint_subnet_id))
+    error_message = "keyvault_private_endpoint_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+
+  validation {
+    condition     = var.keyvault_private_endpoint_subnet_id == "" || var.keyvault_private_endpoint_enabled
+    error_message = "keyvault_private_endpoint_subnet_id applies only with keyvault_private_endpoint_enabled = true."
+  }
+}
+
+variable "keyvault_private_dns_zone_id" {
+  type        = string
+  description = "Existing Key Vault private DNS zone for the endpoint: privatelink.vaultcore.azure.net, or privatelink.vaultcore.usgovcloudapi.net in Azure Government. Empty creates one in the deployment resource group and links it to the VNet. When set, Terraform creates no zone and no VNet link; the endpoint registers its record in the supplied zone, which needs Microsoft.Network/privateDnsZones/join/action on that zone (see PERMISSIONS.md)."
+  default     = ""
+
+  validation {
+    condition     = var.keyvault_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.vaultcore\\.${var.azure_environment == "usgovernment" ? "usgovcloudapi\\.net" : "azure\\.net"}$", var.keyvault_private_dns_zone_id))
+    error_message = "keyvault_private_dns_zone_id must be the full resource ID of the Key Vault private DNS zone for azure_environment: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net (public) or .../privatelink.vaultcore.usgovcloudapi.net (usgovernment). A private endpoint registers its record automatically only in a zone with exactly that name."
+  }
+
+  validation {
+    condition     = var.keyvault_private_dns_zone_id == "" || var.keyvault_private_endpoint_enabled
+    error_message = "keyvault_private_dns_zone_id applies only with keyvault_private_endpoint_enabled = true."
+  }
+}
+
 # ── AKS node pool sizing guidance ─────────────────────────────────────────────
 # Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
 #   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)
@@ -826,8 +1043,10 @@ variable "additional_node_pools" {
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
+    zones             = optional(list(string))
+    os_disk_size_gb   = optional(number)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones is the pool's availability zones, each \"1\", \"2\" or \"3\"; unset (default) means availability_zones. Set it for a pool whose VM size is not offered in every zone, or [] for a regional pool under a zoned availability_zones. Zones apply at creation only: an existing pool keeps the zones it was created with, and plan warns when they differ from the request. A pool with zones of its own satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md). os_disk_size_gb sets the OS disk in GB; unset means the AKS default for the VM size, and a change rotates the pool through a temporary pool."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
@@ -841,6 +1060,13 @@ variable "additional_node_pools" {
   validation {
     condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null ? true : contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], pool.os_sku)])
     error_message = "additional_node_pools: os_sku must be one of AzureLinux, AzureLinux3, Ubuntu or Ubuntu2204, or left unset to follow aks_os_sku."
+  }
+
+  # The same ternary: [for z in pool.zones] on a pool that sets none would fail
+  # on the null before 1.12. The message names each pool with a bad value.
+  validation {
+    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.zones == null ? true : alltrue([for z in pool.zones : contains(["1", "2", "3"], z)])])
+    error_message = "additional_node_pools: zones must list only \"1\", \"2\" or \"3\", the names Azure gives availability zones in every region that has them (${join(", ", [for name, pool in var.additional_node_pools : "${name} = [${join(",", pool.zones)}]" if(pool.zones == null ? false : !alltrue([for z in pool.zones : contains(["1", "2", "3"], z)]))])}). Leave zones unset to follow availability_zones."
   }
 }
 
@@ -908,6 +1134,45 @@ variable "aks_allow_network_upgrade" {
   default     = false
 }
 
+variable "aks_outbound_type" {
+  type        = string
+  description = "How the cluster's nodes reach the internet. loadBalancer (the default, so no existing cluster moves) is an AKS-managed outbound public IP. userDefinedRouting sends egress by the route table on aks_subnet_id, to a firewall, a network virtual appliance or on-premises, and AKS creates no outbound IP. userAssignedNATGateway leaves through the NAT gateway on aks_subnet_id, which aks_nat_gateway checks or creates. Both need create_vnet = false and a supplied aks_subnet_id, because the route table or NAT gateway belongs to whoever owns the network; plan checks the subnet for it. Only for clusters this module creates: an attached cluster keeps its own. See \"Egress through your network\" in the README for what the route must allow."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting", "userAssignedNATGateway"], var.aks_outbound_type)
+    error_message = "aks_outbound_type must be \"loadBalancer\", \"userDefinedRouting\" or \"userAssignedNATGateway\". AKS's managedNATGateway type is for VNets AKS creates itself, and this module always places the cluster in a VNet; none and block are for network-isolated clusters."
+  }
+}
+
+variable "aks_nat_gateway" {
+  type        = string
+  description = "A NAT gateway on aks_subnet_id for the cluster's egress. none (the default) neither creates nor checks one. existing checks at plan that the network owner has already attached one. create makes a Standard NAT gateway and its public IP in this module's resource group and associates them with aks_subnet_id, the only change Terraform makes to that subnet; route tables stay the network owner's. Needs aks_outbound_type userAssignedNATGateway, which requires one, or userDefinedRouting, where the NAT gateway carries the routes whose next hop is Internet. Clusters this module creates only."
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "existing", "create"], var.aks_nat_gateway)
+    error_message = "aks_nat_gateway must be \"none\", \"existing\" or \"create\"."
+  }
+}
+
+variable "aks_nat_gateway_idle_timeout_minutes" {
+  type        = number
+  description = "TCP idle timeout of the NAT gateway Terraform creates (aks_nat_gateway = \"create\"), 4 to 120 minutes. Ignored otherwise."
+  default     = 4
+
+  validation {
+    condition     = var.aks_nat_gateway_idle_timeout_minutes >= 4 && var.aks_nat_gateway_idle_timeout_minutes <= 120
+    error_message = "aks_nat_gateway_idle_timeout_minutes must be between 4 and 120."
+  }
+}
+
+variable "aks_allow_outbound_type_change" {
+  type        = bool
+  description = "Permit changing aks_outbound_type on a cluster that already exists. Azure applies the change in place between all three values in a supplied VNet, but it moves the cluster's egress IP and drops existing connections, so firewall rules and aks_authorized_ip_ranges that name the old IP must change too. Off, the change is refused at plan."
+  default     = false
+}
+
 variable "aks_sku_tier" {
   type        = string
   description = "AKS pricing tier for the control plane. Free has no SLA and suits throwaway clusters. Standard (the default) carries the financially backed uptime SLA, 99.95% when availability_zones spans zones and 99.9% otherwise, and unlocks larger clusters. Premium adds long-term support for Kubernetes versions (see aks_support_plan). Updated in place, so an existing cluster changes tier without a rebuild."
@@ -950,14 +1215,38 @@ variable "smithdb_ingestion_enabled" {
 
 variable "smithdb_migration_enabled" {
   type        = bool
-  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled."
+  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled. make smithdb-migration-job-start sets it to true, and make smithdb-migration-job-end sets it to false."
   default     = false
+}
+
+variable "smithdb_migration_parallelism" {
+  type        = number
+  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
+  default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
+    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
+  }
 }
 
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
   default     = false
+}
+
+variable "smithdb_sizing" {
+  type        = string
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = contains(["minimal", "small", "medium", "large"], coalesce(var.smithdb_sizing, "small"))
+    error_message = "smithdb_sizing must be minimal, small, medium, or large."
+  }
 }
 
 variable "smithdb_metastore_admin_username" {
@@ -976,8 +1265,9 @@ variable "smithdb_metastore_admin_password" {
 
 variable "smithdb_metastore_sku_name" {
   type        = string
-  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore."
-  default     = "GP_Standard_D2ds_v5"
+  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore. Null follows smithdb_sizing: GP_Standard_D2ds_v5 for minimal, then MO_Standard_E2ds_v5, E4ds_v5, and E8ds_v5 for small, medium, and large."
+  default     = null
+  nullable    = true
 }
 
 variable "smithdb_metastore_storage_mb" {
@@ -1047,6 +1337,111 @@ variable "smithdb_cache_disk_throughput_mbps" {
   }
 }
 
+# ── Sandboxes (optional) ─────────────────────────────────────────────────────
+# LangSmith Sandboxes run Firecracker microVMs in a privileged sandbox-host pod,
+# one per node, on a dedicated pool whose VMs expose /dev/kvm. Requires chart
+# 0.17 or later; see the README, "Sandboxes".
+
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Azure Managed Redis for JuiceFS metadata, a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
+  default     = false
+}
+
+variable "sandbox_host_vm_size" {
+  type        = string
+  description = "VM size for sandbox-host nodes. The size must support nested virtualization so the node exposes /dev/kvm; the Dsv4, Ddsv4, Dsv5, Ddsv5 and Ddsv6 families do. null follows sizing_profile: production and production-large use Standard_D32ds_v5, every other profile uses Standard_D8ds_v5. Confirm the family's regional vCPU quota covers sandbox_host_max_count nodes."
+  default     = null
+}
+
+variable "sandbox_host_min_count" {
+  type        = number
+  description = "Minimum sandbox-host node count. The default of 0 lets the autoscaler keep only the nodes sandbox-host replicas need; a Pending replica adds one."
+  default     = 0
+
+  validation {
+    condition     = var.sandbox_host_min_count >= 0
+    error_message = "sandbox_host_min_count must be 0 or greater."
+  }
+}
+
+variable "sandbox_host_max_count" {
+  type        = number
+  description = "Maximum sandbox-host node count. Must be at least 1 and at least sandbox_host_min_count."
+  default     = 5
+
+  validation {
+    condition     = var.sandbox_host_max_count >= 1
+    error_message = "sandbox_host_max_count must be 1 or greater."
+  }
+}
+
+variable "sandbox_host_os_disk_size_gb" {
+  type        = number
+  description = "OS disk size in GB for sandbox-host nodes. The JuiceFS cache and sandbox images live on this disk. A change rotates the pool through a temporary pool, so the region needs vCPU quota for one more node, or drain the pool to 0 nodes first."
+  default     = 200
+
+  validation {
+    condition     = var.sandbox_host_os_disk_size_gb >= 30 && var.sandbox_host_os_disk_size_gb <= 2048
+    error_message = "sandbox_host_os_disk_size_gb must be between 30 and 2048."
+  }
+}
+
+variable "sandbox_juicefs_name" {
+  type        = string
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state. Also the name of the Blob container that holds the volume's data."
+  default     = "sandbox-juicefs"
+
+  # Blob container naming rules, since the container takes this name.
+  validation {
+    condition     = length(var.sandbox_juicefs_name) <= 63 && can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", var.sandbox_juicefs_name))
+    error_message = "sandbox_juicefs_name must be 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
+  }
+}
+
+variable "sandbox_juicefs_redis_name" {
+  type        = string
+  description = "Name for the JuiceFS metadata Redis. Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
+  default     = ""
+}
+
+variable "sandbox_juicefs_amr_sku" {
+  type        = string
+  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
+  default     = "Balanced_B1"
+}
+
+variable "sandbox_juicefs_redis_high_availability" {
+  type        = bool
+  description = "Zone-redundant HA for the JuiceFS metadata Redis, plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
+  default     = true
+}
+
+variable "sandbox_juicefs_redis_prevent_destroy" {
+  type        = bool
+  description = "While true, plan refuses enable_sandboxes = false, which would delete the JuiceFS metadata Redis and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes. It does not stop terraform destroy."
+  default     = false
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  type        = string
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket, access-key). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  type        = number
+  description = "Revision for the sandbox JuiceFS config Secret, which is written write-only so the Redis access key stays out of that resource's state. The key is still in state through the JuiceFS Redis outputs, as the LangSmith Redis key is. Increment to rewrite the Secret after the access key is regenerated. A replaced Redis, from a new sandbox_juicefs_redis_name or redis_location, rewrites the Secret on its own. The chart does not restart sandbox-host for a rewrite, so restart it after the apply."
+  default     = 1
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL init-values.sh uses to generate browser and programmatic service URLs for HTTP services running inside sandboxes. Needs wildcard DNS and TLS for the host when set. Read by helm/scripts/; Terraform ignores this value."
+  default     = ""
+}
+
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
@@ -1105,13 +1500,13 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins for Azure. enable_smithdb requires an explicit chart line selection; see SMITHDB.md, 'Version requirements'."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'."
   default     = ""
 }
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = bring your own cert. 'none' = HTTP only (demo/dev)."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = your own certificate, in a kubernetes.io/tls Secret named langsmith-tls in the LangSmith namespace (deploy.sh checks it; see the README). 'none' = HTTP only (demo/dev)."
   default     = "letsencrypt"
 
   validation {
@@ -1122,6 +1517,11 @@ variable "tls_certificate_source" {
   validation {
     condition     = var.tls_certificate_source != "dns01" || var.install_cert_manager
     error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
+  }
+
+  validation {
+    condition     = var.tls_certificate_source != "letsencrypt" || !contains(["istio-addon", "agic"], var.ingress_controller)
+    error_message = "tls_certificate_source = \"letsencrypt\" does not work with ingress_controller = \"${var.ingress_controller}\": the HTTP-01 challenge never reaches cert-manager (istio-addon registers no IngressClass, and Application Gateway rewrites the challenge path). Use \"dns01\" with langsmith_domain set, \"existing\", or \"none\". See INGRESS_CONTROLLERS.md."
   }
 }
 
@@ -1137,7 +1537,7 @@ variable "install_cert_manager" {
 
 variable "install_keda" {
   type        = bool
-  description = "Install KEDA into the cluster. Set false when the cluster already runs it. KEDA scales the LangSmith queue workers on Redis queue depth, so something has to provide it."
+  description = "Install KEDA into the cluster. Set false when the cluster already runs it. The LangSmith Deployments operator scales agent deployments through KEDA, so something has to provide it when Deployments are enabled."
   default     = true
 }
 
@@ -1175,7 +1575,7 @@ variable "postgres_admin_password" {
 # The admin password, API key salt, JWT secret and Fernet encryption keys are
 # NOT Terraform variables by design — Terraform would persist them in plaintext
 # in state. scripts/seed-keyvault-secrets.sh writes them directly to Key Vault
-# after apply, and helm/scripts/generate-secrets.sh reads them back from KV.
+# after apply, and scripts/create-k8s-secrets.sh reads them back from KV.
 
 variable "langsmith_release_name" {
   type        = string
@@ -1200,7 +1600,7 @@ variable "langsmith_admin_email" {
 
 variable "create_waf" {
   type        = bool
-  description = "Deploy an Azure WAF policy (OWASP 3.2 + bot protection). With ingress_controller = 'agic' the policy is attached to the Application Gateway and forces its WAF_v2 tier. Any other ingress controller leaves the policy unattached, for a Front Door or a gateway you own to reference."
+  description = "Deploy an Azure WAF policy (OWASP 3.2 + bot protection). With ingress_controller = 'agic' the policy is attached to the Application Gateway and forces its WAF_v2 tier. Any other ingress controller leaves the policy unattached, for an Application Gateway you own to reference. Front Door cannot use this policy type."
   default     = false
 }
 
@@ -1274,7 +1674,7 @@ variable "ingress_ip" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pool and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Applies at creation only."
+  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pools and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Covers the default node pool and every additional pool, unless a pool sets its own zones in additional_node_pools. Applies at creation only: a pool keeps the zones it was created with, and plan warns when they differ from the request."
   default     = []
 }
 
@@ -1300,9 +1700,22 @@ variable "postgres_geo_redundant_backup" {
 # Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
 
 # tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_name" {
+  type        = string
+  description = "Optional. A Secret in the LangSmith namespace holding a CA bundle (the chart's config.customCa), for endpoints a private CA signed. The chart mounts it in backend, platform-backend, host-backend, the queues, listener, playground and the agent features, not in the operator or the agent deployments it creates. Read by helm/scripts/init-values.sh and deploy.sh; Terraform ignores this value."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_key" {
+  type        = string
+  description = "The key in langsmith_custom_ca_secret_name that holds the PEM bundle. Read by helm/scripts/; Terraform ignores this value."
+  default     = "ca.crt"
+}
+
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing and the default sandbox_host_vm_size."
   default     = "production"
 }
 
@@ -1380,6 +1793,86 @@ variable "dns_label" {
   default     = ""
 }
 
+variable "ingress_load_balancer" {
+  type        = string
+  description = "Whether the ingress controller's Azure load balancer is 'public' (the default: a public IP) or 'internal' (a private IP in the cluster's VNet, on the AKS-managed kubernetes-internal load balancer, with no public frontend). Applies to envoy-gateway, nginx, istio and istio-addon. 'internal' cannot be combined with dns_label, which needs a public IP; put the hostname in your own DNS or a private DNS zone instead. See INGRESS_CONTROLLERS.md, \"Private ingress\"."
+  default     = "public"
+
+  validation {
+    condition     = contains(["public", "internal"], var.ingress_load_balancer)
+    error_message = "ingress_load_balancer must be 'public' or 'internal'."
+  }
+
+  validation {
+    # AGIC's frontend belongs to the Application Gateway, and with 'none' the
+    # module installs no controller, so neither has a Service to annotate.
+    # Refused rather than ignored, so a set value is never silently dropped.
+    condition     = var.ingress_load_balancer == "public" || !contains(["agic", "none"], var.ingress_controller)
+    error_message = "ingress_load_balancer = \"internal\" applies to envoy-gateway, nginx, istio and istio-addon. With agic, give the Application Gateway a private frontend instead; with none, configure your own controller's Service."
+  }
+
+  validation {
+    # HTTP-01 has Let's Encrypt fetch a token from the load balancer over the
+    # internet, which a private address never answers. DNS-01, your own
+    # certificate and HTTP-only all work behind an internal load balancer.
+    condition     = var.ingress_load_balancer == "public" || var.tls_certificate_source != "letsencrypt"
+    error_message = "ingress_load_balancer = \"internal\" cannot use tls_certificate_source = \"letsencrypt\": the HTTP-01 challenge reaches the load balancer from the internet, and a private address never answers it. Use \"dns01\" (with langsmith_domain and an Azure DNS zone), \"existing\" (your own certificate) or \"none\"."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer == "public" || var.dns_label == ""
+    error_message = "ingress_load_balancer = \"internal\" cannot be combined with dns_label: a cloudapp DNS label needs a public IP. Leave dns_label empty and resolve the hostname through your own DNS or a private DNS zone."
+  }
+}
+
+variable "ingress_load_balancer_subnet_id" {
+  type        = string
+  description = "With ingress_load_balancer = \"internal\": the resource ID of a subnet in the cluster's VNet to take the load balancer's private IP from. Empty uses the AKS node subnet. A subnet other than the node subnet needs subnets/join/action and subnets/read for the cluster identity; see ingress_load_balancer_manage_subnet_assignment."
+  default     = ""
+
+  validation {
+    condition     = var.ingress_load_balancer_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.ingress_load_balancer_subnet_id))
+    error_message = "ingress_load_balancer_subnet_id must be a subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer_subnet_id == "" || var.ingress_load_balancer == "internal"
+    error_message = "ingress_load_balancer_subnet_id is only used with ingress_load_balancer = \"internal\"."
+  }
+
+  validation {
+    # Microsoft: "The subnet specified must be in the same virtual network as
+    # your AKS cluster." Checkable whenever the VNet is supplied; a VNet the
+    # module creates has no ID until apply.
+    condition     = var.ingress_load_balancer_subnet_id == "" || var.create_vnet || var.vnet_id == "" || startswith(lower(var.ingress_load_balancer_subnet_id), "${lower(var.vnet_id)}/subnets/")
+    error_message = "ingress_load_balancer_subnet_id must be a subnet of vnet_id: Azure places an internal load balancer only in a subnet of the cluster's own virtual network."
+  }
+
+}
+
+variable "ingress_load_balancer_ip" {
+  type        = string
+  description = "With ingress_load_balancer = \"internal\": a static private IPv4 address for the load balancer, free in its subnet (ingress_load_balancer_subnet_id, or the node subnet). Not an Azure-reserved address or one in the Kubernetes service CIDR. Empty lets Azure pick one."
+  default     = ""
+
+  validation {
+    # cidrnetmask, unlike cidrhost, refuses IPv6.
+    condition     = var.ingress_load_balancer_ip == "" || can(cidrnetmask("${var.ingress_load_balancer_ip}/32"))
+    error_message = "ingress_load_balancer_ip must be an IPv4 address, for example 10.0.2.10."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer_ip == "" || var.ingress_load_balancer == "internal"
+    error_message = "ingress_load_balancer_ip is only used with ingress_load_balancer = \"internal\"."
+  }
+}
+
+variable "ingress_load_balancer_manage_subnet_assignment" {
+  type        = bool
+  description = "With ingress_load_balancer_subnet_id set to a subnet other than the node subnet: whether Terraform grants the cluster identity Network Contributor on that subnet, which carries the subnets/join/action and subnets/read the internal load balancer needs. Set false when the network owner makes that grant; the ingress_load_balancer_subnet_grant output names the role, scope and principal."
+  default     = true
+}
+
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
 
 variable "agic_subnet_address_prefix" {
@@ -1416,4 +1909,33 @@ variable "envoy_gateway_version" {
   type        = string
   description = "Envoy Gateway Helm chart version. Only used when ingress_controller = 'envoy-gateway'."
   default     = "v1.2.0"
+}
+
+variable "envoy_gateway_image_registry" {
+  type        = string
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, so the mirror keeps the source host as the first path segment, the layout LangSmith's images.registry expects. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
+  default     = ""
+
+  validation {
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+  }
+
+  # A version missing from local.envoy_proxy_default_images would leave the
+  # proxy pulling from docker.io.
+  validation {
+    condition     = var.envoy_gateway_image_registry == "" || contains(keys(local.envoy_proxy_default_images), var.envoy_gateway_version)
+    error_message = "envoy_gateway_image_registry needs the Envoy proxy image that Envoy Gateway uses by default, and the module knows it only for envoy_gateway_version v1.2.0. Set envoy_gateway_version = \"v1.2.0\", or leave envoy_gateway_image_registry empty."
+  }
+}
+
+variable "envoy_gateway_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the envoy-gateway-system namespace that the Envoy Gateway controller and proxy pods pull with. Create the namespace and the Secret before the apply that installs Envoy Gateway. Empty (default) pulls without credentials. Requires envoy_gateway_image_registry."
+  default     = ""
+
+  validation {
+    condition     = var.envoy_gateway_image_pull_secret_name == "" || var.envoy_gateway_image_registry != ""
+    error_message = "envoy_gateway_image_pull_secret_name only applies with a mirror. Set envoy_gateway_image_registry, or leave envoy_gateway_image_pull_secret_name empty."
+  }
 }

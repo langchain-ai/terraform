@@ -17,7 +17,10 @@
 #   7b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
 #   7c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
 #   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
-#   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
+#   9. langsmith-values-smithdb-sizing.yaml      — SmithDB tier and replicas, from terraform output (if enable_smithdb = true)
+#  10. langsmith-values-smithdb.yaml             — SmithDB overlay, hand-edited (if enable_smithdb = true)
+#  11. langsmith-values-smithdb-overrides.yaml   — SmithDB storage, identity, metastore, gates (if enable_smithdb = true)
+#  12. langsmith-values-smithdb-migration.yaml   — TaskDB and migration pod count, from make smithdb-migration-job-start (if smithdb_migration_enabled = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
 # Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
@@ -29,10 +32,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-INFRA_DIR="$HELM_DIR/../infra"
-VALUES_DIR="$HELM_DIR/values"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
 
-source "$INFRA_DIR/scripts/_common.sh"
+source "$HELM_DIR/../infra/scripts/_common.sh"
 
 # The Helm release name: RELEASE_NAME from the environment if set, else
 # langsmith_release_name from terraform.tfvars, else langsmith. The chart names
@@ -50,7 +53,7 @@ fi
 NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
-BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
+BASE_VALUES_FILE="$HELM_DIR/values/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
 
 echo ""
@@ -113,11 +116,18 @@ _cluster_name=$(_tf_out aks_cluster_name) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
   exit 1
 }
-_rg_name=$(_tf_out resource_group_name) || _rg_name=""
+_rg_name=$(_tf_out aks_resource_group_name) || {
+  fail "Could not read aks_resource_group_name. Run 'make apply' to record it."
+  exit 1
+}
 
 info "Cluster: ${_cluster_name}"
-az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
-  --overwrite-existing &>/dev/null
+_aks_get_credentials "$_cluster_name" "$_rg_name" >/dev/null || {
+  fail "Could not fetch credentials for cluster '${_cluster_name}'."
+  action "make kubeconfig  (to retry once the error above is fixed)"
+  exit 1
+}
+_aks_kubelogin_convert "$_cluster_name" "$_rg_name"
 info "Active context: $(kubectl config current-context)"
 echo ""
 
@@ -132,6 +142,15 @@ _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _location=$(_parse_tfvar "location") || _location="eastus"
 _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
 _cloudapp_suffix=$(_azure_cloudapp_suffix)
+# ingress_load_balancer = "internal" puts the controller's load balancer on a
+# private IP in the cluster's VNet. Terraform annotates the Services it owns
+# (nginx, self-managed Istio); the EnvoyProxy and the Istio add-on's internal
+# gateway are handled below. Terraform refuses dns_label with "internal".
+_ingress_lb=$(_parse_tfvar "ingress_load_balancer") || _ingress_lb="public"
+_ingress_lb_subnet_id=$(_parse_tfvar "ingress_load_balancer_subnet_id") || _ingress_lb_subnet_id=""
+_ingress_lb_ip=$(_parse_tfvar "ingress_load_balancer_ip") || _ingress_lb_ip=""
+# The subnet annotation takes the subnet's name, not its ID.
+_ingress_lb_subnet="${_ingress_lb_subnet_id##*/}"
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
     nginx)
@@ -165,6 +184,48 @@ fi
 # kubernetes_manifest in Terraform can't create these on fresh deploy (no cluster
 # exists during plan). Applied here instead — idempotent, safe to re-run.
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
+
+# ── Ingress class for ingress_controller = "none" ─────────────────────────
+# No class is set for none, so the chart's Ingress and the HTTP-01 solver's go
+# to the cluster's default IngressClass, unless values-overrides.yaml (or
+# values.yaml) names one. With neither, no controller serves them. Kubernetes
+# also refuses a classless Ingress when more than one class claims the default.
+_byo_ingress_class=""
+if [[ "$_ingress_controller" == "none" ]]; then
+  for _vf in "$OVERRIDES_FILE" "$BASE_VALUES_FILE"; do
+    [[ -f "$_vf" ]] || continue
+    _byo_ingress_class=$(_values_ingress_class "$_vf")
+    [[ -n "$_byo_ingress_class" ]] && { _byo_class_file=$(basename "$_vf"); break; }
+  done
+
+  if [[ -n "$_byo_ingress_class" ]]; then
+    if ! [[ "$_byo_ingress_class" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]]; then
+      fail "ingress.ingressClassName '${_byo_ingress_class}' in ${_byo_class_file} is not a valid IngressClass name."
+      exit 1
+    fi
+    pass "ingress_controller = none: Ingress uses class '${_byo_ingress_class}' from ${_byo_class_file}"
+  elif ! _default_classes=$(kubectl get ingressclass -o jsonpath='{range .items[?(@.metadata.annotations.ingressclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{" "}{end}' 2>/dev/null); then
+    warn "ingress_controller = none: could not list IngressClasses, so the default class is unverified."
+  else
+    read -r -a _default_class_list <<<"$_default_classes"
+    case "${#_default_class_list[@]}" in
+      1)
+        pass "ingress_controller = none: Ingress uses the cluster's default IngressClass '${_default_class_list[0]}'"
+        ;;
+      0)
+        if [[ "$_tls_source" == "letsencrypt" ]]; then
+          fail "ingress_controller = none: the cluster has no default IngressClass, so no controller would serve the Ingress or the Let's Encrypt HTTP-01 challenge. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default."
+          exit 1
+        fi
+        warn "ingress_controller = none: the cluster has no default IngressClass, so no controller will serve the LangSmith Ingress. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default. Port-forwarding to langsmith-frontend works regardless."
+        ;;
+      *)
+        fail "ingress_controller = none: IngressClasses ${_default_classes% } all claim the default, and Kubernetes rejects an Ingress with no class in that case. Set ingress.ingressClassName in values-overrides.yaml, or leave one default."
+        exit 1
+        ;;
+    esac
+  fi
+fi
 
 # With Envoy Gateway, both cert-manager TLS paths issue through its Gateway shim,
 # which Terraform switches on only for the cert-manager it installs.
@@ -206,12 +267,13 @@ spec:
 EOF
     pass "ClusterIssuer letsencrypt-prod configured (solver: gatewayHTTPRoute)"
   else
-    # Map ingress controller to the class cert-manager uses for HTTP-01 solvers
+    # Map ingress controller to the class cert-manager uses for HTTP-01 solvers.
+    # For none, an empty class leaves the solver's Ingress to the default class.
+    # istio-addon and agic never get here: Terraform rejects them with letsencrypt.
     case "$_ingress_controller" in
-      istio|istio-addon) _acme_ingress_class="istio" ;;
-      nginx)             _acme_ingress_class="nginx" ;;
-      agic)              _acme_ingress_class="azure-application-gateway" ;;
-      *)                 _acme_ingress_class="nginx" ;;
+      istio) _acme_ingress_class="istio" ;;
+      nginx) _acme_ingress_class="nginx" ;;
+      *)     _acme_ingress_class="$_byo_ingress_class" ;;
     esac
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
@@ -226,10 +288,9 @@ spec:
       name: letsencrypt-prod-account-key
     solvers:
     - http01:
-        ingress:
-          ingressClassName: ${_acme_ingress_class}
+        ingress: {${_acme_ingress_class:+ingressClassName: ${_acme_ingress_class}}}
 EOF
-    pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class})"
+    pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class:-cluster default})"
   fi
 fi
 
@@ -293,11 +354,19 @@ fi
 # With AKS managed Istio, ingressClassName: istio targets label istio: ingressgateway
 # but the AKS external gateway has label istio: aks-istio-ingressgateway-external.
 # We create explicit Gateway + VirtualService to route port 80/443 correctly.
-if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+# Runs with either hostname source: langsmith_domain alone is the usual setup for
+# dns01 and existing, and without this Gateway the chart's VirtualServices bind to
+# nothing.
+_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+if [[ "$_ingress_controller" == "istio-addon" && ( -n "$_dns_label" || -n "$_langsmith_domain" ) ]]; then
   _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
-  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
   _namespace="$NAMESPACE"
+  # The add-on labels each gateway's Service istio: aks-istio-ingressgateway-
+  # external or -internal; Terraform enables only the internal one when the
+  # load balancer is internal.
+  _istio_gw="external"
+  [[ "$_ingress_lb" == "internal" ]] && _istio_gw="internal"
 
   kubectl apply -f - &>/dev/null <<EOF
 apiVersion: networking.istio.io/v1beta1
@@ -307,7 +376,7 @@ metadata:
   namespace: ${_namespace}
 spec:
   selector:
-    istio: aks-istio-ingressgateway-external
+    istio: aks-istio-ingressgateway-${_istio_gw}
   servers:
   - port:
       number: 80
@@ -328,6 +397,58 @@ EOF
   pass "Istio Gateway created: ${_istio_hostname} (ports 80 + 443)"
 fi
 
+# The Istio add-on creates its internal gateway's Service itself, so the subnet
+# and static IP go on as annotations, which Microsoft lists as supported on that
+# Service ("External or internal ingresses for the Istio service mesh add-on").
+if [[ "$_ingress_controller" == "istio-addon" && "$_ingress_lb" == "internal" ]]; then
+  _istio_int_ann=()
+  [[ -n "$_ingress_lb_subnet" ]] && _istio_int_ann+=("service.beta.kubernetes.io/azure-load-balancer-internal-subnet=${_ingress_lb_subnet}")
+  [[ -n "$_ingress_lb_ip" ]] && _istio_int_ann+=("service.beta.kubernetes.io/azure-load-balancer-ipv4=${_ingress_lb_ip}")
+  if [[ ${#_istio_int_ann[@]} -gt 0 ]]; then
+    if kubectl get svc aks-istio-ingressgateway-internal -n aks-istio-ingress &>/dev/null; then
+      kubectl annotate svc aks-istio-ingressgateway-internal -n aks-istio-ingress \
+        "${_istio_int_ann[@]}" --overwrite >/dev/null
+      pass "Istio internal gateway: ${_istio_int_ann[*]}"
+    else
+      fail "aks-istio-ingressgateway-internal not found in aks-istio-ingress. Run make apply: ingress_load_balancer = \"internal\" enables the add-on's internal gateway."
+      exit 1
+    fi
+  fi
+fi
+
+# ── Your own certificate and CA bundle ─────────────────────────────────────
+# With tls_certificate_source = "existing" nothing issues langsmith-tls, so a
+# missing Secret would leave the site serving the controller's default
+# certificate. Every controller path reads it from the release namespace (both
+# Istio paths copy it to their gateway namespace after the Helm upgrade).
+if [[ "$_tls_source" == "existing" ]]; then
+  _tls_type=$(kubectl get secret langsmith-tls -n "$NAMESPACE" -o jsonpath='{.type}' 2>/dev/null) || _tls_type=""
+  if [[ -z "$_tls_type" ]]; then
+    fail "tls_certificate_source = \"existing\" but Secret langsmith-tls is missing in namespace ${NAMESPACE}. Create it from your certificate (leaf first, then the intermediates) and its key:"
+    echo "      kubectl -n ${NAMESPACE} create secret tls langsmith-tls --cert=fullchain.pem --key=privkey.pem"
+    exit 1
+  elif [[ "$_tls_type" != "kubernetes.io/tls" ]]; then
+    fail "Secret langsmith-tls in ${NAMESPACE} is of type ${_tls_type}, not kubernetes.io/tls. Re-create it with kubectl create secret tls."
+    exit 1
+  fi
+  pass "Secret langsmith-tls (kubernetes.io/tls) found in ${NAMESPACE}"
+fi
+
+_custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
+if [[ -n "$_custom_ca_secret" ]]; then
+  _custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
+  _ca_keys=$(kubectl get secret "$_custom_ca_secret" -n "$NAMESPACE" -o go-template='{{range $k, $v := .data}}{{$k}} {{end}}' 2>/dev/null) || _ca_keys=""
+  if [[ -z "$_ca_keys" ]]; then
+    fail "langsmith_custom_ca_secret_name = \"${_custom_ca_secret}\" but that Secret is missing in namespace ${NAMESPACE}. Create it from your root and intermediate certificates:"
+    echo "      kubectl -n ${NAMESPACE} create secret generic ${_custom_ca_secret} --from-file=${_custom_ca_key}=ca-bundle.pem"
+    exit 1
+  elif [[ " ${_ca_keys} " != *" ${_custom_ca_key} "* ]]; then
+    fail "Secret ${_custom_ca_secret} has no key ${_custom_ca_key} (it has: ${_ca_keys% }). Set langsmith_custom_ca_secret_key, or re-create the Secret."
+    exit 1
+  fi
+  pass "CA bundle ${_custom_ca_secret}/${_custom_ca_key} found in ${NAMESPACE}"
+fi
+
 # ── Preflight checks ──────────────────────────────────────────────────────
 "$SCRIPT_DIR/preflight-check.sh"
 
@@ -335,9 +456,23 @@ fi
 info "Verifying langsmith-config-secret..."
 if ! kubectl get secret langsmith-config-secret -n "$NAMESPACE" &>/dev/null; then
   warn "langsmith-config-secret not found — creating from Key Vault..."
-  bash "$INFRA_DIR/scripts/create-k8s-secrets.sh"
+  bash "$HELM_DIR/../infra/scripts/create-k8s-secrets.sh"
 else
   pass "langsmith-config-secret exists"
+fi
+
+# platform-backend and sandbox-host read sandbox_callback_signing_jwk from that
+# secret, and a secret created before enable_sandboxes lacks it. Re-sync from Key
+# Vault, which fails naming make seed-secrets when the vault lacks it too.
+if _tfvar_is_true "enable_sandboxes"; then
+  # go-template over key names only, so the key never leaves the API server.
+  if ! kubectl get secret langsmith-config-secret -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
+    | grep -qx "sandbox_callback_signing_jwk"; then
+    warn "langsmith-config-secret has no sandbox_callback_signing_jwk — syncing from Key Vault..."
+    bash "$HELM_DIR/../infra/scripts/create-k8s-secrets.sh"
+  fi
+  pass "langsmith-config-secret has sandbox_callback_signing_jwk"
 fi
 
 # ── Ensure langsmith-clickhouse secret exists (external ClickHouse only) ──
@@ -371,6 +506,44 @@ else
   skip "langsmith-clickhouse secret not required (clickhouse_source = in-cluster)"
 fi
 
+# ── Ensure the TaskDB secret exists (SmithDB backfill only) ───────────────
+# make smithdb-migration-job-start writes the migration values file, which names
+# the TaskDB secret: smithdb-taskdb (from Key Vault) for the chart-managed
+# TaskDB, or smithdb-taskdb-external for an external one. The TaskDB and the
+# migration Job read it through secretKeyRef, so a missing secret or key strands
+# both in CreateContainerConfigError.
+_smithdb_migration_file="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
+if _tfvar_is_true "enable_smithdb" && _tfvar_is_true "smithdb_migration_enabled"; then
+  if [[ ! -f "$_smithdb_migration_file" ]]; then
+    fail "smithdb_migration_enabled = true but langsmith-values-smithdb-migration.yaml is missing."
+    action "Run: make smithdb-migration-job-start"
+    exit 1
+  fi
+  if grep -qE '^[[:space:]]+external:' "$_smithdb_migration_file"; then
+    _taskdb_secret="smithdb-taskdb-external"
+    _taskdb_required="smithdb_taskdb_host smithdb_taskdb_database smithdb_taskdb_username smithdb_taskdb_password"
+    _taskdb_fix="Run: make smithdb-migration-job-start"
+  else
+    _taskdb_secret="smithdb-taskdb"
+    _taskdb_required="postgres_password"
+    _taskdb_fix="Run: make seed-secrets && make k8s-secrets"
+  fi
+  info "Verifying $_taskdb_secret secret..."
+  # go-template over key names only — secret values never leave the API server.
+  _taskdb_keys=$(kubectl get secret "$_taskdb_secret" -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _taskdb_keys=""
+  _taskdb_missing=""
+  for _taskdb_key in $_taskdb_required; do
+    grep -qx "$_taskdb_key" <<< "$_taskdb_keys" || _taskdb_missing="${_taskdb_missing} ${_taskdb_key}"
+  done
+  if [[ -n "$_taskdb_missing" ]]; then
+    fail "smithdb_migration_enabled = true but secret $_taskdb_secret in namespace $NAMESPACE is missing, or lacks keys:${_taskdb_missing}"
+    action "$_taskdb_fix"
+    exit 1
+  fi
+  pass "$_taskdb_secret secret exists"
+fi
+
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
 _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
@@ -389,6 +562,7 @@ _enable_llm_gateway=false
 _enable_gateway_pii_redaction=false
 _enable_fleet=false
 _enable_smithdb=false
+_enable_sandboxes=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
@@ -397,6 +571,7 @@ _tfvar_is_true "enable_llm_gateway"   && _enable_llm_gateway=true  || true
 _tfvar_is_true "enable_gateway_pii_redaction" && _enable_gateway_pii_redaction=true || true
 _tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
 _tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
+_tfvar_is_true "enable_sandboxes"      && _enable_sandboxes=true     || true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -416,6 +591,13 @@ fi
 # no fleet database, so the deploy would fail later resolving the missing secret.
 if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
+  exit 1
+fi
+# The overlay carries the sandbox-host identity, so a deploy without it would
+# turn sandboxes off rather than fail.
+if [[ "$_enable_sandboxes" == "true" && ! -f "$VALUES_DIR/langsmith-values-sandboxes.yaml" ]]; then
+  fail "enable_sandboxes = true but langsmith-values-sandboxes.yaml is missing"
+  action "Run: make init-values"
   exit 1
 fi
 
@@ -444,6 +626,7 @@ _addon_gate=(
   "polly:polly:$_enable_polly"
   "llm-gateway:llm_gateway:$_enable_llm_gateway"
   "gateway-pii:gateway_pii_redaction:$_enable_gateway_pii_redaction"
+  "sandboxes:sandboxes:$_enable_sandboxes"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -489,14 +672,47 @@ else
 fi
 
 if [[ "$_enable_smithdb" == "true" ]]; then
+  # The generated sizing file goes first, so the hand-edited overlay can
+  # override it, and the generated overrides go last.
+  _smithdb_sizing="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
-  if [[ ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
+  if [[ ! -f "$_smithdb_sizing" || ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
     fail "enable_smithdb = true but the SmithDB values files are missing — run: make init-values"
     exit 1
   fi
-  VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
-  echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+  VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base" -f "$_smithdb_overrides")
+  echo "  ✔ langsmith-values-smithdb-sizing.yaml + langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+
+  # init-values.sh writes the migration gate into the overrides. A run of
+  # make smithdb-migration-job-end without make init-values leaves it on, and the
+  # chart then fails on the TaskDB password with no hint of the cause.
+  _smithdb_migration_enabled=false
+  _tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true || true
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    fail "langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration, but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled."
+    action "Run: make init-values, then make deploy"
+    exit 1
+  fi
+
+  # Written by make smithdb-migration-job-start; its presence was checked with
+  # the TaskDB secret above. Loaded only while the migration is on.
+  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
+    # The last apply sized the namespace quota for this pod count. A larger
+    # count in the file leaves the extra pods refused by the quota.
+    _file_parallelism=$(awk '/^[[:space:]]*parallelism:/ { print $2; exit }' "$_smithdb_migration_file")
+    _tf_parallelism=$(_tf_out smithdb_migration_parallelism) || _tf_parallelism=""
+    if [[ "${_file_parallelism:-1}" != "$_tf_parallelism" ]]; then
+      fail "langsmith-values-smithdb-migration.yaml has parallelism ${_file_parallelism:-1}, but the last apply sized the namespace quota for ${_tf_parallelism:-an unknown count of} migration pods."
+      action "Set smithdb_migration_parallelism = ${_file_parallelism:-1} in terraform.tfvars, run make apply, then make deploy"
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration_file")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
+  elif [[ -f "$_smithdb_migration_file" ]]; then
+    echo "  ○ langsmith-values-smithdb-migration.yaml (file exists but smithdb_migration_enabled = false — skipped)"
+  fi
 fi
 echo ""
 
@@ -519,12 +735,13 @@ CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 _required_chart_line="0.17"
 
 # These values target chart 0.17, where the SmithDB Azure values first appear.
+# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
 # Refuse any other line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "$_required_chart_line" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
-  echo "       These values require chart ${_required_chart_line} (SmithDB values, engineInsightsAgent)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
+if [[ "$_chart_line" != "$_required_chart_line" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} or 0.18 line." >&2
+  echo "       These values require chart ${_required_chart_line} or 0.18 (SmithDB values, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} or 0.18 patch explicitly:" >&2
   echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
   exit 1
 fi
@@ -612,6 +829,42 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   _eg_service_annotations="{}"
   [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
+  # Internal: the annotations Terraform puts on the nginx and Istio Services,
+  # from its output. It prints a one-line JSON object, which is YAML flow
+  # syntax. dns_label is refused with "internal", so the two never combine.
+  if [[ "$_ingress_lb" == "internal" ]]; then
+    _eg_service_annotations=$(terraform -chdir="$INFRA_DIR" output -json ingress_internal_annotations 2>/dev/null) || _eg_service_annotations=""
+    if [[ "$_eg_service_annotations" != "{"*"azure-load-balancer-internal"*"}" ]]; then
+      fail "ingress_load_balancer = \"internal\" but the ingress_internal_annotations output does not carry it. Run make apply first."
+      exit 1
+    fi
+  fi
+
+  # With envoy_gateway_image_registry, the proxy pods pull from the mirror as
+  # the controller does. _tf_out refuses the "/" and ":" of an image reference,
+  # so that output is read and checked here.
+  _eg_proxy_image=$(terraform -chdir="$INFRA_DIR" output -raw envoy_gateway_proxy_image 2>/dev/null) || _eg_proxy_image=""
+  [[ "$_eg_proxy_image" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]*$ ]] || _eg_proxy_image=""
+  _eg_registry=$(_parse_tfvar "envoy_gateway_image_registry") || _eg_registry=""
+  if [[ -n "$_eg_registry" && -z "$_eg_proxy_image" ]]; then
+    fail "envoy_gateway_image_registry is set, but the envoy_gateway_proxy_image output is empty or not an image reference, so the proxy pods would pull from docker.io. Run terraform apply in ${INFRA_DIR}, then rerun."
+    exit 1
+  fi
+  _eg_pull_secret=$(_tf_out envoy_gateway_image_pull_secret_name) || _eg_pull_secret=""
+  _eg_deployment=""
+  if [[ -n "$_eg_proxy_image" ]]; then
+    info "Envoy proxy image: ${_eg_proxy_image}"
+    _eg_deployment="
+      envoyDeployment:
+        container:
+          image: \"${_eg_proxy_image}\""
+    if [[ -n "$_eg_pull_secret" ]]; then
+      _eg_deployment+="
+        pod:
+          imagePullSecrets:
+          - name: \"${_eg_pull_secret}\""
+    fi
+  fi
 
   kubectl apply -f - >/dev/null <<EOF
 apiVersion: gateway.envoyproxy.io/v1alpha1
@@ -624,7 +877,7 @@ spec:
     type: Kubernetes
     kubernetes:
       envoyService:
-        annotations: ${_eg_service_annotations}
+        annotations: ${_eg_service_annotations}${_eg_deployment}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
@@ -704,12 +957,67 @@ echo ""
 
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain &>/dev/null
-_resolved_chart=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-  | awk '/^version:/{print $2}') || _resolved_chart=""
+_chart_metadata=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
 echo "Chart: $_chart_source  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
+fi
+
+# Chart 0.17 fails the release when images.sandboxHostImage.tag is empty, and a
+# tag pinned in a file lags every chart upgrade. Set it from the appVersion of
+# the chart resolved above, which helm upgrade installs, as the AWS and GCP
+# modules do. The JuiceFS format Job runs the same image.
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d '"')
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: chart $_resolved_chart does not declare an appVersion for the sandbox-host image." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
+  echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
+fi
+
+# sandbox-host runs on the host network, so it calls platform-backend from a node
+# IP. On other engines Terraform admits the node subnet by ipBlock, which Cilium
+# on AKS never matches against a node IP, so on Cilium this policy admits the
+# nodes by entity instead. It is a CRD object, applied here for the same reason
+# as the ClusterIssuer. Applied before the release so sandbox-host's first call,
+# the default snapshot build, gets through.
+_policy_engine=$(_tf_out network_policy_engine) || _policy_engine=""
+if [[ "$_policy_engine" == "cilium" && "$_enable_sandboxes" == "true" ]]; then
+  if ! kubectl apply -f - >/dev/null <<EOF
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-nodes-to-platform-backend
+  namespace: ${NAMESPACE}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: ${CHART_FULLNAME}-platform-backend
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "1986"
+              protocol: TCP
+EOF
+  then
+    fail "Could not apply the CiliumNetworkPolicy that admits sandbox-host to platform-backend"
+    exit 1
+  fi
+  pass "CiliumNetworkPolicy allow-nodes-to-platform-backend applied (sandbox-host to platform-backend :1986)"
+elif [[ "$_policy_engine" == "cilium" ]]; then
+  if ! kubectl delete ciliumnetworkpolicy allow-nodes-to-platform-backend -n "$NAMESPACE" --ignore-not-found >/dev/null; then
+    warn "Could not delete CiliumNetworkPolicy allow-nodes-to-platform-backend; the nodes can still reach platform-backend :1986"
+  fi
+elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" ]]; then
+  warn "Terraform has no network_policy_engine output yet. On a Cilium cluster, sandbox-host cannot reach platform-backend until it does."
+  action "Run: make apply, then make deploy"
 fi
 
 # --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
@@ -768,6 +1076,58 @@ for dep in "${_core_deployments[@]}"; do
     _all_ready=false
   fi
 done
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  # The format Job name carries a hash, so select it by label. It reaches Blob
+  # through the sandbox-host Workload Identity. Helm does not run a failed Job
+  # again when the manifest is unchanged, so a failed Job must be deleted before
+  # the next deploy.
+  _format_selector="app.kubernetes.io/instance=${RELEASE_NAME},app.kubernetes.io/component=juicefs-format"
+  _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+    -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  _format_waited=true
+  if [[ "$_format_failed" != *True* ]] \
+    && ! kubectl wait --for=condition=complete job -n "$NAMESPACE" -l "$_format_selector" --timeout=5m 2>/dev/null; then
+    _format_waited=false
+    _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  fi
+  if [[ "$_format_failed" == *True* ]]; then
+    _format_reason=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].reason}' 2>/dev/null) || _format_reason=""
+    warn "The JuiceFS format Job failed (${_format_reason:-no reason})"
+    case "$_format_reason" in
+      *DeadlineExceeded*)
+        info "It did not finish in 300 s. Look for FailedScheduling or a slow image pull:"
+        info "kubectl describe job -n $NAMESPACE -l $_format_selector"
+        ;;
+      *)
+        info "A 403 from Blob means the identity label or federated credential is wrong (run: make apply, make init-values):"
+        info "kubectl logs -n $NAMESPACE -l $_format_selector"
+        ;;
+    esac
+    action "kubectl delete job -n $NAMESPACE -l $_format_selector && make deploy"
+    _all_ready=false
+  elif ! kubectl get job -n "$NAMESPACE" -l "$_format_selector" -o name 2>/dev/null | grep -q .; then
+    warn "No JuiceFS format Job found for release ${RELEASE_NAME}"
+    _all_ready=false
+  elif [[ "$_format_waited" == "false" ]]; then
+    warn "The JuiceFS format Job is not complete within 5m"
+    info "kubectl get jobs -n $NAMESPACE -l $_format_selector"
+    _all_ready=false
+  fi
+
+  # rollout status exits 0 when nothing matches, so check first.
+  _sandbox_host_selector="app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host"
+  if ! kubectl get deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" -o name 2>/dev/null | grep -q .; then
+    warn "No sandbox-host Deployment found for release ${RELEASE_NAME}"
+    _all_ready=false
+  elif ! kubectl rollout status deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" --timeout=10m 2>/dev/null; then
+    warn "sandbox-host not ready within 10m (the sandboxhost pool may still be scaling up from 0)"
+    info "kubectl logs -n $NAMESPACE -l $_sandbox_host_selector -c sandbox-host --tail=50"
+    _all_ready=false
+  fi
+fi
 
 if [[ "$_all_ready" == "true" ]]; then
   pass "All core deployments ready"
@@ -830,7 +1190,8 @@ fi
 # For self-managed Istio, the secret must exist in istio-system namespace
 # (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
 # Without this sync, the gateway returns "no peer certificate available".
-if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; then
+# Every TLS source but "none" leaves langsmith-tls in the release namespace.
+if [[ "$_ingress_controller" == "istio" && "$_tls_source" != "none" ]]; then
   _istio_ns="$NAMESPACE"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
@@ -861,7 +1222,8 @@ fi
 # After cert-manager issues the TLS cert, copy it to aks-istio-ingress namespace
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
 # The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
-if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+# Same hostname gate as the Gateway above; skipped for "none", which has no Secret.
+if [[ "$_ingress_controller" == "istio-addon" && ( -n "$_dns_label" || -n "$_langsmith_domain" ) && "$_tls_source" != "none" ]]; then
   _namespace="$NAMESPACE"
 
   info "Waiting for TLS certificate langsmith-tls..."

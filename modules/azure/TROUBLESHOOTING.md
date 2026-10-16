@@ -396,7 +396,7 @@ Error: a resource with the ID "https://langsmith-kv-<id>.vault.azure.net/secrets
 already exists - to be managed via Terraform this resource needs to be imported into the State.
 ```
 
-**Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The seven LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
+**Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The eight LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
 
 Seeding is the usual way in: `make seed-secrets` writes both of these too, so running it against a deployment that has not applied yet leaves Terraform to collide with what the script wrote. Setting `keyvault_manage_secrets = false` is the other resolution, and it makes the collision impossible rather than importing past it.
 
@@ -482,7 +482,7 @@ keyvault_manage_terraform_admin_assignment = false
 keyvault_manage_secrets                    = false
 ```
 
-Apply then touches only the vault's control plane, and `make seed-secrets` writes all nine secrets afterwards under your own credentials. This is the one route that needs no Key Vault role on the deployer, inherited or otherwise. Both flags are required together: the first is what stops the request the condition rejects, and the second is what makes the role that request was asking for unnecessary. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+Apply then touches only the vault's control plane, and `make seed-secrets` writes all ten secrets afterwards under your own credentials. This is the one route that needs no Key Vault role on the deployer, inherited or otherwise. Both flags are required together: the first is what stops the request the condition rejects, and the second is what makes the role that request was asking for unnecessary. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
 
 It does not reduce the deployment's need for `roleAssignments/write`. The other seven assignments still run, so a subscription that delegates none of them fails at `Storage Blob Data Contributor` in the storage module instead.
 
@@ -500,7 +500,7 @@ Failure responding to request: StatusCode=403 -- Original Error: autorest/azure:
 Service returned an error. Status=403 Code="Forbidden"
 ```
 
-`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes all nine secrets over the data plane too.
+`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes all ten secrets over the data plane too.
 
 **Cause:** one of three, and the 403 looks the same for all of them. Read the message body: a network denial names `ForbiddenByFirewall` or client address, an authorization denial names the caller and action.
 
@@ -535,7 +535,7 @@ az keyvault secret list --vault-name <vault> --query "length(@)"
 keyvault_manage_secrets = false
 ```
 
-Terraform then writes no secrets, so neither a missing grant nor an unpropagated one can stop an apply. `make seed-secrets` writes all nine afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. This does nothing for cause 1: the script reaches the same data plane from the same host, so a firewall that denies the apply host denies the script too, and the allowlisting above is still the fix. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+Terraform then writes no secrets, so neither a missing grant nor an unpropagated one can stop an apply. `make seed-secrets` writes all ten afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. This does nothing for cause 1: the script reaches the same data plane from the same host, so a firewall that denies the apply host denies the script too, and the allowlisting above is still the fix. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
 
 **Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
 
@@ -605,13 +605,12 @@ kubectl get challenge -n langsmith
 
 1. **Wrong gateway label.** Kubernetes Ingress with `ingressClassName: istio` targets pods with label `istio: ingressgateway`. The AKS managed external gateway uses label `istio: aks-istio-ingressgateway-external`. Istio never creates Envoy listeners → gateway pod has no routes → all traffic is dropped.
 
-2. **ClusterIssuer created with `class: nginx`.** The ACME HTTP-01 solver ingress gets class `nginx`, not `istio` → cert-manager solver is never routed through the istio gateway.
+2. **HTTP-01 cannot work here.** The addon registers no IngressClass, so the ACME solver's Ingress is never routed and the challenge stays `pending`. Terraform now rejects `tls_certificate_source = "letsencrypt"` with `istio-addon`; use `dns01` with `langsmith_domain`, `existing`, or `none` (see [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md)).
 
 3. **TLS secret in wrong namespace.** Istio SDS reads the `credentialName` secret from the **gateway pod namespace** (`aks-istio-ingress`), not the app namespace (`langsmith`). TLS handshake fails even after the cert is issued.
 
-**Fix — `make deploy` handles all three automatically** (current version):
+**Fix:** switch TLS as in item 2, then run `make deploy`, which handles items 1 and 3:
 - Creates a `Gateway` resource targeting `istio: aks-istio-ingressgateway-external` on ports 80 and 443
-- Applies `ClusterIssuer` with `ingressClassName: istio`
 - Waits for cert-manager to issue the cert, then syncs `langsmith-tls` to `aks-istio-ingress`
 - Creates a `VirtualService` routing traffic to the LangSmith frontend
 
@@ -646,13 +645,7 @@ spec:
     - "langsmith-dz.eastus.cloudapp.azure.com"
 EOF
 
-# 2. Fix the ClusterIssuer (patch solver class from nginx → istio)
-kubectl patch clusterissuer letsencrypt-prod --type=json \
-  -p='[{"op":"replace","path":"/spec/acme/solvers/0/http01/ingress/ingressClassName","value":"istio"}]'
-# Then delete the stuck challenge to force retry:
-kubectl delete challenge -n langsmith --all
-
-# 3. Once the cert is issued, sync the secret to the gateway namespace
+# 2. Once the cert is issued, sync the secret to the gateway namespace
 kubectl get secret langsmith-tls -n langsmith -o json | \
   python3 -c "
 import sys, json
@@ -664,7 +657,7 @@ s['metadata']['annotations'] = {}
 print(json.dumps(s))
 " | kubectl apply -f -
 
-# 4. Create the VirtualService
+# 3. Create the VirtualService
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -906,7 +899,7 @@ config:
   deployment:
     enabled: true
     url: "https://langsmith-demo.eastus.cloudapp.azure.com"   # must include https://
-    tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt or dns01
+    tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt, dns01 or existing
 ```
 
 ---
