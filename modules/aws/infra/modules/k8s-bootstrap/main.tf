@@ -694,10 +694,8 @@ resource "terraform_data" "istio_gatewayclass_cleanup" {
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete gatewayclass istio istio-remote --ignore-not-found=true 2>/dev/null || true
     EOT
   }

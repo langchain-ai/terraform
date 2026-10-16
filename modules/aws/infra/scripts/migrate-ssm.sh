@@ -113,19 +113,19 @@ while IFS=$'\t' read -r old_name old_value; do
 
   if [[ -n "$existing" && "$existing" == "$old_value" ]]; then
     printf "  %-42s  %s\n" "$key_name" "$(_green "already at target (identical)")"
-    ((skipped++))
+    skipped=$((skipped + 1))
     continue
   fi
 
   if [[ -n "$existing" && "$existing" != "$old_value" ]]; then
     printf "  %-42s  %s\n" "$key_name" "$(_yellow "EXISTS at target with DIFFERENT value — skipping")"
-    ((skipped++))
+    skipped=$((skipped + 1))
     continue
   fi
 
   if $DRY_RUN; then
     printf "  %-42s  %s\n" "$key_name" "would copy → $new_name"
-    ((copied++))
+    copied=$((copied + 1))
     continue
   fi
 
@@ -136,9 +136,9 @@ while IFS=$'\t' read -r old_name old_value; do
       --type SecureString \
       ${_ssm_key_args[@]+"${_ssm_key_args[@]}"} \
       --overwrite \
-      --output none 2>/dev/null; then
+      --output text >/dev/null 2>&1; then
     printf "  %-42s  %s\n" "$key_name" "$(_green "copied") → $new_name"
-    ((copied++))
+    copied=$((copied + 1))
 
     if $DELETE_OLD; then
       aws ssm delete-parameter --region "$_region" --name "$old_name" 2>/dev/null \
@@ -147,7 +147,7 @@ while IFS=$'\t' read -r old_name old_value; do
     fi
   else
     printf "  %-42s  %s\n" "$key_name" "$(_red "FAILED")"
-    ((failed++))
+    failed=$((failed + 1))
   fi
 done <<< "$old_params"
 
@@ -158,7 +158,7 @@ if $DRY_RUN; then
   echo "Run without --dry-run to execute."
 else
   echo "Done: $copied copied, $skipped skipped, $failed failed."
-  if [[ $copied -gt 0 && ! $DELETE_OLD ]]; then
+  if [[ $copied -gt 0 ]] && ! $DELETE_OLD; then
     echo ""
     echo "Old parameters are still in place. To clean up later:"
     echo "  $0 --old-prefix $OLD_PREFIX --delete-old"
