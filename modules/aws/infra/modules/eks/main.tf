@@ -16,19 +16,28 @@ locals {
   vpc_cni_tagged_config = merge(local.user_vpc_cni_config, {
     env = merge(try(local.user_vpc_cni_config.env, {}), { ADDITIONAL_ENI_TAGS = jsonencode(var.tags) })
   })
+  # This module manages vpc-cni itself unless eks_addons already lists it outside
+  # custom networking, where the Blueprints add-on keeps it at its existing
+  # state address. Otherwise EKS's self-managed CNI would create untagged ENIs.
+  module_vpc_cni = local.custom_networking || !contains(keys(var.eks_addons), "vpc-cni")
   vpc_cni_addon = merge(
     { for k, v in local.user_vpc_cni : k => v if !contains(["configuration_values", "resolve_conflicts"], k) },
     can(local.user_vpc_cni.resolve_conflicts) ? {
       resolve_conflicts_on_create = local.user_vpc_cni.resolve_conflicts
       resolve_conflicts_on_update = local.user_vpc_cni.resolve_conflicts
     } : {},
+    # Outside custom networking this add-on takes over the CNI EKS installed on
+    # an existing cluster. NONE makes that fail with EKS's conflict error instead
+    # of reverting settings someone changed on aws-node by hand, and the latest
+    # version for the cluster can't be older than the one EKS installed.
+    { for k, v in { most_recent = true, resolve_conflicts_on_create = "NONE" } : k => v if !local.custom_networking },
     {
       # Create the add-on without waiting for compute. Node groups wait only on
       # dataplane_wait_duration, not on this add-on, so that wait is what gives
       # the CNI time to be configured before nodes join. Nodes that joined
       # without it keep pod IPs in the node subnets until they are replaced.
       before_compute = true
-      configuration_values = jsonencode(merge(local.vpc_cni_tagged_config, {
+      configuration_values = !local.custom_networking ? jsonencode(local.vpc_cni_tagged_config) : jsonencode(merge(local.vpc_cni_tagged_config, {
         env = merge(local.vpc_cni_tagged_config.env, {
           AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG = "true"
           ENI_CONFIG_LABEL_DEF               = "topology.kubernetes.io/zone"
@@ -44,6 +53,10 @@ locals {
       }))
     },
   )
+  # 30s is the upstream default. Waiting longer lets the vpc-cni add-on become
+  # active before the first nodes join, so their first pod ENIs are configured
+  # and tagged. Changing it on an existing cluster updates only the time_sleep.
+  dataplane_wait_duration = local.module_vpc_cni ? "2m" : "30s"
 
   # Filters and inner for expressions rather than conditionals: the two branches
   # of a conditional are objects with different attributes, and differently
@@ -89,10 +102,8 @@ module "eks" {
   # AWS CLI or console) and the state already reflects the new values.
   eks_managed_node_groups = local.eks_managed_node_groups
 
-  cluster_addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
-  # 30s is the upstream default. Custom networking waits longer so the vpc-cni
-  # add-on is active before the first nodes join.
-  dataplane_wait_duration = local.custom_networking ? "2m" : "30s"
+  cluster_addons          = local.module_vpc_cni ? { vpc-cni = local.vpc_cni_addon } : {}
+  dataplane_wait_duration = local.dataplane_wait_duration
 
   tags = var.tags
 }

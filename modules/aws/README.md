@@ -276,8 +276,6 @@ Terraform applies the tag set to its own resources through the provider's `defau
 | VPC CNI | Pod ENIs | Add-on `ADDITIONAL_ENI_TAGS` |
 | RDS | Automated and final snapshots | `copy_tags_to_snapshot` |
 
-The VPC CNI row applies only where this module manages the add-on: under custom networking, or when `eks_addons` lists `vpc-cni`. Otherwise EKS installs the CNI itself and the ENIs it adds for pod IPs carry no tags. If an SCP requires tags on `ec2:CreateNetworkInterface`, add `"vpc-cni" = { most_recent = true }` to `eks_addons`.
-
 EKS creates each managed node group's Auto Scaling group with only its own `eks:*` tags. It does so through a service-linked role, which SCPs do not restrict, so the create succeeds, but a tag policy compliance report lists the group.
 
 ---

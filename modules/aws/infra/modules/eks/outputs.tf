@@ -62,6 +62,17 @@ output "controller_tag_inputs" {
   value = {
     ebs_csi_configuration_values    = aws_eks_addon.ebs-csi.configuration_values
     load_balancer_controller_values = local.load_balancer_controller_values
-    vpc_cni_configuration_values    = local.custom_networking ? local.vpc_cni_addon.configuration_values : try(local.blueprints_eks_addons["vpc-cni"].configuration_values, null)
+    vpc_cni_configuration_values    = local.module_vpc_cni ? local.vpc_cni_addon.configuration_values : local.blueprints_eks_addons["vpc-cni"].configuration_values
+  }
+}
+
+output "vpc_cni_inputs" {
+  description = "Which module owns the vpc-cni add-on, its settings when this module owns it, and the node-group wait that follows it. Plan tests assert on this because test assertions cannot reach resources inside nested modules."
+  value = {
+    module_managed          = local.module_vpc_cni
+    blueprints_managed      = contains(keys(local.blueprints_eks_addons), "vpc-cni")
+    most_recent             = local.module_vpc_cni ? try(local.vpc_cni_addon.most_recent, null) : null
+    resolve_on_create       = local.module_vpc_cni ? try(local.vpc_cni_addon.resolve_conflicts_on_create, null) : null
+    dataplane_wait_duration = local.dataplane_wait_duration
   }
 }
