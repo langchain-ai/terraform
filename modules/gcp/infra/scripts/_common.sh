@@ -51,11 +51,19 @@ _tfvar_is_true() {
 # rejects it anyway and gcloud would fail the whole create. Keep identical to
 # the copy in setup-env.sh, apart from the tfvars path.
 _secret_labels() {
-  local _owner _cost_center
-  _owner=$(_parse_tfvar "owner")
-  _owner="${_owner:-${TF_VAR_owner:-platform-team}}"
-  _cost_center=$(_parse_tfvar "cost_center")
-  _cost_center="${_cost_center:-${TF_VAR_cost_center:-}}"
+  local _tfvars="$INFRA_DIR/terraform.tfvars" _owner _cost_center
+  # terraform.tfvars, then TF_VAR_*, then the variables.tf default, as Terraform
+  # resolves them. A key set to "" still wins, and omits the label.
+  if grep -Eq '^[[:space:]]*owner[[:space:]]*=' "$_tfvars" 2>/dev/null; then
+    _owner=$(_parse_tfvar "owner")
+  else
+    _owner="${TF_VAR_owner-platform-team}"
+  fi
+  if grep -Eq '^[[:space:]]*cost_center[[:space:]]*=' "$_tfvars" 2>/dev/null; then
+    _cost_center=$(_parse_tfvar "cost_center")
+  else
+    _cost_center="${TF_VAR_cost_center-}"
+  fi
   {
     printf '%s\n' "$1" | tr ',' '\n'
     [[ -n "$_owner" ]] && printf 'owner=%s\n' "$_owner"
@@ -72,7 +80,7 @@ _secret_labels() {
         }
         if (end) exit
       }
-    ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null
+    ' "$_tfvars" 2>/dev/null
   } | awk -F= '
     NF == 0 { next }
     NF != 2 || $1 !~ /^[a-z]([a-z0-9_-]*[a-z0-9])?$/ || length($1) > 63 || $2 !~ /^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/ || length($2) > 63 {
