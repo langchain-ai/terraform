@@ -38,5 +38,8 @@ Create these resources, then set `allow_iam_management_permissions = false`
 in the [customer provisioning-role module](../langsmith-byoc-role/README.md).
 At time of data plane creation, toggle off IAM role creation.
 
+Engine: the shared workload role includes native Bedrock inference and Mantle
+access, and trusts Engine service accounts. Engine remains opt-in per data plane.
+
 The outputs expose the shared role names and ARNs, Karpenter instance profile
 name, and Karpenter controller policy ARN.

@@ -161,7 +161,16 @@ locals {
           "arn:${local.partition}:ecr:${region}:${local.artifact_account_id}:repository/byoc-smithbox-*"
         ]
       }
-    ], local.migration_source_blob_statements)
+      ], [{
+        Sid    = "EngineBedrockInference"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+        Resource = [
+          "arn:${local.partition}:bedrock:*::foundation-model/*",
+          "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/*",
+          "arn:${local.partition}:bedrock:*:${local.account_id}:application-inference-profile/*"
+        ]
+    }], local.migration_source_blob_statements)
     postgres-setup-iam-role = local.setup_statements["postgres-setup-iam-role"]
     smithdb-setup-iam-role  = local.setup_statements["smithdb-setup-iam-role"]
     smithdb-iam-role = concat(local.s3_statements["smithdb-iam-role"], [
