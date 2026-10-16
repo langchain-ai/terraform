@@ -343,3 +343,8 @@ output "aks_kubeconfig_public_fqdn" {
   description = "true when az aks get-credentials needs --public-fqdn: a private cluster with no private DNS zone, from aks_private_dns_zone_id = \"None\" or, when attaching, from the cluster. The helm scripts read it."
   value       = module.aks.api_server_public_fqdn == true
 }
+
+output "postgres_high_availability_mode" {
+  description = "The PostgreSQL high availability mode the module configures (ZoneRedundant or SameZone), null when HA is off or postgres_source is not external."
+  value       = var.postgres_source == "external" ? module.postgres[0].high_availability_mode : null
+}
