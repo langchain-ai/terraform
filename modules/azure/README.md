@@ -1597,7 +1597,7 @@ decides what the cluster can reach, and nothing works until it allows:
   Artifactory does, takes `langsmith_image_registry_keeps_source_host = false`:
   `init-values` then leaves `images.registry` empty and writes
   `images.<name>Image.repository` as `<registry>/<path>` for every image of
-  the 0.16 chart line (`<registry>/langchain/langsmith-backend`, and
+  the 0.17 and 0.18 chart lines (`<registry>/langchain/langsmith-backend`, and
   `<registry>/presidio-analyzer` and
   `<registry>/sig-storage/csi-node-driver-registrar` for the two from
   `mcr.microsoft.com` and `registry.k8s.io`, which a group repository that

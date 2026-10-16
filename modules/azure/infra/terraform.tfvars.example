@@ -232,7 +232,7 @@ ingress_controller = "envoy-gateway"
 # in values-overrides.yaml (<registry>/docker.io/langchain/...). A proxy repository
 # that serves Docker Hub's paths directly (<registry>/langchain/...) takes
 # langsmith_image_registry_keeps_source_host = false: init-values.sh then writes a
-# repository per image for the 0.16 chart line, and deploy.sh stops on a chart
+# repository per image for the 0.17 and 0.18 chart lines, and deploy.sh stops on a chart
 # image the module does not know. The pull Secret above is written as
 # images.imagePullSecrets as well. All three are stamped into values-overrides.yaml,
 # so deploy.sh stops if one changed since make init-values.
