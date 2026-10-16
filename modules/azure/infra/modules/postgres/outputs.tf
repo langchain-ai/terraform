@@ -53,3 +53,8 @@ output "identity_ids" {
   description = "User-assigned identities assigned to the server for its customer-managed keys; empty under the service-managed key."
   value       = try(azurerm_postgresql_flexible_server.db.identity[0].identity_ids, toset([]))
 }
+
+output "high_availability_mode" {
+  description = "The high availability mode the server is configured with (ZoneRedundant or SameZone), null when HA is off."
+  value       = one(azurerm_postgresql_flexible_server.db.high_availability[*].mode)
+}
