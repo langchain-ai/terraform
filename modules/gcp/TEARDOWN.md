@@ -241,6 +241,7 @@ make destroy
 Terraform destroys in dependency order:
 - The Envoy Gateway `Gateway`, before the Envoy Gateway release and the cluster (only when `install_ingress = true` and `ingress_type = "envoy"`). The step waits up to 5 minutes for the LoadBalancer Service to go, so that GKE deletes the load balancer while the cluster exists. When the cluster is not reachable, the step does nothing.
 - The GKE `Gateway` (only when `install_ingress = true` and `ingress_type = "gke"`), before its static IP and the cluster. The step waits up to 5 minutes for the controller to remove the load balancer. When the cluster is not reachable, the step does nothing.
+- The HTTP-to-HTTPS redirect `HTTPRoute` (only when `install_ingress = true`, `ingress_type` is `"gke"` or `"envoy"`, and `tls_certificate_source` is not `"none"`), before the cluster. When the cluster is not reachable, the step does nothing.
 - k8s-bootstrap (KEDA, cert-manager Helm releases)
 - Cloud SQL PostgreSQL instance
 - SmithDB metastore Cloud SQL instance and its GCS bucket (only when `enable_smithdb = true`)

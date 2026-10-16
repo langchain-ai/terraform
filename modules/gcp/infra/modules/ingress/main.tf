@@ -633,12 +633,13 @@ resource "null_resource" "delete_gke_gateway_on_destroy" {
 locals {
   https_redirect_enabled = local.tls_enabled && contains(["envoy", "gke"], var.ingress_type)
   gateway_namespace      = var.ingress_type == "gke" ? var.langsmith_namespace : "envoy-gateway-system"
+  https_redirect_name    = "${var.gateway_name}-https-redirect"
 
   https_redirect_yaml = local.https_redirect_enabled ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
     kind       = "HTTPRoute"
     metadata = {
-      name      = "${var.gateway_name}-https-redirect"
+      name      = local.https_redirect_name
       namespace = local.gateway_namespace
     }
     spec = merge({
@@ -692,6 +693,57 @@ resource "null_resource" "apply_https_redirect" {
   }
 
   depends_on = [null_resource.apply_gateway, null_resource.apply_gke_gateway, local_file.https_redirect]
+}
+
+# kubectl applied the route, so Terraform does not delete it from the cluster
+# when apply_https_redirect leaves the plan. A route left after TLS is turned off
+# still answers every request on the http listener with a 301 to HTTPS, which no
+# longer has a listener. This step deletes the route when TLS is turned off, on
+# destroy, and when the route name or namespace changes (a new gateway_name, or
+# a move between envoy and gke).
+#
+# It is not on apply_https_redirect for the same reason as the Gateway steps: a
+# route change replaces that resource and would delete the route on each edit.
+# A destroy provisioner can read only self, so the triggers hold the cluster and
+# the route.
+resource "null_resource" "delete_https_redirect_on_destroy" {
+  count = local.https_redirect_enabled ? 1 : 0
+
+  triggers = {
+    project_id   = var.project_id
+    region       = var.region
+    cluster_name = var.cluster_name
+    route_name   = local.https_redirect_name
+    namespace    = local.gateway_namespace
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    on_failure = continue
+    environment = {
+      LS_CLUSTER_NAME = self.triggers.cluster_name
+      LS_REGION       = self.triggers.region
+      LS_PROJECT_ID   = self.triggers.project_id
+      LS_ROUTE_NAME   = self.triggers.route_name
+      LS_NAMESPACE    = self.triggers.namespace
+    }
+    command = <<-EOT
+      KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+      export KUBECONFIG
+      trap 'rm -f "$KUBECONFIG"' EXIT
+      if ! gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+        --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet; then
+        echo "Cluster $LS_CLUSTER_NAME is not reachable. Skipping the redirect route delete."
+        exit 0
+      fi
+      if ! kubectl delete httproute "$LS_ROUTE_NAME" -n "$LS_NAMESPACE" \
+        --ignore-not-found --timeout=120s; then
+        echo "WARNING: the redirect route $LS_ROUTE_NAME is still present. See TLS.md."
+      fi
+    EOT
+  }
+
+  depends_on = [null_resource.apply_https_redirect]
 }
 
 #------------------------------------------------------------------------------

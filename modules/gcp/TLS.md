@@ -158,6 +158,17 @@ request with a 301 to the same URL over HTTPS. `make init-values` sets
 `gateway.sectionName: "https"` so the LangSmith HTTPRoute attaches only to the
 HTTPS listener.
 
+When you turn TLS off (`tls_certificate_source = "none"`), `make apply` deletes
+the redirect route and the HTTPS listener. Then run `make init-values` and
+`make deploy`, so the LangSmith HTTPRoute attaches to the `http` listener again.
+Until then, the `http` listener has no LangSmith route. If the apply prints
+`WARNING: the redirect route ... is still present`, delete the route yourself:
+
+```bash
+kubectl -n langsmith delete httproute <gateway>-https-redirect             # ingress_type = "gke"
+kubectl -n envoy-gateway-system delete httproute <gateway>-https-redirect  # ingress_type = "envoy"
+```
+
 The chart does not pass a section name to the Deployments operator, so the
 HTTPRoutes it creates for LangSmith Deployments attach to both listeners. A route
 with a more specific match than the redirect's `/` prefix still answers plain
