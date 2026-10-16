@@ -448,7 +448,7 @@ locals {
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
-  # Customize via the environment/owner/cost_center variables.
+  # Customize via the environment/owner/cost_center/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
   common_tags = merge(
@@ -458,7 +458,8 @@ locals {
       managed_by  = "terraform"
     },
     var.owner != "" ? { owner = var.owner } : {},
-    var.cost_center != "" ? { cost_center = var.cost_center } : {}
+    var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    var.tags
   )
 }
 
@@ -2387,6 +2388,7 @@ module "k8s_bootstrap" {
   smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
+  tags                             = local.common_tags
 
   # SmithDB's pods on top of the base namespace quota. Zero when disabled.
   resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu

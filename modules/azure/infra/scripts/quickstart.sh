@@ -325,7 +325,7 @@ _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID AZURE_ENVIRONMENT NAME_PRE
 STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
 RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
 CREATE_KEYVAULT EXISTING_KEYVAULT_NAME CREATE_RESOURCE_GROUP EXISTING_RESOURCE_GROUP_NAME
-ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
+ENVIRONMENT COST_CENTER EXTRA_TAGS TAGS_KEPT CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
 NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INGRESS_CONTROLLER
@@ -396,6 +396,58 @@ _tfvar_bare() {
 # the writer carries it in (aks_subnet_address_prefix = ["10.0.0.0/19"]).
 _tfvar_line() {
   sed -n "s/^[[:space:]]*\($1[[:space:]]*=[[:space:]]*\[.*\]\)[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Read the tags map back in the key=value,key=value form the prompt takes, on one
+# line or several. Returns 1 for a map it cannot read exactly (a comment, a comma
+# inside a value), so the caller keeps the assignment as written instead.
+_tfvar_tags() {
+  local body item out="" re='^[[:space:]]*"?([^"=]*[^"=[:space:]])"?[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*$'
+  local -a items
+  body=$(awk '!open && /^[[:space:]]*tags[[:space:]]*=/ { open = 1; sub(/^[^=]*=[[:space:]]*/, "") }
+              open { print; if (index($0, "}")) exit }' "$OUTPUT" 2>/dev/null | tr '\n' ',')
+  [[ -n "$body" ]] || return 0
+  [[ "$body" == "{"*"}"* && "$body" != *"#"* && "$body" != *"//"* ]] || return 1
+  body="${body#\{}"
+  body="${body%\}*}"
+  IFS=',' read -ra items <<< "$body"
+  for item in ${items[@]+"${items[@]}"}; do
+    [[ -z "${item//[[:space:]]/}" ]] && continue
+    [[ "$item" =~ $re ]] || return 1
+    out="${out}${out:+,}${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+  done
+  printf '%s' "$out"
+}
+
+# Whether a tags answer is comma-separated key=value pairs with distinct keys
+# that _tags_hcl can write and _tfvar_tags can read back. Blank means none.
+_valid_tags() {
+  local item key seen=","
+  local -a items
+  IFS=',' read -ra items <<< "$1"
+  for item in ${items[@]+"${items[@]}"}; do
+    [[ -z "${item//[[:space:]]/}" ]] && continue
+    [[ "$item" == *=* && "$item" != *'"'* && "$item" != *'#'* && "$item" != *'%{'* ]] || return 1
+    key=$(printf '%s' "${item%%=*}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+    # Azure tag names are case-insensitive, so Team and team are one tag.
+    [[ -n "$key" && "$seen" != *",$key,"* ]] || return 1
+    seen="${seen}${key},"
+  done
+}
+
+# Render a tags answer as a one-line HCL map: team=platform,product=langsmith
+# becomes { "team" = "platform", "product" = "langsmith" }.
+_tags_hcl() {
+  local item key val out=""
+  local -a items
+  IFS=',' read -ra items <<< "$1"
+  for item in ${items[@]+"${items[@]}"}; do
+    [[ -z "${item//[[:space:]]/}" ]] && continue
+    key=$(printf '%s' "${item%%=*}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    val=$(printf '%s' "${item#*=}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    out="${out}${out:+, }\"${key}\" = \"${val}\""
+  done
+  printf '{ %s }' "$out"
 }
 
 # Whether a key is assigned at all: _tfvar returns "" for both an absent key and
@@ -500,6 +552,13 @@ _load_tfvars() {
   # The generated file tells operators to edit the feature flags by hand. Reading
   # them back is what makes that work: the writer emits all four every time, so
   # an unloaded flag is written false and turns off a deployed pass.
+  # A map the parser cannot read exactly stays in the file as written: the
+  # prompt is skipped and the rewrite carries the line over like an unknown key.
+  if _TF_VAL=$(_tfvar_tags); then
+    EXTRA_TAGS="$_TF_VAL"
+  else
+    TAGS_KEPT="true"
+  fi
   _TF_VAL=$(_parse_tfvar enable_deployments)   && ENABLE_DEPLOYMENTS="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar enable_agent_builder) && ENABLE_AGENT_BUILDER="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar enable_insights)      && ENABLE_INSIGHTS="$_TF_VAL"
@@ -711,8 +770,10 @@ EXISTING_RESOURCE_GROUP_NAME=""
 OWNER=""
 ENVIRONMENT=""
 COST_CENTER=""
+EXTRA_TAGS=""
+TAGS_KEPT="false"
 
-# Quick setup passes "quick" to skip the three tag prompts.
+# Quick setup passes "quick" to skip the tag prompts.
 _run_section_2() {
   local quick="${1:-}"
   _section "2. Subscription & Naming"
@@ -816,7 +877,7 @@ _run_section_2() {
   # Azure tags and nothing else: they name no resource and grant no access.
   if [[ "$quick" != "quick" ]]; then
     echo ""
-    _hint "The last three answers are Azure tags, used for cost reporting and policy."
+    _hint "The next answers are Azure tags, used for cost reporting and policy."
     _hint "None of them grants access or appears in a resource name. Blank omits the tag."
     _hint "The environment tag defaults to the deployment name — set it only when the"
     _hint "deployment name carries more (name \"prod-eastus\", environment tag \"prod\")."
@@ -828,6 +889,21 @@ _run_section_2() {
 
     _ask "Cost center tag (billing code)" "$COST_CENTER"
     COST_CENTER="$_REPLY"
+
+    if [[ "$TAGS_KEPT" == "true" ]]; then
+      _hint "terraform.tfvars sets tags in a form this wizard does not edit (a comment,"
+      _hint "or a comma inside a value), so it is kept exactly as written."
+    else
+      _hint "Any other tags your Azure Policy requires, as key=value pairs separated by"
+      _hint "commas (team=platform,product=langsmith). A value cannot hold a comma; set"
+      _hint "one that does in terraform.tfvars instead. Blank adds none."
+      while true; do
+        _ask "Other tags" "$EXTRA_TAGS"
+        _valid_tags "$_REPLY" && break
+        _red "  ERROR: use key=value pairs separated by commas, each key once, no \", #, or %{."
+      done
+      EXTRA_TAGS="$_REPLY"
+    fi
   fi
 
   echo ""
@@ -1958,6 +2034,8 @@ while [[ "$NONINTERACTIVE" != "true" ]]; do
   printf "  %-24s %s\n" "   Environment tag:" "${ENVIRONMENT:-${NAME_PREFIX:-dev}}"
   [[ -n "$OWNER" ]]       && printf "  %-24s %s\n" "   Owner tag:"       "$OWNER"
   [[ -n "$COST_CENTER" ]] && printf "  %-24s %s\n" "   Cost center tag:" "$COST_CENTER"
+  [[ -n "$EXTRA_TAGS" ]]  && printf "  %-24s %s\n" "   Other tags:"      "$EXTRA_TAGS"
+  [[ "$TAGS_KEPT" == "true" ]] && printf "  %-24s %s\n" "   Other tags:"  "as written in terraform.tfvars"
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
   if [[ "$CREATE_VNET" == "false" ]]; then
     printf "  %-24s %s\n" "   VNet ID:"           "$VNET_ID"
@@ -2073,7 +2151,7 @@ _section "Generating terraform.tfvars"
 # spelling of name_prefix: already read back, and carrying it forward would leave
 # two keys naming the deployment.
 _WRITER_KEYS="subscription_id azure_environment identifier name_prefix location unique_resource_names
-environment owner cost_center
+environment owner cost_center tags
 create_vnet vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id
 aks_subnet_address_prefix postgres_subnet_address_prefix redis_subnet_address_prefix
 aks_service_cidr agic_subnet_id bastion_subnet_id
@@ -2122,6 +2200,8 @@ if [[ -f "$OUTPUT" ]]; then
       for _k in $_WRITER_KEYS; do
         [[ "$_k" == "$_key" ]] && { _known=true; break; }
       done
+      # Kept tags are the one writer key copied rather than written.
+      [[ "$_key" == "tags" && "$TAGS_KEPT" == "true" ]] && _known=false
       [[ "$_known" == "true" ]] && continue
       # Only a value closing on its own line copies verbatim. A multi-line list
       # or map would arrive as a fragment, worse than naming it and leaving the
@@ -2157,6 +2237,7 @@ TFVARS
 [[ -n "$ENVIRONMENT" ]] && echo "environment     = \"${ENVIRONMENT}\"" >> "$OUTPUT"
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"
 [[ -n "$COST_CENTER" ]] && echo "cost_center     = \"${COST_CENTER}\"" >> "$OUTPUT"
+[[ -n "$EXTRA_TAGS" ]]  && echo "tags            = $(_tags_hcl "$EXTRA_TAGS")" >> "$OUTPUT"
 
 cat >> "$OUTPUT" << TFVARS
 

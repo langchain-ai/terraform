@@ -477,6 +477,44 @@ any value. A deployment that set `identifier = "-prod"` and never set
 replaced, but cost allocation and Azure Policy rules keyed on the old value stop
 matching. Set `environment = "dev"` explicitly to keep the old tag.
 
+### Tags required by Azure Policy
+
+Every resource Terraform creates carries `environment`, `project = "langsmith"`,
+and `managed_by = "terraform"`, plus `owner` and `cost_center` when you set
+them. Put any other key a tag policy requires in `tags`:
+
+```hcl
+owner       = "platform-team@example.com"
+environment = "prod"
+tags        = { team = "platform", product = "langsmith" }
+```
+
+A key in `tags` overrides the built-in tag of the same name. `make quickstart`
+asks for these as "Other tags" in `team=platform,product=langsmith` form, and
+keeps a `tags` map it cannot parse, such as one with comments, exactly as
+written. Changing tags later updates resources in place.
+
+AKS also creates resources of its own, and they get tags in different ways:
+
+| Created by AKS | Tags it gets |
+|---|---|
+| Node resource group (`MC_...`), its load balancer, outbound public IP, NSG, route table, and managed identities | The cluster's tags ([AKS tags](https://learn.microsoft.com/en-us/azure/aks/use-tags)) |
+| Node pool scale sets and their VMs | Each node pool's tags, which the module sets to the same set |
+| SmithDB cache disks | The `tags` parameter of the SmithDB cache StorageClass, which the module sets to the same set. A tag change replaces the StorageClass, and disks already provisioned keep their old tags |
+| Disks for other PersistentVolumeClaims, such as in-cluster Postgres, Redis, or ClickHouse | None. They come from the AKS built-in StorageClasses, which carry no `tags` parameter |
+| Public IPs for LoadBalancer Services, such as the ingress controller | Only those in the `service.beta.kubernetes.io/azure-pip-tags` annotation, which the module does not set |
+
+A deny policy that applies to the node resource group therefore blocks those
+last two rows: PVCs stay `Pending` and the ingress Service gets no external IP.
+Scope the policy to exclude the node resource group, or use `modify`/`append`
+in place of `deny` there. The policy also needs to allow the `aks-managed` and
+`k8s-azure` tags AKS sets itself ([AKS FAQ](https://learn.microsoft.com/en-us/azure/aks/faq)).
+
+Private DNS zones and Key Vault secrets accept at most 15 tags, and the module uses up
+to 7 of them, so keep `tags` to 8 new keys or fewer. The plan fails above that.
+Keep commas and `=` out of tag values: the StorageClass `tags` parameter is a
+`key=value,key=value` string, and either character breaks it.
+
 ### Keeping deployment config outside this repo
 
 By default the scripts and `make` targets read `terraform.tfvars`,

@@ -167,6 +167,12 @@ variable "smithdb_cache_storage_class_name" {
   default     = "smithdb-cache-premium-v2"
 }
 
+variable "tags" {
+  type        = map(string)
+  description = "Azure tags for the managed disks the SmithDB cache StorageClass provisions."
+  default     = {}
+}
+
 variable "smithdb_cache_disk_iops" {
   type        = number
   description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume."

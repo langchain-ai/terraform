@@ -568,6 +568,10 @@ resource "azurerm_kubernetes_cluster" "main" {
   default_node_pool {
     name = "default"
 
+    # Node pools carry their own tags, separate from the cluster's, and AKS
+    # applies them to the pool's scale set and its VMs.
+    tags = merge(var.tags, { module = "aks", pool = "default" })
+
     # Default Standard_D8s_v5: 8 vCPU, 32 GB RAM — Dsv5 family, the production baseline.
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
     vm_size = var.default_node_pool_vm_size

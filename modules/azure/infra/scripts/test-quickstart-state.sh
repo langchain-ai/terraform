@@ -186,6 +186,44 @@ printf 'aks_network_mode = "overlay"\n' >> "$OUTPUT"
 _load_tfvars
 eq "present aks_network_mode is read"      "$NETWORK_MODE" "overlay"
 
+echo "5b. Extra tags round-trip between the prompt and terraform.tfvars"
+_valid_tags ""                                  && ok "blank tags are valid"         || bad "blank tags rejected"
+_valid_tags "team=platform, owner=a@b.com"      && ok "key=value pairs are valid"    || bad "key=value pairs rejected"
+_valid_tags "team"                              && bad "a bare key was accepted"     || ok "a bare key is rejected"
+_valid_tags "=platform"                         && bad "an empty key was accepted"   || ok "an empty key is rejected"
+_valid_tags "Team=a,team=b"                     && bad "a repeated key was accepted" || ok "a repeated key is rejected, case-insensitively"
+_valid_tags 'team="a"'                          && bad "a quote was accepted"        || ok "a quote is rejected"
+eq "tags render as an HCL map" "$(_tags_hcl "team=platform, owner = a@b.com,")" \
+  '{ "team" = "platform", "owner" = "a@b.com" }'
+printf 'subscription_id = "sub-1"\ntags            = %s\n' "$(_tags_hcl "team=platform,cost center=x=y")" > "$OUTPUT"
+EXTRA_TAGS=""; TAGS_KEPT="false"
+_load_tfvars
+eq "written tags read back"            "$EXTRA_TAGS" "team=platform,cost center=x=y"
+eq "written tags are not kept as-is"   "$TAGS_KEPT"  "false"
+cat > "$OUTPUT" << 'EOF'
+tags = {
+  team    = "platform"
+  product = "langsmith"
+}
+EOF
+EXTRA_TAGS=""
+_load_tfvars
+eq "a multi-line map reads back"       "$EXTRA_TAGS" "team=platform,product=langsmith"
+cat > "$OUTPUT" << 'EOF'
+tags = {
+  team = "platform" # required by policy
+}
+EOF
+EXTRA_TAGS=""; TAGS_KEPT="false"
+_load_tfvars
+eq "a commented map is kept as written" "$TAGS_KEPT" "true"
+eq "a commented map is not half-read"   "$EXTRA_TAGS" ""
+printf 'tags = { team = "a,b" }\n' > "$OUTPUT"
+TAGS_KEPT="false"
+_load_tfvars
+eq "a comma in a value is kept as written" "$TAGS_KEPT" "true"
+TAGS_KEPT="false"
+
 echo "6. tfvars to checkpoint and back keeps the deployment name"
 _save_state
 eval "$NAME_VAR="; PROFILE=""
