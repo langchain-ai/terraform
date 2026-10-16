@@ -122,3 +122,16 @@ run "refuses_a_cluster_with_in_cluster_clickhouse" {
 
   expect_failures = [var.clickhouse_cluster]
 }
+
+run "refuses_a_cluster_name_the_values_file_cannot_carry" {
+  command = plan
+
+  variables {
+    clickhouse_source   = "external"
+    clickhouse_host     = "ch-repl-replicated.langsmith-data.svc"
+    clickhouse_password = "fixture-not-a-real-secret"
+    clickhouse_cluster  = "repl\"icated"
+  }
+
+  expect_failures = [var.clickhouse_cluster]
+}

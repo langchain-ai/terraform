@@ -84,6 +84,24 @@ _tf_out() {
   printf '%s' "$val"
 }
 
+# ── external ClickHouse: which signal makes the Secret Terraform's ──────────
+# Prints the detail init-values.sh shows beside its verdict: the
+# clickhouse_secret_name output when set (what the last apply did), else the
+# clickhouse_host read from terraform.tfvars (what the next apply will do).
+# Exactly one of the two, never both, which is what a bare ${x:+a}${x:-b}
+# got wrong. Returns 1 when neither is set, so the caller prompts instead.
+#   _clickhouse_owner_detail <secret_name_output> <clickhouse_host_tfvar>
+_clickhouse_owner_detail() {
+  local secret="$1" host="$2"
+  if [[ -n "$secret" ]]; then
+    printf 'clickhouse_secret_name output = %s' "$secret"
+  elif [[ -n "$host" ]]; then
+    printf 'clickhouse_host = %s in terraform.tfvars' "$host"
+  else
+    return 1
+  fi
+}
+
 # ── Azure cloud ──────────────────────────────────────────────────────────────
 # The cloud this deployment targets. Once applied, the azure_environment output
 # is the value Terraform actually used, whichever of terraform.tfvars,
