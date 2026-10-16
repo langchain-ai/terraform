@@ -398,14 +398,22 @@ _tfvar_line() {
   sed -n "s/^[[:space:]]*\($1[[:space:]]*=[[:space:]]*\[.*\]\)[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
+# Print the tags assignment as written, from its first line through the brace
+# that closes the map. A brace inside a string or comment does not count.
+_tfvar_tags_block() {
+  awk '!open && /^[[:space:]]*tags[[:space:]]*=/ { open = 1 }
+       open { print; s = $0; gsub(/"[^"]*"/, "", s); sub(/(#|\/\/).*/, "", s)
+              o = gsub(/[{]/, "", s); c = gsub(/[}]/, "", s); depth += o - c
+              if (o) seen = 1; if (seen && depth <= 0) exit }' "$OUTPUT" 2>/dev/null
+}
+
 # Read the tags map back in the key=value,key=value form the prompt takes, on one
 # line or several. Returns 1 for a map it cannot read exactly (a comment, a comma
 # inside a value, an escape), so the caller keeps the assignment as written instead.
 _tfvar_tags() {
   local body item out="" re='^[[:space:]]*"?([^"=]*[^"=[:space:]])"?[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*$'
   local -a items
-  body=$(awk '!open && /^[[:space:]]*tags[[:space:]]*=/ { open = 1; sub(/^[^=]*=[[:space:]]*/, "") }
-              open { print; if (index($0, "}")) exit }' "$OUTPUT" 2>/dev/null | tr '\n' ',')
+  body=$(_tfvar_tags_block | sed '1s/^[^=]*=[[:space:]]*//' | tr '\n' ',')
   [[ -n "$body" ]] || return 0
   [[ "$body" == "{"*"}"* && "$body" != *"#"* && "$body" != *"//"* && "$body" != *'\'* && "$body" != *'${'* && "$body" != *'%{'* ]] || return 1
   body="${body#\{}"
@@ -553,7 +561,7 @@ _load_tfvars() {
   # them back is what makes that work: the writer emits all four every time, so
   # an unloaded flag is written false and turns off a deployed pass.
   # A map the parser cannot read exactly stays in the file as written: the
-  # prompt is skipped and the rewrite carries the line over like an unknown key.
+  # prompt is skipped and the rewrite copies the whole assignment over.
   if _TF_VAL=$(_tfvar_tags); then
     EXTRA_TAGS="$_TF_VAL"
   else
@@ -2169,9 +2177,13 @@ create_waf create_diagnostics create_bastion"
 
 PRESERVED=""
 PRESERVED_PARTIAL=""
+KEPT_TAGS=""
 if [[ -f "$OUTPUT" ]]; then
   # The rewrite truncates, so the previous file is only recoverable from here.
   cp "$OUTPUT" "$OUTPUT.bak"
+  # Kept tags are copied whether or not unknown keys are, and however many lines
+  # they span.
+  [[ "$TAGS_KEPT" == "true" ]] && KEPT_TAGS=$(_tfvar_tags_block)
   if [[ "$PRESERVE_UNKNOWN" != "false" ]]; then
     _depth=0
     while IFS= read -r _line; do
@@ -2200,8 +2212,6 @@ if [[ -f "$OUTPUT" ]]; then
       for _k in $_WRITER_KEYS; do
         [[ "$_k" == "$_key" ]] && { _known=true; break; }
       done
-      # Kept tags are the one writer key copied rather than written.
-      [[ "$_key" == "tags" && "$TAGS_KEPT" == "true" ]] && _known=false
       [[ "$_known" == "true" ]] && continue
       # Only a value closing on its own line copies verbatim. A multi-line list
       # or map would arrive as a fragment, worse than naming it and leaving the
@@ -2238,6 +2248,7 @@ TFVARS
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"
 [[ -n "$COST_CENTER" ]] && echo "cost_center     = \"${COST_CENTER}\"" >> "$OUTPUT"
 [[ -n "$EXTRA_TAGS" ]]  && echo "tags            = $(_tags_hcl "$EXTRA_TAGS")" >> "$OUTPUT"
+[[ -n "$KEPT_TAGS" ]]   && printf '%s\n' "$KEPT_TAGS" >> "$OUTPUT"
 
 cat >> "$OUTPUT" << TFVARS
 

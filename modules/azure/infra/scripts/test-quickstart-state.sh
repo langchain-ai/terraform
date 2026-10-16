@@ -220,6 +220,15 @@ EXTRA_TAGS=""; TAGS_KEPT="false"
 _load_tfvars
 eq "a commented map is kept as written" "$TAGS_KEPT" "true"
 eq "a commented map is not half-read"   "$EXTRA_TAGS" ""
+eq "a commented map is copied whole"    "$(_tfvar_tags_block)" "$(cat "$OUTPUT")"
+cat > "$OUTPUT" << 'EOF'
+tags = {
+  team = "a}b" # closes with }
+  product = "langsmith"
+}
+location = "eastus"
+EOF
+eq "a brace in a string or comment does not end the map" "$(_tfvar_tags_block | wc -l | tr -d ' ')" "4"
 printf 'tags = { team = "a,b" }\n' > "$OUTPUT"
 TAGS_KEPT="false"
 _load_tfvars
@@ -409,6 +418,19 @@ has "review switch drops purge prot." keyvault_purge_protection false
 # Declining quick setup opens the full wizard, which asks for the tags.
 quick n 1 "" "" "" "" "" "" ""
 grep -q 'Environment tag (blank' qs.out && ok "n opens the full section 2" || bad "n skipped the tag prompts"
+
+# Editing an existing file keeps a tags map the wizard cannot edit, whole.
+rm -rf "$NI"; mkdir -p "$NI"
+cat > "$NI/terraform.tfvars" << 'EOF'
+name_prefix = "dev"
+tags = {
+  team = "platform" # required by policy
+}
+EOF
+{ printf '1'; printf '%300s' '' | tr ' ' '\n'; } | INFRA_DIR="$NI" "$SRC" > qs.out 2>&1
+eq "a rerun over a kept map exits 0"   "$?" "0"
+eq "a kept multi-line map is written back whole" "$(awk '/^tags/,/^}/' "$NI/terraform.tfvars")" \
+  "$(printf 'tags = {\n  team = "platform" # required by policy\n}')"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
