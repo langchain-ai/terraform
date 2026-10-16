@@ -493,7 +493,7 @@ ssm_kms_key_arn         = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
 | `ebs_kms_key_arn` | Managed node group and SmithDB node volumes, and volumes from the `gp3` storage class |
 | `eks_secrets_kms_key_arn` | Kubernetes secrets, in place of the key the EKS module creates |
 | `s3_kms_key_arn` | The LangSmith and SmithDB buckets |
-| `ssm_kms_key_arn` | The SSM parameters that `setup-env.sh`, `manage-ssm.sh`, and `migrate-ssm.sh` write |
+| `ssm_kms_key_arn` | The SSM parameters that `setup-env.sh`, `manage-ssm.sh`, `migrate-ssm.sh`, `sso.sh`, and `smithdb-migration-job-start.sh` write |
 
 - Set the RDS, ElastiCache, and EKS keys before the first apply. Each service takes its key at creation, so setting or changing one later replaces the database, the cache, or the cluster. Replacing the cluster also schedules the key the EKS module created for deletion.
 - Setting `ebs_kms_key_arn` rolls the managed node groups onto new launch templates and replaces the `gp3` storage class. Existing volumes keep their key.
@@ -1294,6 +1294,9 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
 | `create_eks_blueprints_telemetry_stack` | `true` | no | Create the EKS Blueprints usage-telemetry CloudFormation stack |
+| `iam_permissions_boundary_arn` | `null` | no | Permissions boundary on every IAM role the module creates except the bastion's. See [IAM permissions boundary, path, and role names](#iam-permissions-boundary-path-and-role-names) |
+| `iam_role_path` | `/` | no | IAM path for every role and instance profile the module creates except the bastion's. Changing it replaces those roles |
+| `prefix_iam_role_names` | `false` | no | Start the six upstream-named roles with `<name_prefix>-<environment>-`. Changing it replaces those roles |
 | `existing_iam_role_arns` | `{}` | no | Roles your IAM team created, used instead of creating them. See [IAM permissions boundary, path, and role names](#iam-permissions-boundary-path-and-role-names) |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |

@@ -79,13 +79,19 @@ _ssm_exists() {
 }
 
 # Passes the value through a private temp file so it never appears in the process list or shell history.
+# ssm_kms_key_arn names a customer-managed key; empty uses aws/ssm.
 _ssm_put() {
-  local _path="$1" _value="$2" _tmp _rc=0
+  local _path="$1" _value="$2" _tmp _kms_key _rc=0
+  local _key_args=()
+  _kms_key="$(_parse_tfvar ssm_kms_key_arn)" || _kms_key=""
+  if [[ -n "$_kms_key" ]]; then
+    _key_args=(--key-id "$_kms_key")
+  fi
   _tmp="$(mktemp)"
   chmod 600 "$_tmp"
   printf '%s' "$_value" > "$_tmp"
   aws ssm put-parameter --region "$_region" --name "$_path" --type SecureString \
-    --value "file://$_tmp" --overwrite --output text >/dev/null || _rc=$?
+    ${_key_args[@]+"${_key_args[@]}"} --value "file://$_tmp" --overwrite --output text >/dev/null || _rc=$?
   rm -f "$_tmp"
   return $_rc
 }

@@ -203,13 +203,15 @@ eks_cluster_version = "1.34"
 # from outside the VPC.
 # Docs: https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html
 #
-# false (default) — private endpoint only. kubectl must run from inside the
-#   VPC (e.g. via VPN, bastion host, or SSM Session Manager). More secure.
+# true (default) — public endpoint. kubectl works from your laptop, CI/CD
+#   runners, etc. If you keep this, you SHOULD also set eks_public_access_cidrs
+#   below to restrict who can reach it.
 #
-# true — public endpoint. kubectl works from your laptop, CI/CD runners, etc.
-#   If you enable this, you SHOULD also set eks_public_access_cidrs below
-#   to restrict who can reach it.
-enable_public_eks_cluster = false
+# false — private endpoint only. kubectl must run from inside the VPC (e.g. via
+#   VPN, bastion host, or SSM Session Manager). More secure. Also set
+#   eks_private_access_cidrs or eks_private_access_managed_externally below.
+#
+# enable_public_eks_cluster = false
 
 # CIDR allowlist for the public EKS API endpoint (ignored when
 # enable_public_eks_cluster = false).

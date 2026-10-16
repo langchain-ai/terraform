@@ -33,11 +33,13 @@ locals {
   }
 
   # Roles the caller created. Blueprints sets the IRSA annotation only on roles
-  # it creates, so a supplied controller role gets it through set.
-  existing_roles           = var.existing_iam_role_arns
-  irsa_annotation          = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-  karpenter_node_role_name = local.existing_roles.karpenter_node != null ? reverse(split("/", local.existing_roles.karpenter_node))[0] : local.role_names.karpenter_node
-  karpenter_node_role_arn  = local.existing_roles.karpenter_node != null ? local.existing_roles.karpenter_node : module.eks_blueprints_addons.karpenter.node_iam_role_arn
+  # it creates, so a supplied controller role gets it through set. The
+  # cluster-autoscaler chart nests its service account under rbac.
+  existing_roles                     = var.existing_iam_role_arns
+  irsa_annotation                    = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+  cluster_autoscaler_irsa_annotation = "rbac.${local.irsa_annotation}"
+  karpenter_node_role_name           = local.existing_roles.karpenter_node != null ? reverse(split("/", local.existing_roles.karpenter_node))[0] : local.role_names.karpenter_node
+  karpenter_node_role_arn            = local.existing_roles.karpenter_node != null ? local.existing_roles.karpenter_node : module.eks_blueprints_addons.karpenter.node_iam_role_arn
 
   # Custom networking owns the vpc-cni add-on, so a vpc-cni entry in eks_addons
   # moves here instead of going to the Blueprints add-on, where it would be a
@@ -317,7 +319,7 @@ module "eks_blueprints_addons" {
     role_name                     = local.role_names.cluster_autoscaler
     role_path                     = var.iam_role_path
     role_permissions_boundary_arn = var.iam_permissions_boundary_arn
-    set                           = local.existing_roles.cluster_autoscaler != null ? [{ name = local.irsa_annotation, value = local.existing_roles.cluster_autoscaler }] : []
+    set                           = local.existing_roles.cluster_autoscaler != null ? [{ name = local.cluster_autoscaler_irsa_annotation, value = local.existing_roles.cluster_autoscaler }] : []
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
