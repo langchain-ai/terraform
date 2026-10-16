@@ -188,6 +188,12 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "tags" {
+  type        = map(string)
+  description = "Extra tags on all resources, for keys a tag policy requires beyond environment, owner, and cost_center (e.g. { team = \"platform\", product = \"langsmith\" }). A key here overrides the module's own tag of the same name."
+  default     = {}
+}
+
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 variable "keyvault_name" {
