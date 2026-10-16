@@ -10,9 +10,17 @@
 locals {
   engine_vertex_enabled = var.enable_engine && var.engine_vertex_workload_identity
 
-  # The chart's service account names for Engine's API server and queue under the
-  # "langsmith" release, with engineInsightsAgent.namePrefix = standalone-insights.
-  engine_ksas = ["langsmith-standalone-insights-api-server", "langsmith-standalone-insights-queue"]
+  # The chart's fullname is the release name when it contains "langsmith", and
+  # "<release>-langsmith" otherwise (the same rule as modules/smithdb). Engine's
+  # service accounts are <fullname>-<engineInsightsAgent.namePrefix>-<component>,
+  # and langsmith-values-engine.yaml keeps namePrefix = "standalone-insights".
+  # The chart cuts each of these names to 63 characters and then removes one
+  # trailing "-". A long release name reaches that limit, so do the same here.
+  engine_release_fullname = trimsuffix(substr(strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith", 0, 63), "-")
+  engine_agent_fullname   = trimsuffix(substr("${local.engine_release_fullname}-standalone-insights", 0, 63), "-")
+  engine_ksas = [
+    for component in ["api-server", "queue"] : trimsuffix(substr("${local.engine_agent_fullname}-${component}", 0, 63), "-")
+  ]
 }
 
 resource "google_project_service" "engine_vertex" {

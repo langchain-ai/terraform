@@ -99,6 +99,46 @@ run "engine_vertex_identity_binds_both_engine_service_accounts" {
   }
 }
 
+# Without "langsmith" in the release name, the chart's fullname is
+# <release>-langsmith, and the service account names follow it.
+run "engine_vertex_identity_follows_release_and_namespace" {
+  command = plan
+
+  variables {
+    enable_sandboxes                = true
+    enable_engine                   = true
+    engine_vertex_workload_identity = true
+    langsmith_release_name          = "acme"
+    langsmith_namespace             = "ls"
+  }
+
+  assert {
+    condition = (
+      toset(keys(google_service_account_iam_member.engine_workload_identity)) == toset(["acme-langsmith-standalone-insights-api-server", "acme-langsmith-standalone-insights-queue"]) &&
+      google_service_account_iam_member.engine_workload_identity["acme-langsmith-standalone-insights-queue"].member == "serviceAccount:langsmith-plan-tests.svc.id.goog[ls/acme-langsmith-standalone-insights-queue]"
+    )
+    error_message = "Workload Identity should follow the chart's fullname rule and the namespace"
+  }
+}
+
+# The chart cuts a service account name to 63 characters, then removes one
+# trailing "-". The bindings must follow, or the pods get no Vertex AI access.
+run "engine_vertex_identity_follows_the_chart_truncation" {
+  command = plan
+
+  variables {
+    enable_sandboxes                = true
+    enable_engine                   = true
+    engine_vertex_workload_identity = true
+    langsmith_release_name          = "langsmith-production-eu-central-1-blue"
+  }
+
+  assert {
+    condition     = toset(keys(google_service_account_iam_member.engine_workload_identity)) == toset(["langsmith-production-eu-central-1-blue-standalone-insights-api", "langsmith-production-eu-central-1-blue-standalone-insights-queu"])
+    error_message = "Workload Identity should match the chart's 63-character service account names"
+  }
+}
+
 run "engine_requires_sandboxes" {
   command = plan
 

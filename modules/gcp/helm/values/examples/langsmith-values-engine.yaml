@@ -24,6 +24,11 @@
 engine:
   enabled: true
 
+# The deployment's two service accounts are
+# <fullname>-standalone-insights-api-server and
+# <fullname>-standalone-insights-queue. <fullname> is the release name when it
+# contains "langsmith", and <release>-langsmith otherwise. The Engine Workload
+# Identity binding covers only these two names, so keep this namePrefix.
 engineInsightsAgent:
   namePrefix: "standalone-insights"
   # Resources required: the langsmith-quota ResourceQuota in this namespace rejects
