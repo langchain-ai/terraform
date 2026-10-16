@@ -303,7 +303,10 @@ resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
 # The chart gives each SmithDB cache pod a PVC from smithdb.cache.storageClassName.
 # Hyperdisk Balanced sets IOPS and throughput apart from capacity, so each volume
 # gets 7000 IOPS and 1000 MiB/s. WaitForFirstConsumer puts each disk in the zone
-# of its pod.
+# of its pod. The labels parameter puts the labels on each disk at creation, so a
+# disk keeps them while detached, when GKE's cluster-label copy skips it. Changing
+# var.labels replaces this StorageClass; bound volumes are unaffected, and only
+# disks created afterward carry the new set.
 #------------------------------------------------------------------------------
 resource "kubernetes_storage_class_v1" "smithdb_cache" {
   count = var.create_smithdb_cache_storage_class ? 1 : 0
@@ -322,6 +325,9 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
     type                             = "hyperdisk-balanced"
     provisioned-iops-on-create       = "7000"
     provisioned-throughput-on-create = "1000Mi"
+    labels = join(",", [
+      for k, v in merge(var.labels, { "component" = "smithdb-cache" }) : "${k}=${v}"
+    ])
   }
 }
 

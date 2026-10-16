@@ -364,11 +364,9 @@ locals {
       "managed-by"  = "terraform"
       "project"     = var.project_id
       "name-prefix" = var.name_prefix
-
-      # Optional labels (only if provided)
-      "owner" = var.owner
     },
-    # Add cost center if provided
+    # Optional labels (only if provided)
+    var.owner != "" ? { "owner" = var.owner } : {},
     var.cost_center != "" ? { "cost-center" = var.cost_center } : {},
     # Merge custom labels
     var.labels

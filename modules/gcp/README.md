@@ -395,9 +395,44 @@ helm upgrade langsmith langchain/langsmith \
 | `enable_agent_builder` | `false` | no | Deprecated (chart v0.15+) — `config.agentBuilder.*` is superseded by `enable_fleet` (`fleet.*`) |
 | `enable_insights` | `false` | no | Enables Insights without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_insights` is preferred |
 | `enable_polly` | `false` | no | Enables Polly without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_polly` is preferred |
-| `owner` | `platform-team` | no | Owner label applied to all resources |
-| `cost_center` | `""` | no | Cost center label for billing attribution |
-| `labels` | `{}` | no | Additional labels applied to all resources |
+| `owner` | `platform-team` | no | Owner label applied to all resources; empty omits it |
+| `cost_center` | `""` | no | Cost center label for billing attribution; empty omits it |
+| `labels` | `{}` | no | Additional labels applied to all resources; a key here overrides the standard label of the same name. Refer to [Labels](#labels) |
+
+### Labels
+
+Every resource gets `app`, `environment`, `managed-by`, `project`, `name-prefix`, `owner`, and `cost-center`, plus anything in `labels`. Put the labels your org policy requires in `labels`:
+
+```hcl
+labels = {
+  "team"        = "ml-platform"
+  "product"     = "langsmith"
+  "environment" = "production" # replaces the standard environment label
+}
+```
+
+Keys start with a lowercase letter. Keys and values use only lowercase letters, digits, `_`, and `-`, end in a letter or digit, and run at most 63 characters. Values can't be empty. GCP can't store `@` or `.`, so write an email such as `name@example.com` as `name_example_com`. `terraform plan` rejects a value that breaks these rules. The same labels also go on Kubernetes objects, which is why the first and last characters must be alphanumeric.
+
+Where the labels land:
+
+| Labeled | How |
+|---|---|
+| GKE cluster | `resource_labels` |
+| Node VMs and the persistent disks attached to them, including PVC disks | GKE copies the cluster labels to them, hourly |
+| SmithDB cache disks (`smithdb_cache_storage = "network-disk"`) | The module's StorageClass passes the labels to the PD CSI driver, which sets them when it creates each disk, attached or not |
+| Cloud SQL (LangSmith and SmithDB metastore) | `user_labels` |
+| Memorystore, GCS buckets, Secret Manager secrets, DNS zone, global address | Provider `default_labels` |
+| Secrets that `setup-env.sh` and `manage-secrets.sh` create | `--labels`, read from `owner`, `cost_center`, and `labels` in `terraform.tfvars` when the secret is first created |
+
+Not labeled:
+
+- **GKE-created load balancer resources.** The forwarding rule, IP address, and firewall rules that GKE creates for the Envoy Gateway Service. GKE neither labels them nor offers a setting for it.
+- **Unattached disks from GKE's built-in StorageClasses.** A disk from `premium-rwo` or `standard-rwo`, such as the in-cluster ClickHouse volume, gets the cluster labels only while attached to a node.
+- **Resources with no labels in the GCP API.** The VPC, subnet, firewall rules, Cloud Router and NAT, service accounts, IAM bindings, the managed SSL certificate, and Cloud SQL databases and users.
+
+A secret created before you set a label keeps its old labels. Add them with `gcloud secrets update <secret> --update-labels=team=ml-platform`.
+
+Changing `labels` replaces the SmithDB cache StorageClass, because its parameters cannot change in place. Existing cache disks stay bound and keep their old labels; disks created afterward carry the new set.
 
 ### Optional GCP modules
 

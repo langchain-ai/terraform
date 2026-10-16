@@ -63,6 +63,46 @@ _tfvar_is_true() {
   [[ "$(_parse_tfvar "$1")" == "true" ]]
 }
 
+# gcloud --labels value for a secret the scripts create outside Terraform: the
+# base pairs in $1, then owner, cost-center, and the labels map from
+# terraform.tfvars, a later key replacing an earlier one as in locals.tf. A pair
+# that breaks the label rules is skipped with a warning, since terraform plan
+# rejects it anyway and gcloud would fail the whole create. Keep identical to
+# the copy in infra/scripts/_common.sh, apart from the tfvars path.
+_secret_labels() {
+  local _owner _cost_center
+  _owner=$(_parse_tfvar "owner")
+  _owner="${_owner:-${TF_VAR_owner:-platform-team}}"
+  _cost_center=$(_parse_tfvar "cost_center")
+  _cost_center="${_cost_center:-${TF_VAR_cost_center:-}}"
+  {
+    printf '%s\n' "$1" | tr ',' '\n'
+    [[ -n "$_owner" ]] && printf 'owner=%s\n' "$_owner"
+    [[ -n "$_cost_center" ]] && printf 'cost-center=%s\n' "$_cost_center"
+    awk '
+      !open && /^[[:space:]]*labels[[:space:]]*=[[:space:]]*\{/ { open = 1; sub(/^[^{]*\{/, "") }
+      open {
+        line = $0; sub(/#.*$/, "", line)
+        end = index(line, "}"); if (end) line = substr(line, 1, end - 1)
+        while (match(line, /"?[^"=[:space:]]+"?[[:space:]]*=[[:space:]]*"[^"]*"/)) {
+          pair = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
+          gsub(/"/, "", pair); sub(/[[:space:]]*=[[:space:]]*/, "=", pair)
+          print pair
+        }
+        if (end) exit
+      }
+    ' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null
+  } | awk -F= '
+    NF == 0 { next }
+    NF != 2 || $1 !~ /^[a-z]([a-z0-9_-]*[a-z0-9])?$/ || length($1) > 63 || $2 !~ /^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/ || length($2) > 63 {
+      print "WARNING: label " $0 " skipped on the secret: GCP cannot store it" > "/dev/stderr"; next
+    }
+    !($1 in value) { order[++n] = $1 }
+    { value[$1] = $2 }
+    END { for (i = 1; i <= n; i++) printf "%s%s=%s", (i > 1 ? "," : ""), order[i], value[order[i]] }
+  '
+}
+
 _project_id=$(_parse_tfvar "project_id")
 # Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
 # variables.tf default. Keep identical across the GCP scripts.
@@ -86,8 +126,10 @@ export TF_VAR_project_id="$_project_id"
 export TF_VAR_name_prefix="$_name_prefix"
 export TF_VAR_environment="$_environment"
 export TF_VAR_region="$_region"
-export TF_VAR_owner="${LANGSMITH_OWNER:-}"
-export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
+# Only when set: an empty TF_VAR_owner would replace the variables.tf default.
+# terraform.tfvars wins over both, and is where the labels map lives.
+if [[ -n "${LANGSMITH_OWNER:-}" ]]; then export TF_VAR_owner="$LANGSMITH_OWNER"; fi
+if [[ -n "${LANGSMITH_COST_CENTER:-}" ]]; then export TF_VAR_cost_center="$LANGSMITH_COST_CENTER"; fi
 
 # ── Secret Manager path prefix ────────────────────────────────────────────────
 # All secrets are stored under:
@@ -143,7 +185,7 @@ _sm_put() {
     _gcloud_bounded secrets create "$_secret_id" \
       --project="$_project_id" \
       --replication-policy="automatic" \
-      --labels="managed-by=setup-env,langsmith-env=${_environment}" \
+      --labels="$(_secret_labels "managed-by=setup-env,langsmith-env=${_environment}")" \
       --quiet &>/dev/null || return 1
   fi
 
