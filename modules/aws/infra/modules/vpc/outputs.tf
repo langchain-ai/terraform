@@ -10,23 +10,13 @@ output "public_subnets" {
   value = module.vpc.public_subnets
 }
 
+output "nat_public_ips" {
+  description = "Public egress IPs used by workloads in private subnets."
+  value       = module.vpc.nat_public_ips
+}
+
 output "vpc_cidr_block" {
   value = module.vpc.vpc_cidr_block
-}
-
-output "private_route_table_ids" {
-  description = "IDs of the private route tables. With single_nat_gateway = true this is a single-element list."
-  value       = module.vpc.private_route_table_ids
-}
-
-output "nat_gateway_id" {
-  description = "ID of the single NAT gateway (nat-xxxxxxxxxxxxxxxxx)."
-  value       = module.vpc.natgw_ids[0]
-}
-
-output "nat_gateway_az" {
-  description = "Availability zone where the single NAT gateway is placed (first AZ of the VPC)."
-  value       = module.vpc.azs[0]
 }
 
 output "azs" {
