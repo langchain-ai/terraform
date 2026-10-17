@@ -951,3 +951,38 @@ run "in_cluster_redis_plans_nothing" {
     error_message = "redis_source = in-cluster still planned Memorystore"
   }
 }
+
+# ── Ingress type ─────────────────────────────────────────────────────────────
+
+# ingress_type is not set, so this pins the default: a default change fails here.
+run "ingress_defaults_to_gke" {
+  command = plan
+
+  variables {
+    install_ingress        = true
+    tls_certificate_source = "none"
+  }
+
+  assert {
+    condition     = var.ingress_type == "gke"
+    error_message = "ingress_type no longer defaults to gke"
+  }
+  assert {
+    condition     = module.ingress[0].gateway_namespace == var.langsmith_namespace
+    error_message = "The default ingress did not put the GKE Gateway in the LangSmith namespace"
+  }
+}
+
+run "ingress_type_envoy_wires_the_envoy_gateway" {
+  command = plan
+
+  variables {
+    install_ingress = true
+    ingress_type    = "envoy"
+  }
+
+  assert {
+    condition     = module.ingress[0].gateway_namespace == "envoy-gateway-system"
+    error_message = "ingress_type = envoy did not plan the Envoy Gateway namespace"
+  }
+}

@@ -1,8 +1,8 @@
 # GCP base Helm values for LangSmith.
 #
 # Applied on every deploy alongside values-overrides.yaml.
-# Configures GCP-native integrations: Envoy Gateway (HTTPRoute),
-# and GCS blob storage via the S3-compatible HMAC API.
+# Configures GCP-native integrations: the Gateway API HTTPRoute (GKE Gateway or
+# Envoy Gateway), and GCS blob storage via the S3-compatible HMAC API.
 #
 # Do NOT put secrets or env-specific values here.
 #   Hostname, admin email, bucket name, WI annotation → values-overrides.yaml (init-values.sh)
@@ -12,11 +12,13 @@
 # For an annotated reference, see examples/langsmith-values.yaml.
 
 ingress:
-  enabled: false  # GCP uses Envoy Gateway (Gateway API), not a K8s Ingress
+  enabled: false  # GCP uses the Gateway API (GKE Gateway or Envoy Gateway), not a K8s Ingress
 
 gateway:
   enabled: true
   name: ""        # Filled by init-values.sh from terraform output
+  # values-overrides.yaml (init-values.sh) replaces this: the LangSmith
+  # namespace for the GKE Gateway (the default), envoy-gateway-system for Envoy.
   namespace: "envoy-gateway-system"
 
 config:
