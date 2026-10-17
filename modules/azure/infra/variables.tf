@@ -323,6 +323,22 @@ variable "aks_private_dns_zone_id" {
   }
 
   validation {
+    # AKS names the private API server under its own domain per cloud, and a
+    # zone can only hold names under its own name, so AKS refuses any other zone
+    # at create, after the rest of stage 1 has run. Azure Government's domain is
+    # cx.aks.containerservice.azure.us, not the azmk8s.io that Microsoft's
+    # private-endpoint DNS table lists for it. The four forms are the ones AKS's
+    # own error message accepts; "private." is for API Server VNet integration.
+    condition = contains(["", "System", "None"], var.aks_private_dns_zone_id) || can(regex(
+      format("(?i)/privateDnsZones/(?:[a-z0-9-]{1,32}\\.)?(?:private|privatelink)\\.%s\\.%s$",
+        replace(lower(var.location), " ", ""),
+      var.azure_environment == "usgovernment" ? "cx\\.aks\\.containerservice\\.azure\\.us" : "azmk8s\\.io"),
+      var.aks_private_dns_zone_id
+    ))
+    error_message = "aks_private_dns_zone_id names a zone AKS will not use for a cluster in this location and cloud. The zone must be privatelink.<location>.cx.aks.containerservice.azure.us in Azure Government (azure_environment = \"usgovernment\") or privatelink.<location>.azmk8s.io in commercial Azure, optionally with a subzone prefix of up to 32 letters, digits or hyphens (<subzone>.privatelink...), or private.<location>... for API Server VNet integration. <location> is var.location, for example usgovvirginia."
+  }
+
+  validation {
     # A system-assigned identity does not exist until the cluster does, so
     # nothing can grant it rights on the zone before AKS needs them.
     condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || var.aks_control_plane_identity == "user"
@@ -791,6 +807,29 @@ variable "storage_allowed_ips" {
   type        = list(string)
   description = "Public IPs / CIDRs allowed through the storage account default-deny firewall. AKS pod traffic is allowlisted automatically via the Microsoft.Storage service endpoint on the AKS subnet — only add operator workstations, CI runners, or other external clients that need to reach the blob data plane."
   default     = []
+}
+
+variable "storage_shared_access_key_enabled" {
+  type        = bool
+  description = "Whether the LangSmith trace-blob account accepts Shared Key (access key) authorization. Off by default: LangSmith reaches it through Workload Identity, and Terraform manages it through the management plane, so nothing uses a key. Policies built on the Azure security benchmark deny accounts that allow it. SmithDB's account has its own setting, smithdb_storage_shared_access_key_enabled. Changing it updates the account in place."
+  default     = false
+}
+
+variable "smithdb_storage_shared_access_key_enabled" {
+  type        = bool
+  description = "Whether SmithDB's storage account accepts Shared Key (access key) authorization. Off by default: SmithDB reaches it through Workload Identity. Set true only for SmithDB's optional static-key authentication (smithdb.config.objectStore.azure.accessKeySecretKey); the trace-blob account stays as storage_shared_access_key_enabled sets it. Changing it updates the account in place."
+  default     = false
+}
+
+variable "storage_allowed_copy_scope" {
+  type        = string
+  description = "Which storage accounts a copy into the LangSmith or SmithDB account may come from: \"AAD\" (the default: accounts in the same Entra tenant), \"PrivateLink\" (accounts with a private link to the same virtual network), or \"\" for any account, Azure's own default, which security-benchmark policies audit. LangSmith never copies between accounts, so either restriction changes nothing it does."
+  default     = "AAD"
+
+  validation {
+    condition     = contains(["", "AAD", "PrivateLink"], var.storage_allowed_copy_scope)
+    error_message = "storage_allowed_copy_scope must be \"AAD\", \"PrivateLink\" or \"\" (any account)."
+  }
 }
 
 variable "storage_replication_type" {
@@ -1913,7 +1952,7 @@ variable "envoy_gateway_version" {
 
 variable "envoy_gateway_image_registry" {
   type        = string
-  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, so the mirror keeps the source host as the first path segment, the layout LangSmith's images.registry expects. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, the layout LangSmith's images.registry expects, when the mirror keeps the source host as the first path segment (envoy_gateway_image_registry_keeps_source_host = true, the default). A mirror that drops it, as a Docker Hub proxy repository in Nexus or Artifactory does, takes envoy_gateway_image_registry_keeps_source_host = false and is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
   default     = ""
 
   validation {
@@ -1927,6 +1966,12 @@ variable "envoy_gateway_image_registry" {
     condition     = var.envoy_gateway_image_registry == "" || contains(keys(local.envoy_proxy_default_images), var.envoy_gateway_version)
     error_message = "envoy_gateway_image_registry needs the Envoy proxy image that Envoy Gateway uses by default, and the module knows it only for envoy_gateway_version v1.2.0. Set envoy_gateway_version = \"v1.2.0\", or leave envoy_gateway_image_registry empty."
   }
+}
+
+variable "envoy_gateway_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether envoy_gateway_image_registry keeps docker.io as the first path segment under the registry. true (default): the controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version>, the layout LangSmith's images.registry expects. false: the mirror serves Docker Hub's paths directly, as a Docker Hub proxy repository in Nexus or Artifactory does, and the controller is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. The proxy image follows the same rule. Ignored without envoy_gateway_image_registry."
+  default     = true
 }
 
 variable "envoy_gateway_image_pull_secret_name" {

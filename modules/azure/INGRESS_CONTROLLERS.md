@@ -83,6 +83,7 @@ letsencrypt_email      = "you@example.com"
 - Terraform installs cert-manager after Envoy Gateway and sets its `ExperimentalGatewayAPISupport=true` feature gate, so no `kubectl patch` is needed
 - With `install_cert_manager = false`, the cluster's own cert-manager must run with Gateway API support enabled; `make deploy` warns about this
 - `deploy.sh` creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` **before** helm install (required for chart validation)
+- With `enable_fleet` or `enable_deployments` on, `deploy.sh` also applies the `langsmith-fleet-streams` HTTPRoute after the chart: Envoy Gateway applies an effective 15 s response timeout to the chart's catch-all HTTPRoute, which resets Fleet run streams and the Deployments proxy (`/api-host/v2`) mid-response (`response_flags=UT`, `net::ERR_HTTP2_PROTOCOL_ERROR` in the browser); the second route carries only those path prefixes with `timeouts.request: 0s`, so every other path keeps the default
 - The EnvoyProxy lists the `service.beta.kubernetes.io/azure-dns-label-name` annotation, so Envoy Gateway creates the proxy LB service with the DNS label already on it
 - For `letsencrypt` and `dns01`, the Gateway has the `cert-manager.io/cluster-issuer: letsencrypt-prod` annotation, and cert-manager issues `langsmith-tls` for its HTTPS listener
 - cert-manager uses the `gatewayHTTPRoute` solver for `letsencrypt`

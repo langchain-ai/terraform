@@ -57,3 +57,13 @@ output "metastore_private_dns_zone_id" {
   description = "The private DNS zone ID the metastore Flexible Server is configured with."
   value       = azurerm_postgresql_flexible_server.metastore.private_dns_zone_id
 }
+
+output "storage_shared_access_key_enabled" {
+  description = "Whether the SmithDB account accepts Shared Key authorization, as planned or created."
+  value       = azurerm_storage_account.smithdb.shared_access_key_enabled
+}
+
+output "storage_allowed_copy_scope" {
+  description = "Which accounts copy operations into the SmithDB account may source from; null means any."
+  value       = azurerm_storage_account.smithdb.allowed_copy_scope
+}
