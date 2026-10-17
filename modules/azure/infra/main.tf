@@ -1367,7 +1367,7 @@ module "aks" {
   # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
-  # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
+  # Ingress controller: 'envoy-gateway' (Helm, default), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
   ingress_controller = var.ingress_controller
   dns_label          = var.dns_label
 
