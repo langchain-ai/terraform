@@ -94,7 +94,7 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 - **What**: In-chart trace ingestion and query services used alongside ClickHouse on LangSmith chart 0.17
 - **Enabled by**: `enable_smithdb = true` (default: false). Requires GKE Standard
 - **Cloud dependencies**: Dedicated Cloud SQL PostgreSQL 18 metastore on a private IP, a dedicated GCS bucket, and a SmithDB-specific Workload Identity service account
-- **Scheduling**: A cache pool for the cache-heavy workloads (query, ingestion, compactionWorker) and a compute pool for the rest (compaction, clusterManager). Both autoscale from zero. The cache is on node Local SSD or on Hyperdisk volumes, and `smithdb_sizing = "minimal"` creates no pools - see [SMITHDB.md](SMITHDB.md#sizing)
+- **Scheduling**: A cache pool for the cache-heavy workloads (query, ingestion, compactionWorker) and a compute pool for the rest (compaction, clusterManager). Both autoscale from zero. The cache is a `standard-rwo` volume (`default-disk`), a Hyperdisk Balanced volume (`network-disk`), or node Local SSD (`local-ssd`), and `smithdb_sizing = "minimal"` creates no pools - see [SMITHDB.md](SMITHDB.md#sizing)
 - **Network**: Object-store traffic uses the subnet's Private Google Access; the metastore is reachable only over the VPC private service connection
 - **Rollout**: Ingestion, migration, and query integration default off and are enabled in separate validated stages - see [SMITHDB.md](SMITHDB.md)
 
