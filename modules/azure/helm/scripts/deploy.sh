@@ -135,7 +135,7 @@ echo ""
 # Azure assigns <dns_label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net
 # in Azure Government) to the public IP only when
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
-# Covers nginx, istio and istio-addon. Envoy Gateway creates its Service per Gateway,
+# Covers istio and istio-addon. Envoy Gateway creates its Service per Gateway,
 # so the EnvoyProxy in the Envoy Gateway block below carries the label instead.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
@@ -144,7 +144,7 @@ _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller=
 _cloudapp_suffix=$(_azure_cloudapp_suffix)
 # ingress_load_balancer = "internal" puts the controller's load balancer on a
 # private IP in the cluster's VNet. Terraform annotates the Services it owns
-# (nginx, self-managed Istio); the EnvoyProxy and the Istio add-on's internal
+# (self-managed Istio); the EnvoyProxy and the Istio add-on's internal
 # gateway are handled below. Terraform refuses dns_label with "internal".
 _ingress_lb=$(_parse_tfvar "ingress_load_balancer") || _ingress_lb="public"
 _ingress_lb_subnet_id=$(_parse_tfvar "ingress_load_balancer_subnet_id") || _ingress_lb_subnet_id=""
@@ -153,10 +153,6 @@ _ingress_lb_ip=$(_parse_tfvar "ingress_load_balancer_ip") || _ingress_lb_ip=""
 _ingress_lb_subnet="${_ingress_lb_subnet_id##*/}"
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
-    nginx)
-      _lb_svc="ingress-nginx-controller"
-      _lb_ns="ingress-nginx"
-      ;;
     istio-addon)
       _lb_svc="aks-istio-ingressgateway-external"
       _lb_ns="aks-istio-ingress"
@@ -272,7 +268,6 @@ EOF
     # istio-addon and agic never get here: Terraform rejects them with letsencrypt.
     case "$_ingress_controller" in
       istio) _acme_ingress_class="istio" ;;
-      nginx) _acme_ingress_class="nginx" ;;
       *)     _acme_ingress_class="$_byo_ingress_class" ;;
     esac
     kubectl apply -f - &>/dev/null <<EOF
@@ -829,7 +824,7 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   _eg_service_annotations="{}"
   [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
-  # Internal: the annotations Terraform puts on the nginx and Istio Services,
+  # Internal: the annotations Terraform puts on the Istio Services,
   # from its output. It prints a one-line JSON object, which is YAML flow
   # syntax. dns_label is refused with "internal", so the two never combine.
   if [[ "$_ingress_lb" == "internal" ]]; then
@@ -1232,34 +1227,6 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   else
     warn "Envoy Gateway LoadBalancer has no IP yet. Check: kubectl get gateway langsmith-gateway -n ${NAMESPACE}"
   fi
-
-  # A deployment moved off ingress-nginx still has the langsmith-tls Certificate
-  # its Ingress owned, and cert-manager's gateway-shim refuses to take it over.
-  # The helm upgrade above removed that Ingress, so garbage collection deletes
-  # the Certificate, and the shim does not retry on its own: the Secret keeps
-  # serving until it expires, and nothing renews it. Touching the Gateway makes
-  # the shim re-sync and create a Certificate the Gateway owns.
-  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
-    _eg_cert_owner=""
-    for _ in $(seq 1 24); do
-      _eg_cert_owner=$(kubectl get certificate langsmith-tls -n "$NAMESPACE" \
-        -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || echo "none")
-      [[ "$_eg_cert_owner" == "Ingress" ]] || break
-      sleep 5
-    done
-    case "$_eg_cert_owner" in
-      Gateway) ;;
-      Ingress)
-        warn "Certificate langsmith-tls is still owned by the old Ingress, so it will not renew."
-        action "Re-run make deploy once kubectl get ingress -n ${NAMESPACE} shows no langsmith Ingress"
-        ;;
-      *)
-        kubectl annotate gateway langsmith-gateway -n "$NAMESPACE" --overwrite \
-          "langsmith.com/cert-resync=$(date +%s)" >/dev/null
-        pass "Asked cert-manager to re-create Certificate langsmith-tls for the Gateway"
-        ;;
-    esac
-  fi
 fi
 
 # ── Post-deploy self-managed Istio TLS sync ───────────────────────────────
@@ -1345,7 +1312,7 @@ fi
 
 # ── LLM Gateway: an Ingress of its own for /gateway/ ─────────────────────
 # The chart's frontend allows 900 s on /gateway/ for long model calls, but
-# ingress-nginx cuts at 60 s and Application Gateway at 30 s. Raising that on the
+# Application Gateway cuts at 30 s. Raising that on the
 # chart's Ingress would raise it for every path, so /gateway/ gets a second
 # Ingress, built from the chart's (same class, host, TLS and backend), carrying
 # the longer timeout; every other path keeps the controller default. Istio has no
@@ -1354,7 +1321,7 @@ fi
 _chart_fullname="$RELEASE_NAME"
 [[ "$RELEASE_NAME" == *langsmith* ]] || _chart_fullname="${RELEASE_NAME}-langsmith"
 _gw_ingress="${_chart_fullname}-llm-gateway"
-if [[ "$_enable_llm_gateway" == "true" && ( "$_ingress_controller" == "nginx" || "$_ingress_controller" == "agic" ) ]]; then
+if [[ "$_enable_llm_gateway" == "true" && "$_ingress_controller" == "agic" ]]; then
   if _chart_ingress_json=$(kubectl get ingress "${_chart_fullname}-ingress" -n "$NAMESPACE" -o json 2>/dev/null); then
     if printf '%s' "$_chart_ingress_json" \
         | python3 "$SCRIPT_DIR/llm-gateway-ingress.py" --controller "$_ingress_controller" --name "$_gw_ingress" \

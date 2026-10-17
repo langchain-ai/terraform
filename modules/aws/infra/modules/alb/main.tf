@@ -19,11 +19,10 @@ data "aws_caller_identity" "current" {}
 data "aws_elb_service_account" "current" {}
 
 locals {
-  gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway || var.enable_nginx_ingress
+  gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway
   # Envoy Gateway: pods listen on port 10080 (Gateway listener port 80 + 10000 offset,
   # Envoy runs non-root and can't bind to privileged ports below 1024).
   # Istio ingress gateway: listens directly on port 80 (envoy with NET_BIND_SERVICE).
-  # NGINX ingress controller: listens on port 80.
   gateway_target_port = var.enable_envoy_gateway ? 10080 : 80
 
   byo_security_group = var.existing_security_group_id != null && var.existing_security_group_id != ""
@@ -165,7 +164,6 @@ resource "aws_lb" "this" {
 #
 # Envoy Gateway: pods listen on port 10080 (Gateway listener port 80 + 10000 offset).
 # Istio:         pods listen on port 80    (istio-ingressgateway with NET_BIND_SERVICE).
-# NGINX:         pods listen on port 80    (ingress-nginx-controller).
 # Health check uses "200-404": Envoy/Istio returns 404 on unknown paths, which is
 # still a sign the proxy is alive and ready to serve traffic.
 

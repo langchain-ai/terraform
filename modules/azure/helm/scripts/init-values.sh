@@ -180,7 +180,7 @@ echo ""
 #   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
 #   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
 #      (cloudapp.usgovcloudapi.net in Azure Government)
-#      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
+#      Works for ALL ingress controllers (istio, istio-addon, envoy-gateway).
 #      Azure assigns the DNS label to whichever LB service has the annotation set.
 #   3. Existing value in values-overrides.yaml (keep on re-run)
 #   4. Interactive prompt
@@ -408,7 +408,6 @@ info "Generating values-overrides.yaml..."
 
 # Build ingress/TLS block
 # The ingressClassName varies by ingress controller:
-#   nginx         → "nginx"
 #   istio         → "istio"  (self-managed via Helm)
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
@@ -417,7 +416,6 @@ info "Generating values-overrides.yaml..."
 #                             hand in this file, kept on re-run)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;
-  nginx)             _ingress_class="nginx" ;;
   agic)              _ingress_class="azure-application-gateway" ;;
   *)                 _ingress_class="" ;;
 esac
