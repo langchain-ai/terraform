@@ -77,7 +77,7 @@ aws eks associate-access-policy --cluster-name <cluster-name> --principal-arn <r
 
 **Symptom:** `kubectl get ingress -n langsmith` shows no ADDRESS after several minutes.
 
-**Cause:** AWS Load Balancer Controller is not running or lacks the required IRSA permissions, the Terraform-provisioned ALB is not being referenced correctly, or `alb_scheme = "internal"` is set (internal ALBs won't have a public address — see Issue #14).
+**Cause:** AWS Load Balancer Controller is not running or lacks the required IRSA permissions, or the Terraform-provisioned ALB is not being referenced correctly.
 
 **Fix:**
 
@@ -316,70 +316,20 @@ terraform apply -var-file=terraform.tfvars
 
 ---
 
-### Issue #13 — Private EKS cluster unreachable from outside the VPC
+### Issue #13 — EKS API unreachable
 
-**Symptom:** `kubectl` and `terraform apply` timeout when `enable_public_eks_cluster = false`. During Pass 1 the in-cluster resources (gp3 StorageClass, AWS Load Balancer Controller, Cluster Autoscaler, Metrics Server) all fail together:
-```
-Error: Post "https://<cluster-id>.gr7.<region>.eks.amazonaws.com/apis/storage.k8s.io/v1/storageclasses":
-       dial tcp 10.0.3.234:443: i/o timeout
+**Symptom:** `kubectl` or Terraform's Kubernetes and Helm providers time out connecting to the EKS API.
 
-Error: Kubernetes cluster unreachable: Get "https://<cluster-id>.gr7.<region>.eks.amazonaws.com/version":
-       dial tcp 10.0.3.234:443: i/o timeout
-```
+**Cause:** The public EKS API endpoint does not allow your current egress IP, or your network blocks outbound HTTPS to the endpoint.
 
-**Cause:** The EKS API endpoint is private-only. The `kubernetes` and `helm` providers run wherever Terraform runs, so the address in the error is a private VPC IP with no route from outside. You must run commands from within the VPC — via the bastion host or a VPN connection — or expose the endpoint.
-
-**Fix — from inside the VPC:**
-
-```bash
-# If bastion was provisioned (create_bastion = true):
-aws ssm start-session --target <bastion-instance-id>
-
-# From the bastion, update kubeconfig and proceed normally:
-aws eks update-kubeconfig --region <region> --name <cluster-name>
-kubectl get nodes
-```
-
-If the bastion wasn't provisioned, set `create_bastion = true` and re-apply.
-
-**Fix — from a workstation outside the VPC:** expose the API endpoint and restrict it to your address:
-
-```bash
-curl -s https://checkip.amazonaws.com
-```
+**Fix:** Check network connectivity and ensure `eks_public_access_cidrs` includes the egress IP of the machine running Terraform and kubectl. If your team uses a VPN, allow its egress range.
 
 ```hcl
 # terraform.tfvars
-enable_public_eks_cluster = true
-eks_public_access_cidrs   = ["<your-ip>/32"]
+eks_public_access_cidrs = ["<your-ip>/32"]
 ```
 
-```bash
-make plan    # shows the endpoint update plus the in-cluster resources still to add
-make apply
-```
-
-The endpoint update takes a few minutes, after which the previously failed resources converge on the same apply run. Note the allowlist has to be updated whenever your address changes — point it at a stable VPN egress range for anything beyond one-off testing, and never widen it to `0.0.0.0/0`.
-
----
-
-### Issue #14 — ALB has no public address (internal scheme)
-
-**Symptom:** `kubectl get ingress -n langsmith` shows an ADDRESS, but the hostname resolves only within the VPC. Browser access from outside the network fails.
-
-**Cause:** `alb_scheme = "internal"` was set in `terraform.tfvars`. Internal ALBs are only reachable from within the VPC (via VPN, peering, or PrivateLink).
-
-**Fix:** This is intentional for private deployments. To make it publicly reachable:
-
-```hcl
-# terraform.tfvars
-alb_scheme = "internet-facing"
-```
-
-```bash
-terraform apply -var-file=terraform.tfvars
-# Then redeploy Helm to pick up the new ALB
-```
+Review and apply the CIDR change, then retry the failed command. Update the allowlist when your egress IP changes.
 
 ---
 
@@ -606,29 +556,6 @@ aws s3api put-public-access-block \
 ```
 
 **Fix — fall back to local state:** remove or rename `infra/backend.tf`. Terraform then writes `terraform.tfstate` into `infra/`. Acceptable for single-operator testing only, since the state file is not shared, locked, or versioned.
-
----
-
-### Issue #22 — Bastion instance create fails: root volume smaller than AMI snapshot
-
-**Symptom:**
-```
-Error: creating EC2 Instance: operation error EC2: RunInstances, ...
-  api error InvalidBlockDeviceMapping: Volume of size 20GB is smaller than snapshot 'snap-...',
-  expect size >= 30GB
-
-  with module.bastion[0].aws_instance.bastion,
-```
-
-**Cause:** The bastion root volume defaults to 20 GB (`bastion_root_volume_size_gb` in `infra/variables.tf`, `root_volume_size_gb` in `infra/modules/bastion/variables.tf`) while the AMI in use has a 30 GB root snapshot. EC2 rejects `RunInstances` when the requested volume is smaller than the source snapshot.
-
-**Fix:** Override the size in `terraform.tfvars` and re-apply:
-
-```hcl
-bastion_root_volume_size_gb = 30   # 40 leaves headroom for kubectl and helm caches, and logs
-```
-
-If the bastion is not needed — for example when the EKS endpoint is public with an IP allowlist (Issue #13) — set `create_bastion = false` instead.
 
 ---
 

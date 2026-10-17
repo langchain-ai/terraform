@@ -25,8 +25,7 @@ model credentials.
   Mantle endpoint of the region that Engine uses (`bedrock-mantle.<region>.api.aws`,
   `bedrock-mantle.us-east-1.api.aws` by default).
   For LangSmith Intelligence, the cluster also needs `beacon.aws.langchain.com`. The
-  NAT gateway gives this access by default. With `create_firewall = true`, add these
-  names to `firewall_allowed_fqdns`.
+  NAT gateway provides outbound internet access by default.
 - Access to the Engine models in Amazon Bedrock. See [Amazon Bedrock](#amazon-bedrock).
 
 ## Turn on Engine
@@ -220,8 +219,6 @@ kubectl get secret langsmith-config -n langsmith \
 - **Test connection fails for Amazon Bedrock.** Check that the pods run with the
   Engine role (see [Verify](#verify)). Check model access and the
   `AWS_BEDROCK_REGION` organization secret (see [Amazon Bedrock](#amazon-bedrock)).
-  With `create_firewall = true`, check that `firewall_allowed_fqdns` has the Bedrock
-  Mantle endpoint of that region.
 - **Test connection says "AWS Bedrock does not have `<model>` available".**
   Bedrock Mantle does not serve that model in the region of `AWS_BEDROCK_REGION`.
   Model access in the Amazon Bedrock console does not change this. Delete the secret

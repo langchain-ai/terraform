@@ -56,7 +56,6 @@ LangSmith on AWS is deployed in three passes.
 │  Bootstrap:  k8s-bootstrap (KEDA, ESO, Envoy Gateway),                      │
 │              cert-manager (standalone, active when tls=letsencrypt)         │
 │  Ingress:    ALB → Envoy Gateway (default), or ALB Ingress, Istio, NGINX    │
-│  Opt-in:     Network Firewall (FQDN-based egress filtering)                 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -117,31 +116,6 @@ langsmith-agents namespace (optional — dataplane)
         └── HTTPRoute attaches to shared langsmith-gateway (cross-namespace via allowedRoutes: All)
 ```
 
-### Egress path with Network Firewall (optional — `create_firewall = true`)
-
-When Network Firewall is enabled, all outbound internet traffic from private subnets is
-inspected before reaching the NAT gateway:
-
-```
-EKS pods / RDS / ElastiCache (private subnets)
-    │  0.0.0.0/0 → firewall endpoint (private route table)
-    ▼
-AWS Network Firewall (firewall subnet, same AZ as NAT gateway)
-    │  domain allowlist: TLS SNI + HTTP Host inspection
-    │  ALLOWLIST: firewall_allowed_fqdns (default: beacon.langchain.com)
-    │  DROP: all other established connections
-    ▼
-NAT Gateway (public subnet)
-    │
-    ▼
-Internet
-```
-
-Internal traffic (pod-to-pod, pod-to-RDS, pod-to-ElastiCache) routes via the local VPC
-route and never touches the firewall.
-
----
-
 ## Ingress Options
 
 Four mutually exclusive ingress options are supported. The choice determines whether
@@ -165,14 +139,14 @@ Envoy Gateway and Istio both support cross-namespace routing via the Kubernetes 
 
 ### ALB + Envoy Gateway (chained pattern)
 
-When a customer has an existing ALB with SSO (Okta/Cognito), WAF, and TLS configured,
+When a customer has an existing ALB with SSO (Okta/Cognito) and TLS configured,
 Envoy Gateway is added behind it rather than replacing it:
 
 ```
 Internet
     │
     ▼
-ALB ← unchanged: WAF, SSO (Okta/Cognito OIDC), TLS, DNS
+ALB ← unchanged: SSO (Okta/Cognito OIDC), TLS, DNS
     │
     ▼  (ALB target group retargeted to Envoy NLB — only change)
 Envoy Gateway NLB (internal-scheme, auto-provisioned by k8s-bootstrap)
@@ -202,7 +176,7 @@ With `enable_engine`, Engine's API server and queue run under a dedicated `<name
 ## Module Dependency Graph
 
 ```
-vpc  ──►  firewall  (AWS Network Firewall, optional — create_firewall = true)
+vpc
 │
 ├──►  eks  ──►  k8s-bootstrap (KEDA, ESO, Envoy Gateway [opt-in])
 │                └──►  cert-manager  (standalone module — Let's Encrypt DNS-01 via Route 53 IRSA)
@@ -211,26 +185,9 @@ vpc  ──►  firewall  (AWS Network Firewall, optional — create_firewall = 
 ├──►  redis       (ElastiCache, private subnets from VPC)
 ├──►  storage     (S3 bucket + VPC Gateway Endpoint)
 ├──►  alb         (pre-provisioned ALB, public subnets)
-│     └──►  alb_access_logs  (S3 bucket for ALB access logs — opt-in)
-├──►  dns         (Route 53 zone + ACM cert, optional)
-├──►  bastion     (jump host for private EKS access, optional)
-├──►  cloudtrail  (audit logging, optional)
-├──►  waf         (WAF ACL on ALB, optional)
-└──►  firewall    (Network Firewall egress filter, optional)
+└──►  dns         (Route 53 zone + ACM cert, optional)
           all ──►  langsmith (root module)
 ```
-
-### Opt-In Security Modules
-
-Four modules are disabled by default and can be enabled in `terraform.tfvars`:
-
-| Module | Variable | Default | Purpose |
-|--------|----------|---------|---------|
-| Network Firewall | `create_firewall` | `false` | FQDN-based egress filtering — drops all outbound traffic not in `firewall_allowed_fqdns`. Requires `create_vpc = true`. Cost: ~$0.395/hr/endpoint + $0.065/GB processed. |
-| ALB access logs | `alb_access_logs_enabled` | `false` | Traffic analysis and compliance |
-| CloudTrail | `create_cloudtrail` | `false` | API call logging (skip if org trail exists) |
-| WAF | `create_waf` | `false` | WAFv2 Web ACL — OWASP Top 10, IP reputation, known bad inputs |
-| Network Firewall | `create_firewall` | `false` | AWS Network Firewall — FQDN-based egress filtering for private subnets. Intercepts outbound traffic between the private subnet route tables and the NAT gateway; allows only domains in `firewall_allowed_fqdns` (TLS SNI + HTTP Host). Requires `create_vpc = true`. Cost: ~$0.40/hr per endpoint + $0.065/GB processed. |
 
 ### cert-manager Module
 

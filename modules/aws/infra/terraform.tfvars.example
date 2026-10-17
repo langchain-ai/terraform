@@ -155,20 +155,8 @@ create_vpc = true
 # https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html
 eks_cluster_version = "1.34"
 
-# Public API endpoint — controls whether the EKS API server is reachable
-# from outside the VPC.
+# The EKS API endpoint is public. Restrict access with a CIDR allowlist.
 # Docs: https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html
-#
-# false (default) — private endpoint only. kubectl must run from inside the
-#   VPC (e.g. via VPN, bastion host, or SSM Session Manager). More secure.
-#
-# true — public endpoint. kubectl works from your laptop, CI/CD runners, etc.
-#   If you enable this, you SHOULD also set eks_public_access_cidrs below
-#   to restrict who can reach it.
-enable_public_eks_cluster = false
-
-# CIDR allowlist for the public EKS API endpoint (ignored when
-# enable_public_eks_cluster = false).
 # Default is 0.0.0.0/0 (open to the internet). Restrict this to your team's
 # IP addresses or corporate VPN egress IPs.
 #
@@ -576,55 +564,19 @@ langsmith_namespace = "langsmith"
 # langsmith_helm_chart_version = "0.17.0"
 
 #------------------------------------------------------------------------------
-# SECURITY ADD-ONS (all optional, all default to off)
+# ALB Network Access
 #------------------------------------------------------------------------------
-# These are independent features you can enable for compliance or auditing.
-# Each one adds AWS resources and may have additional costs.
-
-# ── ALB Network Access ───────────────────────────────────────────────────────
-#
-# alb_scheme = "internet-facing" or "internal"
-#   "internet-facing" → ALB on public subnets (default).
-#   "internal"        → ALB on private subnets (reachable only from within the
-#                       VPC or via VPN/peering/Transit Gateway).
-#
-# alb_allowed_cidr_blocks = ["10.0.0.0/8", "172.16.0.0/12"]
-#   Restricts which IPs can reach ports 80/443 on the ALB security group.
-#   Defaults to ["0.0.0.0/0"] (open). Set to your VPN/office CIDRs for
-#   internal or limited-access deployments.
-#
-# GOING PUBLIC LATER:
-#   1. Set alb_scheme = "internet-facing"  (switches to public subnets)
-#   2. Set alb_allowed_cidr_blocks = ["0.0.0.0/0"]  (opens to all)
-#   3. Run: terraform apply
-#   The ALB DNS name will change — update any DNS records or bookmarks.
-
-# alb_scheme              = "internet-facing"
+# The internet-facing ALB uses public subnets. Restrict HTTP/HTTPS access
+# to specific egress IPs or VPN/office CIDRs if needed.
+# With Engine enabled, the managed VPC's NAT IPs are also allowed automatically.
+# For an existing VPC, include the sandbox nodes' NAT egress IPs as /32 entries.
+# For a supplied ALB security group, add those IPs to its rules yourself.
 # alb_allowed_cidr_blocks = ["0.0.0.0/0"]
 
-# Attach an existing security group to the ALB (or bastion, if create_bastion
-# = true) instead of letting Terraform create one. Attach-only: Terraform
-# will not write rules onto a supplied group. See "Bring your own security
-# groups" in README.md.
-# alb_existing_security_group_id     = "sg-0123456789abcdef2"
-# bastion_existing_security_group_id = "sg-0123456789abcdef3"
-
-# ALB Access Logs — captures every request that hits the ALB:
-#   client IP, request URI, response latency, HTTP status code.
-#   Docs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
-#   Creates a dedicated S3 bucket with the required ELB delivery policy.
-#   Useful for: traffic analysis, security forensics, compliance audits.
-#   Cost: S3 storage only (~$0.023/GB/month in us-east-1).
-# alb_access_logs_enabled = false
-
-# CloudTrail — records all AWS API calls in this account to S3:
-#   who did what, when, from where (IAM, S3, EKS, RDS, etc.).
-#   SKIP THIS if your organization already has an account-level or org-level
-#   CloudTrail — adding another is redundant and doubles your storage costs.
-#   To check: aws cloudtrail describe-trails --query 'trailList[*].Name'
-# create_cloudtrail             = false
-# cloudtrail_multi_region       = true    # recommended — catches global IAM events
-# cloudtrail_log_retention_days = 365     # set 0 to keep indefinitely
+# Attach an existing security group to the ALB instead of creating one.
+# Terraform does not write rules onto a supplied group.
+# See "Bring your own security groups" in README.md.
+# alb_existing_security_group_id = "sg-0123456789abcdef2"
 
 #------------------------------------------------------------------------------
 # INGRESS / GATEWAY MODE
@@ -691,53 +643,6 @@ enable_istio_gateway = false
 # Route 53 hosted zone ID for your domain. Find it:
 #   aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table
 # cert_manager_hosted_zone_id = "Z1ABCDEF123456"
-
-# WAF (Web Application Firewall) — attaches a WAFv2 Web ACL to the ALB.
-#   Docs: https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-list.html
-#   Includes AWS managed rule groups:
-#     - AWSManagedRulesCommonRuleSet (OWASP Top 10)
-#     - AWSManagedRulesKnownBadInputsRuleSet (Log4Shell, etc.)
-#     - AWSManagedRulesAmazonIpReputationList (known bad IPs)
-#   Cost: ~$5/mo base + $1/mo per rule group + $0.60/million requests.
-# create_waf = false
-
-# Network Firewall — FQDN-based egress filtering for outbound internet traffic.
-#   Deploys an AWS Network Firewall between private subnets and the NAT gateway.
-#   All traffic leaving the VPC is inspected. Only destinations in
-#   firewall_allowed_fqdns are permitted; everything else is dropped.
-#
-#   Requires create_vpc = true (BYOV is not supported with this flag).
-#
-#   How it works:
-#     1. A firewall subnet and endpoint are created in the NAT gateway's AZ.
-#     2. Private route tables are updated: 0.0.0.0/0 → firewall endpoint
-#        (instead of directly to the NAT gateway).
-#     3. The firewall subnet routes 0.0.0.0/0 → NAT gateway.
-#     4. The firewall inspects TLS SNI (HTTPS) and HTTP Host headers and
-#        passes only traffic matching firewall_allowed_fqdns.
-#     5. All other established connections are dropped at the firewall.
-#
-#   Internal VPC traffic (RDS, ElastiCache, pod-to-pod) is unaffected —
-#   it routes via the local VPC route and never hits the firewall.
-#
-#   Cost: ~$0.395/hr per firewall endpoint + $0.065/GB data processed
-#         ≈ $285/mo base before data charges.
-#   Docs: https://docs.aws.amazon.com/network-firewall/latest/developerguide/
-#
-# create_firewall = false
-
-# Domains allowed for outbound internet traffic when create_firewall = true.
-# Add more entries if LangSmith components need additional external endpoints
-# (e.g. LangChain Managed ClickHouse, external model providers, package registries).
-# Default covers the LangSmith beacon/telemetry endpoint only.
-#
-# firewall_allowed_fqdns = ["beacon.langchain.com"]
-
-# CIDR block for the firewall subnet. Must not overlap with existing subnets.
-# Default fits within 10.0.0.0/16 after the default private (10.0.0.0/21–10.0.32.0/21)
-# and public (10.0.40.0/21–10.0.56.0/21) subnets.
-#
-# firewall_subnet_cidr = "10.0.64.0/21"
 
 #------------------------------------------------------------------------------
 # HELM SIZING PROFILE

@@ -27,31 +27,11 @@ run "optional_modules_absent_when_flags_are_false" {
   command = plan
 
   variables {
-    create_firewall          = false
-    create_cloudtrail        = false
-    create_waf               = false
-    create_bastion           = false
     create_cert_manager_irsa = false
     enable_sandboxes         = false
     enable_smithdb           = false
   }
 
-  assert {
-    condition     = length(module.firewall) == 0
-    error_message = "create_firewall = false still planned the firewall"
-  }
-  assert {
-    condition     = length(module.cloudtrail) == 0
-    error_message = "create_cloudtrail = false still planned CloudTrail"
-  }
-  assert {
-    condition     = length(module.waf) == 0
-    error_message = "create_waf = false still planned the WAF"
-  }
-  assert {
-    condition     = length(module.bastion) == 0
-    error_message = "create_bastion = false still planned the bastion"
-  }
   assert {
     condition     = length(module.cert_manager) == 0
     error_message = "create_cert_manager_irsa = false still planned the cert-manager IRSA role"
@@ -69,91 +49,6 @@ run "optional_modules_absent_when_flags_are_false" {
 # ── Optional modules, one flag at a time ─────────────────────────────────────
 # Every run flips exactly one flag, so a run that also plans a sibling module
 # means two gates read the same variable.
-
-# The firewall module is overridden for the same reason as the dns module below,
-# but here the cause is worth a second look: it does
-# for_each = toset(var.private_route_table_ids) over route table IDs that the VPC
-# module creates in the same run, and no provider reports a created resource's ID
-# at plan time. A greenfield plan with create_firewall = true therefore looks
-# like it cannot succeed in one pass.
-run "create_firewall_adds_only_the_firewall" {
-  command = plan
-
-  variables {
-    create_firewall = true
-  }
-
-  override_module {
-    target = module.firewall
-    outputs = {
-      firewall_arn         = "arn:aws:network-firewall:us-east-2:123456789012:firewall/plan-tests"
-      firewall_endpoint_id = "vpce-00000000000000001"
-      firewall_subnet_id   = "subnet-00000000000000005"
-      firewall_policy_arn  = "arn:aws:network-firewall:us-east-2:123456789012:firewall-policy/plan-tests"
-      rule_group_arn       = "arn:aws:network-firewall:us-east-2:123456789012:stateful-rulegroup/plan-tests"
-    }
-  }
-
-  assert {
-    condition     = length(module.firewall) == 1
-    error_message = "create_firewall = true did not plan the firewall"
-  }
-  assert {
-    condition     = length(module.waf) == 0
-    error_message = "create_firewall = true also planned the WAF"
-  }
-}
-
-run "create_cloudtrail_adds_only_cloudtrail" {
-  command = plan
-
-  variables {
-    create_cloudtrail = true
-  }
-
-  assert {
-    condition     = length(module.cloudtrail) == 1
-    error_message = "create_cloudtrail = true did not plan CloudTrail"
-  }
-  assert {
-    condition     = length(module.waf) == 0
-    error_message = "create_cloudtrail = true also planned the WAF"
-  }
-}
-
-run "create_waf_adds_only_the_waf" {
-  command = plan
-
-  variables {
-    create_waf = true
-  }
-
-  assert {
-    condition     = length(module.waf) == 1
-    error_message = "create_waf = true did not plan the WAF"
-  }
-  assert {
-    condition     = length(module.cloudtrail) == 0
-    error_message = "create_waf = true also planned CloudTrail"
-  }
-}
-
-run "create_bastion_adds_only_the_bastion" {
-  command = plan
-
-  variables {
-    create_bastion = true
-  }
-
-  assert {
-    condition     = length(module.bastion) == 1
-    error_message = "create_bastion = true did not plan the bastion"
-  }
-  assert {
-    condition     = length(module.waf) == 0
-    error_message = "create_bastion = true also planned the WAF"
-  }
-}
 
 # The DNS-01 Let's Encrypt path. The hosted zone and the contact address are
 # required alongside the flag, so all three move together.
@@ -274,10 +169,6 @@ run "enable_smithdb_adds_only_smithdb" {
   assert {
     condition     = length(module.smithdb) == 1
     error_message = "enable_smithdb = true did not plan SmithDB"
-  }
-  assert {
-    condition     = length(module.bastion) == 0
-    error_message = "enable_smithdb = true also planned the bastion"
   }
 }
 
@@ -410,7 +301,6 @@ run "custom_networking_admits_pods_to_a_restricted_alb" {
 
   variables {
     eks_network_mode        = "custom-networking"
-    alb_scheme              = "internal"
     alb_allowed_cidr_blocks = ["10.0.0.0/16"]
   }
 
