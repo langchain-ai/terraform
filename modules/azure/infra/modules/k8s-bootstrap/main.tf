@@ -109,12 +109,19 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
   volume_binding_mode    = "WaitForFirstConsumer"
   allow_volume_expansion = true
 
-  parameters = {
-    skuName           = "PremiumV2_LRS"
-    cachingMode       = "None"
-    DiskIOPSReadWrite = tostring(var.smithdb_cache_disk_iops)
-    DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
-  }
+  # The disk CSI driver creates these disks in the node resource group, outside
+  # Terraform, and tags them only from the tags parameter (key1=val1,key2=val2),
+  # not from the cluster. Kubernetes refuses parameter updates, so a tag change
+  # replaces the StorageClass; disks already provisioned keep their old tags.
+  parameters = merge(
+    {
+      skuName           = "PremiumV2_LRS"
+      cachingMode       = "None"
+      DiskIOPSReadWrite = tostring(var.smithdb_cache_disk_iops)
+      DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
+    },
+    length(var.tags) > 0 ? { tags = join(",", [for k, v in var.tags : "${k}=${v}"]) } : {},
+  )
 }
 
 # ── Resource Quota ────────────────────────────────────────────────────────────

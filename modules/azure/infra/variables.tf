@@ -188,6 +188,24 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "tags" {
+  type        = map(string)
+  description = "Extra tags on all resources, for keys a tag policy requires beyond environment, owner, and cost_center (e.g. { team = \"platform\", product = \"langsmith\" }). A key here overrides environment, owner, cost_center, project, or managed_by of the same name."
+  default     = {}
+
+  # Private DNS zones and Key Vault secrets take at most 15 tags. The secrets
+  # carry the most: these keys, the built-in ones, and module and component.
+  validation {
+    condition = length(setunion(
+      keys(var.tags),
+      ["environment", "project", "managed_by", "module", "component"],
+      var.owner != "" ? ["owner"] : [],
+      var.cost_center != "" ? ["cost_center"] : [],
+    )) <= 15
+    error_message = "tags: private DNS zones and Key Vault secrets accept at most 15 tags, and these keys plus environment, project, managed_by, module, component, and owner and cost_center when set come to ${length(setunion(keys(var.tags), ["environment", "project", "managed_by", "module", "component"], var.owner != "" ? ["owner"] : [], var.cost_center != "" ? ["cost_center"] : []))}. Drop keys from tags until the total is 15 or fewer."
+  }
+}
+
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 variable "keyvault_name" {

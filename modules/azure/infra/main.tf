@@ -448,7 +448,7 @@ locals {
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
-  # Customize via the environment/owner/cost_center variables.
+  # Customize via the environment/owner/cost_center/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
   common_tags = merge(
@@ -458,7 +458,8 @@ locals {
       managed_by  = "terraform"
     },
     var.owner != "" ? { owner = var.owner } : {},
-    var.cost_center != "" ? { cost_center = var.cost_center } : {}
+    var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    var.tags
   )
 }
 
@@ -978,6 +979,14 @@ resource "terraform_data" "validate_network" {
     precondition {
       condition     = var.smithdb_cache_disk_throughput_mbps <= var.smithdb_cache_disk_iops * 0.25
       error_message = "smithdb_cache_disk_throughput_mbps (${var.smithdb_cache_disk_throughput_mbps}) cannot exceed 0.25 MB/s per provisioned IOPS. Azure caps a Premium SSD v2 at 0.25 * smithdb_cache_disk_iops, which is ${var.smithdb_cache_disk_iops * 0.25} MB/s at the configured ${var.smithdb_cache_disk_iops} IOPS. Raise smithdb_cache_disk_iops or lower the throughput."
+    }
+
+    # The SmithDB cache StorageClass hands the tags to the disk CSI driver as
+    # key=value,key=value. The driver splits on commas, then each pair on its
+    # first =, and fails every cache PVC on a pair it can't read.
+    precondition {
+      condition     = !var.enable_smithdb || alltrue([for k, v in local.common_tags : !strcontains(k, ",") && !strcontains(k, "=") && !strcontains(v, ",")])
+      error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, or cost_center."
     }
 
     # SmithDB caches sit on Premium SSD v2, and in most regions that offer
@@ -2394,6 +2403,7 @@ module "k8s_bootstrap" {
   smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
+  tags                             = local.common_tags
 
   # SmithDB's pods on top of the base namespace quota. Zero when disabled.
   resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
