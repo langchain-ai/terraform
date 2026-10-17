@@ -378,8 +378,9 @@ run "agic_with_overlay_warns" {
   command = plan
 
   variables {
-    ingress_controller = "agic"
-    aks_network_mode   = "overlay"
+    ingress_controller     = "agic"
+    aks_network_mode       = "overlay"
+    tls_certificate_source = "none"
   }
 
   expect_failures = [check.agic_with_overlay_unverified]

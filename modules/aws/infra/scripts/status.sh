@@ -248,12 +248,12 @@ else
     pass "kubectl context points to ${_cluster_name}"
   elif [[ -n "$_current_ctx" ]]; then
     warn "kubectl context is '${_current_ctx}' — expected *${_cluster_name}*"
-    action "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
-    set_next "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
+    action "source infra/scripts/set-kubeconfig.sh"
+    set_next "source infra/scripts/set-kubeconfig.sh"
   else
     fail "No kubectl context set"
-    action "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
-    set_next "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
+    action "source infra/scripts/set-kubeconfig.sh"
+    set_next "source infra/scripts/set-kubeconfig.sh"
   fi
 
   if kubectl cluster-info --request-timeout=5s &>/dev/null; then

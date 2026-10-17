@@ -114,6 +114,17 @@ role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
 
 When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
 
+### Self-hosted to BYOC migration
+
+When migrating a self-hosted LangSmith installation into a BYOC data plane, set
+`allow_self_hosted_migration_permissions = true` for the duration of the
+migration.
+
+The data plane can then accept a VPC peering connection from the SH instance.
+
+Set the flag back to `false` once LangChain
+confirms the migration is complete.
+
 ### Enabling break-glass assume-role access
 
 `LangSmithBYOCBreakGlass` defaults to `Deny`. To allow an approved LangChain engineer to assume the role, set `allow_break_glass_access = true` and include that engineer's Identity Store user ID and SourceIdentity email (the engineer will provide it to you):
@@ -161,6 +172,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
 | `allow_vpc_creation_permissions` | `bool` | no | `true` | Grants base-network management permissions. Set to `false` for a customer-supplied VPC. |
 | `allow_iam_management_permissions` | `bool` | no | `true` | Grants IAM creation, mutation, and deletion permissions. Set to `false` for customer-managed IAM. |
+| `allow_self_hosted_migration_permissions` | `bool` | no | `false` | Grants VPC peering acceptance and SmithDB role trust updates for a self-hosted to BYOC migration. |
 | `vpc_ids` | `set(string)` | no | `[]` | Customer VPC IDs allowed for tagged workload security-group creation; required when `allow_vpc_creation_permissions = false`. |
 
 ## Outputs

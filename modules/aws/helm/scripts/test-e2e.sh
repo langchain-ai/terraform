@@ -35,6 +35,15 @@ source "$INFRA_DIR/scripts/_common.sh"
 NAMESPACE="${NAMESPACE:-langsmith}"
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 
+# Point kubectl at this deployment's cluster, as deploy.sh does.
+_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
+_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || _cluster_name=""
+if [[ -z "$_cluster_name" || -z "$_region" ]]; then
+  echo "ERROR: Could not read cluster_name from Terraform outputs or region from terraform.tfvars." >&2
+  exit 1
+fi
+_use_cluster_kubeconfig "$_cluster_name" "$_region" >/dev/null
+
 # ── Resolve test URL ──────────────────────────────────────────────────────────
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"

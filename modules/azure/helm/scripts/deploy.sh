@@ -265,10 +265,10 @@ EOF
   else
     # Map ingress controller to the class cert-manager uses for HTTP-01 solvers.
     # For none, an empty class leaves the solver's Ingress to the default class.
+    # istio-addon and agic never get here: Terraform rejects them with letsencrypt.
     case "$_ingress_controller" in
-      istio|istio-addon) _acme_ingress_class="istio" ;;
-      agic)              _acme_ingress_class="azure-application-gateway" ;;
-      *)                 _acme_ingress_class="$_byo_ingress_class" ;;
+      istio) _acme_ingress_class="istio" ;;
+      *)     _acme_ingress_class="$_byo_ingress_class" ;;
     esac
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1

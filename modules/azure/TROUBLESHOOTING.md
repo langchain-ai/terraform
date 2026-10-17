@@ -582,13 +582,12 @@ kubectl get challenge -n langsmith
 
 1. **Wrong gateway label.** Kubernetes Ingress with `ingressClassName: istio` targets pods with label `istio: ingressgateway`. The AKS managed external gateway uses label `istio: aks-istio-ingressgateway-external`. Istio never creates Envoy listeners → gateway pod has no routes → all traffic is dropped.
 
-2. **ClusterIssuer created with `class: nginx`.** The ACME HTTP-01 solver ingress gets class `nginx`, not `istio` → cert-manager solver is never routed through the istio gateway.
+2. **HTTP-01 cannot work here.** The addon registers no IngressClass, so the ACME solver's Ingress is never routed and the challenge stays `pending`. Terraform now rejects `tls_certificate_source = "letsencrypt"` with `istio-addon`; use `dns01` with `langsmith_domain`, `existing`, or `none` (see [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md)).
 
 3. **TLS secret in wrong namespace.** Istio SDS reads the `credentialName` secret from the **gateway pod namespace** (`aks-istio-ingress`), not the app namespace (`langsmith`). TLS handshake fails even after the cert is issued.
 
-**Fix — `make deploy` handles all three automatically** (current version):
+**Fix:** switch TLS as in item 2, then run `make deploy`, which handles items 1 and 3:
 - Creates a `Gateway` resource targeting `istio: aks-istio-ingressgateway-external` on ports 80 and 443
-- Applies `ClusterIssuer` with `ingressClassName: istio`
 - Waits for cert-manager to issue the cert, then syncs `langsmith-tls` to `aks-istio-ingress`
 - Creates a `VirtualService` routing traffic to the LangSmith frontend
 
@@ -623,13 +622,7 @@ spec:
     - "langsmith-dz.eastus.cloudapp.azure.com"
 EOF
 
-# 2. Fix the ClusterIssuer (patch solver class from nginx → istio)
-kubectl patch clusterissuer letsencrypt-prod --type=json \
-  -p='[{"op":"replace","path":"/spec/acme/solvers/0/http01/ingress/ingressClassName","value":"istio"}]'
-# Then delete the stuck challenge to force retry:
-kubectl delete challenge -n langsmith --all
-
-# 3. Once the cert is issued, sync the secret to the gateway namespace
+# 2. Once the cert is issued, sync the secret to the gateway namespace
 kubectl get secret langsmith-tls -n langsmith -o json | \
   python3 -c "
 import sys, json
@@ -641,7 +634,7 @@ s['metadata']['annotations'] = {}
 print(json.dumps(s))
 " | kubectl apply -f -
 
-# 4. Create the VirtualService
+# 3. Create the VirtualService
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
