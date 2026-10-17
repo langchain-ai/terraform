@@ -11,20 +11,34 @@ locals {
   # policy resolve_conflicts; the upstream module splits it in two.
   user_vpc_cni        = try(var.eks_addons["vpc-cni"], {})
   user_vpc_cni_config = try(jsondecode(local.user_vpc_cni.configuration_values), {})
+  # Pod ENIs are created by the CNI, so default_tags never reach them. Wherever
+  # this module manages vpc-cni, these tags go in its CreateNetworkInterface calls.
+  vpc_cni_tagged_config = merge(local.user_vpc_cni_config, {
+    env = merge(try(local.user_vpc_cni_config.env, {}), { ADDITIONAL_ENI_TAGS = jsonencode(var.tags) })
+  })
+  # This module manages vpc-cni itself unless eks_addons already lists it outside
+  # custom networking, where the Blueprints add-on keeps it at its existing
+  # state address. Otherwise EKS's self-managed CNI would create untagged ENIs.
+  module_vpc_cni = local.custom_networking || !contains(keys(var.eks_addons), "vpc-cni")
   vpc_cni_addon = merge(
     { for k, v in local.user_vpc_cni : k => v if !contains(["configuration_values", "resolve_conflicts"], k) },
     can(local.user_vpc_cni.resolve_conflicts) ? {
       resolve_conflicts_on_create = local.user_vpc_cni.resolve_conflicts
       resolve_conflicts_on_update = local.user_vpc_cni.resolve_conflicts
     } : {},
+    # Outside custom networking this add-on takes over the CNI EKS installed on
+    # an existing cluster. NONE makes that fail with EKS's conflict error instead
+    # of reverting settings someone changed on aws-node by hand, and the latest
+    # version for the cluster can't be older than the one EKS installed.
+    { for k, v in { most_recent = true, resolve_conflicts_on_create = "NONE" } : k => v if !local.custom_networking },
     {
       # Create the add-on without waiting for compute. Node groups wait only on
       # dataplane_wait_duration, not on this add-on, so that wait is what gives
       # the CNI time to be configured before nodes join. Nodes that joined
       # without it keep pod IPs in the node subnets until they are replaced.
       before_compute = true
-      configuration_values = jsonencode(merge(local.user_vpc_cni_config, {
-        env = merge(try(local.user_vpc_cni_config.env, {}), {
+      configuration_values = !local.custom_networking ? jsonencode(local.vpc_cni_tagged_config) : jsonencode(merge(local.vpc_cni_tagged_config, {
+        env = merge(local.vpc_cni_tagged_config.env, {
           AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG = "true"
           ENI_CONFIG_LABEL_DEF               = "topology.kubernetes.io/zone"
         })
@@ -39,6 +53,22 @@ locals {
       }))
     },
   )
+  # 30s is the upstream default. Waiting longer lets the vpc-cni add-on become
+  # active before the first nodes join, so their first pod ENIs are configured
+  # and tagged. Changing it on an existing cluster updates only the time_sleep.
+  dataplane_wait_duration = local.module_vpc_cni ? "2m" : "30s"
+
+  # Filters and inner for expressions rather than conditionals: the two branches
+  # of a conditional are objects with different attributes, and differently
+  # shaped add-ons fail to unify into one type even when custom networking is
+  # off. The inner for adds the ENI tags to vpc-cni alone.
+  blueprints_eks_addons = {
+    for k, v in var.eks_addons : k => merge(v, {
+      for name, value in { configuration_values = jsonencode(local.vpc_cni_tagged_config) } : name => value if k == "vpc-cni"
+    }) if !(local.custom_networking && k == "vpc-cni")
+  }
+
+  load_balancer_controller_values = [yamlencode({ defaultTags = var.tags })]
 
   # try() covers extra groups, which are untyped and may omit either attribute.
   eks_managed_node_groups = {
@@ -72,10 +102,8 @@ module "eks" {
   # AWS CLI or console) and the state already reflects the new values.
   eks_managed_node_groups = local.eks_managed_node_groups
 
-  cluster_addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
-  # 30s is the upstream default. Custom networking waits longer so the vpc-cni
-  # add-on is active before the first nodes join.
-  dataplane_wait_duration = local.custom_networking ? "2m" : "30s"
+  cluster_addons          = local.module_vpc_cni ? { vpc-cni = local.vpc_cni_addon } : {}
+  dataplane_wait_duration = local.dataplane_wait_duration
 
   tags = var.tags
 }
@@ -101,7 +129,11 @@ resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
   service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
-  tags                     = var.tags
+  # The driver creates PVC volumes and snapshots itself, outside default_tags.
+  # These tags go in the CreateVolume and CreateSnapshot calls for every
+  # StorageClass, not only the gp3 one below.
+  configuration_values = jsonencode({ controller = { extraVolumeTags = var.tags } })
+  tags                 = var.tags
 
   depends_on = [module.eks]
 }
@@ -125,6 +157,9 @@ module "eks_blueprints_addons" {
   # "no endpoints available for service aws-load-balancer-webhook-service" if the
   # ALB controller pods aren't ready yet.
   aws_load_balancer_controller = {
+    # The controller creates the ALB, its target groups, and its security groups
+    # outside default_tags; defaultTags puts these tags in each create call.
+    values = local.load_balancer_controller_values
     set = [{
       name  = "enableServiceMutatorWebhook"
       value = "false"
@@ -160,10 +195,7 @@ module "eks_blueprints_addons" {
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
-  # One filter rather than a conditional: the two branches of a conditional are
-  # objects with different attributes, and differently shaped add-ons fail to
-  # unify into one type even when custom networking is off.
-  eks_addons = { for k, v in var.eks_addons : k => v if !(local.custom_networking && k == "vpc-cni") }
+  eks_addons = local.blueprints_eks_addons
 
   # Waits for node groups without a module-level depends_on, which defers this module's data sources and replaces (detaches) the Karpenter node role's policy attachments whenever module.eks changes.
   create_delay_dependencies = [for ng in module.eks.eks_managed_node_groups : ng.node_group_arn]
