@@ -45,28 +45,6 @@ variable "self_hosted_role_arn" {
   }
 }
 
-variable "self_hosted_blob_kms_key_arn" {
-  description = "Customer-managed KMS key that encrypts the self-hosted blob storage bucket. Leave null when the bucket uses SSE-S3."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.self_hosted_blob_kms_key_arn == null || can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", var.self_hosted_blob_kms_key_arn))
-    error_message = "self_hosted_blob_kms_key_arn must be null or a KMS key ARN."
-  }
-}
-
-variable "self_hosted_blob_bucket_arn" {
-  description = "Self-hosted blob storage bucket. Required with self_hosted_blob_kms_key_arn. The decrypt grant only covers objects of this bucket, so the bucket must use S3 Bucket Keys."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.self_hosted_blob_bucket_arn == null || can(regex("^arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.self_hosted_blob_bucket_arn))
-    error_message = "self_hosted_blob_bucket_arn must be null or an S3 bucket ARN."
-  }
-}
-
 variable "data_plane_account_id" {
   description = "AWS account ID that owns the BYOC data plane, provided by LangChain team. Required even when it matches the self-hosted account."
   type        = string
@@ -114,17 +92,6 @@ variable "data_plane_smithdb_role_arn" {
   validation {
     condition     = can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", var.data_plane_smithdb_role_arn))
     error_message = "data_plane_smithdb_role_arn must be an IAM role ARN."
-  }
-}
-
-variable "data_plane_workload_role_arn" {
-  description = "Workload IAM role of the BYOC data plane, shown by LangChain in the migration trust step. Required when self_hosted_blob_kms_key_arn is set."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.data_plane_workload_role_arn == null || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", var.data_plane_workload_role_arn))
-    error_message = "data_plane_workload_role_arn must be null or an IAM role ARN."
   }
 }
 

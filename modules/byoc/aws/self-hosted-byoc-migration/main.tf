@@ -74,32 +74,3 @@ resource "aws_iam_role_policy" "assume_data_plane_smithdb_role" {
     }]
   })
 }
-
-resource "aws_kms_grant" "self_hosted_blob_decrypt" {
-  count = var.self_hosted_blob_kms_key_arn == null ? 0 : 1
-
-  name              = "${var.name}-data-plane-decrypt"
-  key_id            = var.self_hosted_blob_kms_key_arn
-  grantee_principal = var.data_plane_workload_role_arn
-  operations        = ["Decrypt"]
-  retire_on_delete  = true
-
-  # With S3 Bucket Keys, S3 uses the bucket ARN as the encryption context, so
-  # the grant cannot decrypt anything else encrypted under the key.
-  constraints {
-    encryption_context_equals = {
-      "aws:s3:arn" = var.self_hosted_blob_bucket_arn
-    }
-  }
-
-  lifecycle {
-    precondition {
-      condition     = var.data_plane_workload_role_arn != null
-      error_message = "data_plane_workload_role_arn is required when self_hosted_blob_kms_key_arn is set."
-    }
-    precondition {
-      condition     = var.self_hosted_blob_bucket_arn != null
-      error_message = "self_hosted_blob_bucket_arn is required when self_hosted_blob_kms_key_arn is set."
-    }
-  }
-}
