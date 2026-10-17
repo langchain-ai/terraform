@@ -1402,10 +1402,11 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version                = var.envoy_gateway_version
-  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
-  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
-  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
+  envoy_gateway_version                          = var.envoy_gateway_version
+  envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
+  envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -2019,6 +2020,9 @@ module "smithdb" {
   replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
+  shared_access_key_enabled = var.smithdb_storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
+
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
   # metastore's PostgreSQL zone.
   blob_private_endpoint_enabled   = var.storage_private_endpoint_enabled
@@ -2187,6 +2191,9 @@ module "blob" {
   resource_group_name  = local.rg_name
 
   replication_type = var.storage_replication_type
+
+  shared_access_key_enabled = var.storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
 
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days
