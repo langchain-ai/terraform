@@ -458,7 +458,7 @@ resource "helm_release" "envoy_gateway" {
 # subsequent applies. Without a GatewayClass, the Gateway stays in "Waiting
 # for controller" state indefinitely.
 #
-# Istio keep their proxy Service internal with a one-line Helm value.
+# Istio keeps its proxy Service internal with a one-line Helm value.
 # Envoy cannot: its Service is created per Gateway at runtime, so the override
 # must be an EnvoyProxy on the GatewayClass. Without it the Service defaults to
 # LoadBalancer and AWS provisions an NLB that never receives traffic.

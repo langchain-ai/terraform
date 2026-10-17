@@ -521,13 +521,6 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
 | `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
 
-> **Upgrading a deployment created on the old `nginx` default:** if `terraform.tfvars` omits
-> `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. NGINX support
-> has been removed. To move to Envoy Gateway, set
-> `ingress_controller = "envoy-gateway"`, then run `make apply`, `make init-values`, and
-> `make deploy` back to back. `make deploy` upgrades the existing LangSmith Helm release with the replacement routing. LangSmith is unreachable from the apply until the deploy finishes.
-> Update any DNS A record that points at the old IP.
-
 ---
 
 ## DNS + TLS

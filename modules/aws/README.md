@@ -471,20 +471,6 @@ Envoy Gateway is the default ingress mode, both in Terraform and in `make quicks
 
 Enabling two controllers is rejected at plan time by a precondition in `infra/main.tf`, because all gateway modes share a single ALB target group and only one port can be health-checked on it.
 
-**NGINX support has been removed.** Existing NGINX deployments must choose a remaining ingress mode and remove `enable_nginx_ingress` from their variable files. Review the plan because it removes the controller. Terraform cannot automatically delete the kubectl-created TargetGroupBinding after its provisioner is removed. On the correct EKS cluster, delete the binding before running `make apply`:
-
-```bash
-kubectl delete targetgroupbinding langsmith-nginx-tgb -n ingress-nginx --ignore-not-found=true
-```
-
-Then apply the infrastructure change, regenerate Helm values, and upgrade the existing LangSmith Helm release with the replacement routing:
-
-```bash
-make apply && make init-values && make deploy
-```
-
-LangSmith is unreachable during the ingress switch until the Helm deployment finishes.
-
 **Upgrading an existing deployment?** Istio deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
 
 When enabled, the `k8s-bootstrap` module:

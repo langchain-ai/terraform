@@ -1131,7 +1131,6 @@ az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningStat
 #    (for envoy-gateway, make uninstall deletes the Gateway, which removes the proxy service)
 make uninstall
 
-
 # 2. Delete the namespace (clears any lingering finalizers)
 kubectl delete namespace langsmith --timeout=60s
 

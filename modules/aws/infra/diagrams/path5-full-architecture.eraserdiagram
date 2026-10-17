@@ -104,7 +104,7 @@ AWS Account [icon: aws, color: blue] {
     // NAT Gateway provides outbound internet for private subnets
     Public Subnets AZ1-3 [color: gray] {
 
-      // ALB — either pre-provisioned by Terraform alb module (Paths 2-4)
+      // ALB — either pre-provisioned by Terraform alb module (Envoy or Istio)
       // or created by AWS LBC via Kubernetes Ingress (Path 1)
       // TLS terminates here via ACM certificate — :443 in, HTTP out
       ALB Internet-Facing [icon: aws-elb-application-load-balancer, color: blue]

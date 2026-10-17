@@ -1151,8 +1151,8 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
     warn "Envoy Gateway LoadBalancer has no IP yet. Check: kubectl get gateway langsmith-gateway -n ${NAMESPACE}"
   fi
 
-  # A deployment moved off ingress-nginx still has the langsmith-tls Certificate
-  # its Ingress owned, and cert-manager's gateway-shim refuses to take it over.
+  # Switching from Ingress to Gateway can leave the langsmith-tls Certificate
+  # owned by the Ingress, and cert-manager's gateway-shim refuses to take it over.
   # The helm upgrade above removed that Ingress, so garbage collection deletes
   # the Certificate, and the shim does not retry on its own: the Secret keeps
   # serving until it expires, and nothing renews it. Touching the Gateway makes

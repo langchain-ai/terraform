@@ -53,7 +53,7 @@ run "enums_reject_an_unlisted_value" {
     postgres_source                = "rds"
     redis_source                   = "elasticache"
     clickhouse_source              = "clickhouse-cloud"
-    ingress_controller             = "nginx"
+    ingress_controller             = "unsupported"
     keyvault_default_action        = "allow"
     agw_sku_tier                   = "Standard"
     agic_network_contributor_scope = "resourcegroup"

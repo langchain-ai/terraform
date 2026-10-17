@@ -9,23 +9,13 @@ type: "reference"
 
 *Updated as deployment is validated.*
 
-## Live Diagrams
-
-### Production Deploy (External Postgres + Redis)
-
-**[LangSmith Azure — Production Architecture (v0.13.28)](https://app.eraser.io/workspace/oto9FgBOY2s7877578R2)**
-
-![LangSmith Azure Production Architecture](diagrams/lang_smith_deployment_pass_4_5.png)
-
-Full topology: all passes (2–4), AKS namespaces, pod names, external managed services, Workload Identity flow, Key Vault, TLS, KEDA, and NGINX ingress, drawn before `envoy-gateway` became the default.
+## Platform Components
 
 ### Pass 5 — Insights (verified)
 
-No new diagram — Pass 5 adds `insights.enabled: true` only. On chart 0.16 Insights runs as the standalone `engineInsightsAgent` deployment (an api-server and a queue pod) rather than an operator-managed LangGraph deployment created on first UI invocation.
+Pass 5 adds `insights.enabled: true` only. On chart 0.16 Insights runs as the standalone `engineInsightsAgent` deployment (an api-server and a queue pod) rather than an operator-managed LangGraph deployment created on first UI invocation.
 
 ### Pass 4 — Agent Builder Containers (verified)
-
-**[LangSmith Azure — Pass 4 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/BdnsvoccuOm7wh2dLyKi)**
 
 Adds to Pass 3 — 2 static + 4 dynamic pods:
 - `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
@@ -33,10 +23,6 @@ Adds to Pass 3 — 2 static + 4 dynamic pods:
 - `agent-builder-<hash>` + `queue` + `redis` + `lg-<hash>-0` — operator-managed Agent Builder agent deployment (dynamic)
 
 ### Pass 3 — LangGraph Platform Containers (verified)
-
-**[LangSmith Azure — Pass 3 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/6renzZO9DtNdvLuqO0Aa)**
-
-![LangSmith Azure Pass 3 Platform Containers](diagrams/lang_smith_deployment_pass_3.png)
 
 Adds 3 pods to the Pass 2 topology:
 - `langsmith-host-backend` — LangGraph control plane API (WI)
@@ -46,22 +32,12 @@ Adds 3 pods to the Pass 2 topology:
 
 ### Pass 2 — Platform Containers (External Postgres + Redis, verified)
 
-**[LangSmith Azure — Pass 2 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/CTA7dtpxBysehdXeYOHu)**
-
-![LangSmith Azure Pass 2 Platform Containers](diagrams/lang_smith_deployment_pass_2.png)
-
 Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 deploy:
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)
 - 1 StatefulSet: clickhouse (large node pool, 500Gi PVC)
 - 3 completed Jobs: backend-migrations, backend-ch-migrations, backend-auth-bootstrap
 - External: Azure DB for PostgreSQL (subnet-postgres), Azure Managed Redis (subnet-redis)
 - WI pods (4): backend, platform-backend, queue, ingest-queue
-
-### Light Deploy (All In-Cluster)
-
-**[LangSmith Azure — Light Deploy Architecture (v0.13.28)](https://app.eraser.io/workspace/sQxjXna8084czm2eRPFj)**
-
-![LangSmith Azure Light Deploy Architecture](diagrams/lang_smith_deployment_light.png)
 
 ---
 

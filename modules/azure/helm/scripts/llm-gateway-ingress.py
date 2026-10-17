@@ -4,12 +4,11 @@
 
 The chart's frontend proxy allows 900 s on /gateway/ for long model calls, but
 Application Gateway in front of it cuts requests at 30 s. Raising the timeout
-on the chart's Ingress
-would raise it for every LangSmith path, so a hung request anywhere could hold
-a connection for fifteen minutes. Instead this builds a second Ingress for the
-same host with only the /gateway/ path and the longer timeout. Application
-Gateway merges Ingresses for one host and routes by the longest matching
-path, so every other path keeps the controller's default.
+on the chart's Ingress would raise it for every LangSmith path, so a hung
+request anywhere could hold a connection for fifteen minutes. Instead this
+builds a second Ingress for the same host with only the /gateway/ path and the
+longer timeout. Application Gateway merges Ingresses for one host and routes
+by the longest matching path, so every other path keeps the controller's default.
 
 The new Ingress copies the chart's class, TLS block, host and frontend backend,
 and its annotations (so AGIC's health-probe override carries over), minus the

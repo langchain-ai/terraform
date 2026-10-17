@@ -7,14 +7,6 @@ including LangGraph Platform (Passes 3–5, `enable_deployments = true`).
 
 Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `make apply`.
 
-> **Upgrading a deployment created on the old `nginx` default:** if `terraform.tfvars` omits
-> `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. NGINX support
-> has been removed. To move to Envoy Gateway, set
-> `ingress_controller = "envoy-gateway"`, then run `make apply`, `make init-values`, and
-> `make deploy` back to back. The apply removes ingress-nginx and its load balancer IP, so
-> LangSmith is unreachable until the deploy finishes. Update any DNS A record that points at the
-> old IP.
-
 ---
 
 ## TLS Compatibility Matrix

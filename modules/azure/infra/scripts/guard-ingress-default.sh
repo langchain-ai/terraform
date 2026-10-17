@@ -4,13 +4,12 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# guard-ingress-default.sh — Stop a plan or apply that would replace ingress-nginx
-# with Envoy Gateway only because ingress_controller is unset.
+# guard-ingress-default.sh — Require an explicit choice before replacing an
+# existing controller with Envoy Gateway because ingress_controller is unset.
 #
-# ingress_controller used to default to "nginx" and now defaults to
-# "envoy-gateway". A deployment that never set it still runs ingress-nginx, and
-# its next apply would remove that release and its load balancer IP. This exits
-# non-zero first, so the switch happens only when someone asks for it.
+# The current default can replace a controller from an older deployment,
+# removing its release and load balancer IP. Exit before that switch unless
+# ingress_controller was explicitly selected.
 #
 # Usage (from azure/):
 #   ./infra/scripts/guard-ingress-default.sh [terraform args...]
@@ -56,13 +55,13 @@ for _arg in "$@"; do
   esac
 done
 
-# Unset. Only a deployment that already runs ingress-nginx is at risk. An
-# unreadable state (no init yet) lets the run through, and terraform reports it.
-_nginx=$(terraform -chdir="$INFRA_DIR" state list 'module.aks.helm_release.nginx_ingress[0]' 2>/dev/null || true)
-[ -n "$_nginx" ] || exit 0
+# Keep the retired release's state address to detect affected deployments.
+# An unreadable state (no init yet) lets Terraform report the error itself.
+_legacy_controller=$(terraform -chdir="$INFRA_DIR" state list 'module.aks.helm_release.nginx_ingress[0]' 2>/dev/null || true)
+[ -n "$_legacy_controller" ] || exit 0
 
-fail "ingress_controller is not set, and this deployment runs ingress-nginx."
-info "The default is now envoy-gateway. Applying it removes ingress-nginx and its load balancer, and the public IP changes."
+fail "ingress_controller is not set, and this deployment has an existing controller."
+info "The default is envoy-gateway. Applying it replaces the existing controller and its load balancer, and the public IP changes."
 action "To move to Envoy Gateway, add:  ingress_controller = \"envoy-gateway\""
 action "Then run make apply, make init-values, and make deploy back to back. LangSmith is unreachable from the apply until the deploy finishes."
 action "Update any DNS A record that points at the old IP."
