@@ -1450,7 +1450,7 @@ variable "langsmith_namespace" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. Changing it on an existing deployment removes the old controller and its load balancer IP. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
   default     = "envoy-gateway"
 
   validation {
