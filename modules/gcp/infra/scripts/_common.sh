@@ -22,27 +22,8 @@
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
 
-# ── terraform.tfvars parser ──────────────────────────────────────────────────
-# Values are cut at the closing quote (quoted strings, which may contain a
-# literal #) or at an inline # (bare booleans and numbers). The previous
-# grep/sed pair kept trailing comments, so `enable_smithdb = true  # step 9`
-# compared as "true#step9" and read as false. Keep this function identical to
-# the copies in helm/scripts/*.sh and infra/scripts/preflight.sh.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
-
-# Parse a boolean tfvar (unquoted true/false). Returns 0 for true, 1 for false.
-_tfvar_is_true() {
-  [[ "$(_parse_tfvar "$1")" == "true" ]]
-}
+# ── terraform.tfvars readers ─────────────────────────────────────────────────
+source "$_COMMON_DIR/_tfvars.sh"
 
 # Replace the first uncommented `key = ...` line in terraform.tfvars, or append
 # one, so every other setting stays exactly as written. `cat >`, not mv, keeps

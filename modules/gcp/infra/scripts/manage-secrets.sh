@@ -131,7 +131,7 @@ _sm_put() {
     gcloud secrets create "$sid" \
       --project="$PROJECT" \
       --replication-policy="automatic" \
-      --labels="managed-by=manage-secrets,langsmith-env=${_environment}" \
+      --labels="$(_secret_labels "managed-by=manage-secrets,langsmith-env=${_environment}")" \
       --quiet
   fi
 

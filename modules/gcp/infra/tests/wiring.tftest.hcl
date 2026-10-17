@@ -951,3 +951,72 @@ run "in_cluster_redis_plans_nothing" {
     error_message = "redis_source = in-cluster still planned Memorystore"
   }
 }
+
+# ── Labels ───────────────────────────────────────────────────────────────────
+# common_labels feeds default_labels and every module's labels input, so these
+# runs pin the merge: custom labels are added, a custom key replaces the
+# standard label of the same name, and an empty owner or cost_center omits it.
+
+run "custom_labels_are_added_and_override_the_standard_ones" {
+  command = plan
+
+  variables {
+    environment = "prod"
+    owner       = "name_example_com"
+    cost_center = "cc-1234"
+    labels = {
+      "team"        = "ml-platform"
+      "product"     = "langsmith"
+      "environment" = "production"
+    }
+  }
+
+  assert {
+    condition = local.common_labels == {
+      "app"         = "langsmith"
+      "environment" = "production"
+      "managed-by"  = "terraform"
+      "project"     = "langsmith-plan-tests"
+      "name-prefix" = "ls"
+      "owner"       = "name_example_com"
+      "cost-center" = "cc-1234"
+      "team"        = "ml-platform"
+      "product"     = "langsmith"
+    }
+    error_message = "common_labels did not add the custom labels, let a custom key replace the standard one, or carry owner and cost-center"
+  }
+}
+
+run "empty_owner_and_cost_center_omit_their_labels" {
+  command = plan
+
+  variables {
+    owner       = ""
+    cost_center = ""
+    labels      = {}
+  }
+
+  assert {
+    condition     = !contains(keys(local.common_labels), "owner") && !contains(keys(local.common_labels), "cost-center")
+    error_message = "An empty owner or cost_center still produced a label"
+  }
+}
+
+run "smithdb_cache_disks_carry_the_labels" {
+  command = plan
+
+  variables {
+    environment           = "dev"
+    enable_smithdb        = true
+    sizing_profile        = "dev"
+    smithdb_cache_storage = "network-disk"
+    owner                 = ""
+    cost_center           = ""
+    labels                = { "team" = "ml-platform" }
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.smithdb_cache_disk_labels == "app=langsmith,component=smithdb-cache,environment=dev,managed-by=terraform,name-prefix=ls,project=langsmith-plan-tests,team=ml-platform"
+    error_message = "The SmithDB cache StorageClass does not pass the common labels to the PD CSI driver as sorted key=value pairs"
+  }
+}

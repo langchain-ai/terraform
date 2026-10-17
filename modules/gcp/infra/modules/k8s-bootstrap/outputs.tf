@@ -92,3 +92,8 @@ output "smithdb_cache_storage_class_name" {
   description = "Name of the SmithDB cache StorageClass, or null when it is not created"
   value       = var.create_smithdb_cache_storage_class ? kubernetes_storage_class_v1.smithdb_cache[0].metadata[0].name : null
 }
+
+output "smithdb_cache_disk_labels" {
+  description = "Labels the SmithDB cache StorageClass puts on each disk it provisions, or null when it is not created"
+  value       = var.create_smithdb_cache_storage_class ? kubernetes_storage_class_v1.smithdb_cache[0].parameters["labels"] : null
+}
