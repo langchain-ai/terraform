@@ -70,7 +70,9 @@ The keys never go into Helm values. The chart reads them from `langsmith-config`
 
 Engine and Insights share the two service accounts. When `enable_engine = true`,
 both run under the Engine role, not the shared LangSmith role. The Engine role
-therefore gets these policies:
+therefore gets these policies. With `existing_iam_role_arns.engine` set, Terraform
+creates no Engine role and attaches none of them, and the `iam_role_trust_policies`
+output gives the trust policy your IAM team's role needs:
 
 | Policy | Purpose | Attached when |
 |---|---|---|

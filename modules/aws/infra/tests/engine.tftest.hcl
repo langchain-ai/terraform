@@ -252,6 +252,58 @@ run "bedrock_access_also_reaches_the_engine_role" {
   }
 }
 
+run "iam_boundary_and_path_reach_the_engine_role" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    enable_engine                = true
+    iam_permissions_boundary_arn = "arn:aws:iam::123456789012:policy/plantest-boundary"
+    iam_role_path                = "/langsmith/"
+  }
+
+  assert {
+    condition     = aws_iam_role.engine[0].permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary"
+    error_message = "iam_permissions_boundary_arn did not reach the Engine role"
+  }
+  assert {
+    condition     = aws_iam_role.engine[0].path == "/langsmith/"
+    error_message = "iam_role_path did not reach the Engine role"
+  }
+}
+
+run "existing_iam_role_arns_replace_the_engine_role" {
+  command = plan
+
+  variables {
+    enable_sandboxes       = true
+    enable_engine          = true
+    enable_bedrock_access  = true
+    existing_iam_role_arns = { engine = "arn:aws:iam::123456789012:role/plantest-engine" }
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role.engine) == 0 &&
+      length(aws_iam_role_policy_attachment.engine_bedrock_mantle) == 0 &&
+      length(aws_iam_role_policy.engine_s3) == 0 &&
+      length(aws_iam_role_policy.engine_bedrock_invoke) == 0
+    )
+    error_message = "existing_iam_role_arns.engine still planned the Engine role or a policy on it"
+  }
+  assert {
+    condition     = output.engine_irsa_role_arn == "arn:aws:iam::123456789012:role/plantest-engine"
+    error_message = "existing_iam_role_arns.engine did not reach the engine_irsa_role_arn output"
+  }
+  assert {
+    condition = jsondecode(output.iam_role_trust_policies["engine"]).Statement[0].Condition.StringLike["oidc.eks.us-east-2.amazonaws.com/id/0123456789ABCDEF:sub"] == [
+      "system:serviceaccount:langsmith:langsmith-standalone-insights-api-server",
+      "system:serviceaccount:langsmith:langsmith-standalone-insights-queue",
+    ]
+    error_message = "iam_role_trust_policies.engine does not trust the two Engine service accounts"
+  }
+}
+
 run "engine_irsa_role_arn_output" {
   command = plan
 

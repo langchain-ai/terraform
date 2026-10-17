@@ -3,6 +3,44 @@ data "aws_region" "current" {}
 locals {
   custom_networking = length(var.pod_subnet_ids_by_az) > 0
 
+  # With an EBS key, every node group volume uses it, and a group with no block
+  # devices gets its AL2023 root volume (/dev/xvda) mapped to carry the key.
+  node_group_block_devices = {
+    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => {
+      for dk, dv in merge(
+        try(length(v.block_device_mappings), 0) > 0 ? {} : { xvda = { device_name = "/dev/xvda", ebs = { volume_type = "gp3" } } },
+        try(v.block_device_mappings, {}),
+      ) : dk => merge(dv, { ebs = merge(lookup(dv, "ebs", {}), { encrypted = true, kms_key_id = var.ebs_kms_key_arn }) })
+    }
+  }
+
+  # A customer-managed EBS key needs grants that AmazonEBSCSIDriverPolicy and the
+  # Karpenter controller policy do not carry.
+  ebs_kms_grant_actions = ["kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant"]
+  ebs_kms_use_actions   = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
+
+  # Role names that upstream modules choose for themselves. With a prefix, each
+  # starts with it like the roles this module names, so one role/<prefix>-*
+  # grant covers them all. Each fits a 15-character name_prefix plus "staging"
+  # under IAM's 38-character name_prefix limit.
+  prefixed_role_names = var.iam_role_name_prefix != null
+  role_names = {
+    alb_controller     = local.prefixed_role_names ? "${var.iam_role_name_prefix}-lb-controller" : "alb-controller"
+    cluster_autoscaler = local.prefixed_role_names ? "${var.iam_role_name_prefix}-autoscaler" : "cluster-autoscaler"
+    karpenter          = local.prefixed_role_names ? "${var.iam_role_name_prefix}-karpenter" : "karpenter"
+    karpenter_node     = local.prefixed_role_names ? "${var.iam_role_name_prefix}-karpenter-node" : "karpenter-${var.cluster_name}"
+    ebs_csi            = local.prefixed_role_names ? "${var.iam_role_name_prefix}-ebs-csi" : "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  }
+
+  # Roles the caller created. Blueprints sets the IRSA annotation only on roles
+  # it creates, so a supplied controller role gets it through set. The
+  # cluster-autoscaler chart nests its service account under rbac.
+  existing_roles                     = var.existing_iam_role_arns
+  irsa_annotation                    = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+  cluster_autoscaler_irsa_annotation = "rbac.${local.irsa_annotation}"
+  karpenter_node_role_name           = local.existing_roles.karpenter_node != null ? reverse(split("/", local.existing_roles.karpenter_node))[0] : local.role_names.karpenter_node
+  karpenter_node_role_arn            = local.existing_roles.karpenter_node != null ? local.existing_roles.karpenter_node : module.eks_blueprints_addons.karpenter.node_iam_role_arn
+
   # Custom networking owns the vpc-cni add-on, so a vpc-cni entry in eks_addons
   # moves here instead of going to the Blueprints add-on, where it would be a
   # second aws_eks_addon for the same add-on. Its settings carry over, and its
@@ -41,11 +79,24 @@ locals {
   )
 
   # try() covers extra groups, which are untyped and may omit either attribute.
+  # Each IAM key is set only when its root input is. Upstream resolves a key the
+  # group sets ahead of eks_managed_node_group_defaults, even when it is null.
   eks_managed_node_groups = {
     for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
       desired_size             = coalesce(try(v.desired_size, null), v.min_size)
       iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
-    })
+      },
+      # A node group name is user-chosen, so truncate it to the name_prefix limit.
+      local.prefixed_role_names && try(v.iam_role_name, null) == null ? {
+        iam_role_name = coalesce(try(v.iam_role_use_name_prefix, null), true) ? substr("${var.iam_role_name_prefix}-${try(v.name, k)}", 0, 37) : "${var.iam_role_name_prefix}-${try(v.name, k)}"
+      } : {},
+      # One key per conditional, since {} and a mixed-type object unify to map(string).
+      local.existing_roles.node_group != null ? { create_iam_role = false } : {},
+      local.existing_roles.node_group != null ? { iam_role_arn = local.existing_roles.node_group } : {},
+      var.iam_permissions_boundary_arn != null ? { iam_role_permissions_boundary = var.iam_permissions_boundary_arn } : {},
+      var.iam_role_path != "/" ? { iam_role_path = var.iam_role_path } : {},
+      var.ebs_kms_key_arn != "" ? { block_device_mappings = local.node_group_block_devices[k] } : {},
+    )
   }
 }
 
@@ -56,12 +107,38 @@ module "eks" {
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version
 
+  # Upstream places node groups in subnet_ids and the control plane in
+  # control_plane_subnet_ids, so node groups can move without touching the cluster.
   vpc_id                                   = var.vpc_id
-  subnet_ids                               = var.subnet_ids
+  control_plane_subnet_ids                 = var.subnet_ids
+  subnet_ids                               = length(var.node_group_subnet_ids) > 0 ? var.node_group_subnet_ids : var.subnet_ids
+  cluster_endpoint_private_access          = true
   cluster_endpoint_public_access           = var.public_cluster_enabled
   cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
   enable_cluster_creator_admin_permissions = true
   cluster_enabled_log_types                = var.cluster_enabled_log_types
+
+  # Inside module.eks, so everything that depends on the cluster also waits for
+  # the rule, and a runner in these CIDRs reaches the API on the first apply.
+  cluster_security_group_additional_rules = length(var.private_access_cidrs) > 0 ? {
+    private_api_from_cidrs = {
+      type        = "ingress"
+      protocol    = "tcp"
+      from_port   = 443
+      to_port     = 443
+      cidr_blocks = var.private_access_cidrs
+      description = "Kubernetes API from the Terraform runner"
+    }
+  } : {}
+
+  create_iam_role               = local.existing_roles.cluster == null
+  iam_role_arn                  = local.existing_roles.cluster
+  iam_role_permissions_boundary = var.iam_permissions_boundary_arn
+  iam_role_path                 = var.iam_role_path
+
+  # EKS takes the secrets key at cluster creation only.
+  create_kms_key            = var.secrets_kms_key_arn == ""
+  cluster_encryption_config = merge({ resources = ["secrets"] }, var.secrets_kms_key_arn != "" ? { provider_key_arn = var.secrets_kms_key_arn } : {})
 
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
 
@@ -89,21 +166,53 @@ module "irsa-ebs-csi" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role-with-oidc"
   version = "4.24.1"
 
-  create_role                   = true
-  role_name                     = "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  create_role                   = local.existing_roles.ebs_csi == null
+  role_name                     = local.role_names.ebs_csi
+  role_path                     = var.iam_role_path
+  role_permissions_boundary_arn = var.iam_permissions_boundary_arn
   provider_url                  = module.eks.oidc_provider
   role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
   oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+}
+
+resource "aws_iam_role_policy" "ebs_csi_kms" {
+  count = var.ebs_kms_key_arn != "" && local.existing_roles.ebs_csi == null ? 1 : 0
+
+  name = "ebs-kms"
+  role = module.irsa-ebs-csi.iam_role_name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Action    = local.ebs_kms_grant_actions
+        Resource  = var.ebs_kms_key_arn
+        Condition = { Bool = { "kms:GrantIsForAWSResource" = "true" } }
+      },
+      {
+        Effect   = "Allow"
+        Action   = local.ebs_kms_use_actions
+        Resource = var.ebs_kms_key_arn
+      },
+    ]
+  })
 }
 
 # Create the EBS CSI Driver addon for volume provisioning.
 resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
-  service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
+  service_account_role_arn = local.existing_roles.ebs_csi != null ? local.existing_roles.ebs_csi : module.irsa-ebs-csi.iam_role_arn
   tags                     = var.tags
 
   depends_on = [module.eks]
+}
+
+# Chart repository and values overrides from the root, for a mirror or a
+# pull-through cache. A release with no entry keeps its upstream repository.
+locals {
+  chart_repository = { for k, v in var.chart_overrides : k => v.repository if v.repository != null }
+  chart_values     = { for k, v in var.chart_overrides : k => [v.values] if v.values != "" }
 }
 
 # Create some important addons for the EKS cluster.
@@ -116,6 +225,9 @@ module "eks_blueprints_addons" {
   cluster_version   = module.eks.cluster_version
   oidc_provider_arn = module.eks.oidc_provider_arn
 
+  # The upstream default tag. Null skips its empty CloudFormation stack.
+  observability_tag = var.create_blueprints_telemetry ? "qs-1ubotj5kl" : null
+
   enable_aws_load_balancer_controller = true
   # Disable the ALB controller's cluster-wide Service mutating webhook
   # (mservice.elbv2.k8s.aws). This module uses ALB Ingress + TargetGroupBinding,
@@ -125,14 +237,29 @@ module "eks_blueprints_addons" {
   # "no endpoints available for service aws-load-balancer-webhook-service" if the
   # ALB controller pods aren't ready yet.
   aws_load_balancer_controller = {
-    set = [{
-      name  = "enableServiceMutatorWebhook"
-      value = "false"
-    }]
+    create_role                   = local.existing_roles.alb_controller == null
+    role_name                     = local.role_names.alb_controller
+    role_path                     = var.iam_role_path
+    role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    repository                    = lookup(local.chart_repository, "aws_load_balancer_controller", "https://aws.github.io/eks-charts")
+    values                        = lookup(local.chart_values, "aws_load_balancer_controller", [])
+    set = concat(
+      [{
+        name  = "enableServiceMutatorWebhook"
+        value = "false"
+      }],
+      local.existing_roles.alb_controller != null ? [{ name = local.irsa_annotation, value = local.existing_roles.alb_controller }] : [],
+    )
   }
 
   enable_metrics_server     = true
   enable_cluster_autoscaler = true
+
+  # The upstream repository and empty values are the add-on's own defaults.
+  metrics_server = {
+    repository = lookup(local.chart_repository, "metrics_server", "https://kubernetes-sigs.github.io/metrics-server/")
+    values     = lookup(local.chart_values, "metrics_server", [])
+  }
 
   # Karpenter provisions the SmithDB instance-store (local-NVMe, RAID0) and
   # compute pools. It coexists with cluster-autoscaler, which manages the core
@@ -141,22 +268,58 @@ module "eks_blueprints_addons" {
   # interruption queue. The SmithDB NodePools/EC2NodeClasses are created in the
   # infra root.
   enable_karpenter = var.enable_karpenter
-  karpenter = merge(
-    { chart_version = var.karpenter_chart_version },
-    # The primary ENI holds no pod IPs under custom networking, so Karpenter must
-    # leave it out of the max-pods calculation or it overcommits every node.
-    local.custom_networking ? { set = [{ name = "settings.reservedENIs", value = "1" }] } : {},
-  )
+  karpenter = {
+    chart_version                 = var.karpenter_chart_version
+    repository                    = lookup(local.chart_repository, "karpenter", "oci://public.ecr.aws/karpenter")
+    values                        = lookup(local.chart_values, "karpenter", [])
+    create_role                   = local.existing_roles.karpenter == null
+    role_name                     = local.role_names.karpenter
+    role_path                     = var.iam_role_path
+    role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    # Karpenter launches the SmithDB nodes, so it needs the EBS key too.
+    policy_statements = var.ebs_kms_key_arn != "" ? [
+      {
+        sid        = "EBSKMSGrant"
+        actions    = local.ebs_kms_grant_actions
+        resources  = [var.ebs_kms_key_arn]
+        conditions = [{ test = "Bool", variable = "kms:GrantIsForAWSResource", values = ["true"] }]
+      },
+      {
+        sid        = "EBSKMSUse"
+        actions    = local.ebs_kms_use_actions
+        resources  = [var.ebs_kms_key_arn]
+        conditions = []
+      },
+    ] : []
+    set = concat(
+      # The primary ENI holds no pod IPs under custom networking, so Karpenter must
+      # leave it out of the max-pods calculation or it overcommits every node.
+      local.custom_networking ? [{ name = "settings.reservedENIs", value = "1" }] : [],
+      local.existing_roles.karpenter != null ? [{ name = local.irsa_annotation, value = local.existing_roles.karpenter }] : [],
+    )
+  }
   # Stable node IAM role name (referenced by the SmithDB EC2NodeClass). The
   # controller itself runs on the core managed node group — SmithDB nodes are
   # tainted, so it never lands there.
   karpenter_node = {
-    iam_role_use_name_prefix = false
+    create_iam_role               = local.existing_roles.karpenter_node == null
+    iam_role_arn                  = local.existing_roles.karpenter_node
+    iam_role_use_name_prefix      = false
+    iam_role_name                 = local.karpenter_node_role_name
+    iam_role_path                 = var.iam_role_path
+    iam_role_permissions_boundary = var.iam_permissions_boundary_arn
   }
 
   # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
   cluster_autoscaler = {
-    chart_version = "9.56.0"
+    chart_version                 = "9.56.0"
+    repository                    = lookup(local.chart_repository, "cluster_autoscaler", "https://kubernetes.github.io/autoscaler")
+    values                        = lookup(local.chart_values, "cluster_autoscaler", [])
+    create_role                   = local.existing_roles.cluster_autoscaler == null
+    role_name                     = local.role_names.cluster_autoscaler
+    role_path                     = var.iam_role_path
+    role_permissions_boundary_arn = var.iam_permissions_boundary_arn
+    set                           = local.existing_roles.cluster_autoscaler != null ? [{ name = local.cluster_autoscaler_irsa_annotation, value = local.existing_roles.cluster_autoscaler }] : []
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
@@ -178,7 +341,7 @@ resource "aws_eks_access_entry" "karpenter_node" {
   count = var.enable_karpenter ? 1 : 0
 
   cluster_name  = module.eks.cluster_name
-  principal_arn = module.eks_blueprints_addons.karpenter.node_iam_role_arn
+  principal_arn = local.karpenter_node_role_arn
   type          = "EC2_LINUX"
 
   depends_on = [module.eks_blueprints_addons]
@@ -199,9 +362,7 @@ resource "kubernetes_storage_class" "gp3_default" {
   volume_binding_mode    = "WaitForFirstConsumer"
   allow_volume_expansion = true
 
-  parameters = {
-    type = "gp3"
-  }
+  parameters = merge({ type = "gp3" }, var.ebs_kms_key_arn != "" ? { encrypted = "true", kmsKeyId = var.ebs_kms_key_arn } : {})
 
   depends_on = [aws_eks_addon.ebs-csi]
 }
@@ -226,9 +387,11 @@ resource "aws_security_group_rule" "istiod_webhook" {
 # IRSA role for LangSmith pods — allows pods to access S3 via their service account.
 # https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
 resource "aws_iam_role" "langsmith" {
-  count = var.create_langsmith_irsa_role ? 1 : 0
+  count = var.create_langsmith_irsa_role && local.existing_roles.langsmith == null ? 1 : 0
 
-  name = "${module.eks.cluster_name}-irsa-role"
+  name                 = "${module.eks.cluster_name}-irsa-role"
+  path                 = var.iam_role_path
+  permissions_boundary = var.iam_permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

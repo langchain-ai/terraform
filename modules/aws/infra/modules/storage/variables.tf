@@ -13,6 +13,18 @@ variable "vpc_id" {
   description = "VPC ID where your EKS cluster runs"
 }
 
+variable "create_vpc_endpoint" {
+  type        = bool
+  description = "Create the S3 gateway endpoint on every route table in the VPC. False uses existing_vpc_endpoint_id."
+  default     = true
+}
+
+variable "existing_vpc_endpoint_id" {
+  type        = string
+  description = "The VPC's existing S3 endpoint, admitted by the bucket policy when create_vpc_endpoint = false"
+  default     = ""
+}
+
 variable "langsmith_irsa_role_arn" {
   type        = string
   description = "ARN of the LangSmith IRSA role. Used to scope the S3 bucket policy to a specific principal."

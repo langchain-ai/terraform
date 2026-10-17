@@ -54,7 +54,7 @@ module "vpc" {
 
   private_subnets         = slice(var.private_subnets, 0, local.az_count)
   public_subnets          = slice(var.public_subnets, 0, local.az_count)
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = var.map_public_ip_on_launch
 
   # Pod subnets get the intra route table: local routes only. Pod traffic to
   # anything outside the VPC is SNAT'd to the node's primary IP and leaves
@@ -63,7 +63,10 @@ module "vpc" {
   intra_subnets         = local.pod_subnets
   intra_subnet_suffix   = "pods"
 
-  enable_nat_gateway   = true
+  # Without internet egress there is no NAT gateway and no internet gateway, so
+  # the public subnets route nowhere outside the VPC either.
+  enable_nat_gateway   = var.enable_internet_egress
+  create_igw           = var.enable_internet_egress
   single_nat_gateway   = true
   enable_dns_hostnames = true
 

@@ -34,6 +34,8 @@ resource "aws_s3_bucket_versioning" "bucket" {
 }
 
 data "aws_route_tables" "vpc" {
+  count = var.create_vpc_endpoint ? 1 : 0
+
   filter {
     name   = "vpc-id"
     values = [var.vpc_id]
@@ -47,10 +49,22 @@ data "aws_route_tables" "vpc" {
 # (which restricts access to this endpoint), the S3 bucket is not publicly
 # accessible and data never leaves the AWS network.
 resource "aws_vpc_endpoint" "s3" {
+  count = var.create_vpc_endpoint ? 1 : 0
+
   vpc_id            = var.vpc_id
   service_name      = "com.amazonaws.${var.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = data.aws_route_tables.vpc.ids
+  route_table_ids   = data.aws_route_tables.vpc[0].ids
+}
+
+moved {
+  from = aws_vpc_endpoint.s3
+  to   = aws_vpc_endpoint.s3[0]
+}
+
+# The endpoint the bucket policy admits: this module's, or the VPC's own.
+locals {
+  vpc_endpoint_id = var.create_vpc_endpoint ? aws_vpc_endpoint.s3[0].id : var.existing_vpc_endpoint_id
 }
 
 # Lifecycle management — automatic object deletion by prefix and age.
@@ -115,7 +129,7 @@ resource "aws_s3_bucket_policy" "bucket_policy" {
         ],
         Condition = {
           StringEquals = {
-            "aws:SourceVpce" = aws_vpc_endpoint.s3.id
+            "aws:SourceVpce" = local.vpc_endpoint_id
           }
         }
       }

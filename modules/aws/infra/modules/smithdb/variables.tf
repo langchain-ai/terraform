@@ -193,6 +193,12 @@ variable "migration_source_bucket_arn" {
   default     = ""
 }
 
+variable "metastore_kms_key_arn" {
+  type        = string
+  description = "KMS key for the metastore RDS instance. Empty uses the AWS-managed aws/rds key."
+  default     = ""
+}
+
 variable "s3_versioning_enabled" {
   type        = bool
   description = "Enable versioning on the SmithDB object-store bucket."
@@ -212,4 +218,16 @@ variable "service_account_role_arn" {
   type        = string
   description = "Existing IAM role ARN for the SmithDB service account. Leave null to have this module create one."
   default     = null
+}
+
+variable "iam_permissions_boundary_arn" {
+  type        = string
+  description = "Permissions boundary policy ARN for the IAM roles this module creates. Null sets no boundary."
+  default     = null
+}
+
+variable "iam_role_path" {
+  type        = string
+  description = "IAM path for the IAM roles and instance profiles this module creates."
+  default     = "/"
 }

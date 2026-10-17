@@ -1,0 +1,80 @@
+# =============================================================================
+# LangSmith on AWS — Private Profile
+# =============================================================================
+# A cluster with no public API endpoint, no public node IPs, and no internet
+# egress. AWS APIs and ECR are reached through VPC endpoints, and Terraform
+# runs from a host on a network that can reach the private API.
+#
+# Copy to terraform.tfvars and change the values marked below:
+#
+#   cp terraform.tfvars.private terraform.tfvars
+#
+# Before the first apply, mirror every chart and image Terraform installs and
+# set helm_chart_overrides, envoy_proxy_image, langsmith_helm_repository, and
+# langsmith_image_registry. See "Pull charts and images from a mirror" in the
+# README. LangSmith needs an offline license, because the license check calls
+# beacon.langchain.com.
+#
+# For the full annotated reference with every option explained, see:
+#   terraform.tfvars.example
+# =============================================================================
+
+#------------------------------------------------------------------------------
+# REQUIRED — Change these
+#------------------------------------------------------------------------------
+name_prefix = "myco" # 1-11 chars, lowercase. Your company/team name.
+environment = "prod"
+region      = "us-west-2"
+
+# Where Terraform runs: a CI runner subnet, a VPN, or a peered VPC. Terraform
+# opens 443 from it to the cluster API before anything calls the cluster.
+eks_private_access_cidrs = ["10.100.0.0/16"]
+
+#------------------------------------------------------------------------------
+# Tagging
+#------------------------------------------------------------------------------
+owner       = "platform-team"
+cost_center = "engineering"
+
+#------------------------------------------------------------------------------
+# Networking — no NAT gateway, no internet gateway, no public node IPs
+#------------------------------------------------------------------------------
+create_vpc                           = true
+enable_internet_egress               = false
+create_vpc_endpoints                 = true
+eks_node_groups_private_subnets_only = true
+vpc_map_public_ip_on_launch          = false
+alb_scheme                           = "internal"
+
+#------------------------------------------------------------------------------
+# EKS — private API endpoint only
+#------------------------------------------------------------------------------
+enable_public_eks_cluster = false
+eks_cluster_version       = "1.34"
+
+eks_managed_node_groups = {
+  default = {
+    name           = "node-group-default"
+    instance_types = ["m5.4xlarge"]
+    min_size       = 6
+    max_size       = 10
+  }
+}
+
+#------------------------------------------------------------------------------
+# External Postgres + Redis
+#------------------------------------------------------------------------------
+postgres_source              = "external"
+postgres_username            = "langsmith"
+postgres_instance_type       = "db.r6g.xlarge"
+postgres_deletion_protection = true
+
+redis_source        = "external"
+redis_instance_type = "cache.m6g.xlarge"
+
+#------------------------------------------------------------------------------
+# TLS — an existing ACM certificate for the internal ALB
+#------------------------------------------------------------------------------
+tls_certificate_source = "acm"
+acm_certificate_arn    = "arn:aws:acm:us-west-2:123456789012:certificate/<id>" # ← change
+langsmith_domain       = "langsmith.internal.example.com"                      # ← change
