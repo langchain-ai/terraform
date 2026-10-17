@@ -161,6 +161,12 @@ variable "smithdb_managed_identity_client_id" {
   default     = ""
 }
 
+variable "langsmith_image_pull_secret_name" {
+  type        = string
+  description = "Name of an existing kubernetes.io/dockerconfigjson Secret in the LangSmith namespace, attached as imagePullSecrets to the service accounts this module creates and to the namespace's default account. Empty attaches nothing."
+  default     = ""
+}
+
 variable "smithdb_cache_storage_class_name" {
   type        = string
   description = "Name of the StorageClass created for SmithDB cache volumes."
@@ -289,7 +295,7 @@ variable "install_keda" {
 
 variable "keda_version" {
   type        = string
-  description = "KEDA Helm chart version"
+  description = "KEDA Helm chart version. KEDA's chart and application versions coincide, so this is also the image tag."
   default     = "2.14.0"
 }
 
@@ -342,4 +348,41 @@ variable "node_subnet_cidrs" {
   type        = list(string)
   description = "Address prefixes of the AKS node subnet, admitted to platform-backend's API port when sandboxes are on and the engine is not cilium."
   default     = []
+}
+
+variable "keda_image_registry" {
+  type        = string
+  description = "Mirror of ghcr.io for KEDA's images, host with optional port and path. Validated in the root module. Empty pulls from ghcr.io."
+  default     = ""
+}
+
+variable "keda_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether the mirror keeps ghcr.io as the first path segment (<registry>/ghcr.io/kedacore/...) or serves ghcr.io's paths directly (<registry>/kedacore/...)."
+  default     = true
+}
+
+variable "keda_image_pull_secret_name" {
+  type        = string
+  description = "Name of an existing kubernetes.io/dockerconfigjson Secret in the keda namespace for KEDA's pods. Empty pulls without credentials."
+  default     = ""
+}
+
+variable "keda_chart_repository" {
+  type        = string
+  description = "Helm repository the KEDA chart is fetched from."
+  default     = "https://kedacore.github.io/charts"
+}
+
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for a chart repository that requires a login. Empty fetches anonymously."
+  default     = ""
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username."
+  default     = ""
+  sensitive   = true
 }

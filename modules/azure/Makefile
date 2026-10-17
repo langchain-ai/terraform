@@ -10,7 +10,7 @@
 # SmithDB migration:       make smithdb-migration-job-start / smithdb-migration-job-end, then apply, init-values, deploy
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart test-license-key setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -55,6 +55,9 @@ test-quickstart: ## Unit-test the quickstart wizard's resume layer, --yes, and q
 
 test-license-key: ## Unit-test the license key check shared by setup-env, k8s-secrets and keyvault set (no Azure)
 	$(INFRA_DIR)/scripts/test-license-key.sh
+
+test-images-block: ## Unit-test the images: block init-values writes for a mirror (no Azure)
+	$(INFRA_DIR)/scripts/test-langsmith-images-block.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh

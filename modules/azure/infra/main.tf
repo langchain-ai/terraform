@@ -2454,6 +2454,10 @@ module "k8s_bootstrap" {
   smithdb_service_account_name       = local.smithdb_service_account
   smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
+  # Pull Secret for the pods the operator creates: agent pods run as
+  # langsmith-ksa, each deployment's Redis and PostgreSQL as the default account.
+  langsmith_image_pull_secret_name = var.langsmith_image_pull_secret_name
+
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
@@ -2463,6 +2467,15 @@ module "k8s_bootstrap" {
   # possible on the attach path. Helm cannot adopt a release it does not own.
   install_cert_manager = var.install_cert_manager
   install_keda         = var.install_keda
+
+  # KEDA's images and chart from a mirror. Composed paths are in the
+  # keda_images output.
+  keda_image_registry                   = var.keda_image_registry
+  keda_image_registry_keeps_source_host = var.keda_image_registry_keeps_source_host
+  keda_image_pull_secret_name           = var.keda_image_pull_secret_name
+  keda_chart_repository                 = var.keda_chart_repository
+  keda_chart_repository_username        = var.keda_chart_repository_username
+  keda_chart_repository_password        = var.keda_chart_repository_password
 
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and

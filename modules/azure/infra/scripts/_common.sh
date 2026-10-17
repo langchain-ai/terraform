@@ -17,6 +17,8 @@
 #   _tf_out <name>                  — Read one terraform output, or return 1
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
+#   _langsmith_images_block         — images: block for values-overrides.yaml from a mirror
+#   _langsmith_image_keys           — the chart images the module knows (0.17 and 0.18 lines)
 #   _read_values_stamp <f> <k>      — Read one stamped value back out
 #   _name_suffix                    — Resource-name suffix derived from name_prefix
 #   _derive_kv_name                 — Key Vault name, mirroring local.keyvault_name
@@ -276,7 +278,75 @@ _validate_license_key() {
 # Keys deploy.sh re-reads from terraform.tfvars on every run — sizing_profile and
 # the enable_* flags, which select whole values files — are deliberately absent.
 # Those cannot go stale, so listing them would fail a deploy that is fine.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count"
+# enable_sso_oidc is the exception: it is baked into the generated auth block
+# (basicAuth off, oauth on), so a flip after init-values would deploy the old
+# login path.
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
+
+# ── LangSmith images from a mirror ────────────────────────────────────────────
+# The chart's images and their repositories for the chart lines deploy.sh
+# accepts here (0.17, and 0.18 with its two operator-deployment images),
+# key=repository. init-values.sh writes one images.<key>.repository
+# per entry when langsmith_image_registry_keeps_source_host = false, the layout
+# of a mirror that serves each source registry's paths directly (a proxy
+# repository in Nexus or Artifactory), because images.registry alone would
+# compose <registry>/docker.io/... there. deploy.sh compares this list with the
+# chart it is about to install and stops on an image the list does not carry,
+# which would otherwise pull from its public registry. Keep the list equal to
+# the images: block of the chart's values.yaml at the pinned lines.
+_LANGSMITH_IMAGE_REPOSITORIES="aceBackendImage=docker.io/langchain/langsmith-ace-backend backendImage=docker.io/langchain/langsmith-backend engineInsightsAgentImage=docker.io/langchain/langsmith-insights-engine frontendImage=docker.io/langchain/langsmith-frontend operatorImage=docker.io/langchain/langgraph-operator postgresImage=docker.io/postgres redisImage=docker.io/redis clickhouseImage=docker.io/clickhouse/clickhouse-server agentBuilderImage=docker.io/langchain/agent-builder-deep-agent pollyAgentImage=docker.io/langchain/langsmith-polly smithdbImage=docker.io/langchain/smithdb presidioAnalyzerImage=mcr.microsoft.com/presidio-analyzer sandboxHostImage=docker.io/langchain/sandbox-host juicefsCSIImage=docker.io/juicedata/juicefs-csi-driver juicefsCSINodeDriverRegistrarImage=registry.k8s.io/sig-storage/csi-node-driver-registrar juicefsMountImage=docker.io/juicedata/mount deploymentRedisImage=docker.io/redis deploymentDbImage=docker.io/pgvector/pgvector"
+
+# Print the image keys of a chart's values.yaml read on stdin: the top-level
+# entries under images: whose name ends in Image, one per line. Reads to the
+# end of its input on purpose. deploy.sh pipes `helm show values` into this
+# under set -o pipefail, and an awk that exits at the first key after the
+# images: block leaves helm with most of a 100 KB file still to write; helm
+# then dies of SIGPIPE, the pipeline fails, and the caller reads "the chart's
+# images could not be read" for a chart it read fine.
+_chart_image_keys_from_stdin() {
+  awk '/^images:/{p=1; next} p && /^[^ ]/{p=0} p && /^  [A-Za-z0-9]+Image:/{sub(":", "", $1); print $1}'
+}
+
+# Print the image keys the module knows, one per line.
+_langsmith_image_keys() {
+  local e
+  for e in $_LANGSMITH_IMAGE_REPOSITORIES; do
+    printf '%s\n' "${e%%=*}"
+  done
+}
+
+# Print the images: block for values-overrides.yaml from the three tfvars:
+#   _langsmith_images_block <registry> <keeps_source_host true|false> <pull secret>
+# Nothing set: one comment line naming the knob. A registry that keeps the
+# source host: images.registry alone. One that drops it: images.registry empty
+# and every repository the list above knows, with the source host removed
+# (docker.io/langchain/x becomes <registry>/langchain/x; images from other
+# registries lose their host the same way, which is what a group repository
+# that proxies several registries serves). A pull Secret: images.imagePullSecrets.
+_langsmith_images_block() {
+  local registry="$1" keeps_host="$2" pull_secret="$3" e key repo
+  if [[ -z "$registry" && -z "$pull_secret" ]]; then
+    printf '# images: the chart defaults (docker.io). Set langsmith_image_registry for a mirror.\n'
+    return 0
+  fi
+  printf 'images:\n'
+  if [[ -n "$registry" ]]; then
+    if [[ "$keeps_host" == "false" ]]; then
+      printf '  # %s serves each source registry'"'"'s paths directly, so the prefix stays\n' "$registry"
+      printf '  # empty and every repository names the mirror path (langsmith_image_registry_keeps_source_host = false).\n'
+      printf '  registry: ""\n'
+      for e in $_LANGSMITH_IMAGE_REPOSITORIES; do
+        key="${e%%=*}"; repo="${e#*=}"; repo="${repo#*/}"
+        printf '  %s:\n    repository: "%s/%s"\n' "$key" "$registry" "$repo"
+      done
+    else
+      printf '  registry: "%s"\n' "$registry"
+    fi
+  fi
+  if [[ -n "$pull_secret" ]]; then
+    printf '  imagePullSecrets:\n    - name: "%s"\n' "$pull_secret"
+  fi
+}
 
 # Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
 # leaves it empty when the key is absent — never the default a caller substitutes,
