@@ -53,6 +53,7 @@ module "byoc_migration" {
   self_hosted_role_arn         = "arn:aws:iam::210987654321:role/langsmith-irsa"
   data_plane_smithdb_role_arn  = "arn:aws:iam::123456789012:role/dp-smith-smithdb-iam-role"
   self_hosted_blob_kms_key_arn = "arn:aws:kms:us-east-1:210987654321:key/11111111-2222-3333-4444-555555555555"
+  self_hosted_blob_bucket_arn  = "arn:aws:s3:::langsmith-blob"
   data_plane_workload_role_arn = "arn:aws:iam::123456789012:role/dp-smith-workload-iam-role"
 }
 ```
@@ -67,6 +68,7 @@ module "byoc_migration" {
 | `data_plane_region` | Region of the data plane VPC. |
 | `data_plane_smithdb_role_arn` | Data plane SmithDB role the self-hosted role may assume. |
 | `self_hosted_blob_kms_key_arn` | Optional. Customer-managed KMS key of the blob storage bucket. The data plane role gets a decrypt grant on it. |
+| `self_hosted_blob_bucket_arn` | Blob storage bucket. Required with `self_hosted_blob_kms_key_arn`. The grant only decrypts objects of this bucket, so the bucket must use S3 Bucket Keys. Use a key dedicated to this bucket when possible. |
 | `data_plane_workload_role_arn` | Data plane workload role that receives the grant. Required with `self_hosted_blob_kms_key_arn`. |
 | `name` | Name prefix for the created resources. |
 | `tags` | Extra tags. `managed_by` is set to `customer`. |

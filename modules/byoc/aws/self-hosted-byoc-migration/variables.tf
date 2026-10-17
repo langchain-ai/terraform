@@ -56,6 +56,17 @@ variable "self_hosted_blob_kms_key_arn" {
   }
 }
 
+variable "self_hosted_blob_bucket_arn" {
+  description = "Self-hosted blob storage bucket. Required with self_hosted_blob_kms_key_arn. The decrypt grant only covers objects of this bucket, so the bucket must use S3 Bucket Keys."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.self_hosted_blob_bucket_arn == null || can(regex("^arn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.self_hosted_blob_bucket_arn))
+    error_message = "self_hosted_blob_bucket_arn must be null or an S3 bucket ARN."
+  }
+}
+
 variable "data_plane_account_id" {
   description = "AWS account ID that owns the BYOC data plane, provided by LangChain team. Required even when it matches the self-hosted account."
   type        = string
