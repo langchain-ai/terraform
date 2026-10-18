@@ -77,6 +77,7 @@ trap 'rm -rf "$TMP"' EXIT
 write_fresh_answers() {
   local file="$1" acm_arn="$2" domain="$3" dns_choice="${4:-}"
   local invalid_zone_id="${5:-}" zone_id="${6:-}"
+  local gateway="${7-3}" deployments="${8:-}" sandboxes="${9:-}"
   {
     printf '%s\n' "1"             # Deployment profile: dev
     printf '\n'                    # Name prefix
@@ -94,7 +95,8 @@ write_fresh_answers() {
     printf '%s\n' "2"             # Redis: in-cluster
     printf '\n'                    # ClickHouse: in-cluster
     printf '\n'                    # SmithDB: disabled
-    printf '%s\n' "3"             # Gateway: ALB
+    printf '%s\n' "$gateway"    # Gateway: default Envoy or explicit selection
+    printf '%s\n' "203.0.113.10/32,198.51.100.0/24" # ALB client CIDRs
     printf '%s\n' "$domain"       # Custom domain
     printf '%s\n' "1"             # TLS: ACM
     if [[ -n "$acm_arn" ]]; then
@@ -111,11 +113,11 @@ write_fresh_answers() {
       fi
     fi
     printf '\n'                    # Sizing: dev
-    printf '\n'                    # Deployments: no
+    printf '%s\n' "$deployments" # Deployments
     printf '\n'                    # Fleet: no
     printf '\n'                    # LangSmith Chat: no
     printf '\n'                    # Insights: no
-    printf '\n'                    # Sandboxes: no
+    printf '%s\n' "$sandboxes"   # Sandboxes
     printf '\n'                    # Write configuration: yes
   } > "$file"
 }
@@ -140,6 +142,7 @@ write_update_defaults() {
     printf '\n' # ClickHouse
     printf '\n' # SmithDB
     printf '\n' # Gateway
+    printf '\n' # ALB client CIDRs
     printf '\n' # TLS
     printf '\n' # Certificate management
     printf '\n' # Route 53 choice
@@ -181,10 +184,21 @@ log_has "invalid zone ID is rejected" "$TMP/reuse.log" \
 log_has "summary shows reused zone" "$TMP/reuse.log" \
   "existing (Z1ABCDEF123456)"
 
+has_line "ALB CIDRs are written" "$REUSE_INFRA/terraform.tfvars" 'alb_allowed_cidr_blocks = ["203.0.113.10/32", "198.51.100.0/24"]'
+log_has "summary includes both ALB CIDRs" "$TMP/reuse.log" "203.0.113.10/32,198.51.100.0/24"
+
 echo "2. Update mode preserves the zone choice, the zone ID, and SSO"
 # Turn SSO on the way `make sso` does: by editing only that line.
 sed 's/^enable_sso_oidc[[:space:]]*=.*/enable_sso_oidc = true/' "$REUSE_INFRA/terraform.tfvars" > "$TMP/sso.tfvars"
 mv "$TMP/sso.tfvars" "$REUSE_INFRA/terraform.tfvars"
+sed '/^alb_allowed_cidr_blocks[[:space:]]*=/d' "$REUSE_INFRA/terraform.tfvars" > "$TMP/cidrs.tfvars"
+cat >> "$TMP/cidrs.tfvars" <<'TFVARS'
+alb_allowed_cidr_blocks = [
+  "203.0.113.10/32",
+  "198.51.100.0/24",
+]
+TFVARS
+mv "$TMP/cidrs.tfvars" "$REUSE_INFRA/terraform.tfvars"
 write_update_defaults "$TMP/update.answers"
 run_wizard "existing-zone update run completes" "$REUSE_INFRA" \
   "$TMP/update.answers" "$TMP/update.log"
@@ -196,6 +210,8 @@ has_line "SSO setting survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "enable_sso_oidc         = true"
 has_line "admin email survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "langsmith_admin_email = \"admin@example.com\""
+
+has_line "all ALB CIDRs survive rerun" "$REUSE_INFRA/terraform.tfvars" 'alb_allowed_cidr_blocks = ["203.0.113.10/32", "198.51.100.0/24"]'
 
 echo "3. Creating a new zone writes the choice without an existing ID"
 NEW_INFRA="$TMP/new"
@@ -222,6 +238,43 @@ lacks_key "existing ACM omits dns_existing_zone_id" "$ACM_INFRA/terraform.tfvars
   "dns_existing_zone_id"
 log_lacks "existing ACM skips the Route 53 question" "$TMP/acm.log" \
   "Route 53 hosted zone for acm.example.com:"
+
+echo "5. Fresh configurations default to Envoy"
+DEFAULT_INFRA="$TMP/default"
+write_fresh_answers "$TMP/default.answers" \
+  "arn:aws:acm:us-west-2:123456789012:certificate/abc123" \
+  "default.example.com" "" "" "" ""
+run_wizard "default gateway run completes" "$DEFAULT_INFRA" "$TMP/default.answers" "$TMP/default.log"
+has_line "Envoy remains the default" "$DEFAULT_INFRA/terraform.tfvars" 'enable_envoy_gateway    = true'
+
+echo "6. ALB-only mode accepts Sandboxes"
+SANDBOX_INFRA="$TMP/sandbox"
+write_fresh_answers "$TMP/sandbox.answers" \
+  "arn:aws:acm:us-west-2:123456789012:certificate/abc123" \
+  "sandbox.example.com" "" "" "" "3" "" "y"
+run_wizard "ALB-only Sandbox run completes" "$SANDBOX_INFRA" "$TMP/sandbox.answers" "$TMP/sandbox.log"
+if grep -Eq '^enable_sandboxes[[:space:]]*=[[:space:]]*true$' "$SANDBOX_INFRA/terraform.tfvars"; then
+  ok "Sandboxes are enabled"
+else
+  bad "Sandboxes were not enabled"
+fi
+
+echo "7. No-gateway mode rejects Deployments before writing configuration"
+INVALID_INFRA="$TMP/invalid"
+mkdir -p "$INVALID_INFRA"
+write_fresh_answers "$TMP/invalid.answers" \
+  "arn:aws:acm:us-west-2:123456789012:certificate/abc123" \
+  "invalid.example.com" "" "" "" "3" "y"
+if INFRA_DIR="$INVALID_INFRA" bash "$SRC" < "$TMP/invalid.answers" > "$TMP/invalid.log" 2>&1; then
+  bad "unsupported no-gateway combination was accepted"
+else
+  log_has "no-gateway rejection explains the dependency" "$TMP/invalid.log" "Agent deployment endpoints require Envoy"
+  if [[ ! -f "$INVALID_INFRA/terraform.tfvars" ]]; then
+    ok "unsupported configuration was not written"
+  else
+    bad "unsupported configuration was written"
+  fi
+fi
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

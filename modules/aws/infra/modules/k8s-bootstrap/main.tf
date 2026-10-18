@@ -180,8 +180,7 @@ MANIFEST
 }
 
 # ── cert-manager DNS-01 resources (Route 53 / Istio Gateway path) ────────────
-# Required on EKS with Istio Gateway — HTTP-01 fails because NLBs cannot be
-# reached from within the cluster (hairpin NAT prevents cert-manager self-check).
+# Issues Istio certificates using Route 53 DNS-01 validation.
 #
 # SA annotation is handled at Helm install time via the dynamic "set" block in
 # helm_release.cert_manager above — no separate kubectl step needed.
@@ -461,7 +460,7 @@ resource "helm_release" "envoy_gateway" {
 # Istio and NGINX keep their proxy Service internal with a one-line Helm value.
 # Envoy cannot: its Service is created per Gateway at runtime, so the override
 # must be an EnvoyProxy on the GatewayClass. Without it the Service defaults to
-# LoadBalancer and AWS provisions an NLB that never receives traffic.
+# LoadBalancer rather than the ClusterIP needed for pod target registration.
 resource "terraform_data" "envoy_gateway_resource" {
   count = var.enable_envoy_gateway ? 1 : 0
 
@@ -530,10 +529,10 @@ MANIFEST
   }
 
   # Delete the Gateway + GatewayClass while the Envoy Gateway controller is still
-  # installed so it can reclaim the controller-spawned Envoy proxy and its NLB.
+  # installed so it can reclaim the controller-spawned Envoy proxy.
   # Runs before helm_release.envoy_gateway is uninstalled (reverse dependency
-  # order). --wait blocks until the controller finishes teardown, avoiding an
-  # orphaned NLB. Mirrors the destroy provisioners on envoy_target_group_binding
+  # order). --wait blocks until the controller finishes teardown.
+  # Mirrors the destroy provisioners on envoy_target_group_binding
   # and istio_gateway_resource.
   provisioner "local-exec" {
     when        = destroy
@@ -645,8 +644,7 @@ MANIFEST
 # of Ingress or HTTPRoute. The ingressgateway service exposes port 80 (container 8080).
 #
 # ALB-always pattern: ALB forwards to istio-ingressgateway pods (target-type: ip)
-# via a TargetGroupBinding. The Istio NLB (auto-created by the controller) is
-# internal-only and not used for external traffic.
+# via a TargetGroupBinding to the ClusterIP gateway Service.
 
 resource "helm_release" "istio_base" {
   count = var.enable_istio_gateway ? 1 : 0
@@ -823,7 +821,7 @@ MANIFEST
 }
 
 # ── NGINX Ingress Controller ──────────────────────────────────────────────────
-# Installs ingress-nginx as a ClusterIP service — no external NLB is created.
+# Installs ingress-nginx as a ClusterIP Service behind the Terraform ALB.
 # A TargetGroupBinding wires the Terraform-managed ALB target group to the
 # nginx controller pods (target-type: ip via VPC-CNI). The LangSmith Helm chart
 # uses ingressClassName: nginx and standard Ingress resources.

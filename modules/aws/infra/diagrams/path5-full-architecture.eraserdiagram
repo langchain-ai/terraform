@@ -6,7 +6,7 @@ typeface clean
 // ============================================================
 // PATH 5: FULL AWS LangSmith Architecture — All Deployment Paths
 // Macro view: all components, all gateway options, all opt-ins
-// Shows ALB-native, NGINX, Envoy, and Istio as parallel options
+// Shows direct frontend, Envoy (default), Istio, and the legacy NGINX path
 // Use this diagram when presenting to a customer CTO or architect
 // ============================================================
 
@@ -86,7 +86,7 @@ AWS Account [icon: aws, color: blue] {
   // ── Route 53 ──────────────────────────────────────────────
   // Terraform dns module manages the hosted zone and all records
   // ACM validation records are automatically provisioned
-  // ALB alias record points to the pre-provisioned or LBC-managed ALB
+  // ALB alias record points to the Terraform-managed ALB
   Route 53 [icon: aws-route-53, color: blue] {
     Public Hosted Zone [icon: aws-route-53, color: blue]
     ACM DNS Validation Record [icon: aws-route-53, color: green]
@@ -104,8 +104,7 @@ AWS Account [icon: aws, color: blue] {
     // NAT Gateway provides outbound internet for private subnets
     Public Subnets AZ1-3 [color: gray] {
 
-      // ALB — either pre-provisioned by Terraform alb module (Paths 2-4)
-      // or created by AWS LBC via Kubernetes Ingress (Path 1)
+      // One Terraform-managed ALB in every routing mode
       // TLS terminates here via ACM certificate — :443 in, HTTP out
       ALB Internet-Facing [icon: aws-elb-application-load-balancer, color: blue]
 
@@ -173,19 +172,18 @@ AWS Account [icon: aws, color: blue] {
         // ── GATEWAY OPTIONS — choose one per deployment ────
         // All four are shown as parallel options; only one is active at a time
 
-        // Path 1: ALB-Native (AWS LBC manages ALB via Kubernetes Ingress)
-        // No separate gateway controller — AWS LBC IS the gateway layer
-        // ingress-nginx not needed; Ingress resource lives in langsmith ns
-        // opt-in: enable_nginx_ingress = false (default: ALB native)
+        // Path 1: No gateway — ALB targets langsmith-frontend (NGINX) directly
+        // enable_envoy_gateway = false, other controllers disabled
+        // Agent deployment endpoints require a gateway
 
-        // Path 2: NGINX Ingress Controller
-        // ALB → NLB/NodePort → NGINX → LangSmith services
+        // Path 2: Legacy NGINX Ingress Controller
+        // ALB → TargetGroupBinding → NGINX pods → LangSmith services
         // Enable with: enable_nginx_ingress = true
         ingress-nginx [color: purple] {
           nginx-ingress-controller [icon: server, color: purple]
         }
 
-        // Path 3: Envoy Gateway
+        // Path 3: Envoy Gateway (default, recommended)
         // ALB (Terraform-pre-provisioned) → TargetGroupBinding → Envoy proxy
         // ACM TLS terminates at ALB; Envoy handles HTTP routing internally
         // Enable with: enable_envoy_gateway = true
@@ -197,7 +195,7 @@ AWS Account [icon: aws, color: blue] {
         // Path 4: Istio
         // ALB → TargetGroupBinding → istio-ingressgateway → VirtualService
         // istiod programs the data plane; mTLS available in-mesh
-        // Enable with: enable_istio = true
+        // Enable with: enable_istio_gateway = true
         istio-system [color: purple] {
           istiod [icon: server, color: purple]
           istio-ingressgateway [icon: server, color: purple]
@@ -208,7 +206,7 @@ AWS Account [icon: aws, color: blue] {
         langsmith [color: blue] {
 
           // Gateway API / Ingress resources (one active per path)
-          Ingress langsmith [icon: kubernetes, color: blue]
+          Frontend TargetGroupBinding [icon: kubernetes, color: blue]
           Gateway langsmith-gateway [icon: kubernetes, color: blue]
           HTTPRoute langsmith [icon: kubernetes, color: blue]
           VirtualService langsmith [icon: kubernetes, color: purple]
@@ -221,7 +219,7 @@ AWS Account [icon: aws, color: blue] {
 
           // ── Core LangSmith pods ──────────────────────
           Core Services [color: blue] {
-            langsmith-frontend [icon: server, color: blue]
+            langsmith-frontend [icon: server, color: blue, label: "langsmith-frontend (NGINX)"]
             langsmith-backend [icon: server, color: blue]
             langsmith-platform-backend [icon: server, color: blue]
             langsmith-ace-backend [icon: server, color: blue]
@@ -311,12 +309,12 @@ ACM DNS Validation Record > ALB Internet-Facing: cert bound to ALB listener
 
 // ── Gateway path options (parallel — one active per deployment) ─
 
-// Path 1: ALB-Native — AWS LBC creates and owns the ALB
-ALB Internet-Facing > Ingress langsmith: Path 1 — LBC-managed ALB
-aws-load-balancer-controller --> Ingress langsmith: watches and reconciles
+// Path 1: Direct frontend — Terraform owns the ALB
+ALB Internet-Facing > Frontend TargetGroupBinding: Path 1 — frontend target group
+aws-load-balancer-controller --> Frontend TargetGroupBinding: watches and reconciles
 
-// Path 2: NGINX — ALB forwards to NGINX NodePort
-ALB Internet-Facing > nginx-ingress-controller: Path 2 — HTTPS :443 → NodePort
+// Path 2: Legacy NGINX — ALB targets proxy pods
+ALB Internet-Facing > nginx-ingress-controller: Path 2 — HTTP :80 (pod IP)
 
 // Path 3: Envoy — ALB TGB forwards to Envoy proxy pod IPs
 ALB Internet-Facing > TargetGroupBinding: Path 3 — HTTP :10080 (TLS offloaded)
@@ -334,7 +332,7 @@ istiod --> VirtualService langsmith: reconciles traffic rules
 nginx-ingress-controller > langsmith-frontend: Ingress backend
 envoy-langsmith-proxy Pods > langsmith-frontend: HTTPRoute backendRef
 istio-ingressgateway > langsmith-frontend: VirtualService destination
-Ingress langsmith > langsmith-frontend: ALB-native rule /
+Frontend TargetGroupBinding > langsmith-frontend: HTTP :8080 (pod IP)
 
 // ── Frontend internal routing ─────────────────────────────────
 langsmith-frontend > langsmith-backend: /api/*

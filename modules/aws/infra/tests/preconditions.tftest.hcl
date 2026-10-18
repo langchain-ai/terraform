@@ -385,3 +385,22 @@ run "two_ingress_controllers_are_rejected" {
 
   expect_failures = [terraform_data.validate_inputs]
 }
+
+run "direct_frontend_rejects_dynamic_deployments" {
+  command = plan
+  variables {
+    enable_envoy_gateway = false
+    enable_deployments   = true
+  }
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "direct_frontend_rejects_http01" {
+  command = plan
+  variables {
+    enable_envoy_gateway   = false
+    tls_certificate_source = "letsencrypt"
+    letsencrypt_email      = "plan-tests@example.com"
+  }
+  expect_failures = [terraform_data.validate_inputs]
+}

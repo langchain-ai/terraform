@@ -7,8 +7,7 @@
 # setup-tls.sh — Install cert-manager and configure Let's Encrypt TLS via Route 53 DNS-01.
 #
 # Designed for EKS clusters using Istio Gateway as the ingress controller.
-# HTTP-01 does NOT work on EKS (NLB hairpin NAT prevents cert-manager self-check).
-# DNS-01 via Route 53 IRSA is the correct approach for EKS.
+# DNS-01 validates domain ownership through Route 53 using IRSA.
 #
 # Prerequisites (must be completed before running this script):
 #   1. terraform apply with create_cert_manager_irsa = true and cert_manager_hosted_zone_id set
@@ -29,7 +28,7 @@
 #
 # After running:
 #   - Let's Encrypt issues a cert stored in secret langsmith-tls in istio-system
-#   - HTTPS traffic terminates at the Istio ingress gateway NLB
+#   - HTTPS traffic terminates at the Istio ingress gateway
 #   - HTTP requests redirect to HTTPS (301)
 #   - cert-manager auto-renews the cert before expiry
 #
