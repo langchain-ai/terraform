@@ -199,6 +199,11 @@ output "envoy_gateway_image_pull_secret_name" {
   value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.pullSecrets[0].name, "")])
 }
 
+output "custom_ca_trust_certificates_base64" {
+  description = "Base64-encoded CA certificates the cluster resource installs in every node's trust store, in the order of aks_custom_ca_trust_certificate_files. Null without any, and without a created cluster."
+  value       = one(azurerm_kubernetes_cluster.main[*].custom_ca_trust_certificates_base64)
+}
+
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
