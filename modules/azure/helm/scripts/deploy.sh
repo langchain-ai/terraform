@@ -79,24 +79,19 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   warn "terraform.tfvars not found — values-overrides.yaml not checked against it"
   echo ""
 else
-  _stale=""
-  _stamped="false"
-  for _key in $_VALUES_INPUT_KEYS; do
-    _was=$(_read_values_stamp "$OVERRIDES_FILE" "$_key") || continue
-    _stamped="true"
-    _now=$(_parse_tfvar "$_key") || _now=""
-    [[ "$_was" == "$_now" ]] && continue
-    _stale="${_stale}${_key}: generated with '${_was}', terraform.tfvars now says '${_now}'
-"
-  done
+  # _values_stamp_drift (infra/scripts/_common.sh): a key the stamp lacks is
+  # drift when terraform.tfvars sets it, so a file generated before that key
+  # existed cannot deploy as if the key were unset.
+  _drift_rc=0
+  _stale=$(_values_stamp_drift "$OVERRIDES_FILE") || _drift_rc=$?
 
-  if [[ "$_stamped" != "true" ]]; then
+  if [[ "$_drift_rc" -eq 2 ]]; then
     warn "values-overrides.yaml carries no terraform.tfvars stamp (written by an older init-values.sh)"
     action "make init-values  (adds the stamp, so this check can run)"
     echo ""
-  elif [[ -n "$_stale" ]]; then
+  elif [[ "$_drift_rc" -eq 1 ]]; then
     fail "values-overrides.yaml was generated from different terraform.tfvars values:"
-    printf '%s' "$_stale" | while IFS= read -r _line; do
+    printf '%s\n' "$_stale" | while IFS= read -r _line; do
       [[ -n "$_line" ]] && info "$_line"
     done
     echo ""

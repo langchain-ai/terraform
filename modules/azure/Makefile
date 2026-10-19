@@ -9,7 +9,7 @@
 # Where am I?              make status
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart test-license-key test-images-block setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -53,6 +53,9 @@ test-license-key: ## Unit-test the license key check shared by setup-env, k8s-se
 
 test-images-block: ## Unit-test the images: block init-values writes for a mirror (no Azure)
 	$(INFRA_DIR)/scripts/test-langsmith-images-block.sh
+
+test-values-stamp: ## Unit-test the stamp check that stops make deploy on a values file generated from other tfvars (no Azure)
+	$(INFRA_DIR)/scripts/test-values-stamp.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh
