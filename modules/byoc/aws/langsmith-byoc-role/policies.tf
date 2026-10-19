@@ -26,6 +26,12 @@ locals {
   secrets_manager_statements = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
   vpc_statements             = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
   byovpc_vpc_statements      = jsondecode(templatefile("${path.module}/policies/vpc_byovpc.json", local.policy_template_vars))
+  self_hosted_migration_statements = [
+    for s in jsondecode(templatefile("${path.module}/policies/self_hosted_migration.json", local.policy_template_vars)) : s if var.allow_self_hosted_migration_permissions
+  ]
+  byovpc_self_hosted_migration_statements = [
+    for s in jsondecode(templatefile("${path.module}/policies/self_hosted_migration_byovpc.json", local.policy_template_vars)) : s if var.allow_self_hosted_migration_permissions
+  ]
 
   delete_statements_for_policy = {
     for policy_name, statements in local.delete_statements : policy_name => [
@@ -45,6 +51,8 @@ locals {
       [for statement in local.network_firewall_statements : statement if var.allow_vpc_creation_permissions],
       [for statement in local.delete_statements_for_policy.vpc : statement if var.allow_vpc_creation_permissions],
       [for statement in local.delete_statements_for_policy.vpc_byovpc : statement if !var.allow_vpc_creation_permissions],
+      [for statement in local.self_hosted_migration_statements : statement if var.allow_vpc_creation_permissions],
+      [for statement in local.byovpc_self_hosted_migration_statements : statement if !var.allow_vpc_creation_permissions],
     )
     iam                        = local.iam_statements
     iam-karpenter-eks-profiles = concat(local.iam_karpenter_eks_profiles_statements, local.delete_statements_for_policy["iam-karpenter-eks-profiles"], local.delete_statements_for_policy.iam)

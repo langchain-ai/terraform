@@ -1353,6 +1353,9 @@ module "aks" {
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
   default_node_pool_os_sku    = var.aks_os_sku
+  # Internal CAs for every node's trust store, such as the one behind an image
+  # mirror. A change to the list replaces every node.
+  aks_custom_ca_trust_certificate_files = var.aks_custom_ca_trust_certificate_files
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
@@ -1411,10 +1414,11 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version                = var.envoy_gateway_version
-  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
-  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
-  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
+  envoy_gateway_version                          = var.envoy_gateway_version
+  envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
+  envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -2028,6 +2032,9 @@ module "smithdb" {
   replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
+  shared_access_key_enabled = var.smithdb_storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
+
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
   # metastore's PostgreSQL zone.
   blob_private_endpoint_enabled   = var.storage_private_endpoint_enabled
@@ -2196,6 +2203,9 @@ module "blob" {
   resource_group_name  = local.rg_name
 
   replication_type = var.storage_replication_type
+
+  shared_access_key_enabled = var.storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
 
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days
@@ -2454,6 +2464,10 @@ module "k8s_bootstrap" {
   smithdb_service_account_name       = local.smithdb_service_account
   smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
+  # Pull Secret for the pods the operator creates: agent pods run as
+  # langsmith-ksa, each deployment's Redis and PostgreSQL as the default account.
+  langsmith_image_pull_secret_name = var.langsmith_image_pull_secret_name
+
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
@@ -2463,6 +2477,15 @@ module "k8s_bootstrap" {
   # possible on the attach path. Helm cannot adopt a release it does not own.
   install_cert_manager = var.install_cert_manager
   install_keda         = var.install_keda
+
+  # KEDA's images and chart from a mirror. Composed paths are in the
+  # keda_images output.
+  keda_image_registry                   = var.keda_image_registry
+  keda_image_registry_keeps_source_host = var.keda_image_registry_keeps_source_host
+  keda_image_pull_secret_name           = var.keda_image_pull_secret_name
+  keda_chart_repository                 = var.keda_chart_repository
+  keda_chart_repository_username        = var.keda_chart_repository_username
+  keda_chart_repository_password        = var.keda_chart_repository_password
 
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and

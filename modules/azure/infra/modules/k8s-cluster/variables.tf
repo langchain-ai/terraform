@@ -89,6 +89,12 @@ variable "default_node_pool_os_sku" {
   default     = "Ubuntu"
 }
 
+variable "aks_custom_ca_trust_certificate_files" {
+  type        = list(string)
+  description = "PEM files, one CA certificate each, for every Linux node's trust store; the cluster resource reads each, trims the whitespace around its certificate block, and base64-encodes it. Validated in the root module. Empty leaves the attribute unset."
+  default     = []
+}
+
 variable "service_cidr" {
   type        = string
   description = "Service CIDR of the cluster"
@@ -361,8 +367,14 @@ variable "envoy_gateway_version" {
 
 variable "envoy_gateway_image_registry" {
   type        = string
-  description = "Registry that mirrors Docker Hub for Envoy Gateway's controller and proxy images, with docker.io as the first path segment under it. Empty pulls from docker.io."
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's controller and proxy images. Empty pulls from docker.io. envoy_gateway_image_registry_keeps_source_host says whether docker.io is the first path segment under it."
   default     = ""
+}
+
+variable "envoy_gateway_image_registry_keeps_source_host" {
+  type        = bool
+  description = "true: images are pulled as <registry>/docker.io/<path>. false: as <registry>/<path>, the layout of a Docker Hub proxy repository. Ignored without envoy_gateway_image_registry."
+  default     = true
 }
 
 variable "envoy_proxy_default_image" {
