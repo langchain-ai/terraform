@@ -1621,9 +1621,9 @@ decides what the cluster can reach, and nothing works until it allows:
   too. The three are stamped into `values-overrides.yaml`, so a change after
   `init-values` stops the deploy until the file is regenerated. A file
   generated with the key unset while its default was `true` (the 0.16 line's
-  v0.16.124 to .126) carries the host-kept layout; `make deploy` stops on it
-  until the key is set, so the next `init-values` does not switch a working
-  mirror's layout.
+  v0.16.124 to .126) carries the host-kept layout; `make init-values` and
+  `make deploy` both stop on it until the key is set, so the file is not
+  regenerated under the new default for a mirror laid out the old way.
 - **A mirror behind an internal CA** also needs that CA on the nodes, where
   containerd does the pulling and trusts only public CAs; without it every pull
   fails with `x509: certificate signed by unknown authority`.

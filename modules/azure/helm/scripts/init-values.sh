@@ -428,6 +428,14 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
 fi
 
 # ── Generate values-overrides.yaml ────────────────────────────────────────
+# A values-overrides.yaml written under the previous default of
+# langsmith_image_registry_keeps_source_host (true, host kept) with the key
+# still unset in terraform.tfvars: regenerating it here would switch the
+# layout under a mirror that serves the host-kept one, and deploy.sh would
+# then see a file that matches its tfvars. Stop first (_common.sh).
+if [[ -f "$OUT_FILE" ]]; then
+  _stop_if_values_layout_from_old_default "$OUT_FILE" || exit 1
+fi
 echo ""
 info "Generating values-overrides.yaml..."
 
