@@ -736,7 +736,7 @@ fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-CHART_VERSION="${CHART_VERSION:-$_LANGSMITH_CHART_PIN}"
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 _required_chart_line="0.17"
 
 # These values target chart 0.17, where the SmithDB Azure values first appear.

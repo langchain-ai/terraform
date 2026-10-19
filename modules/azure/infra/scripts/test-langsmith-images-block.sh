@@ -101,6 +101,16 @@ _check "0.17 templates: no image line keeps docker.io when the host is dropped" 
   '0' \
   "$(printf '%s\n' "$_tpl" | grep -E '^ +image: ' | grep -c 'docker.io')"
 
+_check "deploy.sh's pinned chart line is read from its text (the release guard reads it the same way)" \
+  "$(grep -oE 'CHART_VERSION:-~[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/../../helm/scripts/deploy.sh" | head -1 | sed 's/^CHART_VERSION:-//')" \
+  "$(_langsmith_chart_pin)"
+_check "the resolved chart version falls back on that pin" \
+  "$(_langsmith_chart_pin)" \
+  "$(CHART_VERSION='' INFRA_DIR=/nonexistent _resolve_chart_version)"
+_check "CHART_VERSION in the environment wins" \
+  '0.17.6' \
+  "$(CHART_VERSION=0.17.6 _resolve_chart_version)"
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

@@ -284,17 +284,25 @@ _validate_license_key() {
 _VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
 # The chart line deploy.sh installs when neither CHART_VERSION in the
-# environment nor langsmith_helm_chart_version in terraform.tfvars names one.
-_LANGSMITH_CHART_PIN="~0.17.0"
+# environment nor langsmith_helm_chart_version in terraform.tfvars names one:
+# deploy.sh's own pinned default, read from its text. It stays a literal
+# there because .github/scripts/chart-line.sh reads it the same way as the
+# release tag's MAJOR.MINOR, so deploy.sh is the one place the pin lives.
+_langsmith_chart_pin() {
+  local f="$_COMMON_DIR/../../helm/scripts/deploy.sh" pin
+  pin=$(grep -oE 'CHART_VERSION:-~[0-9]+\.[0-9]+\.[0-9]+' "$f" 2>/dev/null | head -1) || pin=""
+  printf '%s' "${pin#CHART_VERSION:-}"
+}
 
 # The chart version or constraint the next deploy resolves: CHART_VERSION from
-# the environment, else langsmith_helm_chart_version, else the pin. deploy.sh
-# and init-values.sh read the same answer, so what init-values writes for a
-# chart line is what deploy installs.
+# the environment, else langsmith_helm_chart_version, else deploy.sh's pin.
+# deploy.sh and init-values.sh read the same answer, so what init-values
+# writes for a chart is what deploy installs.
 _resolve_chart_version() {
   local v="${CHART_VERSION:-}"
   if [[ -z "$v" ]]; then v=$(_parse_tfvar "langsmith_helm_chart_version") || v=""; fi
-  printf '%s' "${v:-$_LANGSMITH_CHART_PIN}"
+  [[ -n "$v" ]] || v=$(_langsmith_chart_pin)
+  printf '%s' "$v"
 }
 
 # The <major>.<minor> line of a chart version or constraint: ~0.17.0 → 0.17.
