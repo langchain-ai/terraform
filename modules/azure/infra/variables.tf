@@ -1079,6 +1079,16 @@ variable "aks_custom_ca_trust_certificate_files" {
     condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)]) : true
     error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate blocks, or a block that is not whole lines (the BEGIN and END markers alone on theirs, base64 between): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)])}. A private key, a byte-order mark, an openssl Bag Attributes preamble, a note after an END marker, or a certificate commented out line by line all count; comment lines starting with # and blank lines are fine. On a cluster that already holds the entry with that extra content, a stripped file encodes to a different value, and the next apply replaces every node once. Otherwise keep every block and drop the rest: sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' <file> > <file>.crt keeps every certificate of a bundle, where openssl x509 -in <file> -out <file>.crt writes only the first."
   }
+
+  # A PEM block commented out line by line passes the check above, which strips
+  # every # line before looking for leftover content, and AKS keeps the file as
+  # given: a private key kept that way would reach plan output, state and every
+  # node. Refuse a comment line that carries a BEGIN marker; a certificate
+  # commented out the same way is already refused as holding no certificate.
+  validation {
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(!can(regex("(?m)^[ \\t]*#[^\\n]*-----BEGIN", file(f))), true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with a PEM block commented out line by line (a '#' line carrying -----BEGIN): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(can(regex("(?m)^[ \\t]*#[^\\n]*-----BEGIN", file(f))), false)])}. AKS keeps the file as given, so a commented-out private key would reach plan output, state and every node; remove the block."
+  }
 }
 
 # Both of these are empty by default rather than carrying the create-path value,

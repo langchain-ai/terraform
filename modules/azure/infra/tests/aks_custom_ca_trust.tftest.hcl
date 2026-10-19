@@ -234,6 +234,18 @@ run "refuses_a_commented_out_certificate" {
   expect_failures = [var.aks_custom_ca_trust_certificate_files]
 }
 
+# A key commented out line by line left nothing for the content check to see,
+# and AKS would have stored it with the certificate.
+run "refuses_a_private_key_commented_out_after_the_certificate" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
 run "refuses_a_note_after_the_end_marker" {
   command = plan
 
