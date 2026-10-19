@@ -270,6 +270,26 @@ _validate_license_key() {
 # login path.
 _VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source clickhouse_cluster langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
+# The chart line deploy.sh installs when neither CHART_VERSION in the
+# environment nor langsmith_helm_chart_version in terraform.tfvars names one
+# (deploy.sh requires 0.17 instead when enable_smithdb = true).
+_LANGSMITH_CHART_PIN="~0.16.0"
+
+# The chart version or constraint the next deploy resolves: CHART_VERSION from
+# the environment, else langsmith_helm_chart_version, else the pin. deploy.sh
+# and init-values.sh read the same answer, so what init-values writes for a
+# chart line is what deploy installs.
+_resolve_chart_version() {
+  local v="${CHART_VERSION:-}"
+  if [[ -z "$v" ]]; then v=$(_parse_tfvar "langsmith_helm_chart_version") || v=""; fi
+  printf '%s' "${v:-$_LANGSMITH_CHART_PIN}"
+}
+
+# The <major>.<minor> line of a chart version or constraint: ~0.16.0 → 0.16.
+_chart_line_of() {
+  printf '%s' "$1" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true
+}
+
 # ── LangSmith images from a mirror ────────────────────────────────────────────
 # The chart's images and their repositories for the 0.16 chart line (chart
 # 0.16.39), key=repository. init-values.sh writes one images.<key>.repository
@@ -336,6 +356,122 @@ _langsmith_images_block() {
   if [[ -n "$pull_secret" ]]; then
     printf '  imagePullSecrets:\n    - name: "%s"\n' "$pull_secret"
   fi
+}
+
+# operator.templates.redis and operator.templates.db, the two images pointed
+# at the mirror:
+#   _deployment_templates_block <registry> <keeps_source_host true|false>
+# On the 0.16 and 0.17 chart lines the two templates are full manifests in the
+# chart's values.yaml with docker.io/redis:7 and pgvector/pgvector:pg15 written
+# in, and images.registry does not reach them, so a cluster that pulls only
+# from the mirror gets ImagePullBackOff on both pods of every deployment while
+# make deploy reports success. init-values.sh appends this block to
+# langsmith-values-agent-deploys.yaml (which overrides
+# operator.templates.deployment the same way) when langsmith_image_registry is
+# set. The repositories come from _LANGSMITH_IMAGE_REPOSITORIES when the list
+# carries images.deploymentRedisImage and images.deploymentDbImage (the 0.18
+# chart's keys, on main) and are the chart's own otherwise, under the images:
+# block's layout rule; the tags are the templates' own. Template text copied
+# from chart langsmith-0.16.39 (identical in 0.17.6); re-copy it when the
+# chart's operator.templates change.
+_deployment_templates_block() {
+  local registry="$1" keeps_host="$2" e redis_repo="" db_repo="" redis db
+  registry="${registry%/}"
+  for e in $_LANGSMITH_IMAGE_REPOSITORIES; do
+    case "${e%%=*}" in
+      deploymentRedisImage) redis_repo="${e#*=}" ;;
+      deploymentDbImage)    db_repo="${e#*=}" ;;
+    esac
+  done
+  redis_repo="${redis_repo:-docker.io/redis}"
+  db_repo="${db_repo:-docker.io/pgvector/pgvector}"
+  if [[ "$keeps_host" == "false" ]]; then
+    redis_repo="${redis_repo#*/}"; db_repo="${db_repo#*/}"
+  fi
+  redis="${registry}/${redis_repo}:7"
+  db="${registry}/${db_repo}:pg15"
+  sed -e "s|@@REDIS_IMAGE@@|${redis}|" -e "s|@@DB_IMAGE@@|${db}|" <<'EOF'
+    # The per-deployment Redis and PostgreSQL from langsmith_image_registry: the chart
+    # writes docker.io into these two templates. Written by init-values.sh.
+    redis: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${service_name}
+        namespace: ${namespace}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ${service_name}
+        template:
+          metadata:
+            labels:
+              app: ${service_name}
+          spec:
+            enableServiceLinks: false
+            containers:
+            - name: redis
+              image: @@REDIS_IMAGE@@
+              ports:
+              - containerPort: 6379
+                name: redis
+              livenessProbe:
+                exec:
+                  command:
+                  - redis-cli
+                  - ping
+                initialDelaySeconds: 30
+                periodSeconds: 10
+              readinessProbe:
+                tcpSocket:
+                  port: 6379
+                initialDelaySeconds: 10
+                periodSeconds: 5
+    db: |
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: ${service_name}
+      spec:
+        serviceName: ${service_name}
+        selector:
+          matchLabels:
+            app: ${service_name}
+        persistentVolumeClaimRetentionPolicy:
+          whenDeleted: Delete
+          whenScaled: Retain
+        template:
+          metadata:
+            labels:
+              app: ${service_name}
+          spec:
+            containers:
+            - name: postgres
+              image: @@DB_IMAGE@@
+              ports:
+              - containerPort: 5432
+              command: ["docker-entrypoint.sh"]
+              args:
+                - postgres
+                - -c
+                - max_connections=${max_connections}
+              env:
+              - name: PGDATA
+                value: /var/lib/postgresql/data/pgdata
+              volumeMounts:
+              - name: postgres-data
+                mountPath: /var/lib/postgresql/data
+            enableServiceLinks: false
+        volumeClaimTemplates:
+        - metadata:
+            name: postgres-data
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: "${storage_gi}Gi"
+EOF
 }
 
 # Emit the stamp block, one comment line per key. Stamps the raw tfvars value and

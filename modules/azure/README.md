@@ -1413,8 +1413,12 @@ decides what the cluster can reach, and nothing works until it allows:
   and `<registry>/sig-storage/csi-node-driver-registrar` for the two from
   `mcr.microsoft.com` and `registry.k8s.io`, which a group repository that
   proxies those registries serves the same way), and `make deploy` compares the
-  chart's images with that list and stops on one the module does not know. A
-  mirror laid out with the source host kept (`<registry>/docker.io/langchain/<name>`)
+  chart's images with that list and stops on one the module does not know.
+  The operator's per-deployment Redis and PostgreSQL templates carry
+  `docker.io/redis:7` and `pgvector/pgvector:pg15` literally, where
+  `images.registry` does not reach, so with `enable_deployments` `init-values`
+  writes both templates into `langsmith-values-agent-deploys.yaml` with the
+  images on the mirror. A mirror laid out with the source host kept (`<registry>/docker.io/langchain/<name>`)
   takes `langsmith_image_registry_keeps_source_host = true`: `init-values` then
   writes the value as `images.registry` and the chart composes the paths.
   `langsmith_image_pull_secret_name` is written as `images.imagePullSecrets`

@@ -288,12 +288,25 @@ _enable_sso_oidc=$(_parse_tfvar "enable_sso_oidc") || _enable_sso_oidc="false"
 _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
 _ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
 _ls_pull_secret=$(_parse_tfvar "langsmith_image_pull_secret_name") || _ls_pull_secret=""
+# On the 0.16 and 0.17 chart lines the operator's per-deployment Redis and
+# PostgreSQL templates carry docker.io literally, so with a mirror they are
+# written into the agent-deploys file (_deployment_templates_block); a later
+# line reads them from the images: block. The line is the one deploy.sh will
+# resolve.
+_chart_line=$(_chart_line_of "$(_resolve_chart_version)")
+_deployment_templates="false"
+[[ -n "$_ls_image_registry" && ( "$_chart_line" == "0.16" || "$_chart_line" == "0.17" ) ]] && _deployment_templates="true"
 if [[ -n "$_ls_image_registry" || -n "$_ls_pull_secret" ]]; then
   echo ""
   echo "  Images (from terraform.tfvars):"
   info "langsmith_image_registry                   = ${_ls_image_registry:-<docker.io>}"
   info "langsmith_image_registry_keeps_source_host = $_ls_image_keeps_host"
   info "langsmith_image_pull_secret_name           = ${_ls_pull_secret:-<none>}"
+  if [[ "$_deployment_templates" == "true" ]]; then
+    info "operator.templates.redis and db (chart ${_chart_line}) = written with the mirror when enable_deployments = true"
+  elif [[ -n "$_ls_image_registry" ]]; then
+    info "operator.templates.redis and db (chart ${_chart_line}) = from the images: block"
+  fi
 fi
 _images_block=$(_langsmith_images_block "$_ls_image_registry" "$_ls_image_keeps_host" "$_ls_pull_secret")
 
@@ -732,8 +745,14 @@ content = content.replace('tlsEnabled: false  # populated by init-values.sh',
                           'tlsEnabled: ${_tls_enabled}')
 open('${_dst}', 'w').write(content)
 "
+      if [[ "$_deployment_templates" == "true" ]]; then
+        { printf '\n'; _deployment_templates_block "$_ls_image_registry" "$_ls_image_keeps_host"; } >> "$_dst"
+      fi
     fi
     pass "Generated: langsmith-values-${addon_file}.yaml"
+    if [[ "$addon_file" == "agent-deploys" && "$_deployment_templates" == "true" ]]; then
+      info "operator.templates.redis and db point at ${_ls_image_registry} (chart ${_chart_line} line)"
+    fi
   else
     warn "Example file not found: $EXAMPLES_DIR/langsmith-values-${addon_file}.yaml"
   fi
