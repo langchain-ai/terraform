@@ -1655,6 +1655,15 @@ CASES = [
         "reject": ["[✗] aks_disk_encryption_set_id"],
     },
     {
+        "name": "location left at its default (eastus) is the cluster's region for the set check",
+        "ca_all": ALL_GOOD,
+        "tfvars_no_location": True,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_location": "eastus",
+        "expect": ["[✓] aks_disk_encryption_set_id: the set is in eastus, the cluster's region"],
+        "reject": ["[✗] aks_disk_encryption_set_id"],
+    },
+    {
         "name": "an unreadable disk encryption set warns and does not fail",
         "ca_all": ALL_GOOD,
         "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
@@ -1713,8 +1722,10 @@ def build_case(case, index):
     name_prefix = case.get("tfvars_name_prefix", '"-dev"')
     lines = [
         f'subscription_id = "{case.get("tfvars_sub", SUB)}"',
-        'location    = "eastus"',
     ]
+    # tfvars_no_location omits the key, so a case runs on the variable's default.
+    if not case.get("tfvars_no_location"):
+        lines.append('location    = "eastus"')
     if name_prefix is not None:
         lines.append(f"name_prefix = {name_prefix}")
     if "tfvars_identifier" in case:

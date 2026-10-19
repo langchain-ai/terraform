@@ -1624,7 +1624,9 @@ decides what the cluster can reach, and nothing works until it allows:
   and `postgres_customer_managed_key_identity_id` give the server its key and
   the user-assigned identity that reads it; with `postgres_geo_redundant_backup`
   the geo pair (`postgres_geo_backup_customer_managed_key_id` and its identity,
-  a different one in the paired region) encrypts the geo-redundant backups.
+  a different one in the paired region) is required, because Azure encrypts a
+  customer-managed-key server's geo-redundant backups only with a key in the
+  backup region, and plan refuses the primary pair without it.
   `storage_customer_managed_key_id` and `storage_customer_managed_key_identity_id`
   do the same for the blob account (SmithDB's account takes the same pair in a
   later change). The set and the server take their key only at creation: a

@@ -1865,7 +1865,7 @@ variable "postgres_customer_managed_key_identity_id" {
 
 variable "postgres_geo_backup_customer_managed_key_id" {
   type        = string
-  description = "URL of the key that encrypts the server's geo-redundant backups, in a vault in the paired region. Takes effect with postgres_geo_redundant_backup = true and the primary pair set; postgres_geo_backup_customer_managed_key_identity_id reads it. Set only when the server is created. Empty (default) with no geo-redundant backup, or with the backups under the service-managed key."
+  description = "URL of the key that encrypts the server's geo-redundant backups, in a vault in the paired region. Takes effect with postgres_geo_redundant_backup = true and the primary pair set; postgres_geo_backup_customer_managed_key_identity_id reads it. Set only when the server is created. Required when postgres_customer_managed_key_id is set and postgres_geo_redundant_backup = true: Azure encrypts the geo-redundant backups of a customer-managed-key server only with a key in the backup region, never with the service-managed key. Empty (default) without geo-redundant backup."
   default     = ""
 
   validation {
@@ -1881,6 +1881,11 @@ variable "postgres_geo_backup_customer_managed_key_id" {
   validation {
     condition     = var.postgres_geo_backup_customer_managed_key_id == "" || (var.postgres_customer_managed_key_id != "" && var.postgres_geo_redundant_backup)
     error_message = "postgres_geo_backup_customer_managed_key_id needs the primary postgres_customer_managed_key_id and postgres_geo_redundant_backup = true: the geo-backup key encrypts a copy that only a geo-redundant server keeps."
+  }
+
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || !var.postgres_geo_redundant_backup || var.postgres_geo_backup_customer_managed_key_id != ""
+    error_message = "postgres_customer_managed_key_id with postgres_geo_redundant_backup = true needs postgres_geo_backup_customer_managed_key_id and its identity: Azure encrypts a customer-managed-key server's geo-redundant backups only with a key in a vault in the backup region, and the server create fails without it. Set the geo pair, or turn geo-redundant backup off."
   }
 }
 

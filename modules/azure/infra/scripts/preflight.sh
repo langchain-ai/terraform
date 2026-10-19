@@ -2470,7 +2470,7 @@ done
 if [ -n "$CMK_DES" ] || [ -n "$CMK_KEYS" ] || [ -n "$CMK_IDS" ]; then
   echo ""
   echo "── Customer-managed keys ─────────────────────────────"
-  CMK_LOCATION=$(_tfvar location || echo "")
+  CMK_LOCATION=$(_tfvar location || echo "eastus")
   CMK_LOCATION_NORM=$(printf '%s' "$CMK_LOCATION" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
   if [ -n "$CMK_DES" ]; then
     DES_LOCATION=$(az disk-encryption-set show --ids "$CMK_DES" --query location -o tsv 2>/dev/null || echo "")

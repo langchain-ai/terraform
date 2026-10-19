@@ -252,3 +252,17 @@ run "refuses_the_reader_grant_without_a_set" {
 
   expect_failures = [var.aks_disk_encryption_set_reader_grant]
 }
+
+# Azure encrypts a customer-managed-key server's geo-redundant backups only
+# with a key in the backup region; without the geo pair the create fails late.
+run "refuses_the_primary_pair_with_geo_redundant_backup_and_no_geo_pair" {
+  command = plan
+
+  variables {
+    postgres_customer_managed_key_id          = "https://kv-keys.vault.usgovcloudapi.net/keys/pg-key"
+    postgres_customer_managed_key_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pg-cmk"
+    postgres_geo_redundant_backup             = true
+  }
+
+  expect_failures = [var.postgres_geo_backup_customer_managed_key_id]
+}
