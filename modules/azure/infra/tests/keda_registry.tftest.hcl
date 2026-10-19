@@ -219,3 +219,13 @@ run "refuses_a_chart_repository_username_without_its_password" {
 
   expect_failures = [var.keda_chart_repository_username]
 }
+
+run "refuses_a_dotless_host" {
+  command = plan
+
+  variables {
+    keda_image_registry = "nexus"
+  }
+
+  expect_failures = [var.keda_image_registry]
+}
