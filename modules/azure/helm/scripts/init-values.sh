@@ -305,13 +305,25 @@ _enable_gateway_pii_redaction=$(_parse_tfvar "enable_gateway_pii_redaction") || 
 _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
 _ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
 _ls_pull_secret=$(_parse_tfvar "langsmith_image_pull_secret_name") || _ls_pull_secret=""
-# On the 0.17 chart line the operator's per-deployment Redis and PostgreSQL
-# templates carry docker.io literally, so with a mirror they are written into
-# the agent-deploys file (_deployment_templates_block); 0.18 reads them from
-# the images: block. The line is the one deploy.sh will resolve.
-_chart_line=$(_chart_line_of "$(_resolve_chart_version)")
+# A chart that writes docker.io into the operator's per-deployment Redis and
+# PostgreSQL templates (0.16 before 0.16.43, the 0.17 line) gets both written
+# into the agent-deploys file with the mirror (_deployment_templates_block); a
+# chart that reads images.deploymentRedisImage and images.deploymentDbImage
+# (0.16.43 on, 0.18) takes them from the images: block. Decided from the chart
+# deploy.sh will resolve, read through helm; by version when it cannot be read.
+_chart_version=$(_resolve_chart_version)
+_chart_line=$(_chart_line_of "$_chart_version")
 _deployment_templates="false"
-[[ -n "$_ls_image_registry" && "$_chart_line" == "0.17" ]] && _deployment_templates="true"
+if [[ -n "$_ls_image_registry" ]]; then
+  _reads_rc=0
+  _chart_reads_deployment_image_keys "$_chart_version" || _reads_rc=$?
+  if [[ "$_reads_rc" -eq 1 ]]; then
+    _deployment_templates="true"
+  elif [[ "$_reads_rc" -eq 2 ]]; then
+    warn "chart ${_chart_version} could not be read through helm; deciding the per-deployment templates from the version (deploy.sh checks the file against the chart it installs)"
+    _chart_templates_need_mirror_by_version "$_chart_version" && _deployment_templates="true"
+  fi
+fi
 if [[ -n "$_ls_image_registry" || -n "$_ls_pull_secret" ]]; then
   echo ""
   echo "  Images (from terraform.tfvars):"
@@ -319,9 +331,9 @@ if [[ -n "$_ls_image_registry" || -n "$_ls_pull_secret" ]]; then
   info "langsmith_image_registry_keeps_source_host = $_ls_image_keeps_host"
   info "langsmith_image_pull_secret_name           = ${_ls_pull_secret:-<none>}"
   if [[ "$_deployment_templates" == "true" ]]; then
-    info "operator.templates.redis and db (chart ${_chart_line}) = written with the mirror when enable_deployments = true"
+    info "operator.templates.redis and db (chart ${_chart_version}) = written with the mirror when enable_deployments = true"
   elif [[ -n "$_ls_image_registry" ]]; then
-    info "operator.templates.redis and db (chart ${_chart_line}) = from the images: block"
+    info "operator.templates.redis and db (chart ${_chart_version}) = from the images: block"
   fi
 fi
 _images_block=$(_langsmith_images_block "$_ls_image_registry" "$_ls_image_keeps_host" "$_ls_pull_secret")
@@ -779,7 +791,7 @@ open('${_dst}', 'w').write(content)
     fi
     pass "Generated: langsmith-values-${addon_file}.yaml"
     if [[ "$addon_file" == "agent-deploys" && "$_deployment_templates" == "true" ]]; then
-      info "operator.templates.redis and db point at ${_ls_image_registry} (chart ${_chart_line} line)"
+      info "operator.templates.redis and db point at ${_ls_image_registry} (chart ${_chart_version})"
     fi
   else
     warn "Example file not found: $EXAMPLES_DIR/langsmith-values-${addon_file}.yaml"
