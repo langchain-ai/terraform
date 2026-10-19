@@ -1348,6 +1348,12 @@ module "aks" {
   # mirror. A change to the list replaces every node.
   aks_custom_ca_trust_certificate_files = var.aks_custom_ca_trust_certificate_files
 
+  # Customer-managed keys for the node OS disks and the CSI data disks: set
+  # only at creation; the Reader grant on the set is the module's only with
+  # the flag, the platform team's otherwise.
+  disk_encryption_set_id           = var.aks_disk_encryption_set_id
+  disk_encryption_set_reader_grant = var.aks_disk_encryption_set_reader_grant
+
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
   # range and the data plane are fixed at creation, short of the two one-way
@@ -1784,6 +1790,12 @@ module "postgres" {
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
+  # Customer-managed key, set only at creation; the geo pair with geo-redundant backup.
+  customer_managed_key_id                     = var.postgres_customer_managed_key_id
+  customer_managed_key_identity_id            = var.postgres_customer_managed_key_identity_id
+  geo_backup_customer_managed_key_id          = var.postgres_geo_backup_customer_managed_key_id
+  geo_backup_customer_managed_key_identity_id = var.postgres_geo_backup_customer_managed_key_identity_id
+
   # Create the dedicated langsmith_fleet database when standalone Fleet is enabled.
   enable_fleet = var.enable_fleet
 
@@ -2212,6 +2224,10 @@ module "blob" {
   # via var.storage_allowed_ips.
   allowed_subnet_ids = [local.aks_subnet_id]
   allowed_ips        = var.storage_allowed_ips
+
+  # Customer-managed key; Azure accepts it on an existing account too.
+  customer_managed_key_id          = var.storage_customer_managed_key_id
+  customer_managed_key_identity_id = var.storage_customer_managed_key_identity_id
 
   # When enabled, the public endpoint is turned off and the firewall above
   # becomes inert. It stays declared so disabling the endpoint restores a

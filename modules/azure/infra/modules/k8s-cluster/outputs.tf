@@ -265,3 +265,13 @@ output "istio_addon_gateways" {
     internal = local.istio_addon_internal_gateway
   }
 }
+
+output "disk_encryption_set_id" {
+  description = "The disk encryption set the cluster's node OS disks and CSI data disks are encrypted with; null on platform-managed keys or in attach mode."
+  value       = one(azurerm_kubernetes_cluster.main[*].disk_encryption_set_id)
+}
+
+output "disk_encryption_set_reader_scope" {
+  description = "Scope of the Reader assignment the module made on the disk encryption set for the cluster identity; null when the grant is left to the set's owner."
+  value       = one(azurerm_role_assignment.disk_encryption_set_reader[*].scope)
+}

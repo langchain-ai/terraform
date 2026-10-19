@@ -44,3 +44,13 @@ output "allowed_copy_scope" {
   description = "Which accounts copy operations may source from, as planned or created; null means any."
   value       = azurerm_storage_account.storage_account.allowed_copy_scope
 }
+
+output "customer_managed_key" {
+  description = "The account's customer_managed_key block as configured (key_vault_key_id, user_assigned_identity_id); null under the service-managed key."
+  value       = one(azurerm_storage_account.storage_account.customer_managed_key[*])
+}
+
+output "identity_ids" {
+  description = "User-assigned identities assigned to the account for its customer-managed key; empty under the service-managed key."
+  value       = try(azurerm_storage_account.storage_account.identity[0].identity_ids, toset([]))
+}
