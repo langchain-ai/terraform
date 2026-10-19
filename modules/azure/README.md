@@ -948,9 +948,10 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   there. `make uninstall` removes the extra Ingress.
 - **Private registries.** The gateway runs from the LangSmith images already in use. PII redaction adds
   `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage`), which is on Microsoft's
-  registry, not Docker Hub. A cluster that pulls through a mirror needs it mirrored too; with `images.registry` set,
-  the chart prepends that registry to the full repository, so keep the `mcr.microsoft.com/presidio-analyzer` path in the
-  mirror.
+  registry, not Docker Hub. A cluster that pulls through a mirror needs it mirrored too, laid out as the images item
+  under [Egress through your network](#egress-through-your-network) says for the images from registries other than
+  Docker Hub: `<registry>/presidio-analyzer` by default, `<registry>/mcr.microsoft.com/presidio-analyzer` with
+  `langsmith_image_registry_keeps_source_host = true`.
 - **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
   organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
 

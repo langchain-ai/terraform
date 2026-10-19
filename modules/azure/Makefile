@@ -10,7 +10,7 @@
 # SmithDB migration:       make smithdb-migration-job-start / smithdb-migration-job-end, then apply, init-values, deploy
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-chart-image-keys setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -61,6 +61,9 @@ test-images-block: ## Unit-test the images: block init-values writes for a mirro
 
 test-values-stamp: ## Unit-test the stamp check that stops make deploy on a values file generated from other tfvars (no Azure)
 	$(INFRA_DIR)/scripts/test-values-stamp.sh
+
+test-chart-image-keys: ## Unit-test the parser deploy.sh reads the chart's images block with, under pipefail (no Azure)
+	$(INFRA_DIR)/scripts/test-chart-image-keys.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh

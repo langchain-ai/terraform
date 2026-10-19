@@ -326,6 +326,9 @@ _langsmith_image_keys() {
 # that proxies several registries serves). A pull Secret: images.imagePullSecrets.
 _langsmith_images_block() {
   local registry="$1" keeps_host="$2" pull_secret="$3" e key repo
+  # Terraform rejects a trailing slash at plan time, but a tfvars edit after
+  # the last plan reaches this function first and would write <registry>//<path>.
+  registry="${registry%/}"
   if [[ -z "$registry" && -z "$pull_secret" ]]; then
     printf '# images: the chart defaults (docker.io). Set langsmith_image_registry for a mirror.\n'
     return 0
