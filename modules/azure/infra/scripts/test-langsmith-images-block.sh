@@ -7,7 +7,9 @@
 # test-langsmith-images-block.sh — Unit tests for the images: block init-values.sh
 # writes into values-overrides.yaml from langsmith_image_registry,
 # langsmith_image_registry_keeps_source_host and langsmith_image_pull_secret_name
-# (_langsmith_images_block in _common.sh). No Azure, no terraform, no tfvars.
+# (_langsmith_images_block in _common.sh), and for the operator's per-deployment
+# Redis and PostgreSQL templates it writes on the 0.17 chart line
+# (_deployment_templates_block). No Azure, no terraform, no tfvars.
 #
 # Usage:
 #   ./infra/scripts/test-langsmith-images-block.sh
@@ -74,6 +76,30 @@ _check "a trailing slash on the registry is dropped (images.registry)" \
 _check "a trailing slash on the registry is dropped (per-image repository)" \
   '    repository: "nexus.example.com:8443/mirror/langchain/langsmith-backend"' \
   "$(_langsmith_images_block "nexus.example.com:8443/mirror/" "false" "" | grep -A1 '^  backendImage:' | tail -1)"
+
+_tpl=$(_deployment_templates_block "nexus.example.com:8443/mirror" "false")
+_check "0.17 templates, host dropped: the two images" \
+  'image: nexus.example.com:8443/mirror/redis:7
+image: nexus.example.com:8443/mirror/pgvector/pgvector:pg15' \
+  "$(printf '%s\n' "$_tpl" | grep -oE 'image: .*')"
+_check "0.17 templates, host kept, trailing slash dropped: the two images" \
+  'image: nexus.example.com/docker.io/redis:7
+image: nexus.example.com/docker.io/pgvector/pgvector:pg15' \
+  "$(_deployment_templates_block "nexus.example.com/" "true" | grep -oE 'image: .*')"
+_check "0.17 templates: two keys at the depth of the example's operator.templates.deployment" \
+  '    redis: |
+    db: |' \
+  "$(printf '%s\n' "$_tpl" | grep -E '^    [a-z]+: \|$')"
+_check "0.17 templates: every other line is a comment at that depth or template text below it" \
+  '' \
+  "$(printf '%s\n' "$_tpl" | grep -vE '^(    [a-z]+: \||    #|      )')"
+_check "0.17 templates: the chart's placeholders survive" \
+  '        name: ${service_name}
+                storage: "${storage_gi}Gi"' \
+  "$(printf '%s\n' "$_tpl" | grep -E '^        name: |storage: ' | sed -n '1p;$p')"
+_check "0.17 templates: no image line keeps docker.io when the host is dropped" \
+  '0' \
+  "$(printf '%s\n' "$_tpl" | grep -E '^ +image: ' | grep -c 'docker.io')"
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

@@ -726,13 +726,13 @@ fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-CHART_VERSION="${CHART_VERSION:-~0.17.0}"
+CHART_VERSION="${CHART_VERSION:-$_LANGSMITH_CHART_PIN}"
 _required_chart_line="0.17"
 
 # These values target chart 0.17, where the SmithDB Azure values first appear.
 # Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
 # Refuse any other line rather than deploy a half-configured release.
-_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+_chart_line="$(_chart_line_of "$CHART_VERSION")"
 if [[ "$_chart_line" != "$_required_chart_line" && "$_chart_line" != "0.18" ]]; then
   echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} or 0.18 line." >&2
   echo "       These values require chart ${_required_chart_line} or 0.18 (SmithDB values, engineInsightsAgent)." >&2
