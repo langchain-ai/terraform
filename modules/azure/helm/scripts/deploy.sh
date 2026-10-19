@@ -84,24 +84,19 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   warn "terraform.tfvars not found — values-overrides.yaml not checked against it"
   echo ""
 else
-  _stale=""
-  _stamped="false"
-  for _key in $_VALUES_INPUT_KEYS; do
-    _was=$(_read_values_stamp "$OVERRIDES_FILE" "$_key") || continue
-    _stamped="true"
-    _now=$(_parse_tfvar "$_key") || _now=""
-    [[ "$_was" == "$_now" ]] && continue
-    _stale="${_stale}${_key}: generated with '${_was}', terraform.tfvars now says '${_now}'
-"
-  done
+  # _values_stamp_drift (infra/scripts/_common.sh): a key the stamp lacks is
+  # drift when terraform.tfvars sets it, so a file generated before that key
+  # existed cannot deploy as if the key were unset.
+  _drift_rc=0
+  _stale=$(_values_stamp_drift "$OVERRIDES_FILE") || _drift_rc=$?
 
-  if [[ "$_stamped" != "true" ]]; then
+  if [[ "$_drift_rc" -eq 2 ]]; then
     warn "values-overrides.yaml carries no terraform.tfvars stamp (written by an older init-values.sh)"
     action "make init-values  (adds the stamp, so this check can run)"
     echo ""
-  elif [[ -n "$_stale" ]]; then
+  elif [[ "$_drift_rc" -eq 1 ]]; then
     fail "values-overrides.yaml was generated from different terraform.tfvars values:"
-    printf '%s' "$_stale" | while IFS= read -r _line; do
+    printf '%s\n' "$_stale" | while IFS= read -r _line; do
       [[ -n "$_line" ]] && info "$_line"
     done
     echo ""
@@ -109,6 +104,16 @@ else
     action "make init-values  (regenerate it, then re-run make deploy)"
     exit 1
   fi
+fi
+
+# A values file generated under the previous default of
+# langsmith_image_registry_keeps_source_host (true, host kept) with the key
+# unset in terraform.tfvars: the stamp reads '' on both sides, so the check
+# above passes it, and the next make init-values would write the host-dropped
+# layout under a mirror that serves the other one. Stop until the choice is
+# written down (init-values.sh makes the same stop before it overwrites the file).
+if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  _stop_if_values_layout_from_old_default "$OVERRIDES_FILE" || exit 1
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
@@ -737,7 +742,7 @@ _required_chart_line="0.17"
 # These values target chart 0.17, where the SmithDB Azure values first appear.
 # Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
 # Refuse any other line rather than deploy a half-configured release.
-_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+_chart_line="$(_chart_line_of "$CHART_VERSION")"
 if [[ "$_chart_line" != "$_required_chart_line" && "$_chart_line" != "0.18" ]]; then
   echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} or 0.18 line." >&2
   echo "       These values require chart ${_required_chart_line} or 0.18 (SmithDB values, engineInsightsAgent)." >&2
@@ -1018,6 +1023,41 @@ elif [[ "$_policy_engine" == "cilium" ]]; then
 elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" ]]; then
   warn "Terraform has no network_policy_engine output yet. On a Cilium cluster, sandbox-host cannot reach platform-backend until it does."
   action "Run: make apply, then make deploy"
+fi
+
+# With langsmith_image_registry_keeps_source_host = false, init-values.sh wrote
+# a repository for every image the module knows (_LANGSMITH_IMAGE_REPOSITORIES
+# in infra/scripts/_common.sh, the 0.17 and 0.18 chart lines). An image the chart has and
+# the list does not would keep its public repository and fail to pull on a
+# cluster that reaches only the mirror, so compare the two before installing.
+_ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
+_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
+if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
+  _chart_image_keys=$(helm show values "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+    | _chart_image_keys_from_stdin) || _chart_image_keys=""
+  if [[ -z "$_chart_image_keys" ]]; then
+    fail "langsmith_image_registry_keeps_source_host = false, but the chart's images could not be read (helm show values $_chart_source --version $CHART_VERSION), so the module cannot tell whether every image has a mirror path."
+    exit 1
+  fi
+  # A repository passed through EXTRA_HELM_ARGS (--set images.<key>.repository=...)
+  # covers an image the list lacks, so those keys count as known here.
+  _extra_image_keys=$(printf '%s' "${EXTRA_HELM_ARGS:-}" | grep -oE 'images\.[A-Za-z0-9]+\.repository=' | sed -e 's/^images\.//' -e 's/\.repository=$//') || _extra_image_keys=""
+  _unknown_images=""
+  for _k in $_chart_image_keys; do
+    _langsmith_image_keys | grep -qx "$_k" && continue
+    printf '%s\n' "$_extra_image_keys" | grep -qx "$_k" && continue
+    _unknown_images="$_unknown_images $_k"
+  done
+  if [[ -n "$_unknown_images" ]]; then
+    fail "chart ${_resolved_chart} has images the module's mirror list does not know:${_unknown_images}."
+    echo "       With langsmith_image_registry_keeps_source_host = false each image needs its mirror path," >&2
+    echo "       and these would pull from their public registry. Until the module's list carries them" >&2
+    echo "       (_LANGSMITH_IMAGE_REPOSITORIES in infra/scripts/_common.sh), pass each one, which this" >&2
+    echo "       check then accepts:" >&2
+    echo "         EXTRA_HELM_ARGS='--set images.<key>.repository=${_ls_image_registry}/<path without the source host>' make deploy" >&2
+    exit 1
+  fi
+  info "Mirror layout check: every image of chart ${_resolved_chart} has a repository on ${_ls_image_registry}"
 fi
 
 # --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the

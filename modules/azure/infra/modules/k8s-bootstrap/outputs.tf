@@ -62,3 +62,33 @@ output "platform_backend_node_ingress" {
     }
   ])
 }
+
+output "keda_images" {
+  description = "The three images KEDA's pods pull, keyed by name, composed as the chart composes them from keda_image_registry and keda_image_registry_keeps_source_host. Empty when install_keda is false."
+  value       = local.keda_images
+}
+
+output "keda_helm_sets" {
+  description = "The chart values the mirror settings add to the KEDA release, as name = value. Empty without a mirror."
+  value       = local.keda_mirror_sets
+}
+
+output "keda_image_pull_secret_name" {
+  description = "Pull Secret KEDA's pods use, empty without one."
+  value       = var.install_keda ? var.keda_image_pull_secret_name : ""
+}
+
+output "keda_chart_repository_authenticated" {
+  description = "Whether the KEDA chart fetch sends a username and password. False without them or without KEDA."
+  value       = var.install_keda && var.keda_chart_repository_username != ""
+}
+
+output "langsmith_image_pull_secret_name" {
+  description = "Pull Secret attached to the service accounts in the LangSmith namespace, empty without one."
+  value       = var.langsmith_image_pull_secret_name
+}
+
+output "langsmith_image_pull_secret_service_accounts" {
+  description = "The service accounts in the LangSmith namespace that carry langsmith_image_pull_secret_name as imagePullSecrets. Empty without one."
+  value       = local.langsmith_image_pull_secret_service_accounts
+}

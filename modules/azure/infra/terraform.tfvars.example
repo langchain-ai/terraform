@@ -205,6 +205,44 @@ ingress_controller = "envoy-gateway"
 # envoy_gateway_image_registry_keeps_source_host = false
 # envoy_gateway_image_pull_secret_name           = "nexus-pull"
 
+# KEDA's three images come from ghcr.io/kedacore. keda_image_registry points them
+# at a mirror the same way: <registry>/ghcr.io/kedacore/... by default, or
+# <registry>/kedacore/... with keda_image_registry_keeps_source_host = false. The
+# pull Secret goes in the keda namespace, which the module creates with the
+# release: on a new cluster apply with install_keda = false first, create the
+# namespace and the Secret, then set install_keda = true and apply again.
+# keda_chart_repository points the Helm fetch at a mirrored repository.
+# keda_image_registry                   = "nexus.example.com"
+# keda_image_registry_keeps_source_host = false
+# keda_image_pull_secret_name           = "nexus-pull"
+# keda_chart_repository                 = "https://nexus.example.com/repository/helm-kedacore"
+# A chart mirror behind a login takes a username here and its password in
+# secrets.auto.tfvars (keda_chart_repository_password); without them the fetch
+# is anonymous, which the mirror must then allow.
+# keda_chart_repository_username        = "helm-reader"
+
+# LangSmith's own pods take their pull Secret from the chart (images.imagePullSecrets
+# in values-overrides.yaml). The pods the operator creates for each deployment do
+# not: the agent pod runs as langsmith-ksa, and the deployment's Redis and PostgreSQL
+# as the namespace's default account. langsmith_image_pull_secret_name attaches a
+# Secret in the LangSmith namespace to those accounts (and to the backend's and
+# SmithDB's), and every apply keeps it there. Create the Secret after the apply
+# that creates the namespace and before the first deployment.
+# langsmith_image_pull_secret_name = "nexus-pull"
+
+# LangSmith's images from a mirror. By default the mirror serves Docker Hub's paths
+# directly (<registry>/langchain/...), the layout the chart's scripts/mirror_langsmith_images.sh
+# pushes and a proxy repository serves: init-values.sh writes a repository per image
+# for the 0.17 and 0.18 chart lines, and deploy.sh stops on a chart image the module
+# does not know (on 0.17, with enable_deployments, the operator's Redis and PostgreSQL
+# templates are written with the mirror too). A mirror that keeps docker.io as the first path segment
+# (<registry>/docker.io/langchain/...) takes langsmith_image_registry_keeps_source_host = true,
+# and the registry becomes images.registry in values-overrides.yaml. The pull Secret
+# above is written as images.imagePullSecrets as well. All three are stamped into
+# values-overrides.yaml, so deploy.sh stops if one changed since make init-values.
+# langsmith_image_registry                   = "nexus.example.com"
+# langsmith_image_registry_keeps_source_host = true
+
 # A mirror whose certificate an internal CA signed also needs that CA on the
 # nodes, where containerd pulls images: one PEM file per entry (one certificate
 # or a bundle, sent verbatim), up to 10, paths

@@ -857,7 +857,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Guards against a stuck Helm release: auto-rolls back `pending-upgrade` state before proceeding
 - Runs `helm upgrade --install langsmith langchain/langsmith --timeout 20m`
 - Waits for core deployments to roll out (`frontend`, `backend`, `platform-backend`, `ingest-queue`, `queue`, and Deployments pods if enabled)
-- Annotates the `langsmith-ksa` service account with the Workload Identity client ID (used by operator-spawned agent pods)
+- Annotates the `langsmith-ksa` service account with the Workload Identity client ID (used by operator-spawned agent pods); a pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
 - Prints the access URL, login email, and the `az keyvault` command to retrieve the admin password
 
 ---
@@ -948,9 +948,10 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   there. `make uninstall` removes the extra Ingress.
 - **Private registries.** The gateway runs from the LangSmith images already in use. PII redaction adds
   `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage`), which is on Microsoft's
-  registry, not Docker Hub. A cluster that pulls through a mirror needs it mirrored too; with `images.registry` set,
-  the chart prepends that registry to the full repository, so keep the `mcr.microsoft.com/presidio-analyzer` path in the
-  mirror.
+  registry, not Docker Hub. A cluster that pulls through a mirror needs it mirrored too, laid out as the images item
+  under [Egress through your network](#egress-through-your-network) says for the images from registries other than
+  Docker Hub: `<registry>/presidio-analyzer` by default, `<registry>/mcr.microsoft.com/presidio-analyzer` with
+  `langsmith_image_registry_keeps_source_host = true`.
 - **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
   organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
 
@@ -1129,7 +1130,7 @@ These are copied to `helm/values/` by `make init-values` when the corresponding 
 
 **`langsmith-values-agent-deploys.yaml`** — Pass 3 (`enable_deployments = true`)
 
-Enables the LangGraph Platform: the Deployments nav item in the UI, the `listener` pod (watches for new deployment requests), and the `operator` pod (spawns and manages agent pods). Also includes the operator's deployment template — the spec used when it creates agent pods. `make init-values` automatically injects `config.deployment.url` (your FQDN with protocol) and `config.deployment.tlsEnabled` so the operator builds correct endpoint URLs.
+Enables the LangGraph Platform: the Deployments nav item in the UI, the `listener` pod (watches for new deployment requests), and the `operator` pod (spawns and manages agent pods). Also includes the operator's deployment template — the spec used when it creates agent pods. That template runs agent pods as `langsmith-ksa`; each deployment's Redis and PostgreSQL run as the namespace's `default` account, and none of them takes the chart's `images.imagePullSecrets`, so a mirror that needs credentials also needs `langsmith_image_pull_secret_name`. `make init-values` automatically injects `config.deployment.url` (your FQDN with protocol) and `config.deployment.tlsEnabled` so the operator builds correct endpoint URLs.
 
 > Without the correct `url` and `tlsEnabled`, agent deployments will get stuck in `DEPLOYING` state indefinitely.
 
@@ -1571,16 +1572,58 @@ decides what the cluster can reach, and nothing works until it allows:
   Docker Hub proxy repository in Nexus or Artifactory), with an optional pull
   Secret in `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The
   machine running Terraform still pulls the chart from `oci://docker.io`.
-  LangSmith's own images are separate: the chart joins `images.registry` to
-  repositories that mostly begin with `docker.io/`, so under a proxy-layout
-  mirror leave `images.registry` empty and set each
-  `images.<name>Image.repository` in `values-overrides.yaml` to the mirror's
-  path, for example `<registry>/langchain/langsmith-backend`. Two come from
-  other registries, which a Docker Hub proxy does not serve:
-  `mcr.microsoft.com/presidio-analyzer` when `presidioAnalyzer.enabled` is true,
-  and `registry.k8s.io/sig-storage/csi-node-driver-registrar` when
-  `config.sandboxes.enabled` is true. Point those at a proxy for their own
-  registry.
+  For KEDA, `keda_image_registry` does the same for its three images (the
+  operator, the metrics API server and the admission webhooks, from
+  `ghcr.io/kedacore`), laid out as `<registry>/ghcr.io/kedacore/...`, or as
+  `<registry>/kedacore/...` with `keda_image_registry_keeps_source_host =
+  false`. A mirror that needs credentials takes a pull Secret in `keda`
+  (`keda_image_pull_secret_name`), and the Secret has to exist before the
+  release is installed: the module creates the `keda` namespace with the
+  release and waits for its pods, so on a cluster that does not exist yet the
+  install is a two-pass apply. Apply with `install_keda = false`, create the
+  namespace and the Secret (`kubectl create namespace keda`, then
+  `kubectl -n keda create secret docker-registry <name> --docker-server=<registry> --docker-username=<user> --docker-password=<password>`),
+  set `install_keda = true` and apply again. A mirror that allows anonymous
+  pulls needs one apply. The `keda_images` output lists the composed paths.
+  `keda_chart_repository` points the Helm fetch at a mirrored chart repository,
+  so the machine running Terraform stays off `kedacore.github.io`; a mirror
+  that requires a login takes `keda_chart_repository_username` and
+  `keda_chart_repository_password` (in `secrets.auto.tfvars`), and without
+  them the mirror must allow anonymous reads.
+  The pods the operator creates for each deployment (the agent pod, as
+  `langsmith-ksa`, and its Redis and PostgreSQL, as the namespace's `default`
+  account) do not take the chart's `images.imagePullSecrets`;
+  `langsmith_image_pull_secret_name` names a Secret in the LangSmith namespace
+  that the module attaches to those accounts, and to the backend and SmithDB
+  accounts it creates, so every apply keeps it. Create the Secret after the
+  apply that creates the namespace and before the first deployment.
+  LangSmith's own images take `langsmith_image_registry`. By default
+  (`langsmith_image_registry_keeps_source_host = false`) the mirror serves
+  each source registry's paths directly, the layout the chart's own
+  `scripts/mirror_langsmith_images.sh` pushes (`<registry>/langchain/<name>:<tag>`)
+  and a proxy repository in Nexus or Artifactory serves: `make init-values`
+  leaves `images.registry` empty and writes `images.<name>Image.repository` as
+  `<registry>/<path>` for every image of the 0.17 and 0.18 chart lines
+  (`<registry>/langchain/langsmith-backend`, and `<registry>/presidio-analyzer`
+  and `<registry>/sig-storage/csi-node-driver-registrar` for the two from
+  `mcr.microsoft.com` and `registry.k8s.io`, which a group repository that
+  proxies those registries serves the same way), and `make deploy` compares the
+  chart's images with that list and stops on one the module does not know.
+  On the 0.17 chart line the operator's per-deployment Redis and PostgreSQL
+  templates carry `docker.io/redis:7` and `pgvector/pgvector:pg15` literally,
+  where `images.registry` does not reach, so with `enable_deployments`
+  `init-values` writes both templates into `langsmith-values-agent-deploys.yaml`
+  with the images on the mirror; the 0.18 line reads them from the `images:`
+  block. A mirror laid out with the source host kept (`<registry>/docker.io/langchain/<name>`)
+  takes `langsmith_image_registry_keeps_source_host = true`: `init-values` then
+  writes the value as `images.registry` and the chart composes the paths.
+  `langsmith_image_pull_secret_name` is written as `images.imagePullSecrets`
+  too. The three are stamped into `values-overrides.yaml`, so a change after
+  `init-values` stops the deploy until the file is regenerated. A file
+  generated with the key unset while its default was `true` (the 0.16 line's
+  v0.16.124 to .126) carries the host-kept layout; `make init-values` and
+  `make deploy` both stop on it until the key is set, so the file is not
+  regenerated under the new default for a mirror laid out the old way.
 - **A mirror behind an internal CA** also needs that CA on the nodes, where
   containerd does the pulling and trusts only public CAs; without it every pull
   fails with `x509: certificate signed by unknown authority`.
@@ -1619,8 +1662,9 @@ load balancer.
 The Helm charts are not on this list when Terraform and `make deploy` run
 outside the VNet: the runner fetches them, not the cluster. From a jump host
 inside the VNet, its route has to reach `charts.jetstack.io`,
-`kedacore.github.io`, `langchain-ai.github.io`, `docker.io` (the Envoy Gateway
-chart), and the NGINX or Istio chart repository for the controller you choose.
+`kedacore.github.io` (or `keda_chart_repository`), `langchain-ai.github.io`,
+`docker.io` (the Envoy Gateway chart), and the NGINX or Istio chart repository
+for the controller you choose.
 
 **A public ingress and user-defined routes.** With `userDefinedRouting`, a
 public load balancer for the ingress controller receives traffic on its public
