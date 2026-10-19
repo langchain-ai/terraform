@@ -287,10 +287,11 @@ _VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source re
 # The chart's images and their repositories for the chart lines deploy.sh
 # accepts here (0.17, and 0.18 with its two operator-deployment images),
 # key=repository. init-values.sh writes one images.<key>.repository
-# per entry when langsmith_image_registry_keeps_source_host = false, the layout
-# of a mirror that serves each source registry's paths directly (a proxy
-# repository in Nexus or Artifactory), because images.registry alone would
-# compose <registry>/docker.io/... there. deploy.sh compares this list with the
+# per entry when langsmith_image_registry_keeps_source_host = false (the
+# default), the layout of a mirror that serves each source registry's paths
+# directly (the chart's scripts/mirror_langsmith_images.sh pushes it, a proxy
+# repository in Nexus or Artifactory serves it), because images.registry alone
+# would compose <registry>/docker.io/... there. deploy.sh compares this list with the
 # chart it is about to install and stops on an image the list does not carry,
 # which would otherwise pull from its public registry. Keep the list equal to
 # the images: block of the chart's values.yaml at the pinned lines.

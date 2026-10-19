@@ -1590,19 +1590,21 @@ decides what the cluster can reach, and nothing works until it allows:
   that the module attaches to those accounts, and to the backend and SmithDB
   accounts it creates, so every apply keeps it. Create the Secret after the
   apply that creates the namespace and before the first deployment.
-  LangSmith's own images take `langsmith_image_registry`, which `make
-  init-values` writes as `images.registry` in `values-overrides.yaml`, so the
-  chart composes `<registry>/docker.io/langchain/<name>`. A mirror that serves
-  each source registry's paths directly, as a proxy repository in Nexus or
-  Artifactory does, takes `langsmith_image_registry_keeps_source_host = false`:
-  `init-values` then leaves `images.registry` empty and writes
-  `images.<name>Image.repository` as `<registry>/<path>` for every image of
-  the 0.17 and 0.18 chart lines (`<registry>/langchain/langsmith-backend`, and
-  `<registry>/presidio-analyzer` and
-  `<registry>/sig-storage/csi-node-driver-registrar` for the two from
+  LangSmith's own images take `langsmith_image_registry`. By default
+  (`langsmith_image_registry_keeps_source_host = false`) the mirror serves
+  each source registry's paths directly, the layout the chart's own
+  `scripts/mirror_langsmith_images.sh` pushes (`<registry>/langchain/<name>:<tag>`)
+  and a proxy repository in Nexus or Artifactory serves: `make init-values`
+  leaves `images.registry` empty and writes `images.<name>Image.repository` as
+  `<registry>/<path>` for every image of the 0.17 and 0.18 chart lines
+  (`<registry>/langchain/langsmith-backend`, and `<registry>/presidio-analyzer`
+  and `<registry>/sig-storage/csi-node-driver-registrar` for the two from
   `mcr.microsoft.com` and `registry.k8s.io`, which a group repository that
   proxies those registries serves the same way), and `make deploy` compares the
-  chart's images with that list and stops on one the module does not know.
+  chart's images with that list and stops on one the module does not know. A
+  mirror laid out with the source host kept (`<registry>/docker.io/langchain/<name>`)
+  takes `langsmith_image_registry_keeps_source_host = true`: `init-values` then
+  writes the value as `images.registry` and the chart composes the paths.
   `langsmith_image_pull_secret_name` is written as `images.imagePullSecrets`
   too. The three are stamped into `values-overrides.yaml`, so a change after
   `init-values` stops the deploy until the file is regenerated.

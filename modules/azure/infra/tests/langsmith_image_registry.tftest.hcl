@@ -102,3 +102,16 @@ run "accepts_localhost" {
     error_message = "localhost is a registry host and should be accepted"
   }
 }
+
+run "default_layout_drops_the_source_host" {
+  command = plan
+
+  variables {
+    langsmith_image_registry = "nexus.example.com"
+  }
+
+  assert {
+    condition     = var.langsmith_image_registry_keeps_source_host == false
+    error_message = "The default layout should be the one the chart's mirror script pushes (keeps_source_host = false), got ${var.langsmith_image_registry_keeps_source_host}"
+  }
+}
