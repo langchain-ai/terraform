@@ -67,6 +67,14 @@ _check "registry that drops the host: the pull Secret comes last" \
   '    - name: "nexus-pull"' \
   "$(printf '%s\n' "$_out" | tail -1)"
 
+_check "a trailing slash on the registry is dropped (images.registry)" \
+  'images:
+  registry: "nexus.example.com"' \
+  "$(_langsmith_images_block "nexus.example.com/" "true" "")"
+_check "a trailing slash on the registry is dropped (per-image repository)" \
+  '    repository: "nexus.example.com:8443/mirror/langchain/langsmith-backend"' \
+  "$(_langsmith_images_block "nexus.example.com:8443/mirror/" "false" "" | grep -A1 '^  backendImage:' | tail -1)"
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
