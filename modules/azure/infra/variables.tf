@@ -1667,7 +1667,7 @@ variable "keda_image_registry_keeps_source_host" {
 
 variable "keda_image_pull_secret_name" {
   type        = string
-  description = "Name of a kubernetes.io/dockerconfigjson Secret in the keda namespace that KEDA's pods pull with. Create the namespace and the Secret before the apply that installs KEDA, as for envoy_gateway_image_pull_secret_name. Empty (default) pulls without credentials. Requires keda_image_registry."
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the keda namespace that KEDA's pods pull with. The Secret has to exist before the release is installed, and the module creates the keda namespace with the release, so on a new cluster the install is two applies: apply with install_keda = false, create the namespace and the Secret, set install_keda = true and apply again (the README's mirror section has the commands). Empty (default) pulls without credentials. Requires keda_image_registry."
   default     = ""
 
   validation {

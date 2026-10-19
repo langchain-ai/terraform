@@ -1575,9 +1575,15 @@ decides what the cluster can reach, and nothing works until it allows:
   operator, the metrics API server and the admission webhooks, from
   `ghcr.io/kedacore`), laid out as `<registry>/ghcr.io/kedacore/...`, or as
   `<registry>/kedacore/...` with `keda_image_registry_keeps_source_host =
-  false`, with an optional pull Secret in `keda`
-  (`keda_image_pull_secret_name`, created with the namespace before the apply
-  that installs KEDA). The `keda_images` output lists the composed paths.
+  false`. A mirror that needs credentials takes a pull Secret in `keda`
+  (`keda_image_pull_secret_name`), and the Secret has to exist before the
+  release is installed: the module creates the `keda` namespace with the
+  release and waits for its pods, so on a cluster that does not exist yet the
+  install is a two-pass apply. Apply with `install_keda = false`, create the
+  namespace and the Secret (`kubectl create namespace keda`, then
+  `kubectl -n keda create secret docker-registry <name> --docker-server=<registry> --docker-username=<user> --docker-password=<password>`),
+  set `install_keda = true` and apply again. A mirror that allows anonymous
+  pulls needs one apply. The `keda_images` output lists the composed paths.
   `keda_chart_repository` points the Helm fetch at a mirrored chart repository,
   so the machine running Terraform stays off `kedacore.github.io`; a mirror
   that requires a login takes `keda_chart_repository_username` and
