@@ -546,6 +546,21 @@ _values_layout_from_old_default() {
   awk '/^images:/{p=1; next} /^[^ #]/{p=0} p && /^  registry: "[^"]+"/{f=1} END{exit !f}' "$file" 2>/dev/null
 }
 
+# The stop both scripts make on that file: init-values.sh before it overwrites
+# values-overrides.yaml (the usual make init-values && make deploy would
+# otherwise rewrite the file to the new layout first, and deploy.sh would see
+# nothing), deploy.sh before installing. Returns 1 after printing when the
+# file is that one, 0 otherwise.
+#   _stop_if_values_layout_from_old_default <values-file>
+_stop_if_values_layout_from_old_default() {
+  _values_layout_from_old_default "$1" || return 0
+  fail "values-overrides.yaml carries the host-kept mirror layout (images.registry set), written when langsmith_image_registry_keeps_source_host defaulted to true; the default is now false and terraform.tfvars does not set it."
+  info "To keep the layout this cluster pulls from today (<registry>/docker.io/...): set langsmith_image_registry_keeps_source_host = true."
+  info "To move to the layout the chart's mirror script pushes (<registry>/langchain/...): set it to false and lay the mirror out that way."
+  action "Set the key in terraform.tfvars, run make init-values, then re-run make deploy"
+  return 1
+}
+
 # Print ingress.ingressClassName from a values file, quotes stripped; nothing when
 # unset or empty. With ingress_controller = "none" this is the only place a class
 # comes from, so init-values.sh keeps it on re-run and deploy.sh checks it.
