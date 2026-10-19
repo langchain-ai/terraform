@@ -101,6 +101,33 @@ _check "operator templates: no image line keeps docker.io when the host is dropp
   '0' \
   "$(printf '%s\n' "$_tpl" | grep -E '^ +image: ' | grep -c 'docker.io')"
 
+_need() { local rc=0; _chart_templates_need_mirror_by_version "$1" || rc=$?; printf 'rc=%s' "$rc"; }
+_check "by version: 0.16.39 writes docker.io into the templates" 'rc=0' "$(_need 0.16.39)"
+_check "by version: 0.16.42 still does" 'rc=0' "$(_need 0.16.42)"
+_check "by version: 0.16.43 reads the keys" 'rc=1' "$(_need 0.16.43)"
+_check "by version: ~0.16.0 resolves to the newest patch, which reads them" 'rc=1' "$(_need '~0.16.0')"
+_check "by version: 0.17.17 writes docker.io" 'rc=0' "$(_need 0.17.17)"
+_check "by version: 0.18.0-rc.34 reads the keys" 'rc=1' "$(_need 0.18.0-rc.34)"
+
+# The chart read through helm, with helm stubbed: a values file that lists the
+# two keys, one that does not, and a helm that fails.
+_FIXTURE=""
+helm() { case "$*" in "show values"*) [[ -n "$_FIXTURE" ]] && cat "$_FIXTURE" ;; *) : ;; esac; }
+_reads() { local rc=0; _chart_reads_deployment_image_keys "$1" || rc=$?; printf 'rc=%s' "$rc"; }
+_TMPD=$(mktemp -d "${TMPDIR:-/tmp}/test-images-chart.XXXXXX")
+printf 'images:\n  registry: ""\n  backendImage:\n    repository: "x"\n  deploymentRedisImage:\n    repository: "docker.io/redis"\n  deploymentDbImage:\n    repository: "docker.io/pgvector/pgvector"\ningress:\n  enabled: true\n' > "$_TMPD/reads.yaml"
+printf 'images:\n  registry: ""\n  backendImage:\n    repository: "x"\ningress:\n  enabled: true\n' > "$_TMPD/writes.yaml"
+_FIXTURE="$_TMPD/reads.yaml"
+_check "through helm: a chart listing the two keys reads them (rc 0)" 'rc=0' "$(_reads 0.16.43)"
+_FIXTURE="$_TMPD/writes.yaml"
+_check "through helm: a chart without them writes docker.io (rc 1)" 'rc=1' "$(_reads 0.16.39)"
+_FIXTURE=""
+_check "through helm: an unreadable chart is rc 2" 'rc=2' "$(_reads 0.16.39)"
+unset -f helm; rm -rf "$_TMPD"
+_check "the block's first line is the marker deploy.sh looks for" \
+  "    $_DEPLOYMENT_TEMPLATES_MARKER" \
+  "$(_deployment_templates_block nexus.example.com false | head -1 | cut -c1-$((4 + ${#_DEPLOYMENT_TEMPLATES_MARKER})))"
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

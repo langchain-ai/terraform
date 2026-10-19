@@ -290,6 +290,51 @@ _chart_line_of() {
   printf '%s' "$1" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true
 }
 
+# The chart as deploy.sh installs it: the repository name it adds and the URL.
+_LANGSMITH_CHART_SOURCE="langchain/langsmith"
+_LANGSMITH_CHART_REPO_URL="https://langchain-ai.github.io/helm"
+
+# Returns 0 when the chart version or constraint reads
+# images.deploymentRedisImage and images.deploymentDbImage for the
+# per-deployment pods, 1 when it writes docker.io into
+# operator.templates.redis and .db, 2 when the chart could not be read (no
+# helm, or the repository out of reach). Reads the chart through the
+# repository deploy.sh installs from, so the answer is for the chart the next
+# deploy resolves; deploy.sh checks the file against that chart again.
+#   _chart_reads_deployment_image_keys <version or constraint>
+_chart_reads_deployment_image_keys() {
+  local v="$1" keys devel=""
+  case "$v" in *-*) devel="--devel" ;; esac
+  command -v helm >/dev/null 2>&1 || return 2
+  helm repo add langchain "$_LANGSMITH_CHART_REPO_URL" >/dev/null 2>&1 || true
+  helm repo update langchain >/dev/null 2>&1 || true
+  # shellcheck disable=SC2086
+  keys=$(helm show values "$_LANGSMITH_CHART_SOURCE" --version "$v" $devel 2>/dev/null | _chart_image_keys_from_stdin) || return 2
+  [[ -n "$keys" ]] || return 2
+  printf '%s\n' "$keys" | grep -qx deploymentRedisImage
+}
+
+# The fallback when the chart cannot be read, by line and patch: the 0.16
+# line writes docker.io into the templates before 0.16.43, the 0.17 line in
+# every patch up to 0.17.17, and 0.18 reads the keys. A constraint (~0.16.0)
+# resolves to the newest patch of its line. Returns 0 when the templates
+# need the mirror written in.
+#   _chart_templates_need_mirror_by_version <version or constraint>
+_chart_templates_need_mirror_by_version() {
+  local v="$1" line patch
+  line=$(_chart_line_of "$v")
+  patch=$(printf '%s' "$v" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' | awk -F. '{print $3}') || patch=""
+  case "$line" in
+    0.16) [[ -n "$patch" && "$patch" -lt 43 ]] ;;
+    0.17) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The first line _deployment_templates_block writes; deploy.sh looks for it to
+# tell a file that carries the templates from one that does not.
+_DEPLOYMENT_TEMPLATES_MARKER="# The per-deployment Redis and PostgreSQL from langsmith_image_registry"
+
 # ── LangSmith images from a mirror ────────────────────────────────────────────
 # The chart's images and their repositories for the 0.16 chart line (chart
 # 0.16.39, plus the two operator-deployment images 0.16.43 reads from here),

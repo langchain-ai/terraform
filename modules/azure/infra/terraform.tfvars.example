@@ -220,7 +220,8 @@ ingress_controller = "envoy-gateway"
 # pushes and a proxy repository serves: init-values.sh writes a repository per image
 # for the 0.16 chart line, and deploy.sh stops on a chart image the module
 # does not know (with enable_deployments, the operator's Redis and PostgreSQL
-# templates are written with the mirror too). A mirror that keeps docker.io as the first path segment
+# templates are written with the mirror too for a chart before 0.16.43, which
+# writes docker.io into them; 0.16.43 reads them from the images: block). A mirror that keeps docker.io as the first path segment
 # (<registry>/docker.io/langchain/...) takes langsmith_image_registry_keeps_source_host = true,
 # and the registry becomes images.registry in values-overrides.yaml. The pull Secret
 # above is written as images.imagePullSecrets as well. All three are stamped into

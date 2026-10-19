@@ -1414,11 +1414,15 @@ decides what the cluster can reach, and nothing works until it allows:
   `mcr.microsoft.com` and `registry.k8s.io`, which a group repository that
   proxies those registries serves the same way), and `make deploy` compares the
   chart's images with that list and stops on one the module does not know.
-  The operator's per-deployment Redis and PostgreSQL templates carry
-  `docker.io/redis:7` and `pgvector/pgvector:pg15` literally, where
-  `images.registry` does not reach, so with `enable_deployments` `init-values`
-  writes both templates into `langsmith-values-agent-deploys.yaml` with the
-  images on the mirror. A mirror laid out with the source host kept (`<registry>/docker.io/langchain/<name>`)
+  Charts before 0.16.43 write `docker.io/redis:7` and `pgvector/pgvector:pg15`
+  into the operator's per-deployment Redis and PostgreSQL templates, where
+  `images.registry` does not reach, so for them `init-values` writes both
+  templates into `langsmith-values-agent-deploys.yaml` with the images on the
+  mirror when `enable_deployments` is on; from 0.16.43 the chart reads
+  `images.deploymentRedisImage` and `images.deploymentDbImage`, which the
+  `images:` block covers, and nothing is written. `init-values` reads the chart
+  it will install through Helm to decide (by version when it cannot), and
+  `make deploy` stops when the file was written for the other kind of chart. A mirror laid out with the source host kept (`<registry>/docker.io/langchain/<name>`)
   takes `langsmith_image_registry_keeps_source_host = true`: `init-values` then
   writes the value as `images.registry` and the chart composes the paths.
   `langsmith_image_pull_secret_name` is written as `images.imagePullSecrets`
