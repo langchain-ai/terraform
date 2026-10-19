@@ -2449,6 +2449,65 @@ else
   pass "helm ${HELM_VER}: client-side apply is Helm 3's only mode, so no flag is needed"
 fi
 
+# ── 12. Customer-managed keys ─────────────────────────────────────────────────
+# Read-only checks on the objects the platform team hands over: the disk
+# encryption set must be in the cluster's region (a set serves disks in its
+# own region only), each key's vault must have purge protection on (the
+# services refuse a key without it), and each identity must resolve. A read
+# that fails is a warning, since the identity running preflight may hold
+# nothing on the platform team's scopes; the apply is the authority.
+CMK_DES=$(_tfvar aks_disk_encryption_set_id || echo "")
+CMK_KEYS=""
+for KEY_VAR in postgres_customer_managed_key_id postgres_geo_backup_customer_managed_key_id storage_customer_managed_key_id; do
+  KEY_URL=$(_tfvar "$KEY_VAR" || echo "")
+  [ -n "$KEY_URL" ] && CMK_KEYS="${CMK_KEYS}${KEY_VAR}=${KEY_URL} "
+done
+CMK_IDS=""
+for ID_VAR in postgres_customer_managed_key_identity_id postgres_geo_backup_customer_managed_key_identity_id storage_customer_managed_key_identity_id; do
+  ID_VAL=$(_tfvar "$ID_VAR" || echo "")
+  [ -n "$ID_VAL" ] && CMK_IDS="${CMK_IDS}${ID_VAR}=${ID_VAL} "
+done
+if [ -n "$CMK_DES" ] || [ -n "$CMK_KEYS" ] || [ -n "$CMK_IDS" ]; then
+  echo ""
+  echo "── Customer-managed keys ─────────────────────────────"
+  CMK_LOCATION=$(_tfvar location || echo "")
+  CMK_LOCATION_NORM=$(printf '%s' "$CMK_LOCATION" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+  if [ -n "$CMK_DES" ]; then
+    DES_LOCATION=$(az disk-encryption-set show --ids "$CMK_DES" --query location -o tsv 2>/dev/null || echo "")
+    DES_LOCATION_NORM=$(printf '%s' "$DES_LOCATION" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+    if [ -z "$DES_LOCATION_NORM" ]; then
+      warn "aks_disk_encryption_set_id: the set could not be read (az disk-encryption-set show --ids ...), so its region is unverified. The apply fails if it is not in ${CMK_LOCATION}; the platform team can confirm it."
+    elif [ "$DES_LOCATION_NORM" != "$CMK_LOCATION_NORM" ]; then
+      fail "aks_disk_encryption_set_id is in ${DES_LOCATION}, and the cluster is created in ${CMK_LOCATION}: a disk encryption set serves disks in its own region only. Use a set the platform team creates in ${CMK_LOCATION}."
+    else
+      pass "aks_disk_encryption_set_id: the set is in ${CMK_LOCATION}, the cluster's region"
+    fi
+  fi
+  for ENTRY in $CMK_KEYS; do
+    KEY_VAR=${ENTRY%%=*}; KEY_URL=${ENTRY#*=}
+    KEY_HOST=${KEY_URL#https://}; KEY_HOST=${KEY_HOST%%/*}; VAULT_NAME=${KEY_HOST%%.*}
+    case "$KEY_HOST" in
+      *.managedhsm.*) PURGE=$(az keyvault show --hsm-name "$VAULT_NAME" --query properties.enablePurgeProtection -o tsv 2>/dev/null || echo "") ;;
+      *)              PURGE=$(az keyvault show --name "$VAULT_NAME" --query properties.enablePurgeProtection -o tsv 2>/dev/null || echo "") ;;
+    esac
+    if [ -z "$PURGE" ]; then
+      warn "${KEY_VAR}: the vault ${VAULT_NAME} could not be read (az keyvault show), so purge protection is unverified. The apply fails without it; the platform team can confirm it."
+    elif [ "$PURGE" != "true" ]; then
+      fail "${KEY_VAR}: the vault ${VAULT_NAME} has purge protection off, and the services refuse a customer-managed key in such a vault. The platform team enables it, which cannot be undone: az keyvault update --name ${VAULT_NAME} --enable-purge-protection true"
+    else
+      pass "${KEY_VAR}: the vault ${VAULT_NAME} has purge protection on"
+    fi
+  done
+  for ENTRY in $CMK_IDS; do
+    ID_VAR=${ENTRY%%=*}; ID_VAL=${ENTRY#*=}
+    if az identity show --ids "$ID_VAL" --query principalId -o tsv >/dev/null 2>&1; then
+      pass "${ID_VAR}: the identity resolves"
+    else
+      warn "${ID_VAR}: the identity could not be read (az identity show --ids ...), so it is unverified. The apply fails if it does not exist or lacks Key Vault Crypto Service Encryption User on the key's vault."
+    fi
+  done
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════"
