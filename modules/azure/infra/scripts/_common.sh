@@ -529,6 +529,23 @@ _values_stamp_drift() {
   return 0
 }
 
+# Returns 0 when a values file carries the host-kept mirror layout
+# (images.registry set) while terraform.tfvars sets langsmith_image_registry
+# and leaves langsmith_image_registry_keeps_source_host unset: a file generated
+# under that key's previous default (true; the 0.16 line's v0.16.124 to .126
+# wrote it). The default is now false, the stamp reads '' on both sides so
+# _values_stamp_drift passes the file, and the next make init-values would
+# switch the layout under a mirror that serves the host-kept one. deploy.sh
+# stops on it until the key is set.
+#   _values_layout_from_old_default <values-file>
+_values_layout_from_old_default() {
+  local file="$1" registry
+  registry=$(_parse_tfvar "langsmith_image_registry") || return 1
+  [[ -n "$registry" ]] || return 1
+  _parse_tfvar "langsmith_image_registry_keeps_source_host" >/dev/null 2>&1 && return 1
+  awk '/^images:/{p=1; next} /^[^ #]/{p=0} p && /^  registry: "[^"]+"/{f=1} END{exit !f}' "$file" 2>/dev/null
+}
+
 # Print ingress.ingressClassName from a values file, quotes stripped; nothing when
 # unset or empty. With ingress_controller = "none" this is the only place a class
 # comes from, so init-values.sh keeps it on re-run and deploy.sh checks it.
