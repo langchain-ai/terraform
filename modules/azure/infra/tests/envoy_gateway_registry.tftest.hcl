@@ -208,3 +208,13 @@ run "refuses_a_version_without_a_known_proxy_image" {
 
   expect_failures = [var.envoy_gateway_image_registry]
 }
+
+run "refuses_a_dotless_host" {
+  command = plan
+
+  variables {
+    envoy_gateway_image_registry = "nexus"
+  }
+
+  expect_failures = [var.envoy_gateway_image_registry]
+}

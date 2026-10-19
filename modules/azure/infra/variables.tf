@@ -1654,8 +1654,8 @@ variable "keda_image_registry" {
   default     = ""
 
   validation {
-    condition     = var.keda_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.keda_image_registry))
-    error_message = "keda_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.keda_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.keda_image_registry))
+    error_message = "keda_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 }
 
@@ -1750,8 +1750,8 @@ variable "langsmith_image_registry" {
   default     = ""
 
   validation {
-    condition     = var.langsmith_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.langsmith_image_registry))
-    error_message = "langsmith_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.langsmith_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.langsmith_image_registry))
+    error_message = "langsmith_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 }
 
@@ -2111,8 +2111,8 @@ variable "envoy_gateway_image_registry" {
   default     = ""
 
   validation {
-    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
-    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 
   # A version missing from local.envoy_proxy_default_images would leave the

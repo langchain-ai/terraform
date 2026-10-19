@@ -66,3 +66,39 @@ run "refuses_a_trailing_slash" {
 
   expect_failures = [var.langsmith_image_registry]
 }
+
+run "refuses_a_dotless_host" {
+  command = plan
+
+  variables {
+    langsmith_image_registry = "nexus"
+  }
+
+  expect_failures = [var.langsmith_image_registry]
+}
+
+run "accepts_a_dotless_host_with_a_port" {
+  command = plan
+
+  variables {
+    langsmith_image_registry = "nexus:5000"
+  }
+
+  assert {
+    condition     = var.langsmith_image_registry == "nexus:5000"
+    error_message = "A bare name with a port is a registry host and should be accepted"
+  }
+}
+
+run "accepts_localhost" {
+  command = plan
+
+  variables {
+    langsmith_image_registry = "localhost"
+  }
+
+  assert {
+    condition     = var.langsmith_image_registry == "localhost"
+    error_message = "localhost is a registry host and should be accepted"
+  }
+}
