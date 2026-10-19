@@ -371,6 +371,39 @@ _read_values_stamp() {
   printf '%s' "$line" | sed "s/^#   ${key} =[[:space:]]*//"
 }
 
+# Compare a generated values file's stamp with the current terraform.tfvars,
+# one line per key that disagrees:
+#   <key>: generated with '<was>', terraform.tfvars now says '<now>'
+#   <key>: not stamped (the file predates this key), terraform.tfvars now says '<now>'
+# Returns 0 when the file is stamped and every key agrees, 1 when a line was
+# printed, 2 when the file carries no stamp at all (written by an older
+# init-values.sh; the lines printed, if any, are then only informative).
+# A key the stamp lacks counts as drift only when terraform.tfvars sets it:
+# an older file with the key unset on both sides still describes those
+# tfvars, but one generated before langsmith_image_registry existed, with a
+# tfvars that now sets it, would otherwise deploy from docker.io and report
+# success.
+_values_stamp_drift() {
+  local file="$1" key was now stamped="false" drift="false"
+  for key in $_VALUES_INPUT_KEYS; do
+    if was=$(_read_values_stamp "$file" "$key"); then
+      stamped="true"
+      now=$(_parse_tfvar "$key") || now=""
+      [[ "$was" == "$now" ]] && continue
+      printf "%s: generated with '%s', terraform.tfvars now says '%s'\n" "$key" "$was" "$now"
+      drift="true"
+    else
+      now=$(_parse_tfvar "$key") || now=""
+      [[ -n "$now" ]] || continue
+      printf "%s: not stamped (the file predates this key), terraform.tfvars now says '%s'\n" "$key" "$now"
+      drift="true"
+    fi
+  done
+  [[ "$stamped" == "true" ]] || return 2
+  [[ "$drift" == "true" ]] && return 1
+  return 0
+}
+
 # Print ingress.ingressClassName from a values file, quotes stripped; nothing when
 # unset or empty. With ingress_controller = "none" this is the only place a class
 # comes from, so init-values.sh keeps it on re-run and deploy.sh checks it.
