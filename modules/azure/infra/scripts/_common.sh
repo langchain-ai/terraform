@@ -282,6 +282,17 @@ _VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source re
 # the images: block of the chart's values.yaml at the pinned line.
 _LANGSMITH_IMAGE_REPOSITORIES="aceBackendImage=docker.io/langchain/langsmith-ace-backend backendImage=docker.io/langchain/langsmith-backend engineInsightsAgentImage=docker.io/langchain/langsmith-insights-engine frontendImage=docker.io/langchain/langsmith-frontend operatorImage=docker.io/langchain/langgraph-operator postgresImage=docker.io/postgres redisImage=docker.io/redis clickhouseImage=docker.io/clickhouse/clickhouse-server agentBuilderImage=docker.io/langchain/agent-builder-deep-agent pollyAgentImage=docker.io/langchain/langsmith-polly smithdbImage=docker.io/langchain/smithdb presidioAnalyzerImage=mcr.microsoft.com/presidio-analyzer sandboxHostImage=docker.io/langchain/sandbox-host juicefsCSIImage=docker.io/juicedata/juicefs-csi-driver juicefsCSINodeDriverRegistrarImage=registry.k8s.io/sig-storage/csi-node-driver-registrar juicefsMountImage=docker.io/juicedata/mount"
 
+# Print the image keys of a chart's values.yaml read on stdin: the top-level
+# entries under images: whose name ends in Image, one per line. Reads to the
+# end of its input on purpose. deploy.sh pipes `helm show values` into this
+# under set -o pipefail, and an awk that exits at the first key after the
+# images: block leaves helm with most of a 100 KB file still to write; helm
+# then dies of SIGPIPE, the pipeline fails, and the caller reads "the chart's
+# images could not be read" for a chart it read fine.
+_chart_image_keys_from_stdin() {
+  awk '/^images:/{p=1; next} p && /^[^ ]/{p=0} p && /^  [A-Za-z0-9]+Image:/{sub(":", "", $1); print $1}'
+}
+
 # Print the image keys the module knows, one per line.
 _langsmith_image_keys() {
   local e
