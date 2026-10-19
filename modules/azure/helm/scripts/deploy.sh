@@ -886,7 +886,7 @@ fi
 # the list does not would keep its public repository and fail to pull on a
 # cluster that reaches only the mirror, so compare the two before installing.
 _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
-_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="true"
+_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
 if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
   _chart_image_keys=$(helm show values "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
     | _chart_image_keys_from_stdin) || _chart_image_keys=""

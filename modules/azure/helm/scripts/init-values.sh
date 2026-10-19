@@ -286,7 +286,7 @@ _enable_sso_oidc=$(_parse_tfvar "enable_sso_oidc") || _enable_sso_oidc="false"
 
 # ── LangSmith images from a mirror — read from terraform.tfvars ───────────
 _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
-_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="true"
+_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
 _ls_pull_secret=$(_parse_tfvar "langsmith_image_pull_secret_name") || _ls_pull_secret=""
 if [[ -n "$_ls_image_registry" || -n "$_ls_pull_secret" ]]; then
   echo ""
