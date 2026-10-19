@@ -292,7 +292,8 @@ _chart_line_of() {
 
 # ── LangSmith images from a mirror ────────────────────────────────────────────
 # The chart's images and their repositories for the 0.16 chart line (chart
-# 0.16.39), key=repository. init-values.sh writes one images.<key>.repository
+# 0.16.39, plus the two operator-deployment images 0.16.43 reads from here),
+# key=repository. init-values.sh writes one images.<key>.repository
 # per entry when langsmith_image_registry_keeps_source_host = false (the
 # default), the layout of a mirror that serves each source registry's paths
 # directly (the chart's scripts/mirror_langsmith_images.sh pushes it, a proxy
@@ -301,7 +302,7 @@ _chart_line_of() {
 # chart it is about to install and stops on an image the list does not carry,
 # which would otherwise pull from its public registry. Keep the list equal to
 # the images: block of the chart's values.yaml at the pinned line.
-_LANGSMITH_IMAGE_REPOSITORIES="aceBackendImage=docker.io/langchain/langsmith-ace-backend backendImage=docker.io/langchain/langsmith-backend engineInsightsAgentImage=docker.io/langchain/langsmith-insights-engine frontendImage=docker.io/langchain/langsmith-frontend operatorImage=docker.io/langchain/langgraph-operator postgresImage=docker.io/postgres redisImage=docker.io/redis clickhouseImage=docker.io/clickhouse/clickhouse-server agentBuilderImage=docker.io/langchain/agent-builder-deep-agent pollyAgentImage=docker.io/langchain/langsmith-polly smithdbImage=docker.io/langchain/smithdb presidioAnalyzerImage=mcr.microsoft.com/presidio-analyzer sandboxHostImage=docker.io/langchain/sandbox-host juicefsCSIImage=docker.io/juicedata/juicefs-csi-driver juicefsCSINodeDriverRegistrarImage=registry.k8s.io/sig-storage/csi-node-driver-registrar juicefsMountImage=docker.io/juicedata/mount"
+_LANGSMITH_IMAGE_REPOSITORIES="aceBackendImage=docker.io/langchain/langsmith-ace-backend backendImage=docker.io/langchain/langsmith-backend engineInsightsAgentImage=docker.io/langchain/langsmith-insights-engine frontendImage=docker.io/langchain/langsmith-frontend operatorImage=docker.io/langchain/langgraph-operator postgresImage=docker.io/postgres redisImage=docker.io/redis clickhouseImage=docker.io/clickhouse/clickhouse-server agentBuilderImage=docker.io/langchain/agent-builder-deep-agent pollyAgentImage=docker.io/langchain/langsmith-polly smithdbImage=docker.io/langchain/smithdb presidioAnalyzerImage=mcr.microsoft.com/presidio-analyzer sandboxHostImage=docker.io/langchain/sandbox-host juicefsCSIImage=docker.io/juicedata/juicefs-csi-driver juicefsCSINodeDriverRegistrarImage=registry.k8s.io/sig-storage/csi-node-driver-registrar juicefsMountImage=docker.io/juicedata/mount deploymentRedisImage=docker.io/redis deploymentDbImage=docker.io/pgvector/pgvector"
 
 # Print the image keys of a chart's values.yaml read on stdin: the top-level
 # entries under images: whose name ends in Image, one per line. Reads to the
