@@ -106,6 +106,20 @@ else
   fi
 fi
 
+# A values file generated under the previous default of
+# langsmith_image_registry_keeps_source_host (true, host kept) with the key
+# unset in terraform.tfvars: the stamp reads '' on both sides, so the check
+# above passes it, and the next make init-values would write the host-dropped
+# layout under a mirror that serves the other one. Stop until the choice is
+# written down (_values_layout_from_old_default in infra/scripts/_common.sh).
+if [[ -f "$INFRA_DIR/terraform.tfvars" ]] && _values_layout_from_old_default "$OVERRIDES_FILE"; then
+  fail "values-overrides.yaml carries the host-kept mirror layout (images.registry set), written when langsmith_image_registry_keeps_source_host defaulted to true; the default is now false and terraform.tfvars does not set it."
+  info "To keep the layout this cluster pulls from today (<registry>/docker.io/...): set langsmith_image_registry_keeps_source_host = true."
+  info "To move to the layout the chart's mirror script pushes (<registry>/langchain/...): set it to false and lay the mirror out that way."
+  action "Set the key in terraform.tfvars, run make init-values, then re-run make deploy"
+  exit 1
+fi
+
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
 _cluster_name=$(_tf_out aks_cluster_name) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"

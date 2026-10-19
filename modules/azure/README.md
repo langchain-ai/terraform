@@ -1619,7 +1619,11 @@ decides what the cluster can reach, and nothing works until it allows:
   writes the value as `images.registry` and the chart composes the paths.
   `langsmith_image_pull_secret_name` is written as `images.imagePullSecrets`
   too. The three are stamped into `values-overrides.yaml`, so a change after
-  `init-values` stops the deploy until the file is regenerated.
+  `init-values` stops the deploy until the file is regenerated. A file
+  generated with the key unset while its default was `true` (the 0.16 line's
+  v0.16.124 to .126) carries the host-kept layout; `make deploy` stops on it
+  until the key is set, so the next `init-values` does not switch a working
+  mirror's layout.
 - **A mirror behind an internal CA** also needs that CA on the nodes, where
   containerd does the pulling and trusts only public CAs; without it every pull
   fails with `x509: certificate signed by unknown authority`.

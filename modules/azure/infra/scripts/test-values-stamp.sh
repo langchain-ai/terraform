@@ -7,7 +7,9 @@
 # test-values-stamp.sh — Unit tests for the stamp check deploy.sh runs on
 # values-overrides.yaml (_values_stamp_drift in _common.sh): a file generated
 # from other terraform.tfvars values stops the deploy, and so does one generated
-# before a key existed that terraform.tfvars now sets. No Azure, no terraform.
+# before a key existed that terraform.tfvars now sets; and the stop on a file
+# written under the previous mirror-layout default (_values_layout_from_old_default).
+# No Azure, no terraform.
 #
 # Usage:
 #   ./infra/scripts/test-values-stamp.sh
@@ -81,6 +83,23 @@ langsmith_domain: not stamped (the file predates this key), terraform.tfvars now
 langsmith_image_registry: not stamped (the file predates this key), terraform.tfvars now says 'nexus.example.com'
 rc=2" \
   "$(_drift "$VALUES.none")"
+
+# A file written when langsmith_image_registry_keeps_source_host defaulted to
+# true: images.registry set, the key unset in terraform.tfvars.
+_old() { local rc=0; _values_layout_from_old_default "$1" || rc=$?; printf 'rc=%s' "$rc"; }
+printf 'images:\n  registry: "nexus.example.com"\n  imagePullSecrets:\n    - name: "nexus-pull"\nredis:\n  registry: "decoy"\n' > "$VALUES.oldlayout"
+printf 'images:\n  registry: ""\n  backendImage:\n    repository: "nexus.example.com/langchain/langsmith-backend"\n' > "$VALUES.newlayout"
+printf 'langsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
+_check "host-kept layout, registry set, key unset: stop (rc 0)" 'rc=0' "$(_old "$VALUES.oldlayout")"
+printf 'langsmith_image_registry = "nexus.example.com"\nlangsmith_image_registry_keeps_source_host = true\n' > "$TFVARS"
+_check "host-kept layout, key set: no stop" 'rc=1' "$(_old "$VALUES.oldlayout")"
+printf 'langsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
+_check "host-dropped layout (registry empty), key unset: no stop" 'rc=1' "$(_old "$VALUES.newlayout")"
+printf 'ingress_controller = "nginx"\n' > "$TFVARS"
+_check "no registry in tfvars: no stop, whatever the file" 'rc=1' "$(_old "$VALUES.oldlayout")"
+printf 'langsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
+printf 'redis:\n  registry: "decoy"\nimages:\n  imagePullSecrets:\n    - name: "nexus-pull"\n' > "$VALUES.decoy"
+_check "a registry key outside the images block does not count" 'rc=1' "$(_old "$VALUES.decoy")"
 
 echo ""
 echo "  $PASS passed, $FAIL failed"
