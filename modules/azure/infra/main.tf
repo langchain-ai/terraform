@@ -1822,6 +1822,38 @@ module "postgres" {
   tags = local.common_tags
 }
 
+# The server's encryption mode is fixed at creation, and the provider applies a
+# change to postgres_customer_managed_key_id by replacing the server, which
+# destroys the database. Read the live server and refuse a plan whose key
+# presence differs from it. Presence only, so rotating to another key or
+# version stays allowed. Server names are unique across Azure, so the name
+# alone finds it. An absent server, and a mocked provider's output, read as
+# null, which passes.
+data "azapi_resource_list" "postgres_servers" {
+  count     = var.postgres_source == "external" ? 1 : 0
+  type      = "Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    servers = "value[?name=='${local.postgres_name}'].{id: id, name: name, data_encryption: properties.dataEncryption.type}"
+  }
+}
+
+locals {
+  postgres_live_server  = var.postgres_source == "external" ? try(data.azapi_resource_list.postgres_servers[0].output.servers[0], null) : null
+  postgres_live_has_key = local.postgres_live_server == null ? null : try(local.postgres_live_server.data_encryption, "") == "AzureKeyVault"
+}
+
+resource "terraform_data" "postgres_customer_managed_key_guard" {
+  input = var.postgres_customer_managed_key_id != ""
+
+  lifecycle {
+    precondition {
+      condition     = local.postgres_live_has_key == null ? true : local.postgres_live_has_key == (var.postgres_customer_managed_key_id != "")
+      error_message = "postgres_customer_managed_key_id is ${var.postgres_customer_managed_key_id == "" ? "empty" : "set"}, and the PostgreSQL server ${local.postgres_name} already exists ${local.postgres_live_has_key == true ? "with a customer-managed key" : "with the service-managed key"}. The key is fixed at creation, and the provider would apply this by replacing the server and destroying its data. Revert the value to keep the server as it is, or move to a new server created with the key by the restore path in README \"Customer-managed keys\"."
+    }
+  }
+}
+
 # ── SmithDB sizing ───────────────────────────────────────────────────────────
 # One size sets the chart resource tier, the replicas, the default metastore
 # SKU, the namespace quota headroom, and the smithdb_helm_values output.

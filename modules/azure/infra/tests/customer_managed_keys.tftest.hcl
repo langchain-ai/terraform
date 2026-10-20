@@ -391,3 +391,114 @@ run "removing_the_set_from_a_cluster_is_refused" {
 
   expect_failures = [terraform_data.aks_disk_encryption_set_guard]
 }
+
+# The PostgreSQL guard compares key presence with the live server: adding or
+# removing a key is refused, rotating to another key passes, and a server
+# with no key and no key requested plans clean.
+run "adding_a_key_to_a_server_that_has_none_is_refused" {
+  command = plan
+
+  plan_options {
+    target = [terraform_data.postgres_customer_managed_key_guard]
+  }
+
+  variables {
+    postgres_name                             = "ls-postgres-test"
+    postgres_customer_managed_key_id          = "https://kv-keys.vault.azure.net/keys/pg-key"
+    postgres_customer_managed_key_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pg-cmk"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.postgres_servers[0]
+    values = {
+      output = {
+        servers = [{
+          id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-test"
+          name            = "ls-postgres-test"
+          data_encryption = "SystemManaged"
+        }]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.postgres_customer_managed_key_guard]
+}
+
+run "removing_the_key_from_a_server_that_has_one_is_refused" {
+  command = plan
+
+  plan_options {
+    target = [terraform_data.postgres_customer_managed_key_guard]
+  }
+
+  variables {
+    postgres_name = "ls-postgres-test"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.postgres_servers[0]
+    values = {
+      output = {
+        servers = [{
+          id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-test"
+          name            = "ls-postgres-test"
+          data_encryption = "AzureKeyVault"
+        }]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.postgres_customer_managed_key_guard]
+}
+
+run "rotating_the_key_on_a_server_that_has_one_plans_clean" {
+  command = plan
+
+  plan_options {
+    target = [terraform_data.postgres_customer_managed_key_guard]
+  }
+
+  variables {
+    postgres_name                             = "ls-postgres-test"
+    postgres_customer_managed_key_id          = "https://kv-keys.vault.azure.net/keys/pg-key-v2"
+    postgres_customer_managed_key_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pg-cmk"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.postgres_servers[0]
+    values = {
+      output = {
+        servers = [{
+          id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-test"
+          name            = "ls-postgres-test"
+          data_encryption = "AzureKeyVault"
+        }]
+      }
+    }
+  }
+}
+
+run "a_server_without_a_key_and_none_requested_plans_clean" {
+  command = plan
+
+  plan_options {
+    target = [terraform_data.postgres_customer_managed_key_guard]
+  }
+
+  variables {
+    postgres_name = "ls-postgres-test"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.postgres_servers[0]
+    values = {
+      output = {
+        servers = [{
+          id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-test"
+          name            = "ls-postgres-test"
+          data_encryption = "SystemManaged"
+        }]
+      }
+    }
+  }
+}

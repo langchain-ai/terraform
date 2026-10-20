@@ -1844,7 +1844,7 @@ variable "aks_disk_encryption_set_reader_grant" {
 
 variable "postgres_customer_managed_key_id" {
   type        = string
-  description = "URL of the key the PostgreSQL Flexible Server encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL follows the key's newest version). The key's vault has soft delete and purge protection on, and postgres_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Set only when the server is created: a change replaces the server and destroys its data, so read the plan, and move an existing server by a point-in-time restore to a new server created with the key (README, Customer-managed keys). Refused unless postgres_source = \"external\". Empty (default) keeps the service-managed key."
+  description = "URL of the key the PostgreSQL Flexible Server encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL follows the key's newest version). The key's vault has soft delete and purge protection on, and postgres_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Set only when the server is created: the provider would apply a change by replacing the server and destroying its data, so on an existing server plan refuses adding or removing the key (moving to another key or version is allowed). Move an existing server by a point-in-time restore to a new server created with the key and the state steps in README \"Customer-managed keys\". Refused unless postgres_source = \"external\". Empty (default) keeps the service-managed key."
   default     = ""
 
   validation {
