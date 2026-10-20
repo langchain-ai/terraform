@@ -158,6 +158,18 @@ locals {
         Resource = [for region in sort(tolist(var.regions)) :
           "arn:${local.partition}:ecr:${region}:${local.artifact_account_id}:repository/byoc-smithbox-*"
         ]
+      },
+      {
+        # Sandbox registries that authenticate to ECR with an IAM role. Only roles
+        # tagged LangSmithSandboxECR=true opt in; LangSmith always sends the workspace ID as external ID.
+        Sid      = "AssumeSandboxECRRoles"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = {
+          StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" }
+          Null         = { "sts:ExternalId" = "false" }
+        }
       }
       ], [{
         Sid    = "EngineBedrockInference"
