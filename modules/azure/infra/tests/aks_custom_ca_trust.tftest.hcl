@@ -291,6 +291,55 @@ run "accepts_a_commented_out_old_certificate_beside_a_live_one" {
   }
 }
 
+# A block commented out twice, as when a toggle adds '# ' to lines that
+# already held it, or with '##': a key is refused and an old certificate
+# still passes.
+run "refuses_a_key_commented_out_twice_with_spaced_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key-double-spaced.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_key_commented_out_twice_with_doubled_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key-double.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "accepts_an_old_certificate_commented_out_twice_with_spaced_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-old-cert-double-spaced.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == tolist([filebase64("tests/fixtures/ca-1-plus-commented-old-cert-double-spaced.pem")])
+    error_message = "An old certificate commented out twice beside a live one should pass on release/0.16 as one entry equal to the file"
+  }
+}
+
+run "accepts_an_old_certificate_commented_out_twice_with_doubled_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-old-cert-double.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == tolist([filebase64("tests/fixtures/ca-1-plus-commented-old-cert-double.pem")])
+    error_message = "An old certificate commented out twice beside a live one should pass on release/0.16 as one entry equal to the file"
+  }
+}
+
 # The boundary on the other side: prose that names the markers mid-line and a
 # hex fingerprint on its own comment line pass, as one entry equal to the file.
 run "accepts_prose_naming_the_markers_and_a_hex_fingerprint" {
