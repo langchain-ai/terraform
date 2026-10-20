@@ -162,12 +162,19 @@ locals {
       {
         Sid      = "AssumeSandboxECRRoles"
         Effect   = "Allow"
-        Action   = ["sts:AssumeRole", "sts:TagSession"]
+        Action   = ["sts:AssumeRole"]
         Resource = ["arn:${local.partition}:iam::*:role/*"]
         Condition = {
           StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" }
           Null         = { "sts:ExternalId" = "false" }
         }
+      },
+      {
+        Sid       = "TagSandboxECRRoleSessions"
+        Effect    = "Allow"
+        Action    = ["sts:TagSession"]
+        Resource  = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = { StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" } }
       }
       ], [{
         Sid    = "EngineBedrockInference"
