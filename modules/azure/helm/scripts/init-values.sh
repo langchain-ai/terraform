@@ -306,10 +306,10 @@ _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_regis
 _ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
 _ls_pull_secret=$(_parse_tfvar "langsmith_image_pull_secret_name") || _ls_pull_secret=""
 # A chart that writes docker.io into the operator's per-deployment Redis and
-# PostgreSQL templates (0.16 before 0.16.43, the 0.17 line) gets both written
+# PostgreSQL templates (the 0.17 line, 0.18 before rc.30) gets both written
 # into the agent-deploys file with the mirror (_deployment_templates_block); a
 # chart that reads images.deploymentRedisImage and images.deploymentDbImage
-# (0.16.43 on, 0.18) takes them from the images: block. Decided from the chart
+# (0.18 from rc.30) takes them from the images: block. Decided from the chart
 # deploy.sh will resolve, read through helm; by version when it cannot be read.
 _chart_version=$(_resolve_chart_version)
 _chart_line=$(_chart_line_of "$_chart_version")

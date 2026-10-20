@@ -1611,12 +1611,12 @@ decides what the cluster can reach, and nothing works until it allows:
   chart's images with that list and stops on one the module does not know.
   A chart that writes `docker.io/redis:7` and `pgvector/pgvector:pg15` into
   the operator's per-deployment Redis and PostgreSQL templates, where
-  `images.registry` does not reach (every 0.17 patch so far, and the 0.16 line
-  before 0.16.43), gets both templates written into
+  `images.registry` does not reach (every 0.17 patch so far, and 0.18
+  prereleases before 0.18.0-rc.30), gets both templates written into
   `langsmith-values-agent-deploys.yaml` by `init-values` with the images on the
   mirror when `enable_deployments` is on; a chart that reads
-  `images.deploymentRedisImage` and `images.deploymentDbImage` (0.18, and 0.16
-  from 0.16.43) takes them from the `images:` block, and nothing is written.
+  `images.deploymentRedisImage` and `images.deploymentDbImage` (0.18 from
+  0.18.0-rc.30) takes them from the `images:` block, and nothing is written.
   `init-values` reads the chart it will install through Helm to decide (by
   version when it cannot), and `make deploy` stops when the file was written
   for the other kind of chart. A mirror laid out with the source host kept (`<registry>/docker.io/langchain/<name>`)

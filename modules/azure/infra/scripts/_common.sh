@@ -334,19 +334,19 @@ _chart_reads_deployment_image_keys() {
   printf '%s\n' "$keys" | grep -qx deploymentRedisImage
 }
 
-# The fallback when the chart cannot be read, by line and patch: the 0.16
-# line writes docker.io into the templates before 0.16.43, the 0.17 line in
-# every patch up to 0.17.17, and 0.18 reads the keys. A constraint (~0.16.0)
-# resolves to the newest patch of its line. Returns 0 when the templates
-# need the mirror written in.
+# The fallback when the chart cannot be read, by line: the 0.17 line writes
+# docker.io into the templates (no 0.17 patch reads the keys yet), and 0.18
+# reads them from 0.18.0-rc.30 on, so an earlier 0.18 prerelease writes them
+# too. deploy.sh accepts only these two lines here. Returns 0 when the
+# templates need the mirror written in.
 #   _chart_templates_need_mirror_by_version <version or constraint>
 _chart_templates_need_mirror_by_version() {
-  local v="$1" line patch
-  line=$(_chart_line_of "$v")
-  patch=$(printf '%s' "$v" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' | awk -F. '{print $3}') || patch=""
-  case "$line" in
-    0.16) [[ -n "$patch" && "$patch" -lt 43 ]] ;;
+  local v="$1" rc
+  case "$(_chart_line_of "$v")" in
     0.17) return 0 ;;
+    0.18)
+      rc=$(printf '%s' "$v" | sed -n 's/^[~^]*0\.18\.0-rc\.\([0-9][0-9]*\)$/\1/p')
+      [[ -n "$rc" && "$rc" -lt 30 ]] ;;
     *) return 1 ;;
   esac
 }
