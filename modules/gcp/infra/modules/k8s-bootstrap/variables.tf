@@ -37,65 +37,6 @@ variable "workload_identity_gsa_email" {
   default     = ""
 }
 
-variable "resource_quota_include_limits" {
-  description = "Include aggregate CPU and memory limits in the LangSmith namespace ResourceQuota. Disable for sandbox-host, whose Firecracker VMs use child cgroups beneath the pod cgroup."
-  type        = bool
-  default     = true
-}
-
-variable "resource_quota" {
-  type = object({
-    requests_cpu       = number
-    requests_memory_gi = number
-    limits_cpu         = number
-    limits_memory_gi   = number
-    pods               = number
-  })
-  description = "Base hard limits on the LangSmith namespace ResourceQuota, in CPU cores, GiB, and pods. The resource_quota_extra_* inputs add to it, and resource_quota_include_limits = false leaves out the limits."
-  default = {
-    requests_cpu       = 50
-    requests_memory_gi = 120
-    limits_cpu         = 100
-    limits_memory_gi   = 200
-    pods               = 100
-  }
-}
-
-variable "resource_quota_extra_cpu" {
-  description = "Additional CPU added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. The root uses this to make room for optional features that add large pods, so the base figures stay the same for a plain install. Zero keeps the base quota."
-  type        = number
-  default     = 0
-
-  # SmithDB large with the backfill needs 414.
-  validation {
-    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 1024
-    error_message = "resource_quota_extra_cpu must be between 0 and 1024. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
-  }
-}
-
-variable "resource_quota_extra_memory_gi" {
-  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. Counterpart to resource_quota_extra_cpu."
-  type        = number
-  default     = 0
-
-  # SmithDB large with the backfill needs 906.
-  validation {
-    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 2048
-    error_message = "resource_quota_extra_memory_gi must be between 0 and 2048."
-  }
-}
-
-variable "resource_quota_extra_pods" {
-  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
-  type        = number
-  default     = 0
-
-  validation {
-    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
-    error_message = "resource_quota_extra_pods must be between 0 and 400."
-  }
-}
-
 variable "create_smithdb_cache_storage_class" {
   description = "Create the SmithDB cache StorageClass (Hyperdisk Balanced) for SmithDB network-disk mode."
   type        = bool

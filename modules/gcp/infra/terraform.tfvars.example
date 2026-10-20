@@ -193,9 +193,9 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 #   production, production-large -> n2-standard-32
 #   every other profile          -> n2-standard-8
 # sandbox_host_machine_type = "n2-standard-8"
-# Optional: requests injected into sandbox containers that omit them. These
-# values preserve namespace request-quota accounting without imposing limits
-# on sandbox-host and its Firecracker VM child cgroups.
+# Optional: requests injected into sandbox containers that omit them, so the
+# scheduler has something to place them by. No limits are imposed on
+# sandbox-host and its Firecracker VM child cgroups.
 # sandbox_default_container_requests = {
 #   cpu    = "100m"
 #   memory = "128Mi"
@@ -422,8 +422,7 @@ enable_smithdb = false
 # Migration and query both require ingestion, and Terraform enforces that.
 # ClickHouse stays enabled throughout (SMITHDB.md#staged-rollout).
 # For the backfill, make smithdb-migration-job-start sets
-# smithdb_migration_enabled = true and smithdb_migration_parallelism, and
-# make smithdb-migration-job-end sets smithdb_migration_enabled = false.
+# smithdb_migration_enabled = true, and make smithdb-migration-job-end sets smithdb_migration_enabled = false.
 # The default stays false, so an existing install does not start dual write on
 # upgrade; make quickstart writes true for a new install.
 # smithdb_ingestion_enabled = true
@@ -431,8 +430,6 @@ enable_smithdb = false
 # smithdb_query_enabled     = false
 # Backfill start time, RFC 3339. Empty keeps the chart default window.
 # smithdb_migration_start_time = "2026-01-01T00:00:00Z"
-# Migration pods that run at once; sizes the namespace quota.
-# smithdb_migration_parallelism = 1
 
 # Must match the Helm release name used in Pass 2. Chart-created service account
 # names derive from it, and the Workload Identity binding is scoped to that exact
@@ -550,17 +547,6 @@ enable_smithdb = false
 #   "production-large" — high-memory / high-CPU pattern; 50+ users, 1000+ traces/sec
 #------------------------------------------------------------------------------
 sizing_profile = "production"
-
-# Base figures for the namespace ResourceQuota, with memory in GiB. The default
-# fits every profile except production-large, whose sizing file header has the
-# block to use. Terraform adds the SmithDB headroom on top.
-# resource_quota = {
-#   requests_cpu       = 50
-#   requests_memory_gi = 120
-#   limits_cpu         = 100
-#   limits_memory_gi   = 200
-#   pods               = 100
-# }
 
 #------------------------------------------------------------------------------
 # Optional: LangGraph Platform Encryption Keys (sensitive)

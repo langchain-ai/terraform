@@ -429,7 +429,7 @@ variable "sandbox_host_ephemeral_local_ssd_count" {
 }
 
 variable "sandbox_default_container_requests" {
-  description = "Default CPU and memory requests injected into sandbox namespace containers that omit them. This preserves ResourceQuota request accounting without imposing default limits on sandbox-host."
+  description = "Default CPU and memory requests injected into sandbox namespace containers that omit them. No default limits are imposed, so sandbox-host keeps access to dedicated node capacity."
   type        = map(string)
   default = {
     cpu    = "100m"
@@ -555,47 +555,6 @@ variable "langsmith_namespace" {
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{0,62}$", var.langsmith_namespace))
     error_message = "Namespace must be a valid Kubernetes namespace name."
-  }
-}
-
-variable "resource_quota" {
-  type = object({
-    requests_cpu       = number
-    requests_memory_gi = number
-    limits_cpu         = number
-    limits_memory_gi   = number
-    pods               = number
-  })
-  description = "Base hard limits on the LangSmith namespace ResourceQuota, in CPU cores, GiB, and pods. With enable_smithdb, Terraform adds SmithDB's headroom on top; with enable_sandboxes, the quota leaves out the limits. sizing_profile = \"production-large\" needs a larger base: see the header of helm/values/examples/langsmith-values-sizing-production-large.yaml."
-  default = {
-    requests_cpu       = 50
-    requests_memory_gi = 120
-    limits_cpu         = 100
-    limits_memory_gi   = 200
-    pods               = 100
-  }
-
-  # The same ceilings as the SmithDB headroom in k8s-bootstrap: the quota is a
-  # guardrail against a runaway HPA, so it stays bounded.
-  validation {
-    condition = alltrue([
-      for pair in [
-        [var.resource_quota.requests_cpu, 1024],
-        [var.resource_quota.limits_cpu, 1024],
-        [var.resource_quota.requests_memory_gi, 2048],
-        [var.resource_quota.limits_memory_gi, 2048],
-        [var.resource_quota.pods, 400],
-      ] : pair[0] == null ? false : (pair[0] == floor(pair[0]) && pair[0] >= 1 && pair[0] <= pair[1])
-    ])
-    error_message = "resource_quota figures must be set and be whole numbers of at least 1, with CPU at most 1024, memory_gi at most 2048, and pods at most 400."
-  }
-
-  validation {
-    condition = (
-      var.resource_quota.limits_cpu >= var.resource_quota.requests_cpu &&
-      var.resource_quota.limits_memory_gi >= var.resource_quota.requests_memory_gi
-    )
-    error_message = "resource_quota limits_cpu and limits_memory_gi must be at least the matching requests figure."
   }
 }
 
@@ -1059,18 +1018,6 @@ variable "smithdb_migration_start_time" {
   validation {
     condition     = var.smithdb_migration_start_time == "" || can(formatdate("YYYY", var.smithdb_migration_start_time))
     error_message = "smithdb_migration_start_time must be empty or an RFC 3339 timestamp, for example 2026-01-01T00:00:00Z."
-  }
-}
-
-variable "smithdb_migration_parallelism" {
-  type        = number
-  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
-  default     = 1
-  nullable    = false
-
-  validation {
-    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
-    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
   }
 }
 

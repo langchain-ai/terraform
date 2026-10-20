@@ -93,7 +93,7 @@ output "smithdb_cache_storage_class_name" {
   value       = var.create_smithdb_cache_storage_class ? kubernetes_storage_class_v1.smithdb_cache[0].metadata[0].name : null
 }
 
-output "resource_quota" {
-  description = "Hard limits on the LangSmith namespace ResourceQuota, with the SmithDB headroom included"
-  value       = kubernetes_resource_quota.langsmith.spec[0].hard
+output "resource_quota_names" {
+  description = "Names of the ResourceQuotas in the LangSmith namespace"
+  value       = kubernetes_resource_quota_v1.langsmith_critical_pods[*].metadata[0].name
 }

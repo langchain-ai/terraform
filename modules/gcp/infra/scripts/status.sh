@@ -330,36 +330,6 @@ else
     fi
   done
 
-  # Namespace quota headroom. Exhausting this quota does not report itself as a
-  # quota problem: a Deployment records FailedCreate on its ReplicaSet, and a Job
-  # reports Running with no pod at all. Both look like scheduling or image
-  # problems, so surface the remaining CPU here.
-  _quota_cpu=$(kubectl get resourcequota langsmith-quota -n "$_NAMESPACE" \
-    -o jsonpath='{.status.hard.requests\.cpu} {.status.used.requests\.cpu}' 2>/dev/null) || _quota_cpu=""
-  if [[ -z "${_quota_cpu// /}" ]]; then
-    skip "ResourceQuota langsmith-quota not found (created by terraform)"
-  else
-    # Each figure arrives either as whole cores ("50") or as milli-CPU ("43850m").
-    _quota_free=$(awk '
-      function cores(v) {
-        if (v ~ /m$/) { sub(/m$/, "", v); return (v + 0) / 1000 }
-        return v + 0
-      }
-      { printf "%.2f", cores($1) - cores($2) }
-    ' <<< "$_quota_cpu")
-    _quota_hard=${_quota_cpu%% *}
-    _quota_used=${_quota_cpu##* }
-    if (( $(awk -v f="$_quota_free" 'BEGIN { print (f < 5) ? 1 : 0 }') )); then
-      warn "ResourceQuota CPU: ${_quota_used} of ${_quota_hard} used — only ${_quota_free} free"
-      info "  A rolling update needs a second copy of the largest pod, and the"
-      info "  SmithDB backfill Job alone requests 8 CPU. Under ~5 free, an upgrade"
-      info "  can wedge: the new pod is refused, so the old one never terminates."
-      info "  Raise resource_quota.requests_cpu in terraform.tfvars and run make apply."
-    else
-      pass "ResourceQuota CPU: ${_quota_used} of ${_quota_hard} used (${_quota_free} free)"
-    fi
-  fi
-
   _smithdb_ingestion=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
     -o jsonpath='{.data.SMITHDB_INGESTION_ENABLED}' 2>/dev/null) || _smithdb_ingestion=""
   _smithdb_query=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \

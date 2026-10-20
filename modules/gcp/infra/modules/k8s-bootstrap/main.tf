@@ -192,43 +192,6 @@ resource "kubernetes_secret" "tls_certificate" {
 #------------------------------------------------------------------------------
 # Resource Quotas
 #------------------------------------------------------------------------------
-locals {
-  # Base figures come from var.resource_quota, sized for LangSmith itself.
-  # Optional features that add large pods contribute through the
-  # resource_quota_extra_* variables rather than by raising the base, so a plain
-  # install keeps the exact same quota it always had.
-  langsmith_resource_quota_requests = {
-    "requests.cpu"    = tostring(var.resource_quota.requests_cpu + var.resource_quota_extra_cpu)
-    "requests.memory" = "${var.resource_quota.requests_memory_gi + var.resource_quota_extra_memory_gi}Gi"
-    "pods"            = tostring(var.resource_quota.pods + var.resource_quota_extra_pods)
-  }
-
-  # The headroom is doubled on the limits side, so a feature admitted on
-  # requests is not then rejected on limits. Doubling also keeps the same 2x
-  # requests-to-limits ratio the base figures use. The root sizes the SmithDB
-  # extra for both sides, because some SmithDB pods have limits above requests.
-  langsmith_resource_quota_limits = {
-    "limits.cpu"    = tostring(var.resource_quota.limits_cpu + (var.resource_quota_extra_cpu * 2))
-    "limits.memory" = "${var.resource_quota.limits_memory_gi + (var.resource_quota_extra_memory_gi * 2)}Gi"
-  }
-
-  langsmith_resource_quota_hard = merge(
-    local.langsmith_resource_quota_requests,
-    var.resource_quota_include_limits ? local.langsmith_resource_quota_limits : {},
-  )
-}
-
-resource "kubernetes_resource_quota" "langsmith" {
-  metadata {
-    name      = "langsmith-quota"
-    namespace = kubernetes_namespace.langsmith.metadata[0].name
-  }
-
-  spec {
-    hard = local.langsmith_resource_quota_hard
-  }
-}
-
 # GKE configures the apiserver's ResourceQuota admission plugin with
 # limitedResources over the PriorityClass scope, so a pod requesting
 # system-node-critical or system-cluster-critical is admitted only where a
@@ -245,8 +208,7 @@ resource "kubernetes_resource_quota" "langsmith" {
 # has no CSI driver; the quota stays for the upgrade from chart 0.16.
 #
 # The pod ceiling matches GKE's own quota for these classes: this object exists
-# to grant the capability, not to cap it. The unscoped langsmith-quota above
-# still counts these pods against the namespace CPU and memory budget.
+# to grant the capability, not to cap it.
 resource "kubernetes_resource_quota_v1" "langsmith_critical_pods" {
   count = var.allow_critical_priority_pods ? 1 : 0
 
@@ -270,10 +232,10 @@ resource "kubernetes_resource_quota_v1" "langsmith_critical_pods" {
   }
 }
 
-# ResourceQuota request tracking requires every admitted container to declare
-# requests. Supply conservative defaults for third-party sandbox containers that
-# omit them, but deliberately do not inject limits: sandbox-host creates per-VM
-# child cgroups beneath its pod cgroup and needs access to dedicated node capacity.
+# Third-party sandbox containers that omit requests get conservative defaults,
+# so the scheduler has something to place them by. No limits are injected:
+# sandbox-host creates per-VM child cgroups beneath its pod cgroup and needs
+# access to dedicated node capacity.
 resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
   count = length(var.default_container_requests) > 0 ? 1 : 0
 

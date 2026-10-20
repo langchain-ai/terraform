@@ -310,8 +310,7 @@ run "sandbox_host_max_below_min_is_rejected" {
 
 # ── SmithDB ──────────────────────────────────────────────────────────────────
 
-# Resolved values: the tier table and pool defaults in locals.tf, plus a
-# 100m/128Mi Auth Proxy sidecar per pod in the quota figures.
+# Resolved values: the tier table and pool defaults in locals.tf.
 run "smithdb_plans_its_own_node_pool" {
   command = plan
 
@@ -334,8 +333,8 @@ run "smithdb_plans_its_own_node_pool" {
       instance_store_local_ssd_count = 2
       instance_store_disk_size_gb    = 100
       compute_machine_type           = "n2-standard-8"
-    } && output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
-    error_message = "sizing_profile = default did not resolve to SmithDB small local-ssd (n2-standard-16, 2 Local SSD, quota 27 CPU / 53 GiB)"
+    }
+    error_message = "sizing_profile = default did not resolve to SmithDB small local-ssd (n2-standard-16, 2 Local SSD)"
   }
   assert {
     condition = yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources == {
@@ -400,14 +399,12 @@ run "smithdb_minimal_runs_on_the_general_pool" {
     sizing_profile = "minimum"
   }
 
-  # Limits decide the extra: half of 12.5 CPU and 21.5 GiB, rounded up.
   assert {
     condition = (
       output.smithdb_sizing == "minimal" && output.smithdb_cache_storage == "network-disk" &&
-      length(module.smithdb_nodes) == 0 && module.k8s_bootstrap.smithdb_cache_storage_class_name == null &&
-      output.smithdb_quota_extra == { cpu = 7, memory_gi = 11, pods = 12 }
+      length(module.smithdb_nodes) == 0 && module.k8s_bootstrap.smithdb_cache_storage_class_name == null
     )
-    error_message = "sizing_profile = minimum did not resolve to SmithDB minimal: no node pools, no created StorageClass, quota 7 CPU / 11 GiB"
+    error_message = "sizing_profile = minimum did not resolve to SmithDB minimal: no node pools, no created StorageClass"
   }
   assert {
     condition = (
@@ -440,8 +437,7 @@ run "smithdb_minimal_runs_on_the_general_pool" {
 }
 
 # The taskdb keeps the chart default resources (2 / 4Gi requests, 4 / 8Gi
-# limits). Limits decide the CPU extra: half of 19 CPU, rounded up. Memory is
-# 19 GiB from the requests (18.1 GiB, rounded up) and from half of the limits.
+# limits).
 run "smithdb_minimal_backfill_keeps_the_chart_taskdb" {
   command = plan
 
@@ -453,67 +449,8 @@ run "smithdb_minimal_backfill_keeps_the_chart_taskdb" {
   }
 
   assert {
-    condition = (
-      output.smithdb_quota_extra == { cpu = 10, memory_gi = 19, pods = 20 } &&
-      !contains(keys(yamldecode(output.smithdb_helm_values).smithdb.migration), "taskdb")
-    )
-    error_message = "SmithDB minimal with the backfill sets taskdb resources, or the quota is not 10 CPU / 19 GiB / 20 pods"
-  }
-}
-
-# Each further migration pod adds its 8 / 32Gi plus the Auth Proxy sidecar, and
-# one pod. Requests decide both: CPU 53.15 rounds to 54, memory 153.4 GiB to 154.
-run "smithdb_backfill_quota_follows_the_migration_parallelism" {
-  command = plan
-
-  variables {
-    enable_smithdb                = true
-    sizing_profile                = "dev"
-    smithdb_ingestion_enabled     = true
-    smithdb_migration_enabled     = true
-    smithdb_migration_parallelism = 3
-  }
-
-  assert {
-    condition     = output.smithdb_sizing == "small" && output.smithdb_quota_extra == { cpu = 54, memory_gi = 154, pods = 22 }
-    error_message = "SmithDB small with 3 migration pods did not give quota 54 CPU / 154 GiB / 22 pods"
-  }
-}
-
-# The largest pod count on the largest size stays inside the k8s-bootstrap
-# limits (1024 CPU, 2048 GiB, 400 pods), so the plan does not fail there.
-run "smithdb_large_backfill_at_the_parallelism_cap_fits_the_quota_limits" {
-  command = plan
-
-  variables {
-    enable_smithdb                = true
-    sizing_profile                = "production-large"
-    smithdb_ingestion_enabled     = true
-    smithdb_migration_enabled     = true
-    smithdb_migration_parallelism = 30
-  }
-
-  assert {
-    condition     = output.smithdb_quota_extra.cpu <= 1024 && output.smithdb_quota_extra.memory_gi <= 2048 && output.smithdb_quota_extra.pods <= 400
-    error_message = "SmithDB large with 30 migration pods goes over a k8s-bootstrap quota limit"
-  }
-}
-
-# Without the backfill, the migration pod count does not change the quota.
-run "smithdb_migration_parallelism_needs_the_backfill" {
-  command = plan
-
-  variables {
-    enable_smithdb                = true
-    sizing_profile                = "dev"
-    smithdb_ingestion_enabled     = true
-    smithdb_migration_enabled     = false
-    smithdb_migration_parallelism = 3
-  }
-
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
-    error_message = "smithdb_migration_parallelism changed the quota while smithdb_migration_enabled = false"
+    condition     = !contains(keys(yamldecode(output.smithdb_helm_values).smithdb.migration), "taskdb")
+    error_message = "SmithDB minimal with the backfill sets taskdb resources"
   }
 }
 
@@ -547,8 +484,8 @@ run "smithdb_network_disk_uses_the_created_storage_class" {
       instance_store_local_ssd_count = 0
       instance_store_disk_size_gb    = 300
       compute_machine_type           = "n2-standard-8"
-    } && output.smithdb_quota_extra == { cpu = 37, memory_gi = 90, pods = 20 }
-    error_message = "sizing_profile = dev with network-disk did not resolve to small on c3-standard-22, 0 Local SSD, 300 GB, quota 37 CPU / 90 GiB with the backfill"
+    }
+    error_message = "sizing_profile = dev with network-disk did not resolve to small on c3-standard-22, 0 Local SSD, 300 GB with the backfill"
   }
   assert {
     condition = (
@@ -635,8 +572,8 @@ run "smithdb_sizing_follows_sizing_profile_production" {
       instance_store_local_ssd_count = 4
       instance_store_disk_size_gb    = 100
       compute_machine_type           = "n2-standard-8"
-    } && output.smithdb_quota_extra == { cpu = 93, memory_gi = 169, pods = 12 }
-    error_message = "sizing_profile = production did not resolve to SmithDB medium on n2-standard-32 with 4 Local SSD, quota 93 CPU / 169 GiB / 12 pods"
+    }
+    error_message = "sizing_profile = production did not resolve to SmithDB medium on n2-standard-32 with 4 Local SSD"
   }
   assert {
     condition = alltrue([
@@ -667,8 +604,8 @@ run "smithdb_medium_network_disk_uses_the_c3_pool" {
       instance_store_local_ssd_count = 0
       instance_store_disk_size_gb    = 300
       compute_machine_type           = "n2-standard-8"
-    } && output.smithdb_quota_extra == { cpu = 93, memory_gi = 169, pods = 12 }
-    error_message = "sizing_profile = production with network-disk did not resolve to medium on c3-standard-44, 0 Local SSD, 300 GB, quota 93 CPU / 169 GiB / 12 pods"
+    }
+    error_message = "sizing_profile = production with network-disk did not resolve to medium on c3-standard-44, 0 Local SSD, 300 GB"
   }
   assert {
     condition = (
@@ -703,8 +640,8 @@ run "smithdb_sizing_follows_sizing_profile_production_large" {
       instance_store_local_ssd_count = 8
       instance_store_disk_size_gb    = 100
       compute_machine_type           = "n2-standard-16"
-    } && output.smithdb_quota_extra == { cpu = 414, memory_gi = 906, pods = 34 }
-    error_message = "sizing_profile = production-large did not resolve to SmithDB large on n2-standard-64 with 8 Local SSD and n2-standard-16 compute, quota 414 CPU / 906 GiB / 34 pods with the backfill"
+    }
+    error_message = "sizing_profile = production-large did not resolve to SmithDB large on n2-standard-64 with 8 Local SSD and n2-standard-16 compute with the backfill"
   }
   assert {
     condition = (
@@ -725,8 +662,7 @@ run "smithdb_sizing_follows_sizing_profile_production_large" {
   }
 }
 
-# A type that bundles Local SSD takes a count of 0 in local-ssd mode. The
-# quota is for large in dual write, and the pool variables do not change it.
+# A type that bundles Local SSD takes a count of 0 in local-ssd mode.
 run "smithdb_explicit_pool_variables_win_over_the_size" {
   command = plan
 
@@ -745,8 +681,8 @@ run "smithdb_explicit_pool_variables_win_over_the_size" {
       instance_store_local_ssd_count = 0
       instance_store_disk_size_gb    = 150
       compute_machine_type           = "n2-standard-32"
-    } && output.smithdb_quota_extra == { cpu = 404, memory_gi = 870, pods = 26 }
-    error_message = "sizing_profile = production-large did not give large with quota 404 CPU / 870 GiB / 26 pods, or explicit pool variables did not win"
+    }
+    error_message = "sizing_profile = production-large did not give large, or explicit pool variables did not win"
   }
 }
 
@@ -768,11 +704,11 @@ run "smithdb_explicit_sizing_wins_over_sizing_profile" {
       instance_store_local_ssd_count = 4
       instance_store_disk_size_gb    = 100
       compute_machine_type           = "n2-standard-8"
-      } && output.smithdb_quota_extra == { cpu = 103, memory_gi = 206, pods = 20 } && alltrue([
+      } && alltrue([
         for c in ["query", "ingestion", "compactionWorker"] :
         yamldecode(output.smithdb_helm_values).smithdb[c].autoscaling == { hpa = { minReplicas = 1 } }
     ])
-    error_message = "smithdb_sizing = medium did not win over sizing_profile = production-large: n2-standard-32, 4 Local SSD, n2-standard-8 compute, quota 103 CPU / 206 GiB / 20 pods with the backfill, HPA minimum 1"
+    error_message = "smithdb_sizing = medium did not win over sizing_profile = production-large: n2-standard-32, 4 Local SSD, n2-standard-8 compute, HPA minimum 1"
   }
   # The metastore tier follows the resolved smithdb_sizing, not sizing_profile.
   assert {
@@ -797,116 +733,40 @@ run "smithdb_explicit_metastore_tier_wins_over_the_size" {
   }
 }
 
-# ── Namespace quota base ─────────────────────────────────────────────────────
-# production-large needs more than the default base even at minimum replicas,
-# so a broken pass-through leaves its pods rejected at admission. The raised
-# figures are the ones in the production-large sizing file header.
+# ── Namespace quotas ─────────────────────────────────────────────────────────
+# The namespace has no langsmith-quota: the node pool ceilings cap spend. The
+# only quota is the PriorityClass-scoped grant the chart 0.16 JuiceFS CSI pods
+# need, and only with sandboxes on.
 
-run "unset_resource_quota_plans_the_default_base" {
+run "namespace_has_no_langsmith_quota" {
   command = plan
 
   variables {
-    enable_smithdb   = false
     enable_sandboxes = false
   }
 
   assert {
-    condition = module.k8s_bootstrap.resource_quota == tomap({
-      "requests.cpu"    = "50"
-      "requests.memory" = "120Gi"
-      "limits.cpu"      = "100"
-      "limits.memory"   = "200Gi"
-      "pods"            = "100"
-    })
-    error_message = "unset resource_quota planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+    condition     = module.k8s_bootstrap.resource_quota_names == []
+    error_message = "enable_sandboxes = false planned ResourceQuotas ${jsonencode(module.k8s_bootstrap.resource_quota_names)}"
   }
 }
 
-run "raised_resource_quota_reaches_the_namespace" {
+run "sandboxes_keep_only_the_critical_pods_quota" {
   command = plan
 
   variables {
-    enable_smithdb   = false
-    enable_sandboxes = false
-    resource_quota = {
-      requests_cpu       = 160
-      requests_memory_gi = 320
-      limits_cpu         = 560
-      limits_memory_gi   = 1200
-      pods               = 250
-    }
-  }
-
-  assert {
-    condition = module.k8s_bootstrap.resource_quota == tomap({
-      "requests.cpu"    = "160"
-      "requests.memory" = "320Gi"
-      "limits.cpu"      = "560"
-      "limits.memory"   = "1200Gi"
-      "pods"            = "250"
-    })
-    error_message = "raised resource_quota planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
-  }
-}
-
-# SmithDB small adds 27 CPU / 53 GiB / 12 pods: once to requests, twice to limits.
-run "raised_resource_quota_keeps_the_smithdb_headroom" {
-  command = plan
-
-  variables {
-    enable_smithdb    = true
-    enable_sandboxes  = false
-    gke_use_autopilot = false
-    resource_quota = {
-      requests_cpu       = 160
-      requests_memory_gi = 320
-      limits_cpu         = 560
-      limits_memory_gi   = 1200
-      pods               = 250
-    }
-  }
-
-  assert {
-    condition = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 } && module.k8s_bootstrap.resource_quota == tomap({
-      "requests.cpu"    = "187"
-      "requests.memory" = "373Gi"
-      "limits.cpu"      = "614"
-      "limits.memory"   = "1306Gi"
-      "pods"            = "262"
-    })
-    error_message = "raised resource_quota with SmithDB small planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
-  }
-}
-
-run "raised_resource_quota_with_sandboxes_plans_no_limits" {
-  command = plan
-
-  variables {
-    enable_smithdb   = false
     enable_sandboxes = true
-    resource_quota = {
-      requests_cpu       = 160
-      requests_memory_gi = 320
-      limits_cpu         = 560
-      limits_memory_gi   = 1200
-      pods               = 250
-    }
   }
 
   assert {
-    condition = module.k8s_bootstrap.resource_quota == tomap({
-      "requests.cpu"    = "160"
-      "requests.memory" = "320Gi"
-      "pods"            = "250"
-    })
-    error_message = "raised resource_quota with enable_sandboxes = true planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+    condition     = module.k8s_bootstrap.resource_quota_names == ["langsmith-critical-pods"]
+    error_message = "enable_sandboxes = true planned ResourceQuotas ${jsonencode(module.k8s_bootstrap.resource_quota_names)}"
   }
 }
 
 # ── SmithDB metastore TLS ────────────────────────────────────────────────────
 # The created-metastore default (Auth Proxy) is in smithdb_plans_its_own_node_pool.
 
-# No Auth Proxy, so the quota has no sidecar term.
 run "smithdb_external_metastore_defaults_to_direct_tls" {
   command = plan
 
@@ -920,10 +780,9 @@ run "smithdb_external_metastore_defaults_to_direct_tls" {
 
   assert {
     condition = (
-      output.smithdb_metastore_use_auth_proxy == false && output.smithdb_metastore_use_ssl == true &&
-      output.smithdb_quota_extra.cpu == 5 && output.smithdb_quota_extra.memory_gi == 10
+      output.smithdb_metastore_use_auth_proxy == false && output.smithdb_metastore_use_ssl == true
     )
-    error_message = "An external SmithDB metastore did not default to direct TLS with no proxy, or the minimal quota is not 5 CPU / 10 GiB without sidecars"
+    error_message = "An external SmithDB metastore did not default to direct TLS with no proxy"
   }
 }
 

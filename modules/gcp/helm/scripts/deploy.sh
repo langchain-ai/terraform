@@ -631,16 +631,6 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
       echo "Run: make smithdb-migration-job-start" >&2
       exit 1
     fi
-    # The last make apply sized the namespace quota for this pod count. A larger
-    # count in the file leaves the extra pods refused by the quota.
-    _file_parallelism=$(awk '/^[[:space:]]*parallelism:/ { print $2; exit }' "$_smithdb_migration_file")
-    _tf_parallelism=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_migration_parallelism 2>/dev/null) || _tf_parallelism=""
-    if [[ "${_file_parallelism:-1}" != "$_tf_parallelism" ]]; then
-      echo "ERROR: langsmith-values-smithdb-migration.yaml has parallelism ${_file_parallelism:-1}," >&2
-      echo "       but the last make apply sized the namespace quota for ${_tf_parallelism:-an unknown count of} migration pods." >&2
-      echo "       Run make apply (smithdb_migration_parallelism in terraform.tfvars must match the file), then make deploy." >&2
-      exit 1
-    fi
     VALUES_ARGS+=(-f "$_smithdb_migration_file")
     echo "  ✔ langsmith-values-smithdb-migration.yaml"
   fi
