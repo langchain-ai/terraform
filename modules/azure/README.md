@@ -1606,40 +1606,6 @@ decides what the cluster can reach, and nothing works until it allows:
   comment lines included: the nodes plan no change only when that stored value
   is the file's trimmed content plus one newline. An entry stored with no
   trailing newline, or more than one, is replaced once, with every node.
-- **Customer-managed keys.** Three resources encrypt at rest with a key the
-  platform team holds in a Key Vault with soft delete and purge protection on:
-  the cluster's managed disks, the PostgreSQL Flexible Server and the blob
-  storage account. The module never creates a key, so one imported into the
-  vault works the same as one generated there, and every variable takes the ID
-  the platform team returns. `aks_disk_encryption_set_id` names a disk
-  encryption set in the cluster's region: AKS encrypts the node OS disks with
-  it and, by default, every managed disk the Azure Disk CSI driver creates, so
-  the in-cluster databases' volumes take it with no storage class change. The
-  set's own identity holds Key Vault Crypto Service Encryption User on its
-  key's vault, and the cluster identity needs Reader on the set before the
-  first persistent volume: `aks_disk_encryption_set_reader_grant = true` makes
-  that grant from the module when the identity running apply holds
-  roleAssignments/write on the set's scope; otherwise the platform team makes
-  it after the apply that creates the cluster. `postgres_customer_managed_key_id`
-  and `postgres_customer_managed_key_identity_id` give the server its key and
-  the user-assigned identity that reads it; with `postgres_geo_redundant_backup`
-  the geo pair (`postgres_geo_backup_customer_managed_key_id` and its identity,
-  a different one in the paired region) is required, because Azure encrypts a
-  customer-managed-key server's geo-redundant backups only with a key in the
-  backup region, and plan refuses the primary pair without it.
-  `storage_customer_managed_key_id` and `storage_customer_managed_key_identity_id`
-  do the same for the blob account (SmithDB's account takes the same pair in a
-  later change). The set and the server take their key only at creation: a
-  change replaces the resource, so set them before the first apply where you
-  can. The account accepts its key on an existing resource. A versionless key
-  URL follows the key's newest version. Each identity holds Key Vault Crypto
-  Service Encryption User on its vault before the apply. `make preflight`
-  reads the set's region, each vault's purge protection and each identity and
-  stops on a set outside the cluster's region or a vault without purge
-  protection; a read it cannot make is a warning. The provider documents Key
-  Vault key IDs for all three resources; a Managed HSM key has no documented
-  route for the server and is unverified for the set and the account.
-
 - **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
   `tls_certificate_source` is `letsencrypt` or `dns01`.
 
@@ -1786,6 +1752,58 @@ Anything else that reaches Postgres or Redis directly from inside the VNet, such
 On an attached cluster, the plan refuses the flag when node pools run in more than one subnet, since only `aks_subnet_id` is admitted. A cluster that gives pods their own pod subnet reaches the data tier from that subnet's addresses, which these NSGs deny; attach your own NSGs for it instead.
 
 ---
+
+## Customer-managed keys
+
+Three resources encrypt at rest with a key the platform team holds in a Key
+Vault with soft delete and purge protection on: the cluster's managed disks, the
+PostgreSQL Flexible Server and the blob storage account. The module never
+creates a key, so one imported into the vault works the same as one generated
+there, and every variable takes the ID the platform team returns.
+
+- **The cluster's disks.** `aks_disk_encryption_set_id` names a disk encryption
+  set in the cluster's region. AKS encrypts the node OS disks with it and, by
+  default, every managed disk the Azure Disk CSI driver creates, so the
+  in-cluster databases' volumes take it with no storage class change. The set's
+  own identity holds Key Vault Crypto Service Encryption User on its key's
+  vault, and the cluster identity needs Reader on the set before the first
+  persistent volume: `aks_disk_encryption_set_reader_grant = true` makes that
+  grant from the module when the identity running apply holds
+  roleAssignments/write on the set's scope; otherwise the platform team makes it
+  after the apply that creates the cluster. Plan refuses the set with
+  `create_cluster = false`, since the module does not manage an attached
+  cluster's disks.
+- **PostgreSQL.** `postgres_customer_managed_key_id` and
+  `postgres_customer_managed_key_identity_id` give the server its key and the
+  user-assigned identity that reads it. With `postgres_geo_redundant_backup` the
+  geo pair (`postgres_geo_backup_customer_managed_key_id` and its identity, a
+  different one in the paired region) is required, because Azure encrypts a
+  customer-managed-key server's geo-redundant backups only with a key in the
+  backup region; plan refuses the primary pair without it. Plan refuses all four
+  unless `postgres_source = "external"`, the only source with a server to take
+  them.
+- **Blob storage.** `storage_customer_managed_key_id` and
+  `storage_customer_managed_key_identity_id` do the same for the blob account
+  (SmithDB's account takes the same pair in a later change).
+
+A versionless key URL follows the key's newest version. Each identity holds Key
+Vault Crypto Service Encryption User on its vault before the apply. `make
+preflight` reads the set's region, each vault's purge protection and each
+identity, and stops on a set outside the cluster's region or a vault without
+purge protection; a read it cannot make is a warning. The provider documents Key
+Vault key IDs for all three resources; a Managed HSM key has no documented route
+for the server and is unverified for the set and the account.
+
+**Set the cluster's and the server's keys before the first apply.** Both take
+their key only at creation, and the provider applies a change by replacing the
+resource. On an existing cluster, plan reads the set Azure reports and refuses a
+different value, adding one included; to move a running deployment, build a new
+cluster with the set and move the release to it. The server has no such check:
+a key added to a running server plans its replacement, which would destroy the
+database. The supported path for an existing server is a point-in-time restore
+to a new server created with the key, then pointing the deployment at it; read
+the plan before every apply that touches these variables. The storage account
+accepts its key on an existing resource, so that pair can follow a later apply.
 
 ## Node OS
 

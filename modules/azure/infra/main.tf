@@ -1496,6 +1496,26 @@ locals {
   aks_policy_upgrade    = try(local.aks_live.policy, null) == "none" || (contains(["azure", "calico"], try(local.aks_live.policy, "")) && local.aks_network_policy == "cilium")
 }
 
+# ── AKS disk encryption set guard ─────────────────────────────────────────────
+# The cluster's disk encryption set is fixed at creation: the provider applies a
+# change, adding one included, by replacing the cluster and everything installed
+# on it. module.aks reads the set Azure reports for the cluster at plan time
+# (null until the cluster exists), and a value that differs stops the plan.
+locals {
+  aks_live_disk_encryption_set_id = var.create_cluster ? module.aks.live_disk_encryption_set_id : null
+}
+
+resource "terraform_data" "aks_disk_encryption_set_guard" {
+  input = lower(var.aks_disk_encryption_set_id)
+
+  lifecycle {
+    precondition {
+      condition     = local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == lower(var.aks_disk_encryption_set_id)
+      error_message = "aks_disk_encryption_set_id is ${var.aks_disk_encryption_set_id == "" ? "empty" : "\"${var.aks_disk_encryption_set_id}\""}, and the cluster already exists with ${local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == "" ? "no disk encryption set" : "disk encryption set \"${local.aks_live_disk_encryption_set_id}\""}. The set is fixed at creation, and the provider would apply this by replacing the cluster and everything installed on it. Revert the value to keep the cluster as it is, or build a new cluster with the set and move the release to it."
+    }
+  }
+}
+
 resource "terraform_data" "aks_network_guard" {
   input = {
     mode      = var.aks_network_mode

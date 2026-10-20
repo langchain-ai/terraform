@@ -266,3 +266,128 @@ run "refuses_the_primary_pair_with_geo_redundant_backup_and_no_geo_pair" {
 
   expect_failures = [var.postgres_geo_backup_customer_managed_key_id]
 }
+
+# ── Settings that would do nothing ──────────────────────────────────────────
+
+# The module does not manage an attached cluster's disks.
+run "refuses_a_set_in_attach_mode" {
+  command = plan
+
+  # The variable check is what this run is about; planning only the guard keeps
+  # the attached cluster's own lookups, which need a supplied network, out of it.
+  plan_options {
+    target = [terraform_data.aks_disk_encryption_set_guard]
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_disk_encryption_set_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-langsmith"
+  }
+
+  expect_failures = [var.aks_disk_encryption_set_id]
+}
+
+# Only postgres_source = "external" creates a server to take the key.
+run "refuses_a_postgres_key_with_in_cluster_postgres" {
+  command = plan
+
+  variables {
+    postgres_source                           = "in-cluster"
+    postgres_customer_managed_key_id          = "https://kv-keys.vault.usgovcloudapi.net/keys/pg-key"
+    postgres_customer_managed_key_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pg-cmk"
+  }
+
+  expect_failures = [var.postgres_customer_managed_key_id]
+}
+
+# ── The set on a cluster that already exists ────────────────────────────────
+# The set is fixed at creation, so the guard compares it with the one Azure
+# reports for the cluster (the cluster read is stubbed with a live cluster)
+# and refuses a different value, adding one included.
+
+run "the_set_the_cluster_already_has_plans_clean" {
+  command = plan
+
+  plan_options {
+    target = [terraform_data.aks_disk_encryption_set_guard]
+  }
+
+  variables {
+    resource_group_name        = "ls-rg-test"
+    cluster_name               = "ls-aks-test"
+    aks_disk_encryption_set_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-langsmith"
+  }
+
+  # Azure reports resource group names in its own case; the guard compares lowercased.
+  override_data {
+    target = module.aks.data.azapi_resource_list.clusters
+    values = {
+      output = {
+        clusters = [{
+          id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+          name                = "ls-aks-test"
+          disk_encryption_set = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/PLATFORM-RG/providers/Microsoft.Compute/diskEncryptionSets/des-langsmith"
+        }]
+      }
+    }
+  }
+}
+
+run "adding_a_set_to_a_cluster_that_has_none_is_refused" {
+  command = plan
+
+  plan_options {
+    target = [terraform_data.aks_disk_encryption_set_guard]
+  }
+
+  variables {
+    resource_group_name        = "ls-rg-test"
+    cluster_name               = "ls-aks-test"
+    aks_disk_encryption_set_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-langsmith"
+  }
+
+  override_data {
+    target = module.aks.data.azapi_resource_list.clusters
+    values = {
+      output = {
+        clusters = [{
+          id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+          name                = "ls-aks-test"
+          disk_encryption_set = null
+        }]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.aks_disk_encryption_set_guard]
+}
+
+run "removing_the_set_from_a_cluster_is_refused" {
+  command = plan
+
+  plan_options {
+    target = [terraform_data.aks_disk_encryption_set_guard]
+  }
+
+  variables {
+    resource_group_name = "ls-rg-test"
+    cluster_name        = "ls-aks-test"
+  }
+
+  override_data {
+    target = module.aks.data.azapi_resource_list.clusters
+    values = {
+      output = {
+        clusters = [{
+          id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+          name                = "ls-aks-test"
+          disk_encryption_set = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-langsmith"
+        }]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.aks_disk_encryption_set_guard]
+}

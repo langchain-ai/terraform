@@ -393,7 +393,7 @@ data "azapi_resource_list" "clusters" {
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities, disk_encryption_set: properties.diskEncryptionSetID}"
   }
 }
 

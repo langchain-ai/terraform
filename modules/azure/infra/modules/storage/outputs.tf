@@ -47,7 +47,12 @@ output "allowed_copy_scope" {
 
 output "customer_managed_key" {
   description = "The account's customer_managed_key block as configured (key_vault_key_id, user_assigned_identity_id); null under the service-managed key."
-  value       = one(azurerm_storage_account.storage_account.customer_managed_key[*])
+  # The two fields by name: the whole block also carries managed_hsm_key_id,
+  # which the provider deprecates, and reading it warns on every plan.
+  value = one([for k in azurerm_storage_account.storage_account.customer_managed_key : {
+    key_vault_key_id          = k.key_vault_key_id
+    user_assigned_identity_id = k.user_assigned_identity_id
+  }])
 }
 
 output "identity_ids" {

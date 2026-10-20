@@ -1816,12 +1816,18 @@ variable "postgres_geo_redundant_backup" {
 
 variable "aks_disk_encryption_set_id" {
   type        = string
-  description = "Resource ID of a disk encryption set (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>) in the cluster's region. AKS encrypts the node OS disks with it and, by default, every managed disk the Azure Disk CSI driver creates for the cluster's persistent volumes, so the in-cluster databases' volumes take it with no storage class change. Set only when the cluster is created: a change replaces the cluster. The set's own identity needs Key Vault Crypto Service Encryption User on its key's vault, and the cluster identity needs Reader on the set for the data disks (aks_disk_encryption_set_reader_grant, or a grant made after the apply). Empty (default) keeps platform-managed keys."
+  description = "Resource ID of a disk encryption set (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>) in the cluster's region. AKS encrypts the node OS disks with it and, by default, every managed disk the Azure Disk CSI driver creates for the cluster's persistent volumes, so the in-cluster databases' volumes take it with no storage class change. Set only when the cluster is created: the set is fixed at creation, so on an existing cluster plan compares it with the one Azure reports and refuses a change, adding one included. Ignored, and refused, with create_cluster = false. The set's own identity needs Key Vault Crypto Service Encryption User on its key's vault, and the cluster identity needs Reader on the set for the data disks (aks_disk_encryption_set_reader_grant, or a grant made after the apply). Empty (default) keeps platform-managed keys."
   default     = ""
 
   validation {
     condition     = var.aks_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.aks_disk_encryption_set_id))
     error_message = "aks_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  # Attach mode never touches the cluster, so a set given there would do nothing.
+  validation {
+    condition     = var.aks_disk_encryption_set_id == "" || var.create_cluster
+    error_message = "aks_disk_encryption_set_id is set with create_cluster = false. The module does not manage an attached cluster's disks, so the set would never apply: the cluster's OS disks and volumes keep whatever key they were created with. Remove it, and encrypt the existing cluster's disks where it was created."
   }
 }
 
@@ -1838,12 +1844,18 @@ variable "aks_disk_encryption_set_reader_grant" {
 
 variable "postgres_customer_managed_key_id" {
   type        = string
-  description = "URL of the key the PostgreSQL Flexible Server encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL follows the key's newest version). The key's vault has soft delete and purge protection on, and postgres_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Set only when the server is created: a change replaces the server. Read with postgres_source = \"external\". Empty (default) keeps the service-managed key."
+  description = "URL of the key the PostgreSQL Flexible Server encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL follows the key's newest version). The key's vault has soft delete and purge protection on, and postgres_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Set only when the server is created: a change replaces the server and destroys its data, so read the plan, and move an existing server by a point-in-time restore to a new server created with the key (README, Customer-managed keys). Refused unless postgres_source = \"external\". Empty (default) keeps the service-managed key."
   default     = ""
 
   validation {
     condition     = var.postgres_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.postgres_customer_managed_key_id))
     error_message = "postgres_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  # The server exists only with postgres_source = "external"; the key would do nothing otherwise.
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || var.postgres_source == "external"
+    error_message = "postgres_customer_managed_key_id is set with postgres_source = \"${var.postgres_source}\". Only the Flexible Server the module creates with postgres_source = \"external\" takes the key, so the database would not be under it. Remove the key, or set postgres_source = \"external\"; an in-cluster PostgreSQL's volume is encrypted by aks_disk_encryption_set_id."
   }
 
   validation {
@@ -1871,6 +1883,11 @@ variable "postgres_geo_backup_customer_managed_key_id" {
   validation {
     condition     = var.postgres_geo_backup_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.postgres_geo_backup_customer_managed_key_id))
     error_message = "postgres_geo_backup_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_id == "" || var.postgres_source == "external"
+    error_message = "postgres_geo_backup_customer_managed_key_id is set with postgres_source = \"${var.postgres_source}\". Only the Flexible Server the module creates with postgres_source = \"external\" takes the key. Remove it, or set postgres_source = \"external\"."
   }
 
   validation {
