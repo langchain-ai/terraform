@@ -1572,9 +1572,26 @@ variable "resource_quota" {
     pods               = 200
   }
 
+  # Terraform before 1.14 doesn't short-circuit && or ||, so the null guards use ?:.
   validation {
-    condition     = alltrue([for v in values(var.resource_quota) : v != null && v > 0])
-    error_message = "Every resource_quota figure must be set and above zero. A zero leaves no room for any pod, so admission rejects them all."
+    condition     = alltrue([for v in values(var.resource_quota) : v == null ? false : v >= 1 && v == floor(v)])
+    error_message = "Every resource_quota figure must be set and a whole number of at least 1. A zero leaves no room for any pod, so admission rejects them all."
+  }
+
+  validation {
+    condition = alltrue([
+      for k, max in { requests_cpu = 1024, limits_cpu = 1024, requests_memory_gi = 2048, limits_memory_gi = 2048, pods = 400 } :
+      var.resource_quota[k] == null ? true : var.resource_quota[k] <= max
+    ])
+    error_message = "resource_quota allows at most 1024 CPU, 2048 GiB, and 400 pods. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded."
+  }
+
+  validation {
+    condition = anytrue([for v in values(var.resource_quota) : v == null]) ? true : (
+      var.resource_quota.limits_cpu >= var.resource_quota.requests_cpu &&
+      var.resource_quota.limits_memory_gi >= var.resource_quota.requests_memory_gi
+    )
+    error_message = "resource_quota limits_cpu and limits_memory_gi must be at least requests_cpu and requests_memory_gi. Every pod's limit is at least its request, so a limits figure below the requests figure runs out first and the requests figure is never reached."
   }
 }
 

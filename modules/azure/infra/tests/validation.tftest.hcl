@@ -1108,3 +1108,134 @@ run "resource_quota_rejects_a_zero_figure" {
 
   expect_failures = [var.resource_quota]
 }
+
+# The object type admits a null attribute; the validation refuses it.
+run "resource_quota_rejects_a_null_figure" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40
+      requests_memory_gi = 80
+      limits_cpu         = 80
+      limits_memory_gi   = 160
+      pods               = null
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+# A quota figure is a whole number.
+run "resource_quota_rejects_a_fractional_figure" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40.5
+      requests_memory_gi = 80
+      limits_cpu         = 80
+      limits_memory_gi   = 160
+      pods               = 200
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+# The caps keep the quota a guardrail: 1024 CPU, 2048 GiB, 400 pods.
+run "resource_quota_rejects_cpu_over_the_cap" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40
+      requests_memory_gi = 80
+      limits_cpu         = 1025
+      limits_memory_gi   = 160
+      pods               = 200
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+run "resource_quota_rejects_memory_over_the_cap" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40
+      requests_memory_gi = 80
+      limits_cpu         = 80
+      limits_memory_gi   = 2049
+      pods               = 200
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+run "resource_quota_rejects_pods_over_the_cap" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40
+      requests_memory_gi = 80
+      limits_cpu         = 80
+      limits_memory_gi   = 160
+      pods               = 401
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+# Each cap is inclusive.
+run "resource_quota_accepts_every_figure_at_its_cap" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 1024
+      requests_memory_gi = 2048
+      limits_cpu         = 1024
+      limits_memory_gi   = 2048
+      pods               = 400
+    }
+  }
+}
+
+# A limits figure below its requests figure is refused.
+run "resource_quota_rejects_cpu_limits_below_requests" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40
+      requests_memory_gi = 80
+      limits_cpu         = 39
+      limits_memory_gi   = 160
+      pods               = 200
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+run "resource_quota_rejects_memory_limits_below_requests" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40
+      requests_memory_gi = 80
+      limits_cpu         = 80
+      limits_memory_gi   = 79
+      pods               = 200
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
