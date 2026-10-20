@@ -1792,7 +1792,7 @@ module "postgres" {
 
 # ── SmithDB sizing ───────────────────────────────────────────────────────────
 # One size sets the chart resource tier, the replicas, the default metastore
-# SKU, the namespace quota headroom, and the smithdb_helm_values output.
+# SKU, and the smithdb_helm_values output.
 
 locals {
   smithdb_sizing_by_profile = {
@@ -1809,34 +1809,6 @@ locals {
   # The chart has the small, medium, and large tiers. minimal uses small with
   # explicit resources.
   smithdb_resource_tier = local.smithdb_minimal ? "small" : local.smithdb_sizing
-
-  # Per-replica resources for each chart tier. Copied from chart 0.17.0-rc.42,
-  # templates/_helpers.tpl, "langsmith.smithdb.tierResources". The chart sets
-  # requests equal to limits. Update this table with the chart.
-  smithdb_tiers = {
-    small = {
-      query            = { cpu = "4", memory = "8Gi" }
-      ingestion        = { cpu = "4", memory = "8Gi" }
-      compactionWorker = { cpu = "8", memory = "16Gi" }
-      compaction       = { cpu = "2", memory = "4Gi" }
-      clusterManager   = { cpu = "250m", memory = "256Mi" }
-    }
-    medium = {
-      query            = { cpu = "28", memory = "48Gi" }
-      ingestion        = { cpu = "16", memory = "32Gi" }
-      compactionWorker = { cpu = "16", memory = "32Gi" }
-      compaction       = { cpu = "4", memory = "8Gi" }
-      clusterManager   = { cpu = "250m", memory = "256Mi" }
-    }
-    large = {
-      query            = { cpu = "28", memory = "50Gi" }
-      ingestion        = { cpu = "56", memory = "150Gi" }
-      compactionWorker = { cpu = "28", memory = "50Gi" }
-      compaction       = { cpu = "8", memory = "16Gi" }
-      clusterManager   = { cpu = "2", memory = "2Gi" }
-    }
-  }
-  smithdb_tier = local.smithdb_tiers[local.smithdb_resource_tier]
 
   # Replicas for each tier, from the SmithDB sizing table in the LangSmith
   # self-hosted docs. The chart tier sets only the per-replica resources, so the
@@ -1880,66 +1852,6 @@ locals {
     large   = "MO_Standard_E8ds_v5"
   }
   smithdb_metastore_sku_name = coalesce(var.smithdb_metastore_sku_name, local.smithdb_metastore_sku_defaults[local.smithdb_sizing])
-
-  # SmithDB namespace quota headroom, from the resolved resources. It covers the
-  # tier replicas of each component, one surge copy of the largest pod (a
-  # rolling update starts the new pod first), and, with the backfill, each
-  # migration pod (smithdb_migration_parallelism) and the taskdb. HPA scale-out
-  # above the tier replicas has only the surge room. CPU is in millicores and
-  # memory in MiB, so the sums are exact.
-  smithdb_quota_inputs = merge(
-    {
-      for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
-        requests = { cpu = t.cpu, memory = t.memory }
-        limits   = { cpu = t.cpu, memory = t.memory }
-      }
-    },
-    {
-      # Chart values.yaml defaults for smithdb.migration.job.resources and
-      # smithdb.migration.taskdb.postgres.statefulSet.resources.
-      migration_job = local.smithdb_minimal ? local.smithdb_minimal_resources.migration_job : {
-        requests = { cpu = "8", memory = "32Gi" }
-        limits   = { cpu = "8", memory = "32Gi" }
-      }
-      taskdb = {
-        requests = { cpu = "2", memory = "4Gi" }
-        limits   = { cpu = "4", memory = "8Gi" }
-      }
-    },
-  )
-
-  # "250m" and "4" to millicores, "256Mi" and "8Gi" to MiB.
-  smithdb_quota_numbers = {
-    for name, r in local.smithdb_quota_inputs : name => merge([
-      for side in ["requests", "limits"] : {
-        "${side}_cpu_m"     = tonumber(trimsuffix(r[side].cpu, "m")) * (endswith(r[side].cpu, "m") ? 1 : 1000)
-        "${side}_memory_mi" = tonumber(trimsuffix(trimsuffix(r[side].memory, "Gi"), "Mi")) * (endswith(r[side].memory, "Gi") ? 1024 : 1)
-      }
-    ]...)
-  }
-  smithdb_quota_total = {
-    for k in ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"] : k => (
-      sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * local.smithdb_quota_numbers[c][k]]) +
-      max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) +
-      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
-    )
-  }
-
-  # k8s-bootstrap adds the extra once to requests and twice to limits, so it
-  # must cover the requests total and half of the limits total.
-  smithdb_quota_extra_cpu = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_cpu_m / 1000), ceil(local.smithdb_quota_total.limits_cpu_m / 2000)
-  ) : 0
-  smithdb_quota_extra_memory_gi = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_memory_mi / 1024), ceil(local.smithdb_quota_total.limits_memory_mi / 2048)
-  ) : 0
-
-  # The SmithDB pods at the tier replicas plus the metastore migration hook,
-  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
-  # and its taskdb StatefulSet, plus 1 for each further migration pod.
-  smithdb_quota_extra_pods = var.enable_smithdb ? (
-    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
-  ) : 0
 
   # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
   # to helm/values/langsmith-values-smithdb-sizing.yaml. The cache StorageClass,
@@ -2355,7 +2267,7 @@ module "keyvault" {
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
 # Connects to the AKS cluster and:
-#   1. Creates the langsmith namespace, service account, resource quota, network policies
+#   1. Creates the langsmith namespace, service account, network policies
 #   2. Installs cert-manager (TLS automation) and KEDA (autoscaling)
 #   3. Creates K8s secrets for PostgreSQL and Redis connection URLs
 #
@@ -2385,8 +2297,6 @@ module "k8s_bootstrap" {
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace
 
-  resource_quota = var.resource_quota
-
   # SmithDB metastore connection. Keeping this Secret in the bootstrap module
   # ensures it uses that module's AKS-configured Kubernetes provider.
   enable_smithdb                   = var.enable_smithdb
@@ -2397,11 +2307,6 @@ module "k8s_bootstrap" {
   smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
-
-  # SmithDB's pods on top of the base namespace quota. Zero when disabled.
-  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
-  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
-  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
 
   # Sandboxes. No account key: the format Job and sandbox-host reach Blob
   # through workload identity. AMR serves database 0 only.

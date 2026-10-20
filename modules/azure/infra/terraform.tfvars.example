@@ -143,8 +143,7 @@ enable_smithdb = false
 
 # Roll out one stage at a time after the infrastructure-only deployment is
 # healthy. make smithdb-migration-job-start and make smithdb-migration-job-end
-# set smithdb_migration_enabled and smithdb_migration_parallelism; set the other
-# two here. See SMITHDB.md, "Staged rollout".
+# set smithdb_migration_enabled; set the other two here. See SMITHDB.md, "Staged rollout".
 smithdb_ingestion_enabled = false
 smithdb_migration_enabled = false
 smithdb_query_enabled     = false
@@ -339,17 +338,6 @@ langsmith_release_name = "langsmith"
 #   production-large — high-volume (~50 concurrent users, ~1000 traces/sec)
 #
 sizing_profile = "production"
-
-# Namespace ResourceQuota base, in CPU cores, GiB, and pods. The default fits
-# every profile except production-large, whose sizing file header has the block
-# to use. With enable_smithdb, Terraform adds SmithDB's headroom on top.
-# resource_quota = {
-#   requests_cpu       = 40
-#   requests_memory_gi = 80
-#   limits_cpu         = 80
-#   limits_memory_gi   = 160
-#   pods               = 200
-# }
 
 # Pass 3 — LangGraph Platform (hostBackend, listener, operator)
 # Required before enabling agent_builder, insights, or polly.

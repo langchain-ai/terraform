@@ -1326,18 +1326,6 @@ variable "smithdb_migration_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_parallelism" {
-  type        = number
-  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
-  default     = 1
-  nullable    = false
-
-  validation {
-    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
-    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
-  }
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
@@ -1346,7 +1334,7 @@ variable "smithdb_query_enabled" {
 
 variable "smithdb_sizing" {
   type        = string
-  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
   default     = null
   nullable    = true
 
@@ -1553,46 +1541,6 @@ variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
   default     = "langsmith"
-}
-
-variable "resource_quota" {
-  type = object({
-    requests_cpu       = number
-    requests_memory_gi = number
-    limits_cpu         = number
-    limits_memory_gi   = number
-    pods               = number
-  })
-  description = "Base hard limits on the LangSmith namespace ResourceQuota, in CPU cores, GiB, and pods. With enable_smithdb, Terraform adds SmithDB's headroom on top; with enable_sandboxes, the quota leaves out the limits. sizing_profile = \"production-large\" needs a larger base: see the header of helm/values/examples/langsmith-values-sizing-production-large.yaml."
-  default = {
-    requests_cpu       = 40
-    requests_memory_gi = 80
-    limits_cpu         = 80
-    limits_memory_gi   = 160
-    pods               = 200
-  }
-
-  # Terraform before 1.14 doesn't short-circuit && or ||, so the null guards use ?:.
-  validation {
-    condition     = alltrue([for v in values(var.resource_quota) : v == null ? false : v >= 1 && v == floor(v)])
-    error_message = "Every resource_quota figure must be set and a whole number of at least 1. A zero leaves no room for any pod, so admission rejects them all."
-  }
-
-  validation {
-    condition = alltrue([
-      for k, max in { requests_cpu = 1024, limits_cpu = 1024, requests_memory_gi = 2048, limits_memory_gi = 2048, pods = 400 } :
-      var.resource_quota[k] == null ? true : var.resource_quota[k] <= max
-    ])
-    error_message = "resource_quota allows at most 1024 CPU, 2048 GiB, and 400 pods. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded."
-  }
-
-  validation {
-    condition = anytrue([for v in values(var.resource_quota) : v == null]) ? true : (
-      var.resource_quota.limits_cpu >= var.resource_quota.requests_cpu &&
-      var.resource_quota.limits_memory_gi >= var.resource_quota.requests_memory_gi
-    )
-    error_message = "resource_quota limits_cpu and limits_memory_gi must be at least requests_cpu and requests_memory_gi. Every pod's limit is at least its request, so a limits figure below the requests figure runs out first and the requests figure is never reached."
-  }
 }
 
 variable "ingress_controller" {

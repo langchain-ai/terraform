@@ -3,11 +3,6 @@ output "langsmith_namespace" {
   value       = kubernetes_namespace_v1.langsmith.metadata[0].name
 }
 
-output "resource_quota" {
-  description = "Hard limits on the LangSmith namespace ResourceQuota"
-  value       = kubernetes_resource_quota_v1.langsmith.spec[0].hard
-}
-
 output "cert_manager_namespace" {
   description = "Kubernetes namespace where cert-manager is deployed, or null when this module did not install it"
   value       = one(helm_release.cert_manager[*].namespace)
@@ -48,14 +43,12 @@ output "sandbox_juicefs_secret_name" {
   value       = one(kubernetes_secret_v1.sandbox_juicefs[*].metadata[0].name)
 }
 
-output "resource_quota_keys" {
-  description = "Resources the namespace ResourceQuota caps. No limits.* with sandboxes on."
-  value       = sort(keys(kubernetes_resource_quota_v1.langsmith.spec[0].hard))
-}
-
-output "limit_range_default_limits" {
-  description = "Default container limits the namespace LimitRange injects, or null with sandboxes on."
-  value       = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
+output "limit_range_defaults" {
+  description = "Default container requests and limits the namespace LimitRange injects. Limits are always null."
+  value = {
+    default_request = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default_request
+    default         = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
+  }
 }
 
 output "platform_backend_node_ingress" {

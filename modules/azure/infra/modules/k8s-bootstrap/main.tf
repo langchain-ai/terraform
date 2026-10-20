@@ -178,44 +178,13 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
   }
 }
 
-# ── Resource Quota ────────────────────────────────────────────────────────────
-# Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
-# deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
-# Base: var.resource_quota, by default 40 CPU req / 80 CPU lim, 80 GiB req /
-# 160 GiB lim, 200 pods. The resource_quota_extra_* inputs add SmithDB's pods on
-# top, once to requests and twice to limits, so a plain install keeps the base.
-#
-# With sandboxes on, the quota caps requests only. sandbox-host runs Firecracker
-# VMs in child cgroups beneath its own pod cgroup, so a container limit would cap
-# every sandbox on the node, and a limits.* quota would force one onto it.
-
-resource "kubernetes_resource_quota_v1" "langsmith" {
-  metadata {
-    name      = "langsmith-quota"
-    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
-  }
-
-  spec {
-    hard = merge({
-      "requests.cpu"    = tostring(var.resource_quota.requests_cpu + var.resource_quota_extra_cpu)
-      "requests.memory" = "${var.resource_quota.requests_memory_gi + var.resource_quota_extra_memory_gi}Gi"
-      pods              = tostring(var.resource_quota.pods + var.resource_quota_extra_pods)
-      }, var.enable_sandboxes ? {} : {
-      "limits.cpu"    = tostring(var.resource_quota.limits_cpu + var.resource_quota_extra_cpu * 2)
-      "limits.memory" = "${var.resource_quota.limits_memory_gi + var.resource_quota_extra_memory_gi * 2}Gi"
-    })
-  }
-}
-
 # ── Limit Range ───────────────────────────────────────────────────────────────
-# Required companion to the ResourceQuota above: because the quota's `hard` includes
-# requests/limits, Kubernetes forces EVERY pod to declare them. Some chart components
-# (e.g. the bundled Postgres/Redis StatefulSets for the standalone insights/polly/fleet
-# agent features) ship without resource stanzas, so without defaults they're rejected
-# with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
-# This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
-# With sandboxes on it supplies requests only: a default 1 CPU limit lands below
-# sandbox-host's 2 CPU request, and the API server rejects the pod.
+# Gives a container that declares no requests 100m CPU and 256Mi, so the
+# scheduler has a figure to place it on. Some chart components, such as the
+# bundled Postgres and Redis StatefulSets for the insights, polly, and fleet
+# agent features, ship without resource stanzas. No default limits: a limit
+# would cap a pod that sets none, and sandbox-host runs Firecracker VMs inside
+# its own pod cgroup.
 resource "kubernetes_limit_range_v1" "langsmith" {
   metadata {
     name      = "langsmith-defaults"
@@ -225,10 +194,6 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
-      default = var.enable_sandboxes ? null : {
-        cpu    = "1"
-        memory = "1Gi"
-      }
       default_request = {
         cpu    = "100m"
         memory = "256Mi"
