@@ -797,6 +797,112 @@ run "smithdb_explicit_metastore_tier_wins_over_the_size" {
   }
 }
 
+# ── Namespace quota base ─────────────────────────────────────────────────────
+# production-large needs more than the default base even at minimum replicas,
+# so a broken pass-through leaves its pods rejected at admission. The raised
+# figures are the ones in the production-large sizing file header.
+
+run "unset_resource_quota_plans_the_default_base" {
+  command = plan
+
+  variables {
+    enable_smithdb   = false
+    enable_sandboxes = false
+  }
+
+  assert {
+    condition = module.k8s_bootstrap.resource_quota == tomap({
+      "requests.cpu"    = "50"
+      "requests.memory" = "120Gi"
+      "limits.cpu"      = "100"
+      "limits.memory"   = "200Gi"
+      "pods"            = "100"
+    })
+    error_message = "unset resource_quota planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+  }
+}
+
+run "raised_resource_quota_reaches_the_namespace" {
+  command = plan
+
+  variables {
+    enable_smithdb   = false
+    enable_sandboxes = false
+    resource_quota = {
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 1200
+      pods               = 250
+    }
+  }
+
+  assert {
+    condition = module.k8s_bootstrap.resource_quota == tomap({
+      "requests.cpu"    = "160"
+      "requests.memory" = "320Gi"
+      "limits.cpu"      = "560"
+      "limits.memory"   = "1200Gi"
+      "pods"            = "250"
+    })
+    error_message = "raised resource_quota planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+  }
+}
+
+# SmithDB small adds 27 CPU / 53 GiB / 12 pods: once to requests, twice to limits.
+run "raised_resource_quota_keeps_the_smithdb_headroom" {
+  command = plan
+
+  variables {
+    enable_smithdb    = true
+    enable_sandboxes  = false
+    gke_use_autopilot = false
+    resource_quota = {
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 1200
+      pods               = 250
+    }
+  }
+
+  assert {
+    condition = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 } && module.k8s_bootstrap.resource_quota == tomap({
+      "requests.cpu"    = "187"
+      "requests.memory" = "373Gi"
+      "limits.cpu"      = "614"
+      "limits.memory"   = "1306Gi"
+      "pods"            = "262"
+    })
+    error_message = "raised resource_quota with SmithDB small planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+  }
+}
+
+run "raised_resource_quota_with_sandboxes_plans_no_limits" {
+  command = plan
+
+  variables {
+    enable_smithdb   = false
+    enable_sandboxes = true
+    resource_quota = {
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 1200
+      pods               = 250
+    }
+  }
+
+  assert {
+    condition = module.k8s_bootstrap.resource_quota == tomap({
+      "requests.cpu"    = "160"
+      "requests.memory" = "320Gi"
+      "pods"            = "250"
+    })
+    error_message = "raised resource_quota with enable_sandboxes = true planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+  }
+}
+
 # ── SmithDB metastore TLS ────────────────────────────────────────────────────
 # The created-metastore default (Auth Proxy) is in smithdb_plans_its_own_node_pool.
 

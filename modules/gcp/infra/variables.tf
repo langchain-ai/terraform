@@ -558,6 +558,29 @@ variable "langsmith_namespace" {
   }
 }
 
+variable "resource_quota" {
+  type = object({
+    requests_cpu       = number
+    requests_memory_gi = number
+    limits_cpu         = number
+    limits_memory_gi   = number
+    pods               = number
+  })
+  description = "Base hard limits on the LangSmith namespace ResourceQuota, in CPU cores, GiB, and pods. With enable_smithdb, Terraform adds SmithDB's headroom on top; with enable_sandboxes, the quota leaves out the limits. sizing_profile = \"production-large\" needs a larger base: see the header of helm/values/examples/langsmith-values-sizing-production-large.yaml."
+  default = {
+    requests_cpu       = 50
+    requests_memory_gi = 120
+    limits_cpu         = 100
+    limits_memory_gi   = 200
+    pods               = 100
+  }
+
+  validation {
+    condition     = alltrue([for v in values(var.resource_quota) : v != null && v > 0])
+    error_message = "Every resource_quota figure must be set and above zero. A zero leaves no room for any pod, so admission rejects them all."
+  }
+}
+
 variable "langsmith_domain" {
   description = "Domain name for LangSmith (e.g., langsmith.example.com)"
   type        = string

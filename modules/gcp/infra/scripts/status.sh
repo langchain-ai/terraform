@@ -354,7 +354,7 @@ else
       info "  A rolling update needs a second copy of the largest pod, and the"
       info "  SmithDB backfill Job alone requests 8 CPU. Under ~5 free, an upgrade"
       info "  can wedge: the new pod is refused, so the old one never terminates."
-      info "  Raise it via resource_quota_extra_cpu on modules/k8s-bootstrap."
+      info "  Raise resource_quota.requests_cpu in terraform.tfvars and run make apply."
     else
       pass "ResourceQuota CPU: ${_quota_used} of ${_quota_hard} used (${_quota_free} free)"
     fi

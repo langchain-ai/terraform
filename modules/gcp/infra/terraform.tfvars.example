@@ -551,6 +551,17 @@ enable_smithdb = false
 #------------------------------------------------------------------------------
 sizing_profile = "production"
 
+# Base figures for the namespace ResourceQuota, with memory in GiB. The default
+# fits every profile except production-large, whose sizing file header has the
+# block to use. Terraform adds the SmithDB headroom on top.
+# resource_quota = {
+#   requests_cpu       = 50
+#   requests_memory_gi = 120
+#   limits_cpu         = 100
+#   limits_memory_gi   = 200
+#   pods               = 100
+# }
+
 #------------------------------------------------------------------------------
 # Optional: LangGraph Platform Encryption Keys (sensitive)
 # Auto-generated and stored in Secret Manager on first run when using setup-env.sh.

@@ -193,22 +193,14 @@ resource "kubernetes_secret" "tls_certificate" {
 # Resource Quotas
 #------------------------------------------------------------------------------
 locals {
-  # Base figures sized for LangSmith itself. Optional features that add large
-  # pods contribute through the resource_quota_extra_* variables rather than by
-  # editing these, so a plain install keeps the exact same quota it always had.
-  langsmith_resource_quota_base_cpu       = 50
-  langsmith_resource_quota_base_memory_gi = 120
-  langsmith_resource_quota_base_pods      = 100
-
-  # The limits side is not simply twice the requests side, so carry it as its own
-  # pair of figures rather than deriving it.
-  langsmith_resource_quota_base_limit_cpu       = 100
-  langsmith_resource_quota_base_limit_memory_gi = 200
-
+  # Base figures come from var.resource_quota, sized for LangSmith itself.
+  # Optional features that add large pods contribute through the
+  # resource_quota_extra_* variables rather than by raising the base, so a plain
+  # install keeps the exact same quota it always had.
   langsmith_resource_quota_requests = {
-    "requests.cpu"    = tostring(local.langsmith_resource_quota_base_cpu + var.resource_quota_extra_cpu)
-    "requests.memory" = "${local.langsmith_resource_quota_base_memory_gi + var.resource_quota_extra_memory_gi}Gi"
-    "pods"            = tostring(local.langsmith_resource_quota_base_pods + var.resource_quota_extra_pods)
+    "requests.cpu"    = tostring(var.resource_quota.requests_cpu + var.resource_quota_extra_cpu)
+    "requests.memory" = "${var.resource_quota.requests_memory_gi + var.resource_quota_extra_memory_gi}Gi"
+    "pods"            = tostring(var.resource_quota.pods + var.resource_quota_extra_pods)
   }
 
   # The headroom is doubled on the limits side, so a feature admitted on
@@ -216,8 +208,8 @@ locals {
   # requests-to-limits ratio the base figures use. The root sizes the SmithDB
   # extra for both sides, because some SmithDB pods have limits above requests.
   langsmith_resource_quota_limits = {
-    "limits.cpu"    = tostring(local.langsmith_resource_quota_base_limit_cpu + (var.resource_quota_extra_cpu * 2))
-    "limits.memory" = "${local.langsmith_resource_quota_base_limit_memory_gi + (var.resource_quota_extra_memory_gi * 2)}Gi"
+    "limits.cpu"    = tostring(var.resource_quota.limits_cpu + (var.resource_quota_extra_cpu * 2))
+    "limits.memory" = "${var.resource_quota.limits_memory_gi + (var.resource_quota_extra_memory_gi * 2)}Gi"
   }
 
   langsmith_resource_quota_hard = merge(

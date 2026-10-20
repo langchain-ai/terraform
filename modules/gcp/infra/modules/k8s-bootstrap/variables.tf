@@ -43,6 +43,24 @@ variable "resource_quota_include_limits" {
   default     = true
 }
 
+variable "resource_quota" {
+  type = object({
+    requests_cpu       = number
+    requests_memory_gi = number
+    limits_cpu         = number
+    limits_memory_gi   = number
+    pods               = number
+  })
+  description = "Base hard limits on the LangSmith namespace ResourceQuota, in CPU cores, GiB, and pods. The resource_quota_extra_* inputs add to it, and resource_quota_include_limits = false leaves out the limits."
+  default = {
+    requests_cpu       = 50
+    requests_memory_gi = 120
+    limits_cpu         = 100
+    limits_memory_gi   = 200
+    pods               = 100
+  }
+}
+
 variable "resource_quota_extra_cpu" {
   description = "Additional CPU added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. The root uses this to make room for optional features that add large pods, so the base figures stay the same for a plain install. Zero keeps the base quota."
   type        = number

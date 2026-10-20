@@ -730,6 +730,8 @@ module "k8s_bootstrap" {
     var.enable_sandboxes ? var.sandbox_default_container_requests : {}
   )
 
+  resource_quota = var.resource_quota
+
   # SmithDB does not fit inside the base namespace quota, and the failure mode is
   # opaque: a ReplicaSet reports FailedCreate and the backfill Job reports Running
   # with no pod, neither of which names SmithDB. Size the headroom here instead.

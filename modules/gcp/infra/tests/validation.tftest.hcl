@@ -265,6 +265,23 @@ run "smithdb_migration_parallelism_rejects_a_fraction" {
   expect_failures = [var.smithdb_migration_parallelism]
 }
 
+# A zero figure leaves no room for any pod in the namespace.
+run "resource_quota_rejects_a_zero_figure" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 50
+      requests_memory_gi = 120
+      limits_cpu         = 100
+      limits_memory_gi   = 200
+      pods               = 0
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
 # smithdb_migration_start_time has nullable = false, so null takes the default "".
 run "smithdb_null_start_time_keeps_the_chart_window" {
   command = plan
