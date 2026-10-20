@@ -1182,16 +1182,16 @@ variable "aks_custom_ca_trust_certificate_files" {
   # is one long run of base64, which is what a commented-out body with its
   # markers deleted leaves.
   # On this patch line a commented-out certificate beside a live one passes, as
-  # it has since v0.16.118: a CERTIFICATE marker is not refused, and the base64
-  # check is skipped in a file that holds one, since the old certificate's body
-  # is base64 too. That skip is the gap this line keeps: in a file with a
-  # commented-out certificate, a commented key body whose markers are deleted
-  # or carry no dashes (# BEGIN PRIVATE KEY) is not refused. Prose that names
-  # the markers (a line that does not start with them) and a hex fingerprint on
-  # its own line stay allowed.
+  # it has since v0.16.118: a CERTIFICATE marker is not refused, and each
+  # commented certificate block, from its BEGIN line to its END line, is
+  # removed before the lines are scanned, since its body is base64 too. Every
+  # other comment line is scanned, so a commented key body beside an old
+  # certificate is still refused. Prose that names the markers (a line that
+  # does not start with them) and a hex fingerprint on its own line stay
+  # allowed.
   validation {
-    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length([for l in split("\n", file(f)) : l if(can(regex("(?i)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN\\b", l)) && !can(regex("(?i)BEGIN[ \\t]+CERTIFICATE", l))) || (!can(regex("(?im)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN[ \\t]+CERTIFICATE", file(f))) && (can(regex("^[ \\t]*#[# \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[# \\t]*[0-9A-Fa-f]+[ \\t]*$", l))))]) == 0, true)]) : true
-    error_message = "aks_custom_ca_trust_certificate_files names files with a PEM block commented out line by line (a '#' line that is a BEGIN marker for anything but a certificate, or one long run of base64): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length([for l in split("\n", file(f)) : l if(can(regex("(?i)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN\\b", l)) && !can(regex("(?i)BEGIN[ \\t]+CERTIFICATE", l))) || (!can(regex("(?im)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN[ \\t]+CERTIFICATE", file(f))) && (can(regex("^[ \\t]*#[# \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[# \\t]*[0-9A-Fa-f]+[ \\t]*$", l))))]) > 0, false)])}. AKS keeps the file as given, so a commented-out private key would reach plan output, state and every node; remove the block. On a cluster that already holds the entry with that block, the edited file encodes to a different value, and the next apply replaces every node once."
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length([for l in split("\n", replace(file(f), "/(?ims)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN[ \\t]+CERTIFICATE.*?^[ \\t]*#[# \\t]*-+[ \\t]*END[ \\t]+CERTIFICATE[^\\n]*$/", "")) : l if(can(regex("(?i)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN\\b", l)) && !can(regex("(?i)BEGIN[ \\t]+CERTIFICATE", l))) || (can(regex("^[ \\t]*#[# \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[# \\t]*[0-9A-Fa-f]+[ \\t]*$", l)))]) == 0, true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with a PEM block commented out line by line (a '#' line that is a BEGIN marker for anything but a certificate, or one long run of base64): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length([for l in split("\n", replace(file(f), "/(?ims)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN[ \\t]+CERTIFICATE.*?^[ \\t]*#[# \\t]*-+[ \\t]*END[ \\t]+CERTIFICATE[^\\n]*$/", "")) : l if(can(regex("(?i)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN\\b", l)) && !can(regex("(?i)BEGIN[ \\t]+CERTIFICATE", l))) || (can(regex("^[ \\t]*#[# \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[# \\t]*[0-9A-Fa-f]+[ \\t]*$", l)))]) > 0, false)])}. AKS keeps the file as given, so a commented-out private key would reach plan output, state and every node; remove the block. On a cluster that already holds the entry with that block, the edited file encodes to a different value, and the next apply replaces every node once."
   }
 }
 
