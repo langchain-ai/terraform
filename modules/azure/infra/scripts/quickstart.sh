@@ -438,7 +438,8 @@ _valid_tags() {
     [[ "$item" == *=* && "$item" != *'"'* && "$item" != *'\'* && "$item" != *'#'* && "$item" != *'${'* && "$item" != *'%{'* ]] || return 1
     key=$(printf '%s' "${item%%=*}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
     # Azure tag names are case-insensitive, so Team and team are one tag.
-    [[ -n "$key" && "$seen" != *",$key,"* ]] || return 1
+    # module, component, and pool are set by each sub-module.
+    [[ -n "$key" && "$seen" != *",$key,"* && ",module,component,pool," != *",$key,"* ]] || return 1
     seen="${seen}${key},"
   done
 }
@@ -908,7 +909,7 @@ _run_section_2() {
       while true; do
         _ask "Other tags" "$EXTRA_TAGS"
         _valid_tags "$_REPLY" && break
-        _red "  ERROR: use key=value pairs separated by commas, each key once, no \", \\, #, \${, or %{."
+        _red "  ERROR: use key=value pairs separated by commas, each key once, not module, component, or pool, no \", \\, #, \${, or %{."
       done
       EXTRA_TAGS="$_REPLY"
     fi

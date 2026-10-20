@@ -192,6 +192,7 @@ _valid_tags "team=platform, owner=a@b.com"      && ok "key=value pairs are valid
 _valid_tags "team"                              && bad "a bare key was accepted"     || ok "a bare key is rejected"
 _valid_tags "=platform"                         && bad "an empty key was accepted"   || ok "an empty key is rejected"
 _valid_tags "Team=a,team=b"                     && bad "a repeated key was accepted" || ok "a repeated key is rejected, case-insensitively"
+_valid_tags "Module=x"                          && bad "a reserved key was accepted" || ok "a reserved key is rejected, case-insensitively"
 _valid_tags 'team="a"'                          && bad "a quote was accepted"        || ok "a quote is rejected"
 _valid_tags 'owner=DOMAIN\user'                 && bad "a backslash was accepted"    || ok "a backslash is rejected"
 _valid_tags 'team=a${b}'                        && bad "an interpolation was accepted" || ok "an interpolation is rejected"

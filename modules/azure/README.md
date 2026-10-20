@@ -489,10 +489,13 @@ environment = "prod"
 tags        = { team = "platform", product = "langsmith" }
 ```
 
-A key in `tags` overrides the built-in tag of the same name. `make quickstart`
-asks for these as "Other tags" in `team=platform,product=langsmith` form, and
-keeps a `tags` map it cannot parse, such as one with comments, exactly as
-written. Changing tags later updates resources in place.
+A key in `tags` overrides the built-in tag of the same name in any case, so
+`Environment` replaces `environment`, because Azure tag names are
+case-insensitive. `module`, `component`, and `pool` are reserved for the tags
+each sub-module sets. `make quickstart` asks for these as "Other tags" in
+`team=platform,product=langsmith` form, and keeps a `tags` map it cannot parse,
+such as one with comments, exactly as written. Changing tags later updates
+resources in place, except the SmithDB cache StorageClass, which is replaced.
 
 AKS also creates resources of its own, and they get tags in different ways:
 

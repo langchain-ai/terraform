@@ -451,14 +451,19 @@ locals {
   # Customize via the environment/owner/cost_center/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
+  # Azure tag names are case-insensitive and merge() is not, so a built-in key
+  # is dropped when tags has it in any case: Environment replaces environment
+  # instead of sitting beside it.
   common_tags = merge(
-    {
-      environment = coalesce(var.environment, local.deployment_name, "dev")
-      project     = "langsmith"
-      managed_by  = "terraform"
-    },
-    var.owner != "" ? { owner = var.owner } : {},
-    var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    { for k, v in merge(
+      {
+        environment = coalesce(var.environment, local.deployment_name, "dev")
+        project     = "langsmith"
+        managed_by  = "terraform"
+      },
+      var.owner != "" ? { owner = var.owner } : {},
+      var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    ) : k => v if !contains([for t in keys(var.tags) : lower(t)], k) },
     var.tags
   )
 }

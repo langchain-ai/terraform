@@ -84,6 +84,46 @@ run "a_tags_key_overrides_the_built_in_tag" {
   }
 }
 
+# Azure tag names are case-insensitive, so a key in another case replaces the
+# built-in one rather than sitting beside it.
+run "a_tags_key_overrides_the_built_in_tag_in_any_case" {
+  command = plan
+
+  variables {
+    tags = { Environment = "prod", OWNER = "finance@example.com" }
+  }
+
+  assert {
+    condition     = azurerm_resource_group.resource_group[0].tags["Environment"] == "prod" && !contains(keys(azurerm_resource_group.resource_group[0].tags), "environment")
+    error_message = "Environment in tags should replace the built-in environment tag"
+  }
+
+  assert {
+    condition     = azurerm_resource_group.resource_group[0].tags["OWNER"] == "finance@example.com" && !contains(keys(azurerm_resource_group.resource_group[0].tags), "owner")
+    error_message = "OWNER in tags should replace the owner variable's tag"
+  }
+}
+
+run "keys_that_differ_only_in_case_fail_the_plan" {
+  command = plan
+
+  variables {
+    tags = { Team = "a", team = "b" }
+  }
+
+  expect_failures = [var.tags]
+}
+
+run "a_reserved_key_fails_the_plan" {
+  command = plan
+
+  variables {
+    tags = { Component = "x" }
+  }
+
+  expect_failures = [var.tags]
+}
+
 # Private DNS zones and Key Vault secrets take at most 15 tags. With owner set,
 # a secret carries environment, project, managed_by, owner, module, and
 # component, leaving room for 9.
