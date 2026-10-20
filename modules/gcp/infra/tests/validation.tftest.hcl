@@ -265,17 +265,65 @@ run "smithdb_migration_parallelism_rejects_a_fraction" {
   expect_failures = [var.smithdb_migration_parallelism]
 }
 
-# A zero figure leaves no room for any pod in the namespace.
+# Each bad resource_quota value is one figure off from the production-large base.
+run "resource_quota_rejects_a_fraction" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 160.5
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 1200
+      pods               = 250
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
 run "resource_quota_rejects_a_zero_figure" {
   command = plan
 
   variables {
     resource_quota = {
-      requests_cpu       = 50
-      requests_memory_gi = 120
-      limits_cpu         = 100
-      limits_memory_gi   = 200
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 1200
       pods               = 0
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+run "resource_quota_rejects_a_value_above_the_ceiling" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 2049
+      pods               = 250
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}
+
+run "resource_quota_rejects_limits_below_requests" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 150
+      limits_memory_gi   = 1200
+      pods               = 250
     }
   }
 

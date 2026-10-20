@@ -575,9 +575,27 @@ variable "resource_quota" {
     pods               = 100
   }
 
+  # The same ceilings as the SmithDB headroom in k8s-bootstrap: the quota is a
+  # guardrail against a runaway HPA, so it stays bounded.
   validation {
-    condition     = alltrue([for v in values(var.resource_quota) : v != null && v > 0])
-    error_message = "Every resource_quota figure must be set and above zero. A zero leaves no room for any pod, so admission rejects them all."
+    condition = alltrue([
+      for pair in [
+        [var.resource_quota.requests_cpu, 1024],
+        [var.resource_quota.limits_cpu, 1024],
+        [var.resource_quota.requests_memory_gi, 2048],
+        [var.resource_quota.limits_memory_gi, 2048],
+        [var.resource_quota.pods, 400],
+      ] : pair[0] == null ? false : (pair[0] == floor(pair[0]) && pair[0] >= 1 && pair[0] <= pair[1])
+    ])
+    error_message = "resource_quota figures must be set and be whole numbers of at least 1, with CPU at most 1024, memory_gi at most 2048, and pods at most 400."
+  }
+
+  validation {
+    condition = (
+      var.resource_quota.limits_cpu >= var.resource_quota.requests_cpu &&
+      var.resource_quota.limits_memory_gi >= var.resource_quota.requests_memory_gi
+    )
+    error_message = "resource_quota limits_cpu and limits_memory_gi must be at least the matching requests figure."
   }
 }
 
