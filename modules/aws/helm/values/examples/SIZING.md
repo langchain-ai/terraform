@@ -38,8 +38,8 @@ Totals from rendering chart 0.16.34 in `deploy.sh`'s values order, at minimum re
 
 | Profile | Scope | Pods | CPU Reserved | Memory Reserved | CPU Limit | Memory Limit |
 |---|---|---:|---:|---:|---:|---:|
-| Minimum | Core | 8 | 1.3 vCPU | 3.9Gi | 4.8 vCPU | 8.0Gi |
-| Minimum | Full | 18 | 8.3 vCPU | 18.3Gi | 21.8 vCPU | 40.6Gi |
+| Minimum | Core | 8 | 1.7 vCPU | 3.9Gi | 4.8 vCPU | 8.0Gi |
+| Minimum | Full | 18 | 9.1 vCPU | 18.3Gi | 21.8 vCPU | 40.6Gi |
 | Dev | Core | 8 | 4.0 vCPU | 12.2Gi | 10.0 vCPU | 24.5Gi |
 | Dev | Full | 18 | 10.8 vCPU | 22.3Gi | 26.0 vCPU | 48.5Gi |
 | Production | Core | 16 | 13.7 vCPU | 32.0Gi | 28.0 vCPU | 70.0Gi |
