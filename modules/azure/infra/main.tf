@@ -1803,8 +1803,6 @@ locals {
     "production-large" = "large"
   }
 
-  # sizing_profile has no validation of its own, so an unlisted profile falls
-  # back to small, the same tier the chart picks when nothing is set.
   smithdb_sizing  = coalesce(var.smithdb_sizing, lookup(local.smithdb_sizing_by_profile, var.sizing_profile, "small"))
   smithdb_minimal = local.smithdb_sizing == "minimal"
 

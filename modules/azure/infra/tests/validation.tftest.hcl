@@ -1091,3 +1091,20 @@ run "dns01_plans_with_istio_addon" {
     letsencrypt_email      = "fixture@example.com"
   }
 }
+
+# A zero figure leaves no room for any pod in the namespace.
+run "resource_quota_rejects_a_zero_figure" {
+  command = plan
+
+  variables {
+    resource_quota = {
+      requests_cpu       = 40
+      requests_memory_gi = 80
+      limits_cpu         = 80
+      limits_memory_gi   = 160
+      pods               = 0
+    }
+  }
+
+  expect_failures = [var.resource_quota]
+}

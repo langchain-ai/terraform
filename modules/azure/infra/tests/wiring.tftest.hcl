@@ -864,6 +864,8 @@ run "cluster_components_absent_when_flags_are_false" {
 # ── Namespace quota, both directions ─────────────────────────────────────────
 # production-large needs more than the default quota even at minimum replicas,
 # so a broken pass-through would leave its pods rejected at admission.
+# resource_quota is the base: SmithDB's headroom still adds to a raised base,
+# and sandboxes still drop the limits from it.
 
 run "resource_quota_reaches_the_namespace" {
   command = plan
@@ -887,6 +889,61 @@ run "resource_quota_reaches_the_namespace" {
       pods              = "250"
     })
     error_message = "resource_quota for production-large planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+  }
+}
+
+# smithdb small adds 27 CPU, 53 GiB, and 12 pods
+# (smithdb_small_sets_the_tier_without_resources), twice to limits.
+run "raised_resource_quota_keeps_the_smithdb_headroom" {
+  command = plan
+
+  variables {
+    enable_smithdb            = true
+    availability_zones        = ["1", "2", "3"]
+    smithdb_sizing            = "small"
+    smithdb_migration_enabled = false
+    resource_quota = {
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 1200
+      pods               = 250
+    }
+  }
+
+  assert {
+    condition = module.k8s_bootstrap.resource_quota == tomap({
+      "requests.cpu"    = "187"
+      "requests.memory" = "373Gi"
+      "limits.cpu"      = "614"
+      "limits.memory"   = "1306Gi"
+      pods              = "262"
+    })
+    error_message = "raised resource_quota with SmithDB planned ${jsonencode(module.k8s_bootstrap.resource_quota)}"
+  }
+}
+
+run "raised_resource_quota_with_sandboxes_plans_no_limits" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    resource_quota = {
+      requests_cpu       = 160
+      requests_memory_gi = 320
+      limits_cpu         = 560
+      limits_memory_gi   = 1200
+      pods               = 250
+    }
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.resource_quota_keys == tolist(["pods", "requests.cpu", "requests.memory"])
+    error_message = "raised resource_quota with sandboxes planned keys ${jsonencode(module.k8s_bootstrap.resource_quota_keys)}"
+  }
+  assert {
+    condition     = module.k8s_bootstrap.resource_quota["requests.cpu"] == "160"
+    error_message = "raised resource_quota with sandboxes planned requests.cpu = ${module.k8s_bootstrap.resource_quota["requests.cpu"]}"
   }
 }
 

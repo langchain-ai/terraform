@@ -1571,6 +1571,11 @@ variable "resource_quota" {
     limits_memory_gi   = 160
     pods               = 200
   }
+
+  validation {
+    condition     = alltrue([for v in values(var.resource_quota) : v != null && v > 0])
+    error_message = "Every resource_quota figure must be set and above zero. A zero leaves no room for any pod, so admission rejects them all."
+  }
 }
 
 variable "ingress_controller" {
