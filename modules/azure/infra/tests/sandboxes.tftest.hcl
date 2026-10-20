@@ -57,8 +57,8 @@ run "sandboxes_absent_when_disabled" {
     error_message = "enable_sandboxes = false still planned the JuiceFS Secret"
   }
   assert {
-    condition     = module.k8s_bootstrap.limit_range_defaults.default_request == tomap({ cpu = "100m", memory = "256Mi" }) && module.k8s_bootstrap.limit_range_defaults.default == null
-    error_message = "enable_sandboxes = false planned LimitRange defaults ${jsonencode(module.k8s_bootstrap.limit_range_defaults)}, not requests of 100m and 256Mi with no limits"
+    condition     = module.k8s_bootstrap.limit_range_defaults.default_request == tomap({ cpu = "250m", memory = "256Mi" }) && module.k8s_bootstrap.limit_range_defaults.default == null
+    error_message = "enable_sandboxes = false planned LimitRange defaults ${jsonencode(module.k8s_bootstrap.limit_range_defaults)}, not requests of 250m and 256Mi with no limits"
   }
   assert {
     condition     = module.k8s_bootstrap.platform_backend_node_ingress == null
@@ -105,8 +105,8 @@ run "sandboxes_present_when_enabled" {
     error_message = "enable_sandboxes = true did not plan the JuiceFS Secret"
   }
   assert {
-    condition     = module.k8s_bootstrap.limit_range_defaults.default_request == tomap({ cpu = "100m", memory = "256Mi" }) && module.k8s_bootstrap.limit_range_defaults.default == null
-    error_message = "enable_sandboxes = true planned LimitRange defaults ${jsonencode(module.k8s_bootstrap.limit_range_defaults)}, not requests of 100m and 256Mi with no limits"
+    condition     = module.k8s_bootstrap.limit_range_defaults.default_request == tomap({ cpu = "250m", memory = "256Mi" }) && module.k8s_bootstrap.limit_range_defaults.default == null
+    error_message = "enable_sandboxes = true planned LimitRange defaults ${jsonencode(module.k8s_bootstrap.limit_range_defaults)}, not requests of 250m and 256Mi with no limits"
   }
   assert {
     condition     = tolist(module.k8s_bootstrap.platform_backend_node_ingress.cidrs) == tolist(var.aks_subnet_address_prefix) && tolist(module.k8s_bootstrap.platform_backend_node_ingress.ports) == tolist(["TCP/1986"])

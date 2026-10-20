@@ -1023,13 +1023,16 @@ fi
 # cluster that reaches only the mirror, so compare the two before installing.
 _ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
 _ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
-if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
+_chart_image_keys=""
+if [[ -n "$_ls_image_registry" ]]; then
   _chart_image_keys=$(helm show values "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
     | _chart_image_keys_from_stdin) || _chart_image_keys=""
   if [[ -z "$_chart_image_keys" ]]; then
-    fail "langsmith_image_registry_keeps_source_host = false, but the chart's images could not be read (helm show values $_chart_source --version $CHART_VERSION), so the module cannot tell whether every image has a mirror path."
+    fail "langsmith_image_registry is set, but the chart's images could not be read (helm show values $_chart_source --version $CHART_VERSION), so the mirror checks cannot run."
     exit 1
   fi
+fi
+if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
   # A repository passed through EXTRA_HELM_ARGS (--set images.<key>.repository=...)
   # covers an image the list lacks, so those keys count as known here.
   _extra_image_keys=$(printf '%s' "${EXTRA_HELM_ARGS:-}" | grep -oE 'images\.[A-Za-z0-9]+\.repository=' | sed -e 's/^images\.//' -e 's/\.repository=$//') || _extra_image_keys=""
@@ -1049,6 +1052,33 @@ if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
     exit 1
   fi
   info "Mirror layout check: every image of chart ${_resolved_chart} has a repository on ${_ls_image_registry}"
+fi
+
+# The per-deployment Redis and PostgreSQL templates: init-values writes them
+# into langsmith-values-agent-deploys.yaml with the mirror when the chart it
+# resolved writes docker.io into them, and leaves them out when the chart
+# reads images.deploymentRedisImage and images.deploymentDbImage. The chart
+# installed here is read again, so a file written for the other kind stops
+# the deploy instead of replacing the chart's templates or pulling docker.io.
+if [[ -n "$_ls_image_registry" && "$_enable_deployments" == "true" && -f "$VALUES_DIR/langsmith-values-agent-deploys.yaml" ]]; then
+  _chart_reads_keys="false"
+  printf '%s\n' "$_chart_image_keys" | grep -qx deploymentRedisImage && _chart_reads_keys="true"
+  _file_writes_templates="false"
+  grep -qF "$_DEPLOYMENT_TEMPLATES_MARKER" "$VALUES_DIR/langsmith-values-agent-deploys.yaml" && _file_writes_templates="true"
+  if [[ "$_chart_reads_keys" == "true" && "$_file_writes_templates" == "true" ]]; then
+    fail "chart ${_resolved_chart} reads images.deploymentRedisImage and images.deploymentDbImage for the per-deployment pods, but langsmith-values-agent-deploys.yaml carries the templates init-values wrote for a chart that did not, which would replace the chart's own."
+    action "make init-values  (with langsmith_helm_chart_version naming the chart to deploy), then re-run make deploy"
+    exit 1
+  elif [[ "$_chart_reads_keys" == "false" && "$_file_writes_templates" == "false" ]]; then
+    fail "chart ${_resolved_chart} writes docker.io into its per-deployment Redis and PostgreSQL templates, and langsmith-values-agent-deploys.yaml carries no mirror templates for them."
+    action "make init-values  (it writes them from langsmith_image_registry), then re-run make deploy"
+    exit 1
+  fi
+  if [[ "$_chart_reads_keys" == "true" ]]; then
+    info "Per-deployment templates: chart ${_resolved_chart} reads their images from the images: block"
+  else
+    info "Per-deployment templates: written for chart ${_resolved_chart} from ${_ls_image_registry}"
+  fi
 fi
 
 # --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the

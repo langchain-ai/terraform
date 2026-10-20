@@ -179,7 +179,7 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 }
 
 # ── Limit Range ───────────────────────────────────────────────────────────────
-# Gives a container that declares no requests 100m CPU and 256Mi, so the
+# Gives a container that declares no requests 250m CPU and 256Mi, so the
 # scheduler has a figure to place it on. Some chart components, such as the
 # bundled Postgres and Redis StatefulSets for the insights, polly, and fleet
 # agent features, ship without resource stanzas. No default limits: a limit
@@ -194,8 +194,11 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
+      # 250m covers an unsized container's startup CPU, so the scheduler stops
+      # packing more of them onto a node than it can feed. A LimitRange applies
+      # at admission: running pods keep their old request until they restart.
       default_request = {
-        cpu    = "100m"
+        cpu    = "250m"
         memory = "256Mi"
       }
     }
