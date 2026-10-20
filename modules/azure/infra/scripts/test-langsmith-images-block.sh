@@ -7,7 +7,9 @@
 # test-langsmith-images-block.sh — Unit tests for the images: block init-values.sh
 # writes into values-overrides.yaml from langsmith_image_registry,
 # langsmith_image_registry_keeps_source_host and langsmith_image_pull_secret_name
-# (_langsmith_images_block in _common.sh). No Azure, no terraform, no tfvars.
+# (_langsmith_images_block in _common.sh), and for the operator's per-deployment
+# Redis and PostgreSQL templates it writes with a mirror
+# (_deployment_templates_block). No Azure, no terraform, no tfvars.
 #
 # Usage:
 #   ./infra/scripts/test-langsmith-images-block.sh
@@ -66,6 +68,57 @@ _check "registry that drops the host: one repository per known image" \
 _check "registry that drops the host: the pull Secret comes last" \
   '    - name: "nexus-pull"' \
   "$(printf '%s\n' "$_out" | tail -1)"
+
+_check "a trailing slash on the registry is dropped (images.registry)" \
+  'images:
+  registry: "nexus.example.com"' \
+  "$(_langsmith_images_block "nexus.example.com/" "true" "")"
+_check "a trailing slash on the registry is dropped (per-image repository)" \
+  '    repository: "nexus.example.com:8443/mirror/langchain/langsmith-backend"' \
+  "$(_langsmith_images_block "nexus.example.com:8443/mirror/" "false" "" | grep -A1 '^  backendImage:' | tail -1)"
+
+_tpl=$(_deployment_templates_block "nexus.example.com:8443/mirror" "false")
+_check "operator templates, host dropped: the two images" \
+  'image: nexus.example.com:8443/mirror/redis:7
+image: nexus.example.com:8443/mirror/pgvector/pgvector:pg15' \
+  "$(printf '%s\n' "$_tpl" | grep -oE 'image: .*')"
+_check "operator templates, host kept, trailing slash dropped: the two images" \
+  'image: nexus.example.com/docker.io/redis:7
+image: nexus.example.com/docker.io/pgvector/pgvector:pg15' \
+  "$(_deployment_templates_block "nexus.example.com/" "true" | grep -oE 'image: .*')"
+_check "operator templates: two keys at the depth of the example's operator.templates.deployment" \
+  '    redis: |
+    db: |' \
+  "$(printf '%s\n' "$_tpl" | grep -E '^    [a-z]+: \|$')"
+_check "operator templates: every other line is a comment at that depth or template text below it" \
+  '' \
+  "$(printf '%s\n' "$_tpl" | grep -vE '^(    [a-z]+: \||    #|      )')"
+_check "operator templates: the chart's placeholders survive" \
+  '        name: ${service_name}
+                storage: "${storage_gi}Gi"' \
+  "$(printf '%s\n' "$_tpl" | grep -E '^        name: |storage: ' | sed -n '1p;$p')"
+_check "operator templates: no image line keeps docker.io when the host is dropped" \
+  '0' \
+  "$(printf '%s\n' "$_tpl" | grep -E '^ +image: ' | grep -c 'docker.io')"
+
+_check "deploy.sh's pinned chart line is read from its text (the release guard reads it the same way)" \
+  "$(grep -oE 'CHART_VERSION:-~[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/../../helm/scripts/deploy.sh" | head -1 | sed 's/^CHART_VERSION:-//')" \
+  "$(_langsmith_chart_pin)"
+_check "the resolved chart version falls back on that pin" \
+  "$(_langsmith_chart_pin)" \
+  "$(CHART_VERSION='' INFRA_DIR=/nonexistent _resolve_chart_version)"
+_check "CHART_VERSION in the environment wins" \
+  '0.16.39' \
+  "$(CHART_VERSION=0.16.39 _resolve_chart_version)"
+_check "a plain install's default pin is on the line deploy.sh requires without SmithDB" \
+  "$(_required_chart_line_for false)" \
+  "$(_chart_line_of "$(_langsmith_chart_pin)")"
+_check "SmithDB requires the 0.17 line" \
+  '0.17' \
+  "$(_required_chart_line_for true)"
+_check "deploy.sh takes its required chart line from _required_chart_line_for" \
+  '1' \
+  "$(grep -cF '_required_chart_line="$(_required_chart_line_for "$_enable_smithdb")"' "$SCRIPT_DIR/../../helm/scripts/deploy.sh")"
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

@@ -1611,8 +1611,8 @@ variable "keda_image_registry" {
   default     = ""
 
   validation {
-    condition     = var.keda_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.keda_image_registry))
-    error_message = "keda_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.keda_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.keda_image_registry))
+    error_message = "keda_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 }
 
@@ -1624,7 +1624,7 @@ variable "keda_image_registry_keeps_source_host" {
 
 variable "keda_image_pull_secret_name" {
   type        = string
-  description = "Name of a kubernetes.io/dockerconfigjson Secret in the keda namespace that KEDA's pods pull with. Create the namespace and the Secret before the apply that installs KEDA, as for envoy_gateway_image_pull_secret_name. Empty (default) pulls without credentials. Requires keda_image_registry."
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the keda namespace that KEDA's pods pull with. The Secret has to exist before the release is installed, and the module creates the keda namespace with the release, so on a new cluster the install is two applies: apply with install_keda = false, create the namespace and the Secret, set install_keda = true and apply again (the README's mirror section has the commands). Empty (default) pulls without credentials. Requires keda_image_registry."
   default     = ""
 
   validation {
@@ -1703,20 +1703,20 @@ variable "langsmith_image_pull_secret_name" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_image_registry" {
   type        = string
-  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. It becomes images.registry in values-overrides.yaml, so every chart image is pulled as <registry>/docker.io/langchain/<name>:<tag>, when the mirror keeps the source host as the first path segment (langsmith_image_registry_keeps_source_host = true, the default). A mirror that drops it, as a proxy repository in Nexus or Artifactory does, takes langsmith_image_registry_keeps_source_host = false: init-values.sh then leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.16 chart line, and deploy.sh refuses a chart with an image the module does not know. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
+  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. By default (langsmith_image_registry_keeps_source_host = false) the mirror serves each source registry's paths directly, the layout the chart's own scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and a proxy repository in Nexus or Artifactory serves: init-values.sh leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.16 chart line, and deploy.sh refuses a chart with an image the module does not know. A mirror laid out with the source host kept as the first path segment (<registry>/docker.io/langchain/<name>:<tag>) takes langsmith_image_registry_keeps_source_host = true: the value then becomes images.registry in values-overrides.yaml and the chart composes the paths. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
   default     = ""
 
   validation {
-    condition     = var.langsmith_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.langsmith_image_registry))
-    error_message = "langsmith_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.langsmith_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.langsmith_image_registry))
+    error_message = "langsmith_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 }
 
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_image_registry_keeps_source_host" {
   type        = bool
-  description = "Whether langsmith_image_registry keeps each image's source registry as the first path segment under the mirror. true (default): images.registry is set and the chart composes <registry>/docker.io/langchain/<name>. false: the mirror serves the source registries' paths directly, as a proxy repository in Nexus or Artifactory does, so init-values.sh writes each image's repository as <registry>/langchain/<name> (and <registry>/<path> for the images from mcr.microsoft.com and registry.k8s.io, which a group repository that proxies those registries serves the same way). Ignored without langsmith_image_registry."
-  default     = true
+  description = "Whether langsmith_image_registry keeps each image's source registry as the first path segment under the mirror. false (default): the mirror serves the source registries' paths directly, which is what the chart's scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and what a proxy repository in Nexus or Artifactory serves, so init-values.sh writes each image's repository as <registry>/langchain/<name> (and <registry>/<path> for the images from mcr.microsoft.com and registry.k8s.io, which a group repository that proxies those registries serves the same way). true: images.registry is set and the chart composes <registry>/docker.io/langchain/<name>, for a mirror laid out with the source host kept. Ignored without langsmith_image_registry."
+  default     = false
 }
 
 # ── LangSmith secrets ─────────────────────────────────────────────────────────
@@ -2066,8 +2066,8 @@ variable "envoy_gateway_image_registry" {
   default     = ""
 
   validation {
-    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
-    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 
   # A version missing from local.envoy_proxy_default_images would leave the

@@ -270,17 +270,98 @@ _validate_license_key() {
 # login path.
 _VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source clickhouse_cluster langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
+# The chart line deploy.sh installs when neither CHART_VERSION in the
+# environment nor langsmith_helm_chart_version in terraform.tfvars names one:
+# deploy.sh's own pinned default, read from its text. It stays a literal
+# there because .github/scripts/chart-line.sh reads it the same way as the
+# release tag's MAJOR.MINOR, so deploy.sh is the one place the pin lives.
+_langsmith_chart_pin() {
+  local f="$_COMMON_DIR/../../helm/scripts/deploy.sh" pin
+  pin=$(grep -oE 'CHART_VERSION:-~[0-9]+\.[0-9]+\.[0-9]+' "$f" 2>/dev/null | head -1) || pin=""
+  printf '%s' "${pin#CHART_VERSION:-}"
+}
+
+# The chart version or constraint the next deploy resolves: CHART_VERSION from
+# the environment, else langsmith_helm_chart_version, else deploy.sh's pin.
+# deploy.sh and init-values.sh read the same answer, so what init-values
+# writes for a chart is what deploy installs.
+_resolve_chart_version() {
+  local v="${CHART_VERSION:-}"
+  if [[ -z "$v" ]]; then v=$(_parse_tfvar "langsmith_helm_chart_version") || v=""; fi
+  [[ -n "$v" ]] || v=$(_langsmith_chart_pin)
+  printf '%s' "$v"
+}
+
+# The <major>.<minor> line of a chart version or constraint: ~0.16.0 → 0.16.
+_chart_line_of() {
+  printf '%s' "$1" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true
+}
+
+# The chart line deploy.sh requires on this branch: 0.16, or 0.17 with SmithDB,
+# whose Azure values first appear in 0.17. A plain install's default pin must
+# resolve to the first; test-langsmith-images-block.sh checks that it does.
+_required_chart_line_for() {
+  if [[ "${1:-false}" == "true" ]]; then printf '0.17'; else printf '0.16'; fi
+}
+
+# The chart as deploy.sh installs it: the repository name it adds and the URL.
+_LANGSMITH_CHART_SOURCE="langchain/langsmith"
+_LANGSMITH_CHART_REPO_URL="https://langchain-ai.github.io/helm"
+
+# Returns 0 when the chart version or constraint reads
+# images.deploymentRedisImage and images.deploymentDbImage for the
+# per-deployment pods, 1 when it writes docker.io into
+# operator.templates.redis and .db, 2 when the chart could not be read (no
+# helm, or the repository out of reach). Reads the chart through the
+# repository deploy.sh installs from, so the answer is for the chart the next
+# deploy resolves; deploy.sh checks the file against that chart again.
+#   _chart_reads_deployment_image_keys <version or constraint>
+_chart_reads_deployment_image_keys() {
+  local v="$1" keys devel=""
+  case "$v" in *-*) devel="--devel" ;; esac
+  command -v helm >/dev/null 2>&1 || return 2
+  helm repo add langchain "$_LANGSMITH_CHART_REPO_URL" >/dev/null 2>&1 || true
+  helm repo update langchain >/dev/null 2>&1 || true
+  # shellcheck disable=SC2086
+  keys=$(helm show values "$_LANGSMITH_CHART_SOURCE" --version "$v" $devel 2>/dev/null | _chart_image_keys_from_stdin) || return 2
+  [[ -n "$keys" ]] || return 2
+  printf '%s\n' "$keys" | grep -qx deploymentRedisImage
+}
+
+# The fallback when the chart cannot be read, by line and patch: the 0.16
+# line writes docker.io into the templates before 0.16.43, the 0.17 line in
+# every patch so far, and 0.18 reads the keys. A constraint (~0.16.0)
+# resolves to the newest patch of its line. Returns 0 when the templates
+# need the mirror written in.
+#   _chart_templates_need_mirror_by_version <version or constraint>
+_chart_templates_need_mirror_by_version() {
+  local v="$1" line patch
+  line=$(_chart_line_of "$v")
+  patch=$(printf '%s' "$v" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' | awk -F. '{print $3}') || patch=""
+  case "$line" in
+    0.16) [[ -n "$patch" && "$patch" -lt 43 ]] ;;
+    0.17) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The first line _deployment_templates_block writes; deploy.sh looks for it to
+# tell a file that carries the templates from one that does not.
+_DEPLOYMENT_TEMPLATES_MARKER="# The per-deployment Redis and PostgreSQL from langsmith_image_registry"
+
 # ── LangSmith images from a mirror ────────────────────────────────────────────
 # The chart's images and their repositories for the 0.16 chart line (chart
-# 0.16.39), key=repository. init-values.sh writes one images.<key>.repository
-# per entry when langsmith_image_registry_keeps_source_host = false, the layout
-# of a mirror that serves each source registry's paths directly (a proxy
-# repository in Nexus or Artifactory), because images.registry alone would
-# compose <registry>/docker.io/... there. deploy.sh compares this list with the
+# 0.16.39, plus the two operator-deployment images 0.16.43 reads from here),
+# key=repository. init-values.sh writes one images.<key>.repository
+# per entry when langsmith_image_registry_keeps_source_host = false (the
+# default), the layout of a mirror that serves each source registry's paths
+# directly (the chart's scripts/mirror_langsmith_images.sh pushes it, a proxy
+# repository in Nexus or Artifactory serves it), because images.registry alone
+# would compose <registry>/docker.io/... there. deploy.sh compares this list with the
 # chart it is about to install and stops on an image the list does not carry,
 # which would otherwise pull from its public registry. Keep the list equal to
 # the images: block of the chart's values.yaml at the pinned line.
-_LANGSMITH_IMAGE_REPOSITORIES="aceBackendImage=docker.io/langchain/langsmith-ace-backend backendImage=docker.io/langchain/langsmith-backend engineInsightsAgentImage=docker.io/langchain/langsmith-insights-engine frontendImage=docker.io/langchain/langsmith-frontend operatorImage=docker.io/langchain/langgraph-operator postgresImage=docker.io/postgres redisImage=docker.io/redis clickhouseImage=docker.io/clickhouse/clickhouse-server agentBuilderImage=docker.io/langchain/agent-builder-deep-agent pollyAgentImage=docker.io/langchain/langsmith-polly smithdbImage=docker.io/langchain/smithdb presidioAnalyzerImage=mcr.microsoft.com/presidio-analyzer sandboxHostImage=docker.io/langchain/sandbox-host juicefsCSIImage=docker.io/juicedata/juicefs-csi-driver juicefsCSINodeDriverRegistrarImage=registry.k8s.io/sig-storage/csi-node-driver-registrar juicefsMountImage=docker.io/juicedata/mount"
+_LANGSMITH_IMAGE_REPOSITORIES="aceBackendImage=docker.io/langchain/langsmith-ace-backend backendImage=docker.io/langchain/langsmith-backend engineInsightsAgentImage=docker.io/langchain/langsmith-insights-engine frontendImage=docker.io/langchain/langsmith-frontend operatorImage=docker.io/langchain/langgraph-operator postgresImage=docker.io/postgres redisImage=docker.io/redis clickhouseImage=docker.io/clickhouse/clickhouse-server agentBuilderImage=docker.io/langchain/agent-builder-deep-agent pollyAgentImage=docker.io/langchain/langsmith-polly smithdbImage=docker.io/langchain/smithdb presidioAnalyzerImage=mcr.microsoft.com/presidio-analyzer sandboxHostImage=docker.io/langchain/sandbox-host juicefsCSIImage=docker.io/juicedata/juicefs-csi-driver juicefsCSINodeDriverRegistrarImage=registry.k8s.io/sig-storage/csi-node-driver-registrar juicefsMountImage=docker.io/juicedata/mount deploymentRedisImage=docker.io/redis deploymentDbImage=docker.io/pgvector/pgvector"
 
 # Print the image keys of a chart's values.yaml read on stdin: the top-level
 # entries under images: whose name ends in Image, one per line. Reads to the
@@ -311,6 +392,9 @@ _langsmith_image_keys() {
 # that proxies several registries serves). A pull Secret: images.imagePullSecrets.
 _langsmith_images_block() {
   local registry="$1" keeps_host="$2" pull_secret="$3" e key repo
+  # Terraform rejects a trailing slash at plan time, but a tfvars edit after
+  # the last plan reaches this function first and would write <registry>//<path>.
+  registry="${registry%/}"
   if [[ -z "$registry" && -z "$pull_secret" ]]; then
     printf '# images: the chart defaults (docker.io). Set langsmith_image_registry for a mirror.\n'
     return 0
@@ -334,6 +418,122 @@ _langsmith_images_block() {
   fi
 }
 
+# operator.templates.redis and operator.templates.db, the two images pointed
+# at the mirror:
+#   _deployment_templates_block <registry> <keeps_source_host true|false>
+# On the 0.16 and 0.17 chart lines the two templates are full manifests in the
+# chart's values.yaml with docker.io/redis:7 and pgvector/pgvector:pg15 written
+# in, and images.registry does not reach them, so a cluster that pulls only
+# from the mirror gets ImagePullBackOff on both pods of every deployment while
+# make deploy reports success. init-values.sh appends this block to
+# langsmith-values-agent-deploys.yaml (which overrides
+# operator.templates.deployment the same way) when langsmith_image_registry is
+# set. The repositories come from _LANGSMITH_IMAGE_REPOSITORIES when the list
+# carries images.deploymentRedisImage and images.deploymentDbImage (the 0.18
+# chart's keys, on main) and are the chart's own otherwise, under the images:
+# block's layout rule; the tags are the templates' own. Template text copied
+# from chart langsmith-0.16.39 (identical in 0.17.6); re-copy it when the
+# chart's operator.templates change.
+_deployment_templates_block() {
+  local registry="$1" keeps_host="$2" e redis_repo="" db_repo="" redis db
+  registry="${registry%/}"
+  for e in $_LANGSMITH_IMAGE_REPOSITORIES; do
+    case "${e%%=*}" in
+      deploymentRedisImage) redis_repo="${e#*=}" ;;
+      deploymentDbImage)    db_repo="${e#*=}" ;;
+    esac
+  done
+  redis_repo="${redis_repo:-docker.io/redis}"
+  db_repo="${db_repo:-docker.io/pgvector/pgvector}"
+  if [[ "$keeps_host" == "false" ]]; then
+    redis_repo="${redis_repo#*/}"; db_repo="${db_repo#*/}"
+  fi
+  redis="${registry}/${redis_repo}:7"
+  db="${registry}/${db_repo}:pg15"
+  sed -e "s|@@REDIS_IMAGE@@|${redis}|" -e "s|@@DB_IMAGE@@|${db}|" <<'EOF'
+    # The per-deployment Redis and PostgreSQL from langsmith_image_registry: the chart
+    # writes docker.io into these two templates. Written by init-values.sh.
+    redis: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${service_name}
+        namespace: ${namespace}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ${service_name}
+        template:
+          metadata:
+            labels:
+              app: ${service_name}
+          spec:
+            enableServiceLinks: false
+            containers:
+            - name: redis
+              image: @@REDIS_IMAGE@@
+              ports:
+              - containerPort: 6379
+                name: redis
+              livenessProbe:
+                exec:
+                  command:
+                  - redis-cli
+                  - ping
+                initialDelaySeconds: 30
+                periodSeconds: 10
+              readinessProbe:
+                tcpSocket:
+                  port: 6379
+                initialDelaySeconds: 10
+                periodSeconds: 5
+    db: |
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: ${service_name}
+      spec:
+        serviceName: ${service_name}
+        selector:
+          matchLabels:
+            app: ${service_name}
+        persistentVolumeClaimRetentionPolicy:
+          whenDeleted: Delete
+          whenScaled: Retain
+        template:
+          metadata:
+            labels:
+              app: ${service_name}
+          spec:
+            containers:
+            - name: postgres
+              image: @@DB_IMAGE@@
+              ports:
+              - containerPort: 5432
+              command: ["docker-entrypoint.sh"]
+              args:
+                - postgres
+                - -c
+                - max_connections=${max_connections}
+              env:
+              - name: PGDATA
+                value: /var/lib/postgresql/data/pgdata
+              volumeMounts:
+              - name: postgres-data
+                mountPath: /var/lib/postgresql/data
+            enableServiceLinks: false
+        volumeClaimTemplates:
+        - metadata:
+            name: postgres-data
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: "${storage_gi}Gi"
+EOF
+}
+
 # Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
 # leaves it empty when the key is absent — never the default a caller substitutes,
 # so both sides of the comparison are reading the same thing.
@@ -354,6 +554,71 @@ _read_values_stamp() {
   line=$(grep -E "^#   ${key} =" "$file" 2>/dev/null | head -1) || return 1
   [[ -n "$line" ]] || return 1
   printf '%s' "$line" | sed "s/^#   ${key} =[[:space:]]*//"
+}
+
+# Compare a generated values file's stamp with the current terraform.tfvars,
+# one line per key that disagrees:
+#   <key>: generated with '<was>', terraform.tfvars now says '<now>'
+#   <key>: not stamped (the file predates this key), terraform.tfvars now says '<now>'
+# Returns 0 when the file is stamped and every key agrees, 1 when a line was
+# printed, 2 when the file carries no stamp at all (written by an older
+# init-values.sh; the lines printed, if any, are then only informative).
+# A key the stamp lacks counts as drift only when terraform.tfvars sets it:
+# an older file with the key unset on both sides still describes those
+# tfvars, but one generated before langsmith_image_registry existed, with a
+# tfvars that now sets it, would otherwise deploy from docker.io and report
+# success.
+_values_stamp_drift() {
+  local file="$1" key was now stamped="false" drift="false"
+  for key in $_VALUES_INPUT_KEYS; do
+    if was=$(_read_values_stamp "$file" "$key"); then
+      stamped="true"
+      now=$(_parse_tfvar "$key") || now=""
+      [[ "$was" == "$now" ]] && continue
+      printf "%s: generated with '%s', terraform.tfvars now says '%s'\n" "$key" "$was" "$now"
+      drift="true"
+    else
+      now=$(_parse_tfvar "$key") || now=""
+      [[ -n "$now" ]] || continue
+      printf "%s: not stamped (the file predates this key), terraform.tfvars now says '%s'\n" "$key" "$now"
+      drift="true"
+    fi
+  done
+  [[ "$stamped" == "true" ]] || return 2
+  [[ "$drift" == "true" ]] && return 1
+  return 0
+}
+
+# Returns 0 when a values file carries the host-kept mirror layout
+# (images.registry set) while terraform.tfvars sets langsmith_image_registry
+# and leaves langsmith_image_registry_keeps_source_host unset: a file generated
+# under that key's previous default (true; the 0.16 line's v0.16.124 to .126
+# wrote it). The default is now false, the stamp reads '' on both sides so
+# _values_stamp_drift passes the file, and the next make init-values would
+# switch the layout under a mirror that serves the host-kept one. deploy.sh
+# stops on it until the key is set.
+#   _values_layout_from_old_default <values-file>
+_values_layout_from_old_default() {
+  local file="$1" registry
+  registry=$(_parse_tfvar "langsmith_image_registry") || return 1
+  [[ -n "$registry" ]] || return 1
+  _parse_tfvar "langsmith_image_registry_keeps_source_host" >/dev/null 2>&1 && return 1
+  awk '/^images:/{p=1; next} /^[^ #]/{p=0} p && /^  registry: "[^"]+"/{f=1} END{exit !f}' "$file" 2>/dev/null
+}
+
+# The stop both scripts make on that file: init-values.sh before it overwrites
+# values-overrides.yaml (the usual make init-values && make deploy would
+# otherwise rewrite the file to the new layout first, and deploy.sh would see
+# nothing), deploy.sh before installing. Returns 1 after printing when the
+# file is that one, 0 otherwise.
+#   _stop_if_values_layout_from_old_default <values-file>
+_stop_if_values_layout_from_old_default() {
+  _values_layout_from_old_default "$1" || return 0
+  fail "values-overrides.yaml carries the host-kept mirror layout (images.registry set), written when langsmith_image_registry_keeps_source_host defaulted to true; the default is now false and terraform.tfvars does not set it."
+  info "To keep the layout this cluster pulls from today (<registry>/docker.io/...): set langsmith_image_registry_keeps_source_host = true."
+  info "To move to the layout the chart's mirror script pushes (<registry>/langchain/...): set it to false and lay the mirror out that way."
+  action "Set the key in terraform.tfvars, run make init-values, then re-run make deploy"
+  return 1
 }
 
 # Print ingress.ingressClassName from a values file, quotes stripped; nothing when
