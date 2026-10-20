@@ -288,6 +288,48 @@ run "refuses_a_commented_out_old_certificate_beside_a_live_one" {
   expect_failures = [var.aks_custom_ca_trust_certificate_files]
 }
 
+# A block commented out twice, as when a toggle adds '# ' to lines that
+# already held it, or with '##': the same refusals hold.
+run "refuses_a_key_commented_out_twice_with_spaced_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key-double-spaced.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_key_commented_out_twice_with_doubled_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key-double.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_an_old_certificate_commented_out_twice_with_spaced_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-old-cert-double-spaced.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_an_old_certificate_commented_out_twice_with_doubled_hashes" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-old-cert-double.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
 # The boundary on the other side: prose that names the markers mid-line and a
 # hex fingerprint on its own comment line pass, as one entry equal to the file.
 run "accepts_prose_naming_the_markers_and_a_hex_fingerprint" {
