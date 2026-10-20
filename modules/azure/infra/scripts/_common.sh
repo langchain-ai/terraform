@@ -330,7 +330,7 @@ _chart_reads_deployment_image_keys() {
 
 # The fallback when the chart cannot be read, by line and patch: the 0.16
 # line writes docker.io into the templates before 0.16.43, the 0.17 line in
-# every patch up to 0.17.17, and 0.18 reads the keys. A constraint (~0.16.0)
+# every patch so far, and 0.18 reads the keys. A constraint (~0.16.0)
 # resolves to the newest patch of its line. Returns 0 when the templates
 # need the mirror written in.
 #   _chart_templates_need_mirror_by_version <version or constraint>
