@@ -297,6 +297,13 @@ _chart_line_of() {
   printf '%s' "$1" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true
 }
 
+# The chart line deploy.sh requires on this branch: 0.16, or 0.17 with SmithDB,
+# whose Azure values first appear in 0.17. A plain install's default pin must
+# resolve to the first; test-langsmith-images-block.sh checks that it does.
+_required_chart_line_for() {
+  if [[ "${1:-false}" == "true" ]]; then printf '0.17'; else printf '0.16'; fi
+}
+
 # The chart as deploy.sh installs it: the repository name it adds and the URL.
 _LANGSMITH_CHART_SOURCE="langchain/langsmith"
 _LANGSMITH_CHART_REPO_URL="https://langchain-ai.github.io/helm"

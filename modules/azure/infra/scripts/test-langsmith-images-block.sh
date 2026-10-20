@@ -110,6 +110,15 @@ _check "the resolved chart version falls back on that pin" \
 _check "CHART_VERSION in the environment wins" \
   '0.16.39' \
   "$(CHART_VERSION=0.16.39 _resolve_chart_version)"
+_check "a plain install's default pin is on the line deploy.sh requires without SmithDB" \
+  "$(_required_chart_line_for false)" \
+  "$(_chart_line_of "$(_langsmith_chart_pin)")"
+_check "SmithDB requires the 0.17 line" \
+  '0.17' \
+  "$(_required_chart_line_for true)"
+_check "deploy.sh takes its required chart line from _required_chart_line_for" \
+  '1' \
+  "$(grep -cF '_required_chart_line="$(_required_chart_line_for "$_enable_smithdb")"' "$SCRIPT_DIR/../../helm/scripts/deploy.sh")"
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

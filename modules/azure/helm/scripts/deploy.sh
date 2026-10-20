@@ -632,7 +632,7 @@ if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
-_required_chart_line="0.17"
+_required_chart_line="$(_required_chart_line_for "$_enable_smithdb")"
 
 # Select the chart line explicitly. The SmithDB Azure values first appear in
 # 0.17; deployments without SmithDB retain the existing 0.16 contract.
