@@ -162,7 +162,7 @@ locals {
       {
         Sid      = "AssumeSandboxECRRoles"
         Effect   = "Allow"
-        Action   = ["sts:AssumeRole"]
+        Action   = ["sts:AssumeRole", "sts:TagSession"]
         Resource = ["arn:${local.partition}:iam::*:role/*"]
         Condition = {
           StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" }
