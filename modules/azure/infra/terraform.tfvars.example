@@ -123,6 +123,7 @@ additional_node_pools = {
     vm_size   = "Standard_D16s_v5"  # 16 vCPU, 64 GiB
     min_count = 0                   # scales from zero — not needed for Pass 2 alone
     max_count = 2
+    # zones   = ["1", "2"]          # this pool only, for a size not offered in every zone; unset follows availability_zones
   }
 }
 
@@ -140,12 +141,22 @@ additional_node_pools = {
 # set. See SMITHDB.md, "Version requirements".
 enable_smithdb = false
 
-# Roll out one stage at a time after the infrastructure-only deployment is healthy.
+# Roll out one stage at a time after the infrastructure-only deployment is
+# healthy. make smithdb-migration-job-start and make smithdb-migration-job-end
+# set smithdb_migration_enabled and smithdb_migration_parallelism; set the other
+# two here. See SMITHDB.md, "Staged rollout".
 smithdb_ingestion_enabled = false
 smithdb_migration_enabled = false
 smithdb_query_enabled     = false
 
-# smithdb_metastore_sku_name       = "GP_Standard_D2ds_v5"
+# minimal, small, medium, or large. Unset follows sizing_profile. Also sets the
+# default metastore SKU. See SMITHDB.md, "Sizing".
+# smithdb_sizing = "small"
+
+# An install from an earlier module version that left this unset runs
+# GP_Standard_D2ds_v5. Set that value to keep it: a SKU change restarts the
+# metastore. See MIGRATION-0.16-to-0.17.md, section 6.
+# smithdb_metastore_sku_name       = "MO_Standard_E2ds_v5" # unset takes the default for smithdb_sizing
 # smithdb_metastore_storage_mb     = 32768
 # smithdb_storage_account_name     = "" # empty derives a globally unique name
 # smithdb_storage_container_name   = "smithdb"
@@ -153,6 +164,24 @@ smithdb_query_enabled     = false
 # smithdb_cache_storage_class_name   = "smithdb-cache-premium-v2"
 # smithdb_cache_disk_iops            = 7000
 # smithdb_cache_disk_throughput_mbps = 1000
+
+# ── Sandboxes (optional) ─────────────────────────────────────────────────────
+# Chart 0.17. Adds a tainted sandbox-host node pool, a dedicated Azure Managed
+# Redis for JuiceFS metadata, a Blob container for JuiceFS data, and a Workload
+# Identity scoped to that container. Then run make seed-secrets (needs OpenSSL 3)
+# and make init-values. See README, "Sandboxes".
+enable_sandboxes = false
+
+# The VM size needs nested virtualization (Dsv4, Ddsv4, Dsv5, Ddsv5, Ddsv6).
+# Unset follows sizing_profile: Standard_D32ds_v5 for production and
+# production-large, Standard_D8ds_v5 otherwise.
+# sandbox_host_vm_size   = "Standard_D8ds_v5"
+# sandbox_host_min_count = 0
+# sandbox_host_max_count = 5
+# sandbox_juicefs_amr_sku                 = "Balanced_B1"
+# sandbox_juicefs_redis_high_availability = true
+# sandbox_juicefs_redis_name              = "" # empty derives from the naming scheme
+# sandbox_service_url_base_url            = "" # needs wildcard DNS and TLS
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API, uses Gateway/HTTPRoute; start here)
 # "nginx"         — NGINX ingress via Helm (legacy Ingress compatibility)
@@ -166,11 +195,63 @@ smithdb_query_enabled     = false
 ingress_controller = "envoy-gateway"
 
 # Envoy Gateway's controller and proxy images from a registry that mirrors Docker
-# Hub with docker.io as the first path segment (<registry>/docker.io/envoyproxy/...),
-# the same layout LangSmith's images.registry uses. The pull Secret goes in the
-# envoy-gateway-system namespace, created before the apply that installs Envoy Gateway.
-# envoy_gateway_image_registry         = "nexus.example.com"
-# envoy_gateway_image_pull_secret_name = "nexus-pull"
+# Hub. By default the mirror keeps docker.io as the first path segment
+# (<registry>/docker.io/envoyproxy/...), the same layout LangSmith's images.registry
+# uses. A Docker Hub proxy repository in Nexus or Artifactory drops it
+# (<registry>/envoyproxy/...): set envoy_gateway_image_registry_keeps_source_host = false.
+# The pull Secret goes in the envoy-gateway-system namespace, created before the
+# apply that installs Envoy Gateway.
+# envoy_gateway_image_registry                   = "nexus.example.com"
+# envoy_gateway_image_registry_keeps_source_host = false
+# envoy_gateway_image_pull_secret_name           = "nexus-pull"
+
+# KEDA's three images come from ghcr.io/kedacore. keda_image_registry points them
+# at a mirror the same way: <registry>/ghcr.io/kedacore/... by default, or
+# <registry>/kedacore/... with keda_image_registry_keeps_source_host = false. The
+# pull Secret goes in the keda namespace, which the module creates with the
+# release: on a new cluster apply with install_keda = false first, create the
+# namespace and the Secret, then set install_keda = true and apply again.
+# keda_chart_repository points the Helm fetch at a mirrored repository.
+# keda_image_registry                   = "nexus.example.com"
+# keda_image_registry_keeps_source_host = false
+# keda_image_pull_secret_name           = "nexus-pull"
+# keda_chart_repository                 = "https://nexus.example.com/repository/helm-kedacore"
+# A chart mirror behind a login takes a username here and its password in
+# secrets.auto.tfvars (keda_chart_repository_password); without them the fetch
+# is anonymous, which the mirror must then allow.
+# keda_chart_repository_username        = "helm-reader"
+
+# LangSmith's own pods take their pull Secret from the chart (images.imagePullSecrets
+# in values-overrides.yaml). The pods the operator creates for each deployment do
+# not: the agent pod runs as langsmith-ksa, and the deployment's Redis and PostgreSQL
+# as the namespace's default account. langsmith_image_pull_secret_name attaches a
+# Secret in the LangSmith namespace to those accounts (and to the backend's and
+# SmithDB's), and every apply keeps it there. Create the Secret after the apply
+# that creates the namespace and before the first deployment.
+# langsmith_image_pull_secret_name = "nexus-pull"
+
+# LangSmith's images from a mirror. By default the mirror serves Docker Hub's paths
+# directly (<registry>/langchain/...), the layout the chart's scripts/mirror_langsmith_images.sh
+# pushes and a proxy repository serves: init-values.sh writes a repository per image
+# for the 0.17 and 0.18 chart lines, and deploy.sh stops on a chart image the module
+# does not know (on 0.17, with enable_deployments, the operator's Redis and PostgreSQL
+# templates are written with the mirror too). A mirror that keeps docker.io as the first path segment
+# (<registry>/docker.io/langchain/...) takes langsmith_image_registry_keeps_source_host = true,
+# and the registry becomes images.registry in values-overrides.yaml. The pull Secret
+# above is written as images.imagePullSecrets as well. All three are stamped into
+# values-overrides.yaml, so deploy.sh stops if one changed since make init-values.
+# langsmith_image_registry                   = "nexus.example.com"
+# langsmith_image_registry_keeps_source_host = true
+
+# A mirror whose certificate an internal CA signed also needs that CA on the
+# nodes, where containerd pulls images: one PEM file per entry (one certificate
+# or a bundle, sent verbatim), up to 10, paths
+# relative to this directory or absolute. A change to the list replaces every
+# node (AKS creates new nodes, drains and deletes the old). Pods are separate:
+# LangSmith's own trust store is langsmith_custom_ca_secret_name. Keep the files
+# in place for the life of the cluster: Terraform reads them at every plan,
+# destroy included.
+# aks_custom_ca_trust_certificate_files = ["certs/internal-root-ca.pem"]
 
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
@@ -239,6 +320,9 @@ blob_ttl_enabled    = true
 blob_ttl_short_days = 14    # short-lived trace payloads
 blob_ttl_long_days  = 400   # run attachments (~13 months)
 # storage_replication_type = "LRS" # LRS | ZRS (zone loss) | GRS/RAGRS (region) | GZRS/RAGZRS (both). Choose before the first apply: README "Storage redundancy"
+# storage_shared_access_key_enabled = false  # trace-blob account; nothing in LangSmith uses a key
+# smithdb_storage_shared_access_key_enabled = false  # true only for SmithDB static-key auth; README "Storage security defaults"
+# storage_allowed_copy_scope        = "AAD"  # AAD | PrivateLink | "" (any)
 
 # ── LangSmith ─────────────────────────────────────────────────────────────────
 langsmith_namespace    = "langsmith"
@@ -256,15 +340,15 @@ langsmith_release_name = "langsmith"
 #
 sizing_profile = "production"
 
-# Namespace ResourceQuota. The default (40 CPU requests, 80 CPU limits, 200 pods)
-# fits every profile except production-large, whose sizing file header has the
-# block to use. Replaces the whole map, so list every key.
+# Namespace ResourceQuota base, in CPU cores, GiB, and pods. The default fits
+# every profile except production-large, whose sizing file header has the block
+# to use. With enable_smithdb, Terraform adds SmithDB's headroom on top.
 # resource_quota = {
-#   "requests.cpu"    = "40"
-#   "requests.memory" = "80Gi"
-#   "limits.cpu"      = "80"
-#   "limits.memory"   = "160Gi"
-#   pods              = "200"
+#   requests_cpu       = 40
+#   requests_memory_gi = 80
+#   limits_cpu         = 80
+#   limits_memory_gi   = 160
+#   pods               = 200
 # }
 
 # Pass 3 — LangGraph Platform (hostBackend, listener, operator)
@@ -318,7 +402,7 @@ sizing_profile = "production"
 # the database. Pin zones only when your VM and database sizes are offered in
 # all of them — README.md "Multi-AZ Support" has the az vm list-skus check.
 # postgres_high_availability           = true             # Postgres standby in another zone
-# availability_zones                   = ["1", "2", "3"]  # pin the AKS node pool
+# availability_zones                   = ["1", "2", "3"]  # pin every AKS node pool; a pool sets its own zones in additional_node_pools
 # postgres_standby_availability_zone   = "2"              # pin the standby; needs pinned zones
 # postgres_geo_redundant_backup        = true             # geo-redundant backups
 

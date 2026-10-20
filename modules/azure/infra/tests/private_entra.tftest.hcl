@@ -46,8 +46,11 @@ variables {
   # Fixture IDs, not real resources.
   fixture_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/identity-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aks-control-plane"
   fixture_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.usgovvirginia.cx.aks.containerservice.azure.us"
-  fixture_group_id    = "55555555-5555-5555-5555-555555555555"
-  fixture_vnet_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+  # Root runs plan in the default commercial location (eastus), where the zone
+  # has to be the commercial name; the validation refuses the Government one.
+  fixture_public_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.eastus.azmk8s.io"
+  fixture_group_id           = "55555555-5555-5555-5555-555555555555"
+  fixture_vnet_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
 
   fixture_route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/route-rg/providers/Microsoft.Network/routeTables/egress"
 }
@@ -60,6 +63,10 @@ run "defaults_plan_a_public_cluster_with_local_accounts_and_a_system_identity" {
   assert {
     condition     = module.aks.access_profile.private_cluster_enabled == false && module.aks.access_profile.private_dns_zone_id == null
     error_message = "With every flag off, the cluster was planned with a private API server"
+  }
+  assert {
+    condition     = module.aks.access_profile.public_fqdn_enabled == false
+    error_message = "A public cluster was planned with private_cluster_public_fqdn_enabled on"
   }
   assert {
     condition     = module.aks.access_profile.local_account_disabled == null && module.aks.access_profile.azure_rbac_enabled == false
@@ -90,6 +97,14 @@ run "a_private_cluster_defaults_to_the_system_dns_zone" {
     condition     = module.aks.access_profile.private_dns_zone_id == "System"
     error_message = "A private cluster with aks_private_dns_zone_id empty was not planned with the System zone"
   }
+  assert {
+    condition     = module.aks.access_profile.public_fqdn_enabled == false
+    error_message = "A private cluster with the System zone was planned with a public FQDN"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == false && !strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "A private cluster with the System zone was told to fetch credentials with --public-fqdn"
+  }
 }
 
 run "a_private_cluster_takes_a_zone_it_does_not_own" {
@@ -104,6 +119,77 @@ run "a_private_cluster_takes_a_zone_it_does_not_own" {
     condition     = module.aks.access_profile.private_dns_zone_id == "None"
     error_message = "aks_private_dns_zone_id = \"None\" did not reach the cluster"
   }
+  assert {
+    # Microsoft does not support None with the public FQDN off, and the
+    # provider defaults it to off, so the module has to turn it on.
+    condition     = module.aks.access_profile.public_fqdn_enabled == true
+    error_message = "aks_private_dns_zone_id = \"None\" was planned without the public FQDN, which Azure refuses"
+  }
+  assert {
+    # With no private zone only the public FQDN resolves, so the scripts' az aks
+    # get-credentials calls need --public-fqdn.
+    condition     = output.aks_kubeconfig_public_fqdn == true && strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "aks_private_dns_zone_id = \"None\" did not tell the scripts to fetch credentials with --public-fqdn"
+  }
+}
+
+# The providers and the kubeconfig output follow the same switch: the public
+# FQDN once the cluster has one. Azure's kubeconfig names the private FQDN.
+run "a_cluster_with_no_private_zone_is_reached_through_its_public_fqdn" {
+  command = plan
+
+  override_resource {
+    target          = module.aks.azurerm_kubernetes_cluster.main
+    override_during = plan
+    values = {
+      id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+      fqdn            = "ls-aks-test-abc.hcp.eastus.azmk8s.io"
+      kube_config     = [{ host = "https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      kube_config_raw = "clusters:\n- cluster:\n    server: https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443\n"
+    }
+  }
+
+  variables {
+    aks_private_cluster_enabled = true
+    aks_private_dns_zone_id     = "None"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://ls-aks-test-abc.hcp.eastus.azmk8s.io:443"
+    error_message = "With aks_private_dns_zone_id = \"None\", the providers do not dial the public FQDN"
+  }
+  assert {
+    condition     = strcontains(nonsensitive(output.kubeconfig), "server: https://ls-aks-test-abc.hcp.eastus.azmk8s.io:443") && !strcontains(nonsensitive(output.kubeconfig), "privatelink")
+    error_message = "With aks_private_dns_zone_id = \"None\", the kubeconfig output still names the private FQDN"
+  }
+}
+
+# A cluster already deployed with None has no public FQDN until this apply turns
+# it on, so the plan that does it keeps the kubeconfig's host rather than
+# dialing "https://:443".
+run "a_cluster_with_no_public_fqdn_yet_keeps_the_kubeconfig_host" {
+  command = plan
+
+  override_resource {
+    target          = module.aks.azurerm_kubernetes_cluster.main
+    override_during = plan
+    values = {
+      id              = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+      fqdn            = ""
+      kube_config     = [{ host = "https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      kube_config_raw = "clusters:\n- cluster:\n    server: https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443\n"
+    }
+  }
+
+  variables {
+    aks_private_cluster_enabled = true
+    aks_private_dns_zone_id     = "None"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://ls-aks-test-abc.privatelink.eastus.azmk8s.io:443"
+    error_message = "With no public FQDN yet, the providers did not fall back to the kubeconfig's host"
+  }
 }
 
 run "a_private_cluster_registers_in_a_supplied_zone_as_the_supplied_identity" {
@@ -111,13 +197,13 @@ run "a_private_cluster_registers_in_a_supplied_zone_as_the_supplied_identity" {
 
   variables {
     aks_private_cluster_enabled   = true
-    aks_private_dns_zone_id       = var.fixture_dns_zone_id
+    aks_private_dns_zone_id       = var.fixture_public_dns_zone_id
     aks_control_plane_identity    = "user"
     aks_control_plane_identity_id = var.fixture_identity_id
   }
 
   assert {
-    condition     = module.aks.access_profile.private_dns_zone_id == var.fixture_dns_zone_id
+    condition     = module.aks.access_profile.private_dns_zone_id == var.fixture_public_dns_zone_id
     error_message = "A supplied aks_private_dns_zone_id did not reach the cluster"
   }
   assert {
@@ -200,7 +286,7 @@ run "grants_on_a_supplied_network_land_on_the_vnet_and_the_dns_zone" {
     vnet_id                                  = var.fixture_vnet_id
     aks_service_cidr                         = "172.20.0.0/16"
     aks_private_cluster_enabled              = true
-    aks_private_dns_zone_id                  = var.fixture_dns_zone_id
+    aks_private_dns_zone_id                  = var.fixture_public_dns_zone_id
     aks_control_plane_identity               = "user"
     aks_control_plane_identity_id            = var.fixture_identity_id
     aks_control_plane_identity_manage_grants = true
@@ -209,7 +295,7 @@ run "grants_on_a_supplied_network_land_on_the_vnet_and_the_dns_zone" {
   assert {
     condition = toset(module.aks.control_plane_grants) == toset([
       { role = "Network Contributor", scope = var.fixture_vnet_id },
-      { role = "Private DNS Zone Contributor", scope = var.fixture_dns_zone_id },
+      { role = "Private DNS Zone Contributor", scope = var.fixture_public_dns_zone_id },
     ])
     error_message = "The control-plane grants were not planned on the supplied VNet and DNS zone"
   }
@@ -266,6 +352,36 @@ run "a_supplied_network_without_the_grants_is_refused" {
   }
 
   expect_failures = [azurerm_kubernetes_cluster.main]
+}
+
+# The same network with no direct grants passes when the check is off: an
+# owner who grants through group membership, which the check cannot see.
+run "a_supplied_network_without_the_grants_passes_with_the_check_off" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  override_data {
+    target = data.azurerm_role_assignments.control_plane
+    values = { role_assignments = [] }
+  }
+
+  variables {
+    location                             = "eastus"
+    subnet_id                            = "${var.fixture_vnet_id}/subnets/aks"
+    vnet_id                              = var.fixture_vnet_id
+    control_plane_identity               = "user"
+    control_plane_identity_id            = var.fixture_identity_id
+    control_plane_identity_manage_grants = false
+    control_plane_grant_check            = false
+  }
+
+  assert {
+    condition     = length(data.azurerm_role_assignments.control_plane) == 0
+    error_message = "control_plane_grant_check = false still read the identity's role assignments"
+  }
 }
 
 # A grant on the node subnet covers the network, but not the zone.
@@ -594,7 +710,7 @@ run "a_supplied_dns_zone_without_a_user_assigned_identity_is_refused" {
 
   variables {
     aks_private_cluster_enabled = true
-    aks_private_dns_zone_id     = var.fixture_dns_zone_id
+    aks_private_dns_zone_id     = var.fixture_public_dns_zone_id
   }
 
   expect_failures = [var.aks_private_dns_zone_id]
@@ -744,7 +860,7 @@ run "moving_an_existing_private_cluster_to_another_zone_is_refused" {
 
   variables {
     aks_private_cluster_enabled   = true
-    aks_private_dns_zone_id       = var.fixture_dns_zone_id
+    aks_private_dns_zone_id       = var.fixture_public_dns_zone_id
     aks_control_plane_identity    = "user"
     aks_control_plane_identity_id = var.fixture_identity_id
   }
@@ -766,7 +882,7 @@ run "the_supplied_zone_in_another_case_plans_clean" {
           dataplane        = "azure"
           policy           = "azure"
           private          = true
-          private_dns_zone = "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/dns-rg/providers/microsoft.network/privatednszones/privatelink.usgovvirginia.cx.aks.containerservice.azure.us"
+          private_dns_zone = "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/dns-rg/providers/microsoft.network/privatednszones/privatelink.eastus.azmk8s.io"
           entra            = null
         }]
       }
@@ -775,7 +891,7 @@ run "the_supplied_zone_in_another_case_plans_clean" {
 
   variables {
     aks_private_cluster_enabled   = true
-    aks_private_dns_zone_id       = var.fixture_dns_zone_id
+    aks_private_dns_zone_id       = var.fixture_public_dns_zone_id
     aks_control_plane_identity    = "user"
     aks_control_plane_identity_id = var.fixture_identity_id
   }
@@ -976,4 +1092,54 @@ run "swapping_an_existing_clusters_user_identity_is_refused" {
   }
 
   expect_failures = [terraform_data.aks_access_guard]
+}
+
+# ── The zone's name has to match the cloud and the location ──────────────────
+
+run "a_government_cluster_refuses_the_commercial_zone_name" {
+  command = plan
+
+  variables {
+    azure_environment             = "usgovernment"
+    location                      = "usgovvirginia"
+    redis_source                  = "in-cluster"
+    aks_private_cluster_enabled   = true
+    aks_private_dns_zone_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.usgovvirginia.azmk8s.io"
+    aks_control_plane_identity    = "user"
+    aks_control_plane_identity_id = var.fixture_identity_id
+  }
+
+  expect_failures = [var.aks_private_dns_zone_id]
+}
+
+run "a_government_cluster_accepts_the_cx_aks_zone_and_a_subzone" {
+  command = plan
+
+  variables {
+    azure_environment             = "usgovernment"
+    location                      = "usgovvirginia"
+    redis_source                  = "in-cluster"
+    aks_private_cluster_enabled   = true
+    aks_private_dns_zone_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/team1.privatelink.usgovvirginia.cx.aks.containerservice.azure.us"
+    aks_control_plane_identity    = "user"
+    aks_control_plane_identity_id = var.fixture_identity_id
+  }
+
+  assert {
+    condition     = endswith(module.aks.access_profile.private_dns_zone_id, "team1.privatelink.usgovvirginia.cx.aks.containerservice.azure.us")
+    error_message = "A Government cluster did not plan with the cx.aks subzone"
+  }
+}
+
+run "a_zone_for_another_region_is_refused" {
+  command = plan
+
+  variables {
+    aks_private_cluster_enabled   = true
+    aks_private_dns_zone_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.westus2.azmk8s.io"
+    aks_control_plane_identity    = "user"
+    aks_control_plane_identity_id = var.fixture_identity_id
+  }
+
+  expect_failures = [var.aks_private_dns_zone_id]
 }

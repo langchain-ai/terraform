@@ -113,6 +113,46 @@ variable "eks_cluster_version" {
   }
 }
 
+variable "eks_network_mode" {
+  type        = string
+  description = <<-EOT
+    Where pods get their IP addresses. "node-subnet" (default) gives each pod an
+    address in the node's subnet. "custom-networking" moves pods to dedicated pod
+    subnets (VPC CNI custom networking), so the node subnets only need room for
+    nodes. Pod IPs stay routable VPC addresses, so the ALB keeps targeting pods
+    directly. Set this at cluster creation: nodes that joined before the switch
+    keep pod IPs in the node subnets until they are replaced.
+  EOT
+  default     = "node-subnet"
+
+  validation {
+    condition     = contains(["node-subnet", "custom-networking"], var.eks_network_mode)
+    error_message = "eks_network_mode must be \"node-subnet\" or \"custom-networking\"."
+  }
+}
+
+variable "eks_pod_cidr" {
+  type        = string
+  description = "Secondary VPC CIDR for the pod subnets when eks_network_mode = \"custom-networking\" and create_vpc = true. Split into one pod subnet per AZ. Must not overlap the VPC CIDR or any network the VPC routes to."
+  default     = "100.64.0.0/16"
+
+  validation {
+    # A VPC CIDR block is /16 to /28, and each pod subnet is two bits longer
+    # than eks_pod_cidr, so a /26 is the longest prefix that still fits.
+    condition = can(cidrhost(var.eks_pod_cidr, 0)) && try(
+      tonumber(split("/", var.eks_pod_cidr)[1]) >= 16 && tonumber(split("/", var.eks_pod_cidr)[1]) <= 26,
+      false,
+    )
+    error_message = "eks_pod_cidr must be an IPv4 CIDR from /16 to /26 (e.g., 100.64.0.0/16)."
+  }
+}
+
+variable "eks_pod_subnet_ids" {
+  type        = list(string)
+  description = "Pod subnet IDs when eks_network_mode = \"custom-networking\" and create_vpc = false. One subnet per AZ, covering every AZ the cluster subnets are in, usually carved from a secondary VPC CIDR."
+  default     = []
+}
+
 variable "create_gp3_storage_class" {
   type        = bool
   description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."
@@ -461,7 +501,7 @@ variable "firewall_allowed_fqdns" {
 
 variable "firewall_subnet_cidr" {
   type        = string
-  description = "CIDR block for the firewall subnet. Must be within the VPC CIDR (default 10.0.0.0/16) and must not overlap with private_subnets (10.0.0.0/21–10.0.32.0/21) or public_subnets (10.0.40.0/21–10.0.56.0/21)."
+  description = "CIDR block for the firewall subnet. Must be within the VPC CIDR (default 10.0.0.0/16) and must not overlap with the default VPC subnets: private 10.0.0.0/21, 10.0.8.0/21, 10.0.16.0/21 and public 10.0.40.0/21, 10.0.48.0/21, 10.0.56.0/21."
   default     = "10.0.64.0/21"
 
   validation {
@@ -566,7 +606,7 @@ variable "create_langsmith_irsa_role" {
 
 variable "enable_bedrock_access" {
   type        = bool
-  description = "Attach a Bedrock InvokeModel policy to the shared LangSmith IRSA role (module.eks.langsmith_irsa_role_name), so backend/platformBackend/queue/etc. pods can call Bedrock models directly via workload identity instead of static AWS keys. Requires create_langsmith_irsa_role = true."
+  description = "Attach a Bedrock InvokeModel policy to the shared LangSmith IRSA role (module.eks.langsmith_irsa_role_name), so backend/platformBackend/queue/etc. pods can call Bedrock models directly via workload identity instead of static AWS keys. Requires create_langsmith_irsa_role = true. With enable_engine = true, the Engine IRSA role also gets this policy, because Insights runs under that role. Engine itself uses Bedrock Mantle (engine_bedrock_policy_arn), not this policy."
   default     = false
 }
 
@@ -615,6 +655,12 @@ variable "langsmith_namespace" {
   }
 }
 
+variable "langsmith_admin_email" {
+  type        = string
+  description = "Initial LangSmith organization admin email. Stored as configuration and written to initialOrgAdminEmail in Helm values."
+  default     = ""
+}
+
 variable "tls_certificate_source" {
   type        = string
   default     = "acm"
@@ -654,12 +700,12 @@ variable "letsencrypt_email" {
 
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.17.0\". Empty deploys the latest patch on the pinned 0.17 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
+  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.17.0\". Empty deploys the latest patch on the pinned 0.17 line. A 0.18.x patch is also accepted. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
   default     = ""
 
   validation {
-    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.17\\.", var.langsmith_helm_chart_version))
-    error_message = "langsmith_helm_chart_version must be empty or a 0.17.x version — deploy.sh refuses anything off the pinned chart line."
+    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.1[78]\\.", var.langsmith_helm_chart_version))
+    error_message = "langsmith_helm_chart_version must be empty or a 0.17.x or 0.18.x version — deploy.sh refuses any other chart line."
   }
 }
 
@@ -975,7 +1021,7 @@ variable "smithdb_query_enabled" {
 
 variable "langsmith_release_name" {
   type        = string
-  description = "Helm release name for LangSmith (Pass 2). Used to scope the SmithDB IRSA trust to the <release>-langsmith-smithdb service account. Must match RELEASE_NAME / release_name used in helm/ or app/."
+  description = "Helm release name for LangSmith (Pass 2). Used to scope the SmithDB IRSA trust to the <release>-langsmith-smithdb service account, and the Engine IRSA trust to the <release>-langsmith-standalone-insights-{api-server,queue} service accounts. A release name that contains \"langsmith\" drops the -langsmith part. Must match RELEASE_NAME / release_name used in helm/ or app/."
   default     = "langsmith"
 }
 
@@ -1188,4 +1234,79 @@ variable "smithdb_node_root_volume_size_gb" {
   type        = number
   description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
   default     = 100
+}
+
+#------------------------------------------------------------------------------
+# LangSmith Engine (chart 0.17+) — see ENGINE.md
+#
+# Engine finds recurring failures in your traces, diagnoses them against your
+# code, and proposes fixes. It runs on the deployment it shares with Insights
+# (engineInsightsAgent), and every Engine run executes in a sandbox.
+#------------------------------------------------------------------------------
+variable "enable_engine" {
+  type        = bool
+  description = "Enable LangSmith Engine (chart 0.17+). Creates an IRSA role for Engine's API server and queue, with Amazon Bedrock Mantle access and the shared role's LangSmith bucket access. Makes init-values.sh copy, and deploy.sh load, langsmith-values-engine.yaml. Requires enable_sandboxes = true and a license with the Engine entitlement."
+  default     = false
+}
+
+variable "engine_bedrock_policy_arn" {
+  type        = string
+  description = "IAM policy attached to the Engine IRSA role. Empty uses the AWS managed policy AmazonBedrockMantleInferenceAccess in the current partition. Set a customer-managed policy ARN to grant less."
+  default     = ""
+
+  validation {
+    condition     = var.engine_bedrock_policy_arn == "" || can(regex("^arn:aws[a-z-]*:iam::(aws|[0-9]{12}):policy/[A-Za-z0-9+=,.@_/-]+$", var.engine_bedrock_policy_arn))
+    error_message = "engine_bedrock_policy_arn must be empty or an IAM policy ARN (arn:<partition>:iam::<aws|account-id>:policy/<name>)."
+  }
+}
+
+# Read by helm/scripts/init-values.sh out of terraform.tfvars, not by Terraform.
+# tflint-ignore: terraform_unused_declarations
+variable "engine_sandbox_tenant_id" {
+  type        = string
+  description = "Workspace ID that owns Engine's sandboxes. Required when the shared organization has more than one workspace. Empty lets LangSmith use the only workspace. Use a workspace reserved for Engine."
+  default     = ""
+
+  validation {
+    condition     = var.engine_sandbox_tenant_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.engine_sandbox_tenant_id))
+    error_message = "engine_sandbox_tenant_id must be empty or a workspace ID (a lowercase UUID)."
+  }
+}
+
+# Read by helm/scripts/init-values.sh out of terraform.tfvars, not by Terraform.
+# tflint-ignore: terraform_unused_declarations
+variable "engine_intelligence_base_url" {
+  type        = string
+  description = "Empty keeps the chart default (https://beacon.langchain.com/intelligence), which only records usage when Engine runs on your own model providers, such as Amazon Bedrock. Set https://beacon.aws.langchain.com/intelligence to run Engine's models on LangSmith Intelligence."
+  default     = ""
+
+  validation {
+    condition     = var.engine_intelligence_base_url == "" || can(regex("^https://[^[:space:]]+$", var.engine_intelligence_base_url))
+    error_message = "engine_intelligence_base_url must be empty or an https:// URL."
+  }
+}
+
+# ESO-managed secrets, like langsmith_api_key_salt. Terraform does not read them.
+# setup-env.sh writes both to SSM and exports them as TF_VAR_*. apply-eso.sh syncs
+# them into the langsmith-config Secret. deploy.sh reads the TF_VAR_* values only
+# when SKIP_ESO=true. Do not put them in Helm values.
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_engine_encryption_key" {
+  type        = string
+  description = "Fernet key for the payloads LangSmith passes to Engine. Auto-generated by setup-env.sh and stored in SSM: /langsmith/{base_name}/engine-encryption-key. Keep it stable; see ENGINE.md for rotation."
+  sensitive   = true
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_engine_usage_signing_secret" {
+  type        = string
+  description = "Secret of at least 32 characters that signs Engine's usage reports. Auto-generated by setup-env.sh and stored in SSM: /langsmith/{base_name}/engine-usage-signing-secret."
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_engine_usage_signing_secret == "" || length(var.langsmith_engine_usage_signing_secret) >= 32
+    error_message = "langsmith_engine_usage_signing_secret must be at least 32 characters."
+  }
 }

@@ -14,15 +14,17 @@ output "oidc_issuer_url" {
 }
 
 output "host" {
-  description = "The Kubernetes API server endpoint"
-  value       = local.cluster_kube_config[0].host
+  description = "The Kubernetes API server endpoint: the public FQDN on a private cluster with no private DNS zone, the kubeconfig's server otherwise"
+  value       = local.cluster_host
   sensitive   = true
 }
 
 output "kube_config_raw" {
-  description = "Raw kubeconfig for the AKS cluster"
-  value       = local.cluster_kube_config_raw
-  sensitive   = true
+  description = "Raw kubeconfig for the AKS cluster, with its server set to host"
+  # Azure's kubeconfig names the private FQDN, which nothing resolves with no
+  # private DNS zone.
+  value     = local.cluster_host == local.cluster_kube_config[0].host ? local.cluster_kube_config_raw : replace(local.cluster_kube_config_raw, local.cluster_kube_config[0].host, local.cluster_host)
+  sensitive = true
 }
 
 output "client_certificate" {
@@ -143,6 +145,7 @@ output "access_profile" {
   value = !var.create_cluster ? null : {
     private_cluster_enabled = one(azurerm_kubernetes_cluster.main[*].private_cluster_enabled)
     private_dns_zone_id     = var.private_cluster_enabled ? one(azurerm_kubernetes_cluster.main[*].private_dns_zone_id) : null
+    public_fqdn_enabled     = one(azurerm_kubernetes_cluster.main[*].private_cluster_public_fqdn_enabled)
     local_account_disabled  = one(azurerm_kubernetes_cluster.main[*].local_account_disabled)
     azure_rbac_enabled      = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].azure_rbac_enabled, false)
     admin_group_object_ids  = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].admin_group_object_ids, [])
@@ -164,6 +167,11 @@ output "default_node_pool_os_sku" {
 output "node_pool_os_skus" {
   description = "OS SKU of each additional node pool, keyed by pool name."
   value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.os_sku }
+}
+
+output "node_pool_zones" {
+  description = "Availability zones each additional node pool is planned or created with, keyed by pool name. Empty for a regional pool, and null in the plan that creates one."
+  value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.zones }
 }
 
 output "support_plan" {
@@ -191,9 +199,19 @@ output "envoy_gateway_image_pull_secret_name" {
   value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.pullSecrets[0].name, "")])
 }
 
+output "custom_ca_trust_certificates_base64" {
+  description = "Base64-encoded CA certificates the cluster resource installs in every node's trust store, in the order of aks_custom_ca_trust_certificate_files. Null without any, and without a created cluster."
+  value       = one(azurerm_kubernetes_cluster.main[*].custom_ca_trust_certificates_base64)
+}
+
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
+}
+
+output "network_policy_engine" {
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. A created cluster runs network_policy; an attached one reports its own."
+  value       = var.create_cluster ? var.network_policy : coalesce(try(data.azurerm_kubernetes_cluster.existing[0].network_profile[0].network_policy, null), "none")
 }
 
 output "control_plane_grants" {
@@ -207,6 +225,11 @@ output "control_plane_grants" {
 output "kube_auth" {
   description = "How the module's Kubernetes and Helm providers sign in to the cluster: 'entra' (kubelogin with the caller's az session) or 'certificate' (kube_config client certificate)."
   value       = local.kube_auth
+}
+
+output "api_server_public_fqdn" {
+  description = "True when clients reach the API server through its public FQDN (a private cluster with no private DNS zone: private_dns_zone_id = \"None\", or an attached cluster Azure reports with None), so az aks get-credentials needs --public-fqdn."
+  value       = local.api_server_public_fqdn
 }
 
 output "ingress_internal_annotations" {

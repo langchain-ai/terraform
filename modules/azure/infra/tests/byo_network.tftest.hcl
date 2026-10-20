@@ -394,8 +394,9 @@ run "a_delegated_agic_subnet_plans_clean" {
   command = plan
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 }
 
@@ -412,8 +413,9 @@ run "an_undelegated_agic_subnet_warns" {
   }
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 
   expect_failures = [check.agic_subnet_delegation]
@@ -519,6 +521,94 @@ run "subnet_nsgs_are_refused_on_an_attached_cluster_across_subnets" {
   }
 
   expect_failures = [terraform_data.validate_network]
+}
+
+# An attached cluster reports its own policy engine, which decides whether the
+# node-subnet NetworkPolicy for sandbox-host is created here or left to deploy.sh.
+# The two runs differ only in the engine the cluster reports.
+
+run "attached_cilium_cluster_leaves_the_sandbox_policy_to_deploy" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      network_profile     = [{ network_policy = "cilium" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    existing_cluster_node_pools_managed  = true
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = output.network_policy_engine == "cilium"
+    error_message = "the network_policy_engine output is not the attached cluster's engine"
+  }
+  assert {
+    condition     = module.k8s_bootstrap.platform_backend_node_ingress == null
+    error_message = "an attached Cilium cluster planned the ipBlock NetworkPolicy, which Cilium never matches against a node IP"
+  }
+}
+
+run "attached_npm_cluster_admits_the_supplied_node_subnet" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      network_profile     = [{ network_policy = "azure" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    existing_cluster_node_pools_managed  = true
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = output.network_policy_engine == "azure"
+    error_message = "the network_policy_engine output is not the attached cluster's engine"
+  }
+  assert {
+    condition     = tolist(module.k8s_bootstrap.platform_backend_node_ingress.cidrs) == tolist(["10.0.0.0/19"]) && tolist(module.k8s_bootstrap.platform_backend_node_ingress.ports) == tolist(["TCP/1986"])
+    error_message = "an attached NPM cluster did not admit the supplied AKS subnet's prefixes to platform-backend on TCP 1986"
+  }
 }
 
 # ── Subnet capacity on an attached cluster ───────────────────────────────────
@@ -734,4 +824,215 @@ run "aks_kube_auth_rejects_an_unknown_mode" {
   }
 
   expect_failures = [var.aks_kube_auth]
+}
+
+# An attached cluster's private DNS zone comes from Azure, not from the
+# aks_private_* settings, which attaching ignores. The two runs differ only in
+# the zone Azure reports.
+
+run "an_attached_cluster_with_no_private_zone_is_reached_through_its_public_fqdn" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      fqdn                = "platform-aks-abc.hcp.eastus.azmk8s.io"
+      kube_config         = [{ host = "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = {
+        securityProfile        = { workloadIdentity = { enabled = true } }
+        apiServerAccessProfile = { privateDNSZone = "none" }
+      } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://platform-aks-abc.hcp.eastus.azmk8s.io:443"
+    error_message = "An attached cluster with no private zone is not reached through its public FQDN"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == true && strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "An attached cluster with no private zone did not tell the scripts to fetch credentials with --public-fqdn"
+  }
+}
+
+run "an_attached_cluster_with_the_system_zone_keeps_the_kubeconfig_host" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      fqdn                = "platform-aks-abc.hcp.eastus.azmk8s.io"
+      kube_config         = [{ host = "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = {
+        securityProfile        = { workloadIdentity = { enabled = true } }
+        apiServerAccessProfile = { privateDNSZone = "system" }
+      } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = nonsensitive(module.aks.host) == "https://platform-aks-abc.privatelink.eastus.azmk8s.io:443"
+    error_message = "An attached cluster with the System zone is not reached through the kubeconfig's host"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == false && !strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "An attached cluster with the System zone was told to fetch credentials with --public-fqdn"
+  }
+}
+
+# ── Sandboxes on an attached cluster ─────────────────────────────────────────
+# The sandboxhost pool is an additional pool, so an attached cluster gets it only
+# with existing_cluster_node_pools_managed on. The README tells attach users to
+# set it or bring a pool with the sandbox label and taint.
+
+run "an_attached_cluster_gets_no_sandbox_pool_by_default" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  # The plan warns that there is no pool, so sandbox-host does not sit Pending unexplained.
+  expect_failures = [check.sandbox_pool_on_attached_cluster]
+
+  assert {
+    condition     = !contains(keys(local.aks_managed_node_pools), "sandboxhost")
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = false got the sandboxhost pool"
+  }
+}
+
+run "an_attached_cluster_gets_the_sandbox_pool_when_pools_are_managed" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    existing_cluster_node_pools_managed  = true
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_sandboxes                     = true
+  }
+
+  assert {
+    condition     = tolist(local.aks_managed_node_pools["sandboxhost"].node_taints) == tolist(["sandbox.langsmith.com/host=true:NoSchedule"])
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = true did not get the tainted sandboxhost pool"
+  }
+}
+
+# The custom CA file checks apply to a cluster this module creates. An attached
+# cluster ignores aks_custom_ca_trust_certificate_files, so a file that is not
+# there must not block its plan.
+run "an_attached_cluster_skips_the_custom_ca_file_checks" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+        { name = "user", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/AKS" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                        = false
+    existing_cluster_name                 = "platform-aks"
+    existing_cluster_resource_group_name  = "platform-aks-rg"
+    aks_subnet_id                         = "${var.vnet_id}/subnets/aks"
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/does-not-exist.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == null
+    error_message = "An attached cluster should set no custom CA trust certificates and run no file check, whatever the list names"
+  }
 }

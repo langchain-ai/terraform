@@ -44,14 +44,20 @@ variable "langsmith_namespace" {
 }
 
 variable "resource_quota" {
-  type        = map(string)
-  description = "Hard limits on the LangSmith namespace ResourceQuota. Replaces the whole map, so list every key."
+  type = object({
+    requests_cpu       = number
+    requests_memory_gi = number
+    limits_cpu         = number
+    limits_memory_gi   = number
+    pods               = number
+  })
+  description = "Base hard limits on the LangSmith namespace ResourceQuota, in CPU cores, GiB, and pods. The resource_quota_extra_* inputs add to it, and enable_sandboxes leaves out the limits."
   default = {
-    "requests.cpu"    = "40"
-    "requests.memory" = "80Gi"
-    "limits.cpu"      = "80"
-    "limits.memory"   = "160Gi"
-    pods              = "200"
+    requests_cpu       = 40
+    requests_memory_gi = 80
+    limits_cpu         = 80
+    limits_memory_gi   = 160
+    pods               = 200
   }
 }
 
@@ -173,6 +179,12 @@ variable "smithdb_managed_identity_client_id" {
   default     = ""
 }
 
+variable "langsmith_image_pull_secret_name" {
+  type        = string
+  description = "Name of an existing kubernetes.io/dockerconfigjson Secret in the LangSmith namespace, attached as imagePullSecrets to the service accounts this module creates and to the namespace's default account. Empty attaches nothing."
+  default     = ""
+}
+
 variable "smithdb_cache_storage_class_name" {
   type        = string
   description = "Name of the StorageClass created for SmithDB cache volumes."
@@ -191,10 +203,45 @@ variable "smithdb_cache_disk_throughput" {
   default     = 1000
 }
 
+variable "resource_quota_extra_cpu" {
+  type        = number
+  description = "Additional CPU added to the LangSmith namespace ResourceQuota, once on the requests side and twice on the limits side. The root sizes it for SmithDB. Zero keeps the base quota."
+  default     = 0
+
+  # SmithDB large with the backfill needs 414.
+  validation {
+    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 1024
+    error_message = "resource_quota_extra_cpu must be between 0 and 1024. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
+  }
+}
+
+variable "resource_quota_extra_memory_gi" {
+  type        = number
+  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
+  default     = 0
+
+  # SmithDB large with the backfill needs 906.
+  validation {
+    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 2048
+    error_message = "resource_quota_extra_memory_gi must be between 0 and 2048."
+  }
+}
+
+variable "resource_quota_extra_pods" {
+  type        = number
+  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
+    error_message = "resource_quota_extra_pods must be between 0 and 400."
+  }
+}
+
 # ── Application secrets ───────────────────────────────────────────────────────
 # License key is stored in K8s as langsmith-license secret.
 # Other app secrets (api_key_salt, jwt_secret, admin_password) are written by
-# helm/scripts/generate-secrets.sh from Azure Key Vault.
+# infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
 
 variable "langsmith_license_key" {
   type        = string
@@ -260,12 +307,100 @@ variable "cert_manager_identity_client_id" {
 # Defaults true for the same reason install_cert_manager does.
 variable "install_keda" {
   type        = bool
-  description = "Install KEDA, which scales the LangSmith queue workers on Redis queue depth. Set false when attaching to a cluster that already runs it."
+  description = "Install KEDA, which the LangSmith Deployments operator uses to scale agent deployments. Set false when attaching to a cluster that already runs it."
   default     = true
 }
 
 variable "keda_version" {
   type        = string
-  description = "KEDA Helm chart version"
+  description = "KEDA Helm chart version. KEDA's chart and application versions coincide, so this is also the image tag."
   default     = "2.14.0"
+}
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Shape the namespace for sandbox-host: the quota and LimitRange drop CPU and memory limits, the node subnet reaches platform-backend's API port where the policy engine is not Cilium, and the JuiceFS config Secret is created."
+  default     = false
+}
+
+variable "sandbox_juicefs_secret_name" {
+  type        = string
+  description = "Name of the JuiceFS config Secret, passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_config" {
+  type        = map(string)
+  description = "JuiceFS config Secret data: name, metaurl, storage, bucket, access-key."
+  sensitive   = true
+  default     = {}
+}
+
+variable "sandbox_juicefs_config_revision" {
+  type        = number
+  description = "Revision of the write-only JuiceFS config Secret. A change rewrites the Secret from sandbox_juicefs_config."
+  default     = 1
+}
+
+variable "sandbox_juicefs_redis_id" {
+  type        = string
+  description = "Resource ID of the JuiceFS Redis. A replaced Redis replaces the JuiceFS config Secret, which writes the new host and key."
+  default     = null
+}
+
+variable "platform_backend_component" {
+  type        = string
+  description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. Selects the pods the node subnet may reach when sandboxes are on."
+  default     = "langsmith-platform-backend"
+}
+
+variable "network_policy_engine" {
+  type        = string
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. On cilium, helm/scripts/deploy.sh admits the nodes to platform-backend instead of this module."
+  default     = "azure"
+}
+
+variable "node_subnet_cidrs" {
+  type        = list(string)
+  description = "Address prefixes of the AKS node subnet, admitted to platform-backend's API port when sandboxes are on and the engine is not cilium."
+  default     = []
+}
+
+variable "keda_image_registry" {
+  type        = string
+  description = "Mirror of ghcr.io for KEDA's images, host with optional port and path. Validated in the root module. Empty pulls from ghcr.io."
+  default     = ""
+}
+
+variable "keda_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether the mirror keeps ghcr.io as the first path segment (<registry>/ghcr.io/kedacore/...) or serves ghcr.io's paths directly (<registry>/kedacore/...)."
+  default     = true
+}
+
+variable "keda_image_pull_secret_name" {
+  type        = string
+  description = "Name of an existing kubernetes.io/dockerconfigjson Secret in the keda namespace for KEDA's pods. Empty pulls without credentials."
+  default     = ""
+}
+
+variable "keda_chart_repository" {
+  type        = string
+  description = "Helm repository the KEDA chart is fetched from."
+  default     = "https://kedacore.github.io/charts"
+}
+
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for a chart repository that requires a login. Empty fetches anonymously."
+  default     = ""
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username."
+  default     = ""
+  sensitive   = true
 }

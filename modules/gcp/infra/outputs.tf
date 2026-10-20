@@ -23,6 +23,11 @@ output "langsmith_namespace" {
   value       = var.langsmith_namespace
 }
 
+output "langsmith_admin_email" {
+  description = "Initial LangSmith organization admin email used in Helm values"
+  value       = var.langsmith_admin_email
+}
+
 output "name_prefix" {
   description = "Name prefix used for all resources"
   value       = var.name_prefix
@@ -392,6 +397,11 @@ output "smithdb_ingestion_enabled" {
 output "smithdb_migration_enabled" {
   description = "Whether the historical ClickHouse-to-SmithDB migration integration is enabled"
   value       = var.smithdb_migration_enabled
+}
+
+output "smithdb_migration_parallelism" {
+  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
+  value       = var.smithdb_migration_parallelism
 }
 
 output "smithdb_query_enabled" {

@@ -100,6 +100,33 @@ locals {
     : toset(one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].zones))
   )
 
+  # Each additional pool's zones: its own when it sets them, availability_zones
+  # otherwise, as the default pool takes availability_zones. An empty list here
+  # becomes null on the resource, a regional pool, so a cluster built under the
+  # [] default plans no change.
+  node_pool_zones = {
+    for name, pool in var.additional_node_pools :
+    name => pool.zones != null ? pool.zones : var.availability_zones
+  }
+
+  # Live zones of each additional pool, with null (a regional pool) normalized
+  # to an empty set as live_node_pool_zones does for the default pool. Keyed by
+  # the pool resources that exist, so an attached cluster whose pools this
+  # module does not manage has nothing here.
+  live_additional_node_pool_zones = {
+    for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool :
+    name => pool.zones == null ? toset([]) : toset(pool.zones)
+  }
+
+  # Additional pools whose live zones differ from the zones requested for them.
+  # A pool with no requested zones is exempt, as the default pool is under an
+  # empty availability_zones: [] asks Azure to place it, so whatever zones it
+  # reports are not drift from a request nobody made.
+  additional_node_pool_zone_drift = [
+    for name in sort(keys(local.live_additional_node_pool_zones)) : name
+    if length(local.node_pool_zones[name]) > 0 && local.live_additional_node_pool_zones[name] != toset(local.node_pool_zones[name])
+  ]
+
   service_accounts_for_workload_identity = [
     "${var.langsmith_release_name}-backend",
     "${var.langsmith_release_name}-platform-backend",
@@ -153,6 +180,20 @@ locals {
   cluster_oidc_issuer_url = var.create_cluster ? azurerm_kubernetes_cluster.main[0].oidc_issuer_url : data.azurerm_kubernetes_cluster.existing[0].oidc_issuer_url
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
+
+  # A private cluster with no private DNS zone ("None") is reached through its
+  # public FQDN, whose A record points at the private IP: the credentials Azure
+  # returns name the private FQDN, which no zone resolves. Terraform's providers
+  # use the public FQDN instead, and the scripts pass --public-fqdn to
+  # az aks get-credentials (output api_server_public_fqdn). The zone comes from
+  # the settings for a cluster created here, and from Azure for an attached one,
+  # since the settings are ignored when attaching.
+  api_server_public_fqdn = var.create_cluster ? var.private_cluster_enabled && var.private_dns_zone_id == "None" : lower(try(data.azapi_resource.existing_security_profile[0].output.properties.apiServerAccessProfile.privateDNSZone, "")) == "none"
+  cluster_fqdn           = var.create_cluster ? azurerm_kubernetes_cluster.main[0].fqdn : data.azurerm_kubernetes_cluster.existing[0].fqdn
+  # fqdn is empty until the public FQDN is on: on the plan that turns it on for
+  # a cluster already deployed with None, the providers keep the kubeconfig's
+  # host, and switch on the next plan.
+  cluster_host = local.api_server_public_fqdn && local.cluster_fqdn != "" ? "https://${local.cluster_fqdn}:443" : local.cluster_kube_config[0].host
 
   # On a cluster with Entra ID integration, azurerm returns kube_config with an
   # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
@@ -270,11 +311,16 @@ data "azurerm_kubernetes_cluster" "existing" {
 # that passes the check above, applies cleanly, and then leaves pods without a
 # projected service account token. The azurerm data source doesn't expose the
 # flag, so read the cluster's ARM properties directly. Read-only GET, no writes.
+# The same read gives the private DNS zone, which the data source doesn't expose
+# either, for local.api_server_public_fqdn.
 data "azapi_resource" "existing_security_profile" {
-  count                  = var.create_cluster ? 0 : 1
-  type                   = "Microsoft.ContainerService/managedClusters@2024-09-01"
-  resource_id            = data.azurerm_kubernetes_cluster.existing[0].id
-  response_export_values = ["properties.securityProfile.workloadIdentity.enabled"]
+  count       = var.create_cluster ? 0 : 1
+  type        = "Microsoft.ContainerService/managedClusters@2024-09-01"
+  resource_id = data.azurerm_kubernetes_cluster.existing[0].id
+  response_export_values = [
+    "properties.securityProfile.workloadIdentity.enabled",
+    "properties.apiServerAccessProfile.privateDNSZone",
+  ]
 
   lifecycle {
     postcondition {
@@ -305,7 +351,7 @@ check "existing_cluster_location" {
 # every cloud.
 provider "helm" {
   kubernetes {
-    host                   = local.cluster_kube_config[0].host
+    host                   = local.cluster_host
     client_certificate     = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_certificate)
     client_key             = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_key)
     cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
@@ -394,7 +440,7 @@ locals {
   control_plane_network_scope = local.control_plane_dns_zone ? var.vnet_id : var.subnet_id
 
   control_plane_grant = local.control_plane_user && var.control_plane_identity_manage_grants
-  control_plane_check = local.control_plane_user && !var.control_plane_identity_manage_grants
+  control_plane_check = local.control_plane_user && !var.control_plane_identity_manage_grants && var.control_plane_grant_check
 }
 
 resource "azurerm_user_assigned_identity" "control_plane" {
@@ -556,6 +602,18 @@ resource "azurerm_kubernetes_cluster" "main" {
     zones = var.availability_zones
   }
 
+  # Internal CAs in every Linux node's trust store, so containerd on the node can
+  # pull from an image mirror whose certificate an internal CA signed. A change
+  # replaces every node: AKS creates new nodes, drains and deletes the old ones.
+  # Null when there are none, so a cluster created before this setting plans no
+  # change. The module sets it because the provider reads the live value back:
+  # a CA added by hand with az aks update would be removed by the next apply.
+  # Each entry is the certificate block the root validation checked, with one
+  # trailing newline, not the raw file: whitespace around the block, such as an
+  # editor adding or dropping a final newline, would otherwise change the value
+  # and replace every node for the same certificate.
+  custom_ca_trust_certificates_base64 = length(var.aks_custom_ca_trust_certificate_files) > 0 ? [for f in var.aks_custom_ca_trust_certificate_files : base64encode("${trimspace(file(f))}\n")] : null
+
   # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
   # configured), and interact with the node resource group. System-assigned,
   # or the user-assigned identity above, granted before the cluster exists.
@@ -586,6 +644,10 @@ resource "azurerm_kubernetes_cluster" "main" {
   # root module refuses to flip them on a cluster that already exists.
   private_cluster_enabled = var.private_cluster_enabled
   private_dns_zone_id     = var.private_cluster_enabled ? (var.private_dns_zone_id == "" ? "System" : var.private_dns_zone_id) : null
+  # Except with no private zone ("None"): then the API server resolves only
+  # through its public FQDN, an A record to the private IP. Microsoft does not
+  # support None with the public FQDN off, and the provider defaults it to off.
+  private_cluster_public_fqdn_enabled = local.api_server_public_fqdn
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply
@@ -730,6 +792,42 @@ check "aks_node_pool_zone_drift" {
   }
 }
 
+# The same for the additional pools. ignore_changes on zones in
+# azurerm_kubernetes_cluster_node_pool.node_pool makes an edit to
+# availability_zones, or to a pool's own zones, a silent no-op there too, and a
+# pool created before availability_zones reached additional pools is regional
+# whatever the variable says. One warning names every pool whose live zones
+# differ from the request, with both values. The exemptions are the default
+# pool's: a pool with no requested zones, and a cluster whose pools this module
+# does not manage, where local.live_additional_node_pool_zones is empty.
+check "aks_additional_node_pool_zone_drift" {
+  assert {
+    condition = length(local.additional_node_pool_zone_drift) == 0
+    error_message = join("", [
+      "AKS additional node pool zones differ from the request: ",
+      join("; ", [
+        for name in local.additional_node_pool_zone_drift :
+        "pool ${name} is in [${join(",", sort(tolist(local.live_additional_node_pool_zones[name])))}] but [${join(",", sort(local.node_pool_zones[name]))}] is requested"
+      ]),
+      ". This module ignores zone changes on an existing node pool, so the ",
+      "request was discarded and the live zones above are what you have: a ",
+      "pool's zones cannot change after creation, and letting the plan change ",
+      "them would rotate the pool through its temporary pool and drain every ",
+      "node on it. To make it take effect, either revert the request to the ",
+      "live value, add a new pool with the zones to additional_node_pools and ",
+      "move the workloads to it, or drop zones from the ignore_changes block of ",
+      "azurerm_kubernetes_cluster_node_pool.node_pool in ",
+      "modules/k8s-cluster/main.tf and apply during a maintenance window, ",
+      "which rotates each pool named above and drains every node on it. To ",
+      "keep a regional pool as it is and silence this, set zones = [] on its ",
+      "additional_node_pools entry. For the default large pool, that means ",
+      "copying its default entry from variables.tf into additional_node_pools ",
+      "and adding zones = []. On a zoned cluster with SmithDB on, plan refuses ",
+      "zones = [], and the pool has to be replaced with a zonal one.",
+    ])
+  }
+}
+
 # Additional node pools for workloads that need different compute profiles.
 # Default: one "large" pool (Standard_D16s_v5, 16 vCPU / 64 GB) for ClickHouse
 # and other memory-intensive services. Scales 0→2 (scales to zero when idle).
@@ -746,6 +844,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   node_labels           = each.value.node_labels
   node_taints           = each.value.node_taints
   kubelet_disk_type     = each.value.kubelet_disk_type
+  os_disk_size_gb       = each.value.os_disk_size_gb
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
 
   # Follows the default pool unless the pool sets its own. In place between any
@@ -760,8 +859,24 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   # a stable hash fragment so truncating long pool names cannot collide.
   temporary_name_for_rotation = "${substr(each.key, 0, 7)}${substr(sha1(each.key), 0, 2)}tmp"
 
+  # availability_zones unless the pool sets its own zones; null, a regional
+  # pool, when neither names a zone, so a cluster built under the [] default
+  # plans no change here. Set once: see ignore_changes below.
+  zones = length(local.node_pool_zones[each.key]) > 0 ? local.node_pool_zones[each.key] : null
+
   lifecycle {
-    ignore_changes = [upgrade_settings]
+    # upgrade_settings change during rolling node upgrades; ignore to prevent
+    # drift between Terraform state and live cluster configuration.
+    #
+    # zones: a pool's zones cannot change after creation. The provider applies
+    # a change by rotating the pool through temporary_name_for_rotation, a
+    # replacement scale set that drains every node of a pool holding workloads
+    # (4.5 to 6 minutes per pool on a test cluster). A tfvars edit should not
+    # do that unannounced, and a pool created regional before availability_zones
+    # reached additional pools should not be rotated by the first plan after the
+    # upgrade. check.aks_additional_node_pool_zone_drift above names the
+    # mismatch instead.
+    ignore_changes = [upgrade_settings, zones]
   }
 }
 
@@ -1122,10 +1237,15 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # With envoy_gateway_image_registry, the controller (and its certgen job) pull
 # from the mirror through the chart's global image value, and the proxy image is
 # exported for deploy.sh, which sets it on the EnvoyProxy.
+# envoy_gateway_image_registry_keeps_source_host decides whether docker.io sits
+# between the registry and the image path: a mirror that keeps the source host
+# serves <registry>/docker.io/<path>, a Docker Hub proxy repository serves
+# <registry>/<path>.
 locals {
   envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
-  envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
-  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
+  envoy_mirror_prefix  = local.envoy_gateway_mirror ? (var.envoy_gateway_image_registry_keeps_source_host ? "${var.envoy_gateway_image_registry}/docker.io/" : "${var.envoy_gateway_image_registry}/") : ""
+  envoy_gateway_image  = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}envoyproxy/gateway:${var.envoy_gateway_version}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}${var.envoy_proxy_default_image}" : ""
 }
 
 resource "helm_release" "envoy_gateway" {

@@ -194,6 +194,76 @@ run "enable_sandboxes_adds_the_juicefs_redis" {
   }
 }
 
+# The sandbox-host group carries attributes outside the eks_managed_node_groups
+# object type. A typed path drops them silently, and the upstream module then
+# falls back to its own metadata_options default of hop limit 2, which lets pods
+# reach the node's IMDS credentials.
+run "sandbox_host_node_group_keeps_metadata_options_and_overrides" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_node_group_overrides = {
+      capacity_type = "SPOT"
+      ami_type      = "AL2023_x86_64_NVIDIA"
+      cpu_options   = { core_count = 24 }
+    }
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_tokens == "required"
+    error_message = "the sandbox-host node group lost http_tokens = required on the way to the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_put_response_hop_limit == 1
+    error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].capacity_type == "SPOT"
+    error_message = "sandbox_host_node_group_overrides.capacity_type did not reach the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].ami_type == "AL2023_x86_64_NVIDIA"
+    error_message = "sandbox_host_node_group_overrides.ami_type did not reach the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.core_count == 24
+    error_message = "sandbox_host_node_group_overrides.cpu_options did not reach the EKS module"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["default"].desired_size == 3
+    error_message = "the default node group no longer gets desired_size from min_size"
+  }
+}
+
+run "sandbox_host_node_group_null_overrides_fall_back" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_node_count          = 2
+    sandbox_host_node_group_overrides = {
+      desired_size             = null
+      iam_role_use_name_prefix = null
+    }
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].desired_size == 2
+    error_message = "a null desired_size override no longer falls back to min_size"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_use_name_prefix == true
+    error_message = "a null iam_role_use_name_prefix override no longer falls back to true"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_put_response_hop_limit == 1
+    error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
+  }
+}
+
 run "enable_smithdb_adds_only_smithdb" {
   command = plan
 
@@ -271,6 +341,115 @@ run "create_vpc_false_plans_no_vpc" {
   assert {
     condition     = length(module.vpc) == 0
     error_message = "create_vpc = false still planned a VPC"
+  }
+}
+
+# ── EKS network mode ─────────────────────────────────────────────────────────
+# custom-networking moves pods to their own subnets. Everything downstream (the
+# vpc-cni add-on, Karpenter's reserved ENI, the pod CIDRs in the security group
+# rules) keys off pod_subnet_ids_by_az and pod_cidr_blocks, so the runs assert
+# those two and the subnets behind them.
+
+run "node_subnet_mode_plans_no_pod_subnets" {
+  command = plan
+
+  variables {
+    # Add-ons of different shapes, one of them vpc-cni, must plan in either
+    # mode. Both modes route them through the vpc-cni filter in the eks module.
+    eks_addons = {
+      coredns    = { most_recent = true, timeouts = { create = "25m" } }
+      kube-proxy = { addon_version = "v1.34.0-eksbuild.1" }
+      vpc-cni    = { most_recent = true, configuration_values = "{\"env\":{\"ENABLE_PREFIX_DELEGATION\":\"true\"}}" }
+    }
+  }
+
+  assert {
+    condition     = length(module.vpc[0].pod_subnets) == 0
+    error_message = "eks_network_mode = node-subnet still planned pod subnets"
+  }
+  assert {
+    condition     = length(local.pod_subnet_ids_by_az) == 0 && length(local.pod_cidr_blocks) == 0
+    error_message = "eks_network_mode = node-subnet still turned on custom networking"
+  }
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["0.0.0.0/0"])
+    error_message = "eks_network_mode = node-subnet changed the ALB ingress CIDRs"
+  }
+}
+
+run "custom_networking_plans_a_pod_subnet_per_az" {
+  command = plan
+
+  variables {
+    eks_network_mode = "custom-networking"
+    # Add-ons of different shapes, one of them vpc-cni, must plan in either
+    # mode. Both modes route them through the vpc-cni filter in the eks module.
+    eks_addons = {
+      coredns    = { most_recent = true, timeouts = { create = "25m" } }
+      kube-proxy = { addon_version = "v1.34.0-eksbuild.1" }
+      vpc-cni    = { most_recent = true, configuration_values = "{\"env\":{\"ENABLE_PREFIX_DELEGATION\":\"true\"}}" }
+    }
+  }
+
+  assert {
+    condition     = length(module.vpc[0].pod_subnets) == 3
+    error_message = "custom networking did not plan one pod subnet per AZ"
+  }
+  assert {
+    condition     = keys(local.pod_subnet_ids_by_az) == tolist(["us-east-2a", "us-east-2b", "us-east-2c"])
+    error_message = "custom networking did not key the pod subnets by AZ"
+  }
+  assert {
+    condition     = local.pod_cidr_blocks == tolist(["100.64.0.0/16"])
+    error_message = "custom networking did not add eks_pod_cidr to the security group rules"
+  }
+}
+
+run "custom_networking_admits_pods_to_a_restricted_alb" {
+  command = plan
+
+  variables {
+    eks_network_mode        = "custom-networking"
+    alb_scheme              = "internal"
+    alb_allowed_cidr_blocks = ["10.0.0.0/16"]
+  }
+
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["10.0.0.0/16", "100.64.0.0/16"])
+    error_message = "custom networking did not add eks_pod_cidr to the ALB ingress rules"
+  }
+}
+
+run "byo_custom_networking_uses_the_supplied_pod_subnets" {
+  command = plan
+
+  variables {
+    eks_network_mode   = "custom-networking"
+    create_vpc         = false
+    vpc_id             = "vpc-00000000000000001"
+    vpc_cidr_block     = "10.0.0.0/16"
+    private_subnets    = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets     = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    eks_pod_subnet_ids = ["subnet-00000000000000005"]
+  }
+
+  # One AZ for every subnet: a mock would invent a different one per subnet.
+  override_data {
+    target = data.aws_subnet.pod
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000001" }
+  }
+  override_data {
+    target = data.aws_subnet.cluster
+    values = { availability_zone = "us-east-2a" }
+  }
+
+  assert {
+    condition     = local.pod_subnet_ids_by_az == tomap({ "us-east-2a" = "subnet-00000000000000005" })
+    error_message = "a BYO VPC did not key the supplied pod subnet by its AZ"
+  }
+  assert {
+    condition     = local.pod_cidr_blocks == tolist(["100.64.0.0/18"])
+    error_message = "a BYO VPC did not add the pod subnet CIDR to the security group rules"
   }
 }
 

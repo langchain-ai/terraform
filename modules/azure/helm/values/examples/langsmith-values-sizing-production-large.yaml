@@ -14,12 +14,15 @@
 # every HPA at its maximum with Deployments and Fleet on:
 #
 #   resource_quota = {
-#     "requests.cpu"    = "160"
-#     "requests.memory" = "320Gi"
-#     "limits.cpu"      = "560"
-#     "limits.memory"   = "1200Gi"
-#     pods              = "250"
+#     requests_cpu       = 160
+#     requests_memory_gi = 320
+#     limits_cpu         = 560
+#     limits_memory_gi   = 1200
+#     pods               = 250
 #   }
+#
+# These figures leave out SmithDB. With enable_smithdb = true, Terraform adds
+# SmithDB's headroom on top, so don't add it here.
 #
 # The profile covers ALL chart components including infrastructure (ClickHouse,
 # operator, agent-builder servers) — not just the application pods.

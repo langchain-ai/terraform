@@ -309,7 +309,7 @@ variable "aks_private_cluster_enabled" {
 
 variable "aks_private_dns_zone_id" {
   type        = string
-  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and resolving the API server is left to the caller's DNS. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity = \"user\" with Private DNS Zone Contributor on the zone. Set before the first apply."
+  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and the module turns on the public FQDN, which Azure requires with None: the API server's name then resolves through public DNS to its private IP, so the nodes' and operators' DNS must resolve public names. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity = \"user\" with Private DNS Zone Contributor on the zone. Set before the first apply."
   default     = ""
 
   validation {
@@ -320,6 +320,22 @@ variable "aks_private_dns_zone_id" {
   validation {
     condition     = var.aks_private_dns_zone_id == "" || var.aks_private_cluster_enabled
     error_message = "aks_private_dns_zone_id only applies to a private API server. Set aks_private_cluster_enabled = true, or leave aks_private_dns_zone_id empty."
+  }
+
+  validation {
+    # AKS names the private API server under its own domain per cloud, and a
+    # zone can only hold names under its own name, so AKS refuses any other zone
+    # at create, after the rest of stage 1 has run. Azure Government's domain is
+    # cx.aks.containerservice.azure.us, not the azmk8s.io that Microsoft's
+    # private-endpoint DNS table lists for it. The four forms are the ones AKS's
+    # own error message accepts; "private." is for API Server VNet integration.
+    condition = contains(["", "System", "None"], var.aks_private_dns_zone_id) || can(regex(
+      format("(?i)/privateDnsZones/(?:[a-z0-9-]{1,32}\\.)?(?:private|privatelink)\\.%s\\.%s$",
+        replace(lower(var.location), " ", ""),
+      var.azure_environment == "usgovernment" ? "cx\\.aks\\.containerservice\\.azure\\.us" : "azmk8s\\.io"),
+      var.aks_private_dns_zone_id
+    ))
+    error_message = "aks_private_dns_zone_id names a zone AKS will not use for a cluster in this location and cloud. The zone must be privatelink.<location>.cx.aks.containerservice.azure.us in Azure Government (azure_environment = \"usgovernment\") or privatelink.<location>.azmk8s.io in commercial Azure, optionally with a subzone prefix of up to 32 letters, digits or hyphens (<subzone>.privatelink...), or private.<location>... for API Server VNet integration. <location> is var.location, for example usgovvirginia."
   }
 
   validation {
@@ -396,6 +412,12 @@ variable "aks_control_plane_identity_manage_grants" {
     condition     = var.aks_control_plane_identity_manage_grants == null || var.aks_control_plane_identity == "user"
     error_message = "aks_control_plane_identity_manage_grants only applies to a user-assigned control plane. Set aks_control_plane_identity = \"user\", or leave aks_control_plane_identity_manage_grants unset."
   }
+}
+
+variable "aks_network_owner_checks" {
+  type        = bool
+  description = "Whether plan reads two things on a network you supply, to catch at plan what Azure would otherwise refuse at cluster create: the node subnet's route table (with aks_outbound_type = \"userDefinedRouting\", to check its 0.0.0.0/0 next hop, and to warn on a missing default route or service-tag-only egress; needs read on the route table), and, with aks_control_plane_identity_manage_grants = false, the control-plane identity's direct role assignments on the subnet, route table and private DNS zone. Set false where the deploying identity cannot read the route table, or where the network owner grants the control-plane identity its roles through group membership, which the direct-assignment check cannot see. Azure still checks the grants and the next hop when it creates the cluster; the two warnings have no counterpart there."
+  default     = true
 }
 
 variable "location" {
@@ -787,6 +809,29 @@ variable "storage_allowed_ips" {
   default     = []
 }
 
+variable "storage_shared_access_key_enabled" {
+  type        = bool
+  description = "Whether the LangSmith trace-blob account accepts Shared Key (access key) authorization. Off by default: LangSmith reaches it through Workload Identity, and Terraform manages it through the management plane, so nothing uses a key. Policies built on the Azure security benchmark deny accounts that allow it. SmithDB's account has its own setting, smithdb_storage_shared_access_key_enabled. Changing it updates the account in place."
+  default     = false
+}
+
+variable "smithdb_storage_shared_access_key_enabled" {
+  type        = bool
+  description = "Whether SmithDB's storage account accepts Shared Key (access key) authorization. Off by default: SmithDB reaches it through Workload Identity. Set true only for SmithDB's optional static-key authentication (smithdb.config.objectStore.azure.accessKeySecretKey); the trace-blob account stays as storage_shared_access_key_enabled sets it. Changing it updates the account in place."
+  default     = false
+}
+
+variable "storage_allowed_copy_scope" {
+  type        = string
+  description = "Which storage accounts a copy into the LangSmith or SmithDB account may come from: \"AAD\" (the default: accounts in the same Entra tenant), \"PrivateLink\" (accounts with a private link to the same virtual network), or \"\" for any account, Azure's own default, which security-benchmark policies audit. LangSmith never copies between accounts, so either restriction changes nothing it does."
+  default     = "AAD"
+
+  validation {
+    condition     = contains(["", "AAD", "PrivateLink"], var.storage_allowed_copy_scope)
+    error_message = "storage_allowed_copy_scope must be \"AAD\", \"PrivateLink\" or \"\" (any account)."
+  }
+}
+
 variable "storage_replication_type" {
   type        = string
   description = "Redundancy of the LangSmith trace-blob account, which holds every trace payload and attachment. LRS (the default, so no existing account moves) keeps three copies in one datacenter. ZRS spreads them across availability zones and keeps the account readable and writable through a zone loss; Microsoft recommends it for high availability, and it matches a cluster spread by availability_zones. GZRS adds a copy in the paired region. ZRS, GZRS and RAGZRS need a region with availability zones. Changing between LRS, GRS and RAGRS, or between ZRS, GZRS and RAGZRS, updates the account in place. A change across those two groups adds or removes zone redundancy, which the azurerm provider can only apply by deleting and recreating the account, so plan refuses it on an existing account: run Azure's conversion first (az storage account migration start), then set this to match. See README \"Storage redundancy\"."
@@ -968,6 +1013,74 @@ variable "aks_os_sku" {
   }
 }
 
+variable "aks_custom_ca_trust_certificate_files" {
+  type        = list(string)
+  description = "Paths to PEM files, one entry each, that AKS installs in the trust store of every Linux node: for example the internal CA that signs an image mirror's certificate. containerd on the node does the pulling and trusts only public CAs, so a mirror behind an internal CA fails every pull with 'x509: certificate signed by unknown authority' until its CA is here. Up to 10. Paths are relative to the directory Terraform runs in (infra/) or absolute, and the files are read at plan. Empty (default) leaves the cluster's custom CA trust unset. A change replaces every node: AKS creates new nodes, drains and deletes the old ones. The module owns the setting because the provider reads it back from the cluster, so a CA added by hand with az aks update is removed by the next apply. Nodes only: pods keep their own trust store, and LangSmith's is langsmith_custom_ca_secret_name. Each file becomes one entry, its content trimmed of surrounding whitespace with one trailing newline, and an entry may hold one certificate or a bundle of several. A cluster that already holds an entry keeps it, and the nodes plan no change, only when that stored value equals the file's trimmed content plus one newline, so to adopt an existing entry write the file from the cluster's value (az aks show, securityProfile.customCATrustCertificates, base64-decoded), bundle and comment lines included; an entry stored with no trailing newline, or more than one, cannot be matched by any file and is replaced once, with every node. A file holds certificate blocks (the BEGIN and END markers alone on their lines, base64 between, as the node's PEM decoder reads them), with comment lines starting with # and blank lines around them at most; a key, a byte-order mark, an openssl Bag Attributes preamble, a note after a marker or a commented-out certificate is refused. A bundle file is one entry toward the limit of 10. Ignored when create_cluster = false, and the file checks are skipped then. The files must stay in place for the life of the cluster: Terraform reads them at every plan, including the one for destroy, so a file that has gone blocks destroy until it is restored or removed from the list."
+  default     = []
+
+  validation {
+    condition     = length(var.aks_custom_ca_trust_certificate_files) <= 10
+    error_message = "aks_custom_ca_trust_certificate_files lists ${length(var.aks_custom_ca_trust_certificate_files)} files, and AKS installs at most 10 custom CA certificates on a node. List only the CAs the nodes need to reach the image mirror: the root of each chain is enough when the mirror serves its intermediates."
+  }
+
+  validation {
+    condition     = length(distinct(var.aks_custom_ca_trust_certificate_files)) == length(var.aks_custom_ca_trust_certificate_files)
+    error_message = "aks_custom_ca_trust_certificate_files lists the same file more than once: ${join(", ", distinct([for i, f in var.aks_custom_ca_trust_certificate_files : f if contains(slice(var.aks_custom_ca_trust_certificate_files, 0, i), f)]))}. List each CA once."
+  }
+
+  # The file checks below run only for a cluster this module creates: an
+  # attached cluster ignores the list, and a missing file must not block it.
+  # A ternary rather than || : Terraform 1.11 evaluates both operands.
+  validation {
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : can(file(f))]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files Terraform cannot read: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !can(file(f))])}. Each must exist, as an absolute path or one relative to the directory Terraform runs in (infra/), and be UTF-8 text. A UTF-16 file, the default of Out-File in Windows PowerShell 5.1, is not: re-save it as UTF-8. A DER certificate converts with openssl x509 -inform der -in <file> -out <file>.pem."
+  }
+
+  validation {
+    # At least one certificate per file, counted by BEGIN markers that stand
+    # alone on their line, as the node's PEM decoder reads them: a commented-out
+    # certificate counts for nothing. AKS takes each list element as one
+    # entry and the node's trust store loads every certificate in it, so a
+    # bundle is one entry; the module never splits a file, it sends the file's
+    # trimmed content plus one newline as one entry, which is what lets a
+    # file reproduce an entry a cluster already holds. (az aks update may
+    # split a file at blank lines into several entries; the module does not.)
+    # try() rather than || : Terraform 1.11 evaluates both operands, so an
+    # unreadable file would error here instead of failing the check above.
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("(?m)^-----BEGIN CERTIFICATE-----$", file(f))), 1) >= 1]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files that hold no certificate: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length(regexall("(?m)^-----BEGIN CERTIFICATE-----$", file(f))), 1) < 1])}. Each file holds one or more PEM certificates (-----BEGIN CERTIFICATE----- blocks); a private key, a CSR or an empty file is not a certificate."
+  }
+
+  validation {
+    # AKS fails to decode a certificate whose lines end in CRLF; the Microsoft
+    # page on custom CA trust names it as a cause of the unknown-authority error.
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : !can(file(f)) || !can(regex("\r", file(f)))]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with CRLF line endings: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if can(file(f)) && can(regex("\r", file(f)))])}. AKS cannot decode a certificate with them. Convert with: tr -d '\\r' < <file> > <file>.lf, then list the new file."
+  }
+
+  validation {
+    # Certificate blocks, comment lines (#) and blank lines, and nothing else,
+    # anywhere in the file. A block is what the node's PEM decoder takes: the
+    # BEGIN and END markers alone on their lines and base64 lines between, so
+    # a marker with a note after it, a body that is not base64, or a block
+    # commented out line by line is not a block, and the file is refused
+    # rather than replace every node for a CA that never loads. With the
+    # blocks and the comment lines removed, only whitespace may remain. A server PEM that also holds the key passes
+    # the count above, and the cluster module would then put the key in plan
+    # output, in state and in the request to AKS; the key block remains here, so it
+    # is refused, before or after the certificate. A byte-order mark remains
+    # too: it stops the node's PEM decoder finding the first block, so the CA
+    # would be silently not loaded. An openssl pkcs12 "Bag Attributes"
+    # preamble is export cruft. Comment lines stay allowed, as do bundles:
+    # AKS keeps an entry verbatim, so a cluster can already hold one written
+    # from such a file, and stripping it would change the encoded value and
+    # replace every node once. try() so a missing file is reported by the
+    # check above.
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate blocks, or a block that is not whole lines (the BEGIN and END markers alone on theirs, base64 between): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)])}. A private key, a byte-order mark, an openssl Bag Attributes preamble, a note after an END marker, or a certificate commented out line by line all count; comment lines starting with # and blank lines are fine. On a cluster that already holds the entry with that extra content, a stripped file encodes to a different value, and the next apply replaces every node once. Otherwise keep every block and drop the rest: sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' <file> > <file>.crt keeps every certificate of a bundle, where openssl x509 -in <file> -out <file>.crt writes only the first."
+  }
+}
+
 # Both of these are empty by default rather than carrying the create-path value,
 # because 10.0.64.0/20 is only safe against the subnets Terraform carves. main.tf
 # fills them in for create_vnet = true and requires aks_service_cidr under
@@ -1037,8 +1150,10 @@ variable "additional_node_pools" {
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
+    zones             = optional(list(string))
+    os_disk_size_gb   = optional(number)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones is the pool's availability zones, each \"1\", \"2\" or \"3\"; unset (default) means availability_zones. Set it for a pool whose VM size is not offered in every zone, or [] for a regional pool under a zoned availability_zones. Zones apply at creation only: an existing pool keeps the zones it was created with, and plan warns when they differ from the request. A pool with zones of its own satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md). os_disk_size_gb sets the OS disk in GB; unset means the AKS default for the VM size, and a change rotates the pool through a temporary pool."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
@@ -1052,6 +1167,13 @@ variable "additional_node_pools" {
   validation {
     condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null ? true : contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], pool.os_sku)])
     error_message = "additional_node_pools: os_sku must be one of AzureLinux, AzureLinux3, Ubuntu or Ubuntu2204, or left unset to follow aks_os_sku."
+  }
+
+  # The same ternary: [for z in pool.zones] on a pool that sets none would fail
+  # on the null before 1.12. The message names each pool with a bad value.
+  validation {
+    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.zones == null ? true : alltrue([for z in pool.zones : contains(["1", "2", "3"], z)])])
+    error_message = "additional_node_pools: zones must list only \"1\", \"2\" or \"3\", the names Azure gives availability zones in every region that has them (${join(", ", [for name, pool in var.additional_node_pools : "${name} = [${join(",", pool.zones)}]" if(pool.zones == null ? false : !alltrue([for z in pool.zones : contains(["1", "2", "3"], z)]))])}). Leave zones unset to follow availability_zones."
   }
 }
 
@@ -1200,14 +1322,38 @@ variable "smithdb_ingestion_enabled" {
 
 variable "smithdb_migration_enabled" {
   type        = bool
-  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled."
+  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled. make smithdb-migration-job-start sets it to true, and make smithdb-migration-job-end sets it to false."
   default     = false
+}
+
+variable "smithdb_migration_parallelism" {
+  type        = number
+  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
+  default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
+    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
+  }
 }
 
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
   default     = false
+}
+
+variable "smithdb_sizing" {
+  type        = string
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = contains(["minimal", "small", "medium", "large"], coalesce(var.smithdb_sizing, "small"))
+    error_message = "smithdb_sizing must be minimal, small, medium, or large."
+  }
 }
 
 variable "smithdb_metastore_admin_username" {
@@ -1226,8 +1372,9 @@ variable "smithdb_metastore_admin_password" {
 
 variable "smithdb_metastore_sku_name" {
   type        = string
-  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore."
-  default     = "GP_Standard_D2ds_v5"
+  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore. Null follows smithdb_sizing: GP_Standard_D2ds_v5 for minimal, then MO_Standard_E2ds_v5, E4ds_v5, and E8ds_v5 for small, medium, and large."
+  default     = null
+  nullable    = true
 }
 
 variable "smithdb_metastore_storage_mb" {
@@ -1297,6 +1444,111 @@ variable "smithdb_cache_disk_throughput_mbps" {
   }
 }
 
+# ── Sandboxes (optional) ─────────────────────────────────────────────────────
+# LangSmith Sandboxes run Firecracker microVMs in a privileged sandbox-host pod,
+# one per node, on a dedicated pool whose VMs expose /dev/kvm. Requires chart
+# 0.17 or later; see the README, "Sandboxes".
+
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Azure Managed Redis for JuiceFS metadata, a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
+  default     = false
+}
+
+variable "sandbox_host_vm_size" {
+  type        = string
+  description = "VM size for sandbox-host nodes. The size must support nested virtualization so the node exposes /dev/kvm; the Dsv4, Ddsv4, Dsv5, Ddsv5 and Ddsv6 families do. null follows sizing_profile: production and production-large use Standard_D32ds_v5, every other profile uses Standard_D8ds_v5. Confirm the family's regional vCPU quota covers sandbox_host_max_count nodes."
+  default     = null
+}
+
+variable "sandbox_host_min_count" {
+  type        = number
+  description = "Minimum sandbox-host node count. The default of 0 lets the autoscaler keep only the nodes sandbox-host replicas need; a Pending replica adds one."
+  default     = 0
+
+  validation {
+    condition     = var.sandbox_host_min_count >= 0
+    error_message = "sandbox_host_min_count must be 0 or greater."
+  }
+}
+
+variable "sandbox_host_max_count" {
+  type        = number
+  description = "Maximum sandbox-host node count. Must be at least 1 and at least sandbox_host_min_count."
+  default     = 5
+
+  validation {
+    condition     = var.sandbox_host_max_count >= 1
+    error_message = "sandbox_host_max_count must be 1 or greater."
+  }
+}
+
+variable "sandbox_host_os_disk_size_gb" {
+  type        = number
+  description = "OS disk size in GB for sandbox-host nodes. The JuiceFS cache and sandbox images live on this disk. A change rotates the pool through a temporary pool, so the region needs vCPU quota for one more node, or drain the pool to 0 nodes first."
+  default     = 200
+
+  validation {
+    condition     = var.sandbox_host_os_disk_size_gb >= 30 && var.sandbox_host_os_disk_size_gb <= 2048
+    error_message = "sandbox_host_os_disk_size_gb must be between 30 and 2048."
+  }
+}
+
+variable "sandbox_juicefs_name" {
+  type        = string
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state. Also the name of the Blob container that holds the volume's data."
+  default     = "sandbox-juicefs"
+
+  # Blob container naming rules, since the container takes this name.
+  validation {
+    condition     = length(var.sandbox_juicefs_name) <= 63 && can(regex("^[a-z0-9]([a-z0-9]|-[a-z0-9]){2,62}$", var.sandbox_juicefs_name))
+    error_message = "sandbox_juicefs_name must be 3-63 lowercase letters, digits and single hyphens, starting and ending with a letter or digit."
+  }
+}
+
+variable "sandbox_juicefs_redis_name" {
+  type        = string
+  description = "Name for the JuiceFS metadata Redis. Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
+  default     = ""
+}
+
+variable "sandbox_juicefs_amr_sku" {
+  type        = string
+  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
+  default     = "Balanced_B1"
+}
+
+variable "sandbox_juicefs_redis_high_availability" {
+  type        = bool
+  description = "Zone-redundant HA for the JuiceFS metadata Redis, plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
+  default     = true
+}
+
+variable "sandbox_juicefs_redis_prevent_destroy" {
+  type        = bool
+  description = "While true, plan refuses enable_sandboxes = false, which would delete the JuiceFS metadata Redis and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes. It does not stop terraform destroy."
+  default     = false
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  type        = string
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket, access-key). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  type        = number
+  description = "Revision for the sandbox JuiceFS config Secret, which is written write-only so the Redis access key stays out of that resource's state. The key is still in state through the JuiceFS Redis outputs, as the LangSmith Redis key is. Increment to rewrite the Secret after the access key is regenerated. A replaced Redis, from a new sandbox_juicefs_redis_name or redis_location, rewrites the Secret on its own. The chart does not restart sandbox-host for a rewrite, so restart it after the apply."
+  default     = 1
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL init-values.sh uses to generate browser and programmatic service URLs for HTTP services running inside sandboxes. Needs wildcard DNS and TLS for the host when set. Read by helm/scripts/; Terraform ignores this value."
+  default     = ""
+}
+
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
@@ -1304,14 +1556,20 @@ variable "langsmith_namespace" {
 }
 
 variable "resource_quota" {
-  type        = map(string)
-  description = "Hard limits on the LangSmith namespace ResourceQuota. Replaces the whole map, so list every key. sizing_profile = \"production-large\" needs a larger quota: see the header of helm/values/examples/langsmith-values-sizing-production-large.yaml."
+  type = object({
+    requests_cpu       = number
+    requests_memory_gi = number
+    limits_cpu         = number
+    limits_memory_gi   = number
+    pods               = number
+  })
+  description = "Base hard limits on the LangSmith namespace ResourceQuota, in CPU cores, GiB, and pods. With enable_smithdb, Terraform adds SmithDB's headroom on top; with enable_sandboxes, the quota leaves out the limits. sizing_profile = \"production-large\" needs a larger base: see the header of helm/values/examples/langsmith-values-sizing-production-large.yaml."
   default = {
-    "requests.cpu"    = "40"
-    "requests.memory" = "80Gi"
-    "limits.cpu"      = "80"
-    "limits.memory"   = "160Gi"
-    pods              = "200"
+    requests_cpu       = 40
+    requests_memory_gi = 80
+    limits_cpu         = 80
+    limits_memory_gi   = 160
+    pods               = 200
   }
 }
 
@@ -1367,7 +1625,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins for Azure. enable_smithdb requires an explicit chart line selection; see SMITHDB.md, 'Version requirements'."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'."
   default     = ""
 }
 
@@ -1385,6 +1643,11 @@ variable "tls_certificate_source" {
     condition     = var.tls_certificate_source != "dns01" || var.install_cert_manager
     error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
   }
+
+  validation {
+    condition     = var.tls_certificate_source != "letsencrypt" || !contains(["istio-addon", "agic"], var.ingress_controller)
+    error_message = "tls_certificate_source = \"letsencrypt\" does not work with ingress_controller = \"${var.ingress_controller}\": the HTTP-01 challenge never reaches cert-manager (istio-addon registers no IngressClass, and Application Gateway rewrites the challenge path). Use \"dns01\" with langsmith_domain set, \"existing\", or \"none\". See INGRESS_CONTROLLERS.md."
+  }
 }
 
 # Both default true, which is what this module did before the flags existed. Set
@@ -1399,8 +1662,65 @@ variable "install_cert_manager" {
 
 variable "install_keda" {
   type        = bool
-  description = "Install KEDA into the cluster. Set false when the cluster already runs it. KEDA scales the LangSmith queue workers on Redis queue depth, so something has to provide it."
+  description = "Install KEDA into the cluster. Set false when the cluster already runs it. The LangSmith Deployments operator scales agent deployments through KEDA, so something has to provide it when Deployments are enabled."
   default     = true
+}
+
+variable "keda_image_registry" {
+  type        = string
+  description = "Registry that mirrors ghcr.io for KEDA's three images (the operator, the metrics API server and the admission webhooks), as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). They are pulled as <registry>/ghcr.io/kedacore/<name>:<keda chart version> when the mirror keeps the source host, the layout LangSmith's images.registry expects, or as <registry>/kedacore/<name>:<version> with keda_image_registry_keeps_source_host = false. Empty (default) pulls from ghcr.io. Applies when install_keda is true."
+  default     = ""
+
+  validation {
+    condition     = var.keda_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.keda_image_registry))
+    error_message = "keda_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
+  }
+}
+
+variable "keda_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether keda_image_registry keeps ghcr.io as the first path segment under the registry. true (default): the images are pulled as <registry>/ghcr.io/kedacore/<name>, the layout LangSmith's images.registry expects. false: the mirror serves ghcr.io's paths directly, as a proxy repository for ghcr.io in Nexus or Artifactory does, and the images are pulled as <registry>/kedacore/<name>."
+  default     = true
+}
+
+variable "keda_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the keda namespace that KEDA's pods pull with. The Secret has to exist before the release is installed, and the module creates the keda namespace with the release, so on a new cluster the install is two applies: apply with install_keda = false, create the namespace and the Secret, set install_keda = true and apply again (the README's mirror section has the commands). Empty (default) pulls without credentials. Requires keda_image_registry."
+  default     = ""
+
+  validation {
+    condition     = var.keda_image_pull_secret_name == "" || var.keda_image_registry != ""
+    error_message = "keda_image_pull_secret_name only applies with a mirror. Set keda_image_registry, or leave keda_image_pull_secret_name empty."
+  }
+}
+
+variable "keda_chart_repository" {
+  type        = string
+  description = "Helm repository the KEDA chart is fetched from, by the machine running Terraform. The default is KEDA's own; a mirrored repository (a Helm proxy in Nexus or Artifactory, or an OCI registry as oci://<host>/<path>) keeps that machine off kedacore.github.io. The chart name and version do not change."
+  default     = "https://kedacore.github.io/charts"
+
+  validation {
+    condition     = can(regex("^(https?|oci)://[^/]+(/[^/]+)*$", var.keda_chart_repository))
+    error_message = "keda_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'https://kedacore.github.io/charts' or 'oci://nexus.example.com/helm-kedacore')."
+  }
+}
+
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for keda_chart_repository when the mirror requires a login to read charts, as a Nexus or Artifactory Helm proxy behind authentication does; the machine running Terraform sends it with the chart fetch. Empty (default) fetches anonymously, which KEDA's own repository and an open mirror allow. Set with keda_chart_repository_password."
+  default     = ""
+
+  validation {
+    condition     = (var.keda_chart_repository_username == "") == (var.keda_chart_repository_password == "")
+    error_message = "keda_chart_repository_username and keda_chart_repository_password go together: set both for a chart mirror that requires a login, or neither."
+  }
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars."
+  default     = ""
+  sensitive   = true
 }
 
 variable "postgres_admin_username" {
@@ -1430,6 +1750,36 @@ variable "postgres_admin_password" {
   }
 }
 
+variable "langsmith_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in langsmith_namespace that LangSmith's pods pull with. init-values.sh writes it as images.imagePullSecrets, so the chart's own pods use it; the pods the operator creates for each deployment take no chart value (the agent pod runs as the langsmith-ksa service account, the deployment's Redis and PostgreSQL pods as the namespace's default account), so the module also attaches the Secret to those two accounts, and to the backend and SmithDB accounts it creates, and every apply keeps it. Create the Secret in the namespace after the apply that creates the namespace and before make deploy; the accounts reference it by name. Empty (default) attaches nothing."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_image_pull_secret_name == "" || (length(var.langsmith_image_pull_secret_name) <= 253 && can(regex("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", var.langsmith_image_pull_secret_name)))
+    error_message = "langsmith_image_pull_secret_name must be a Secret name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit, at most 253 characters."
+  }
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_image_registry" {
+  type        = string
+  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. By default (langsmith_image_registry_keeps_source_host = false) the mirror serves each source registry's paths directly, the layout the chart's own scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and a proxy repository in Nexus or Artifactory serves: init-values.sh leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.17 and 0.18 chart lines, and deploy.sh refuses a chart with an image the module does not know. A mirror laid out with the source host kept as the first path segment (<registry>/docker.io/langchain/<name>:<tag>) takes langsmith_image_registry_keeps_source_host = true: the value then becomes images.registry in values-overrides.yaml and the chart composes the paths. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.langsmith_image_registry))
+    error_message = "langsmith_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
+  }
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether langsmith_image_registry keeps each image's source registry as the first path segment under the mirror. false (default): the mirror serves the source registries' paths directly, which is what the chart's scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and what a proxy repository in Nexus or Artifactory serves, so init-values.sh writes each image's repository as <registry>/langchain/<name> (and <registry>/<path> for the images from mcr.microsoft.com and registry.k8s.io, which a group repository that proxies those registries serves the same way). true: images.registry is set and the chart composes <registry>/docker.io/langchain/<name>, for a mirror laid out with the source host kept. Ignored without langsmith_image_registry."
+  default     = false
+}
+
 # ── LangSmith secrets ─────────────────────────────────────────────────────────
 # Only the license key is a Terraform variable: the k8s_bootstrap module needs
 # it to create the langsmith-license K8s secret.
@@ -1437,7 +1787,7 @@ variable "postgres_admin_password" {
 # The admin password, API key salt, JWT secret and Fernet encryption keys are
 # NOT Terraform variables by design — Terraform would persist them in plaintext
 # in state. scripts/seed-keyvault-secrets.sh writes them directly to Key Vault
-# after apply, and helm/scripts/generate-secrets.sh reads them back from KV.
+# after apply, and scripts/create-k8s-secrets.sh reads them back from KV.
 
 variable "langsmith_release_name" {
   type        = string
@@ -1536,7 +1886,7 @@ variable "ingress_ip" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pool and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Applies at creation only."
+  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pools and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Covers the default node pool and every additional pool, unless a pool sets its own zones in additional_node_pools. Applies at creation only: a pool keeps the zones it was created with, and plan warns when they differ from the request."
   default     = []
 }
 
@@ -1575,10 +1925,9 @@ variable "langsmith_custom_ca_secret_key" {
   default     = "ca.crt"
 }
 
-# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing and the default sandbox_host_vm_size."
   default     = "production"
 
   # "default" is the scripts' value for the chart's base values with no overlay.
@@ -1782,12 +2131,12 @@ variable "envoy_gateway_version" {
 
 variable "envoy_gateway_image_registry" {
   type        = string
-  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, so the mirror keeps the source host as the first path segment, the layout LangSmith's images.registry expects. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, the layout LangSmith's images.registry expects, when the mirror keeps the source host as the first path segment (envoy_gateway_image_registry_keeps_source_host = true, the default). A mirror that drops it, as a Docker Hub proxy repository in Nexus or Artifactory does, takes envoy_gateway_image_registry_keeps_source_host = false and is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
   default     = ""
 
   validation {
-    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
-    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 
   # A version missing from local.envoy_proxy_default_images would leave the
@@ -1796,6 +2145,12 @@ variable "envoy_gateway_image_registry" {
     condition     = var.envoy_gateway_image_registry == "" || contains(keys(local.envoy_proxy_default_images), var.envoy_gateway_version)
     error_message = "envoy_gateway_image_registry needs the Envoy proxy image that Envoy Gateway uses by default, and the module knows it only for envoy_gateway_version v1.2.0. Set envoy_gateway_version = \"v1.2.0\", or leave envoy_gateway_image_registry empty."
   }
+}
+
+variable "envoy_gateway_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether envoy_gateway_image_registry keeps docker.io as the first path segment under the registry. true (default): the controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version>, the layout LangSmith's images.registry expects. false: the mirror serves Docker Hub's paths directly, as a Docker Hub proxy repository in Nexus or Artifactory does, and the controller is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. The proxy image follows the same rule. Ignored without envoy_gateway_image_registry."
+  default     = true
 }
 
 variable "envoy_gateway_image_pull_secret_name" {

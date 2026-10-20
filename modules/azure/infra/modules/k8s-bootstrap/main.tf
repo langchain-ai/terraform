@@ -54,10 +54,22 @@ resource "kubernetes_namespace_v1" "langsmith" {
   }
 }
 
-# ── Service Account (Workload Identity) ───────────────────────────────────────
+# ── Service Accounts (Workload Identity, pull Secret) ─────────────────────────
 # langsmith-ksa is used by LangSmith pods and LGP operator deployments.
 # The azure.workload.identity/client-id annotation binds it to the managed
 # identity that has Storage Blob Data Contributor on the blob account.
+#
+# With langsmith_image_pull_secret_name set, every account here carries the
+# Secret as imagePullSecrets. The chart's own pods pull with
+# images.imagePullSecrets from the values file; the pods the operator creates
+# for each deployment do not, and run as langsmith-ksa (the agent pod) or as
+# the namespace's default account (its Redis and PostgreSQL). The provider
+# reads imagePullSecrets back, so a Secret attached by hand is removed at the
+# next apply; declared here, it stays.
+
+locals {
+  langsmith_image_pull_secrets = var.langsmith_image_pull_secret_name == "" ? [] : [var.langsmith_image_pull_secret_name]
+}
 
 resource "kubernetes_service_account_v1" "langsmith" {
   metadata {
@@ -65,6 +77,13 @@ resource "kubernetes_service_account_v1" "langsmith" {
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
     annotations = {
       "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
+    }
+  }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
     }
   }
 }
@@ -79,6 +98,13 @@ resource "kubernetes_service_account_v1" "backend" {
       "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
     }
   }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
 }
 
 resource "kubernetes_service_account_v1" "smithdb" {
@@ -91,6 +117,41 @@ resource "kubernetes_service_account_v1" "smithdb" {
       "azure.workload.identity/client-id" = var.smithdb_managed_identity_client_id
     }
   }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
+}
+
+# Kubernetes creates the default service account in the namespace. With a pull
+# Secret set, the module adopts it (the provider's resource for exactly that)
+# and attaches the Secret, because the operator's Redis and PostgreSQL pods run
+# as it. Clearing the setting destroys the resource, which deletes the account;
+# Kubernetes recreates it, without the Secret, within seconds.
+resource "kubernetes_default_service_account_v1" "langsmith" {
+  count = var.langsmith_image_pull_secret_name == "" ? 0 : 1
+
+  metadata {
+    name      = "default"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  image_pull_secret {
+    name = var.langsmith_image_pull_secret_name
+  }
+}
+
+locals {
+  # The accounts that carry the pull Secret, for the output and the tests.
+  langsmith_image_pull_secret_service_accounts = var.langsmith_image_pull_secret_name == "" ? [] : compact([
+    "langsmith-ksa",
+    var.backend_service_account_name,
+    var.enable_smithdb ? var.smithdb_service_account_name : "",
+    "default",
+  ])
 }
 
 # SmithDB's disk-backed caches use per-pod generic ephemeral PVCs. Premium SSD
@@ -120,6 +181,13 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 # ── Resource Quota ────────────────────────────────────────────────────────────
 # Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
 # deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
+# Base: var.resource_quota, by default 40 CPU req / 80 CPU lim, 80 GiB req /
+# 160 GiB lim, 200 pods. The resource_quota_extra_* inputs add SmithDB's pods on
+# top, once to requests and twice to limits, so a plain install keeps the base.
+#
+# With sandboxes on, the quota caps requests only. sandbox-host runs Firecracker
+# VMs in child cgroups beneath its own pod cgroup, so a container limit would cap
+# every sandbox on the node, and a limits.* quota would force one onto it.
 
 resource "kubernetes_resource_quota_v1" "langsmith" {
   metadata {
@@ -128,7 +196,14 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
   }
 
   spec {
-    hard = var.resource_quota
+    hard = merge({
+      "requests.cpu"    = tostring(var.resource_quota.requests_cpu + var.resource_quota_extra_cpu)
+      "requests.memory" = "${var.resource_quota.requests_memory_gi + var.resource_quota_extra_memory_gi}Gi"
+      pods              = tostring(var.resource_quota.pods + var.resource_quota_extra_pods)
+      }, var.enable_sandboxes ? {} : {
+      "limits.cpu"    = tostring(var.resource_quota.limits_cpu + var.resource_quota_extra_cpu * 2)
+      "limits.memory" = "${var.resource_quota.limits_memory_gi + var.resource_quota_extra_memory_gi * 2}Gi"
+    })
   }
 }
 
@@ -139,6 +214,8 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
 # agent features) ship without resource stanzas, so without defaults they're rejected
 # with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
 # This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
+# With sandboxes on it supplies requests only: a default 1 CPU limit lands below
+# sandbox-host's 2 CPU request, and the API server rejects the pod.
 resource "kubernetes_limit_range_v1" "langsmith" {
   metadata {
     name      = "langsmith-defaults"
@@ -148,7 +225,7 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
-      default = {
+      default = var.enable_sandboxes ? null : {
         cpu    = "1"
         memory = "1Gi"
       }
@@ -250,10 +327,58 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
   }
 }
 
+# sandbox-host runs on the host network, so its calls to platform-backend come
+# from a node IP, which no namespace rule above matches. Azure NPM matches node
+# IPs by ipBlock, so this admits the node subnet to platform-backend's API port
+# alone. Under node-subnet IPAM, pods draw from the same range and reach that port
+# too; under overlay, only nodes do. Cilium on AKS never matches a node IP by
+# ipBlock, so there helm/scripts/deploy.sh applies a CiliumNetworkPolicy instead.
+resource "kubernetes_network_policy_v1" "platform_backend_from_nodes" {
+  count = var.enable_sandboxes && var.network_policy_engine != "cilium" ? 1 : 0
+
+  metadata {
+    name      = "allow-nodes-to-platform-backend"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = {
+        "app.kubernetes.io/component" = var.platform_backend_component
+      }
+    }
+
+    ingress {
+      dynamic "from" {
+        for_each = var.node_subnet_cidrs
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
+      ports {
+        port     = "1986"
+        protocol = "TCP"
+      }
+    }
+
+    policy_types = ["Ingress"]
+  }
+
+  lifecycle {
+    precondition {
+      # An ingress rule with ports and no peers admits every source.
+      condition     = length(var.node_subnet_cidrs) > 0
+      error_message = "The NetworkPolicy admitting sandbox-host to platform-backend needs the AKS node subnet's address prefixes, and none were found."
+    }
+  }
+}
+
 # ── Kubernetes Secrets (infrastructure dependencies) ──────────────────────────
 # These are created here because they depend on Terraform outputs (connection URLs).
 # Application-level secrets (api_key_salt, jwt_secret, admin_password) are
-# written by helm/scripts/generate-secrets.sh from Azure Key Vault.
+# written by infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
 
 # PostgreSQL connection URL injected into the namespace so the Helm chart can
 # reference it via existingSecretName. Created here (not by Helm) because the
@@ -356,6 +481,36 @@ resource "kubernetes_secret_v1" "license" {
   type = "Opaque"
 }
 
+# JuiceFS config for sandbox-host and the chart's juicefs-format Job, passed to
+# the chart as sandboxes.juicefs.existingSecretName. The format Job's name hashes
+# this Secret's name, not its data, so a changed value reaches an existing volume
+# only under a new Secret name. Write-only, so the metaurl's Redis key stays out
+# of this resource's state, and a new value is written only when the revision
+# changes or the Redis is replaced: a new Redis has a new host and key, and
+# replacing the Secret writes them without a revision bump.
+resource "terraform_data" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes ? 1 : 0
+  input = var.sandbox_juicefs_redis_id
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_secret_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data_wo          = var.sandbox_juicefs_config
+  data_wo_revision = var.sandbox_juicefs_config_revision
+
+  type = "Opaque"
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.sandbox_juicefs_redis]
+  }
+}
+
 # ── cert-manager ──────────────────────────────────────────────────────────────
 # TLS automation infrastructure. Manages Let's Encrypt certificates.
 # ClusterIssuers are applied separately by helm/scripts/deploy.sh.
@@ -444,6 +599,30 @@ resource "helm_release" "cert_manager" {
 # ── KEDA ──────────────────────────────────────────────────────────────────────
 # Kubernetes Event-Driven Autoscaling. Scales LangSmith queue workers
 # based on Redis queue depth.
+#
+# With keda_image_registry, the chart's global.image.registry puts the mirror
+# in front of each image's repository, whose default carries the ghcr.io host
+# (ghcr.io/kedacore/<name>), so the pull is <registry>/ghcr.io/kedacore/<name>.
+# keda_image_registry_keeps_source_host = false drops that segment by setting
+# the three repositories to kedacore/<name>. The tag is the chart's appVersion,
+# which KEDA keeps equal to the chart version. local.keda_images composes the
+# same paths for the keda_images output, so a plan shows what the nodes pull.
+locals {
+  keda_mirror       = var.install_keda && var.keda_image_registry != ""
+  keda_image_prefix = local.keda_mirror ? (var.keda_image_registry_keeps_source_host ? "${var.keda_image_registry}/ghcr.io/kedacore/" : "${var.keda_image_registry}/kedacore/") : "ghcr.io/kedacore/"
+  keda_images = var.install_keda ? {
+    for name in ["keda", "keda-metrics-apiserver", "keda-admission-webhooks"] : name => "${local.keda_image_prefix}${name}:${var.keda_version}"
+  } : {}
+  keda_mirror_sets = merge(
+    local.keda_mirror ? { "global.image.registry" = var.keda_image_registry } : {},
+    local.keda_mirror && !var.keda_image_registry_keeps_source_host ? {
+      "image.keda.repository"             = "kedacore/keda"
+      "image.metricsApiServer.repository" = "kedacore/keda-metrics-apiserver"
+      "image.webhooks.repository"         = "kedacore/keda-admission-webhooks"
+    } : {},
+    var.install_keda && var.keda_image_pull_secret_name != "" ? { "imagePullSecrets[0].name" = var.keda_image_pull_secret_name } : {},
+  )
+}
 
 resource "helm_release" "keda" {
   count = var.install_keda ? 1 : 0
@@ -451,11 +630,14 @@ resource "helm_release" "keda" {
   name             = "keda"
   namespace        = "keda"
   create_namespace = true
-  repository       = "https://kedacore.github.io/charts"
-  chart            = "keda"
-  version          = var.keda_version
-  wait             = true
-  wait_for_jobs    = true
+  repository       = var.keda_chart_repository
+  # A mirror behind a login takes the two; null keeps the fetch anonymous.
+  repository_username = var.keda_chart_repository_username != "" ? var.keda_chart_repository_username : null
+  repository_password = var.keda_chart_repository_password != "" ? var.keda_chart_repository_password : null
+  chart               = "keda"
+  version             = var.keda_version
+  wait                = true
+  wait_for_jobs       = true
 
   set {
     name  = "resources.operator.requests.cpu"
@@ -488,5 +670,14 @@ resource "helm_release" "keda" {
   set {
     name  = "resources.metricServer.limits.memory"
     value = "512Mi"
+  }
+
+  # The mirror, the repository layout and the pull Secret, only when set.
+  dynamic "set" {
+    for_each = local.keda_mirror_sets
+    content {
+      name  = set.key
+      value = set.value
+    }
   }
 }

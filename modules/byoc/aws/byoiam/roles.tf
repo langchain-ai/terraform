@@ -30,7 +30,8 @@ locals {
       namespace = "langsmith"
       service_accounts = concat(
         [for component in ["backend", "host-backend", "listener", "platform-backend", "ingest-queue", "queue", "agent-gateway"] : "*-langsmith-${component}"],
-        ["*-fleet-tool-server", "*-fleet-trigger-server"]
+        ["*-fleet-tool-server", "*-fleet-trigger-server"],
+        ["*-standalone-insights-api-server", "*-standalone-insights-queue"]
       )
     }
     postgres-setup-iam-role    = { namespace = "langsmith", service_accounts = ["*-langsmith-postgres-setup"] }
@@ -42,6 +43,7 @@ locals {
 
   node_policy_names = ["AmazonEKSWorkerNodePolicy", "AmazonEKS_CNI_Policy", "AmazonEC2ContainerRegistryReadOnly", "AmazonSSMManagedInstanceCore"]
   managed_policy_names = {
+    workload-iam-role                 = ["AmazonBedrockMantleInferenceAccess"]
     eks-cluster-role                  = ["AmazonEKSClusterPolicy"]
     eks-node-role                     = local.node_policy_names
     karpenter-node-role               = local.node_policy_names
@@ -63,7 +65,7 @@ resource "aws_iam_role" "this" {
   permissions_boundary = var.permissions_boundary_arn
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [merge({
+    Statement = concat([merge({
       Effect    = "Allow"
       Principal = { Service = each.value.service }
       Action    = each.value.service == "pods.eks.amazonaws.com" ? ["sts:AssumeRole", "sts:TagSession"] : ["sts:AssumeRole"]
@@ -84,7 +86,12 @@ resource "aws_iam_role" "this" {
           "arn:${local.partition}:rds:${region}:${local.account_id}:db:*-smith${each.key == "postgres-monitoring-role" ? "-postgres" : "db-metastore"}"
         ] }
       }
-    } : {})]
+      } : {})], each.key == "smithdb-iam-role" && length(var.smithdb_migration_writer_principal_arns) > 0 ? [{
+      Sid       = "SelfHostedMigrationWriters"
+      Effect    = "Allow"
+      Principal = { AWS = var.smithdb_migration_writer_principal_arns }
+      Action    = ["sts:AssumeRole"]
+    }] : [])
   })
   # langsmith-byoc-role participates in EKS access-entry authorization. local.tags
   # enforces customer ownership to keep IAM outside the provisioner's write scope.
