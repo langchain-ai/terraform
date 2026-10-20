@@ -160,8 +160,6 @@ locals {
         ]
       },
       {
-        # Sandbox registries that authenticate to ECR with an IAM role. Only roles
-        # tagged LangSmithSandboxECR=true opt in; LangSmith always sends the workspace ID as external ID.
         Sid      = "AssumeSandboxECRRoles"
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
