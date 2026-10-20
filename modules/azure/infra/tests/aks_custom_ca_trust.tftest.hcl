@@ -246,6 +246,63 @@ run "refuses_a_private_key_commented_out_after_the_certificate" {
   expect_failures = [var.aks_custom_ca_trust_certificate_files]
 }
 
+run "refuses_a_commented_key_whose_markers_carry_spaces" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key-spaced.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_commented_key_with_four_dashes_in_lowercase" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key-lowercase.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+run "refuses_a_commented_key_body_with_its_markers_deleted" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-key-body-only.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+# A live certificate plus a commented-out old one: the commented block is
+# refused, so a bundle holds only live certificates.
+run "refuses_a_commented_out_old_certificate_beside_a_live_one" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-plus-commented-old-cert.pem"]
+  }
+
+  expect_failures = [var.aks_custom_ca_trust_certificate_files]
+}
+
+# The boundary on the other side: prose that names the markers mid-line and a
+# hex fingerprint on its own comment line pass, as one entry equal to the file.
+run "accepts_prose_naming_the_markers_and_a_hex_fingerprint" {
+  command = plan
+
+  variables {
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/ca-1-prose-and-fingerprint.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == tolist([filebase64("tests/fixtures/ca-1-prose-and-fingerprint.pem")])
+    error_message = "Prose naming the markers and a hex fingerprint line should pass as one entry equal to the file"
+  }
+}
+
 run "refuses_a_note_after_the_end_marker" {
   command = plan
 

@@ -1077,17 +1077,21 @@ variable "aks_custom_ca_trust_certificate_files" {
     # replace every node once. try() so a missing file is reported by the
     # check above.
     condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)]) : true
-    error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate blocks, or a block that is not whole lines (the BEGIN and END markers alone on theirs, base64 between): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)])}. A private key, a byte-order mark, an openssl Bag Attributes preamble, a note after an END marker, or a certificate commented out line by line all count; comment lines starting with # and blank lines are fine. On a cluster that already holds the entry with that extra content, a stripped file encodes to a different value, and the next apply replaces every node once. Otherwise keep every block and drop the rest: sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' <file> > <file>.crt keeps every certificate of a bundle, where openssl x509 -in <file> -out <file>.crt writes only the first."
+    error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate blocks, or a block that is not whole lines (the BEGIN and END markers alone on theirs, base64 between): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)])}. A private key, a byte-order mark, an openssl Bag Attributes preamble, a note after an END marker, or a certificate commented out line by line all count; other comment lines starting with # and blank lines are fine. On a cluster that already holds the entry with that extra content, a stripped file encodes to a different value, and the next apply replaces every node once. Otherwise keep every block and drop the rest: sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' <file> > <file>.crt keeps every certificate of a bundle, where openssl x509 -in <file> -out <file>.crt writes only the first."
   }
 
   # A PEM block commented out line by line passes the check above, which strips
   # every # line before looking for leftover content, and AKS keeps the file as
   # given: a private key kept that way would reach plan output, state and every
-  # node. Refuse a comment line that carries a BEGIN marker; a certificate
-  # commented out the same way is already refused as holding no certificate.
+  # node. Refuse a comment line that is a BEGIN marker in any spelling (any run
+  # of dashes, spaces, any case), and a comment line that is one long run of
+  # base64, which is what a commented-out body with its markers deleted leaves.
+  # A commented-out certificate is refused the same way, so a bundle holds only
+  # live certificates. Prose that names the markers (a line that does not start
+  # with them) and a hex fingerprint on its own line stay allowed.
   validation {
-    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(!can(regex("(?m)^[ \\t]*#[^\\n]*-----BEGIN", file(f))), true)]) : true
-    error_message = "aks_custom_ca_trust_certificate_files names files with a PEM block commented out line by line (a '#' line carrying -----BEGIN): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(can(regex("(?m)^[ \\t]*#[^\\n]*-----BEGIN", file(f))), false)])}. AKS keeps the file as given, so a commented-out private key would reach plan output, state and every node; remove the block."
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length([for l in split("\n", file(f)) : l if can(regex("(?i)^[ \\t]*#[ \\t]*-+[ \\t]*BEGIN\\b", l)) || (can(regex("^[ \\t]*#[ \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[ \\t]*[0-9A-Fa-f]+[ \\t]*$", l)))]) == 0, true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with a PEM block commented out line by line (a '#' line that is a BEGIN marker, or one long run of base64): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length([for l in split("\n", file(f)) : l if can(regex("(?i)^[ \\t]*#[ \\t]*-+[ \\t]*BEGIN\\b", l)) || (can(regex("^[ \\t]*#[ \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[ \\t]*[0-9A-Fa-f]+[ \\t]*$", l)))]) > 0, false)])}. AKS keeps the file as given, so a commented-out private key would reach plan output, state and every node; remove the block, a commented-out certificate included. On a cluster that already holds the entry with that block, the edited file encodes to a different value, and the next apply replaces every node once."
   }
 }
 
