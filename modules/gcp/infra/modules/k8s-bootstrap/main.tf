@@ -313,7 +313,7 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
 
   metadata {
     name   = var.smithdb_cache_storage_class_name
-    labels = merge(var.labels, { "component" = "smithdb-cache" })
+    labels = merge({ "component" = "smithdb-cache" }, var.labels)
   }
 
   storage_provisioner    = "pd.csi.storage.gke.io"
@@ -326,7 +326,7 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
     provisioned-iops-on-create       = "7000"
     provisioned-throughput-on-create = "1000Mi"
     labels = join(",", [
-      for k, v in merge(var.labels, { "component" = "smithdb-cache" }) : "${k}=${v}"
+      for k, v in merge({ "component" = "smithdb-cache" }, var.labels) : "${k}=${v}"
     ])
   }
 }

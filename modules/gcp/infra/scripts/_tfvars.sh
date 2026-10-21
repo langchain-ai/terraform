@@ -7,15 +7,17 @@
 # _tfvars.sh — terraform.tfvars readers shared by the GCP infra and helm scripts.
 #
 # Usage: set INFRA_DIR, then source this file. Each function reads
-# "$INFRA_DIR/terraform.tfvars" when called, so INFRA_DIR may change after
+# its var files under "$INFRA_DIR" when called, so INFRA_DIR may change after
 # sourcing.
 #
 # setup-env.sh sources this into the operator's shell, so it defines functions
 # only: no `set -euo pipefail`, no output, no other variables.
 #
 # Provides:
-#   _parse_tfvar <key>        — Read a value from terraform.tfvars
+#   _parse_tfvar <key> [file] — Read a value from terraform.tfvars, or file
 #   _tfvar_is_true <key>      — Return 0 if tfvar == true
+#   _tfvar_source <key>       — The last var file that sets key
+#   _tfvar_value <key> <dflt> — Value from var files, then TF_VAR_<key>, then dflt
 #   _secret_labels <pairs>    — gcloud --labels value for a script-created secret
 
 # Values are cut at the closing quote (quoted strings, which may contain a
@@ -30,7 +32,7 @@ _parse_tfvar() {
       else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
       print; exit
     }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+  ' "${2:-$INFRA_DIR/terraform.tfvars}" 2>/dev/null || true
 }
 
 # Parse a boolean tfvar (unquoted true/false). Returns 0 for true, 1 for false.
@@ -38,44 +40,54 @@ _tfvar_is_true() {
   [[ "$(_parse_tfvar "$1")" == "true" ]]
 }
 
+# The last of terraform.tfvars and *.auto.tfvars, in Terraform's load order,
+# that sets $1. Empty when none does. The .json forms are not read.
+_tfvar_source() {
+  local _f _src=""
+  for _f in "$INFRA_DIR/terraform.tfvars" "$INFRA_DIR"/*.auto.tfvars; do
+    if grep -Eq "^[[:space:]]*$1[[:space:]]*=" "$_f" 2>/dev/null; then _src="$_f"; fi
+  done
+  printf '%s' "$_src"
+}
+
+# Variable $1 as Terraform resolves it from what a script can see: the var file
+# from _tfvar_source, then TF_VAR_$1, then the default $2. A key set to "" in a
+# var file still wins.
+_tfvar_value() {
+  local _src _env="TF_VAR_$1"
+  _src=$(_tfvar_source "$1")
+  if [[ -n "$_src" ]]; then _parse_tfvar "$1" "$_src"; else printf '%s' "${!_env-$2}"; fi
+}
+
 # gcloud --labels value for a secret the scripts create outside Terraform: the
-# base pairs in $1, then owner, cost-center, and the labels map from
-# terraform.tfvars, a later key replacing an earlier one as in locals.tf. A pair
-# that breaks the label rules is skipped with a warning, since terraform plan
-# rejects it anyway and gcloud would fail the whole create.
+# standard labels from locals.tf, the base pairs in $1, then owner, cost-center,
+# and the labels map, a later key replacing an earlier one as in locals.tf. An
+# empty value omits its label. A pair that breaks the label rules is skipped
+# with a warning, since terraform plan rejects it anyway and gcloud would fail
+# the whole create.
 _secret_labels() {
-  local _tfvars="$INFRA_DIR/terraform.tfvars" _owner _cost_center
-  # terraform.tfvars, then TF_VAR_*, then the variables.tf default, as Terraform
-  # resolves them. A key set to "" still wins, and omits the label.
-  if grep -Eq '^[[:space:]]*owner[[:space:]]*=' "$_tfvars" 2>/dev/null; then
-    _owner=$(_parse_tfvar "owner")
-  else
-    _owner="${TF_VAR_owner-platform-team}"
-  fi
-  if grep -Eq '^[[:space:]]*cost_center[[:space:]]*=' "$_tfvars" 2>/dev/null; then
-    _cost_center=$(_parse_tfvar "cost_center")
-  else
-    _cost_center="${TF_VAR_cost_center-}"
-  fi
+  local _src
   {
+    printf 'app=langsmith\nenvironment=%s\nproject=%s\nname-prefix=%s\n' \
+      "$(_tfvar_value environment prod)" "$(_tfvar_value project_id "")" "$(_tfvar_value name_prefix ls)"
     printf '%s\n' "$1" | tr ',' '\n'
-    [[ -n "$_owner" ]] && printf 'owner=%s\n' "$_owner"
-    [[ -n "$_cost_center" ]] && printf 'cost-center=%s\n' "$_cost_center"
-    awk '
+    printf 'owner=%s\ncost-center=%s\n' "$(_tfvar_value owner platform-team)" "$(_tfvar_value cost_center "")"
+    _src=$(_tfvar_source labels)
+    if [[ -n "$_src" ]]; then cat "$_src"; else printf 'labels = %s\n' "${TF_VAR_labels-}"; fi | awk '
       !open && /^[[:space:]]*labels[[:space:]]*=[[:space:]]*\{/ { open = 1; sub(/^[^{]*\{/, "") }
       open {
         line = $0; sub(/#.*$/, "", line)
         end = index(line, "}"); if (end) line = substr(line, 1, end - 1)
-        while (match(line, /"?[^"=[:space:]]+"?[[:space:]]*=[[:space:]]*"[^"]*"/)) {
+        while (match(line, /"?[^"=,[:space:]]+"?[[:space:]]*=[[:space:]]*("[^"]*"|[^",[:space:]]+)/)) {
           pair = substr(line, RSTART, RLENGTH); line = substr(line, RSTART + RLENGTH)
           gsub(/"/, "", pair); sub(/[[:space:]]*=[[:space:]]*/, "=", pair)
           print pair
         }
         if (end) exit
       }
-    ' "$_tfvars" 2>/dev/null
+    '
   } | awk -F= '
-    NF == 0 { next }
+    NF == 0 || (NF == 2 && $2 == "") { next }
     NF != 2 || $1 !~ /^[a-z]([a-z0-9_-]*[a-z0-9])?$/ || length($1) > 63 || $2 !~ /^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/ || length($2) > 63 {
       print "WARNING: label " $0 " skipped on the secret: GCP cannot store it" > "/dev/stderr"; next
     }

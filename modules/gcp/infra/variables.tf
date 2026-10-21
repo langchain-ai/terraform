@@ -55,8 +55,8 @@ variable "name_prefix" {
   default     = "ls" # Short for LangSmith
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{0,10}$", var.name_prefix))
-    error_message = "Name prefix must be 1-11 characters, start with a letter, and contain only lowercase letters, numbers, and hyphens."
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,9}[a-z0-9])?$", var.name_prefix))
+    error_message = "Name prefix must be 1-11 characters, start with a letter, end with a letter or number, and contain only lowercase letters, numbers, and hyphens."
   }
 }
 

@@ -102,10 +102,12 @@ _LABEL_KEY_RE='^[a-z]([a-z0-9_-]{0,61}[a-z0-9])?$'
 _LABEL_VALUE_RE='^([a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?)?$'
 _LABEL_VALUE_HINT="lowercase letters, digits, '_' and '-', starting and ending with a letter or digit, max 63 chars (write name@example.com as name_example_com)"
 
+# A reply of "-" is the empty value, since a blank reply takes the default.
 _ask_label_value() {
   local prompt="$1" default="${2:-}"
   while true; do
     _ask "$prompt" "$default"
+    if [[ "$_REPLY" == "-" ]]; then _REPLY=""; fi
     if [[ "$_REPLY" =~ $_LABEL_VALUE_RE ]]; then
       break
     fi
@@ -167,10 +169,10 @@ PROJECT_ID="$_REPLY"
 while true; do
   _ask "Company/team prefix (max 11 chars, lowercase)" "myco"
   NAME_PREFIX="$_REPLY"
-  if [[ ${#NAME_PREFIX} -le 11 ]] && [[ "$NAME_PREFIX" =~ ^[a-z][a-z0-9-]*$ ]]; then
+  if [[ ${#NAME_PREFIX} -le 11 ]] && [[ "$NAME_PREFIX" =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ]]; then
     break
   fi
-  _red "  ERROR: must be 1-11 lowercase alphanumeric chars (may include hyphens, must start with a letter)."
+  _red "  ERROR: must be 1-11 lowercase alphanumeric chars (may include hyphens, must start with a letter and end with a letter or digit)."
   echo ""
 done
 
@@ -189,7 +191,7 @@ _default_zone="${REGION}-a"
 _ask "GCP zone (for zonal resources)" "$_default_zone"
 ZONE="$_REPLY"
 
-_ask_label_value "Owner (team or person, for labels)" "platform-team"
+_ask_label_value "Owner (team or person, for labels; - to omit)" "platform-team"
 OWNER="$_REPLY"
 
 _ask_label_value "Cost center (for billing, leave blank to skip)" ""

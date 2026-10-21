@@ -70,10 +70,11 @@ export TF_VAR_project_id="$_project_id"
 export TF_VAR_name_prefix="$_name_prefix"
 export TF_VAR_environment="$_environment"
 export TF_VAR_region="$_region"
-# Only when set: an empty TF_VAR_owner would replace the variables.tf default.
+# Only when set, and unset otherwise: an empty TF_VAR_owner, or one left from an
+# earlier source, would replace the variables.tf default.
 # terraform.tfvars wins over both, and is where the labels map lives.
-if [[ -n "${LANGSMITH_OWNER:-}" ]]; then export TF_VAR_owner="$LANGSMITH_OWNER"; fi
-if [[ -n "${LANGSMITH_COST_CENTER:-}" ]]; then export TF_VAR_cost_center="$LANGSMITH_COST_CENTER"; fi
+if [[ -n "${LANGSMITH_OWNER:-}" ]]; then export TF_VAR_owner="$LANGSMITH_OWNER"; else unset TF_VAR_owner; fi
+if [[ -n "${LANGSMITH_COST_CENTER:-}" ]]; then export TF_VAR_cost_center="$LANGSMITH_COST_CENTER"; else unset TF_VAR_cost_center; fi
 
 # ── Secret Manager path prefix ────────────────────────────────────────────────
 # All secrets are stored under:

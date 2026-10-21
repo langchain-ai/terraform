@@ -423,7 +423,7 @@ Where the labels land:
 | SmithDB cache disks (`smithdb_cache_storage = "network-disk"`) | The module's StorageClass passes the labels to the PD CSI driver, which sets them when it creates each disk, attached or not |
 | Cloud SQL (LangSmith and SmithDB metastore) | `user_labels` |
 | Memorystore, GCS buckets, Secret Manager secrets, DNS zone, global address | Provider `default_labels` |
-| Secrets that `setup-env.sh` and `manage-secrets.sh` create | `--labels`, read from `owner`, `cost_center`, and `labels` in `terraform.tfvars` when the secret is first created |
+| Secrets that `setup-env.sh` and `manage-secrets.sh` create | `--labels` when the secret is first created, with `managed-by` set to the script name. The scripts read the label variables from `terraform.tfvars` and `*.auto.tfvars`, then `TF_VAR_*`, but not from `-var`, `-var-file`, or `.tfvars.json` |
 
 Not labeled:
 
