@@ -1,0 +1,378 @@
+<title>LangSmith on Azure: attach-path findings</title>
+<style>
+  :root {
+    --ground: #f6f8f7; --panel: #ffffff; --ink: #16201f; --ink-soft: #4d5a58;
+    --ink-faint: #7d8987; --rule: #dfe5e3; --rule-soft: #edf1f0;
+    --accent: #0f6b63; --accent-soft: #e9f2f0;
+    --blocker: #a8332a; --blocker-bg: #f9e9e7;
+    --silent: #8a5d15;  --silent-bg: #f8efdf;
+    --friction: #35617f; --friction-bg: #e7eff5;
+    --gap: #5f656d;     --gap-bg: #ecedef;
+    --done: #2f6b3f;    --done-bg: #e6f0e8;
+    --serif: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #111615; --panel: #171e1d; --ink: #e7ecea; --ink-soft: #a6b2b0;
+      --ink-faint: #7f8b89; --rule: #2a3433; --rule-soft: #1f2726;
+      --accent: #5cc4b5; --accent-soft: #1b2c2a;
+      --blocker: #e88b80; --blocker-bg: #33201e;
+      --silent: #d9ab61;  --silent-bg: #2e2617;
+      --friction: #8ab4d1; --friction-bg: #1b2732;
+      --gap: #9aa2ab;     --gap-bg: #232729;
+      --done: #7fc08f;    --done-bg: #1a2a1f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #111615; --panel: #171e1d; --ink: #e7ecea; --ink-soft: #a6b2b0;
+    --ink-faint: #7f8b89; --rule: #2a3433; --rule-soft: #1f2726;
+    --accent: #5cc4b5; --accent-soft: #1b2c2a;
+    --blocker: #e88b80; --blocker-bg: #33201e;
+    --silent: #d9ab61;  --silent-bg: #2e2617;
+    --friction: #8ab4d1; --friction-bg: #1b2732;
+    --gap: #9aa2ab;     --gap-bg: #232729;
+    --done: #7fc08f;    --done-bg: #1a2a1f;
+  }
+  :root[data-theme="light"] {
+    --ground: #f6f8f7; --panel: #ffffff; --ink: #16201f; --ink-soft: #4d5a58;
+    --ink-faint: #7d8987; --rule: #dfe5e3; --rule-soft: #edf1f0;
+    --accent: #0f6b63; --accent-soft: #e9f2f0;
+    --blocker: #a8332a; --blocker-bg: #f9e9e7;
+    --silent: #8a5d15;  --silent-bg: #f8efdf;
+    --friction: #35617f; --friction-bg: #e7eff5;
+    --gap: #5f656d;     --gap-bg: #ecedef;
+    --done: #2f6b3f;    --done-bg: #e6f0e8;
+  }
+
+  body {
+    background: var(--ground); color: var(--ink); font-family: var(--sans);
+    font-size: 15px; line-height: 1.55; margin: 0;
+    padding: 0 clamp(16px, 4vw, 56px) 72px; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1460px; margin: 0 auto; }
+  header { padding: clamp(40px, 6vw, 72px) 0 0; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 18px;
+  }
+  h1 {
+    font-family: var(--serif); font-size: clamp(30px, 4.4vw, 46px); line-height: 1.1;
+    font-weight: 500; letter-spacing: -0.015em; text-wrap: balance;
+    margin: 0 0 16px; max-width: 23ch;
+  }
+  .standfirst { color: var(--ink-soft); max-width: 70ch; font-size: 16.5px; margin: 0; }
+
+  .counts {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+    border-radius: 3px; margin: 44px 0 8px; overflow: hidden;
+  }
+  .count { background: var(--panel); padding: 15px 18px 16px; }
+  .count b {
+    display: block; font-family: var(--serif); font-size: 27px; font-weight: 500;
+    line-height: 1; font-variant-numeric: tabular-nums; margin-bottom: 7px;
+  }
+  .count span {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .count.blocker b { color: var(--blocker); }
+  .count.silent b  { color: var(--silent); }
+  .count.friction b{ color: var(--friction); }
+  .count.gap b     { color: var(--gap); }
+  .count.done b    { color: var(--done); }
+
+  h2 {
+    font-family: var(--serif); font-size: 23px; font-weight: 500;
+    letter-spacing: -0.01em; margin: 56px 0 6px;
+  }
+  .sub { color: var(--ink-faint); font-size: 14px; margin: 0 0 20px; max-width: 78ch; }
+
+  .scroller { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; min-width: 1150px; }
+  thead th {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-faint); font-weight: 400;
+    text-align: left; padding: 13px 14px; border-bottom: 1px solid var(--rule);
+    background: var(--panel); white-space: nowrap;
+  }
+  tbody td { padding: 15px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; font-size: 14px; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: var(--accent-soft); }
+
+  td.id {
+    font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-faint);
+    width: 30px; border-left: 3px solid transparent; padding-left: 12px;
+  }
+  tr.sev-blocker  td.id { border-left-color: var(--blocker); color: var(--blocker); }
+  tr.sev-silent   td.id { border-left-color: var(--silent); }
+  tr.sev-friction td.id { border-left-color: var(--friction); }
+  tr.sev-gap      td.id { border-left-color: var(--gap); }
+
+  td.issue { min-width: 196px; }
+  td.issue strong { font-weight: 600; display: block; margin-bottom: 6px; }
+  td.where { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); min-width: 166px; line-height: 1.8; }
+  td.breaks { min-width: 234px; color: var(--ink-soft); }
+  td.fix { min-width: 250px; }
+  td.owner { width: 128px; }
+
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 7px;
+    border-radius: 2px; white-space: nowrap;
+  }
+  .p-blocker  { background: var(--blocker-bg);  color: var(--blocker); }
+  .p-silent   { background: var(--silent-bg);   color: var(--silent); }
+  .p-friction { background: var(--friction-bg); color: var(--friction); }
+  .p-gap      { background: var(--gap-bg);      color: var(--gap); }
+  .p-done     { background: var(--done-bg);     color: var(--done); }
+  .owner-name { font-family: var(--mono); font-size: 12px; display: block; margin-bottom: 6px; }
+
+  .seq { display: grid; grid-template-columns: repeat(auto-fit, minmax(272px, 1fr)); gap: 16px; margin-top: 20px; }
+  .step {
+    background: var(--panel); border: 1px solid var(--rule);
+    border-top: 2px solid var(--accent); border-radius: 3px; padding: 18px 20px 20px;
+  }
+  .step h3 {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+  .step p { margin: 0 0 10px; font-size: 14px; color: var(--ink-soft); }
+  .step p:last-child { margin-bottom: 0; }
+  .step .lead { color: var(--ink); font-weight: 600; }
+  .step ul { margin: 0 0 10px; padding-left: 17px; font-size: 13.5px; color: var(--ink-soft); }
+  .step li { margin-bottom: 5px; }
+  code { font-family: var(--mono); font-size: 0.9em; }
+
+  footer {
+    margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--rule);
+    font-size: 13px; color: var(--ink-faint); max-width: 88ch;
+  }
+  footer p { margin: 0 0 10px; }
+  a { color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Terraform module audit &middot; branch preview/azure-stack-94-99</p>
+  <h1>Deploying LangSmith onto a cluster the customer already runs</h1>
+  <p class="standfirst">Seventeen findings from applying the attach path end to end against a fixture cluster, then walking a customer through it live on their own. Two are hard blockers. Seven pass every check and produce a wrong result anyway. <strong>Seven are code in #95 and #99, neither of which has merged</strong>, so they can be fixed in the PR that introduced them instead of chased afterward.</p>
+
+  <div class="counts">
+    <div class="count blocker"><b>2</b><span>Blockers</span></div>
+    <div class="count silent"><b>7</b><span>Silently wrong</span></div>
+    <div class="count friction"><b>4</b><span>Friction</span></div>
+    <div class="count gap"><b>4</b><span>Missing capability</span></div>
+    <div class="count done"><b>3</b><span>Already fixed</span></div>
+  </div>
+</header>
+
+<h2>All seventeen, worst first</h2>
+<p class="sub">Severity is the left stripe. <strong>Blocker</strong> stops an apply. <strong>Silently wrong</strong> passes every check and produces a wrong or incomplete result. <strong>Friction</strong> costs the operator time but is recoverable. <strong>Missing capability</strong> is a configuration a customer will ask for that has no answer today.</p>
+
+<div class="scroller">
+<table>
+<thead>
+  <tr><th>#</th><th>Issue</th><th>Where</th><th>What breaks</th><th>Fix</th><th>Lands on</th></tr>
+</thead>
+<tbody>
+
+<tr class="sev-blocker">
+  <td class="id">8</td>
+  <td class="issue"><strong>Subnet capacity check counts node pools the attach path never creates</strong><span class="pill p-blocker">Blocker</span></td>
+  <td class="where">infra/main.tf:99-102<br>infra/main.tf:341<br>k8s-cluster/main.tf:173</td>
+  <td class="breaks">Demanded 764 addresses against a customer's /24, which has 251 usable. Both terms of that 764 describe pools Terraform will not create. <code>existing_cluster_node_pools_managed = false</code> does not reduce it, because line 101 reads <code>var.additional_node_pools</code> rather than the gated map at line 398. The flag whose whole purpose is "do not touch my pools" has no effect on the check that blocks the deploy.</td>
+  <td class="fix">Count the default pool only when <code>create_cluster = true</code>, and iterate the gated map. Creating a cluster behaves exactly as it does now; attaching without managed pools drops the requirement to zero. The wizard comment at <code>quickstart.sh:1379</code> asserts the check is deliberate, so it changes with this.</td>
+  <td class="owner"><span class="owner-name">PR #99</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-blocker">
+  <td class="id">0</td>
+  <td class="issue"><strong>External Postgres failed on every deployment, on every cloud path</strong><span class="pill p-blocker">Blocker</span></td>
+  <td class="where">modules/postgres/main.tf:145<br>modules/postgres/variables.tf:32</td>
+  <td class="breaks"><code>connection_throttling</code> is not a real server parameter. Azure rejects it with <code>ParameterNotExists</code> after the server is already <code>Ready</code>, leaving a working database and a red apply. Not attach-specific: it broke every <code>postgres_source = "external"</code> apply on the default <code>postgres_version = "14"</code>.</td>
+  <td class="fix">The name is <code>connection_throttle.enable</code>. One line. Verified against a live server: the corrected parameter created in 34 seconds where the old name failed.</td>
+  <td class="owner"><span class="owner-name">Own PR, off main</span><span class="pill p-done">Committed</span></td>
+</tr>
+
+<tr class="sev-silent">
+  <td class="id">2</td>
+  <td class="issue"><strong>Four existing-cluster guards never run at plan time</strong><span class="pill p-silent">Silently wrong</span></td>
+  <td class="where">k8s-cluster/main.tf:58<br>infra/main.tf:381<br>checks at :106 :117 :135 :149</td>
+  <td class="breaks">The cluster data source falls back to a resource group Terraform is creating, so Terraform defers the read to apply. Node subnet membership, OIDC issuer, workload identity, and the region check all go quiet on the first run, which is the run where a customer's config is most likely wrong. On a second plan they all evaluate. The guards work only once you no longer need them.</td>
+  <td class="fix">Resolve the fallback in the root against the plain-string local, and drop it from <code>k8s-cluster/main.tf:58</code>. Two lines, and what it resolves to does not change. Diagnosis confirmed in both directions; the fix is written but not applied.</td>
+  <td class="owner"><span class="owner-name">PR #95</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-silent">
+  <td class="id">12</td>
+  <td class="issue"><strong>Nothing checks whether the customer's pools can run LangSmith</strong><span class="pill p-silent">Silently wrong</span></td>
+  <td class="where">infra/variables.tf:355<br>no check exists</td>
+  <td class="breaks">Seven prerequisites are validated on an attached cluster and none is capacity. ClickHouse requests 3.5 vCPU and 15 GiB. The fixture's <code>Standard_D4s_v3</code> nodes report <code>cpu=3860m mem=14992436Ki</code> allocatable, read off the live nodes: 14.3 GiB, about 700 MiB short. That cluster passes all seven checks and ClickHouse cannot schedule on it.</td>
+  <td class="fix">Compare each pool's allocatable capacity against the request before the tfvars are written. Belongs in the wizard, not Terraform, because mapping a VM SKU to allocatable capacity needs an <code>az</code> call. Pair with finding 4: once pools default to unmanaged, this becomes the number that decides success.</td>
+  <td class="owner"><span class="owner-name">Follow-up PR</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-silent">
+  <td class="id">4</td>
+  <td class="issue"><strong>Node pools default to Terraform-managed on someone else's cluster</strong><span class="pill p-silent">Silently wrong</span></td>
+  <td class="where">infra/variables.tf:147<br>infra/main.tf:398</td>
+  <td class="breaks">The flag defaults to <code>true</code>, so attaching adds a <code>large</code> pool of <code>Standard_D16s_v3</code> to a cluster the README describes as one Terraform never modifies. Those two statements disagree and the default is the surprising one. Terraform never adopts existing pools either way; it only ever adds new ones.</td>
+  <td class="fix">Flip the default to <code>false</code>. Opting in to managing someone else's node pools is the choice worth making explicit.</td>
+  <td class="owner"><span class="owner-name">PR #95</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-silent">
+  <td class="id">10</td>
+  <td class="issue"><strong><code>aks_service_cidr</code> is required when attaching and configures nothing</strong><span class="pill p-silent">Silently wrong</span></td>
+  <td class="where">k8s-cluster/main.tf:251<br>infra/main.tf:349, :358</td>
+  <td class="breaks"><code>service_cidr</code> is set only inside the cluster resource counted off when attaching. Two checks require the value and test it for VNet overlap; nothing compares it to the cluster's real <code>networkProfile.serviceCidr</code>. A plausible guess passes and changes nothing. A guess landing inside their VNet blocks a valid deployment over a value with no effect.</td>
+  <td class="fix">Read it off the cluster. A real service CIDR can never overlap its own VNet, because Azure will not create one that way, so reading it satisfies both checks by construction.</td>
+  <td class="owner"><span class="owner-name">PR #99</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-silent">
+  <td class="id">5</td>
+  <td class="issue"><strong><code>create_cluster = false</code> silently forces <code>create_vnet = false</code></strong><span class="pill p-silent">Silently wrong</span></td>
+  <td class="where">infra/variables.tf:120</td>
+  <td class="breaks">The comment documents that Terraform still provisions networking "when <code>create_vnet = true</code>" under an attached cluster. It cannot: a freshly carved subnet can never satisfy the node subnet postcondition. The combination the comment describes has no working configuration, and it fails on an unrelated postcondition instead of saying so.</td>
+  <td class="fix">Correct the comment, and add a precondition rejecting the combination directly.</td>
+  <td class="owner"><span class="owner-name">PR #95</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-silent">
+  <td class="id">6</td>
+  <td class="issue"><strong>Two deletion-protection variables do nothing</strong><span class="pill p-silent">Silently wrong</span></td>
+  <td class="where">infra/variables.tf:365, :371</td>
+  <td class="breaks"><code>aks_deletion_protection</code> and <code>postgres_deletion_protection</code> are declared, set in every tfvars template, and documented as destroy blockers. Nothing reads them, and no <code>lifecycle</code> block uses them. Anyone relying on them for protection has none.</td>
+  <td class="fix">Wire up the <code>prevent_destroy</code> behaviour they claim, or delete them from the variables and every template. A flag that silently does nothing is worse than no flag.</td>
+  <td class="owner"><span class="owner-name">Own PR, off main</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-silent">
+  <td class="id">11</td>
+  <td class="issue"><strong>The capacity error states a total with no arithmetic</strong><span class="pill p-silent">Silently wrong</span></td>
+  <td class="where">infra/main.tf:342<br>quickstart.sh:1388</td>
+  <td class="breaks">The message reports 764 against 251 and names two variables to lower, without showing how 764 was built. There is no way to tell which knob moves the number, by how much, or what subnet size would be enough, short of reading the module source. Separately <code>default_node_pool_max_pods</code> is hardcoded to 60 in the writer with no prompt, so the wizard cannot produce another value for one of the two knobs the message names.</td>
+  <td class="fix">Carry the per-pool breakdown, Azure's five reserved addresses, the smallest prefix that fits, and each knob's sensitivity: 61 per node and 11 per pod at the defaults. Land finding 8 first, or this makes a wrong answer more articulate. <strong>Unverified:</strong> whether Terraform preserves newlines in <code>error_message</code>; it is known to reflow the text.</td>
+  <td class="owner"><span class="owner-name">PR #99</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-friction">
+  <td class="id">9</td>
+  <td class="issue"><strong>The attach path asks for values Azure already holds</strong><span class="pill p-friction">Friction</span></td>
+  <td class="where">quickstart.sh:475<br>infra/main.tf:90</td>
+  <td class="breaks">One <code>az aks show</code> returns every prompted value plus every prerequisite the module checks. Of nine questions on this path, three are genuine, two cause paste errors for no reason, and four configure nothing. A customer pasted the VNet ID into the node subnet prompt, because that question comes immediately before it and the IDs are prefixes of each other; the rejection only restates the expected format.</td>
+  <td class="fix">Two questions and a confirmation screen replace nine prompts: cluster name and resource group, one lookup, then show what came back for approval. Skip the node pool section when they own the pools. Portal deep links as the fallback when the lookup returns nothing.</td>
+  <td class="owner"><span class="owner-name">Follow-up PR</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-friction">
+  <td class="id">16</td>
+  <td class="issue"><strong>The wizard hides "create it for me" inside an ID prompt</strong><span class="pill p-friction">Friction</span></td>
+  <td class="where">quickstart.sh:463, :464</td>
+  <td class="breaks">Raised by the customer in their own words. The capability exists, since #99 made bring-your-own subnet IDs optional per subnet, but the question never asks: the choice is a parenthetical on a prompt whose subject is a resource ID. Worse, the three prompts do not behave alike. When attaching, the AKS subnet is required and line 464 drops the parenthetical, while Postgres and Redis keep it, with nothing on screen explaining why.</td>
+  <td class="fix">Ask the question first, then the ID: "Do you already have a subnet for PostgreSQL, or should Terraform create one?" Where the AKS subnet has no create option, say why rather than silently dropping it. Composes with the lookup: once the cluster is read, only the two subnets with a real choice remain.</td>
+  <td class="owner"><span class="owner-name">Follow-up PR</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-friction">
+  <td class="id">1</td>
+  <td class="issue"><strong>The quickstart wizard could not express this deployment</strong><span class="pill p-friction">Friction</span></td>
+  <td class="where">infra/scripts/quickstart.sh</td>
+  <td class="breaks">None of the four cluster keys appeared in the wizard, and its writer truncates <code>terraform.tfvars</code> with <code>cat &gt;</code>, so hand-added keys were erased on any later run and the file came back as <code>create_cluster = true</code>. Every customer who already owns a cluster hit this.</td>
+  <td class="fix">Section 3 asks about the cluster before the VNet, forces <code>create_vnet = false</code>, and makes the node subnet required. Section 4 asks about node pools. Names are validated at the prompt and again in <code>_load_tfvars</code>, because values read back with <code>sed</code> reach the writer without passing a prompt and land inside double-quoted HCL.</td>
+  <td class="owner"><span class="owner-name">Follow-up PR</span><span class="pill p-done">Committed</span></td>
+</tr>
+
+<tr class="sev-friction">
+  <td class="id">3</td>
+  <td class="issue"><strong>The wizard invites a subnet choice the attach path rejects</strong><span class="pill p-friction">Friction</span></td>
+  <td class="where">k8s-cluster/main.tf:117</td>
+  <td class="breaks">Under bring-your-own VNet the wizard offers to carve each subnet. For <code>aks_subnet_id</code> that is invalid when attaching, because the postcondition requires a subnet the cluster already runs nodes in and a subnet Terraform is about to carve never is. Compounds finding 2: the postcondition that would catch it is deferred, so the result is a clean plan and a partial apply.</td>
+  <td class="fix">Reject a blank <code>aks_subnet_id</code> at plan time when <code>create_cluster = false</code>. Removes the finding outright, and removes the compounding with finding 2.</td>
+  <td class="owner"><span class="owner-name">#95 + follow-up</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-gap">
+  <td class="id">13</td>
+  <td class="issue"><strong>AGIC and bastion are unavailable with a bring-your-own VNet</strong><span class="pill p-gap">Missing capability</span></td>
+  <td class="where">infra/main.tf:296, :301<br>infra/main.tf:68<br>k8s-cluster/main.tf:282</td>
+  <td class="breaks">A plumbing gap, not an Azure limitation. Both need a dedicated subnet and there is no <code>agic_subnet_id</code> or <code>bastion_subnet_id</code> input; the AGIC subnet exists only inside the VNet Terraform owns. AGIC has a second blocker a subnet input would not clear: the add-on lives inside the cluster resource counted off when attaching, so it cannot be enabled on an existing cluster at all.</td>
+  <td class="fix">Add both subnet inputs, selected over the VNet module's outputs when <code>create_vnet = false</code>, and relax the two checks to accept either. Same shape as the existing bring-your-own subnet inputs. Does not help the attach path, where nginx is the answer.</td>
+  <td class="owner"><span class="owner-name">PR #99</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-gap">
+  <td class="id">15</td>
+  <td class="issue"><strong>Cluster-scoped components sit in the app half of the split</strong><span class="pill p-gap">Missing capability</span></td>
+  <td class="where">k8s-bootstrap/main.tf:262<br>k8s-bootstrap/main.tf:363<br>k8s-bootstrap/main.tf:323</td>
+  <td class="breaks">cert-manager and keda install unconditionally, neither with a <code>count</code>, plus a cluster-scoped <code>ClusterIssuer</code>. A platform team that owns the cluster is already running cert-manager, and there is no flag to stop a second one. The current boundary between <code>infra/</code> and <code>app/</code> is Terraform-versus-Helm, not foundation-versus-app.</td>
+  <td class="fix">Add counts plus inputs for "the cluster already provides these," then write down the handoff contract: about eight facts the app root needs from whoever owns the cluster. Needs no second Terraform state. Check PR #100 first, which is making the <code>enable_*</code> flags authoritative for the same class of problem.</td>
+  <td class="owner"><span class="owner-name">Own PR, off main</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-gap">
+  <td class="id">14</td>
+  <td class="issue"><strong>An existing Key Vault cannot be reused</strong><span class="pill p-gap">Missing capability</span></td>
+  <td class="where">modules/keyvault/main.tf:34<br>infra/main.tf:517<br>modules/keyvault/main.tf:43, :56</td>
+  <td class="breaks">No <code>key_vault_id</code> input, no data source, no <code>count</code> on the resource. Costs less than it sounds: the vault is not a runtime dependency, since pods never mount from it and <code>setup-env.sh</code> reads the secrets back. <code>terraform import</code> is not the workaround; it would push <code>rbac_authorization_enabled = true</code> and our <code>network_acls</code> onto a shared vault, dropping their existing access policies.</td>
+  <td class="fix">Variable, data source, <code>count</code>, and a local selecting between them. The prerequisite needing a conversation rather than a flag is data plane reachability: the first apply writes ten secrets and gets 403'd under <code>default_action = Deny</code>, which a production vault almost certainly uses.</td>
+  <td class="owner"><span class="owner-name">Own PR, off main</span><span class="pill p-gap">Open</span></td>
+</tr>
+
+<tr class="sev-gap">
+  <td class="id">7</td>
+  <td class="issue"><strong>The repo has no Azure test scaffolding</strong><span class="pill p-gap">Missing capability</span></td>
+  <td class="where">modules/azure/test/</td>
+  <td class="breaks">No prereq module, no runnable examples, and CI runs only format, lint, and scan. AWS has three test scripts; Azure had one unit test that creates no Azure resources. Every check in finding 2 needs a real subscription and a real cluster, so none of it reproduces offline. This is why a fixture had to be written before any of the rest could be tested at all.</td>
+  <td class="fix">Fixture committed: an AKS cluster, VNet, and three subnets configured the way the attach path requires, six resources in one resource group so teardown is a single command. The ten negative tests all need credentials, so they belong in a job with a subscription rather than the format-and-lint pass.</td>
+  <td class="owner"><span class="owner-name">#95 + own PR</span><span class="pill p-done">Fixture done</span></td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<h2>How to sequence this against the open PRs</h2>
+<p class="sub">All six Azure PRs report <code>MERGEABLE</code> and all six report <code>REVIEW_REQUIRED</code>. None has merged and none has been reviewed, which is the opening: seven of these findings are code inside #95 and #99 and can be fixed in the PR that introduced them.</p>
+
+<div class="seq">
+  <div class="step">
+    <h3>First &middot; independent of everything</h3>
+    <p class="lead">Ship the Postgres fix as its own PR off <code>main</code>.</p>
+    <p>Finding 0. One line, already committed and verified, in a file no open PR touches, and it unblocks every external-Postgres deploy on every cloud path. No reason for it to wait behind a six-PR review queue.</p>
+  </div>
+
+  <div class="step">
+    <h3>Second &middot; before review starts</h3>
+    <p class="lead">Push seven fixes back into #95 and #99.</p>
+    <ul>
+      <li><strong>#99</strong> introduced <code>aks_required_ips</code>, both service-CIDR checks, and the AGIC and bastion gates. Findings 8, 10, 11, and 13 are all its own code.</li>
+      <li><strong>#95</strong> introduced the resource-group fallback and the attach semantics. Findings 2, 4, 5, and the plan-time half of 3.</li>
+    </ul>
+    <p>Doing it here costs a few extra commits on two unreviewed PRs. Doing it later costs two follow-up PRs against merged code, and reviewers reading the same files twice.</p>
+  </div>
+
+  <div class="step">
+    <h3>Third &middot; after the stack lands</h3>
+    <p class="lead">One wizard follow-up PR.</p>
+    <p>Findings 1, 9, 12, and 16. This work cannot go on #95: it builds on <code>_load_tfvars</code> from #98, <code>_ask_subnet</code> from #99, and <code>NAME_PREFIX</code> from #96, and #95 never touches <code>quickstart.sh</code>. So it waits for #95, #96, #98, and #99, then arrives as one PR carrying the attach questions, the <code>az aks show</code> lookup, the have-or-create subnet question, and the ClickHouse capacity warning.</p>
+  </div>
+
+  <div class="step">
+    <h3>Fourth &middot; not urgent, not blocked</h3>
+    <p class="lead">Three separate PRs off <code>main</code>.</p>
+    <p>Findings 6, 14, and 15 are all pre-existing on <code>main</code> and touch files none of the six PRs touch, so they can run in parallel with everything above, in any order. Check PR #100 before opening the one for finding 15, since it overlaps that work on the <code>enable_*</code> flags.</p>
+  </div>
+</div>
+
+<footer>
+  <p><strong>Verified by running:</strong> the fixture applies; <code>make preflight</code> passes every check; <code>terraform plan</code> and <code>terraform apply</code> both succeed on the attach path and the state converges to "No changes"; the customer's cluster, VNet, and subnet appear in state only as <code>data.</code> reads, with zero managed cluster, VNet, subnet, or node pool resources; nine of ten negative tests reject a bad config at plan time. Finding 8 was hit as a live failure rather than derived from reading, and finding 12's numbers were read off live nodes.</p>
+  <p><strong>Caveats:</strong> Redis ran in-cluster because Azure Managed Redis could not allocate in eastus2 at either SKU, so the managed-Redis path is covered by plan-time checks only. The license key was a placeholder, so the LangSmith chart itself was never installed. Findings 10, 13, 14, and 15 were confirmed by tracing every consumer across the module rather than by a failing apply. Whether Terraform preserves explicit newlines in <code>error_message</code> is unverified, and it shapes finding 11's fix.</p>
+</footer>
+</div>
