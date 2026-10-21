@@ -1884,6 +1884,152 @@ variable "postgres_geo_redundant_backup" {
   default     = false
 }
 
+# ── Customer-managed keys ────────────────────────────────────────────────────
+# Three resources encrypt at rest with a key the customer holds: the cluster's
+# managed disks through a disk encryption set, the PostgreSQL Flexible Server
+# and the blob storage account. Each takes an ID the platform team returns; the
+# module never creates a key, so a key imported into the vault works the same
+# as one generated there. The set and the server take theirs only at creation,
+# so these are set before the first apply where they can be. The provider
+# documents Key Vault key IDs for all three; a Managed HSM key has no
+# documented route for the server and is unverified for the set and the
+# storage account.
+
+variable "aks_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of a disk encryption set (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>) in the cluster's region. AKS encrypts the node OS disks with it and, by default, every managed disk the Azure Disk CSI driver creates for the cluster's persistent volumes, so the in-cluster databases' volumes take it with no storage class change. Set only when the cluster is created: the set is fixed at creation, so on an existing cluster plan compares it with the one Azure reports and refuses a change, adding one included. Ignored, and refused, with create_cluster = false. The set's own identity needs Key Vault Crypto Service Encryption User on its key's vault, and the cluster identity needs Reader on the set for the data disks (aks_disk_encryption_set_reader_grant, or a grant made after the apply). Empty (default) keeps platform-managed keys."
+  default     = ""
+
+  validation {
+    condition     = var.aks_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.aks_disk_encryption_set_id))
+    error_message = "aks_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  # Attach mode never touches the cluster, so a set given there would do nothing.
+  validation {
+    condition     = var.aks_disk_encryption_set_id == "" || var.create_cluster
+    error_message = "aks_disk_encryption_set_id is set with create_cluster = false. The module does not manage an attached cluster's disks, so the set would never apply: the cluster's OS disks and volumes keep whatever key they were created with. Remove it, and encrypt the existing cluster's disks where it was created."
+  }
+}
+
+variable "aks_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Requires aks_disk_encryption_set_id."
+  default     = false
+
+  validation {
+    condition     = !var.aks_disk_encryption_set_reader_grant || var.aks_disk_encryption_set_id != ""
+    error_message = "aks_disk_encryption_set_reader_grant = true needs aks_disk_encryption_set_id: there is no set to grant Reader on."
+  }
+}
+
+variable "postgres_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the PostgreSQL Flexible Server encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL follows the key's newest version). The key's vault has soft delete and purge protection on, and postgres_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Set only when the server is created: the provider would apply a change by replacing the server and destroying its data, so on an existing server plan refuses adding or removing the key (moving to another key or version is allowed). Move an existing server by a point-in-time restore to a new server created with the key and the state steps in README \"Customer-managed keys\". Refused unless postgres_source = \"external\". Empty (default) keeps the service-managed key."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.postgres_customer_managed_key_id))
+    error_message = "postgres_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  # The server exists only with postgres_source = "external"; the key would do nothing otherwise.
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || var.postgres_source == "external"
+    error_message = "postgres_customer_managed_key_id is set with postgres_source = \"${var.postgres_source}\". Only the Flexible Server the module creates with postgres_source = \"external\" takes the key, so the database would not be under it. Remove the key, or set postgres_source = \"external\"; an in-cluster PostgreSQL's volume is encrypted by aks_disk_encryption_set_id."
+  }
+
+  validation {
+    condition     = (var.postgres_customer_managed_key_id == "") == (var.postgres_customer_managed_key_identity_id == "")
+    error_message = "postgres_customer_managed_key_id and postgres_customer_managed_key_identity_id are set together or not at all: the server reads the key as that identity."
+  }
+}
+
+variable "postgres_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>) the PostgreSQL Flexible Server reads postgres_customer_managed_key_id with. It is assigned to the server and must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with postgres_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.postgres_customer_managed_key_identity_id))
+    error_message = "postgres_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "postgres_geo_backup_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key that encrypts the server's geo-redundant backups, in a vault in the paired region. Takes effect with postgres_geo_redundant_backup = true and the primary pair set; postgres_geo_backup_customer_managed_key_identity_id reads it. Set only when the server is created. Required when postgres_customer_managed_key_id is set and postgres_geo_redundant_backup = true: Azure encrypts the geo-redundant backups of a customer-managed-key server only with a key in the backup region, never with the service-managed key. Empty (default) without geo-redundant backup."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.postgres_geo_backup_customer_managed_key_id))
+    error_message = "postgres_geo_backup_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_id == "" || var.postgres_source == "external"
+    error_message = "postgres_geo_backup_customer_managed_key_id is set with postgres_source = \"${var.postgres_source}\". Only the Flexible Server the module creates with postgres_source = \"external\" takes the key. Remove it, or set postgres_source = \"external\"."
+  }
+
+  validation {
+    condition     = (var.postgres_geo_backup_customer_managed_key_id == "") == (var.postgres_geo_backup_customer_managed_key_identity_id == "")
+    error_message = "postgres_geo_backup_customer_managed_key_id and postgres_geo_backup_customer_managed_key_identity_id are set together or not at all: the geo-backup key is read as that identity."
+  }
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_id == "" || (var.postgres_customer_managed_key_id != "" && var.postgres_geo_redundant_backup)
+    error_message = "postgres_geo_backup_customer_managed_key_id needs the primary postgres_customer_managed_key_id and postgres_geo_redundant_backup = true: the geo-backup key encrypts a copy that only a geo-redundant server keeps."
+  }
+
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || !var.postgres_geo_redundant_backup || var.postgres_geo_backup_customer_managed_key_id != ""
+    error_message = "postgres_customer_managed_key_id with postgres_geo_redundant_backup = true needs postgres_geo_backup_customer_managed_key_id and its identity: Azure encrypts a customer-managed-key server's geo-redundant backups only with a key in a vault in the backup region, and the server create fails without it. Set the geo pair, or turn geo-redundant backup off."
+  }
+}
+
+variable "postgres_geo_backup_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity, in the paired region, that reads postgres_geo_backup_customer_managed_key_id. Azure requires an identity other than postgres_customer_managed_key_identity_id, holding Key Vault Crypto Service Encryption User on the paired region's vault. Required with postgres_geo_backup_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.postgres_geo_backup_customer_managed_key_identity_id))
+    error_message = "postgres_geo_backup_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_identity_id == "" || lower(var.postgres_geo_backup_customer_managed_key_identity_id) != lower(var.postgres_customer_managed_key_identity_id)
+    error_message = "postgres_geo_backup_customer_managed_key_identity_id must differ from postgres_customer_managed_key_identity_id: Azure reads the geo-backup key with a second identity in the paired region."
+  }
+}
+
+variable "storage_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the blob storage account encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL enables automatic rotation to the key's newest version). The key's vault has soft delete and purge protection on, and storage_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Azure accepts the switch on an existing account, so this one can follow a later apply. Empty (default) keeps the service-managed key."
+  default     = ""
+
+  validation {
+    condition     = var.storage_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.storage_customer_managed_key_id))
+    error_message = "storage_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.storage_customer_managed_key_id == "") == (var.storage_customer_managed_key_identity_id == "")
+    error_message = "storage_customer_managed_key_id and storage_customer_managed_key_identity_id are set together or not at all: the account reads the key as that identity."
+  }
+}
+
+variable "storage_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>) the blob storage account reads storage_customer_managed_key_id with. It is assigned to the account and must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with storage_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.storage_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.storage_customer_managed_key_identity_id))
+    error_message = "storage_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
 # Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
 
