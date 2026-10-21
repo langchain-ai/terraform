@@ -1,5 +1,6 @@
 # Polly — AI-powered evaluation and monitoring.
-# Requires config.deployment.enabled = true (LangGraph Platform).
+# The top-level path does not run Polly as an operator-managed LGP agent, so it no
+# longer requires config.deployment.enabled.
 # Encryption key is read from langsmith-config-secret (polly_encryption_key).
 # Do NOT set it inline — it is already in the secret via config.existingSecretName.
 # Chart 0.15.1 removed config.polly (bundled-agent bootstrap path) → top-level polly block.

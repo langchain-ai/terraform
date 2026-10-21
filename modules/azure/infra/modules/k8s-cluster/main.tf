@@ -540,7 +540,7 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # CNCF Gateway API implementation. Uses Gateway/HTTPRoute resources (not classic Ingress).
 # Published via OCI registry — no separate Helm repository needed.
 # After install: create a GatewayClass + Gateway + HTTPRoute to expose LangSmith.
-# See: helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml
+# See: helm/values/overlays/langsmith-values-ingress-envoy-gateway.yaml
 
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0

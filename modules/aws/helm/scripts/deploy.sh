@@ -7,7 +7,7 @@
 # Deploys or upgrades LangSmith via Helm on AWS.
 #
 # Values files loaded (in order, last wins):
-#   1. langsmith-values.yaml              — base AWS config (always)
+#   1. values.yaml                        — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
 #   4. langsmith-values-agent-builder.yaml  — Agent Builder legacy (if enable_agent_builder)
@@ -19,7 +19,7 @@
 #  10. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
-# Templates live in values/examples/ — init-values.sh copies them based on your choices.
+# Templates live in values/overlays/ — init-values.sh copies them based on your choices.
 set -euo pipefail
 export AWS_PAGER=""
 
@@ -166,10 +166,6 @@ if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]];
   echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
 fi
-if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-  exit 1
-fi
 # Standalone Fleet's chat UI resolves OAuth provider/token connections via host-backend,
 # which only exists when Deployments is enabled. (Standalone Polly/Insights do not need it.)
 if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -179,7 +175,7 @@ if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
 fi
 
 # ── Build values args ─────────────────────────────────────────────────────────
-VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
+VALUES_ARGS=(-f "$VALUES_DIR/values.yaml" -f "$ENV_FILE")
 
 # Sizing profile: read from terraform.tfvars (production, dev, minimum, or default).
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
@@ -187,7 +183,7 @@ _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 # Print values chain so the user knows exactly what's going into the release.
 echo ""
 echo "Values chain:"
-echo "  ✔ langsmith-values.yaml (base)"
+echo "  ✔ values.yaml (base)"
 echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 
 # Addon files: gated by enable_* flags in terraform.tfvars.

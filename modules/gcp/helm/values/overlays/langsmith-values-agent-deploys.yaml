@@ -2,7 +2,7 @@
 #
 # init-values.sh copies this to ../langsmith-values-agent-deploys.yaml when you choose
 # a product tier that includes Deployments.
-# Manual: cp examples/langsmith-values-agent-deploys.yaml ../langsmith-values-agent-deploys.yaml
+# Manual: cp overlays/langsmith-values-agent-deploys.yaml ../langsmith-values-agent-deploys.yaml
 #
 # Prerequisites:
 #   - LangGraph Platform entitlement in your LangSmith license

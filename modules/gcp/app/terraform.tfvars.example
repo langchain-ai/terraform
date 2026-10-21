@@ -28,7 +28,7 @@ admin_email = "admin@example.com"
 # enable_agent_deploys   = true    # Deployments feature (LangGraph Platform)
 # enable_agent_builder   = true    # Agent Builder (requires agent_deploys)
 # enable_insights        = true    # Insights (requires ClickHouse below)
-# enable_polly           = true    # Polly AI eval/monitoring (requires agent_deploys)
+# enable_polly           = true    # Polly AI eval/monitoring
 # enable_usage_telemetry = true    # Extended usage telemetry reporting
 
 # ── ClickHouse (required when enable_insights = true) ────────────────────────

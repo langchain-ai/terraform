@@ -131,7 +131,7 @@ gcp/
     └── values/
         ├── values.yaml                    ← GCP base Helm values (Gateway, GCS HMAC)
         ├── values-overrides.yaml.example  ← Env-specific overlay template
-        └── examples/                      ← Annotated reference files and addon overlays
+        └── overlays/                      ← Annotated reference files and addon overlays
 ```
 
 ---
@@ -375,7 +375,7 @@ helm upgrade langsmith langchain/langsmith \
 | `enable_langsmith_deployment` | `true` | no | Enable LangSmith Deployments — installs KEDA |
 | `enable_deployments` | `false` | no | Enable LangGraph Platform (host-backend, listener, operator) |
 | `enable_fleet` | `false` | no | Enable Fleet standalone (chart v0.15+) — replaces `enable_agent_builder`; does not require `enable_deployments` |
-| `enable_standalone_polly` | `false` | no | Enable Polly standalone (chart v0.15+) — replaces `enable_polly`; does not require `enable_deployments` |
+| `enable_standalone_polly` | `false` | no | Enable Polly with its own Cloud SQL and Memorystore databases (chart v0.15+). `enable_polly` uses the same chart path but leaves those databases in-cluster. |
 | `enable_standalone_insights` | `false` | no | Enable Insights standalone (chart v0.15+) — replaces `enable_insights`; does not require `enable_deployments` |
 | `enable_agent_builder` | `false` | no | Deprecated (chart v0.15+) — `config.agentBuilder.*` is superseded by `enable_fleet` (`fleet.*`) |
 | `enable_insights` | `false` | no | Deprecated (chart v0.15+) — `config.insights.*` is superseded by `enable_standalone_insights` (`insights.*`) |

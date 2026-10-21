@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
-EXAMPLES_DIR="$VALUES_DIR/examples"
+OVERLAYS_DIR="$VALUES_DIR/overlays"
 
 source "$INFRA_DIR/scripts/_common.sh"
 
@@ -445,20 +445,20 @@ pass "Generated: ${OUT_FILE}"
 
 # ── Generate sizing file ──────────────────────────────────────────────────
 if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_src="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  _sizing_src="$OVERLAYS_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
   _sizing_dst="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
   if [[ -f "$_sizing_src" ]]; then
     cp "$_sizing_src" "$_sizing_dst"
     pass "Generated: langsmith-values-sizing-${_sizing_profile}.yaml"
   else
-    warn "No example found for sizing_profile '${_sizing_profile}' in examples/ — skipping"
+    warn "No example found for sizing_profile '${_sizing_profile}' in overlays/ — skipping"
   fi
 fi
 
 # ── Generate addon files ──────────────────────────────────────────────────
 _copy_addon() {
   local addon_file="$1"
-  local _src="$EXAMPLES_DIR/langsmith-values-${addon_file}.yaml"
+  local _src="$OVERLAYS_DIR/langsmith-values-${addon_file}.yaml"
   local _dst="$VALUES_DIR/langsmith-values-${addon_file}.yaml"
   if [[ -f "$_src" ]]; then
     cp "$_src" "$_dst"
@@ -479,7 +479,7 @@ open('${_dst}', 'w').write(content)
     fi
     pass "Generated: langsmith-values-${addon_file}.yaml"
   else
-    warn "Example file not found: $EXAMPLES_DIR/langsmith-values-${addon_file}.yaml"
+    warn "Example file not found: $OVERLAYS_DIR/langsmith-values-${addon_file}.yaml"
   fi
 }
 

@@ -80,11 +80,6 @@ resource "terraform_data" "validate_inputs" {
       error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
     }
 
-    precondition {
-      condition     = !var.enable_polly || var.enable_deployments
-      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
-    }
-
     # Standalone agent features (chart v0.15+) run their own api-server + queue against
     # per-feature databases on the shared RDS/ElastiCache. They do NOT require
     # enable_deployments, but they DO require external Postgres and Redis to exist.

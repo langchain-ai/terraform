@@ -20,7 +20,7 @@ locals {
   namespace               = var.langsmith_namespace
 
   # Helm values path — reads from the active values directory (same files the scripts path uses).
-  # init-values.sh copies from examples/ into values/ on first run; the app module reads from there.
+  # init-values.sh copies from overlays/ into values/ on first run; the app module reads from there.
   values_path = coalesce(var.helm_values_path, "${path.module}/../helm/values")
 
   # Derived
@@ -119,16 +119,12 @@ resource "terraform_data" "validate_required" {
       error_message = "enable_agent_builder requires enable_agent_deploys = true"
     }
     precondition {
-      condition     = !var.enable_polly || var.enable_agent_deploys
-      error_message = "enable_polly requires enable_agent_deploys = true"
-    }
-    precondition {
       condition     = !var.enable_insights || var.clickhouse_host != ""
       error_message = "clickhouse_host is required when enable_insights = true"
     }
     precondition {
-      condition     = fileexists("${local.values_path}/langsmith-values.yaml")
-      error_message = "Helm values files not found at ${local.values_path}/. Run: make init-values (copies templates from helm/values/examples/)"
+      condition     = fileexists("${local.values_path}/values.yaml")
+      error_message = "Helm values files not found at ${local.values_path}/. Run: make init-values (generates the overrides file; the base is tracked at helm/values/values.yaml)"
     }
   }
 }

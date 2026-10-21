@@ -19,7 +19,7 @@
 #  10. langsmith-values-standalone-insights.yaml        — Insights standalone v0.15+ (if enable_standalone_insights)
 #
 # Generate values files: ./helm/scripts/init-values.sh
-# Templates live in values/examples/ — init-values.sh copies them based on your choices.
+# Templates live in values/overlays/ — init-values.sh copies them based on your choices.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -155,10 +155,6 @@ _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=tru
 # Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
   echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
-  exit 1
-fi
-if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
 fi
 

@@ -1,0 +1,37 @@
+# Polly — AI-powered evaluation and monitoring.
+# Enable via: enable_polly = true in terraform.tfvars
+#
+# Chart 0.15.1 removed the bundled config.polly path and its validator hard-fails on
+# the mere presence of that key, so the top-level polly block below is the only way to
+# enable the feature. Two consequences of that switch:
+#   - Polly no longer runs as an operator-managed LGP agent, so it no longer needs
+#     config.deployment.enabled.
+#   - It gets its own in-cluster Postgres and Redis StatefulSet. Set
+#     enable_standalone_polly instead to point them at the Cloud SQL and Memorystore
+#     instances the infra pass already provisions.
+polly:
+  enabled: true
+  # encryptionKey must be set in values-overrides.yaml — GCP does not use
+  # config.existingSecretName. init-values.sh writes it from
+  # TF_VAR_langsmith_polly_encryption_key.
+  #
+  # Carried over from the removed config.polly.agent.resources (cpu 2/4, memory
+  # 4096/8192 MiB), split across the two Deployments the top-level path creates.
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 8Gi
+  queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi

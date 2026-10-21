@@ -207,7 +207,7 @@ resource "helm_release" "langsmith" {
   force_update = var.helm_force_update
 
   # Values layering — YAML files are the single source of truth (shared with helm/scripts path).
-  # Files are loaded from helm/values/ (populated by make init-values from examples/).
+  # Files are loaded from helm/values/ (populated by make init-values from overlays/).
   values = concat(
     # 1. Azure base config (NGINX ingress default, Blob engine, auth/secret defaults)
     [file("${local.values_path}/values.yaml")],
@@ -286,11 +286,7 @@ resource "terraform_data" "validate_required" {
     }
     precondition {
       condition     = !var.enable_fleet || fileexists("${local.values_path}/langsmith-values-fleet.yaml")
-      error_message = "langsmith-values-fleet.yaml not found at ${local.values_path}/. Run: make init-values (copies it from helm/values/examples/ when enable_fleet = true)."
-    }
-    precondition {
-      condition     = !var.enable_polly || var.enable_agent_deploys
-      error_message = "enable_polly requires enable_agent_deploys = true"
+      error_message = "langsmith-values-fleet.yaml not found at ${local.values_path}/. Run: make init-values (copies it from helm/values/overlays/ when enable_fleet = true)."
     }
     precondition {
       condition     = !var.enable_insights || var.clickhouse_host != ""

@@ -15,7 +15,7 @@ set -euo pipefail
 #   infra/terraform.tfstate             — local state (when not using remote backend)
 #   infra/terraform.tfstate*.backup     — state backup files
 #   infra/logs/                         — permutation and parallel test run logs
-#   helm/values/langsmith-values*.yaml           — gitignored local copies (canonical versions in examples/)
+#   helm/values/langsmith-values*.yaml           — gitignored local copies (canonical versions in overlays/)
 #
 # Does NOT remove:
 #   infra/terraform.tfvars.example      — template, keep it

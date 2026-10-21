@@ -1,21 +1,26 @@
 # Azure base Helm values for LangSmith.
 #
 # Applied on every deploy, by BOTH deploy paths:
-#   - helm/scripts/deploy.sh   (shell path)  loads this as the base values file
-#   - app/main.tf              (Terraform)   loads this as the base values file
+#   helm/scripts/deploy.sh  (shell)      loads this as the base values file
+#   app/main.tf             (Terraform)  loads this as the base values file
 #
-# Holds the Azure-native defaults that do NOT vary per deployment: NGINX ingress,
-# the Azure Blob Storage engine, and auth/secret conventions. Everything that
-# varies per environment is layered on top:
-#   Hostname, admin email, storage account/container, Workload Identity client ID,
-#     ingress class + TLS  → values-overrides.yaml (shell) or app/locals.tf (Terraform)
-#   External Postgres/Redis secret references          → same overrides layer
-#   Feature addon config (agent-deploys, insights)     → addon overlay files
-#   Resource sizing                                    → langsmith-values-sizing-*.yaml
+# Holds the Azure-native defaults that do not vary per deployment: NGINX ingress,
+# the Azure Blob Storage engine, and the auth/secret conventions. Everything that
+# varies per install layers on top, last value wins:
+#   1. values.yaml                                     this file (tracked)
+#   2. values-overrides.yaml                           generated per install (gitignored)
+#      (Terraform path: the equivalent values come from app/locals.tf)
+#   3. overlays/langsmith-values-sizing-<profile>.yaml
+#   4. overlays/langsmith-values-<addon>.yaml
 #
-# Do NOT put secrets here. Secrets live in langsmith-config-secret (Key Vault →
-# Terraform or create-k8s-secrets.sh) and are referenced via config.existingSecretName.
+# Do NOT put secrets or per-install values here. Hostname, admin email, storage
+# account/container, Workload Identity client ID, ingress class + TLS, and the
+# external Postgres/Redis references are all generated into the overrides layer.
+#
+# Secrets live in langsmith-config-secret (Key Vault → Terraform or
+# create-k8s-secrets.sh) and are referenced via config.existingSecretName below.
 
+# ── Ingress ───────────────────────────────────────────────────────────────────
 ingress:
   enabled: true
   # Default class. Overridden per ingress_controller in the overrides layer
@@ -25,14 +30,79 @@ ingress:
 istioGateway:
   enabled: false
 
+# ── Config ────────────────────────────────────────────────────────────────────
 config:
   authType: "mixed"
   # Tells the chart to read every LangSmith secret (license, jwt, salt, admin
   # password, encryption keys) from this one K8s secret.
   existingSecretName: "langsmith-config-secret"
+
   basicAuth:
-    enabled: true
+    enabled: true   # must be false when SSO is enabled (see below)
+
+  # ── SSO (OAuth2.0 / OIDC) ───────────────────────────────────────────────────
+  # Commented out by default. Enterprise plan only, and https only.
+  # Setup guide (IdP app registration, callback URL, per-provider steps, and the
+  # rules on migrating between auth modes):
+  #   https://docs.langchain.com/langsmith/self-host-sso
+  #
+  # basicAuth and oauth cannot both be enabled. Set basicAuth.enabled to false
+  # above when you uncomment the oauth block.
+  #
+  # The IdP redirect URI is https://<hostname>/api/v1/oauth/custom-oidc/callback.
+  # For Microsoft Entra ID, also add the "email" optional claim to the ID token
+  # (Token configuration > Add optional claim > ID > email). Without it every login
+  # fails with "Your identity provider did not provide an email address". The Entra
+  # issuer URL is https://login.microsoftonline.com/<tenant-id>/v2.0
+  #
+  # The client id, client secret, and issuer URL do NOT go in this file. Because
+  # existingSecretName is set above, the chart skips its own secret template and
+  # reads them out of langsmith-config-secret under the keys oauth_client_id,
+  # oauth_client_secret, and oauth_issuer_url. They are mounted with
+  # optional: false, so a missing key leaves the pods in CreateContainerConfigError.
+  # Neither infra/scripts/create-k8s-secrets.sh nor app/main.tf populates them
+  # today, so add them by hand:
+  #   kubectl patch secret langsmith-config-secret -n langsmith --type merge -p '{"stringData":{
+  #     "oauth_client_id":"<client-id>",
+  #     "oauth_client_secret":"<client-secret>",
+  #     "oauth_issuer_url":"https://login.microsoftonline.com/<tenant-id>/v2.0"}}'
+  #
+  # oauth:
+  #   enabled: true
+  #   oauthScopes: "email,profile,openid"  # add ",groups" only if your IdP needs it for SSO group sync
+  #   oauthSessionMaxSec: "86400"          # 24h session cap; max 604800
+  #   # urlEncodeScopeSpaces: true         # only for IdPs that reject "+"-encoded scope lists (e.g. SiteMinder)
+  #
+  # Optional: to end the IdP session on logout, register https://<hostname> as a
+  # post-logout redirect URI in the IdP and set OAUTH_IDP_LOGOUT_ENABLED=true via
+  # commonEnv. There is no chart value for it.
+
   blobStorage:
     enabled: true
     engine: "Azure"
     # azureStorageAccountName + azureStorageContainerName are set in the overrides layer.
+
+# ── Postgres / Redis ──────────────────────────────────────────────────────────
+# Deliberately not set here. Azure supports both in-cluster and managed
+# (Flexible Server / Azure Managed Redis), so the external.* toggles and secret
+# references are written into the overrides layer from the Terraform outputs.
+
+# ── ClickHouse ────────────────────────────────────────────────────────────────
+# Defaults to in-cluster. When clickhouse_source is "langsmith-managed" or
+# "external", the insights overlay sets external.enabled to true and points at the
+# langsmith-clickhouse secret.
+clickhouse:
+  external:
+    enabled: false
+
+# ── Add-on features ───────────────────────────────────────────────────────────
+# The chart defaults insights.enabled and polly.enabled to TRUE. Left alone that
+# adds eight workloads to every install — each feature gets an api-server, a queue,
+# and its own in-cluster Postgres and Redis StatefulSet, each claiming a volume.
+# Both deploy paths load this file first and the add-on overlays last, so turning
+# the features off here leaves the overlay as the only thing that switches one on.
+# fleet.enabled already defaults to false, so it needs no entry.
+insights:
+  enabled: false
+polly:
+  enabled: false

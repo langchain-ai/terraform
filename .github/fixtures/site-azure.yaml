@@ -1,0 +1,26 @@
+# CI-only stand-in for the per-install values that init-values.sh generates into
+# helm/values/values-overrides.yaml (and that app/locals.tf builds on the Terraform
+# path). Secrets come from langsmith-config-secret via config.existingSecretName in
+# the base file, exactly as on a real Azure install.
+#
+# Keep this minimal. Anything added here is a value the render check stops verifying.
+config:
+  hostname: "langsmith.ci.example.com"
+  initialOrgAdminEmail: "ci@example.com"
+  blobStorage:
+    azureStorageAccountName: "cistorageaccount"
+    azureStorageContainerName: "langsmith"
+  deployment:
+    url: "https://langsmith.ci.example.com"
+
+postgres:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-postgres-secret"
+    connectionUrlSecretKey: "connection_url"
+
+redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-secret"
+    connectionUrlSecretKey: "connection_url"

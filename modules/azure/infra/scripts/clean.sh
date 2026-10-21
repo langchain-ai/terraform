@@ -22,7 +22,7 @@ set -euo pipefail
 #
 # Does NOT remove:
 #   infra/terraform.tfvars.example  — template, keep it
-#   helm/values/examples/           — reference files, keep them
+#   helm/values/overlays/           — reference files, keep them
 #   .terraform/                     — provider cache, not sensitive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -1,0 +1,14 @@
+# CI-only stand-in for the per-install values that init-values.sh generates into
+# helm/values/langsmith-values-overrides.yaml. Supplies hostname, admin email, and
+# the ALB binding annotations, nothing else. Secrets come from langsmith-config via
+# config.existingSecretName in the base file, exactly as on a real AWS install.
+#
+# Keep this minimal. Anything added here is a value the render check stops verifying.
+config:
+  hostname: "https://langsmith.ci.example.com"
+  initialOrgAdminEmail: "ci@example.com"
+
+ingress:
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/group.name: langsmith-ci

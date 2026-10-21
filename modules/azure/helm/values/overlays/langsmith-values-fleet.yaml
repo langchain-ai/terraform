@@ -17,7 +17,7 @@
 # cluster (SELECT blocked on every SKU), so it can't provide the logical-DB
 # isolation the AWS/GCP Fleet uses, and Fleet has no clusterSafeMode knob to make
 # a cluster endpoint safe. The bundled pod avoids CROSSSLOT with no config fix.
-# See helm/values/examples/ notes or the fleet-redis explainer for the full rationale.
+# See helm/values/overlays/ notes or the fleet-redis explainer for the full rationale.
 #
 # Prerequisites:
 #   - chart >= 0.15.0

@@ -159,23 +159,22 @@ aws/
 │   │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
 │   │   ├── preflight-check.sh      ← Pre-deploy validation
 │   │   └── uninstall.sh            ← Helm uninstall + cleanup
-│   └── values/
-│       ├── examples/                                    ← Reference templates (init-values.sh copies from here)
-│       │   ├── langsmith-values.yaml                    ← Base AWS values
-│       │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
-│       │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
-│       │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
-│       │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
-│       │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
-│       │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
-│       │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
-│       │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
-│       │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
-│       │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
-│       ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
-│       ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
-│       ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
-│       └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
+│   ├── values/
+│   │   ├── values.yaml                                  ← Base AWS values (tracked in git, always applied)
+│   │   ├── overlays/                                    ← Tracked source files (init-values.sh copies from here)
+│   │   │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
+│   │   │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
+│   │   │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
+│   │   │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
+│   │   │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
+│   │   │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
+│   │   │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
+│   │   │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
+│   │   │   └── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
+│   │   ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
+│   │   └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
+│   └── manifests/                                       ← kubectl apply, not Helm values
+│       └── dataplane-rbac.yaml                          ← RBAC: host-backend read access to dataplane namespace
 └── app/                    ← Pass 2 option B: Terraform-managed Helm deploy
     ├── main.tf             ← Providers, ESO resources, helm_release
     ├── variables.tf        ← Infra inputs (auto-populated) + app config
@@ -317,7 +316,7 @@ make init-values       # prompts: admin email; reads sizing + addons from terraf
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
-`init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
+`init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/overlays/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
 ### Option B: Terraform-managed Helm deploy
 
@@ -341,7 +340,7 @@ make plan-app
 make apply-app
 ```
 
-> **Important:** `make init-values` is required before `make plan-app`. The app module reads YAML values files from `helm/values/` — `init-values` copies them from `helm/values/examples/` based on your sizing and product choices.
+> **Important:** `make init-values` is required before `make plan-app`. The app module reads YAML values files from `helm/values/` — `init-values` copies them from `helm/values/overlays/` based on your sizing and product choices.
 
 The `app/` module manages the ESO ClusterSecretStore, ExternalSecret, and `helm_release` in Terraform. Feature toggles are variables:
 
@@ -402,7 +401,7 @@ make apply
 # Use the Envoy Gateway Helm values overlay
 make init-values
 # Copy the envoy gateway overlay:
-cp helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml helm/values/
+cp helm/values/overlays/langsmith-values-ingress-envoy-gateway.yaml helm/values/
 make deploy
 ```
 
@@ -420,7 +419,7 @@ Client → NLB:443 (ACM TLS termination) → Envoy proxy:80 → HTTPRoute → la
 When running the `langgraph-dataplane` chart in a separate namespace (e.g. `langsmith-agents`), apply the RBAC manifest once per dataplane namespace to allow `langsmith-host-backend` to read pods and logs:
 
 ```bash
-kubectl apply -f helm/values/dataplane-rbac.yaml
+kubectl apply -f helm/manifests/dataplane-rbac.yaml
 ```
 
 The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmith` namespace) read access to pods, pod logs, deployments, and ReplicaSets in the `langsmith-agents` namespace. Without this, agent run logs will not stream in the LangSmith UI.
@@ -661,7 +660,7 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
 1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `sizing_profile`, `enable_*` flags, `langsmith_domain`)
 2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`)
 3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
-4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
+4. Copies addon values files from `helm/values/overlays/` based on which `enable_*` flags are set:
    - `enable_deployments = true` → copies `langsmith-values-agent-deploys.yaml`
    - `enable_agent_builder = true` → copies `langsmith-values-agent-builder.yaml`
    - `enable_insights = true` → copies `langsmith-values-insights.yaml`
@@ -684,11 +683,11 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads `enable_deployments`, `enable_agent_builder`, `enable_insights`, `enable_polly` from `terraform.tfvars`. Validates addon dependencies (agent_builder and polly require deployments).
+**Step 4 — Read feature flags.** Reads `enable_deployments`, `enable_agent_builder`, `enable_insights`, `enable_polly` from `terraform.tfvars`. Validates addon dependencies (agent_builder requires deployments; insights requires a ClickHouse host).
 
 **Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
 ```
--f langsmith-values.yaml                      (base — always)
+-f values.yaml                                (base — always)
 -f langsmith-values-overrides.yaml            (your env — always)
 -f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
 -f langsmith-values-agent-builder.yaml        (enable_agent_builder = true)
@@ -1003,7 +1002,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_deployments` | `false` | no | Enable LangGraph Platform (listener, operator, host-backend) |
 | `enable_agent_builder` | `false` | no | Enable Agent Builder (requires `enable_deployments`) |
 | `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
-| `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
+| `enable_polly` | `false` | no | Enable Polly AI eval/monitoring. Its Postgres and Redis run in-cluster; use `enable_standalone_polly` to point them at RDS and ElastiCache. |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Agent Builder |

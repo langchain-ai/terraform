@@ -233,7 +233,7 @@ resource "helm_release" "langsmith" {
   # Only overrides_values is HCL — it contains dynamic, env-specific config (hostname, IRSA, S3).
   values = concat(
     # 1. Base AWS config (ingress, storage, auth, blob, external postgres/redis)
-    [file("${local.values_path}/langsmith-values.yaml")],
+    [file("${local.values_path}/values.yaml")],
     # 2. Dynamic overrides (hostname, IRSA annotations, S3 bucket, region)
     [yamlencode(local.overrides_values)],
     # 3. Sizing
@@ -274,7 +274,7 @@ resource "kubernetes_service_account_v1" "langsmith_ksa" {
 # Static values (sizing, resource limits, addon config) come from the YAML files
 # in helm/values/ via file(). These are the same files the scripts path uses,
 # so both deployment paths share a single source of truth.
-# Requires: make init-values (copies examples/ → values/ and generates overrides).
+# Requires: make init-values (copies overlays/ → values/ and generates overrides).
 #
 # Only env-specific config that requires variable interpolation lives here as HCL.
 #------------------------------------------------------------------------------

@@ -19,7 +19,7 @@ locals {
   ingress_controller          = var.ingress_controller
 
   # Helm values path — reads from the active values directory (same files the scripts path uses).
-  # init-values.sh copies from examples/ into values/ on first run.
+  # init-values.sh copies from overlays/ into values/ on first run.
   values_path = coalesce(var.helm_values_path, "${path.module}/../helm/values")
 
   # Hostname resolution: explicit → dns_label (works for all ingress controllers) → empty

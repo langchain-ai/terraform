@@ -35,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
-EXAMPLES_DIR="$VALUES_DIR/examples"
+OVERLAYS_DIR="$VALUES_DIR/overlays"
 
 # ── tfvars parser ─────────────────────────────────────────────────────────────
 _parse_tfvar() {
@@ -212,7 +212,7 @@ fi
 # ── Sizing profile (from terraform.tfvars) ────────────────────────────────────
 if [[ "$_sizing_profile" != "default" ]]; then
   _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  _sizing_example="$OVERLAYS_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
   if [[ ! -f "$_sizing_file" ]]; then
     if [[ -f "$_sizing_example" ]]; then
       cp "$_sizing_example" "$_sizing_file"
@@ -267,14 +267,10 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
     echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
     exit 1
   fi
-  if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
 
   if [[ "$_enable_deployments" == "true" ]]; then
     if [[ ! -f "$_deploys_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
+      cp "$OVERLAYS_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
       echo "  ✔ Deployments (created langsmith-values-agent-deploys.yaml)"
     else
       echo "  ✔ Deployments (existing)"
@@ -285,7 +281,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
 
   if [[ "$_enable_agent_builder" == "true" ]]; then
     if [[ ! -f "$_builder_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
+      cp "$OVERLAYS_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
       echo "  ✔ Agent Builder (created langsmith-values-agent-builder.yaml)"
     else
       echo "  ✔ Agent Builder (existing)"
@@ -304,7 +300,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   if [[ "$_enable_polly" == "true" ]]; then
     _polly_file="$VALUES_DIR/langsmith-values-polly.yaml"
     if [[ ! -f "$_polly_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-polly.yaml" "$_polly_file"
+      cp "$OVERLAYS_DIR/langsmith-values-polly.yaml" "$_polly_file"
       echo "  ✔ Polly (created langsmith-values-polly.yaml)"
     else
       echo "  ✔ Polly (existing)"
@@ -316,7 +312,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   if [[ "$_enable_fleet" == "true" ]]; then
     _fleet_file="$VALUES_DIR/langsmith-values-fleet.yaml"
     if [[ ! -f "$_fleet_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
+      cp "$OVERLAYS_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
       echo "  ✔ Fleet (created langsmith-values-fleet.yaml)"
     else
       echo "  ✔ Fleet (existing)"
@@ -328,7 +324,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   if [[ "$_enable_standalone_polly" == "true" ]]; then
     _sp_file="$VALUES_DIR/langsmith-values-standalone-polly.yaml"
     if [[ ! -f "$_sp_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_sp_file"
+      cp "$OVERLAYS_DIR/langsmith-values-standalone-polly.yaml" "$_sp_file"
       echo "  ✔ Standalone Polly (created langsmith-values-standalone-polly.yaml; encryptionKey written to values-overrides.yaml)"
     else
       echo "  ✔ Standalone Polly (existing; encryptionKey in values-overrides.yaml)"
@@ -340,7 +336,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   if [[ "$_enable_standalone_insights" == "true" ]]; then
     _si_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml"
     if [[ ! -f "$_si_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_si_file"
+      cp "$OVERLAYS_DIR/langsmith-values-standalone-insights.yaml" "$_si_file"
       echo "  ✔ Standalone Insights (created langsmith-values-standalone-insights.yaml; encryptionKey written to values-overrides.yaml)"
     else
       echo "  ✔ Standalone Insights (existing; encryptionKey in values-overrides.yaml)"
@@ -367,12 +363,12 @@ elif [[ "$_first_run" == "true" ]]; then
     1)
       ;;
     2|3|4)
-      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
+      cp "$OVERLAYS_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
       echo "  Created: langsmith-values-agent-deploys.yaml"
       _enable_deployments=true
 
       if [[ "$_tier_choice" == "3" || "$_tier_choice" == "4" ]]; then
-        cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
+        cp "$OVERLAYS_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
         echo "  Created: langsmith-values-agent-builder.yaml"
         _enable_agent_builder=true
       fi
@@ -408,9 +404,8 @@ if [[ "$_enable_insights" == "true" && ! -f "$_insights_file" ]]; then
 # ClickHouse runs as a StatefulSet pod in the cluster (dev/POC only).
 # For production, set clickhouse_source = "external" in terraform.tfvars
 # and re-run init-values.sh to configure an external ClickHouse connection.
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 CHEOF
     echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
   else
@@ -446,9 +441,8 @@ CHEOF
 # Auto-generated by init-values.sh — ClickHouse connection details.
 # Re-run init-values.sh or edit this file to update.
 # Password is stored in the langsmith-clickhouse K8s Secret (not this file).
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 
 clickhouse:
   external:
@@ -506,8 +500,8 @@ fi
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
 _addon_keys_block=""
 _fleet_key_block=""
-_standalone_polly_key_block=""
-_standalone_insights_key_block=""
+_polly_key_block=""
+_insights_key_block=""
 if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" || \
       "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" || \
       "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
@@ -530,16 +524,13 @@ if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" || \
     exit 1
   fi
 
-  # Only write the legacy config.* keys when the old bundled-path flags are set.
-  # chart >= 0.15.1 blocks config.agentBuilder/insights/polly via validate.yaml.
-  if [[ "$_enable_agent_builder" == "true" || "$_enable_insights" == "true" || "$_enable_polly" == "true" ]]; then
+  # config.agentBuilder is still a supported chart path, so its key stays under config.
+  # config.insights and config.polly were removed in 0.15.1 — validate.yaml hard-fails
+  # on the mere presence of either key, so their keys go in the top-level blocks below.
+  if [[ "$_enable_agent_builder" == "true" ]]; then
     _addon_keys_block="
   agentBuilder:
-    encryptionKey: \"${_agent_builder_key}\"
-  insights:
-    encryptionKey: \"${_insights_key}\"
-  polly:
-    encryptionKey: \"${_polly_key}\""
+    encryptionKey: \"${_agent_builder_key}\""
   fi
 
   if [[ "$_enable_fleet" == "true" ]]; then
@@ -548,14 +539,16 @@ fleet:
   encryptionKey: \"${_agent_builder_key}\""
   fi
 
-  if [[ "$_enable_standalone_polly" == "true" ]]; then
-    _standalone_polly_key_block="
+  # One block per feature: the legacy and standalone flags now target the same
+  # top-level key, and emitting it twice would be a duplicate YAML key.
+  if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
+    _polly_key_block="
 polly:
   encryptionKey: \"${_polly_key}\""
   fi
 
-  if [[ "$_enable_standalone_insights" == "true" ]]; then
-    _standalone_insights_key_block="
+  if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
+    _insights_key_block="
 insights:
   encryptionKey: \"${_insights_key}\""
   fi
@@ -650,8 +643,8 @@ gateway:
 ${_wi_block}
 ${_external_services_block}
 ${_fleet_key_block}
-${_standalone_polly_key_block}
-${_standalone_insights_key_block}
+${_polly_key_block}
+${_insights_key_block}
 YAML
 
 echo "Written: $OUT_FILE"

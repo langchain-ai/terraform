@@ -299,7 +299,7 @@ admin_email = "you@example.com"
 # enable_agent_deploys = true    # Pass 3 — LangSmith Deployments
 # enable_agent_builder = true    # Pass 4 — Agent Builder (requires agent_deploys)
 # enable_insights      = true    # Pass 5 — Insights (requires clickhouse_host)
-# enable_polly         = true    # Pass 5 — Polly (requires agent_deploys)
+# enable_polly         = true    # Pass 5 — Polly AI eval/monitoring
 ```
 
 ---
@@ -412,7 +412,7 @@ langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0        
 
 > **AGIC RBAC timing — known issue.** The AKS AGIC addon creates its managed identity during cluster provisioning, but Azure AD needs ~5 minutes to register it before role assignments take effect. Terraform adds a 300s `time_sleep` before creating role assignments to avoid this. If the AGIC pod is still in CrashLoopBackOff after `make apply`, run: `az aks update --name <cluster> --resource-group <rg> --yes` then `kubectl delete pod -n kube-system -l app=ingress-azure`.
 
-> **Envoy Gateway uses Gateway API, not Ingress.** Set `ingress.enabled: false` in LangSmith Helm values and apply Gateway + HTTPRoute resources manually. See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the step-by-step commands.
+> **Envoy Gateway uses Gateway API, not Ingress.** Set `ingress.enabled: false` in LangSmith Helm values and apply Gateway + HTTPRoute resources manually. See `helm/values/overlays/langsmith-values-ingress-envoy-gateway.yaml` for the step-by-step commands.
 
 > **Pin `--version` in Helm.** Without it, `helm upgrade` pulls latest which may silently apply DB migrations or toggle feature flags.
 

@@ -1,16 +1,26 @@
 # GCP base Helm values for LangSmith.
 #
-# Applied on every deploy alongside values-overrides.yaml.
-# Configures GCP-native integrations: Envoy Gateway (HTTPRoute),
-# and GCS blob storage via the S3-compatible HMAC API.
+# Applied on every deploy, by BOTH deploy paths:
+#   helm/scripts/deploy.sh  (shell)      loads this as the base values file
+#   app/main.tf             (Terraform)  loads this as the base values file
 #
-# Do NOT put secrets or env-specific values here.
-#   Hostname, admin email, bucket name, WI annotation → values-overrides.yaml (init-values.sh)
-#   Feature addon config (agentBuilder, insights)     → addon overlay files
-#   Resource sizing                                   → langsmith-values-sizing-*.yaml
+# Holds the GCP-native defaults that do not vary per deployment: Envoy Gateway
+# (Gateway API, not a K8s Ingress) and GCS blob storage. Everything that varies per
+# install layers on top, last value wins:
+#   1. values.yaml                                     this file (tracked)
+#   2. values-overrides.yaml                           generated per install (gitignored)
+#   3. overlays/langsmith-values-sizing-<profile>.yaml
+#   4. overlays/langsmith-values-<addon>.yaml
 #
-# For an annotated reference, see examples/langsmith-values.yaml.
+# Do NOT put per-install values here. Hostname, admin email, bucket name, and the
+# Workload Identity annotation are generated into the overrides file.
+#
+# Unlike AWS and Azure, GCP does not set config.existingSecretName, so the chart
+# creates its own secret from values. That means the license key, API key salt, JWT
+# secret, and admin password are written as plaintext into values-overrides.yaml,
+# which is why that file is gitignored.
 
+# ── Ingress / Gateway ─────────────────────────────────────────────────────────
 ingress:
   enabled: false  # GCP uses Envoy Gateway (Gateway API), not a K8s Ingress
 
@@ -19,17 +29,54 @@ gateway:
   name: ""        # Filled by init-values.sh from terraform output
   namespace: "envoy-gateway-system"
 
+# ── Config ────────────────────────────────────────────────────────────────────
 config:
   basePath: ""
   authType: "mixed"
+
   basicAuth:
-    enabled: true
+    enabled: true   # must be false when SSO is enabled (see below)
+
+  # ── SSO (OAuth2.0 / OIDC) ───────────────────────────────────────────────────
+  # Commented out by default. Enterprise plan only, and https only.
+  # Setup guide (IdP app registration, callback URL, per-provider steps, and the
+  # rules on migrating between auth modes):
+  #   https://docs.langchain.com/langsmith/self-host-sso
+  #
+  # basicAuth and oauth cannot both be enabled. Set basicAuth.enabled to false
+  # above when you uncomment the oauth block.
+  #
+  # The IdP redirect URI is https://<hostname>/api/v1/oauth/custom-oidc/callback.
+  # Google Workspace does not support PKCE, so use the client-secret flow, which is
+  # what authType "mixed" selects. The Google issuer URL is
+  # https://accounts.google.com
+  #
+  # GCP does not set config.existingSecretName, so unlike AWS and Azure the three
+  # oauth values below are live chart values rather than secret keys. Put the client
+  # id and secret in values-overrides.yaml alongside the other plaintext secrets,
+  # not in this tracked file.
+  #
+  # oauth:
+  #   enabled: true
+  #   oauthIssuerUrl: "https://accounts.google.com"
+  #   oauthScopes: "email,profile,openid"  # add ",groups" only if your IdP needs it for SSO group sync
+  #   oauthSessionMaxSec: "86400"          # 24h session cap; max 604800
+  #   # urlEncodeScopeSpaces: true         # only for IdPs that reject "+"-encoded scope lists (e.g. SiteMinder)
+  #   # oauthClientId / oauthClientSecret → values-overrides.yaml
+
   blobStorage:
     enabled: true
     engine: "GCS"       # Prefer native GCS mode (supports Workload Identity without HMAC keys)
     apiURL: "https://storage.googleapis.com"
     s3UsePathStyle: false
     # bucketName, accessKey, accessKeySecret → values-overrides.yaml
+
+# ── Component sizing ──────────────────────────────────────────────────────────
+# NOTE: these per-component resource and HPA blocks overlap with the sizing
+# overlays in overlays/langsmith-values-sizing-*.yaml, which are applied after this
+# file and therefore win. AWS and Azure keep sizing only in the overlays. Moving
+# these out would change the resources on any GCP install that does not apply a
+# sizing overlay, so they are left in place here and tracked as a follow-up.
 
 aceBackend:
   deployment:
@@ -52,8 +99,6 @@ aceBackend:
     port: 1987
 
 backend:
-  agentBootstrap:
-    enabled: true
   deployment:
     resources:
       limits:
@@ -213,7 +258,6 @@ operator:
                   memory: 1Gi
 
 playground:
-  enabled: true
   deployment:
     resources:
       limits:
@@ -261,3 +305,15 @@ redis:
     enabled: true
     existingSecretName: "langsmith-redis-credentials"  # created by k8s-bootstrap
     connectionUrlSecretKey: "connection_url"
+
+# ── Add-on features ───────────────────────────────────────────────────────────
+# The chart defaults insights.enabled and polly.enabled to TRUE. Left alone that
+# adds eight workloads to every install — each feature gets an api-server, a queue,
+# and its own in-cluster Postgres and Redis StatefulSet, each claiming a volume.
+# Both deploy paths load this file first and the add-on overlays last, so turning
+# the features off here leaves the overlay as the only thing that switches one on.
+# fleet.enabled already defaults to false, so it needs no entry.
+insights:
+  enabled: false
+polly:
+  enabled: false

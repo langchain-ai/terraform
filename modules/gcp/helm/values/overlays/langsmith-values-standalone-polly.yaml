@@ -19,12 +19,10 @@
 # encryptionKey is written by init-values.sh into helm/values/values-overrides.yaml
 # as a top-level `polly.encryptionKey` (gitignored; mirrors the fleet.encryptionKey convention).
 
-# Disables the legacy config.polly path — overrides langsmith-values-polly.yaml
-# if both files are loaded in the same helm command.
-config:
-  polly:
-    enabled: false
-
+# NOTE: do not add a `config.polly` block here. Chart 0.15.1 removed the bundled
+# config.polly path and its validator hard-fails on the mere presence of the key
+# (hasKey), even when set to false. The top-level `polly` block below is the only
+# supported path. Polly is off by default via helm/values/values.yaml.
 polly:
   enabled: true
   namePrefix: "standalone-polly"

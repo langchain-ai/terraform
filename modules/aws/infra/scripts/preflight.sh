@@ -205,7 +205,7 @@ run_post_infra_checks() {
   # ── 5. Helm values files ────────────────────────────────────────────────────
   info "--- Helm Values Files ---"
   local values_ok=true
-  for f in "langsmith-values.yaml" "langsmith-values-overrides.yaml"; do
+  for f in "values.yaml" "langsmith-values-overrides.yaml"; do
     local full_path="${helm_dir}/${f}"
     if [[ -f "$full_path" ]]; then
       success "Found : $full_path"

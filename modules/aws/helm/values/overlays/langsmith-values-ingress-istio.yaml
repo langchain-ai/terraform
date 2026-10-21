@@ -125,7 +125,7 @@
 # Helm command:
 #   helm upgrade --install langsmith langchain/langsmith \
 #     --namespace langsmith \
-#     -f langsmith-values.yaml \
+#     -f values.yaml \
 #     -f langsmith-values-overrides.yaml \
 #     -f langsmith-values-ingress-istio.yaml \
 #     --wait

@@ -2,20 +2,26 @@
 #
 # init-values.sh copies this to ../langsmith-values-insights.yaml when you choose
 # a product tier that includes Insights. You'll be prompted for ClickHouse connection details.
-# Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
+# Manual: cp overlays/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
 #
 # Prerequisites:
 #   - ClickHouse instance reachable from the GKE cluster
 #   - clickhouse_source = "langsmith-managed" or "external" in terraform.tfvars
 
-config:
-  insights:
-    enabled: true
-    # encryptionKey must be set in values-overrides.yaml or via --set on each deploy.
-    # Generate a Fernet key:
-    #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    # Rotating this key requires re-encrypting all existing Insights data.
-    # encryptionKey: "YOUR_INSIGHTS_FERNET_KEY"
+# Chart 0.15.1 removed the bundled config.insights path and its validator hard-fails on
+# the mere presence of that key, so the top-level insights block below is the only way to
+# enable the feature. On this path Insights gets its own in-cluster Postgres and Redis
+# StatefulSet; set enable_standalone_insights instead to point them at the Cloud SQL and
+# Memorystore instances the infra pass already provisions.
+insights:
+  enabled: true
+  # encryptionKey must be set in values-overrides.yaml or via --set on each deploy —
+  # GCP does not use config.existingSecretName, so the chart has nowhere else to read it.
+  # init-values.sh writes it from TF_VAR_langsmith_insights_encryption_key.
+  # Generate a Fernet key:
+  #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  # Rotating this key requires re-encrypting all existing Insights data.
+  # encryptionKey: "YOUR_INSIGHTS_FERNET_KEY"
 
 clickhouse:
   external:

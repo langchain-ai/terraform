@@ -94,7 +94,7 @@ resource "helm_release" "langsmith" {
   # This is the same values chain as deploy.sh: base → overrides → sizing → addons.
   values = concat(
     # 1. Base GCP config (ingress type, storage, auth, external postgres/redis)
-    [file("${local.values_path}/langsmith-values.yaml")],
+    [file("${local.values_path}/values.yaml")],
     # 2. Dynamic overrides (hostname, Workload Identity annotations, GCS bucket)
     [yamlencode(local.overrides_values)],
     # 3. Sizing

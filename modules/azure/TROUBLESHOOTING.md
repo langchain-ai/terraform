@@ -565,7 +565,7 @@ Even though `enable_deployments = true` is clearly set in tfvars.
 
 **Cause:** `config.deployment.url` was empty or `config.deployment.tlsEnabled` was `false` when TLS is enabled. The operator builds agent endpoint URLs using these values — an empty URL or wrong protocol causes the health check to fail.
 
-**Fix:** `init-values.sh` now automatically injects `url` and `tlsEnabled` into `langsmith-values-agent-deploys.yaml` after copying from examples. If deploying manually, set both explicitly:
+**Fix:** `init-values.sh` now automatically injects `url` and `tlsEnabled` into `langsmith-values-agent-deploys.yaml` after copying from overlays. If deploying manually, set both explicitly:
 ```yaml
 config:
   deployment:
@@ -605,7 +605,7 @@ EOF
 make deploy
 ```
 
-For **external ClickHouse** (production with LangChain managed ClickHouse), the full configuration is in `helm/values/examples/langsmith-values-insights.yaml`.
+For **external ClickHouse** (production with LangChain managed ClickHouse), the full configuration is in `helm/values/overlays/langsmith-values-insights.yaml`.
 
 ---
 

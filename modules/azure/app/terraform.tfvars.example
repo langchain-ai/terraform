@@ -20,7 +20,7 @@ admin_email = "admin@example.com"
 # "production-large" = high-volume (~50 users, ~1000 traces/sec)
 # "dev"              = single-replica, minimal resources (dev/CI/demos)
 # "none"             = chart defaults
-# See: helm/values/examples/SIZING.md
+# See: helm/values/overlays/SIZING.md
 
 # sizing = "production"
 
@@ -30,7 +30,7 @@ admin_email = "admin@example.com"
 # enable_agent_builder   = true    # Agent Builder — legacy (requires agent_deploys)
 # enable_fleet           = true    # Fleet, standalone successor to Agent Builder (requires agent_deploys; mutually exclusive with enable_agent_builder; also set enable_fleet in the infra pass)
 # enable_insights        = true    # Insights (requires ClickHouse below)
-# enable_polly           = true    # Polly AI eval/monitoring (requires agent_deploys)
+# enable_polly           = true    # Polly AI eval/monitoring
 # enable_usage_telemetry = true    # Extended usage telemetry reporting
 
 # ── ClickHouse (required when enable_insights = true) ────────────────────────

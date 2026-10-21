@@ -181,7 +181,7 @@ Envoy Gateway NLB (internal-scheme, auto-provisioned by k8s-bootstrap)
     └── HTTPRoute → langsmith-agents ns (agent pods — split dataplane)
 ```
 
-See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the Helm values
+See `helm/values/overlays/langsmith-values-ingress-envoy-gateway.yaml` for the Helm values
 and `doc_use_cases/enable_split_dataplane_aws/` for the full split dataplane guide.
 
 ---
@@ -347,7 +347,7 @@ Gateway API's `allowedRoutes: All` setting makes Envoy Gateway the recommended i
 Apply the dataplane RBAC manifest once per dataplane namespace to allow `langsmith-host-backend` to stream pod logs:
 
 ```bash
-kubectl apply -f helm/values/dataplane-rbac.yaml
+kubectl apply -f helm/manifests/dataplane-rbac.yaml
 # Edit namespace: field if using a namespace other than langsmith-agents
 ```
 

@@ -299,7 +299,7 @@ enable_usage_telemetry = false
 #------------------------------------------------------------------------------
 # Optional: Helm Sizing Profile
 # Controls which langsmith-values-sizing-{profile}.yaml overlay deploy.sh loads.
-# Run `make init-values` after changing this — it copies the sizing file from examples/.
+# Run `make init-values` after changing this — it copies the sizing file from overlays/.
 #
 #   "default"          — chart defaults (no overlay); suitable for quick tests
 #   "minimum"          — absolute floor; fits e2-standard-4; not for production

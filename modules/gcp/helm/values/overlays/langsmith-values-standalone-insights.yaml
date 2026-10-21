@@ -23,12 +23,10 @@
 # encryptionKey is written by init-values.sh into helm/values/values-overrides.yaml
 # as a top-level `insights.encryptionKey` (gitignored; mirrors the fleet.encryptionKey convention).
 
-# Disables the legacy config.insights path — overrides langsmith-values-insights.yaml
-# if both files are loaded in the same helm command.
-config:
-  insights:
-    enabled: false
-
+# NOTE: do not add a `config.insights` block here. Chart 0.15.1 removed the bundled
+# config.insights path and its validator hard-fails on the mere presence of the key
+# (hasKey), even when set to false. The top-level `insights` block below is the only
+# supported path. Insights is off by default via helm/values/values.yaml.
 insights:
   enabled: true
   namePrefix: "standalone-insights"

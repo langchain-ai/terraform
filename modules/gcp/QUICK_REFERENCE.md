@@ -98,13 +98,13 @@ enable_usage_telemetry = true
 
 > **Chart v0.15+:** `config.agentBuilder.*`, `config.polly.*`, and `config.insights.*` are deprecated in favor of the top-level standalone blocks. Use the standalone flags above instead.
 
-To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
+To add an addon after initial install without re-running `init-values.sh`, copy manually from `overlays/`:
 
 ```bash
-cp helm/values/examples/langsmith-values-agent-deploys.yaml    helm/values/
-cp helm/values/examples/langsmith-values-fleet.yaml            helm/values/
-cp helm/values/examples/langsmith-values-standalone-polly.yaml helm/values/
-cp helm/values/examples/langsmith-values-standalone-insights.yaml helm/values/
+cp helm/values/overlays/langsmith-values-agent-deploys.yaml    helm/values/
+cp helm/values/overlays/langsmith-values-fleet.yaml            helm/values/
+cp helm/values/overlays/langsmith-values-standalone-polly.yaml helm/values/
+cp helm/values/overlays/langsmith-values-standalone-insights.yaml helm/values/
 
 make deploy
 ```

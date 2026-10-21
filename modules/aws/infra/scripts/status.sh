@@ -248,12 +248,12 @@ fi
 header "7. Helm Values"
 
 _overrides="$VALUES_DIR/langsmith-values-overrides.yaml"
-_base_values="$VALUES_DIR/langsmith-values.yaml"
+_base_values="$VALUES_DIR/values.yaml"
 
 if [[ -f "$_base_values" ]]; then
-  pass "langsmith-values.yaml (base)"
+  pass "values.yaml (base)"
 else
-  fail "langsmith-values.yaml (base) — missing"
+  fail "values.yaml (base) — missing"
 fi
 
 if [[ -f "$_overrides" ]]; then

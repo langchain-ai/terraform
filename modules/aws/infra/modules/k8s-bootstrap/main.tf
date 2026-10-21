@@ -300,7 +300,7 @@ resource "terraform_data" "langsmith_certificate" {
       kubectl get namespace istio-system > /dev/null 2>&1 || {
         echo "ERROR: istio-system namespace not found."
         echo "       Install Istio (istiod + istio-ingressgateway) before running terraform apply."
-        echo "       See: terraform/aws/helm/values/examples/langsmith-values-ingress-istio.yaml"
+        echo "       See: terraform/aws/helm/values/overlays/langsmith-values-ingress-istio.yaml"
         exit 1
       }
       kubectl delete secret langsmith-tls -n istio-system --ignore-not-found

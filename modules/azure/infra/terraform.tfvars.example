@@ -143,7 +143,7 @@ langsmith_release_name = "langsmith"
 # Read by helm/scripts/init-values.sh and helm/scripts/deploy.sh.
 # Set flags and re-run `make init-values && make deploy` to enable each pass.
 #
-# Sizing profiles (controls which examples/langsmith-values-sizing-*.yaml is applied):
+# Sizing profiles (controls which overlays/langsmith-values-sizing-*.yaml is applied):
 #   minimum          — absolute minimum (demos, very constrained clusters)
 #   dev              — single-replica, minimal resources (dev / CI / demos)
 #   production       — multi-replica with HPA (recommended for all real workloads)

@@ -6,7 +6,7 @@
 # For in-cluster ClickHouse (dev/POC), init-values.sh generates a minimal file automatically:
 #   insights:
 #     enabled: true
-# Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
+# Manual: cp overlays/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
 #
 # Prerequisites:
 #   - External ClickHouse instance (LangChain Managed, Azure Marketplace, or self-hosted)

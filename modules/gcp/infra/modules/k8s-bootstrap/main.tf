@@ -194,6 +194,36 @@ resource "kubernetes_resource_quota" "langsmith" {
 }
 
 #------------------------------------------------------------------------------
+# Limit Range
+#------------------------------------------------------------------------------
+# Required companion to the ResourceQuota above: because the quota's `hard` includes
+# requests/limits, Kubernetes forces EVERY pod in the namespace to declare them. Some
+# chart components (e.g. the in-cluster Postgres/Redis StatefulSets that back the
+# insights/polly/fleet features) ship without resource stanzas, so without defaults
+# they are rejected with "failed quota: must specify limits.cpu/... for: <container>"
+# and never schedule. This mirrors modules/azure/infra/modules/k8s-bootstrap.
+resource "kubernetes_limit_range" "langsmith" {
+  metadata {
+    name      = "langsmith-defaults"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    limit {
+      type = "Container"
+      default = {
+        cpu    = "1"
+        memory = "1Gi"
+      }
+      default_request = {
+        cpu    = "100m"
+        memory = "256Mi"
+      }
+    }
+  }
+}
+
+#------------------------------------------------------------------------------
 # Network Policy (restrict traffic)
 #------------------------------------------------------------------------------
 resource "kubernetes_network_policy" "langsmith_default" {
