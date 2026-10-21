@@ -44,6 +44,27 @@ resource "azurerm_postgresql_flexible_server" "db" {
   zone                         = var.availability_zone != "" ? var.availability_zone : null
   geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
 
+  # Customer-managed key, set only at creation: the server reads the key as a
+  # user-assigned identity it carries, and a second identity in the paired
+  # region reads the geo-backup key. The root validates the pairs.
+  dynamic "identity" {
+    for_each = var.customer_managed_key_identity_id != "" ? [1] : []
+    content {
+      type         = "UserAssigned"
+      identity_ids = compact([var.customer_managed_key_identity_id, var.geo_backup_customer_managed_key_identity_id])
+    }
+  }
+
+  dynamic "customer_managed_key" {
+    for_each = var.customer_managed_key_id != "" ? [1] : []
+    content {
+      key_vault_key_id                     = var.customer_managed_key_id
+      primary_user_assigned_identity_id    = var.customer_managed_key_identity_id
+      geo_backup_key_vault_key_id          = var.geo_backup_customer_managed_key_id != "" ? var.geo_backup_customer_managed_key_id : null
+      geo_backup_user_assigned_identity_id = var.geo_backup_customer_managed_key_identity_id != "" ? var.geo_backup_customer_managed_key_identity_id : null
+    }
+  }
+
   # standby_availability_zone is optional on the provider's high_availability
   # block: with mode set and no zone named, Azure picks a standby in a zone
   # other than the primary's. Naming one is a pin, not the switch. A non-empty

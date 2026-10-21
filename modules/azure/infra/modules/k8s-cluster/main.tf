@@ -393,7 +393,7 @@ data "azapi_resource_list" "clusters" {
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities, disk_encryption_set: properties.diskEncryptionSetID}"
   }
 }
 
@@ -478,6 +478,22 @@ resource "azurerm_role_assignment" "control_plane_dns_zone_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
+# Reader on the disk encryption set for the cluster identity: the Azure Disk
+# CSI driver reads the set before it creates an encrypted data disk, and AKS
+# refuses the volume without it. The set is usually in the platform team's
+# resource group, where the identity running apply holds nothing, so the grant
+# is the module's only on request; otherwise it is made after the apply that
+# creates the cluster and before the first persistent volume. The principal
+# is the user-assigned identity when the cluster runs as one, else the
+# system-assigned identity the cluster reports once it exists.
+resource "azurerm_role_assignment" "disk_encryption_set_reader" {
+  count                = var.create_cluster && var.disk_encryption_set_reader_grant ? 1 : 0
+  scope                = var.disk_encryption_set_id
+  role_definition_name = "Reader"
+  principal_id         = local.control_plane_user ? local.control_plane_principal_id : azurerm_kubernetes_cluster.main[0].identity[0].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # AKS documents up to 60 minutes for a grant to its identity to take effect,
 # and a cluster created before then fails on the network it cannot yet join.
 # Hold the cluster back once, when the grants are made. 300s covers the common
@@ -544,7 +560,11 @@ resource "azurerm_kubernetes_cluster" "main" {
   resource_group_name = var.resource_group_name
   dns_prefix          = var.cluster_name
   kubernetes_version  = var.kubernetes_version
-  tags                = merge(var.tags, { module = "aks" })
+
+  # Customer-managed keys for the node OS disks and, by default, every managed
+  # disk the Azure Disk CSI driver creates. Creation-time only on AKS.
+  disk_encryption_set_id = var.disk_encryption_set_id != "" ? var.disk_encryption_set_id : null
+  tags                   = merge(var.tags, { module = "aks" })
 
   # Free has no SLA. Standard carries the financially backed uptime SLA (99.95%
   # when the control plane spans availability zones) and is where a production
@@ -601,6 +621,18 @@ resource "azurerm_kubernetes_cluster" "main" {
     # a full extra node of the same VM size).
     zones = var.availability_zones
   }
+
+  # Internal CAs in every Linux node's trust store, so containerd on the node can
+  # pull from an image mirror whose certificate an internal CA signed. A change
+  # replaces every node: AKS creates new nodes, drains and deletes the old ones.
+  # Null when there are none, so a cluster created before this setting plans no
+  # change. The module sets it because the provider reads the live value back:
+  # a CA added by hand with az aks update would be removed by the next apply.
+  # Each entry is the certificate block the root validation checked, with one
+  # trailing newline, not the raw file: whitespace around the block, such as an
+  # editor adding or dropping a final newline, would otherwise change the value
+  # and replace every node for the same certificate.
+  custom_ca_trust_certificates_base64 = length(var.aks_custom_ca_trust_certificate_files) > 0 ? [for f in var.aks_custom_ca_trust_certificate_files : base64encode("${trimspace(file(f))}\n")] : null
 
   # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
   # configured), and interact with the node resource group. System-assigned,
@@ -1225,10 +1257,15 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # With envoy_gateway_image_registry, the controller (and its certgen job) pull
 # from the mirror through the chart's global image value, and the proxy image is
 # exported for deploy.sh, which sets it on the EnvoyProxy.
+# envoy_gateway_image_registry_keeps_source_host decides whether docker.io sits
+# between the registry and the image path: a mirror that keeps the source host
+# serves <registry>/docker.io/<path>, a Docker Hub proxy repository serves
+# <registry>/<path>.
 locals {
   envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
-  envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
-  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
+  envoy_mirror_prefix  = local.envoy_gateway_mirror ? (var.envoy_gateway_image_registry_keeps_source_host ? "${var.envoy_gateway_image_registry}/docker.io/" : "${var.envoy_gateway_image_registry}/") : ""
+  envoy_gateway_image  = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}envoyproxy/gateway:${var.envoy_gateway_version}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}${var.envoy_proxy_default_image}" : ""
 }
 
 resource "helm_release" "envoy_gateway" {

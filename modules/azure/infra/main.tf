@@ -1344,6 +1344,15 @@ module "aks" {
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
   default_node_pool_os_sku    = var.aks_os_sku
+  # Internal CAs for every node's trust store, such as the one behind an image
+  # mirror. A change to the list replaces every node.
+  aks_custom_ca_trust_certificate_files = var.aks_custom_ca_trust_certificate_files
+
+  # Customer-managed keys for the node OS disks and the CSI data disks: set
+  # only at creation; the Reader grant on the set is the module's only with
+  # the flag, the platform team's otherwise.
+  disk_encryption_set_id           = var.aks_disk_encryption_set_id
+  disk_encryption_set_reader_grant = var.aks_disk_encryption_set_reader_grant
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
@@ -1402,10 +1411,11 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version                = var.envoy_gateway_version
-  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
-  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
-  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
+  envoy_gateway_version                          = var.envoy_gateway_version
+  envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
+  envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -1484,6 +1494,26 @@ locals {
   # The two updates Azure and the provider apply in place.
   aks_dataplane_upgrade = try(local.aks_live.dataplane, null) == "azure" && local.aks_network_dataplane == "cilium"
   aks_policy_upgrade    = try(local.aks_live.policy, null) == "none" || (contains(["azure", "calico"], try(local.aks_live.policy, "")) && local.aks_network_policy == "cilium")
+}
+
+# ── AKS disk encryption set guard ─────────────────────────────────────────────
+# The cluster's disk encryption set is fixed at creation: the provider applies a
+# change, adding one included, by replacing the cluster and everything installed
+# on it. module.aks reads the set Azure reports for the cluster at plan time
+# (null until the cluster exists), and a value that differs stops the plan.
+locals {
+  aks_live_disk_encryption_set_id = var.create_cluster ? module.aks.live_disk_encryption_set_id : null
+}
+
+resource "terraform_data" "aks_disk_encryption_set_guard" {
+  input = lower(var.aks_disk_encryption_set_id)
+
+  lifecycle {
+    precondition {
+      condition     = local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == lower(var.aks_disk_encryption_set_id)
+      error_message = "aks_disk_encryption_set_id is ${var.aks_disk_encryption_set_id == "" ? "empty" : "\"${var.aks_disk_encryption_set_id}\""}, and the cluster already exists with ${local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == "" ? "no disk encryption set" : "disk encryption set \"${local.aks_live_disk_encryption_set_id}\""}. The set is fixed at creation, and the provider would apply this by replacing the cluster and everything installed on it. Revert the value to keep the cluster as it is, or build a new cluster with the set and move the release to it."
+    }
+  }
 }
 
 resource "terraform_data" "aks_network_guard" {
@@ -1780,10 +1810,48 @@ module "postgres" {
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
+  # Customer-managed key, set only at creation; the geo pair with geo-redundant backup.
+  customer_managed_key_id                     = var.postgres_customer_managed_key_id
+  customer_managed_key_identity_id            = var.postgres_customer_managed_key_identity_id
+  geo_backup_customer_managed_key_id          = var.postgres_geo_backup_customer_managed_key_id
+  geo_backup_customer_managed_key_identity_id = var.postgres_geo_backup_customer_managed_key_identity_id
+
   # Create the dedicated langsmith_fleet database when standalone Fleet is enabled.
   enable_fleet = var.enable_fleet
 
   tags = local.common_tags
+}
+
+# The server's encryption mode is fixed at creation, and the provider applies a
+# change to postgres_customer_managed_key_id by replacing the server, which
+# destroys the database. Read the live server and refuse a plan whose key
+# presence differs from it. Presence only, so rotating to another key or
+# version stays allowed. Server names are unique across Azure, so the name
+# alone finds it. An absent server, and a mocked provider's output, read as
+# null, which passes.
+data "azapi_resource_list" "postgres_servers" {
+  count     = var.postgres_source == "external" ? 1 : 0
+  type      = "Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    servers = "value[?name=='${local.postgres_name}'].{id: id, name: name, data_encryption: properties.dataEncryption.type}"
+  }
+}
+
+locals {
+  postgres_live_server  = var.postgres_source == "external" ? try(data.azapi_resource_list.postgres_servers[0].output.servers[0], null) : null
+  postgres_live_has_key = local.postgres_live_server == null ? null : try(local.postgres_live_server.data_encryption, "") == "AzureKeyVault"
+}
+
+resource "terraform_data" "postgres_customer_managed_key_guard" {
+  input = var.postgres_customer_managed_key_id != ""
+
+  lifecycle {
+    precondition {
+      condition     = local.postgres_live_has_key == null ? true : local.postgres_live_has_key == (var.postgres_customer_managed_key_id != "")
+      error_message = "postgres_customer_managed_key_id is ${var.postgres_customer_managed_key_id == "" ? "empty" : "set"}, and the PostgreSQL server ${local.postgres_name} already exists ${local.postgres_live_has_key == true ? "with a customer-managed key" : "with the service-managed key"}. The key is fixed at creation, and the provider would apply this by replacing the server and destroying its data. Revert the value to keep the server as it is, or move to a new server created with the key by the restore path in README \"Customer-managed keys\"."
+    }
+  }
 }
 
 # ── SmithDB sizing ───────────────────────────────────────────────────────────
@@ -2019,6 +2087,9 @@ module "smithdb" {
   replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
+  shared_access_key_enabled = var.smithdb_storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
+
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
   # metastore's PostgreSQL zone.
   blob_private_endpoint_enabled   = var.storage_private_endpoint_enabled
@@ -2188,6 +2259,9 @@ module "blob" {
 
   replication_type = var.storage_replication_type
 
+  shared_access_key_enabled = var.storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
+
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days
   ttl_long_days  = var.blob_ttl_long_days
@@ -2202,6 +2276,10 @@ module "blob" {
   # via var.storage_allowed_ips.
   allowed_subnet_ids = [local.aks_subnet_id]
   allowed_ips        = var.storage_allowed_ips
+
+  # Customer-managed key; Azure accepts it on an existing account too.
+  customer_managed_key_id          = var.storage_customer_managed_key_id
+  customer_managed_key_identity_id = var.storage_customer_managed_key_identity_id
 
   # When enabled, the public endpoint is turned off and the firewall above
   # becomes inert. It stays declared so disabling the endpoint restores a
@@ -2444,6 +2522,10 @@ module "k8s_bootstrap" {
   smithdb_service_account_name       = local.smithdb_service_account
   smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
+  # Pull Secret for the pods the operator creates: agent pods run as
+  # langsmith-ksa, each deployment's Redis and PostgreSQL as the default account.
+  langsmith_image_pull_secret_name = var.langsmith_image_pull_secret_name
+
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
@@ -2453,6 +2535,15 @@ module "k8s_bootstrap" {
   # possible on the attach path. Helm cannot adopt a release it does not own.
   install_cert_manager = var.install_cert_manager
   install_keda         = var.install_keda
+
+  # KEDA's images and chart from a mirror. Composed paths are in the
+  # keda_images output.
+  keda_image_registry                   = var.keda_image_registry
+  keda_image_registry_keeps_source_host = var.keda_image_registry_keeps_source_host
+  keda_image_pull_secret_name           = var.keda_image_pull_secret_name
+  keda_chart_repository                 = var.keda_chart_repository
+  keda_chart_repository_username        = var.keda_chart_repository_username
+  keda_chart_repository_password        = var.keda_chart_repository_password
 
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and

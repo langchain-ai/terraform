@@ -36,6 +36,33 @@ locals {
       object_prefix  = ""
     }
   }
+  migration_source_blob_statements = length(var.workload_migration_source_blob_bucket_arns) == 0 ? [] : concat([
+    {
+      Sid      = "ReadMigrationSourceBlobObjects"
+      Effect   = "Allow"
+      Action   = ["s3:GetObject"]
+      Resource = [for arn in var.workload_migration_source_blob_bucket_arns : "${arn}/*"]
+    },
+    {
+      Sid      = "ListMigrationSourceBlobBuckets"
+      Effect   = "Allow"
+      Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
+      Resource = var.workload_migration_source_blob_bucket_arns
+    }
+    ], length(var.workload_migration_source_blob_kms_key_arns) == 0 ? [] : [{
+      Sid      = "DecryptMigrationSourceBlobObjects"
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt"]
+      Resource = var.workload_migration_source_blob_kms_key_arns
+      Condition = {
+        StringLike = {
+          "kms:EncryptionContext:aws:s3:arn" = concat(
+            var.workload_migration_source_blob_bucket_arns,
+            [for arn in var.workload_migration_source_blob_bucket_arns : "${arn}/*"]
+          )
+        }
+      }
+  }])
   s3_statements = { for key, permission in local.s3_permissions : key => [
     {
       Sid       = "BucketAccess"
@@ -99,6 +126,22 @@ locals {
         Action    = ["cloudwatch:GetMetricData"]
         Resource  = ["*"]
         Condition = local.regional_condition
+      },
+      {
+        Sid       = "ReadMigrationInventory"
+        Effect    = "Allow"
+        Action    = ["s3:GetObject"]
+        Resource  = ["arn:${local.partition}:s3:::*-smithdb-blob/byoc-migration/*"]
+        Condition = local.s3_condition
+      },
+      {
+        Sid      = "ListMigrationInventory"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = ["arn:${local.partition}:s3:::*-smithdb-blob"]
+        Condition = merge(local.s3_condition, {
+          StringLike = { "s3:prefix" = "byoc-migration/*" }
+        })
       }
       ], [
       {
@@ -115,8 +158,34 @@ locals {
         Resource = [for region in sort(tolist(var.regions)) :
           "arn:${local.partition}:ecr:${region}:${local.artifact_account_id}:repository/byoc-smithbox-*"
         ]
+      },
+      {
+        Sid      = "AssumeSandboxECRRoles"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = {
+          StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" }
+          Null         = { "sts:ExternalId" = "false" }
+        }
+      },
+      {
+        Sid       = "TagSandboxECRRoleSessions"
+        Effect    = "Allow"
+        Action    = ["sts:TagSession"]
+        Resource  = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = { StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" } }
       }
-    ])
+      ], [{
+        Sid    = "EngineBedrockInference"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+        Resource = [
+          "arn:${local.partition}:bedrock:*::foundation-model/*",
+          "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/*",
+          "arn:${local.partition}:bedrock:*:${local.account_id}:application-inference-profile/*"
+        ]
+    }], local.migration_source_blob_statements)
     postgres-setup-iam-role = local.setup_statements["postgres-setup-iam-role"]
     smithdb-setup-iam-role  = local.setup_statements["smithdb-setup-iam-role"]
     smithdb-iam-role = concat(local.s3_statements["smithdb-iam-role"], [
