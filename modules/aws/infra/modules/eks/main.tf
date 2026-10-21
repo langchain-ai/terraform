@@ -12,6 +12,17 @@ locals {
   user_vpc_cni        = try(var.eks_addons["vpc-cni"], {})
   user_vpc_cni_config = try(jsondecode(local.user_vpc_cni.configuration_values), {})
   vpc_cni_addon = merge(
+    {
+      # v20 effectively defaulted to resolve_conflicts_on_create = "OVERWRITE"
+      # (bootstrap_self_managed_addons was true, which this module used to
+      # pick the conflict policy) and most_recent = false. v21 hardcodes
+      # bootstrap_self_managed_addons = false and changed those defaults to
+      # "NONE" / true (UPGRADE-21.0.md) — pin the old values here so the
+      # addon doesn't silently start auto-upgrading on apply.
+      resolve_conflicts_on_create = "OVERWRITE"
+      resolve_conflicts_on_update = "OVERWRITE"
+      most_recent                 = false
+    },
     { for k, v in local.user_vpc_cni : k => v if !contains(["configuration_values", "resolve_conflicts"], k) },
     can(local.user_vpc_cni.resolve_conflicts) ? {
       resolve_conflicts_on_create = local.user_vpc_cni.resolve_conflicts
@@ -38,6 +49,20 @@ locals {
         }
       }))
     },
+  )
+
+  # v21 hardcodes bootstrap_self_managed_addons = false (UPGRADE-21.0.md), so
+  # EKS no longer auto-installs self-managed vpc-cni/kube-proxy/coredns at
+  # cluster creation the way it did under v20. Without an explicit add-on, a
+  # brand-new cluster gets no CNI, no kube-proxy, and no DNS, and every
+  # managed node group times out NotReady. These restore that behavior via
+  # the EKS add-ons API (the upstream-recommended replacement). A key in
+  # var.eks_addons overrides the matching default; the custom-networking
+  # vpc-cni entry is handled above via module.eks's own `addons` input, not
+  # here, so it's excluded from this default too.
+  eks_core_addons_defaults = merge(
+    { kube-proxy = {}, coredns = {} },
+    local.custom_networking ? {} : { vpc-cni = {} },
   )
 
   # try() covers extra groups, which are untyped and may omit either attribute.
@@ -170,11 +195,16 @@ module "eks_blueprints_addons" {
     chart_version = "9.56.0"
   }
 
-  # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
+  # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.). local.eks_core_addons_defaults
+  # keeps every cluster on CNI/kube-proxy/DNS post-v21 (see its definition above);
+  # a matching key in var.eks_addons overrides the default for that add-on.
   # One filter rather than a conditional: the two branches of a conditional are
   # objects with different attributes, and differently shaped add-ons fail to
   # unify into one type even when custom networking is off.
-  eks_addons = { for k, v in var.eks_addons : k => v if !(local.custom_networking && k == "vpc-cni") }
+  eks_addons = merge(
+    local.eks_core_addons_defaults,
+    { for k, v in var.eks_addons : k => v if !(local.custom_networking && k == "vpc-cni") },
+  )
 
   # Waits for node groups without a module-level depends_on, which defers this module's data sources and replaces (detaches) the Karpenter node role's policy attachments whenever module.eks changes.
   create_delay_dependencies = [for ng in module.eks.eks_managed_node_groups : ng.node_group_arn]
