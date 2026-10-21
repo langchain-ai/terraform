@@ -3,7 +3,7 @@
 // See LICENSE at the root of this repository for full license text.
 
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.11.0"
 
   required_providers {
     azurerm = {

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Machine grading for HCL and shell edits. Enforced in CI by
 # .github/workflows/checks.yaml, and run locally before handing back:
-#   bash agents/check.sh                    # every root, plus every script
-#   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
+#   bash agents/check.sh                    # fmt repo-wide, every root, every script
+#   bash agents/check.sh modules/aws        # fmt and the roots under one dir, terraform only
 #   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
+#   bash agents/check.sh --fmt modules/ocp  # fmt only (repo-wide with no dir)
 #
-# Per root: terraform validate (init -backend=false, so no cloud creds or
-# state) and tflint with the provider's pinned ruleset. Scripts are linted
-# repo-wide rather than per root, so naming a directory checks terraform only.
+# terraform fmt -check first, over the named dirs (the whole repo with no
+# argument). Per root: terraform validate (init -backend=false, so no cloud
+# creds or state) and tflint with the provider's pinned ruleset. Scripts are
+# linted repo-wide rather than per root, so naming a directory checks terraform
+# only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
@@ -41,6 +44,39 @@ lint_scripts() {
     | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY")
 }
 
+# terraform fmt -check over repo-relative dirs. Unlike validate it needs no root,
+# so --fmt reaches HCL that has none (modules/ocp), which is how CI covers it.
+# fmt is handed the files git would commit (tracked, plus untracked ones not
+# ignored) rather than the dirs, so a gitignored terraform.tfvars or
+# backend_override.tf never reaches it: not as unformatted, and not as a parse
+# error mid-edit, which would fail a run that CI passes. The extensions are the
+# ones fmt -recursive picks up.
+fmt_check() {
+  local out rc file files=()
+  echo "== terraform fmt -check $*"
+  while IFS= read -r -d '' file; do
+    [ -f "$REPO_ROOT/$file" ] || continue  # tracked but deleted locally
+    case "$file" in
+      *.tf | *.tfvars | *.tftest.hcl | *.tfmock.hcl) files+=("$file") ;;
+    esac
+  done < <(git -C "$REPO_ROOT" ls-files -z -co --exclude-standard -- "$@")
+  [ "${#files[@]}" -gt 0 ] || return 0
+  out=$(cd "$REPO_ROOT" && terraform fmt -check -no-color "${files[@]}")
+  rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    3) ;;  # unformatted files, listed one per line on stdout
+    *) return 1 ;;  # parse error, reported on stderr
+  esac
+  while IFS= read -r file; do
+    [ -n "$file" ] && echo "   not formatted: $file"
+  done <<EOF
+$out
+EOF
+  echo "   fix with: terraform fmt -recursive <dir>"
+  return 1
+}
+
 # Print the terraform roots at or beneath one repo-relative directory. Roots are
 # discovered rather than listed so a new one cannot be silently missed, and so a
 # CI leg can scope itself to modules/<provider> without carrying a second copy
@@ -67,6 +103,24 @@ case "${1:-}" in
   --scripts) lint_scripts; exit $? ;;
 esac
 
+# CI installs the Terraform pinned in .terraform-version. A different local
+# binary can format or validate differently, so say so rather than fail: the
+# run is still useful, it just stops being a promise about CI.
+tf_pin=$(tr -d '[:space:]' < "$REPO_ROOT/.terraform-version")
+tf_have=$(terraform version | sed -n '1s/^Terraform v//p')
+if [ "$tf_have" != "$tf_pin" ]; then
+  echo "check: local terraform is $tf_have but CI pins $tf_pin (.terraform-version);" >&2
+  echo "       fmt and validate results may differ from the PR's" >&2
+fi
+
+# --fmt stops after the fmt check, so it skips root discovery too: a dir with no
+# root is exactly what it is for.
+fmt_only=0
+if [ "${1:-}" = --fmt ]; then
+  fmt_only=1
+  shift
+fi
+
 lint_all=0
 if [ $# -eq 0 ]; then
   set -- modules
@@ -77,6 +131,7 @@ fi
 # fails rather than passing quietly: a CI leg scoped to one provider would
 # otherwise report success having checked nothing.
 roots=()
+fmt_dirs=()
 for arg in "$@"; do
   arg=${arg#"$REPO_ROOT/"}
   arg=${arg%/}
@@ -84,6 +139,8 @@ for arg in "$@"; do
     echo "check: no such dir: $arg" >&2
     exit 2
   fi
+  fmt_dirs+=("$arg")
+  [ "$fmt_only" -eq 0 ] || continue
   before=${#roots[@]}
   while IFS= read -r _root; do
     [ -n "$_root" ] || continue
@@ -102,6 +159,16 @@ done
 # than per root. Space-delimited for bash 3.2 (no associative arrays).
 tflint_inited=" "
 status=0
+
+# No argument checks formatting from the repo root, so HCL outside every root
+# is covered too; a named dir checks only that dir.
+if [ "$lint_all" -eq 1 ]; then
+  fmt_dirs=(.)
+fi
+fmt_check "${fmt_dirs[@]}" || status=1
+if [ "$fmt_only" -eq 1 ]; then
+  exit "$status"
+fi
 
 for rel in "${roots[@]}"; do
   dir="$REPO_ROOT/$rel"
