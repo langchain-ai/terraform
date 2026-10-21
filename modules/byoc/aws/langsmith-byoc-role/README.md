@@ -128,9 +128,7 @@ byoiam_karpenter_controller_policy_arn = module.byoiam.karpenter_controller_poli
 
 Set `break_glass_role_name` when your naming convention does not allow
 `LangSmithBYOCBreakGlass`, and share the resulting `break_glass_role_arn` output
-with LangChain. The module tags the role `langsmith-byoc-break-glass=true`,
-which lets LangChain's break-glass sessions find it under any name; keep that
-tag if you add your own tags. Set `permissions_boundary_arn` to attach your permissions
+with LangChain. Set `permissions_boundary_arn` to attach your permissions
 boundary to both roles when Terraform creates them. The boundary limits what the
 provisioning role can do, so confirm it allows the actions in this module's
 policies.
