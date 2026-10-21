@@ -1,0 +1,35 @@
+# CI-only stand-in for the per-install values that init-values.sh generates into
+# helm/values/values-overrides.yaml.
+#
+# GCP does not set config.existingSecretName, so the chart creates its own secret
+# from values. That is why this fixture carries plaintext secret placeholders where
+# the AWS and Azure fixtures carry none: it mirrors how a real GCP install works.
+# The values below are throwaway CI placeholders and grant access to nothing.
+#
+# Keep this minimal. Anything added here is a value the render check stops verifying.
+config:
+  hostname: "langsmith.ci.example.com"
+  initialOrgAdminEmail: "ci@example.com"
+  langsmithLicenseKey: "ci-placeholder-license-key"
+  apiKeySalt: "ci-placeholder-api-key-salt"
+  basicAuth:
+    jwtSecret: "ci-placeholder-jwt-secret"
+    initialOrgAdminPassword: "ci-Placeholder-Password-123"
+  blobStorage:
+    bucketName: "ci-placeholder-bucket"
+  # Required whenever an add-on overlay enables the feature. init-values.sh writes
+  # these from the TF_VAR_langsmith_*_encryption_key variables.
+  agentBuilder:
+    encryptionKey: "Q0lQbGFjZWhvbGRlckFnZW50QnVpbGRlcktleTA="
+
+gateway:
+  name: "ci-placeholder-gateway"
+
+# Same story for the top-level add-on features: without existingSecretName the chart
+# requires each enabled feature's encryption key inline.
+fleet:
+  encryptionKey: "Q0lQbGFjZWhvbGRlckZsZWV0S2V5MDAwMDAwMDAwMDA="
+insights:
+  encryptionKey: "Q0lQbGFjZWhvbGRlckluc2lnaHRzS2V5MDAwMDAwMDA="
+polly:
+  encryptionKey: "Q0lQbGFjZWhvbGRlclBvbGx5S2V5MDAwMDAwMDAwMDA="
