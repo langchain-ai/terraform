@@ -114,14 +114,14 @@ variable "byoiam_role_arns" {
   }
 }
 
-variable "byoiam_instance_profile_arn" {
-  description = "Exact ARN of the customer-managed Karpenter instance profile when its name does not match *-smith-karpenter-node-profile."
+variable "byoiam_instance_profile_name" {
+  description = "Name of the customer-managed Karpenter instance profile, in this account with path /, when it does not match *-smith-karpenter-node-profile. Pass the byoiam module's karpenter_instance_profile_name output."
   type        = string
   default     = null
 
   validation {
-    condition     = var.byoiam_instance_profile_arn == null ? true : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:instance-profile/[\\w+=,.@-]{1,128}$", var.byoiam_instance_profile_arn))
-    error_message = "Supply an IAM instance profile ARN with path / and no wildcards."
+    condition     = var.byoiam_instance_profile_name == null ? true : can(regex("^[\\w+=,.@-]{1,128}$", var.byoiam_instance_profile_name))
+    error_message = "The instance profile name must be 1-128 characters of letters, digits, and +=,.@_-."
   }
 }
 

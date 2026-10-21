@@ -108,8 +108,8 @@ locals {
       Sid      = "BYOIAMCustomInstanceProfileRead"
       Effect   = "Allow"
       Action   = ["iam:GetInstanceProfile"]
-      Resource = [var.byoiam_instance_profile_arn]
-  }] : statement if var.byoiam_instance_profile_arn != null])
+      Resource = ["arn:aws:iam::${local.account_id}:instance-profile/${coalesce(var.byoiam_instance_profile_name, "unset")}"]
+  }] : statement if var.byoiam_instance_profile_name != null])
 
   # Filter after composing teardown permissions so enabling deletes cannot
   # restore IAM writes. Mixed statements retain their permitted read actions.

@@ -114,12 +114,12 @@ role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
 
 When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
 
-If the BYOIAM roles or instance profile use custom names, list their exact ARNs
-so this role can still read and pass them:
+If the BYOIAM roles or instance profile use custom names, pass them from the
+BYOIAM module so this role can still read and pass them:
 
 ```hcl
-byoiam_role_arns            = values(module.byoiam.role_arns)
-byoiam_instance_profile_arn = "arn:aws:iam::<account-id>:instance-profile/<custom-profile-name>"
+byoiam_role_arns             = values(module.byoiam.role_arns)
+byoiam_instance_profile_name = module.byoiam.karpenter_instance_profile_name
 ```
 
 ### Naming and permissions boundaries

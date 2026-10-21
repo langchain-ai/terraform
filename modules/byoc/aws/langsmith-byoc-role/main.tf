@@ -34,9 +34,9 @@ resource "aws_iam_role" "langchain_byoc" {
     }
     precondition {
       condition = alltrue([
-        for arn in concat(var.byoiam_role_arns, compact([var.byoiam_instance_profile_arn])) : split(":", arn)[4] == data.aws_caller_identity.current.account_id
+        for arn in var.byoiam_role_arns : split(":", arn)[4] == data.aws_caller_identity.current.account_id
       ])
-      error_message = "byoiam_role_arns and byoiam_instance_profile_arn must be in the account that holds this role."
+      error_message = "byoiam_role_arns must be in the account that holds this role."
     }
   }
 }
