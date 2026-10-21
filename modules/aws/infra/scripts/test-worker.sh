@@ -96,7 +96,6 @@ owner       = "test-orchestrator"
 
 #── Networking ────────────────────────────────────────────────────────────────
 create_vpc                = true
-enable_public_eks_cluster = true
 
 #── EKS ───────────────────────────────────────────────────────────────────────
 eks_cluster_version = "${EKS_VERSION}"

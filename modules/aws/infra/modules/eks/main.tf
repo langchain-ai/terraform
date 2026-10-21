@@ -58,7 +58,7 @@ module "eks" {
 
   vpc_id                                   = var.vpc_id
   subnet_ids                               = var.subnet_ids
-  cluster_endpoint_public_access           = var.public_cluster_enabled
+  cluster_endpoint_public_access           = true
   cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
   enable_cluster_creator_admin_permissions = true
   cluster_enabled_log_types                = var.cluster_enabled_log_types

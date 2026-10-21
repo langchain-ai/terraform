@@ -15,9 +15,6 @@ terraform {
   }
 }
 
-data "aws_caller_identity" "current" {}
-data "aws_elb_service_account" "current" {}
-
 locals {
   gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway || var.enable_nginx_ingress
   # Envoy Gateway: pods listen on port 10080 (Gateway listener port 80 + 10000 offset,
@@ -28,54 +25,6 @@ locals {
 
   byo_security_group = var.existing_security_group_id != null && var.existing_security_group_id != ""
   security_group_id  = local.byo_security_group ? var.existing_security_group_id : aws_security_group.alb[0].id
-}
-
-# ── Access Logs S3 Bucket ──────────────────────────────────────────────────────
-# Created only when access_logs_enabled = true.
-# The ELB service requires a specific bucket policy — it cannot write to an
-# arbitrary bucket without it.
-
-resource "aws_s3_bucket" "access_logs" {
-  count         = var.access_logs_enabled ? 1 : 0
-  bucket        = var.bucket_suffix != "" ? "${var.name}-access-logs-${var.bucket_suffix}" : "${var.name}-access-logs"
-  force_destroy = true
-  tags          = var.tags
-}
-
-resource "aws_s3_bucket_public_access_block" "access_logs" {
-  count  = var.access_logs_enabled ? 1 : 0
-  bucket = aws_s3_bucket.access_logs[0].id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_policy" "access_logs" {
-  count  = var.access_logs_enabled ? 1 : 0
-  bucket = aws_s3_bucket.access_logs[0].id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { AWS = data.aws_elb_service_account.current.arn }
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.access_logs[0].arn}/${var.access_logs_prefix}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
-      },
-      {
-        Effect    = "Allow"
-        Principal = { Service = "logdelivery.elasticloadbalancing.amazonaws.com" }
-        Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.access_logs[0].arn}/${var.access_logs_prefix}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
-        Condition = {
-          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
-        }
-      }
-    ]
-  })
 }
 
 # ── Security Group ─────────────────────────────────────────────────────────────
@@ -136,23 +85,10 @@ resource "aws_lb" "this" {
   name                       = var.name
   drop_invalid_header_fields = true
   idle_timeout               = 3600
-  internal                   = var.internal
+  internal                   = false
   load_balancer_type         = "application"
   security_groups            = [local.security_group_id]
   subnets                    = var.subnets
-
-  dynamic "access_logs" {
-    for_each = var.access_logs_enabled ? [1] : []
-    content {
-      bucket  = aws_s3_bucket.access_logs[0].id
-      prefix  = var.access_logs_prefix
-      enabled = true
-    }
-  }
-
-  # AWS validates the bucket policy when enabling access logs — the policy must
-  # exist before the ALB attribute is modified, not just the bucket.
-  depends_on = [aws_s3_bucket_policy.access_logs]
 
   tags = var.tags
 }

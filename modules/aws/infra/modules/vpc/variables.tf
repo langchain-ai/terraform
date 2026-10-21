@@ -44,12 +44,6 @@ variable "extra_private_subnet_tags" {
   }
 }
 
-variable "firewall_enabled" {
-  type        = bool
-  description = "When true, suppresses the 0.0.0.0/0 → NAT GW route in private route tables so the firewall module can own that route instead."
-  default     = false
-}
-
 variable "pod_cidr" {
   type        = string
   description = "Secondary VPC CIDR for EKS pod subnets (VPC CNI custom networking). null creates no secondary CIDR and no pod subnets."

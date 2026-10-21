@@ -28,9 +28,6 @@ A custom policy needs these services. The **Required when** column is the config
 | ACM | `acm:*` | The LangSmith certificate and its validation | `langsmith_domain` is set and `acm_certificate_arn` is not |
 | Route 53 | `route53:*` | Hosted zone and records | `langsmith_domain` is set and `acm_certificate_arn` is not |
 | SQS, EventBridge | `sqs:*`, `events:*` | Karpenter's interruption queue and rules | `enable_smithdb = true` |
-| WAF | `wafv2:*` | Web ACL and its ALB association | `create_waf = true` |
-| Network Firewall | `network-firewall:*` | Egress firewall, policy, rule group | `create_firewall = true` |
-| CloudTrail | `cloudtrail:*` | Trail | `create_cloudtrail = true` |
 | KMS | `kms:Decrypt`, `kms:GenerateDataKey` on the key | Bucket encryption with a customer-managed key | `s3_kms_key_arn` is set |
 
 The existing S3 key already has to allow the deploying identity; Terraform does not edit its key policy.
@@ -73,7 +70,7 @@ iam:PassRole
 iam:CreateServiceLinkedRole
 ```
 
-`iam:PassRole` covers the roles Terraform hands to AWS services: the EKS cluster role, the node group roles, the EBS CSI add-on role, and the bastion's instance profile. `iam:CreateServiceLinkedRole` is needed the first time the account uses EKS, Elastic Load Balancing, RDS, ElastiCache, or Auto Scaling.
+`iam:PassRole` covers the roles Terraform hands to AWS services: the EKS cluster role, the node group roles, and the EBS CSI add-on role. `iam:CreateServiceLinkedRole` is needed the first time the account uses EKS, Elastic Load Balancing, RDS, ElastiCache, or Auto Scaling.
 
 ## Permissions boundaries and SCPs
 
@@ -116,7 +113,6 @@ Run `make preflight`. It confirms credentials with `aws sts get-caller-identity`
 | SSM | `ssm:DescribeParameters` | Yes |
 | ACM | `acm:ListCertificates` | Yes |
 | Route 53 | `route53:ListHostedZones` | Yes |
-| WAF | `wafv2:ListWebACLs` | No, warns only |
 | IAM | `iam:GetPolicy` on the Engine policy | Only when `enable_engine = true`. A missing policy stops the script. A denial warns only |
 
 A read-only call that succeeds does not prove the create action behind it is allowed. The read-only pass never tests `iam:PassRole`, KMS, CloudWatch Logs, SQS, or EventBridge, and never checks service quotas.
@@ -166,7 +162,6 @@ The deployment creates the following roles. IRSA roles trust the cluster's OIDC 
 | `<base_name>-smithdb-irsa` | The SmithDB service account | Object access on the SmithDB bucket, plus `kms:Decrypt` and `kms:GenerateDataKey` when `s3_kms_key_arn` is set | `enable_smithdb = true` |
 | Karpenter controller and node roles | The Karpenter service account, and `ec2.amazonaws.com` | Policies the module creates for node provisioning and the interruption queue | `enable_smithdb = true` |
 | `<base_name>-sandbox-host` | `ec2.amazonaws.com` | The node group policies above | `enable_sandboxes = true` |
-| `<name>-bastion`, with an instance profile | `ec2.amazonaws.com` | `AmazonSSMManagedInstanceCore`, plus `eks:DescribeCluster` and `eks:ListClusters` | `create_bastion = true` |
 
 The LangSmith role also gets `rds-db:connect` for one database user when `postgres_iam_database_user` is set.
 
