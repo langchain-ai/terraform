@@ -38,6 +38,10 @@ resource "aws_iam_role" "langchain_byoc" {
       ])
       error_message = "byoiam_role_arns must be in the account that holds this role."
     }
+    precondition {
+      condition     = var.byoiam_karpenter_controller_policy_arn == null ? true : split(":", var.byoiam_karpenter_controller_policy_arn)[4] == data.aws_caller_identity.current.account_id
+      error_message = "byoiam_karpenter_controller_policy_arn must be in the account that holds this role."
+    }
   }
 }
 

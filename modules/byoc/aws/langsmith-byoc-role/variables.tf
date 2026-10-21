@@ -125,6 +125,17 @@ variable "byoiam_instance_profile_name" {
   }
 }
 
+variable "byoiam_karpenter_controller_policy_arn" {
+  description = "Exact ARN of the customer-managed Karpenter controller policy when its name does not match *-smith-karpenter-controller-policy. The role may read this policy; pass the byoiam module's karpenter_controller_policy_arn output."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.byoiam_karpenter_controller_policy_arn == null ? true : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:policy/[\\w+=,.@-]{1,128}$", var.byoiam_karpenter_controller_policy_arn))
+    error_message = "The value must be an IAM policy ARN with path / and no wildcards."
+  }
+}
+
 variable "allow_self_hosted_migration_permissions" {
   description = "Self-hosted to BYOC migration only. Grants permissions needed for the migration. Enable for the duration of a self-hosted to BYOC migration."
   type        = bool

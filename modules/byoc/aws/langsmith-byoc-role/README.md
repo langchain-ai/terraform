@@ -114,12 +114,14 @@ role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
 
 When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
 
-If the BYOIAM roles or instance profile use custom names, pass them from the
-BYOIAM module so this role can still read and pass them:
+When you use the BYOIAM module, always pass its outputs to this module. With
+default names the grants are redundant; with custom names they are required, so
+this role can still read and pass them:
 
 ```hcl
-byoiam_role_arns             = values(module.byoiam.role_arns)
-byoiam_instance_profile_name = module.byoiam.karpenter_instance_profile_name
+byoiam_role_arns                       = values(module.byoiam.role_arns)
+byoiam_instance_profile_name           = module.byoiam.karpenter_instance_profile_name
+byoiam_karpenter_controller_policy_arn = module.byoiam.karpenter_controller_policy_arn
 ```
 
 ### Naming and permissions boundaries
@@ -220,7 +222,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-lambda` | Lambda + EventBridge for periodic jobs |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
-The exact statements are in `policies/*.json`.
+The exact statements are in `policies/*.json`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs.
 
 ### Break-glass role
 

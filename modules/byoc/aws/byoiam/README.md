@@ -69,15 +69,17 @@ module "byoiam" {
 ```
 
 IAM role names are limited to 64 characters. Custom names do not match the
-provisioning role's default `*-smith-*` allowlists, so pass them to the
-[customer provisioning-role module](../langsmith-byoc-role/README.md):
+provisioning role's default `*-smith-*` allowlists. Always pass these outputs
+to the [customer provisioning-role module](../langsmith-byoc-role/README.md);
+with default names the grants are redundant, with custom names they are required:
 
 ```hcl
-byoiam_role_arns             = values(module.byoiam.role_arns)
-byoiam_instance_profile_name = module.byoiam.karpenter_instance_profile_name
+byoiam_role_arns                       = values(module.byoiam.role_arns)
+byoiam_instance_profile_name           = module.byoiam.karpenter_instance_profile_name
+byoiam_karpenter_controller_policy_arn = module.byoiam.karpenter_controller_policy_arn
 ```
 
 Keep the `role_names` and `karpenter_instance_profile_name` outputs until you
 create the data plane; you paste them into the data plane setup in LangSmith.
-The Karpenter controller policy name is only for your naming convention;
-LangSmith does not need it.
+You do not paste the Karpenter controller policy name into LangSmith. The
+provisioning role still reads that policy, so pass its ARN as shown above.

@@ -109,7 +109,12 @@ locals {
       Effect   = "Allow"
       Action   = ["iam:GetInstanceProfile"]
       Resource = ["arn:aws:iam::${local.account_id}:instance-profile/${coalesce(var.byoiam_instance_profile_name, "unset")}"]
-  }] : statement if var.byoiam_instance_profile_name != null])
+  }] : statement if var.byoiam_instance_profile_name != null], [for statement in [{
+      Sid      = "BYOIAMCustomControllerPolicyRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"]
+      Resource = [coalesce(var.byoiam_karpenter_controller_policy_arn, "unset")]
+  }] : statement if var.byoiam_karpenter_controller_policy_arn != null])
 
   # Filter after composing teardown permissions so enabling deletes cannot
   # restore IAM writes. Mixed statements retain their permitted read actions.
@@ -122,11 +127,11 @@ locals {
       })
     ]
   }
-  role_policies = merge({
+  role_policies = {
     for name, statements in local.filtered_role_policies : name => [
       for statement in statements : statement if length(statement.Action) > 0
     ]
-  }, length(local.byoiam_custom_name_statements) == 0 ? {} : { byoiam = local.byoiam_custom_name_statements })
+  }
 }
 
 resource "aws_iam_policy" "this" {
@@ -148,4 +153,16 @@ resource "aws_iam_role_policy_attachment" "this" {
 
   role       = aws_iam_role.langchain_byoc.name
   policy_arn = aws_iam_policy.this[each.key].arn
+}
+
+resource "aws_iam_role_policy" "byoiam_custom_names" {
+  count = length(local.byoiam_custom_name_statements) > 0 ? 1 : 0
+
+  name = "${var.role_name}-byoiam"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.byoiam_custom_name_statements
+  })
 }
