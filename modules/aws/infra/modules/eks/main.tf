@@ -41,29 +41,40 @@ locals {
   )
 
   # try() covers extra groups, which are untyped and may omit either attribute.
+  # eks_managed_node_group_defaults is merged in here (defaults first, group
+  # settings win) because v21 of the upstream module dropped that top-level
+  # input — see UPGRADE-21.0.md. This is also what lets a group-level
+  # cpu_options (e.g. sandbox_host_node_group_overrides.cpu_options.
+  # nested_virtualization) reach the upstream module: it is typed as `any`
+  # here, and v21's eks_managed_node_groups object type has
+  # cpu_options.nested_virtualization, so it survives the conversion into that
+  # type (v20's cpu_options object type only had core_count/threads_per_core
+  # and silently dropped it).
   eks_managed_node_groups = {
-    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
-      desired_size             = coalesce(try(v.desired_size, null), v.min_size)
-      iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
-    })
+    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(
+      var.eks_managed_node_group_defaults,
+      v,
+      {
+        desired_size             = coalesce(try(v.desired_size, null), v.min_size)
+        iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      }
+    )
   }
 }
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "20.37.2"
+  version = "21.24.0"
 
-  cluster_name    = var.cluster_name
-  cluster_version = var.cluster_version
+  name               = var.cluster_name
+  kubernetes_version = var.cluster_version
 
   vpc_id                                   = var.vpc_id
   subnet_ids                               = var.subnet_ids
-  cluster_endpoint_public_access           = var.public_cluster_enabled
-  cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
+  endpoint_public_access                   = var.public_cluster_enabled
+  endpoint_public_access_cidrs             = var.public_access_cidrs
   enable_cluster_creator_admin_permissions = true
-  cluster_enabled_log_types                = var.cluster_enabled_log_types
-
-  eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
+  enabled_log_types                        = var.cluster_enabled_log_types
 
   # The community module ignores desired_size changes (lifecycle ignore_changes) so
   # the cluster autoscaler can manage it. min_size and max_size DO propagate through
@@ -72,7 +83,7 @@ module "eks" {
   # AWS CLI or console) and the state already reflects the new values.
   eks_managed_node_groups = local.eks_managed_node_groups
 
-  cluster_addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
+  addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
   # 30s is the upstream default. Custom networking waits longer so the vpc-cni
   # add-on is active before the first nodes join.
   dataplane_wait_duration = local.custom_networking ? "2m" : "30s"

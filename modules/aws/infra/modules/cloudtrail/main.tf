@@ -8,8 +8,11 @@
 terraform {
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+      source = "hashicorp/aws"
+      # Plain S3 bucket + aws_cloudtrail resources; no version-specific syntax.
+      # Widened to stay compatible with the root module's >= 6.33 constraint
+      # (see ../../versions.tf).
+      version = ">= 5.0.0, < 7.0.0"
     }
   }
 }
