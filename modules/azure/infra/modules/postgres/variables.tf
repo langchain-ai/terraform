@@ -129,3 +129,27 @@ variable "private_dns_zone_name" {
   description = "Name of the private DNS zone for the server. The root passes the name for its azure_environment; Government uses privatelink.postgres.database.usgovcloudapi.net."
   default     = "privatelink.postgres.database.azure.com"
 }
+
+variable "customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the server encrypts with; with customer_managed_key_identity_id it becomes the customer_managed_key block, set only at creation. Validated in the root module (postgres_customer_managed_key_id); empty keeps the service-managed key."
+  default     = ""
+}
+
+variable "customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity that reads customer_managed_key_id; assigned to the server. Validated in the root module."
+  default     = ""
+}
+
+variable "geo_backup_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key, in the paired region's vault, that encrypts the geo-redundant backups. Validated in the root module (postgres_geo_backup_customer_managed_key_id); empty leaves the backups under the primary key's rules."
+  default     = ""
+}
+
+variable "geo_backup_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the second user-assigned identity, in the paired region, that reads geo_backup_customer_managed_key_id; assigned to the server beside the primary one. Validated in the root module."
+  default     = ""
+}
