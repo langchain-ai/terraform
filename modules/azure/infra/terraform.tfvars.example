@@ -42,6 +42,7 @@ unique_resource_names = true
 # environment = "prod"   # defaults to name_prefix; set only to tag it differently
 # owner       = "platform-team"
 # cost_center = "engineering"
+# tags        = { team = "platform", product = "langsmith" }   # any other keys a tag policy requires
 
 # ── Sources — external managed services ───────────────────────────────────────
 postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexible Server
