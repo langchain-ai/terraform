@@ -2487,10 +2487,13 @@ if [ -n "$CMK_DES" ] || [ -n "$CMK_KEYS" ] || [ -n "$CMK_IDS" ]; then
     KEY_VAR=${ENTRY%%=*}; KEY_URL=${ENTRY#*=}
     KEY_HOST=${KEY_URL#https://}; KEY_HOST=${KEY_HOST%%/*}; VAULT_NAME=${KEY_HOST%%.*}
     case "$KEY_HOST" in
-      *.managedhsm.*) PURGE=$(az keyvault show --hsm-name "$VAULT_NAME" --query properties.enablePurgeProtection -o tsv 2>/dev/null || echo "") ;;
-      *)              PURGE=$(az keyvault show --name "$VAULT_NAME" --query properties.enablePurgeProtection -o tsv 2>/dev/null || echo "") ;;
+      *.managedhsm.*) KV_SHOW_FLAG="--hsm-name" ;;
+      *)              KV_SHOW_FLAG="--name" ;;
     esac
-    if [ -z "$PURGE" ]; then
+    # Purge protection cannot be turned off once on, so a vault that never had
+    # it reports the property unset, which az prints as an empty line with a
+    # zero exit. Only a failed read is unverified; any value but true is off.
+    if ! PURGE=$(az keyvault show "$KV_SHOW_FLAG" "$VAULT_NAME" --query properties.enablePurgeProtection -o tsv 2>/dev/null); then
       warn "${KEY_VAR}: the vault ${VAULT_NAME} could not be read (az keyvault show), so purge protection is unverified. The apply fails without it; the platform team can confirm it."
     elif [ "$PURGE" != "true" ]; then
       fail "${KEY_VAR}: the vault ${VAULT_NAME} has purge protection off, and the services refuse a customer-managed key in such a vault. The platform team enables it, which cannot be undone: az keyvault update --name ${VAULT_NAME} --enable-purge-protection true"
