@@ -1628,6 +1628,86 @@ CASES = [
         "expect": ["[✓] clickhouse_source = external — no ClickHouse pod to schedule"],
         "reject_calls": ["kubectl get nodes"],
     },
+    # ── Customer-managed keys (section 12) ──────────────────────────────────
+    {
+        "name": "customer-managed keys: nothing set runs no check",
+        "ca_all": ALL_GOOD,
+        "reject": ["Customer-managed keys"],
+        "reject_calls": ["disk-encryption-set show", "keyvault show --name", "identity show --ids"],
+    },
+    {
+        "name": "a disk encryption set in another region fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_location": "westus",
+        "expect": [
+            "[✗] aks_disk_encryption_set_id is in westus, and the cluster is created in eastus",
+        ],
+        "expect_calls": ["disk-encryption-set show --ids /subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a disk encryption set in the cluster's region passes, and an unreadable one warns",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_location": "East US",
+        "expect": ["[✓] aks_disk_encryption_set_id: the set is in eastus, the cluster's region"],
+        "reject": ["[✗] aks_disk_encryption_set_id"],
+    },
+    {
+        "name": "location left at its default (eastus) is the cluster's region for the set check",
+        "ca_all": ALL_GOOD,
+        "tfvars_no_location": True,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_location": "eastus",
+        "expect": ["[✓] aks_disk_encryption_set_id: the set is in eastus, the cluster's region"],
+        "reject": ["[✗] aks_disk_encryption_set_id"],
+    },
+    {
+        "name": "an unreadable disk encryption set warns and does not fail",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_fail": True,
+        "expect": ["[!] aks_disk_encryption_set_id: the set could not be read"],
+        "reject": ["[✗] aks_disk_encryption_set_id"],
+    },
+    {
+        "name": "a key vault without purge protection fails, and the identities are read",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'postgres_customer_managed_key_id          = "https://kv-keys.vault.usgovcloudapi.net/keys/pg-key"',
+            'postgres_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pg-cmk"',
+            'storage_customer_managed_key_id           = "https://kv-keys.vault.usgovcloudapi.net/keys/blob-key/0123456789abcdef"',
+            'storage_customer_managed_key_identity_id  = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_purge_protection": "false",
+        "expect": [
+            "[✗] postgres_customer_managed_key_id: the vault kv-keys has purge protection off",
+            "[✗] storage_customer_managed_key_id: the vault kv-keys has purge protection off",
+            "az keyvault update --name kv-keys --enable-purge-protection true",
+            "[✓] postgres_customer_managed_key_identity_id: the identity resolves",
+            "[✓] storage_customer_managed_key_identity_id: the identity resolves",
+        ],
+        "expect_calls": ["keyvault show --name kv-keys --query properties.enablePurgeProtection"],
+        "reject_calls": ["keyvault show --hsm-name"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a Managed HSM key is read with --hsm-name, and an unreadable vault or identity warns",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'storage_customer_managed_key_id          = "https://hsm-keys.managedhsm.usgovcloudapi.net/keys/blob-key"',
+            'storage_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_fail": True,
+        "identity_fail": True,
+        "expect": [
+            "[!] storage_customer_managed_key_id: the vault hsm-keys could not be read",
+            "[!] storage_customer_managed_key_identity_id: the identity could not be read",
+        ],
+        "expect_calls": ["keyvault show --hsm-name hsm-keys --query properties.enablePurgeProtection"],
+        "reject": ["[✗] storage_customer_managed_key"],
+    },
 ]
 
 
@@ -1642,8 +1722,10 @@ def build_case(case, index):
     name_prefix = case.get("tfvars_name_prefix", '"-dev"')
     lines = [
         f'subscription_id = "{case.get("tfvars_sub", SUB)}"',
-        'location    = "eastus"',
     ]
+    # tfvars_no_location omits the key, so a case runs on the variable's default.
+    if not case.get("tfvars_no_location"):
+        lines.append('location    = "eastus"')
     if name_prefix is not None:
         lines.append(f"name_prefix = {name_prefix}")
     if "tfvars_identifier" in case:
@@ -1701,7 +1783,8 @@ def build_case(case, index):
             "".join(f"{size}\t{family}\n" for size, family in case["vm_skus"])
         )
     for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment",
-                "kube_ctx", "subnet_route_table", "dig_soa"):
+                "kube_ctx", "subnet_route_table", "dig_soa",
+                "des_location", "kv_purge_protection", "identity_principal"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
@@ -1724,7 +1807,7 @@ def build_case(case, index):
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
                  "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr",
-                 "group_missing", "subnet_show_fail"):
+                 "group_missing", "subnet_show_fail", "des_fail", "kv_fail", "identity_fail"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 

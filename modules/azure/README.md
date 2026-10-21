@@ -1802,6 +1802,104 @@ On an attached cluster, the plan refuses the flag when node pools run in more th
 
 ---
 
+## Customer-managed keys
+
+Three resources encrypt at rest with a key the platform team holds in a Key
+Vault with soft delete and purge protection on: the cluster's managed disks, the
+PostgreSQL Flexible Server and the blob storage account. The module never
+creates a key, so one imported into the vault works the same as one generated
+there, and every variable takes the ID the platform team returns.
+
+- **The cluster's disks.** `aks_disk_encryption_set_id` names a disk encryption
+  set in the cluster's region. AKS encrypts the node OS disks with it and, by
+  default, every managed disk the Azure Disk CSI driver creates, so the
+  in-cluster databases' volumes take it with no storage class change. The set's
+  own identity holds Key Vault Crypto Service Encryption User on its key's
+  vault, and the cluster identity needs Reader on the set before the first
+  persistent volume: `aks_disk_encryption_set_reader_grant = true` makes that
+  grant from the module when the identity running apply holds
+  roleAssignments/write on the set's scope. Otherwise the platform team makes it
+  after the apply that creates the cluster. Plan refuses the set with
+  `create_cluster = false`, since the module does not manage an attached
+  cluster's disks.
+- **PostgreSQL.** `postgres_customer_managed_key_id` and
+  `postgres_customer_managed_key_identity_id` give the server its key and the
+  user-assigned identity that reads it. With `postgres_geo_redundant_backup` the
+  geo pair (`postgres_geo_backup_customer_managed_key_id` and its identity, a
+  different one in the paired region) is required, because Azure encrypts a
+  customer-managed-key server's geo-redundant backups only with a key in the
+  backup region, and plan refuses the primary pair without it. Plan refuses all four
+  unless `postgres_source = "external"`, the only source with a server to take
+  them.
+- **Blob storage.** `storage_customer_managed_key_id` and
+  `storage_customer_managed_key_identity_id` do the same for the blob account
+  (SmithDB's account takes the same pair in a later change).
+
+A versionless key URL follows the key's newest version. Each identity holds Key
+Vault Crypto Service Encryption User on its vault before the apply. `make
+preflight` reads the set's region, each vault's purge protection and each
+identity, and stops on a set outside the cluster's region or a vault without
+purge protection. A read it cannot make is a warning. The provider documents Key
+Vault key IDs for all three resources. A Managed HSM key has no documented route
+for the server and is unverified for the set and the account.
+
+**Set the cluster's and the server's keys before the first apply.** Both take
+their key only at creation, and the provider applies a change by replacing the
+resource. On an existing cluster, plan reads the disk encryption set Azure
+reports and refuses a different value, adding one included. To move a running
+deployment, build a new cluster with the set and move the release to it. On an
+existing server, plan reads whether Azure reports a customer-managed key and
+refuses a plan that adds or removes one. It compares presence only, so moving
+to another key or key version stays allowed. The storage account accepts its
+key on an existing resource, so that pair can follow a later apply.
+
+**Moving an existing server to a key.** The module cannot restore a server
+itself, so the move is a restore by hand followed by state steps, then an
+apply. Read the plan before the apply.
+
+1. Stop writes, so the restore holds everything: scale the LangSmith
+   deployments in the namespace to zero.
+2. Restore to a new server created with the key. With geo-redundant backup on,
+   also pass `--backup-key` and `--backup-identity`.
+
+   ```bash
+   az postgres flexible-server restore \
+     --resource-group <resource group> --name <new server> \
+     --source-server <current server> \
+     --key <key URL> --identity <identity resource ID>
+   ```
+
+   Confirm the new server sits in the module's delegated subnet and private
+   DNS zone (`az postgres flexible-server show`). `--subnet` and
+   `--private-dns-zone` choose them.
+3. In `terraform.tfvars`, set `postgres_name` to the new server and set the key
+   variables to what the restore used.
+4. Swap the server in state. Record each address with the name it imports
+   under, remove them, then import each at the new server:
+
+   ```bash
+   cd infra
+   ADDRS=$(terraform state list | grep -E '^module\.postgres\[0\]\.azurerm_postgresql_flexible_server(_database|_configuration)?\.')
+   for a in $ADDRS; do
+     printf '%s %s\n' "$a" "$(terraform state show -no-color "$a" | awk -F'"' '$1 ~ /^ *name *= *$/ {print $2; exit}')"
+   done > postgres-addresses.txt
+   for a in $ADDRS; do terraform state rm "$a"; done
+   NEW=$(az postgres flexible-server show --resource-group <resource group> --name <new server> --query id -o tsv)
+   while read -r a n; do
+     case "$a" in
+       *flexible_server.db) terraform import "$a" "$NEW" ;;
+       *_database.*)        terraform import "$a" "$NEW/databases/$n" ;;
+       *_configuration.*)   terraform import "$a" "$NEW/configurations/$n" ;;
+     esac
+   done < postgres-addresses.txt
+   ```
+
+5. `terraform plan` should show no replacement of the server or its databases.
+   The connection Secret updates with the new host. Apply, scale the
+   deployments back up and check the install.
+6. Delete the old server by hand (`az postgres flexible-server delete`).
+   Terraform no longer tracks it.
+
 ## Node OS
 
 Every pool runs Ubuntu unless you choose otherwise. `aks_os_sku` sets the default

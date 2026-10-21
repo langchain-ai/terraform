@@ -254,6 +254,26 @@ ingress_controller = "envoy-gateway"
 # destroy included.
 # aks_custom_ca_trust_certificate_files = ["certs/internal-root-ca.pem"]
 
+# Customer-managed keys, each an ID the platform team returns from a Key Vault
+# with soft delete and purge protection on. The disk encryption set (in the
+# cluster's region) covers the node OS disks and the CSI data disks; the
+# cluster identity needs Reader on it before the first volume (the module
+# grants it only with the flag). The PostgreSQL pair and the storage pair are
+# a key URL (versionless = follows the newest version) and the user-assigned
+# identity that reads it, holding Key Vault Crypto Service Encryption User on
+# the vault. The set and the server take their key only at creation.
+# In Azure Government the vault host ends in .vault.usgovcloudapi.net.
+# aks_disk_encryption_set_id                = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>"
+# aks_disk_encryption_set_reader_grant      = false
+# postgres_customer_managed_key_id          = "https://<vault>.vault.azure.net/keys/<name>"
+# postgres_customer_managed_key_identity_id = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
+# With postgres_geo_redundant_backup = true: a key in the paired region's vault
+# and a different identity there.
+# postgres_geo_backup_customer_managed_key_id          = "https://<vault-paired>.vault.azure.net/keys/<name>"
+# postgres_geo_backup_customer_managed_key_identity_id = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name-paired>"
+# storage_customer_managed_key_id          = "https://<vault>.vault.azure.net/keys/<name>"
+# storage_customer_managed_key_identity_id = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
+
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
 # istio_addon_revision = "asm-1-27"

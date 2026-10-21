@@ -103,6 +103,11 @@ output "live_network_profile" {
   }
 }
 
+output "live_disk_encryption_set_id" {
+  description = "The disk encryption set Azure reports for the cluster at plan time, lowercased: \"\" when the cluster has none. null until the cluster exists, and when create_cluster = false."
+  value       = local.live_cluster == null ? null : try(lower(local.live_cluster.disk_encryption_set), "")
+}
+
 output "live_access_profile" {
   description = "API server access Azure reports for the cluster at plan time: whether it is private, its private DNS zone (\"system\", \"none\", a zone ID, or null on a public cluster), whether Entra integration is on, and the control-plane identity (\"system\" or \"user\", null when Azure reports none) with its lowercased user-assigned identity IDs. null until the cluster exists, and when create_cluster = false."
   value = local.live_cluster == null ? null : {
@@ -264,4 +269,14 @@ output "istio_addon_gateways" {
     external = local.istio_addon_external_gateway
     internal = local.istio_addon_internal_gateway
   }
+}
+
+output "disk_encryption_set_id" {
+  description = "The disk encryption set the cluster's node OS disks and CSI data disks are encrypted with; null on platform-managed keys or in attach mode."
+  value       = one(azurerm_kubernetes_cluster.main[*].disk_encryption_set_id)
+}
+
+output "disk_encryption_set_reader_scope" {
+  description = "Scope of the Reader assignment the module made on the disk encryption set for the cluster identity; null when the grant is left to the set's owner."
+  value       = one(azurerm_role_assignment.disk_encryption_set_reader[*].scope)
 }

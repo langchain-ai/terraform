@@ -393,7 +393,7 @@ data "azapi_resource_list" "clusters" {
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities, disk_encryption_set: properties.diskEncryptionSetID}"
   }
 }
 
@@ -478,6 +478,22 @@ resource "azurerm_role_assignment" "control_plane_dns_zone_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
+# Reader on the disk encryption set for the cluster identity: the Azure Disk
+# CSI driver reads the set before it creates an encrypted data disk, and AKS
+# refuses the volume without it. The set is usually in the platform team's
+# resource group, where the identity running apply holds nothing, so the grant
+# is the module's only on request; otherwise it is made after the apply that
+# creates the cluster and before the first persistent volume. The principal
+# is the user-assigned identity when the cluster runs as one, else the
+# system-assigned identity the cluster reports once it exists.
+resource "azurerm_role_assignment" "disk_encryption_set_reader" {
+  count                = var.create_cluster && var.disk_encryption_set_reader_grant ? 1 : 0
+  scope                = var.disk_encryption_set_id
+  role_definition_name = "Reader"
+  principal_id         = local.control_plane_user ? local.control_plane_principal_id : azurerm_kubernetes_cluster.main[0].identity[0].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # AKS documents up to 60 minutes for a grant to its identity to take effect,
 # and a cluster created before then fails on the network it cannot yet join.
 # Hold the cluster back once, when the grants are made. 300s covers the common
@@ -544,7 +560,11 @@ resource "azurerm_kubernetes_cluster" "main" {
   resource_group_name = var.resource_group_name
   dns_prefix          = var.cluster_name
   kubernetes_version  = var.kubernetes_version
-  tags                = merge(var.tags, { module = "aks" })
+
+  # Customer-managed keys for the node OS disks and, by default, every managed
+  # disk the Azure Disk CSI driver creates. Creation-time only on AKS.
+  disk_encryption_set_id = var.disk_encryption_set_id != "" ? var.disk_encryption_set_id : null
+  tags                   = merge(var.tags, { module = "aks" })
 
   # Free has no SLA. Standard carries the financially backed uptime SLA (99.95%
   # when the control plane spans availability zones) and is where a production
