@@ -57,10 +57,16 @@ locals {
   use_ingress_resource = !contains(["envoy-gateway", "istio-addon"], local.ingress_controller)
 
   # Ingress / gateway values, matching init-values.sh per controller.
-  # NOTE: istio-addon and envoy-gateway also require the imperative Gateway /
-  # IngressClass / TLS-secret-sync that helm/scripts/deploy.sh performs — the
-  # Terraform app path does not create those. Use the shell path (make deploy)
-  # for those controllers, or for letsencrypt/dns01 TLS (ClusterIssuer setup).
+  # NOTE: some ingress/TLS setup is imperative and ONLY helm/scripts/deploy.sh
+  # performs it; the Terraform app path does not. Use the shell path (make deploy)
+  # for:
+  #   - letsencrypt (HTTP-01) TLS   — deploy.sh creates the letsencrypt-prod ClusterIssuer
+  #   - istio                       — deploy.sh creates the "istio" IngressClass
+  #   - istio-addon / envoy-gateway — deploy.sh creates the Gateway/GatewayClass and
+  #                                   syncs langsmith-tls into the gateway namespace
+  # The TF path is complete for: nginx and agic (their IngressClass ships with the
+  # controller), TLS source none/existing, and dns01 (whose ClusterIssuer is created
+  # by the infra k8s-bootstrap module, not deploy.sh).
   # Built with merge() of single-key fragments so every conditional stays a
   # map-unifiable "{ key = val } : {}" — Terraform rejects conditionals whose two
   # branches are heterogeneous objects (an object with mixed value types cannot
