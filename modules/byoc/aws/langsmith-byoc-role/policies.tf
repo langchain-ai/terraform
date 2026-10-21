@@ -84,6 +84,33 @@ locals {
     "iam:SimulatePrincipalPolicy",
   ]
 
+  # Exact-ARN grants for BYOIAM resources with custom names. Read and pass only,
+  # so the IAM-management filter below leaves them unchanged.
+  byoiam_custom_name_statements = concat([for statement in [
+    {
+      Sid      = "BYOIAMCustomRoleRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies", "iam:GetRolePolicy", "iam:ListInstanceProfilesForRole"]
+      Resource = var.byoiam_role_arns
+    },
+    {
+      Sid      = "BYOIAMCustomRolePass"
+      Effect   = "Allow"
+      Action   = ["iam:PassRole"]
+      Resource = var.byoiam_role_arns
+      Condition = {
+        StringEquals = {
+          "iam:PassedToService" = ["eks.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com", "monitoring.rds.amazonaws.com", "lambda.amazonaws.com"]
+        }
+      }
+    }
+    ] : statement if length(var.byoiam_role_arns) > 0], [for statement in [{
+      Sid      = "BYOIAMCustomInstanceProfileRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetInstanceProfile"]
+      Resource = [var.byoiam_instance_profile_arn]
+  }] : statement if var.byoiam_instance_profile_arn != null])
+
   # Filter after composing teardown permissions so enabling deletes cannot
   # restore IAM writes. Mixed statements retain their permitted read actions.
   filtered_role_policies = {
@@ -95,11 +122,11 @@ locals {
       })
     ]
   }
-  role_policies = {
+  role_policies = merge({
     for name, statements in local.filtered_role_policies : name => [
       for statement in statements : statement if length(statement.Action) > 0
     ]
-  }
+  }, length(local.byoiam_custom_name_statements) == 0 ? {} : { byoiam = local.byoiam_custom_name_statements })
 }
 
 resource "aws_iam_policy" "this" {

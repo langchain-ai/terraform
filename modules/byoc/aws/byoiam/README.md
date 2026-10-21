@@ -24,6 +24,9 @@ module "byoiam" {
 | --- | --- |
 | `regions` | AWS regions where data planes are to be deployed. |
 | `permissions_boundary_arn` | Optional boundary for all roles. |
+| `role_names` | Optional. Custom names for some or all roles, keyed by role purpose (the keys of the `role_names` output). Unset keys keep the default `byoc-smith-*` names. |
+| `karpenter_instance_profile_name` | Optional. Custom name for the Karpenter instance profile. |
+| `karpenter_controller_policy_name` | Optional. Custom name for the Karpenter controller policy. |
 | `service_linked_roles_to_create` | Missing service-linked roles to create. Defaults to none. Import existing roles or leave them out. |
 | `smithdb_migration_writer_principal_arns` | Optional. Self-hosted LangSmith roles or users that may assume the SmithDB role during a self-hosted to BYOC migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |
@@ -43,3 +46,32 @@ access, and trusts Engine service accounts. Engine remains opt-in per data plane
 
 The outputs expose the shared role names and ARNs, Karpenter instance profile
 name, and Karpenter controller policy ARN.
+
+### Custom names
+
+Use `role_names`, `karpenter_instance_profile_name`, and
+`karpenter_controller_policy_name` when your organization requires its own IAM
+naming convention, for example a mandatory prefix:
+
+```hcl
+module "byoiam" {
+  source = "github.com/langchain-ai/terraform//modules/byoc/aws/byoiam?ref=main"
+
+  regions                  = ["us-east-1"]
+  permissions_boundary_arn = "arn:aws:iam::<account-id>:policy/<boundary>"
+  role_names = {
+    eks-cluster-role        = "ACME-langsmith-eks-cluster"
+    postgres-setup-iam-role = "ACME-langsmith-postgres-setup"
+  }
+  karpenter_instance_profile_name  = "ACME-langsmith-karpenter-node"
+  karpenter_controller_policy_name = "ACME-langsmith-karpenter-controller"
+}
+```
+
+IAM role names are limited to 64 characters. Custom names do not match the
+provisioning role's default `*-smith-*` allowlists, so pass
+`values(module.byoiam.role_arns)` as `byoiam_role_arns` and the instance profile
+ARN as `byoiam_instance_profile_arn` in the
+[customer provisioning-role module](../langsmith-byoc-role/README.md). Share the
+`role_names` and `karpenter_instance_profile_name` outputs with LangChain when
+you create the data plane.

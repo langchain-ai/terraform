@@ -7,7 +7,7 @@ This module creates two roles:
 | Role | Purpose | Trust |
 |------|---------|-------|
 | `var.role_name` (you choose) | Assumed by the LangSmith control-plane Crossplane controller to provision and manage resources. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
-| `LangSmithBYOCBreakGlass` | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
+| `var.break_glass_role_name` (default `LangSmithBYOCBreakGlass`) | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
 
 ## Prerequisites
 
@@ -113,6 +113,23 @@ instance-profile mutation, or deletion permissions, including service-linked
 role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
 
 When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
+
+If the BYOIAM roles or instance profile use custom names, list their exact ARNs
+so this role can still read and pass them:
+
+```hcl
+byoiam_role_arns            = values(module.byoiam.role_arns)
+byoiam_instance_profile_arn = "arn:aws:iam::<account-id>:instance-profile/<custom-profile-name>"
+```
+
+### Naming and permissions boundaries
+
+Set `break_glass_role_name` when your naming convention does not allow
+`LangSmithBYOCBreakGlass`, and share the resulting `break_glass_role_arn` output
+with LangChain. Set `permissions_boundary_arn` to attach your permissions
+boundary to both roles when Terraform creates them. The boundary limits what the
+provisioning role can do, so confirm it allows the actions in this module's
+policies.
 
 ### Self-hosted to BYOC migration
 

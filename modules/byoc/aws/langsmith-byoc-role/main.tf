@@ -1,8 +1,9 @@
 data "aws_caller_identity" "current" {}
 
 resource "aws_iam_role" "langchain_byoc" {
-  name        = var.role_name
-  description = "Role for LangSmith Control Plane to manage resources"
+  name                 = var.role_name
+  description          = "Role for LangSmith Control Plane to manage resources"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -30,6 +31,12 @@ resource "aws_iam_role" "langchain_byoc" {
     precondition {
       condition     = var.allow_vpc_creation_permissions || length(var.vpc_ids) > 0
       error_message = "At least one vpc_ids entry is required when allow_vpc_creation_permissions is false."
+    }
+    precondition {
+      condition = alltrue([
+        for arn in concat(var.byoiam_role_arns, compact([var.byoiam_instance_profile_arn])) : split(":", arn)[4] == data.aws_caller_identity.current.account_id
+      ])
+      error_message = "byoiam_role_arns and byoiam_instance_profile_arn must be in the account that holds this role."
     }
   }
 }

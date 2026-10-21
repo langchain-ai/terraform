@@ -12,7 +12,7 @@ locals {
 }
 
 resource "aws_iam_instance_profile" "karpenter" {
-  name = "byoc-smith-karpenter-node-profile"
+  name = var.karpenter_instance_profile_name
   path = "/"
   role = aws_iam_role.this["karpenter-node-role"].name
   tags = local.tags

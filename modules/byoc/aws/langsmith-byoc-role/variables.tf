@@ -13,6 +13,28 @@ variable "external_id" {
   type        = string
 }
 
+variable "break_glass_role_name" {
+  description = "Name of the customer-side break-glass role. Tell LangChain if you change it."
+  type        = string
+  default     = "LangSmithBYOCBreakGlass"
+
+  validation {
+    condition     = can(regex("^[\\w+=,.@-]{1,64}$", var.break_glass_role_name))
+    error_message = "The role name must be 1-64 characters of letters, digits, and +=,.@_-."
+  }
+}
+
+variable "permissions_boundary_arn" {
+  description = "Optional customer IAM permissions boundary applied to the provisioning and break-glass roles when they are created."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.permissions_boundary_arn == null ? true : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:policy/[a-zA-Z0-9/+=,.@_-]+$", var.permissions_boundary_arn))
+    error_message = "Supply an IAM policy ARN without wildcards."
+  }
+}
+
 variable "allow_break_glass_access" {
   description = "Allow trusted LangSmith Identity Center users to assume the customer-side break-glass role."
   type        = bool
@@ -79,6 +101,28 @@ variable "allow_iam_management_permissions" {
   description = "Grant IAM creation, mutation, and deletion permissions. Disable when the customer supplies roles, policies, instance profiles, and service-linked roles; IAM reads, scoped PassRole, and policy simulation remain available."
   type        = bool
   default     = true
+}
+
+variable "byoiam_role_arns" {
+  description = "Exact ARNs of customer-managed BYOIAM roles whose names do not match the default *-smith-* patterns. The role may read and pass these roles; pass the byoiam module's role_arns output values."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for arn in var.byoiam_role_arns : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/[\\w+=,.@-]{1,64}$", arn))])
+    error_message = "Each entry must be an IAM role ARN with path / and no wildcards."
+  }
+}
+
+variable "byoiam_instance_profile_arn" {
+  description = "Exact ARN of the customer-managed Karpenter instance profile when its name does not match *-smith-karpenter-node-profile."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.byoiam_instance_profile_arn == null ? true : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:instance-profile/[\\w+=,.@-]{1,128}$", var.byoiam_instance_profile_arn))
+    error_message = "Supply an IAM instance profile ARN with path / and no wildcards."
+  }
 }
 
 variable "allow_self_hosted_migration_permissions" {

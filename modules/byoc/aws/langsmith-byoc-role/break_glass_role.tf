@@ -16,7 +16,8 @@ locals {
 }
 
 resource "aws_iam_role" "break_glass" {
-  name = "LangSmithBYOCBreakGlass"
+  name                 = var.break_glass_role_name
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
