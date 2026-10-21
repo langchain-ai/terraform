@@ -159,6 +159,20 @@ case "$ARGS" in
   "aks show"*)
     # The attached cluster exists; the capacity cases are about its nodes.
     exit 0 ;;
+  "disk-encryption-set show --ids "*)
+    # The customer-managed-keys block reads the set's region.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/des_fail" ]; then exit 1; fi
+    emit_file "$FIX/des_location" "eastus" ;;
+  "keyvault show --name "*|"keyvault show --hsm-name "*)
+    # The vault of a customer-managed key: purge protection on unless a fixture says otherwise.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/kv_fail" ]; then exit 1; fi
+    emit_file "$FIX/kv_purge_protection" "true" ;;
+  "identity show --ids "*)
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/identity_fail" ]; then exit 1; fi
+    emit_file "$FIX/identity_principal" "55555555-5555-5555-5555-555555555555" ;;
   *)
     echo "STUB: unhandled az invocation: $ARGS" >&2
     exit 1 ;;
