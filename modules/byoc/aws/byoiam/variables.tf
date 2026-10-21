@@ -8,6 +8,49 @@ variable "regions" {
   }
 }
 
+variable "role_names" {
+  description = "Optional role name overrides, keyed by role purpose (see the role_names output for the keys). Unset keys keep their default byoc-smith-* names."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = alltrue([for key in keys(var.role_names) : contains([
+      "eks-cluster-role", "eks-node-role", "ebs-csi-role", "karpenter-node-role", "karpenter-controller-role",
+      "postgres-monitoring-role", "smithdb-metastore-monitoring-role", "workload-iam-role", "postgres-setup-iam-role",
+      "smithdb-iam-role", "smithdb-setup-iam-role", "external-secrets-iam-role", "lbc-role", "clickhouse-backup-iam-role",
+      "privatelink-lambda-role", "juicefs-csi-iam-role"
+    ], key)])
+    error_message = "role_names keys must be BYOIAM role purposes, such as eks-cluster-role or workload-iam-role."
+  }
+
+  validation {
+    condition     = alltrue([for name in values(var.role_names) : can(regex("^[\\w+=,.@-]{1,64}$", name))])
+    error_message = "Each role name must be 1-64 characters of letters, digits, and +=,.@_-."
+  }
+}
+
+variable "karpenter_instance_profile_name" {
+  description = "Name of the Karpenter node instance profile."
+  type        = string
+  default     = "byoc-smith-karpenter-node-profile"
+
+  validation {
+    condition     = can(regex("^[\\w+=,.@-]{1,128}$", var.karpenter_instance_profile_name))
+    error_message = "The instance profile name must be 1-128 characters of letters, digits, and +=,.@_-."
+  }
+}
+
+variable "karpenter_controller_policy_name" {
+  description = "Name of the customer-managed Karpenter controller policy."
+  type        = string
+  default     = "byoc-smith-karpenter-controller-policy"
+
+  validation {
+    condition     = can(regex("^[\\w+=,.@-]{1,128}$", var.karpenter_controller_policy_name))
+    error_message = "The policy name must be 1-128 characters of letters, digits, and +=,.@_-."
+  }
+}
+
 variable "permissions_boundary_arn" {
   description = "Optional customer IAM permissions boundary applied to all 16 application/infrastructure roles (not AWS service-linked roles)."
   type        = string
