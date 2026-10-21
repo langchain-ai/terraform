@@ -42,7 +42,7 @@ resource "aws_iam_role" "break_glass" {
     }]
   })
 
-  tags = merge(var.tags, { managed_by = "langsmith" })
+  tags = merge(var.tags, { managed_by = "langsmith", "langsmith-byoc-break-glass" = "true" })
 }
 
 resource "aws_iam_role_policy" "break_glass_eks_describe" {
