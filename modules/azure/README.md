@@ -1819,7 +1819,9 @@ there, and every variable takes the ID the platform team returns.
   persistent volume: `aks_disk_encryption_set_reader_grant = true` makes that
   grant from the module when the identity running apply holds
   roleAssignments/write on the set's scope. Otherwise the platform team makes it
-  after the apply that creates the cluster. Plan refuses the set with
+  after the apply that creates the cluster. Leave the flag false when the
+  platform team has already made the grant: true would create the same
+  assignment again, and the apply fails with RoleAssignmentExists. Plan refuses the set with
   `create_cluster = false`, since the module does not manage an attached
   cluster's disks.
 - **PostgreSQL.** `postgres_customer_managed_key_id` and
