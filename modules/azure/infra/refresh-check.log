@@ -1,0 +1,91 @@
+[0m[1mdata.azurerm_virtual_network.byo_vnet[0]: Reading...[0m[0m
+[0m[1mazurerm_resource_group.resource_group: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812][0m
+[0m[1mmodule.aks.azurerm_user_assigned_identity.cert_manager: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/ls-aks-e2e0812-cert-manager-identity][0m
+[0m[1mmodule.postgres[0].azurerm_private_dns_zone.db_dns_zone: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com][0m
+[0m[1mmodule.aks.azurerm_user_assigned_identity.k8s_app: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity][0m
+[0m[1mmodule.redis[0].azurerm_private_dns_zone.redis: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Network/privateDnsZones/privatelink.redis.azure.net][0m
+[0m[1mmodule.vnet.azurerm_subnet.subnet_redis[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/mf-byo-e2e-rg/providers/Microsoft.Network/virtualNetworks/byo-e2e-vnet/subnets/ls-vnet-e2e0812-subnet-redis][0m
+[0m[1mmodule.vnet.azurerm_subnet.subnet_main[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/mf-byo-e2e-rg/providers/Microsoft.Network/virtualNetworks/byo-e2e-vnet/subnets/ls-vnet-e2e0812-subnet-0][0m
+[0m[1mmodule.redis[0].azapi_resource.amr: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Cache/redisEnterprise/ls-redis-e2e0812-d88b2b][0m
+[0m[1mmodule.vnet.azurerm_subnet.subnet_postgres[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/mf-byo-e2e-rg/providers/Microsoft.Network/virtualNetworks/byo-e2e-vnet/subnets/ls-vnet-e2e0812-subnet-postgres][0m
+[0m[1mdata.azurerm_virtual_network.byo_vnet[0]: Read complete after 1s [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/mf-byo-e2e-rg/providers/Microsoft.Network/virtualNetworks/byo-e2e-vnet][0m
+[0m[1mterraform_data.validate_network: Refreshing state... [id=172bc839-dbe6-dd1e-87c6-0d8e7051852c][0m
+[0m[1mmodule.blob.azurerm_storage_account.storage_account: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Storage/storageAccounts/lsblobe2e0812d88b2b][0m
+[0m[1mmodule.aks.azurerm_kubernetes_cluster.main[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ContainerService/managedClusters/ls-aks-e2e0812][0m
+[0m[1mmodule.redis[0].azurerm_private_dns_zone_virtual_network_link.redis: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Network/privateDnsZones/privatelink.redis.azure.net/virtualNetworkLinks/ls-redis-e2e0812-d88b2b-dnslink][0m
+[0m[1mmodule.redis[0].azurerm_private_endpoint.redis: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Network/privateEndpoints/ls-redis-e2e0812-d88b2b-pe][0m
+[0m[1mmodule.redis[0].azapi_resource.amr_db: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Cache/redisEnterprise/ls-redis-e2e0812-d88b2b/databases/default][0m
+[0m[1mmodule.postgres[0].azurerm_private_dns_zone_virtual_network_link.dns_zone_vnet_link: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com/virtualNetworkLinks/ls-postgres-e2e0812-d88b2b-link][0m
+[0m[1mmodule.postgres[0].azurerm_postgresql_flexible_server.db: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b][0m
+[0m[1mmodule.redis[0].azapi_resource_action.amr_keys: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Cache/redisEnterprise/ls-redis-e2e0812-d88b2b/databases/default/listKeys][0m
+[0m[1mmodule.postgres[0].azurerm_postgresql_flexible_server_configuration.max_connections: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b/configurations/max_connections][0m
+[0m[1mmodule.postgres[0].azurerm_postgresql_flexible_server_database.langsmith: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b/databases/langsmith][0m
+[0m[1mmodule.postgres[0].azurerm_postgresql_flexible_server_configuration.log_checkpoints: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b/configurations/log_checkpoints][0m
+[0m[1mmodule.postgres[0].azurerm_postgresql_flexible_server_configuration.extensions: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b/configurations/azure.extensions][0m
+[0m[1mmodule.postgres[0].azurerm_postgresql_flexible_server_configuration.connection_throttle: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b/configurations/connection_throttle.enable][0m
+[0m[1mmodule.postgres[0].azurerm_postgresql_flexible_server_configuration.log_connections: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b/configurations/log_connections][0m
+[0m[1mmodule.aks.azurerm_kubernetes_cluster_node_pool.node_pool["large"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ContainerService/managedClusters/ls-aks-e2e0812/agentPools/large][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-backend"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-backend][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.cert_manager: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/ls-aks-e2e0812-cert-manager-identity/federatedIdentityCredentials/ls-aks-e2e0812-cert-manager-federated][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-listener"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-listener][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-ingest-queue"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-ingest-queue][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-fleet-trigger-server"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-fleet-trigger-server][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-queue"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-queue][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-host-backend"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-host-backend][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-fleet-tool-server"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-fleet-tool-server][0m
+[0m[1mmodule.aks.azurerm_federated_identity_credential.k8s_app["langsmith-platform-backend"]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.ManagedIdentity/userAssignedIdentities/k8s-app-identity/federatedIdentityCredentials/langsmith-federated-langsmith-platform-backend][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_namespace_v1.langsmith: Refreshing state... [id=langsmith][0m
+[0m[1mmodule.aks.helm_release.nginx_ingress[0]: Refreshing state... [id=ingress-nginx][0m
+[0m[1mmodule.k8s_bootstrap.helm_release.keda[0]: Refreshing state... [id=keda][0m
+[0m[1mmodule.k8s_bootstrap.helm_release.cert_manager[0]: Refreshing state... [id=cert-manager][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_secret_v1.redis[0]: Refreshing state... [id=langsmith/langsmith-redis-secret][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_secret_v1.postgres[0]: Refreshing state... [id=langsmith/langsmith-postgres-secret][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith: Refreshing state... [id=langsmith/langsmith-quota][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_default_deny: Refreshing state... [id=langsmith/default-deny-ingress][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_allow_internal: Refreshing state... [id=langsmith/allow-from-ingress][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_limit_range_v1.langsmith: Refreshing state... [id=langsmith/langsmith-defaults][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_service_account_v1.langsmith: Refreshing state... [id=langsmith/langsmith-ksa][0m
+[0m[1mmodule.k8s_bootstrap.kubernetes_secret_v1.license[0]: Refreshing state... [id=langsmith/langsmith-license][0m
+[0m[1mmodule.blob.azurerm_role_assignment.blob_data_contributor: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Storage/storageAccounts/lsblobe2e0812d88b2b/providers/Microsoft.Authorization/roleAssignments/92f588f5-10b5-d247-378e-2c04db913ccb][0m
+[0m[1mmodule.blob.azurerm_storage_container.container: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Storage/storageAccounts/lsblobe2e0812d88b2b/blobServices/default/containers/ls-blob-e2e0812-d88b2b-container][0m
+[0m[1mmodule.blob.azurerm_storage_management_policy.lifecycle_policy[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.Storage/storageAccounts/lsblobe2e0812d88b2b/managementPolicies/default][0m
+[0m[1mmodule.keyvault.data.azurerm_client_config.current: Reading...[0m[0m
+[0m[1mmodule.keyvault.data.azurerm_client_config.current: Read complete after 0s [id=Y2xpZW50Q29uZmlncy9jbGllbnRJZD0wNGIwNzc5NS04ZGRiLTQ2MWEtYmJlZS0wMmY5ZTFiZjdiNDY7b2JqZWN0SWQ9NjNmNjYzODQtYzQwYi00ZmMyLTk1MDctZmNkM2Y5NjY0YTQyO3N1YnNjcmlwdGlvbklkPTAxNGMzMDk4LWIwMWYtNDU4NS1hOTIyLWM1NjE3YzIwNGVjMjt0ZW5hbnRJZD0yYzZhNDZhOC1mOWIzLTRmNTgtOGU1ZC00YmFiOGMxZjkyNzA=][0m
+[0m[1mmodule.keyvault.azurerm_key_vault.langsmith[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.KeyVault/vaults/ls-kv-e2e0812-d88b2b][0m
+[0m[1mmodule.keyvault.azurerm_role_assignment.terraform_kv_admin[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.KeyVault/vaults/ls-kv-e2e0812-d88b2b/providers/Microsoft.Authorization/roleAssignments/1172c20f-d51a-8888-ca59-662a065c9b9e][0m
+[0m[1mmodule.keyvault.azurerm_role_assignment.managed_identity_kv_reader[0]: Refreshing state... [id=/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.KeyVault/vaults/ls-kv-e2e0812-d88b2b/providers/Microsoft.Authorization/roleAssignments/d23ee28a-9550-a1ae-72e1-ff46426b28da][0m
+[0m[1mmodule.keyvault.time_sleep.wait_for_rbac[0]: Refreshing state... [id=2026-08-13T17:57:55Z][0m
+[0m[1mmodule.keyvault.azurerm_key_vault_secret.postgres_admin_password: Refreshing state... [id=https://ls-kv-e2e0812-d88b2b.vault.azure.net/secrets/postgres-admin-password/b1711fb56f164b01b7d2cb7053b61cf7][0m
+[0m[1mmodule.keyvault.azurerm_key_vault_secret.langsmith_license_key[0]: Refreshing state... [id=https://ls-kv-e2e0812-d88b2b.vault.azure.net/secrets/langsmith-license-key/44247a03eed14efab613fae5b9c5b8dd][0m
+
+[1m[36mNote:[0m[1m Objects have changed outside of Terraform
+[0m
+Terraform detected the following changes made outside of Terraform since the
+last "terraform apply" which may have affected this plan:
+
+[1m  # module.postgres[0].azurerm_postgresql_flexible_server.db[0m has changed
+[0m  [33m~[0m[0m resource "azurerm_postgresql_flexible_server" "db" {
+        id                                = "/subscriptions/014c3098-b01f-4585-a922-c5617c204ec2/resourceGroups/ls-rg-e2e0812/providers/Microsoft.DBforPostgreSQL/flexibleServers/ls-postgres-e2e0812-d88b2b"
+        name                              = "ls-postgres-e2e0812-d88b2b"
+        tags                              = {
+            "environment" = "e2e0812"
+            "managed_by"  = "terraform"
+            "module"      = "postgres"
+            "project"     = "langsmith"
+        }
+      [33m~[0m[0m version                           = "16" [33m->[0m[0m "14"
+        [90m# (20 unchanged attributes hidden)[0m[0m
+
+        [90m# (1 unchanged block hidden)[0m[0m
+    }
+
+
+This is a refresh-only plan, so Terraform will not take any actions to undo
+these. If you were expecting these changes then you can apply this plan to
+record the updated values in the Terraform state without changing any remote
+objects.
+[90m
+─────────────────────────────────────────────────────────────────────────────[0m
+
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.
