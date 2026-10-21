@@ -1,0 +1,40 @@
+# Base LangSmith values for bare metal (committed; no secrets).
+# Layered first by deploy.sh; environment files from init-values.sh follow.
+
+config:
+  # Every secret comes from this Secret, built by deploy.sh from
+  # infra/.secrets.env (license, api_key_salt, jwt_secret, admin password,
+  # feature Fernet keys).
+  existingSecretName: langsmith-config
+  authType: mixed
+  basicAuth:
+    enabled: true
+
+# Routing goes through the Envoy Gateway (HTTPRoute); no Ingress, no Istio.
+ingress:
+  enabled: false
+istioGateway:
+  enabled: false
+frontend:
+  service:
+    type: ClusterIP
+
+# SmithDB-only: no ClickHouse.
+clickhouse:
+  enabled: false
+
+# External datastores built by Terraform (other namespaces).
+postgres:
+  external:
+    enabled: true
+    existingSecretName: langsmith-postgres
+redis:
+  external:
+    enabled: true
+    existingSecretName: langsmith-redis
+
+# Off unless their flags are on (feature files from init-values.sh enable them).
+insights:
+  enabled: false
+polly:
+  enabled: false

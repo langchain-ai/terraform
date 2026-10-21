@@ -21,6 +21,16 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 
 The AWS, Azure, and GCP directories are self-contained deployments with a `Makefile`, an `infra/` Terraform layout, Helm values, and provider-specific operator scripts. The OpenShift preview follows its own layout. See [`modules/README.md`](modules/README.md) for the differences between providers.
 
+## Reference examples
+
+Worked examples of one way to run LangSmith outside the supported providers.
+LangChain supports the LangSmith application under your agreement, not the
+infrastructure these examples add.
+
+| Example | Guide | Cluster | Status |
+|---|---|---|---|
+| Self-managed Kubernetes | [`modules/baremetal/`](modules/baremetal/README.md) | an existing cluster (tested on kubeadm) | Example |
+
 For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byoc/README.md) for the customer-side IAM role and AWS VPC reference modules.
 
 ## What you get
