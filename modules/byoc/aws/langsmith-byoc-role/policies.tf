@@ -86,7 +86,7 @@ locals {
 
   # Exact-ARN grants for BYOIAM resources with custom names. Read and pass only,
   # so the IAM-management filter below leaves them unchanged.
-  byoiam_custom_name_statements = concat([for statement in [
+  byoiam_role_statements = [for statement in [
     {
       Sid      = "BYOIAMCustomRoleRead"
       Effect   = "Allow"
@@ -103,18 +103,29 @@ locals {
           "iam:PassedToService" = ["eks.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com", "monitoring.rds.amazonaws.com", "lambda.amazonaws.com"]
         }
       }
-    }
-    ] : statement if length(var.byoiam_role_arns) > 0], [for statement in [{
+    },
+  ] : statement if length(var.byoiam_role_arns) > 0]
+  byoiam_instance_profile_statements = [for statement in [
+    {
       Sid      = "BYOIAMCustomInstanceProfileRead"
       Effect   = "Allow"
       Action   = ["iam:GetInstanceProfile"]
       Resource = ["arn:aws:iam::${local.account_id}:instance-profile/${coalesce(var.byoiam_instance_profile_name, "unset")}"]
-  }] : statement if var.byoiam_instance_profile_name != null], [for statement in [{
+    },
+  ] : statement if var.byoiam_instance_profile_name != null]
+  byoiam_controller_policy_statements = [for statement in [
+    {
       Sid      = "BYOIAMCustomControllerPolicyRead"
       Effect   = "Allow"
       Action   = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"]
       Resource = [coalesce(var.byoiam_karpenter_controller_policy_arn, "unset")]
-  }] : statement if var.byoiam_karpenter_controller_policy_arn != null])
+    },
+  ] : statement if var.byoiam_karpenter_controller_policy_arn != null]
+  byoiam_custom_name_statements = concat(
+    local.byoiam_role_statements,
+    local.byoiam_instance_profile_statements,
+    local.byoiam_controller_policy_statements,
+  )
 
   # Filter after composing teardown permissions so enabling deletes cannot
   # restore IAM writes. Mixed statements retain their permitted read actions.
