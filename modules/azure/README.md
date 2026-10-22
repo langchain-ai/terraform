@@ -1376,7 +1376,11 @@ decides what the cluster can reach, and nothing works until it allows:
   `envoy_gateway_image_registry_keeps_source_host = false` (the layout of a
   Docker Hub proxy repository in Nexus or Artifactory), with an optional pull
   Secret in `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The
-  machine running Terraform still pulls the chart from `oci://docker.io`.
+  machine running Terraform fetches the chart from `oci://docker.io/envoyproxy`
+  unless `envoy_gateway_chart_repository` points at a mirror (an OCI registry,
+  or an https Helm proxy repository), with
+  `envoy_gateway_chart_repository_username` and
+  `envoy_gateway_chart_repository_password` for one that requires a login.
   For KEDA, `keda_image_registry` does the same for its three images (the
   operator, the metrics API server and the admission webhooks, from
   `ghcr.io/kedacore`), laid out as `<registry>/ghcr.io/kedacore/...`, or as

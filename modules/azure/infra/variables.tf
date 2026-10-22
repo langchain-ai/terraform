@@ -2251,6 +2251,35 @@ variable "envoy_gateway_image_registry_keeps_source_host" {
   default     = true
 }
 
+variable "envoy_gateway_chart_repository" {
+  type        = string
+  description = "Repository the Envoy Gateway chart (gateway-helm) is fetched from, by the machine running Terraform. The default is Envoy's own OCI registry on Docker Hub. A mirror keeps that machine off docker.io: an OCI registry as oci://<host>/<path> serves the chart as <path>/gateway-helm, and a Helm proxy repository in Nexus or Artifactory as https://<host>/<path>. The chart name and version (envoy_gateway_version) do not change. envoy_gateway_image_registry is the separate setting for the images the cluster pulls."
+  default     = "oci://docker.io/envoyproxy"
+
+  validation {
+    condition     = can(regex("^(https?|oci)://[^/]+(/[^/]+)*$", var.envoy_gateway_chart_repository))
+    error_message = "envoy_gateway_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'oci://docker.io/envoyproxy' or 'https://nexus.example.com/repository/helm-envoy')."
+  }
+}
+
+variable "envoy_gateway_chart_repository_username" {
+  type        = string
+  description = "Username for envoy_gateway_chart_repository when the mirror requires a login to read charts; the machine running Terraform sends it with the chart fetch. Empty (default) fetches anonymously, which Docker Hub and an open mirror allow. Set with envoy_gateway_chart_repository_password."
+  default     = ""
+
+  validation {
+    condition     = (var.envoy_gateway_chart_repository_username == "") == (var.envoy_gateway_chart_repository_password == "")
+    error_message = "envoy_gateway_chart_repository_username and envoy_gateway_chart_repository_password go together: set both for a chart mirror that requires a login, or neither."
+  }
+}
+
+variable "envoy_gateway_chart_repository_password" {
+  type        = string
+  description = "Password or token for envoy_gateway_chart_repository_username. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars."
+  default     = ""
+  sensitive   = true
+}
+
 variable "envoy_gateway_image_pull_secret_name" {
   type        = string
   description = "Name of a kubernetes.io/dockerconfigjson Secret in the envoy-gateway-system namespace that the Envoy Gateway controller and proxy pods pull with. Create the namespace and the Secret before the apply that installs Envoy Gateway. Empty (default) pulls without credentials. Requires envoy_gateway_image_registry."

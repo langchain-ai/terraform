@@ -218,3 +218,66 @@ run "refuses_a_dotless_host" {
 
   expect_failures = [var.envoy_gateway_image_registry]
 }
+
+# envoy_gateway_chart_repository: where the machine running Terraform fetches
+# the gateway-helm chart. The default keeps the reference the release always
+# used, so an existing install plans no change. An OCI mirror carries the chart
+# in the reference, and an https Helm proxy names it. A login is optional and
+# comes as a pair.
+run "default_chart_source_is_docker_hub_oci" {
+  command = plan
+
+  assert {
+    condition     = module.aks.envoy_gateway_chart_source.chart == "oci://docker.io/envoyproxy/gateway-helm" && module.aks.envoy_gateway_chart_source.repository == null && !module.aks.envoy_gateway_chart_source.authenticated
+    error_message = "The default should fetch oci://docker.io/envoyproxy/gateway-helm with no repository and no login, got ${jsonencode(module.aks.envoy_gateway_chart_source)}"
+  }
+}
+
+run "oci_mirror_carries_the_chart_in_the_reference" {
+  command = plan
+
+  variables {
+    envoy_gateway_chart_repository = "oci://nexus.example.com/helm-envoy"
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_chart_source.chart == "oci://nexus.example.com/helm-envoy/gateway-helm" && module.aks.envoy_gateway_chart_source.repository == null
+    error_message = "An OCI mirror should give chart oci://nexus.example.com/helm-envoy/gateway-helm and no repository, got ${jsonencode(module.aks.envoy_gateway_chart_source)}"
+  }
+}
+
+run "https_mirror_names_the_chart_with_a_login" {
+  command = plan
+
+  variables {
+    envoy_gateway_chart_repository          = "https://nexus.example.com/repository/helm-envoy"
+    envoy_gateway_chart_repository_username = "helm-reader"
+    envoy_gateway_chart_repository_password = "fixture-not-a-real-secret"
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_chart_source.repository == "https://nexus.example.com/repository/helm-envoy" && module.aks.envoy_gateway_chart_source.chart == "gateway-helm" && module.aks.envoy_gateway_chart_source.authenticated
+    error_message = "An https mirror should set the repository, name the chart gateway-helm and send the login, got ${jsonencode(module.aks.envoy_gateway_chart_source)}"
+  }
+}
+
+run "refuses_a_chart_repository_with_a_trailing_slash" {
+  command = plan
+
+  variables {
+    envoy_gateway_chart_repository = "oci://nexus.example.com/helm-envoy/"
+  }
+
+  expect_failures = [var.envoy_gateway_chart_repository]
+}
+
+run "refuses_a_chart_username_without_its_password" {
+  command = plan
+
+  variables {
+    envoy_gateway_chart_repository          = "https://nexus.example.com/repository/helm-envoy"
+    envoy_gateway_chart_repository_username = "helm-reader"
+  }
+
+  expect_failures = [var.envoy_gateway_chart_repository_username]
+}
