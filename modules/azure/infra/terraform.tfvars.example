@@ -206,6 +206,15 @@ ingress_controller = "envoy-gateway"
 # envoy_gateway_image_registry_keeps_source_host = false
 # envoy_gateway_image_pull_secret_name           = "nexus-pull"
 
+# The Envoy Gateway chart is fetched by the machine running Terraform, from
+# oci://docker.io/envoyproxy unless envoy_gateway_chart_repository points at a
+# mirror: an OCI registry (oci://<host>/<path>, serving <path>/gateway-helm) or
+# a Helm proxy repository (https://<host>/<path>). A mirror that requires a
+# login takes the username here and the password in secrets.auto.tfvars
+# (envoy_gateway_chart_repository_password).
+# envoy_gateway_chart_repository          = "oci://nexus.example.com/helm-envoy"
+# envoy_gateway_chart_repository_username = "helm-reader"
+
 # KEDA's three images come from ghcr.io/kedacore. keda_image_registry points them
 # at a mirror the same way: <registry>/ghcr.io/kedacore/... by default, or
 # <registry>/kedacore/... with keda_image_registry_keeps_source_host = false. The
