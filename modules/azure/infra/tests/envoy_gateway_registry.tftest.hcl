@@ -271,6 +271,18 @@ run "refuses_a_chart_repository_with_a_trailing_slash" {
   expect_failures = [var.envoy_gateway_chart_repository]
 }
 
+# Plain http would send a mirror's login in clear and let the chart be swapped
+# in transit, so only https:// and oci:// are accepted.
+run "refuses_a_plain_http_chart_repository" {
+  command = plan
+
+  variables {
+    envoy_gateway_chart_repository = "http://nexus.example.com/repository/helm-envoy"
+  }
+
+  expect_failures = [var.envoy_gateway_chart_repository]
+}
+
 run "refuses_a_chart_username_without_its_password" {
   command = plan
 
