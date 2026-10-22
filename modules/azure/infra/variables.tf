@@ -2325,7 +2325,7 @@ variable "envoy_gateway_chart_repository" {
   default     = "oci://docker.io/envoyproxy"
 
   validation {
-    condition     = can(regex("^(https?|oci)://[^/]+(/[^/]+)*$", var.envoy_gateway_chart_repository))
+    condition     = can(regex("^(https|oci)://[^/]+(/[^/]+)*$", var.envoy_gateway_chart_repository))
     error_message = "envoy_gateway_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'oci://docker.io/envoyproxy' or 'https://nexus.example.com/repository/helm-envoy')."
   }
 }
