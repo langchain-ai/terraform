@@ -63,6 +63,11 @@ output "platform_backend_node_ingress" {
   ])
 }
 
+output "smithdb_cache_disk_tags" {
+  description = "The tags parameter of the SmithDB cache StorageClass, which the disk CSI driver puts on each disk it creates. null when SmithDB is off."
+  value       = var.enable_smithdb ? lookup(kubernetes_storage_class_v1.smithdb_cache[0].parameters, "tags", null) : null
+}
+
 output "keda_images" {
   description = "The three images KEDA's pods pull, keyed by name, composed as the chart composes them from keda_image_registry and keda_image_registry_keeps_source_host. Empty when install_keda is false."
   value       = local.keda_images

@@ -1,7 +1,7 @@
 locals {
-  # Static names preserve the AWS role suffixes used by the compositions and
-  # customer provisioning-role allowlists.
-  roles = {
+  # Default names keep the AWS role suffixes that the provisioning role's
+  # wildcard allowlists match. Custom names need byoiam_role_arns there instead.
+  default_roles = {
     eks-cluster-role                  = { name = "byoc-smith-eks-cluster-role", service = "eks.amazonaws.com" }
     eks-node-role                     = { name = "byoc-smith-eks-node-role", service = "ec2.amazonaws.com" }
     ebs-csi-role                      = { name = "byoc-smith-ebs-csi-role", service = "pods.eks.amazonaws.com" }
@@ -19,6 +19,7 @@ locals {
     privatelink-lambda-role           = { name = "byoc-smith-privatelink-lambda-role", service = "lambda.amazonaws.com" }
     juicefs-csi-iam-role              = { name = "byoc-smith-juicefs-csi-iam-role", service = "pods.eks.amazonaws.com" }
   }
+  roles     = { for key, role in local.default_roles : key => merge(role, { name = lookup(var.role_names, key, role.name) }) }
   role_arns = { for key, role in local.roles : key => "arn:${local.partition}:iam::${local.account_id}:role/${role.name}" }
 
   pod_identities = {
@@ -96,6 +97,13 @@ resource "aws_iam_role" "this" {
   # langsmith-byoc-role participates in EKS access-entry authorization. local.tags
   # enforces customer ownership to keep IAM outside the provisioner's write scope.
   tags = merge(local.tags, contains(["eks-node-role", "karpenter-node-role", "workload-iam-role", "privatelink-lambda-role"], each.key) ? { "langsmith-byoc-role" = "true" } : {})
+
+  lifecycle {
+    precondition {
+      condition     = length(distinct([for role in local.roles : role.name])) == length(local.roles)
+      error_message = "Every BYOIAM role needs a distinct name; check role_names against the default names."
+    }
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "managed" {
