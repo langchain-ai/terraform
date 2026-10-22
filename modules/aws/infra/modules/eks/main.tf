@@ -62,7 +62,7 @@ locals {
           # nodes (the ALB target rules included) admits pods too.
           eniConfig = {
             create  = true
-            region  = data.aws_region.current.name
+            region  = data.aws_region.current.region
             subnets = { for az, id in var.pod_subnet_ids_by_az : az => { id = id } }
           }
         }))
@@ -102,11 +102,15 @@ locals {
       var.eks_managed_node_group_defaults,
       v,
       {
-        metadata_options = merge(
-          local.v20_node_group_defaults.metadata_options,
-          coalesce(try(var.eks_managed_node_group_defaults.metadata_options, null), {}),
-          coalesce(try(v.metadata_options, null), {}),
-        )
+        # Drop null maps instead of merging {}. merge() with an empty object
+        # turns the hop limit into a string.
+        metadata_options = merge([
+          for m in [
+            local.v20_node_group_defaults.metadata_options,
+            try(var.eks_managed_node_group_defaults.metadata_options, null),
+            try(v.metadata_options, null),
+          ] : m if m != null
+        ]...)
         desired_size             = coalesce(try(v.desired_size, null), v.min_size)
         iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
       }

@@ -75,7 +75,7 @@ resource "aws_s3_bucket_policy" "cloudtrail" {
         Action    = "s3:GetBucketAcl"
         Resource  = aws_s3_bucket.cloudtrail.arn
         Condition = {
-          StringEquals = { "aws:SourceArn" = "arn:aws:cloudtrail:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:trail/${var.trail_name}" }
+          StringEquals = { "aws:SourceArn" = "arn:aws:cloudtrail:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:trail/${var.trail_name}" }
         }
       },
       {
@@ -87,7 +87,7 @@ resource "aws_s3_bucket_policy" "cloudtrail" {
         Condition = {
           StringEquals = {
             "s3:x-amz-acl"  = "bucket-owner-full-control"
-            "aws:SourceArn" = "arn:aws:cloudtrail:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:trail/${var.trail_name}"
+            "aws:SourceArn" = "arn:aws:cloudtrail:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:trail/${var.trail_name}"
           }
         }
       }
