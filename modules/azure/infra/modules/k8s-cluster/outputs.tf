@@ -179,6 +179,19 @@ output "node_pool_zones" {
   value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.zones }
 }
 
+output "node_pool_tags" {
+  description = "Tags each node pool is planned or created with, keyed by pool name, the default pool under \"default\". The default pool is absent when create_cluster = false."
+  value = merge(
+    { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.tags },
+    { for cluster in azurerm_kubernetes_cluster.main : "default" => cluster.default_node_pool[0].tags },
+  )
+}
+
+output "cluster_tags" {
+  description = "Tags the cluster is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].tags)
+}
+
 output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)

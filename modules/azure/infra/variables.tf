@@ -188,6 +188,36 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "tags" {
+  type        = map(string)
+  description = "Extra tags on all resources, for keys a tag policy requires beyond environment, owner, and cost_center (e.g. { team = \"platform\", product = \"langsmith\" }). A key here overrides environment, owner, cost_center, project, or managed_by of the same name in any case, since Azure tag names are case-insensitive. module, component, and pool are reserved: each sub-module sets them."
+  default     = {}
+
+  # Azure stores Team and team as one tag, so the map can hold only one of them.
+  validation {
+    condition     = length(distinct([for k in keys(var.tags) : lower(k)])) == length(var.tags)
+    error_message = "tags: Azure tag names are case-insensitive, so keys that differ only in case are one tag. Keep one of each."
+  }
+
+  # The sub-modules merge these over tags, so a value here would never apply.
+  validation {
+    condition     = length(setintersection([for k in keys(var.tags) : lower(k)], ["module", "component", "pool"])) == 0
+    error_message = "tags: module, component, and pool are reserved; each sub-module sets them on its own resources. Remove them from tags."
+  }
+
+  # Private DNS zones and Key Vault secrets take at most 15 tags. The secrets
+  # carry the most: these keys, the built-in ones, and module and component.
+  validation {
+    condition = length(setunion(
+      [for k in keys(var.tags) : lower(k)],
+      ["environment", "project", "managed_by", "module", "component"],
+      var.owner != "" ? ["owner"] : [],
+      var.cost_center != "" ? ["cost_center"] : [],
+    )) <= 15
+    error_message = "tags: private DNS zones and Key Vault secrets accept at most 15 tags, and these keys plus environment, project, managed_by, module, component, and owner and cost_center when set come to ${length(setunion([for k in keys(var.tags) : lower(k)], ["environment", "project", "managed_by", "module", "component"], var.owner != "" ? ["owner"] : [], var.cost_center != "" ? ["cost_center"] : []))}. Drop keys from tags until the total is 15 or fewer."
+  }
+}
+
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 variable "keyvault_name" {
