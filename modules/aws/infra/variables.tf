@@ -161,26 +161,9 @@ variable "create_gp3_storage_class" {
 
 variable "eks_managed_node_group_defaults" {
   type        = any
-  description = "Default configuration for EKS managed node groups"
+  description = "Default configuration for EKS managed node groups. Merged over the v20 IMDS, monitoring, and AMI pins in the EKS module, so a partial override keeps those pins. Group settings still win."
   default = {
     ami_type = "AL2023_x86_64_STANDARD"
-    # The upstream eks module (>= 21.x) changed several node-group defaults
-    # (UPGRADE-21.0.md). Pinned back to the v20 values so this stays a pure
-    # version bump instead of also rolling every existing node group and
-    # changing ongoing behavior:
-    #   - metadata_options.http_put_response_hop_limit: 1 -> 2. At 1, pods
-    #     (not just the host) can't reach IMDSv2, which breaks the AWS Load
-    #     Balancer Controller's vpcID/region lookup.
-    #   - enable_monitoring: false -> true (detailed CloudWatch monitoring).
-    #   - use_latest_ami_release_version: true -> false (don't silently
-    #     follow new AMI releases on every apply).
-    metadata_options = {
-      http_endpoint               = "enabled"
-      http_tokens                 = "required"
-      http_put_response_hop_limit = 2
-    }
-    enable_monitoring              = true
-    use_latest_ami_release_version = false
   }
 }
 

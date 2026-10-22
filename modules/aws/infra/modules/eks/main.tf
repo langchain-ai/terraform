@@ -70,9 +70,25 @@ locals {
     } : {},
   )
 
+  # v21 changed these (UPGRADE-21.0.md). They are merged under
+  # eks_managed_node_group_defaults because setting that variable replaces its
+  # default entirely. Hop limit 1 blocks pod IMDSv2, which the ALB controller
+  # uses to look up its VPC and region. Monitoring and AMI following are the
+  # v20 values. metadata_options is merged key-wise so a partial override keeps
+  # the keys it does not set.
+  v20_node_group_defaults = {
+    metadata_options = {
+      http_endpoint               = "enabled"
+      http_tokens                 = "required"
+      http_put_response_hop_limit = 2
+    }
+    enable_monitoring              = true
+    use_latest_ami_release_version = false
+  }
+
   # try() covers extra groups, which are untyped and may omit either attribute.
-  # eks_managed_node_group_defaults is merged in here (defaults first, group
-  # settings win) because v21 of the upstream module dropped that top-level
+  # eks_managed_node_group_defaults is merged in here (pins, then the variable,
+  # then the group) because v21 of the upstream module dropped that top-level
   # input — see UPGRADE-21.0.md. This is also what lets a group-level
   # cpu_options (e.g. sandbox_host_node_group_overrides.cpu_options.
   # nested_virtualization) reach the upstream module: it is typed as `any`
@@ -82,9 +98,15 @@ locals {
   # and silently dropped it).
   eks_managed_node_groups = {
     for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(
+      local.v20_node_group_defaults,
       var.eks_managed_node_group_defaults,
       v,
       {
+        metadata_options = merge(
+          local.v20_node_group_defaults.metadata_options,
+          coalesce(try(var.eks_managed_node_group_defaults.metadata_options, null), {}),
+          coalesce(try(v.metadata_options, null), {}),
+        )
         desired_size             = coalesce(try(v.desired_size, null), v.min_size)
         iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
       }
