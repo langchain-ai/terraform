@@ -182,6 +182,8 @@ variable "eks_managed_node_groups" {
     iam_role_name                = optional(string, null)
     iam_role_use_name_prefix     = optional(bool, null)
     iam_role_additional_policies = optional(map(string), {})
+    # Null leaves the upstream default, ON_DEMAND, so an existing group is unchanged.
+    capacity_type = optional(string, null)
   }))
   description = "EKS managed node groups. desired_size defaults to min_size when omitted."
   default = {
@@ -191,6 +193,14 @@ variable "eks_managed_node_groups" {
       min_size       = 3
       max_size       = 10
     }
+  }
+
+  validation {
+    condition = alltrue([
+      for group in values(var.eks_managed_node_groups) :
+      group.capacity_type == null || contains(["ON_DEMAND", "SPOT"], group.capacity_type)
+    ])
+    error_message = "capacity_type must be ON_DEMAND or SPOT."
   }
 }
 

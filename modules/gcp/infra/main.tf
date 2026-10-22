@@ -372,6 +372,7 @@ module "gke_cluster" {
   min_node_count             = var.gke_min_nodes
   max_node_count             = var.gke_max_nodes
   machine_type               = var.gke_machine_type
+  spot                       = var.gke_spot
   disk_size_gb               = var.gke_disk_size
   node_service_account_email = var.gke_node_service_account_email
   release_channel            = var.gke_release_channel

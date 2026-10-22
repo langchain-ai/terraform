@@ -41,11 +41,16 @@ locals {
   )
 
   # try() covers extra groups, which are untyped and may omit either attribute.
+  # A null capacity_type is omitted so the upstream module keeps ON_DEMAND
+  # without planning a capacity change on groups that never set it.
   eks_managed_node_groups = {
-    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(v, {
-      desired_size             = coalesce(try(v.desired_size, null), v.min_size)
-      iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
-    })
+    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(
+      { for attr, value in v : attr => value if !(attr == "capacity_type" && value == null) },
+      {
+        desired_size             = coalesce(try(v.desired_size, null), v.min_size)
+        iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      }
+    )
   }
 }
 
