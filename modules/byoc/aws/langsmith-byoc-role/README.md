@@ -86,6 +86,12 @@ We recommend keeping Terraform state in remote storage when possible, rather tha
 
 By default, the Crossplane role does not include permissions to delete LangSmith-managed resources. Set `allow_delete_permissions = true` before teardown to grant those resource deletion permissions.
 
+### Sandbox bootstrap secret permissions
+
+Enabling sandboxes checks whether `langsmith/<data-plane-id>/sandboxes` exists before creating it. The role allows `secretsmanager:GetSecretValue` on this reserved secret path without requiring the `managed_by=langsmith` tag: a missing secret has no tags, so a tag-conditioned read can return `AccessDenied` instead of `ResourceNotFoundException`. The policy covers both the unsuffixed resource name and the six-character suffix AWS adds to secret ARNs.
+
+This also permits reading existing untagged secrets at that reserved path. Updates and deletions retain their existing tag conditions. Upgrade and reapply this module before enabling sandboxes on an existing data plane that lacks the sandbox secret.
+
 ### Customer-supplied VPC (BYOVPC)
 
 Set the following inputs when the customer manages the base network, using the VPC IDs supplied to LangSmith:
