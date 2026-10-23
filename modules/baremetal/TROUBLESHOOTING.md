@@ -70,6 +70,7 @@ Symptom → cause → fix. Commands assume `kubectl --context <your context>`.
 | Symptom | Cause | Fix |
 |---|---|---|
 | A node's root disk fills | local-path doesn't enforce PVC sizes; the object store grows with retention | watch node disk; shorten retention; move RustFS to a larger disk |
+| RustFS logs `Disk operation timed out` (`rename_data`, 30000 ms), then `disk_marked_faulty` and 503 `SlowDownRead`; SmithDB flushes and blob uploads fail | the volume directory is on a copy-on-write filesystem (btrfs with CoW and compression, a desktop default): fsync and rename wait on its commits, and a single-drive RustFS takes its only drive offline after one slow operation | put `local_path_node_path` on ext4 or XFS, or make it a btrfs subvolume with copy-on-write off before any volume exists (`btrfs subvolume create`, then `chattr +C`), which also keeps it out of root snapshots |
 | PV stays `Released` after deleting a PVC | `local-path-retain` keeps data | reuse it (clear `spec.claimRef`) or delete the PV **and** its directory on the node |
 | Deleted a Retain PV, disk still full | deleting the PV object never touches the data | remove the `pvc-…` directory under the provisioner path on that node |
 | `ImagePullBackOff` on MinIO images | MinIO community images are no longer published | this module uses RustFS |

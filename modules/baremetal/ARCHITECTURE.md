@@ -127,6 +127,10 @@ Important properties of local-path volumes:
   root filesystem. Watch node disk usage.
 - **Volumes are pinned to a node.** If that node is lost, so is the volume. Back up Postgres (both) and the object store.
 - **No replication.** For durability, use a storage system with replication or external managed services.
+- **The filesystem is the node's.** Databases and the object store fsync and rename constantly; on a
+  copy-on-write filesystem (btrfs as most desktop installs set it up, with compression) those wait on the
+  filesystem's commits. Use ext4 or XFS for `local_path_node_path`, or a btrfs subvolume with copy-on-write
+  off, outside any snapshot schedule.
 
 ## The budget gate
 

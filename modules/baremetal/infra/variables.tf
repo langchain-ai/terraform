@@ -210,7 +210,7 @@ variable "local_path_helper_image" {
 variable "local_path_node_path" {
   type        = string
   default     = "/opt/local-path-provisioner"
-  description = "Directory on each node for local-path volumes."
+  description = "Directory on each node for local-path volumes, the datastores' included. Put it on ext4 or XFS, or on a btrfs subvolume with copy-on-write off: on copy-on-write btrfs, RustFS's commits stall under load (TROUBLESHOOTING.md, Storage)."
 }
 
 variable "metallb_chart_version" {
