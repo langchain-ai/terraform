@@ -63,6 +63,7 @@ resource "aws_db_instance" "metastore" {
   allocated_storage         = var.metastore_allocated_storage
   storage_type              = "gp3"
   storage_encrypted         = true
+  kms_key_id                = var.metastore_kms_key_arn != "" ? var.metastore_kms_key_arn : null
   db_name                   = local.rds_db_name
   username                  = var.metastore_master_username
   password                  = local.rds_master_password

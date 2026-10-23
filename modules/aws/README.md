@@ -132,6 +132,7 @@ aws/
 │   │   └── status.sh           ← Deployment state checker
 │   └── modules/
 │       ├── vpc/            ← VPC, subnets, NAT gateway
+│       ├── vpc-endpoints/  ← Interface VPC endpoints for a cluster without egress (optional)
 │       ├── eks/            ← EKS cluster, managed node groups, IRSA role, GP3 storage class
 │       ├── postgres/       ← RDS PostgreSQL, subnet group, security group, IAM auth
 │       ├── redis/          ← ElastiCache Redis, subnet group, security group, auth token
@@ -391,6 +392,118 @@ not as a clear plan-time error. Double-check the ID and its rules before applyin
 
 ---
 
+## IAM permissions boundary, path, and role names
+
+If your account requires a permissions boundary or a dedicated IAM path on every
+role, set both here:
+
+```hcl
+iam_permissions_boundary_arn = "arn:aws:iam::<account-id>:policy/<boundary-policy>"
+iam_role_path                = "/langsmith/"
+```
+
+Both apply to every IAM role this module creates: the EKS cluster role, each
+node group role, the Karpenter node role and its instance profile, the EBS CSI,
+ALB controller, cluster-autoscaler, and Karpenter controller roles, the
+LangSmith, ESO, SmithDB, and cert-manager IRSA roles. The bastion role takes
+neither. The defaults (no boundary, path `/`) plan no changes.
+
+Set `iam_role_path` before the first apply. A path change replaces every role
+above, and the pods and nodes using them lose AWS access until the new roles
+exist.
+
+Six role names come from upstream modules and do not start with
+`<name_prefix>-<environment>-`: the node group, ALB controller,
+cluster-autoscaler, Karpenter controller, Karpenter node, and EBS CSI roles. To
+cover every role with one `role/<name_prefix>-<environment>-*` grant, set:
+
+```hcl
+prefix_iam_role_names = true
+```
+
+Set it before the first apply too. Turning it on later replaces those six roles.
+
+If the deployer cannot create roles at all, have your IAM team create them and
+pass their ARNs. Each ARN you set skips creating that role, and the module
+attaches no policies to it:
+
+```hcl
+existing_iam_role_arns = {
+  cluster            = "arn:aws:iam::<account-id>:role/<base>-eks-cluster"
+  node_group         = "arn:aws:iam::<account-id>:role/<base>-eks-node"
+  karpenter_node     = "arn:aws:iam::<account-id>:role/<base>-karpenter-node"
+  karpenter          = "arn:aws:iam::<account-id>:role/<base>-karpenter"
+  alb_controller     = "arn:aws:iam::<account-id>:role/<base>-lb-controller"
+  cluster_autoscaler = "arn:aws:iam::<account-id>:role/<base>-autoscaler"
+  ebs_csi            = "arn:aws:iam::<account-id>:role/<base>-ebs-csi"
+  langsmith          = "arn:aws:iam::<account-id>:role/<base>-eks-irsa-role"
+  eso                = "arn:aws:iam::<account-id>:role/<base>-eso"
+  smithdb            = "arn:aws:iam::<account-id>:role/<base>-smithdb-irsa"
+  cert_manager       = "arn:aws:iam::<account-id>:role/<base>-cert-manager"
+  engine             = "arn:aws:iam::<account-id>:role/<base>-engine-irsa"
+}
+```
+
+Set only the keys you need. `node_group` covers every managed node group,
+`karpenter`, `karpenter_node`, and `smithdb` apply with `enable_smithdb = true`,
+`cert_manager` needs `create_cert_manager_irsa = true`, and `engine` applies with
+`enable_engine = true`.
+
+Each role needs the permissions the module would otherwise attach. To see them,
+run `terraform plan` without `existing_iam_role_arns` and read the policy
+documents it plans. The cluster role trusts `eks.amazonaws.com` and needs
+`AmazonEKSClusterPolicy`. The node group and Karpenter node roles trust
+`ec2.amazonaws.com` and need `AmazonEKSWorkerNodePolicy`,
+`AmazonEC2ContainerRegistryReadOnly`, and `AmazonEKS_CNI_Policy`.
+
+Create every role before the first apply. The other eight are IRSA roles, and
+their trust policies name the cluster's OIDC provider, which the first apply
+creates, so they start with a placeholder trust policy:
+
+1. Run `terraform apply`. Pods that use an IRSA role start without AWS access.
+2. Run `terraform output -json iam_role_trust_policies` and have your IAM team
+   set each policy as the trust policy of the role with the same key.
+3. Restart the pods that use those roles.
+
+EKS Blueprints also creates an empty CloudFormation stack named
+`<base>-eks-<hex>` that AWS uses to count Blueprints deployments. To deploy
+without granting the deployer CloudFormation permissions, skip it:
+
+```hcl
+create_eks_blueprints_telemetry_stack = false
+```
+
+## Encrypt with customer-managed KMS keys
+
+Each encrypted resource uses an AWS-managed key until you name one of your own:
+
+```hcl
+rds_kms_key_arn         = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+elasticache_kms_key_arn = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+ebs_kms_key_arn         = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+eks_secrets_kms_key_arn = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+s3_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+ssm_kms_key_arn         = "arn:aws:kms:us-east-2:123456789012:key/<key-id>"
+```
+
+| Variable | Encrypts |
+|---|---|
+| `rds_kms_key_arn` | The LangSmith Postgres instance and the SmithDB metastore |
+| `elasticache_kms_key_arn` | The LangSmith Redis and the sandbox JuiceFS Redis |
+| `ebs_kms_key_arn` | Managed node group and SmithDB node volumes, and volumes from the `gp3` storage class |
+| `eks_secrets_kms_key_arn` | Kubernetes secrets, in place of the key the EKS module creates |
+| `s3_kms_key_arn` | The LangSmith and SmithDB buckets |
+| `ssm_kms_key_arn` | The SSM parameters that `setup-env.sh`, `manage-ssm.sh`, `migrate-ssm.sh`, `sso.sh`, and `smithdb-migration-job-start.sh` write |
+
+- Set the RDS, ElastiCache, and EKS keys before the first apply. Each service takes its key at creation, so setting or changing one later replaces the database, the cache, or the cluster. Replacing the cluster also schedules the key the EKS module created for deletion.
+- Setting `ebs_kms_key_arn` rolls the managed node groups onto new launch templates and replaces the `gp3` storage class. Existing volumes keep their key.
+- Terraform grants the LangSmith and SmithDB IRSA roles `kms:Decrypt` and `kms:GenerateDataKey` on the S3 key.
+- Terraform grants the EBS CSI driver and Karpenter the use of the EBS key, and the EKS module grants the cluster role the use of the secrets key. A role you supply through `existing_iam_role_arns` needs the same access from your IAM team.
+- A parameter keeps the key it was written with until a script writes it again. The identity running the scripts needs `kms:Encrypt` and `kms:Decrypt` on the SSM key. Terraform grants the External Secrets Operator role `kms:Decrypt` on it.
+- The EBS key policy must let the `AWSServiceRoleForAutoScaling` service-linked role use the key and create grants on it, because that role launches the managed node group instances. A service-linked role takes no IAM policies, so only the key policy can grant this.
+
+---
+
 ## Pass 1 — Infrastructure
 
 Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC endpoint, ALB, IRSA role, ESO IRSA role, SSM secrets.
@@ -527,9 +640,25 @@ The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmi
 
 ## Private Cluster with Bastion Host
 
-For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. A bastion host provides the access point.
+For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. Pass 1 runs the Helm, Kubernetes, and kubectl providers, so Terraform needs a path to the API from the first apply. A private-only endpoint with neither `create_bastion` nor `eks_private_access_cidrs` fails the plan. If Terraform already reaches the endpoint through a VPN or transit gateway and a cluster security group rule you manage, set `eks_private_access_managed_externally = true` instead.
+
+To start from every private setting at once, copy the private profile:
+
+```bash
+cp infra/terraform.tfvars.private infra/terraform.tfvars
+```
+
+It keeps the API endpoint private, keeps nodes off the public subnets without public IPs, removes internet egress, and creates the VPC endpoints. Change `eks_private_access_cidrs` to the network Terraform runs from, then work through the sections below for the endpoints and the mirror.
 
 ### How it works
+
+If the endpoint must never be public, run Terraform from a host inside or connected to the VPC: a CI runner subnet, a VPN, or a peered VPC. Set `eks_private_access_cidrs` to its CIDR. Terraform opens 443 from that CIDR on the cluster security group before anything calls the cluster.
+
+```hcl
+# terraform.tfvars
+enable_public_eks_cluster = false
+eks_private_access_cidrs  = ["10.100.0.0/16"]   # where Terraform runs
+```
 
 1. **First run from your workstation** — Deploy infrastructure with `create_bastion = true` and `enable_public_eks_cluster = true` (temporarily). This creates the bastion alongside everything else.
 2. **Switch to private** — Set `enable_public_eks_cluster = false` and re-apply. The EKS API endpoint becomes private-only.
@@ -576,6 +705,65 @@ make plan
 make apply
 make deploy
 ```
+
+### Keep nodes off the public subnets
+
+The managed node groups span the private and public subnets, and the VPC this module creates gives an instance in a public subnet a public IP. To keep every node private:
+
+```hcl
+# terraform.tfvars
+eks_node_groups_private_subnets_only = true
+vpc_map_public_ip_on_launch          = false   # create_vpc = true only
+```
+
+On an existing cluster, `eks_node_groups_private_subnets_only` replaces each node group. The control plane stays where it is. `vpc_map_public_ip_on_launch = false` without it fails the plan, because a node in a public subnet without a public IP has no egress. With your own VPC, the public IP setting belongs to your subnets.
+
+### Run without internet egress
+
+`enable_internet_egress = false` builds the VPC with no NAT gateway and no internet gateway, so nothing in it reaches the internet. AWS APIs and ECR are reachable only through VPC endpoints:
+
+```hcl
+# terraform.tfvars
+enable_internet_egress = false
+alb_scheme             = "internal"
+create_vpc_endpoints   = true
+```
+
+- The plan fails unless the ALB is internal, `create_bastion = false`, and `create_firewall = false`. Reach the cluster through `eks_private_access_cidrs`.
+- `create_vpc_endpoints` creates an interface endpoint with private DNS for each service in `vpc_endpoint_services`: `ecr.api`, `ecr.dkr`, `sts`, `ec2`, `logs`, `ssm`, `ssmmessages`, `ec2messages`, `elasticloadbalancing`, `autoscaling`, `eks`, `eks-auth`, `kms`, and `sqs`. The storage module already adds the S3 gateway endpoint that ECR image layers come through.
+- The endpoints go in the private subnets. To use dedicated subnets, set `vpc_endpoint_subnet_ids`, one per AZ.
+- If your VPC already has endpoints for these services, leave `create_vpc_endpoints = false`. A second endpoint with private DNS for the same service collides with the first.
+- If your VPC already has an S3 gateway endpoint, set `create_s3_gateway_endpoint = false` and `s3_gateway_endpoint_id` to its ID. The bucket policy admits LangSmith's role only through that endpoint, and a second gateway endpoint on the same route tables fails to create.
+- With your own VPC, `enable_internet_egress = false` applies the same checks but changes no routes. Removing the route to the internet is up to you.
+- LangSmith's license check calls `beacon.langchain.com`, so a cluster with no egress needs an offline license.
+- Charts and images from outside your network need a mirror. Refer to [Pull charts and images from a mirror](#pull-charts-and-images-from-a-mirror).
+
+### Pull charts and images from a mirror
+
+Point the charts Terraform installs at a mirror with `helm_chart_overrides`, and the LangSmith chart that `make deploy` installs with `langsmith_helm_repository` and `langsmith_image_registry`:
+
+```hcl
+# terraform.tfvars
+helm_chart_overrides = {
+  keda = {
+    repository = "https://artifactory.example.com/api/helm/kedacore"
+    values     = <<-YAML
+      global:
+        image:
+          registry: 123456789012.dkr.ecr.us-east-2.amazonaws.com/ghcr.io
+    YAML
+  }
+}
+envoy_proxy_image         = "123456789012.dkr.ecr.us-east-2.amazonaws.com/docker.io/envoyproxy/envoy:distroless-v1.33.0"
+langsmith_helm_repository = "oci://123456789012.dkr.ecr.us-east-2.amazonaws.com/charts"
+langsmith_image_registry  = "123456789012.dkr.ecr.us-east-2.amazonaws.com"
+```
+
+- `helm_chart_overrides` takes these keys: `keda`, `cert_manager`, `external_secrets`, `envoy_gateway`, `istio_base`, `istiod`, `istio_ingress`, `ingress_nginx`, `aws_load_balancer_controller`, `metrics_server`, `cluster_autoscaler`, and `karpenter`. `repository` replaces the chart repository, which must hold the same chart at the same version. `values` is YAML passed to the release; a setting this module makes itself wins over the same key.
+- Image keys differ per chart. Read the chart's `values.yaml` at the version pinned in `infra/modules/k8s-bootstrap/main.tf` or `infra/modules/eks/main.tf`.
+- `envoy_proxy_image` sets the image of the Envoy proxy pods. Envoy Gateway creates them at runtime, so no chart value reaches them.
+- An ECR pull-through cache serves an upstream image under the rule's prefix. Name each prefix after its upstream registry (`docker.io`, `ghcr.io`, `quay.io`, `registry.k8s.io`, `public.ecr.aws`), so an override replaces only the registry part of an image path. `langsmith_image_registry` relies on this: the chart prepends it to image paths that start with `docker.io/`.
+- For a private OCI repository, log Helm in on the machine that runs Terraform and `make deploy`: `aws ecr get-login-password --region <region> | helm registry login --username AWS --password-stdin <registry>`.
 
 ### Important notes
 
@@ -1079,8 +1267,22 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `private_subnets` | `[]` | when !create_vpc | Existing private subnet IDs |
 | `public_subnets` | `[]` | when !create_vpc | Existing public subnet IDs |
 | `vpc_cidr_block` | `null` | when !create_vpc | Existing VPC CIDR block |
+| `vpc_map_public_ip_on_launch` | `true` | no | Give instances in the module-created VPC's public subnets a public IP. See [keep nodes off the public subnets](#keep-nodes-off-the-public-subnets) |
+| `eks_node_groups_private_subnets_only` | `false` | no | Place the managed node groups in the private subnets only. Replaces existing node groups |
+| `enable_internet_egress` | `true` | no | `false` creates no NAT or internet gateway. Requires an internal ALB, no bastion, and no firewall. See [Run without internet egress](#run-without-internet-egress) |
+| `create_vpc_endpoints` | `false` | no | Create interface endpoints with private DNS for `vpc_endpoint_services` |
+| `vpc_endpoint_services` | 14 services | no | Endpoint service suffixes, such as `ecr.api`. The default covers a cluster with no egress |
+| `vpc_endpoint_subnet_ids` | `[]` | no | Subnets for the endpoints, one per AZ. Empty uses the private subnets |
+| `create_s3_gateway_endpoint` | `true` | no | Create the S3 gateway endpoint on every route table in the VPC |
+| `s3_gateway_endpoint_id` | `""` | no | The VPC's existing S3 endpoint, admitted by the bucket policy. Required when `create_s3_gateway_endpoint = false` |
+| `helm_chart_overrides` | `{}` | no | Chart repository and extra values per release Terraform installs. See [pull charts and images from a mirror](#pull-charts-and-images-from-a-mirror) |
+| `envoy_proxy_image` | `""` | no | Image for the Envoy proxy pods. Empty keeps the controller's default |
+| `langsmith_helm_repository` | `""` | no | HTTPS or `oci://` source of the LangSmith chart for `make deploy`. Empty uses `https://langchain-ai.github.io/helm` |
+| `langsmith_image_registry` | `""` | no | Registry `make deploy` prefixes every LangSmith image with |
 | `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
+| `eks_private_access_cidrs` | `[]` | no | CIDRs that reach the private EKS API endpoint on 443, such as the runner Terraform uses |
+| `eks_private_access_managed_externally` | `false` | no | Terraform reaches the private EKS API endpoint through access you manage, so the plan needs no bastion or `eks_private_access_cidrs` |
 | `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |
@@ -1091,6 +1293,11 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
+| `create_eks_blueprints_telemetry_stack` | `true` | no | Create the EKS Blueprints usage-telemetry CloudFormation stack |
+| `iam_permissions_boundary_arn` | `null` | no | Permissions boundary on every IAM role the module creates except the bastion's. See [IAM permissions boundary, path, and role names](#iam-permissions-boundary-path-and-role-names) |
+| `iam_role_path` | `/` | no | IAM path for every role and instance profile the module creates except the bastion's. Changing it replaces those roles |
+| `prefix_iam_role_names` | `false` | no | Start the six upstream-named roles with `<name_prefix>-<environment>-`. Changing it replaces those roles |
+| `existing_iam_role_arns` | `{}` | no | Roles your IAM team created, used instead of creating them. See [IAM permissions boundary, path, and role names](#iam-permissions-boundary-path-and-role-names) |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
@@ -1111,6 +1318,11 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
 | `s3_kms_key_arn` | `""` | no | KMS CMK ARN for S3 encryption (empty = SSE-S3) |
+| `rds_kms_key_arn` | `""` | no | KMS key for the Postgres instance and SmithDB metastore. Creation only. See [customer-managed KMS keys](#encrypt-with-customer-managed-kms-keys) |
+| `elasticache_kms_key_arn` | `""` | no | KMS key for both Redis caches. Creation only |
+| `ebs_kms_key_arn` | `""` | no | KMS key for node volumes and the `gp3` storage class |
+| `eks_secrets_kms_key_arn` | `""` | no | KMS key for Kubernetes secrets. Creation only |
+| `ssm_kms_key_arn` | `""` | no | KMS key for the SSM parameters the scripts write. ESO gets `kms:Decrypt` on it |
 | `s3_versioning_enabled` | `false` | no | Enable S3 bucket versioning |
 | `tls_certificate_source` | `acm` | no | `acm`, `letsencrypt`, or `none` |
 | `acm_certificate_arn` | `""` | when acm | ACM certificate ARN |
@@ -1156,6 +1368,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_karpenter_subnet_selector` | `{}` | no | Tags on existing private subnets you tagged yourself for SmithDB nodes. Empty tags `private_subnets` with `karpenter.sh/discovery`. Only with `create_vpc = false`. See [SMITHDB.md](SMITHDB.md#select-the-subnets-for-smithdb-nodes) |
 | `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
 | `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
 | `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |

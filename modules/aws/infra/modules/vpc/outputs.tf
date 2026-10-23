@@ -20,8 +20,8 @@ output "private_route_table_ids" {
 }
 
 output "nat_gateway_id" {
-  description = "ID of the single NAT gateway (nat-xxxxxxxxxxxxxxxxx)."
-  value       = module.vpc.natgw_ids[0]
+  description = "ID of the single NAT gateway (nat-xxxxxxxxxxxxxxxxx). null without internet egress."
+  value       = length(module.vpc.natgw_ids) > 0 ? module.vpc.natgw_ids[0] : null
 }
 
 output "nat_gateway_az" {

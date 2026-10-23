@@ -25,6 +25,14 @@ _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-dev}"
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-us-east-2}"
 
+# ssm_kms_key_arn names a customer-managed key for the parameters this script
+# writes; empty uses aws/ssm.
+_ssm_kms_key=$(_parse_tfvar "ssm_kms_key_arn") || _ssm_kms_key=""
+_ssm_key_args=()
+if [[ -n "$_ssm_kms_key" ]]; then
+  _ssm_key_args=(--key-id "$_ssm_kms_key")
+fi
+
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: Could not read name_prefix from $INFRA_DIR/terraform.tfvars" >&2
   exit 1
@@ -232,6 +240,7 @@ cmd_set() {
     --name "$path" \
     --value "$val" \
     --type SecureString \
+    ${_ssm_key_args[@]+"${_ssm_key_args[@]}"} \
     --overwrite >/dev/null
 
   _green "OK"; echo ": Updated $path"

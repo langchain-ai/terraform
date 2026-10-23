@@ -64,6 +64,10 @@ run "optional_modules_absent_when_flags_are_false" {
     condition     = length(module.smithdb) == 0
     error_message = "enable_smithdb = false still planned SmithDB"
   }
+  assert {
+    condition     = length(module.vpc_endpoints) == 0
+    error_message = "create_vpc_endpoints = false still planned the interface endpoints"
+  }
 }
 
 # ── Optional modules, one flag at a time ─────────────────────────────────────
@@ -176,6 +180,132 @@ run "cert_manager_irsa_adds_only_cert_manager" {
   }
 }
 
+run "iam_roles_default_to_no_boundary_and_the_root_path" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  assert {
+    condition     = module.eks.karpenter_node_iam_role_name == "karpenter-plantest-dev-eks"
+    error_message = "With prefix_iam_role_names unset, the Karpenter node role lost its upstream name"
+  }
+  assert {
+    condition     = aws_iam_role.eso[0].permissions_boundary == null
+    error_message = "With iam_permissions_boundary_arn unset, the ESO role planned a boundary"
+  }
+  assert {
+    condition     = aws_iam_role.eso[0].path == "/"
+    error_message = "With iam_role_path unset, the ESO role planned a path other than /"
+  }
+  assert {
+    condition     = length(aws_iam_role_policy.langsmith_s3) == 1
+    error_message = "With existing_iam_role_arns unset, the LangSmith role lost its S3 policy"
+  }
+  assert {
+    condition     = output.iam_role_trust_policies == {}
+    error_message = "With existing_iam_role_arns unset, iam_role_trust_policies is not empty"
+  }
+}
+
+# Every module that creates a role is on, so a boundary that one of them fails
+# to accept stops this plan.
+run "iam_boundary_and_path_reach_the_roles" {
+  command = plan
+
+  variables {
+    iam_permissions_boundary_arn = "arn:aws:iam::123456789012:policy/plantest-boundary"
+    iam_role_path                = "/langsmith/"
+    create_cert_manager_irsa     = true
+    cert_manager_hosted_zone_id  = "Z00000000000000000001"
+    letsencrypt_email            = "plan-tests@example.com"
+    enable_smithdb               = true
+  }
+
+  assert {
+    condition     = aws_iam_role.eso[0].permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary"
+    error_message = "iam_permissions_boundary_arn did not reach the ESO role"
+  }
+  assert {
+    condition     = aws_iam_role.eso[0].path == "/langsmith/"
+    error_message = "iam_role_path did not reach the ESO role"
+  }
+}
+
+run "prefix_iam_role_names_starts_the_upstream_names_with_the_base" {
+  command = plan
+
+  variables {
+    prefix_iam_role_names = true
+    enable_smithdb        = true
+  }
+
+  assert {
+    condition     = module.eks.karpenter_node_iam_role_name == "plantest-dev-karpenter-node"
+    error_message = "prefix_iam_role_names did not reach the Karpenter node role"
+  }
+}
+
+# Every module that creates a role is on, so a role that one of them still
+# creates or attaches a policy to shows up here.
+run "existing_iam_role_arns_replace_the_roles" {
+  command = plan
+
+  variables {
+    create_cert_manager_irsa    = true
+    cert_manager_hosted_zone_id = "Z00000000000000000001"
+    letsencrypt_email           = "plan-tests@example.com"
+    enable_smithdb              = true
+    existing_iam_role_arns = {
+      cluster            = "arn:aws:iam::123456789012:role/plantest-cluster"
+      node_group         = "arn:aws:iam::123456789012:role/plantest-node"
+      karpenter_node     = "arn:aws:iam::123456789012:role/langsmith/plantest-karpenter-node"
+      karpenter          = "arn:aws:iam::123456789012:role/plantest-karpenter"
+      alb_controller     = "arn:aws:iam::123456789012:role/plantest-alb"
+      cluster_autoscaler = "arn:aws:iam::123456789012:role/plantest-autoscaler"
+      ebs_csi            = "arn:aws:iam::123456789012:role/plantest-ebs-csi"
+      langsmith          = "arn:aws:iam::123456789012:role/plantest-langsmith"
+      eso                = "arn:aws:iam::123456789012:role/plantest-eso"
+      smithdb            = "arn:aws:iam::123456789012:role/plantest-smithdb"
+      cert_manager       = "arn:aws:iam::123456789012:role/plantest-cert-manager"
+    }
+  }
+
+  assert {
+    condition     = length(aws_iam_role.eso) == 0 && length(aws_iam_role_policy.eso_ssm) == 0
+    error_message = "existing_iam_role_arns.eso still planned the ESO role or its policy"
+  }
+  assert {
+    condition     = length(aws_iam_role_policy.langsmith_s3) == 0
+    error_message = "existing_iam_role_arns.langsmith still planned a policy on the supplied role"
+  }
+  assert {
+    condition     = length(module.cert_manager) == 0
+    error_message = "existing_iam_role_arns.cert_manager still planned the cert-manager role"
+  }
+  assert {
+    condition     = output.langsmith_irsa_role_arn == "arn:aws:iam::123456789012:role/plantest-langsmith"
+    error_message = "existing_iam_role_arns.langsmith did not reach the langsmith_irsa_role_arn output"
+  }
+  assert {
+    condition     = output.smithdb_irsa_role_arn == "arn:aws:iam::123456789012:role/plantest-smithdb"
+    error_message = "existing_iam_role_arns.smithdb did not reach the smithdb_irsa_role_arn output"
+  }
+  assert {
+    condition     = output.cert_manager_irsa_role_arn == "arn:aws:iam::123456789012:role/plantest-cert-manager"
+    error_message = "existing_iam_role_arns.cert_manager did not reach the cert_manager_irsa_role_arn output"
+  }
+  assert {
+    condition     = module.eks.karpenter_node_iam_role_name == "plantest-karpenter-node"
+    error_message = "The Karpenter node role name was not taken from the last segment of its ARN"
+  }
+  assert {
+    condition     = toset(keys(output.iam_role_trust_policies)) == toset(["ebs_csi", "alb_controller", "cluster_autoscaler", "karpenter", "langsmith", "eso", "cert_manager", "smithdb"])
+    error_message = "iam_role_trust_policies does not cover exactly the supplied IRSA roles"
+  }
+}
+
 run "enable_sandboxes_adds_the_juicefs_redis" {
   command = plan
 
@@ -234,6 +364,79 @@ run "sandbox_host_node_group_keeps_metadata_options_and_overrides" {
   assert {
     condition     = module.eks.eks_managed_node_group_inputs["default"].desired_size == 3
     error_message = "the default node group no longer gets desired_size from min_size"
+  }
+}
+
+# The sandbox-host group reaches the EKS module outside the typed input, so check
+# that the IAM and EBS key settings every node group gets still reach it.
+run "sandbox_host_node_group_gets_the_iam_and_ebs_key_settings" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    iam_permissions_boundary_arn     = "arn:aws:iam::123456789012:policy/plantest-boundary"
+    iam_role_path                    = "/langsmith/"
+    ebs_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ab"
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary"
+    error_message = "iam_permissions_boundary_arn did not reach the sandbox-host node group"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_path == "/langsmith/"
+    error_message = "iam_role_path did not reach the sandbox-host node group"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].block_device_mappings.xvda.ebs.kms_key_id == var.ebs_kms_key_arn
+    error_message = "ebs_kms_key_arn did not reach the sandbox-host root volume"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].block_device_mappings.xvda.ebs.volume_size == 200
+    error_message = "the EBS key replaced the sandbox-host root volume size instead of adding to it"
+  }
+}
+
+# Upstream takes a key the group sets over eks_managed_node_group_defaults, even
+# a null one, so unset root inputs must leave the IAM keys off the group.
+run "node_group_iam_defaults_apply_when_the_root_inputs_are_unset" {
+  command = plan
+
+  variables {
+    eks_managed_node_group_defaults = {
+      ami_type                      = "AL2023_x86_64_STANDARD"
+      create_iam_role               = false
+      iam_role_arn                  = "arn:aws:iam::123456789012:role/plantest-node"
+      iam_role_permissions_boundary = "arn:aws:iam::123456789012:policy/plantest-boundary"
+      iam_role_path                 = "/langsmith/"
+    }
+  }
+
+  assert {
+    condition = length(setintersection(
+      keys(module.eks.eks_managed_node_group_inputs["default"]),
+      ["create_iam_role", "iam_role_arn", "iam_role_permissions_boundary", "iam_role_path"],
+    )) == 0
+    error_message = "the default node group sets IAM keys that override eks_managed_node_group_defaults"
+  }
+}
+
+run "sandbox_host_node_group_uses_the_existing_node_role" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    existing_iam_role_arns           = { node_group = "arn:aws:iam::123456789012:role/plantest-node" }
+  }
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["sandbox_host"].create_iam_role == false &&
+      module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_arn == "arn:aws:iam::123456789012:role/plantest-node"
+    )
+    error_message = "existing_iam_role_arns.node_group did not reach the sandbox-host node group"
   }
 }
 
@@ -550,5 +753,256 @@ run "in_cluster_fleet_storage_plans_no_shared_credentials" {
   assert {
     condition     = length(kubernetes_secret.fleet_redis) == 0
     error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
+  }
+}
+
+# The stack sits inside the Blueprints module, out of an assert's reach, so this
+# run proves only that the null tag plans.
+run "eks_blueprints_telemetry_stack_can_be_skipped" {
+  command = plan
+
+  variables {
+    create_eks_blueprints_telemetry_stack = false
+  }
+}
+
+# The runner rule sits inside the eks module, out of an assert's reach, so this
+# run proves only that a private endpoint with a runner CIDR plans.
+run "private_endpoint_with_a_runner_cidr_plans" {
+  command = plan
+
+  variables {
+    enable_public_eks_cluster = false
+    eks_private_access_cidrs  = ["10.100.0.0/16"]
+  }
+}
+
+# Node group subnets and the public IP setting sit inside the eks and vpc
+# modules, out of an assert's reach, so this run proves only that they plan.
+run "private_subnet_node_groups_without_public_ips_plan" {
+  command = plan
+
+  variables {
+    eks_node_groups_private_subnets_only = true
+    vpc_map_public_ip_on_launch          = false
+  }
+}
+
+run "create_vpc_endpoints_adds_the_default_set" {
+  command = plan
+
+  variables {
+    create_vpc_endpoints = true
+  }
+
+  assert {
+    condition     = length(module.vpc_endpoints) == 1
+    error_message = "create_vpc_endpoints = true did not plan the interface endpoints"
+  }
+  assert {
+    condition     = length(output.vpc_endpoint_ids) == 14
+    error_message = "create_vpc_endpoints = true did not plan one endpoint per default service"
+  }
+}
+
+run "no_internet_egress_drops_the_nat_gateway" {
+  command = plan
+
+  variables {
+    enable_internet_egress = false
+    alb_scheme             = "internal"
+    create_vpc_endpoints   = true
+  }
+
+  assert {
+    condition     = module.vpc[0].nat_gateway_id == null
+    error_message = "enable_internet_egress = false still planned a NAT gateway"
+  }
+}
+
+# Every release key at once, with both fields, so a type mismatch in any lookup
+# fails the plan.
+run "helm_chart_overrides_accept_every_release" {
+  command = plan
+
+  variables {
+    envoy_proxy_image = "123456789012.dkr.ecr.us-east-2.amazonaws.com/docker.io/envoyproxy/envoy:distroless-v1.33.0"
+    helm_chart_overrides = {
+      for k in [
+        "keda", "cert_manager", "external_secrets", "envoy_gateway", "istio_base", "istiod",
+        "istio_ingress", "ingress_nginx", "aws_load_balancer_controller", "metrics_server",
+        "cluster_autoscaler", "karpenter",
+      ] : k => { repository = "oci://123456789012.dkr.ecr.us-east-2.amazonaws.com/charts", values = "image:\n  registry: mirror.example.com\n" }
+    }
+  }
+
+  assert {
+    condition     = length(var.helm_chart_overrides) == 12
+    error_message = "helm_chart_overrides did not accept every release key"
+  }
+}
+
+run "an_existing_s3_endpoint_replaces_the_created_one" {
+  command = plan
+
+  variables {
+    create_s3_gateway_endpoint = false
+    s3_gateway_endpoint_id     = "vpce-0123456789abcdef0"
+  }
+
+  assert {
+    condition     = module.storage.s3_vpc_endpoint_id == "vpce-0123456789abcdef0"
+    error_message = "the bucket policy does not admit the existing S3 endpoint"
+  }
+}
+
+run "byo_vpc_smithdb_tags_the_private_subnets" {
+  command = plan
+
+  variables {
+    create_vpc      = false
+    vpc_id          = "vpc-00000000000000001"
+    vpc_cidr_block  = "10.0.0.0/16"
+    private_subnets = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets  = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    enable_smithdb  = true
+  }
+
+  assert {
+    condition     = length(aws_ec2_tag.smithdb_karpenter_subnet) == 2
+    error_message = "with smithdb_karpenter_subnet_selector unset, SmithDB did not tag each BYO private subnet"
+  }
+  assert {
+    condition     = local.smithdb_karpenter_subnet_tags == tomap({ "karpenter.sh/discovery" = "plantest-dev-eks" })
+    error_message = "with smithdb_karpenter_subnet_selector unset, the EC2NodeClasses do not select the discovery tag"
+  }
+}
+
+run "byo_vpc_smithdb_subnet_selector_skips_the_tags" {
+  command = plan
+
+  variables {
+    create_vpc                        = false
+    vpc_id                            = "vpc-00000000000000001"
+    vpc_cidr_block                    = "10.0.0.0/16"
+    private_subnets                   = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets                    = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    enable_smithdb                    = true
+    smithdb_karpenter_subnet_selector = { "smithdb" = "true" }
+  }
+
+  assert {
+    condition     = length(aws_ec2_tag.smithdb_karpenter_subnet) == 0
+    error_message = "smithdb_karpenter_subnet_selector still tagged the BYO private subnets"
+  }
+  assert {
+    condition     = local.smithdb_karpenter_subnet_tags == tomap({ "smithdb" = "true" })
+    error_message = "the EC2NodeClasses do not select smithdb_karpenter_subnet_selector"
+  }
+}
+
+run "no_customer_managed_keys_leaves_aws_managed_keys" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  # The S3 policy embeds the bucket ARN, which is unknown at plan without this.
+  override_resource {
+    target          = module.storage.aws_s3_bucket.bucket
+    override_during = plan
+    values          = { arn = "arn:aws:s3:::plantest-dev-langsmith" }
+  }
+
+  assert {
+    condition     = !strcontains(kubectl_manifest.smithdb_ec2nc_compute[0].yaml_body, "kmsKeyID")
+    error_message = "with ebs_kms_key_arn unset, the SmithDB EC2NodeClass named a KMS key"
+  }
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.eso_ssm[0].policy, "kms:")
+    error_message = "with ssm_kms_key_arn unset, the ESO policy granted a KMS action"
+  }
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.langsmith_s3[0].policy, "kms:")
+    error_message = "with s3_kms_key_arn unset, the LangSmith S3 policy granted a KMS action"
+  }
+}
+
+# Every key at once, with every resource it reaches enabled, so a type mismatch
+# in any of the wiring fails the plan.
+run "customer_managed_keys_reach_every_resource" {
+  command = plan
+
+  variables {
+    enable_smithdb                   = true
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    postgres_source                  = "external"
+    redis_source                     = "external"
+    rds_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ab"
+    elasticache_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ac"
+    ebs_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/mrk-0123456789abcdef0123456789abcdef"
+    eks_secrets_kms_key_arn          = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789ae"
+    ssm_kms_key_arn                  = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789af"
+    s3_kms_key_arn                   = "arn:aws:kms:us-east-2:123456789012:key/0123abcd-0123-0123-0123-0123456789b0"
+  }
+
+  override_resource {
+    target          = module.storage.aws_s3_bucket.bucket
+    override_during = plan
+    values          = { arn = "arn:aws:s3:::plantest-dev-langsmith" }
+  }
+
+  assert {
+    condition     = strcontains(aws_iam_role_policy.eso_ssm[0].policy, var.ssm_kms_key_arn)
+    error_message = "the ESO policy does not grant kms:Decrypt on ssm_kms_key_arn"
+  }
+  assert {
+    condition     = strcontains(aws_iam_role_policy.langsmith_s3[0].policy, var.s3_kms_key_arn)
+    error_message = "the LangSmith S3 policy does not grant the use of s3_kms_key_arn"
+  }
+
+  assert {
+    condition     = strcontains(kubectl_manifest.smithdb_ec2nc_compute[0].yaml_body, var.ebs_kms_key_arn)
+    error_message = "the SmithDB EC2NodeClass does not name ebs_kms_key_arn"
+  }
+  assert {
+    condition     = strcontains(kubectl_manifest.smithdb_ec2nc_instance_store[0].yaml_body, var.ebs_kms_key_arn)
+    error_message = "the SmithDB instance-store EC2NodeClass does not name ebs_kms_key_arn"
+  }
+}
+
+# The network settings of terraform.tfvars.private, together, so a precondition
+# that rejects their combination fails here.
+run "private_profile_plans" {
+  command = plan
+
+  variables {
+    eks_private_access_cidrs             = ["10.100.0.0/16"]
+    enable_internet_egress               = false
+    create_vpc_endpoints                 = true
+    eks_node_groups_private_subnets_only = true
+    vpc_map_public_ip_on_launch          = false
+    alb_scheme                           = "internal"
+    enable_public_eks_cluster            = false
+    postgres_source                      = "external"
+    redis_source                         = "external"
+    tls_certificate_source               = "acm"
+    acm_certificate_arn                  = "arn:aws:acm:us-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+    langsmith_domain                     = "langsmith.internal.example.com"
+  }
+
+  assert {
+    condition     = module.vpc[0].nat_gateway_id == null
+    error_message = "the private profile planned a NAT gateway"
+  }
+  assert {
+    condition     = length(module.vpc_endpoints) == 1
+    error_message = "the private profile did not plan the VPC endpoints"
+  }
+  assert {
+    condition     = length(module.bastion) == 0
+    error_message = "the private profile planned a bastion"
   }
 }

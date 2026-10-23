@@ -28,6 +28,18 @@ variable "public_subnets" {
   default     = ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 }
 
+variable "map_public_ip_on_launch" {
+  type        = bool
+  description = "Give instances launched in the public subnets a public IP"
+  default     = true
+}
+
+variable "enable_internet_egress" {
+  type        = bool
+  description = "Create the NAT gateway and internet gateway. False leaves the VPC with no route to the internet."
+  default     = true
+}
+
 variable "extra_public_subnet_tags" {
   type        = map(string)
   description = "The tags for the public subnets"

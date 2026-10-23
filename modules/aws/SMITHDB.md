@@ -14,7 +14,9 @@ With `enable_smithdb = true`, the infrastructure pass creates:
 - the `smithdb-local` Kubernetes Secret containing metastore connection fields.
 
 The existing S3 Gateway VPC endpoint is associated with the VPC route tables,
-so same-region SmithDB S3 traffic takes the private AWS network path.
+so same-region SmithDB S3 traffic takes the private AWS network path. With
+`s3_gateway_endpoint_id`, that endpoint is the VPC's own, and it must be on the
+private subnets' route tables.
 
 ## Configure infrastructure
 
@@ -29,6 +31,24 @@ smithdb_external_metastore_username = "smithdb"
 
 Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file.
 The Postgres database and S3 bucket must be dedicated to SmithDB.
+
+### Select the subnets for SmithDB nodes
+
+Karpenter launches SmithDB nodes into the subnets its EC2NodeClasses select by
+tag. With a module-created VPC, Terraform tags the private subnets
+`karpenter.sh/discovery = <cluster>` when it creates them. With
+`create_vpc = false`, Terraform adds that tag to each subnet in
+`private_subnets`, which needs `ec2:CreateTags` on them.
+
+To skip the tag calls, tag the subnets yourself and name the tags in
+`smithdb_karpenter_subnet_selector`:
+
+```hcl
+smithdb_karpenter_subnet_selector = { "smithdb" = "true" }
+```
+
+Karpenter then launches into every subnet carrying all of those tags, so tag
+only private subnets in the cluster's VPC.
 
 ## Deploy SmithDB services
 

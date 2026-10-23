@@ -43,3 +43,8 @@ output "metastore_security_group_id" {
   description = "Security group ID attached to the metastore RDS instance (created by this module, or the supplied existing_metastore_security_group_id). Null when metastore_source = 'external'."
   value       = local.metastore_security_group_id
 }
+
+output "service_account_subject" {
+  description = "OIDC subject of the SmithDB service account, for the trust policy of a role supplied through service_account_role_arn."
+  value       = local.oidc_sub_pattern
+}

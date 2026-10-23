@@ -61,6 +61,7 @@ resource "aws_db_instance" "this" {
   publicly_accessible     = false
   deletion_protection     = var.deletion_protection
   storage_encrypted       = true
+  kms_key_id              = var.kms_key_arn != "" ? var.kms_key_arn : null
   backup_retention_period = var.backup_retention_period
 
   iam_database_authentication_enabled = var.iam_database_authentication_enabled

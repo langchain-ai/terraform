@@ -51,6 +51,70 @@ variable "vpc_public_subnets" {
   default     = []
 }
 
+variable "vpc_map_public_ip_on_launch" {
+  type        = bool
+  description = "Give instances launched in the module-created VPC's public subnets a public IP. Set false with eks_node_groups_private_subnets_only = true. The bastion sets its own public IP and is unaffected."
+  default     = true
+}
+
+variable "eks_node_groups_private_subnets_only" {
+  type        = bool
+  description = "Place the managed node groups in the private subnets only. Off, they span private and public subnets. Turning it on for an existing cluster replaces each node group."
+  default     = false
+}
+
+variable "enable_internet_egress" {
+  type        = bool
+  description = "Give the cluster a route to the internet. False creates no NAT gateway and no internet gateway in the module-created VPC, and requires an internal ALB, no bastion, and no Network Firewall. Pair it with create_vpc_endpoints."
+  default     = true
+}
+
+variable "create_vpc_endpoints" {
+  type        = bool
+  description = "Create interface VPC endpoints for vpc_endpoint_services, with private DNS on. Leave false when the VPC already has endpoints for these services, because their private DNS names would collide."
+  default     = false
+}
+
+variable "vpc_endpoint_services" {
+  type        = list(string)
+  description = "Services that get an interface endpoint when create_vpc_endpoints = true, as the suffix after com.amazonaws.<region>."
+  default = [
+    "ecr.api", "ecr.dkr", "sts", "ec2", "logs", "ssm", "ssmmessages", "ec2messages",
+    "elasticloadbalancing", "autoscaling", "eks", "eks-auth", "kms", "sqs",
+  ]
+}
+
+variable "vpc_endpoint_subnet_ids" {
+  type        = list(string)
+  description = "Subnets for the interface endpoints, at most one per AZ. Empty uses the private subnets."
+  default     = []
+}
+
+variable "helm_chart_overrides" {
+  type = map(object({
+    repository = optional(string)
+    values     = optional(string, "")
+  }))
+  description = "Chart repository and extra Helm values for each chart Terraform installs, keyed by release: keda, cert_manager, external_secrets, envoy_gateway, istio_base, istiod, istio_ingress, ingress_nginx, aws_load_balancer_controller, metrics_server, cluster_autoscaler, karpenter. repository replaces the upstream chart repository, such as an internal mirror or an OCI repository in ECR. values is a YAML string passed to the release; use it to point images at a pull-through cache. Settings this module sets itself win over the same keys in values."
+  default     = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.helm_chart_overrides) : contains(["keda", "cert_manager", "external_secrets", "envoy_gateway", "istio_base", "istiod", "istio_ingress", "ingress_nginx", "aws_load_balancer_controller", "metrics_server", "cluster_autoscaler", "karpenter"], k)])
+    error_message = "helm_chart_overrides keys must be among: keda, cert_manager, external_secrets, envoy_gateway, istio_base, istiod, istio_ingress, ingress_nginx, aws_load_balancer_controller, metrics_server, cluster_autoscaler, karpenter."
+  }
+}
+
+variable "envoy_proxy_image" {
+  type        = string
+  description = "Image for the Envoy proxy pods that Envoy Gateway creates, such as a pull-through cache copy of docker.io/envoyproxy/envoy. Empty keeps the controller's default."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9./:@_-]*$", var.envoy_proxy_image))
+    error_message = "envoy_proxy_image must be an image reference: letters, digits, and . / : @ _ - only."
+  }
+}
+
 variable "dns_create_zone" {
   type        = bool
   description = "Create a dedicated public Route 53 hosted zone for langsmith_domain. Set to false to write DNS validation and ALB alias records into dns_existing_zone_id instead."
@@ -100,6 +164,23 @@ variable "eks_public_access_cidrs" {
   type        = list(string)
   description = "CIDRs allowed to reach the public EKS API endpoint. Defaults to unrestricted (0.0.0.0/0). Set to your corporate VPN egress CIDRs to lock down access while keeping the endpoint public."
   default     = ["0.0.0.0/0"]
+}
+
+variable "eks_private_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs inside or connected to the VPC (a CI runner subnet, a VPN, a peered VPC) that reach the private EKS API endpoint on 443. Set it to where Terraform runs when enable_public_eks_cluster = false, so the first apply can reach the cluster."
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.eks_private_access_cidrs : can(cidrhost(c, 0)) && c != "0.0.0.0/0"])
+    error_message = "Each eks_private_access_cidrs entry must be a CIDR other than 0.0.0.0/0."
+  }
+}
+
+variable "eks_private_access_managed_externally" {
+  type        = bool
+  description = "Set true when Terraform already reaches the private EKS API endpoint through access you manage, such as a VPN or transit gateway and your own cluster security group rule. It lets enable_public_eks_cluster = false plan without create_bastion or eks_private_access_cidrs."
+  default     = false
 }
 
 variable "eks_cluster_version" {
@@ -591,10 +672,141 @@ variable "s3_kms_key_arn" {
   default     = ""
 }
 
+variable "rds_kms_key_arn" {
+  type        = string
+  description = "KMS key for the LangSmith Postgres instance and the SmithDB metastore. Empty uses the AWS-managed aws/rds key. RDS takes a key only at creation, so changing it replaces the database."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.rds_kms_key_arn))
+    error_message = "rds_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "elasticache_kms_key_arn" {
+  type        = string
+  description = "KMS key for the LangSmith and sandbox JuiceFS Redis. Empty uses the AWS-managed key. ElastiCache takes a key only at creation, so changing it replaces the cache."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.elasticache_kms_key_arn))
+    error_message = "elasticache_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "ebs_kms_key_arn" {
+  type        = string
+  description = "KMS key for node group and SmithDB node volumes and for volumes from the gp3 storage class. Empty uses the account's default EBS encryption."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.ebs_kms_key_arn))
+    error_message = "ebs_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "eks_secrets_kms_key_arn" {
+  type        = string
+  description = "KMS key for Kubernetes secrets, in place of the key the EKS module creates. EKS takes a key only at creation, so changing it replaces the cluster."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.eks_secrets_kms_key_arn))
+    error_message = "eks_secrets_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "ssm_kms_key_arn" {
+  type        = string
+  description = "KMS key for the SSM SecureString parameters the scripts write. Empty uses the AWS-managed aws/ssm key. The External Secrets Operator role gets kms:Decrypt on it."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/(mrk-)?[0-9a-f-]+)?$", var.ssm_kms_key_arn))
+    error_message = "ssm_kms_key_arn must be empty or a KMS key ARN, such as arn:aws:kms:us-east-2:123456789012:key/<key-id>."
+  }
+}
+
+variable "create_s3_gateway_endpoint" {
+  type        = bool
+  description = "Create an S3 gateway endpoint on every route table in the VPC. Set false when the VPC already has one, and set s3_gateway_endpoint_id to it."
+  default     = true
+}
+
+variable "s3_gateway_endpoint_id" {
+  type        = string
+  description = "The VPC's existing S3 endpoint (vpce-...), which the bucket policy admits. Required when create_s3_gateway_endpoint = false."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^(vpce-[0-9a-f]{8,17})?$", var.s3_gateway_endpoint_id))
+    error_message = "s3_gateway_endpoint_id must be empty or a VPC endpoint ID (vpce-...)."
+  }
+}
+
 variable "s3_versioning_enabled" {
   type        = bool
   description = "Enable S3 bucket versioning. Increases storage costs as all prior object versions are retained."
   default     = false
+}
+
+# IAM roles
+variable "iam_permissions_boundary_arn" {
+  type        = string
+  description = "IAM policy ARN set as the permissions boundary on every IAM role this module creates: the EKS cluster and node roles, the Karpenter node role, and each add-on and IRSA role. The bastion role takes none. Leave null for no boundary."
+  default     = null
+
+  validation {
+    condition     = var.iam_permissions_boundary_arn == null ? true : can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:policy/[a-zA-Z0-9/+=,.@_-]+$", var.iam_permissions_boundary_arn))
+    error_message = "Supply an IAM policy ARN without wildcards."
+  }
+}
+
+variable "iam_role_path" {
+  type        = string
+  description = "IAM path for every IAM role and instance profile this module creates except the bastion's. Changing it on an existing deployment replaces those roles."
+  default     = "/"
+
+  validation {
+    condition     = can(regex("^/([a-zA-Z0-9+=,.@_-]+/)*$", var.iam_role_path))
+    error_message = "Supply a path that starts and ends with /, such as /langsmith/."
+  }
+}
+
+variable "prefix_iam_role_names" {
+  type        = bool
+  description = "Start the node group, ALB controller, cluster-autoscaler, Karpenter controller, Karpenter node, and EBS CSI role names with <name_prefix>-<environment>-, like every other role here, so one role/<name_prefix>-<environment>-* grant covers them all. Changing it on an existing deployment replaces those six roles."
+  default     = false
+}
+
+variable "existing_iam_role_arns" {
+  type = object({
+    cluster            = optional(string)
+    node_group         = optional(string)
+    karpenter_node     = optional(string)
+    karpenter          = optional(string)
+    alb_controller     = optional(string)
+    cluster_autoscaler = optional(string)
+    ebs_csi            = optional(string)
+    langsmith          = optional(string)
+    eso                = optional(string)
+    smithdb            = optional(string)
+    cert_manager       = optional(string)
+    engine             = optional(string)
+  })
+  description = "ARNs of roles your IAM team created, for accounts where the deployer cannot create roles. Each one set skips creating that role, and the module attaches no policies to it. node_group covers every managed node group. The iam_role_trust_policies output gives the trust policy each IRSA role needs once the cluster exists."
+  default     = {}
+
+  validation {
+    condition     = alltrue([for arn in values(var.existing_iam_role_arns) : arn == null || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/", arn))])
+    error_message = "Each existing_iam_role_arns value must be an IAM role ARN, such as arn:aws:iam::123456789012:role/langsmith-eso."
+  }
+}
+
+variable "create_eks_blueprints_telemetry_stack" {
+  type        = bool
+  description = "Create the empty CloudFormation stack EKS Blueprints uses to count deployments. Set false to skip it, so the deployer needs no CloudFormation permissions."
+  default     = true
 }
 
 # IRSA (IAM Roles for Service Accounts) settings
@@ -706,6 +918,28 @@ variable "langsmith_helm_chart_version" {
   validation {
     condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.1[78]\\.", var.langsmith_helm_chart_version))
     error_message = "langsmith_helm_chart_version must be empty or a 0.17.x or 0.18.x version — deploy.sh refuses any other chart line."
+  }
+}
+
+variable "langsmith_helm_repository" {
+  type        = string
+  description = "LangSmith chart source for helm/scripts/deploy.sh: an HTTPS Helm repository or an oci:// registry path that holds the langsmith chart, such as an internal mirror. Empty uses https://langchain-ai.github.io/helm."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_helm_repository == "" || can(regex("^(https|oci)://[^\\s\"]+$", var.langsmith_helm_repository))
+    error_message = "langsmith_helm_repository must start with https:// or oci:// and contain no spaces or quotes."
+  }
+}
+
+variable "langsmith_image_registry" {
+  type        = string
+  description = "Registry that helm/scripts/deploy.sh prefixes every LangSmith image with, through the chart's images.registry, such as an ECR pull-through cache. Empty pulls from each image's own registry."
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9./:_-]*$", var.langsmith_image_registry))
+    error_message = "langsmith_image_registry must be a registry host and optional path: letters, digits, and . / : _ - only."
   }
 }
 
@@ -1216,6 +1450,12 @@ variable "smithdb_compute_sizes" {
   type        = list(string)
   description = "Allowed instance sizes for the SmithDB compute pool (compaction, cluster-manager, metastore-migration job)."
   default     = ["2xlarge", "4xlarge", "8xlarge"]
+}
+
+variable "smithdb_karpenter_subnet_selector" {
+  type        = map(string)
+  description = "Tags that select the existing private subnets for SmithDB's Karpenter nodes, which you apply yourself. Empty tags var.private_subnets with karpenter.sh/discovery = <cluster>, which needs ec2:CreateTags on them. Applies only with create_vpc = false."
+  default     = {}
 }
 
 variable "smithdb_compute_limits" {
