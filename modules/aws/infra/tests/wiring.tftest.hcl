@@ -263,12 +263,12 @@ run "sandbox_host_node_group_null_overrides_fall_back" {
     error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
   }
   assert {
-    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].instance_types[0] == "m7i.2xlarge"
-    error_message = "the sandbox-host node group no longer defaults to m7i.2xlarge"
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].instance_types[0] == "m5d.metal"
+    error_message = "the sandbox-host node group no longer defaults to m5d.metal"
   }
   assert {
-    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization == "enabled"
-    error_message = "the sandbox-host node group did not enable nested virtualization"
+    condition     = can(module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization) == false
+    error_message = "the default bare-metal sandbox host enabled nested virtualization"
   }
 }
 
@@ -296,24 +296,46 @@ run "sandbox_host_bare_metal_instance_type_keeps_local_nvme_and_skips_nested_vir
   }
 }
 
-# The virtual default (m7i.2xlarge, unset here) must keep getting nested
-# virtualization and skip local NVMe bootstrap without the caller setting
-# either variable.
-run "sandbox_host_default_instance_type_enables_nested_virt_and_skips_local_nvme" {
+# Opting into a virtual type derives nested virtualization and skips local NVMe
+# bootstrap. The module default stays bare metal.
+run "sandbox_host_virtual_instance_type_enables_nested_virt_and_skips_local_nvme" {
   command = plan
 
   variables {
     enable_sandboxes                 = true
     sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types      = ["m7i.2xlarge"]
   }
 
   assert {
     condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization == "enabled"
-    error_message = "the default sandbox_host_instance_types no longer enables nested virtualization"
+    error_message = "a virtual sandbox_host_instance_types did not enable nested virtualization"
   }
   assert {
     condition     = length(module.eks.eks_managed_node_group_inputs["sandbox_host"].cloudinit_pre_nodeadm) == 0
-    error_message = "the default sandbox_host_instance_types unexpectedly bootstraps local NVMe"
+    error_message = "a virtual sandbox_host_instance_types unexpectedly bootstrapped local NVMe"
+  }
+}
+
+# A virtual d type can still opt into local NVMe bootstrap. The derived default
+# skips it, and an explicit true must not be rejected.
+run "sandbox_host_virtual_instance_store_can_enable_local_nvme" {
+  command = plan
+
+  variables {
+    enable_sandboxes                          = true
+    sandbox_juicefs_redis_auth_token          = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types               = ["m8id.2xlarge"]
+    sandbox_host_local_nvme_bootstrap_enabled = true
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization == "enabled"
+    error_message = "a virtual instance-store type lost nested virtualization"
+  }
+  assert {
+    condition     = length(module.eks.eks_managed_node_group_inputs["sandbox_host"].cloudinit_pre_nodeadm) > 0
+    error_message = "an explicit local NVMe bootstrap on a virtual type was ignored"
   }
 }
 
@@ -329,20 +351,6 @@ run "sandbox_host_nested_virt_true_rejects_bare_metal" {
 
   expect_failures = [
     var.sandbox_host_nested_virtualization,
-  ]
-}
-
-run "sandbox_host_local_nvme_true_rejects_virtual_instance" {
-  command = plan
-
-  variables {
-    enable_sandboxes                          = true
-    sandbox_juicefs_redis_auth_token          = "fixture-not-a-real-token-0123456789"
-    sandbox_host_local_nvme_bootstrap_enabled = true
-  }
-
-  expect_failures = [
-    var.sandbox_host_local_nvme_bootstrap_enabled,
   ]
 }
 

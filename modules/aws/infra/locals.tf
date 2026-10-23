@@ -69,11 +69,11 @@ locals {
   # change behaviour. An explicit true/false in terraform.tfvars still wins.
   enable_envoy_gateway = var.enable_envoy_gateway != null ? var.enable_envoy_gateway : !(var.enable_istio_gateway || var.enable_nginx_ingress)
 
-  # A stack that pins a bare-metal type (*.metal, *.metal-*) relies on its
-  # local NVMe instance store and cannot use nested virtualization, which AWS
-  # rejects on bare metal. A virtual type has neither. Null falls back to that
-  # derived default; an explicit value always wins, and the variable
-  # validations reject a value AWS would reject outright.
+  # A bare-metal type (*.metal, *.metal-*) keeps local NVMe bootstrap and does
+  # not get nested virtualization, which AWS rejects on bare metal. Any other
+  # type gets nested virtualization and skips NVMe bootstrap. Null uses that
+  # derivation; an explicit value always wins. A virtual d type with instance
+  # store sets sandbox_host_local_nvme_bootstrap_enabled = true.
   sandbox_host_is_metal = anytrue([
     for t in var.sandbox_host_instance_types : endswith(t, ".metal") || strcontains(t, ".metal-")
   ])

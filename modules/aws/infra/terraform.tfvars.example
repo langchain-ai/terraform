@@ -349,14 +349,15 @@ redis_instance_type = "cache.m6g.xlarge"
 #
 # Requirements:
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
-#     The default is m7i.2xlarge. sandbox_host_nested_virtualization and
+#     The default is m5d.metal. sandbox_host_nested_virtualization and
 #     sandbox_host_local_nvme_bootstrap_enabled derive from
 #     sandbox_host_instance_types when left unset: a bare-metal type
 #     (m5d.metal, m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl,
 #     r6i.metal, i4i.metal) gets local NVMe bootstrap and no nested
-#     virtualization (AWS does not support it on bare metal); any other
-#     type gets nested virtualization and no local NVMe bootstrap. Set
-#     either variable explicitly only to override that derivation.
+#     virtualization. A virtual type gets nested virtualization and no
+#     local NVMe bootstrap. Set either variable to override that, including
+#     sandbox_host_local_nvme_bootstrap_enabled = true on a virtual d type
+#     that has instance store (m8id, m6id, c6id, r6id, i4i).
 #   - sandbox_host_local_nvme_expected_device_count is the number of local NVMe
 #     instance-store devices the selected instance type already exposes.
 #     Terraform does not attach these devices. Device 0 is used for swap and
@@ -371,7 +372,7 @@ redis_instance_type = "cache.m6g.xlarge"
 #   source ./setup-env.sh
 # sandbox_juicefs_redis_snapshot_retention_limit = 7
 # sandbox_host_node_count = 1
-# sandbox_host_instance_types = ["m7i.2xlarge"]
+# sandbox_host_instance_types = ["m5d.metal"]
 #
 # Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
 # Requires wildcard DNS and TLS for *.<host>.

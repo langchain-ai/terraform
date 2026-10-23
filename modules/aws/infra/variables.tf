@@ -365,8 +365,8 @@ variable "sandbox_host_node_count" {
 
 variable "sandbox_host_instance_types" {
   type        = list(string)
-  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to m7i.2xlarge, which uses nested virtualization and has no instance store. Bare metal (m5d.metal, m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl, r6i.metal, i4i.metal) also works; set sandbox_host_nested_virtualization = false, and set sandbox_host_local_nvme_bootstrap_enabled = true when that type has local NVMe. 8th-generation Intel instances need the EKS vpc-cni addon at v1.21 or newer."
-  default     = ["m7i.2xlarge"]
+  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal. Virtual instances also work where EC2 supports nested virtualization (m7i, c7i, r7i, m8i, c8i, r8i and their d variants). sandbox_host_nested_virtualization and sandbox_host_local_nvme_bootstrap_enabled derive from the type when left unset. 8th-generation Intel instances need the EKS vpc-cni addon at v1.21 or newer."
+  default     = ["m5d.metal"]
 }
 
 variable "sandbox_host_nested_virtualization" {
@@ -382,13 +382,8 @@ variable "sandbox_host_nested_virtualization" {
 
 variable "sandbox_host_local_nvme_bootstrap_enabled" {
   type        = bool
-  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Null derives it from sandbox_host_instance_types: enabled when every type is bare metal (*.metal, *.metal-*), since that family exposes local NVMe instance store; disabled for virtual types. Set explicitly when a chosen type does not follow that pattern."
+  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Null derives it from sandbox_host_instance_types: enabled when a type is bare metal (*.metal, *.metal-*). Set true for a virtual type that still has instance store, such as m8id, m6id, c6id, r6id, or i4i."
   default     = null
-
-  validation {
-    condition     = var.sandbox_host_local_nvme_bootstrap_enabled != true || !anytrue([for t in var.sandbox_host_instance_types : !(endswith(t, ".metal") || strcontains(t, ".metal-"))])
-    error_message = "sandbox_host_local_nvme_bootstrap_enabled = true requires every sandbox_host_instance_types entry to be bare metal (*.metal or *.metal-*); virtual instances have no local NVMe instance store."
-  }
 }
 
 variable "sandbox_host_local_nvme_expected_device_count" {
