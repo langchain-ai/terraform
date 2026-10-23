@@ -824,7 +824,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Guards against a stuck Helm release: auto-rolls back `pending-upgrade` state before proceeding
 - Runs `helm upgrade --install langsmith langchain/langsmith --timeout 20m`
 - Waits for core deployments to roll out (`frontend`, `backend`, `platform-backend`, `ingest-queue`, `queue`, and Deployments pods if enabled)
-- Annotates the `langsmith-ksa` service account with the Workload Identity client ID (used by operator-spawned agent pods); a pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
+- Annotates the `langsmith-ksa` service account with the Workload Identity client ID. The operator's agent pods run as that account, but they get no Azure identity from it: the account has no federated credential and the agent template sets no Workload Identity label. A pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
 - Prints the access URL, login email, and the `az keyvault` command to retrieve the admin password
 
 ---
