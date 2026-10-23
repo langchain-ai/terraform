@@ -217,7 +217,17 @@ values_args+=(
 header "Helm: $RELEASE_NAME (chart langchain/langsmith $CHART_VERSION)"
 
 _helm repo add langchain https://langchain-ai.github.io/helm >/dev/null 2>&1 || true
-_helm repo update langchain >/dev/null
+# One failed fetch of the index used to end the deploy; the chart version is pinned, so a retry is
+# always safe. Seen on a lab node: the fetch failed once, then answered in 0.3 s.
+for attempt in 1 2 3 4 5; do
+  _helm repo update langchain >/dev/null && break
+  if [[ $attempt == 5 ]]; then
+    fail "helm repo update langchain failed 5 times: is https://langchain-ai.github.io/helm reachable from here?"
+    exit 1
+  fi
+  warn "helm repo update failed (attempt $attempt of 5); retrying in $((attempt * 5))s"
+  sleep $((attempt * 5))
+done
 
 # A release stuck in pending-* (an interrupted run) blocks upgrades. Don't
 # guess the fix: print it.
