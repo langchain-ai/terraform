@@ -192,8 +192,11 @@ ingress_controller = "envoy-gateway"
 
 # The Envoy Gateway chart is fetched by the machine running Terraform, from
 # oci://docker.io/envoyproxy unless envoy_gateway_chart_repository points at a
-# mirror: an OCI registry (oci://<host>/<path>, serving <path>/gateway-helm) or
-# a Helm proxy repository (https://<host>/<path>). A mirror that requires a
+# mirror: an OCI registry (oci://<host>/<path>, serving <path>/gateway-helm),
+# which includes a Docker Hub proxy that serves OCI artifacts, or a hosted Helm
+# repository (https://<host>/<path>) holding an uploaded copy of the chart.
+# Envoy publishes the chart only as an OCI artifact, with no index.yaml, so a
+# Helm proxy repository cannot serve it. A mirror that requires a
 # login takes the username here and the password in secrets.auto.tfvars
 # (envoy_gateway_chart_repository_password).
 # envoy_gateway_chart_repository          = "oci://nexus.example.com/helm-envoy"
