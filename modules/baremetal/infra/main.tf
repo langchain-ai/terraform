@@ -281,6 +281,8 @@ module "rustfs_smithdb" {
   image              = var.rustfs_image
   bucket             = "smithdb"
   extra_buckets      = var.enable_blob_storage ? [local.blob_bucket] : []
+  ttl_buckets        = var.enable_blob_storage ? [local.blob_bucket] : []
+  ttl_days           = var.blob_storage_ttl_days
   aws_cli_image      = var.aws_cli_image
   storage_size       = local.datastores_k8s.rustfs_smithdb.storage
   storage_class      = module.local_path.storage_class_retain

@@ -27,6 +27,18 @@ variable "extra_buckets" {
   description = "More buckets on the same store and keys (e.g. LangSmith's payload blob bucket)."
 }
 
+variable "ttl_buckets" {
+  type        = list(string)
+  default     = []
+  description = "Buckets that get LangSmith's two expiry rules (ttl_s/ and ttl_l/ prefixes): the payload blob bucket only. SmithDB's bucket takes none; it manages its own retention."
+}
+
+variable "ttl_days" {
+  type        = object({ short = number, long = number })
+  default     = { short = 14, long = 400 }
+  description = "Days before ttl_s/ and ttl_l/ objects expire in the ttl_buckets."
+}
+
 variable "aws_cli_image" {
   type        = string
   description = "AWS CLI image for the bucket Job (works against any S3-compatible endpoint)."

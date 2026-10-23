@@ -153,6 +153,17 @@ variable "blob_storage_min_size_kb" {
   }
 }
 
+variable "blob_storage_ttl_days" {
+  type        = object({ short = number, long = number })
+  default     = { short = 14, long = 400 }
+  description = "Days before the blob bucket deletes ttl_s/ (short-lived) and ttl_l/ (long-lived) payloads, as the cloud modules' lifecycle rules do. LangSmith expects the bucket to expire them; match the chart's config.ttl if you change it."
+
+  validation {
+    condition     = var.blob_storage_ttl_days.short >= 1 && var.blob_storage_ttl_days.long >= var.blob_storage_ttl_days.short
+    error_message = "blob_storage_ttl_days: short must be at least 1 and long at least short."
+  }
+}
+
 variable "expected_agent_deployments" {
   type        = number
   default     = 0

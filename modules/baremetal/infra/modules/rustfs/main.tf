@@ -247,7 +247,11 @@ resource "kubernetes_stateful_set_v1" "this" {
 
 #------------------------------------------------------------------------------
 # Buckets: one one-shot Job each (head-bucket first, so reruns are no-ops).
-# No lifecycle rules: SmithDB manages its own retention and deletion.
+# SmithDB's bucket takes no lifecycle rules: SmithDB manages its own retention
+# and deletion. LangSmith's blob bucket takes the two prefix rules the cloud
+# modules set (aws/gcp/azure storage): LangSmith writes payloads under ttl_s/
+# and ttl_l/ and expects the bucket to expire them; without them it grows
+# without bound (57 GB in two lab days).
 #------------------------------------------------------------------------------
 resource "kubernetes_job_v1" "bucket" {
   for_each = toset(concat([var.bucket], var.extra_buckets))
@@ -286,6 +290,11 @@ resource "kubernetes_job_v1" "bucket" {
             aws --endpoint-url "$S3_ENDPOINT" s3api head-bucket --bucket "$BUCKET" 2>/dev/null \
               && echo "bucket $BUCKET exists" \
               || { aws --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$BUCKET" && echo "bucket $BUCKET created"; }
+            if [ -n "$LIFECYCLE" ]; then
+              aws --endpoint-url "$S3_ENDPOINT" s3api put-bucket-lifecycle-configuration \
+                --bucket "$BUCKET" --lifecycle-configuration "$LIFECYCLE"
+              echo "bucket $BUCKET expires ttl_s/ and ttl_l/ objects"
+            fi
           EOT
           ]
 
@@ -296,6 +305,15 @@ resource "kubernetes_job_v1" "bucket" {
           env {
             name  = "BUCKET"
             value = each.key
+          }
+          env {
+            name = "LIFECYCLE"
+            value = contains(var.ttl_buckets, each.key) ? jsonencode({
+              Rules = [
+                { ID = "ttl-short", Status = "Enabled", Filter = { Prefix = "ttl_s/" }, Expiration = { Days = var.ttl_days.short } },
+                { ID = "ttl-long", Status = "Enabled", Filter = { Prefix = "ttl_l/" }, Expiration = { Days = var.ttl_days.long } },
+              ]
+            }) : ""
           }
           env {
             name  = "AWS_SHARED_CREDENTIALS_FILE"
