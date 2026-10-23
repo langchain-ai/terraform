@@ -96,11 +96,13 @@ locals {
   # cpu_options.nested_virtualization, so it survives the conversion into that
   # type (v20's cpu_options object type only had core_count/threads_per_core
   # and silently dropped it).
+  # A null capacity_type is omitted so the upstream module keeps ON_DEMAND
+  # without planning a capacity change on groups that never set it.
   eks_managed_node_groups = {
     for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(
       local.v20_node_group_defaults,
       var.eks_managed_node_group_defaults,
-      v,
+      { for attr, value in v : attr => value if !(attr == "capacity_type" && value == null) },
       {
         # Drop null maps instead of merging {}. merge() with an empty object
         # turns the hop limit into a string.

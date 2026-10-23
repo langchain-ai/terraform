@@ -90,6 +90,12 @@ variable "machine_type" {
   default     = "e2-standard-4"
 }
 
+variable "spot" {
+  description = "Create the primary node pool from Spot VMs. False omits the setting so an existing on-demand pool is left alone."
+  type        = bool
+  default     = false
+}
+
 variable "disk_size_gb" {
   description = "Disk size in GB for nodes"
   type        = number
