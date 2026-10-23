@@ -780,14 +780,38 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag"
 fi
 
-helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+# A failed hook leaves Helm reporting only "hooks failed: job failed:
+# BackoffLimitExceeded", which never names the job. The chart's hooks use
+# hook-delete-policy before-hook-creation, so the failed Job and its pod are
+# still in the cluster and can be read back.
+_report_failed_hook_jobs() {
+  local job failed
+  echo "" >&2
+  echo "Helm failed. Jobs in namespace ${NAMESPACE}:" >&2
+  kubectl get jobs -n "$NAMESPACE" >&2 || true
+  while read -r job failed; do
+    [[ -n "$job" && "${failed:-}" =~ ^[0-9]+$ ]] || continue
+    ((failed > 0)) || continue
+    echo "" >&2
+    echo "── failed hook job: ${job} ──" >&2
+    kubectl describe job "$job" -n "$NAMESPACE" >&2 || true
+    kubectl logs "job/$job" -n "$NAMESPACE" --all-containers --tail=200 >&2 || true
+  done < <(kubectl get jobs -n "$NAMESPACE" \
+    -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.failed}{"\n"}{end}' \
+    2>/dev/null || true)
+}
+
+if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   ${_devel_flag} \
   "${VALUES_ARGS[@]}" \
   ${_ssa_flag} \
-  --timeout "$_helm_timeout"
+  --timeout "$_helm_timeout"; then
+  _report_failed_hook_jobs
+  exit 1
+fi
 
 echo ""
 echo "LangSmith deployed. Waiting for core pods..."
@@ -878,13 +902,16 @@ if [[ -n "$_active_host" ]]; then
     echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → ${_protocol}://${_active_host}"
     echo "Re-running deploy for hostname to take effect..."
     echo ""
-    helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+    if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
       --namespace "$NAMESPACE" \
       ${CHART_VERSION:+--version "$CHART_VERSION"} \
       ${_devel_flag} \
       "${VALUES_ARGS[@]}" \
       ${_ssa_flag} \
-      --timeout "$_helm_timeout"
+      --timeout "$_helm_timeout"; then
+      _report_failed_hook_jobs
+      exit 1
+    fi
     echo ""
     echo "LangSmith redeployed with hostname: $_active_host"
   fi
