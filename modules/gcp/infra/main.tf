@@ -230,6 +230,11 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_sandboxes || var.sandbox_host_max_node_count >= var.sandbox_host_min_node_count
       error_message = "sandbox_host_max_node_count must be greater than or equal to sandbox_host_min_node_count."
     }
+
+    precondition {
+      condition     = !var.enable_engine || var.enable_sandboxes
+      error_message = "enable_engine requires enable_sandboxes = true. Every Engine run executes in a sandbox, and the chart rejects Engine without Sandboxes."
+    }
   }
 }
 
@@ -899,8 +904,10 @@ resource "kubernetes_secret" "standalone_polly_redis" {
   depends_on = [module.k8s_bootstrap]
 }
 
+# Engine runs on the deployment it shares with standalone Insights, so either flag
+# creates its database and the two Secrets below.
 resource "google_sql_database" "insights" {
-  count      = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  count      = (var.enable_standalone_insights || var.enable_engine) && var.postgres_source == "external" ? 1 : 0
   project    = var.project_id
   instance   = local.postgres_instance_name
   name       = "langsmith_insights"
@@ -908,7 +915,7 @@ resource "google_sql_database" "insights" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  count = (var.enable_standalone_insights || var.enable_engine) && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -920,7 +927,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = var.enable_standalone_insights && var.redis_source == "external" ? 1 : 0
+  count = (var.enable_standalone_insights || var.enable_engine) && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace
