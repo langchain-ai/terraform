@@ -105,7 +105,7 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ### `langsmith-operator`
 - **What**: Kubernetes operator — reconciles `LangGraphPlatform` CRDs, creates/deletes K8s Deployments for each LangGraph agent
-- **Azure-specific**: Deployment template injects `azure.workload.identity/use: "true"` + `langsmith-ksa` ServiceAccount so every agent pod accesses Blob Storage via Workload Identity
+- **Azure-specific**: The deployment template runs every agent pod as the `langsmith-ksa` ServiceAccount, which carries the image pull Secret. Agent pods have no Azure identity: the template sets no `azure.workload.identity/use` label, and `langsmith-ksa` has no federated credential. The agent server does not need one, because it traces to LangSmith over HTTP and keeps its checkpoints in its own PostgreSQL. Do not federate `langsmith-ksa` to the blob identity: every agent's own code would then hold Storage Blob Data Contributor on the trace-payload account
 - **Depends on**: Kubernetes API (RBAC to manage Deployments/Services)
 
 ### Dynamic agent Deployments (operator-managed)

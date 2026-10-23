@@ -42,7 +42,7 @@ Adds 3 pods to the Pass 2 topology:
 - `langsmith-host-backend` — LangGraph control plane API (WI)
 - `langsmith-listener` — watches host-backend, creates LangGraphPlatform CRDs (WI)
 - `langsmith-operator` — reconciles CRDs, manages per-deployment K8s Deployments
-- Dynamic agent Deployments created by operator in the same namespace, using `langsmith-ksa` + WI label
+- Dynamic agent Deployments created by operator in the same namespace, running as `langsmith-ksa` (pull Secret only; no Workload Identity, see below)
 
 ### Pass 2 — Platform Containers (External Postgres + Redis, verified)
 
@@ -367,6 +367,8 @@ Every pod that reads blob storage env vars (`langsmith.commonEnv` in the Helm ch
 | `langsmith-ace-backend` | 2 | no |
 | `langsmith-clickhouse` | 2 | no |
 | `langsmith-operator` | 3 | no |
+
+Operator-created agent pods are deliberately not on this list. They run as `langsmith-ksa`, which has no federated credential, and the agent template sets no `azure.workload.identity/use` label, so they get no Azure token. The client-ID annotation on `langsmith-ksa` has no effect for them. Federating that account would give every agent's code the blob identity's Storage Blob Data Contributor role on the trace-payload account.
 
 All federated credentials are registered in `modules/k8s-cluster/main.tf` under `service_accounts_for_workload_identity`. Adding a new pod that accesses blob storage requires adding its service account name to that list and running `terraform apply -target=module.aks`.
 

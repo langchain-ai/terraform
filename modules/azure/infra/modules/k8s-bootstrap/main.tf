@@ -55,9 +55,12 @@ resource "kubernetes_namespace_v1" "langsmith" {
 }
 
 # ── Service Accounts (Workload Identity, pull Secret) ─────────────────────────
-# langsmith-ksa is used by LangSmith pods and LGP operator deployments.
-# The azure.workload.identity/client-id annotation binds it to the managed
-# identity that has Storage Blob Data Contributor on the blob account.
+# langsmith-ksa is the account the operator's agent pods run as. It carries
+# the blob identity's client-ID annotation, but that grants nothing: there is
+# no federated credential for it (k8s-cluster's
+# service_accounts_for_workload_identity) and the agent template sets no
+# azure.workload.identity/use label. Keep it that way: federating it would give
+# every agent's code Storage Blob Data Contributor on the blob account.
 #
 # With langsmith_image_pull_secret_name set, every account here carries the
 # Secret as imagePullSecrets. The chart's own pods pull with
