@@ -161,7 +161,7 @@ variable "create_gp3_storage_class" {
 
 variable "eks_managed_node_group_defaults" {
   type        = any
-  description = "Default configuration for EKS managed node groups"
+  description = "Default configuration for EKS managed node groups. Merged over the v20 IMDS, monitoring, and AMI pins in the EKS module, so a partial override keeps those pins. Group settings still win."
   default = {
     ami_type = "AL2023_x86_64_STANDARD"
   }
@@ -169,15 +169,18 @@ variable "eks_managed_node_group_defaults" {
 
 variable "eks_managed_node_groups" {
   type = map(object({
-    name                         = string
-    instance_types               = list(string)
-    min_size                     = optional(number, 1)
-    desired_size                 = optional(number, null)
-    max_size                     = optional(number, 10)
-    labels                       = optional(map(string), {})
-    taints                       = optional(any, {})
-    block_device_mappings        = optional(any, {})
-    update_config                = optional(any, {})
+    name                  = string
+    instance_types        = list(string)
+    min_size              = optional(number, 1)
+    desired_size          = optional(number, null)
+    max_size              = optional(number, 10)
+    labels                = optional(map(string), {})
+    taints                = optional(any, {})
+    block_device_mappings = optional(any, {})
+    # The upstream eks module (>= 21.x) requires update_config.max_unavailable
+    # or max_unavailable_percentage to be set; it no longer defaults one in.
+    # 1 matches the EKS console default (roll one node at a time).
+    update_config                = optional(any, { max_unavailable = 1 })
     cloudinit_pre_nodeadm        = optional(any, [])
     iam_role_name                = optional(string, null)
     iam_role_use_name_prefix     = optional(bool, null)
