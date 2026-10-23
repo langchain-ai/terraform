@@ -125,7 +125,9 @@ _secret_gen_fernet() {
 _secrets_file_check() {
   [[ -f "$SECRETS_FILE" ]] || return 0
   local mode
-  mode="$(stat -f '%Lp' "$SECRETS_FILE" 2>/dev/null || stat -c '%a' "$SECRETS_FILE" 2>/dev/null)"
+  # GNU stat first: on Linux `stat -f` is filesystem status, succeeds, and printed "Inodes: ..." in
+  # place of a mode, so every Linux run warned about a file that was 600. BSD stat has no -c.
+  mode="$(stat -c '%a' "$SECRETS_FILE" 2>/dev/null || stat -f '%Lp' "$SECRETS_FILE" 2>/dev/null)"
   if [[ "$mode" != "600" ]]; then
     warn "$SECRETS_FILE has mode $mode — run: chmod 600 $SECRETS_FILE"
   fi
