@@ -1428,6 +1428,9 @@ module "aks" {
   envoy_gateway_version                          = var.envoy_gateway_version
   envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
   envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_gateway_chart_repository                 = var.envoy_gateway_chart_repository
+  envoy_gateway_chart_repository_username        = var.envoy_gateway_chart_repository_username
+  envoy_gateway_chart_repository_password        = var.envoy_gateway_chart_repository_password
   envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
   envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
