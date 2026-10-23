@@ -358,7 +358,7 @@ variable "redis_existing_security_group_id" {
 #------------------------------------------------------------------------------
 variable "enable_sandboxes" {
   type        = bool
-  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires external Redis and dedicated sandbox-host nodes with usable Linux KVM (/dev/kvm). On AWS, use x86_64 EC2 bare metal instance types."
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires external Redis and dedicated sandbox-host nodes with usable Linux KVM (/dev/kvm)."
   default     = false
 }
 
@@ -375,14 +375,25 @@ variable "sandbox_host_node_count" {
 
 variable "sandbox_host_instance_types" {
   type        = list(string)
-  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal; other bare-metal examples include m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl, r6i.metal, and i4i.metal. Virtual instances also work where EC2 supports nested virtualization (m7i, c7i, r7i, m8i, c8i, r8i and their d variants), which is cheaper than renting a whole host; set sandbox_host_local_nvme_bootstrap_enabled = false on families without instance store, and note that the EKS vpc-cni addon must be v1.21 or newer because v1.20 crashes on 8th-generation Intel instances."
+  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal. Virtual instances also work where EC2 supports nested virtualization (m7i, c7i, r7i, m8i, c8i, r8i and their d variants). sandbox_host_nested_virtualization and sandbox_host_local_nvme_bootstrap_enabled derive from the type when left unset. 8th-generation Intel instances need the EKS vpc-cni addon at v1.21 or newer."
   default     = ["m5d.metal"]
+}
+
+variable "sandbox_host_nested_virtualization" {
+  type        = bool
+  description = "Set cpu_options.nested_virtualization = enabled on the sandbox-host launch template. Null derives it from sandbox_host_instance_types: enabled unless every type is bare metal (*.metal, *.metal-*). AWS rejects nested virtualization on bare metal, so explicit true with a bare-metal type fails validation."
+  default     = null
+
+  validation {
+    condition     = var.sandbox_host_nested_virtualization != true || !anytrue([for t in var.sandbox_host_instance_types : endswith(t, ".metal") || strcontains(t, ".metal-")])
+    error_message = "sandbox_host_nested_virtualization = true is incompatible with a bare-metal sandbox_host_instance_types entry (*.metal or *.metal-*); AWS does not support nested virtualization on bare metal."
+  }
 }
 
 variable "sandbox_host_local_nvme_bootstrap_enabled" {
   type        = bool
-  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Disable when using an instance type without local NVMe instance store."
-  default     = true
+  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Null derives it from sandbox_host_instance_types: enabled when a type is bare metal (*.metal, *.metal-*). Set true for a virtual type that still has instance store, such as m8id, m6id, c6id, r6id, or i4i."
+  default     = null
 }
 
 variable "sandbox_host_local_nvme_expected_device_count" {
