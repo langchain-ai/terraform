@@ -70,7 +70,7 @@ variable "instance_store_local_ssd_count" {
 }
 
 variable "instance_store_disk_size_gb" {
-  description = "Boot disk size in GB for cache pool nodes. With no Local SSD (network-disk mode), node ephemeral storage, including the backfill Job's, is on this disk."
+  description = "Boot disk size in GB for cache pool nodes. With no Local SSD (default-disk and network-disk modes), node ephemeral storage, including the backfill Job's, is on this disk."
   type        = number
   default     = 100
 }

@@ -539,7 +539,7 @@ List what is published with `helm search repo langchain/langsmith --versions`.
 
 ### Sizing and staged rollout
 
-`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) in `infra/terraform.tfvars` set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
+`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`default-disk`, `network-disk`, `local-ssd`) in `infra/terraform.tfvars` set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. `smithdb_cache_storage` is required for `small`, `medium`, and `large`: `default-disk` for development and test, `network-disk` for production, or `local-ssd` as the performance option (see [SMITHDB.md](SMITHDB.md#cache-storage)). `minimal` uses `default-disk`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
 
 The historical migration (backfill) is the one stage with its own make targets:
 

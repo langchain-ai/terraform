@@ -174,10 +174,19 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_metastore_use_auth_proxy = false on a created metastore requires smithdb_metastore_use_ssl = false and smithdb_metastore_ssl_mode = 'ALLOW_UNENCRYPTED_AND_ENCRYPTED' (mode 2, test and staging only). Direct TLS from SmithDB to Cloud SQL fails with UnknownIssuer. See the metastore TLS section of SMITHDB.md."
     }
 
-    # minimal has no SmithDB node pools, so no node has Local SSD for the cache.
+    # The cache mode is a required value for small, medium, and large. A null
+    # would let a new recommendation move an existing deployment to a new
+    # cache pool. The old default was local-ssd for those sizes.
     precondition {
-      condition     = !var.enable_smithdb || !local.smithdb_minimal || local.smithdb_network_disk
-      error_message = "smithdb_sizing = 'minimal' requires smithdb_cache_storage = 'network-disk'. Leave smithdb_cache_storage unset, or select a larger smithdb_sizing."
+      condition     = !var.enable_smithdb || local.smithdb_minimal || var.smithdb_cache_storage != null
+      error_message = "smithdb_cache_storage is required with enable_smithdb = true and smithdb_sizing = '${local.smithdb_sizing}'. Set default-disk, network-disk, or local-ssd. To keep the cache pool of an existing deployment, set local-ssd, the earlier default. For a new deployment with sizing_profile = '${var.sizing_profile}', the recommended mode is ${local.smithdb_cache_storage_recommended[var.sizing_profile]}. See SMITHDB.md#cache-storage."
+    }
+
+    # minimal has no SmithDB node pools. Its cache goes on the cluster default
+    # class, so no node needs Local SSD or a C3 machine type.
+    precondition {
+      condition     = !var.enable_smithdb || !local.smithdb_minimal || local.smithdb_default_disk
+      error_message = "smithdb_sizing = 'minimal' requires smithdb_cache_storage = 'default-disk'. Leave smithdb_cache_storage unset, or select a larger smithdb_sizing."
     }
 
     # network-disk cache volumes are Hyperdisk Balanced. E2, N1, N2, and N2D
@@ -188,17 +197,17 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_cache_storage = 'network-disk' requires a C3 or C3D cache machine type and smithdb_instance_store_local_ssd_count = 0. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
     }
 
-    # In network-disk mode, the backfill Job takes its 100Gi of ephemeral
-    # storage from the cache pool boot disk.
+    # In default-disk and network-disk modes, the backfill Job takes its 100Gi
+    # of ephemeral storage from the cache pool boot disk.
     precondition {
-      condition     = !local.smithdb_create_cache_storage_class || !var.smithdb_migration_enabled || local.smithdb_instance_store_disk_size >= 300
-      error_message = "smithdb_cache_storage = 'network-disk' with smithdb_migration_enabled = true requires smithdb_instance_store_disk_size >= 300 for the 100Gi backfill Job. The resolved boot disk is ${local.smithdb_instance_store_disk_size} GB."
+      condition     = !local.smithdb_dedicated_pools || !local.smithdb_pvc_cache || !var.smithdb_migration_enabled || local.smithdb_instance_store_disk_size >= 300
+      error_message = "smithdb_cache_storage = '${local.smithdb_cache_storage}' with smithdb_migration_enabled = true requires smithdb_instance_store_disk_size >= 300 for the 100Gi backfill Job. The resolved boot disk is ${local.smithdb_instance_store_disk_size} GB."
     }
 
     # local-ssd puts each cache in an emptyDir, so the cache pool needs Local SSD
     # ephemeral storage. That is an explicit count, or a type that bundles it.
     precondition {
-      condition     = !local.smithdb_dedicated_pools || local.smithdb_network_disk || local.smithdb_instance_store_local_ssd_count > 0 || endswith(local.smithdb_instance_store_machine_type, "lssd")
+      condition     = !local.smithdb_dedicated_pools || !local.smithdb_local_ssd || local.smithdb_instance_store_local_ssd_count > 0 || endswith(local.smithdb_instance_store_machine_type, "lssd")
       error_message = "smithdb_cache_storage = 'local-ssd' requires Local SSD on the cache pool: smithdb_instance_store_local_ssd_count > 0, or a machine type that ends in lssd. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
     }
 
@@ -586,7 +595,8 @@ module "smithdb" {
 
 #------------------------------------------------------------------------------
 # SmithDB Node Pools (Optional, enable_smithdb)
-# A cache pool (Local SSD, or none in network-disk mode) plus a compute pool.
+# A cache pool (Local SSD in local-ssd mode, none in default-disk and
+# network-disk modes) plus a compute pool.
 # Not created for smithdb_sizing = minimal, or on Autopilot, where Google
 # manages node pools; see the SmithDB section of README.md for that path.
 #------------------------------------------------------------------------------
@@ -616,6 +626,31 @@ module "smithdb_nodes" {
   labels = local.common_labels
 
   depends_on = [module.gke_cluster]
+}
+
+# Speed rule for network-disk (see locals.tf). A failed check is a warning:
+# the plan and the apply continue. default-disk and local-ssd are not checked.
+# A type that is not C3 or C3D gets the precondition error above, not this
+# warning.
+check "smithdb_network_disk_speed" {
+  assert {
+    condition     = !local.smithdb_create_cache_storage_class || local.smithdb_speed_rule_checked || !can(regex("^c3d?-", local.smithdb_instance_store_machine_type))
+    error_message = "SmithDB network-disk speed rule not checked: ${local.smithdb_instance_store_machine_type} is not a default network-disk shape (c3-standard-22, -44, -88). Confirm that the most cache pods on one node x 1,000 MiB/s is not more than the machine's Hyperdisk Balanced throughput limit. See SMITHDB.md#cache-storage."
+  }
+  assert {
+    condition     = !local.smithdb_create_cache_storage_class || !local.smithdb_speed_rule_checked || local.smithdb_speed_rule_need <= local.smithdb_speed_rule_limit
+    error_message = "SmithDB network-disk speed rule fails for ${local.smithdb_sizing} on ${local.smithdb_instance_store_machine_type}: up to ${local.smithdb_speed_rule_pods} cache pods fit on one node, which need ${local.smithdb_speed_rule_need} MiB/s, and the node limit is ${local.smithdb_speed_rule_limit} MiB/s. The cache volumes on one node share that limit, so each can get less than 1,000 MiB/s when several are busy. For more disk speed, use local-ssd or a larger size. See SMITHDB.md#cache-storage."
+  }
+}
+
+# default-disk is below the LangSmith minimum cache speed. A failed check is a
+# warning: the plan and the apply continue. Only the explicit production
+# profiles warn: setup scripts leave sizing_profile at default.
+check "smithdb_default_disk_purpose" {
+  assert {
+    condition     = !var.enable_smithdb || !local.smithdb_default_disk || !contains(["production", "production-large"], var.sizing_profile)
+    error_message = "SmithDB default-disk with sizing_profile = '${var.sizing_profile}': each cache is a standard-rwo (pd-balanced) volume, below the LangSmith minimum of 7,000 IOPS and 1,000 MiB/s for each cache volume. default-disk is for development and test. For production, use network-disk or local-ssd. See SMITHDB.md#cache-storage."
+  }
 }
 
 #------------------------------------------------------------------------------
