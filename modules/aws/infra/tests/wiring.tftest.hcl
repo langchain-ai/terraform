@@ -272,6 +272,80 @@ run "sandbox_host_node_group_null_overrides_fall_back" {
   }
 }
 
+# A stack that only overrides sandbox_host_instance_types to a bare-metal type
+# (the pre-m7i.2xlarge default, and the terraform.tfvars.example pattern) must
+# keep its pre-existing behavior: no nested virtualization (AWS rejects it on
+# bare metal) and local NVMe bootstrap still on, both derived without the
+# caller setting either variable.
+run "sandbox_host_bare_metal_instance_type_keeps_local_nvme_and_skips_nested_virt" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types      = ["m5d.metal"]
+  }
+
+  assert {
+    condition     = can(module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization) == false
+    error_message = "a bare-metal sandbox_host_instance_types still enabled nested virtualization"
+  }
+  assert {
+    condition     = length(module.eks.eks_managed_node_group_inputs["sandbox_host"].cloudinit_pre_nodeadm) > 0
+    error_message = "a bare-metal sandbox_host_instance_types no longer bootstraps local NVMe for swap/JuiceFS cache"
+  }
+}
+
+# The virtual default (m7i.2xlarge, unset here) must keep getting nested
+# virtualization and skip local NVMe bootstrap without the caller setting
+# either variable.
+run "sandbox_host_default_instance_type_enables_nested_virt_and_skips_local_nvme" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization == "enabled"
+    error_message = "the default sandbox_host_instance_types no longer enables nested virtualization"
+  }
+  assert {
+    condition     = length(module.eks.eks_managed_node_group_inputs["sandbox_host"].cloudinit_pre_nodeadm) == 0
+    error_message = "the default sandbox_host_instance_types unexpectedly bootstraps local NVMe"
+  }
+}
+
+run "sandbox_host_nested_virt_true_rejects_bare_metal" {
+  command = plan
+
+  variables {
+    enable_sandboxes                   = true
+    sandbox_juicefs_redis_auth_token   = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types        = ["m5d.metal"]
+    sandbox_host_nested_virtualization = true
+  }
+
+  expect_failures = [
+    var.sandbox_host_nested_virtualization,
+  ]
+}
+
+run "sandbox_host_local_nvme_true_rejects_virtual_instance" {
+  command = plan
+
+  variables {
+    enable_sandboxes                          = true
+    sandbox_juicefs_redis_auth_token          = "fixture-not-a-real-token-0123456789"
+    sandbox_host_local_nvme_bootstrap_enabled = true
+  }
+
+  expect_failures = [
+    var.sandbox_host_local_nvme_bootstrap_enabled,
+  ]
+}
+
 run "enable_smithdb_adds_only_smithdb" {
   command = plan
 

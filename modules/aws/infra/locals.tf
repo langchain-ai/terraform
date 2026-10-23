@@ -69,11 +69,26 @@ locals {
   # change behaviour. An explicit true/false in terraform.tfvars still wins.
   enable_envoy_gateway = var.enable_envoy_gateway != null ? var.enable_envoy_gateway : !(var.enable_istio_gateway || var.enable_nginx_ingress)
 
-  sandbox_host_cache_dirs = var.sandbox_host_local_nvme_bootstrap_enabled && var.sandbox_host_local_nvme_expected_device_count > 1 ? [
+  # A stack that pins a bare-metal type (*.metal, *.metal-*) relies on its
+  # local NVMe instance store and cannot use nested virtualization, which AWS
+  # rejects on bare metal. A virtual type has neither. Null falls back to that
+  # derived default; an explicit value always wins, and the variable
+  # validations reject a value AWS would reject outright.
+  sandbox_host_is_metal = anytrue([
+    for t in var.sandbox_host_instance_types : endswith(t, ".metal") || strcontains(t, ".metal-")
+  ])
+  sandbox_host_nested_virtualization = coalesce(
+    var.sandbox_host_nested_virtualization, !local.sandbox_host_is_metal
+  )
+  sandbox_host_local_nvme_bootstrap_enabled = coalesce(
+    var.sandbox_host_local_nvme_bootstrap_enabled, local.sandbox_host_is_metal
+  )
+
+  sandbox_host_cache_dirs = local.sandbox_host_local_nvme_bootstrap_enabled && var.sandbox_host_local_nvme_expected_device_count > 1 ? [
     for idx in range(var.sandbox_host_local_nvme_expected_device_count - 1) : "/mnt/juicefs-cache${idx}"
   ] : []
 
-  sandbox_host_pre_nodeadm = var.sandbox_host_local_nvme_bootstrap_enabled ? [
+  sandbox_host_pre_nodeadm = local.sandbox_host_local_nvme_bootstrap_enabled ? [
     {
       content_type = "text/x-shellscript; charset=\"us-ascii\""
       content      = <<-EOT
@@ -116,7 +131,7 @@ locals {
     },
   ] : []
 
-  sandbox_host_cpu_options = var.sandbox_host_nested_virtualization ? {
+  sandbox_host_cpu_options = local.sandbox_host_nested_virtualization ? {
     cpu_options = {
       nested_virtualization = "enabled"
     }
