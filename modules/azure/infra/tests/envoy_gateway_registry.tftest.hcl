@@ -222,7 +222,7 @@ run "refuses_a_dotless_host" {
 # envoy_gateway_chart_repository: where the machine running Terraform fetches
 # the gateway-helm chart. The default keeps the reference the release always
 # used, so an existing install plans no change. An OCI mirror carries the chart
-# in the reference, and an https Helm proxy names it. A login is optional and
+# in the reference, and an https hosted repository names it. A login is optional and
 # comes as a pair.
 run "default_chart_source_is_docker_hub_oci" {
   command = plan

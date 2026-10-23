@@ -2321,12 +2321,12 @@ variable "envoy_gateway_image_registry_keeps_source_host" {
 
 variable "envoy_gateway_chart_repository" {
   type        = string
-  description = "Repository the Envoy Gateway chart (gateway-helm) is fetched from, by the machine running Terraform. The default is Envoy's own OCI registry on Docker Hub. A mirror keeps that machine off docker.io: an OCI registry as oci://<host>/<path> serves the chart as <path>/gateway-helm, and a Helm proxy repository in Nexus or Artifactory as https://<host>/<path>. The chart name and version (envoy_gateway_version) do not change. envoy_gateway_image_registry is the separate setting for the images the cluster pulls."
+  description = "Repository the Envoy Gateway chart (gateway-helm) is fetched from, by the machine running Terraform. The default is Envoy's own OCI registry on Docker Hub. A mirror keeps that machine off docker.io: an OCI registry as oci://<host>/<path> serves the chart as <path>/gateway-helm (a Docker Hub proxy in Nexus or Artifactory that serves OCI artifacts is this form). Envoy publishes the chart only as an OCI artifact, with no index.yaml, so a Helm proxy repository cannot serve it; https://<host>/<path> is for a hosted Helm repository holding an uploaded copy (helm pull oci://docker.io/envoyproxy/gateway-helm --version <envoy_gateway_version>, then upload). The chart name and version (envoy_gateway_version) do not change. envoy_gateway_image_registry is the separate setting for the images the cluster pulls."
   default     = "oci://docker.io/envoyproxy"
 
   validation {
     condition     = can(regex("^(https|oci)://[^/]+(/[^/]+)*$", var.envoy_gateway_chart_repository))
-    error_message = "envoy_gateway_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'oci://docker.io/envoyproxy' or 'https://nexus.example.com/repository/helm-envoy')."
+    error_message = "envoy_gateway_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'oci://docker.io/envoyproxy' or 'oci://nexus.example.com/docker-hub/envoyproxy')."
   }
 }
 
