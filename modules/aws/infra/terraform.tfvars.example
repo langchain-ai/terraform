@@ -89,7 +89,9 @@ langsmith_admin_email = "admin@example.com"
 #------------------------------------------------------------------------------
 # TAGGING — For cost tracking and ownership in AWS
 #------------------------------------------------------------------------------
-# These are applied as tags to every resource Terraform creates.
+# These are applied as tags to every AWS resource the install creates: the ones
+# Terraform creates, plus the nodes, volumes, ENIs, and load balancers that
+# Karpenter and the EKS controllers create. See "Tagging" in the README.
 
 # Team or individual responsible for this deployment.
 owner = "platform-team"
@@ -97,11 +99,13 @@ owner = "platform-team"
 # Billing label — shows up in AWS Cost Explorer when you group by tag.
 cost_center = "engineering"
 
-# Additional custom tags. Add any your organization requires
-# (e.g. compliance tags, project codes, etc.).
+# Additional custom tags. Add any your organization's tag policy requires.
+# Keys may not start with aws:, kubernetes.io, or ebs.csi.aws.com/.
 tags = {
-  # "department" = "engineering"
-  # "project"    = "langsmith"
+  # "team"          = "data-platform"
+  # "owner-email"   = "platform@example.com"
+  # "product"       = "langsmith"
+  # "data-class"    = "internal"
 }
 
 #------------------------------------------------------------------------------
