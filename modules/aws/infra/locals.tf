@@ -116,6 +116,12 @@ locals {
     },
   ] : []
 
+  sandbox_host_cpu_options = var.sandbox_host_nested_virtualization ? {
+    cpu_options = {
+      nested_virtualization = "enabled"
+    }
+  } : {}
+
   sandbox_host_node_group = merge({
     name                     = "node-group-sandbox-host"
     instance_types           = var.sandbox_host_instance_types
@@ -155,7 +161,7 @@ locals {
         }
       }
     }
-  }, var.sandbox_host_node_group_overrides)
+  }, local.sandbox_host_cpu_options, var.sandbox_host_node_group_overrides)
 
   # Passed outside the typed eks_managed_node_groups input, which would drop
   # metadata_options and any override attribute the object type doesn't declare.

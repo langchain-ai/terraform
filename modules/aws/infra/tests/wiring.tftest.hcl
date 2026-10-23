@@ -262,6 +262,14 @@ run "sandbox_host_node_group_null_overrides_fall_back" {
     condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_put_response_hop_limit == 1
     error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
   }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].instance_types[0] == "m7i.2xlarge"
+    error_message = "the sandbox-host node group no longer defaults to m7i.2xlarge"
+  }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization == "enabled"
+    error_message = "the sandbox-host node group did not enable nested virtualization"
+  }
 }
 
 run "enable_smithdb_adds_only_smithdb" {
