@@ -21,7 +21,6 @@
 # Permutations:
 #   1  ALB only         tls=none
 #   2  ALB + ACM        tls=acm  (needs langsmith_domain + NS delegation)
-#   3  ALB + Let's Encrypt HTTP-01  tls=letsencrypt  (needs domain)
 #   4  Istio Gateway    tls=none  (no TLS)
 #   5  Istio + Let's Encrypt DNS-01 via Route 53 IRSA  (full cert-manager path)
 #   6  Istio + DNS-01 domain change  (validate stale-secret deletion + re-issuance)
@@ -33,10 +32,10 @@
 #   - postgres_source, redis_source (external or in-cluster)
 #   - For destructive external-RDS tests: postgres_skip_final_snapshot = true
 #   - For a managed SmithDB metastore: smithdb_metastore_skip_final_snapshot = true
-#   - For permutations 2-6: langsmith_domain (must be Route 53 delegated)
-#   - For permutations 2, 3, 5, 6: letsencrypt_email
+#   - For permutations 2, 4-6: langsmith_domain (must be Route 53 delegated)
+#   - For permutations 2, 5, 6: letsencrypt_email
 #   - For permutations 5, 6, 7: cert_manager_hosted_zone_id
-#   - For permutations 2-7: domain must be Route 53 NS-delegated
+#   - For permutations 2, 4-7: domain must be Route 53 NS-delegated
 #
 # Log files:
 #   Each run writes full output to logs/permutation-<N>-<timestamp>/
@@ -54,7 +53,6 @@ source "$SCRIPT_DIR/_common.sh"
 OVERRIDE_FILE="$INFRA_DIR/permutation.auto.tfvars"
 LOG_DIR="$SCRIPT_DIR/../logs"
 SUMMARY_LOG="$LOG_DIR/summary.log"
-ISTIO_VERSION="${ISTIO_VERSION:-1.24.3}"
 
 # ── Arg parsing ───────────────────────────────────────────────────────────────
 
@@ -68,7 +66,11 @@ for arg in "$@"; do
     --dry-run)       DRY_RUN=true ;;
     --skip-destroy)  SKIP_DESTROY=true ;;
     all|"")          RUN_ALL=true ;;
-    [1-8])           SELECTED+=("$arg") ;;
+    3)
+      echo "Unsupported permutation: ALB-only supports ACM or HTTP." >&2
+      exit 1
+      ;;
+    [124-8])         SELECTED+=("$arg") ;;
     *)               echo "Unknown argument: $arg" >&2; exit 1 ;;
   esac
 done
@@ -220,46 +222,12 @@ _helm_deploy() {
   local logfile="$1"
   _step "init-values + helm deploy"
   [[ "$DRY_RUN" == "true" ]] && return 0
-  "$HELM_DIR/scripts/init-values.sh" >> "$logfile" 2>&1
-  "$HELM_DIR/scripts/deploy.sh" >> "$logfile" 2>&1
+  TFVARS_OVERRIDE_FILE="$OVERRIDE_FILE" "$HELM_DIR/scripts/init-values.sh" >> "$logfile" 2>&1
+  TFVARS_OVERRIDE_FILE="$OVERRIDE_FILE" "$HELM_DIR/scripts/deploy.sh" >> "$logfile" 2>&1
   _ok "LangSmith deployed"
 }
 
-# ── Istio install/uninstall helpers ───────────────────────────────────────────
-
-_istio_install() {
-  local logfile="$1"
-  _step "Installing Istio $ISTIO_VERSION (istiod + ingressgateway)"
-  [[ "$DRY_RUN" == "true" ]] && return 0
-  {
-    helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
-    helm repo update
-    helm upgrade --install istio-base istio/base \
-      --namespace istio-system --create-namespace --version "$ISTIO_VERSION" --wait
-    helm upgrade --install istiod istio/istiod \
-      --namespace istio-system --version "$ISTIO_VERSION" --wait
-    # Install ingressgateway on public subnets (internet-facing NLB)
-    _public_subnets=$(aws ec2 describe-subnets \
-      --region "$_region" \
-      --filters "Name=tag:kubernetes.io/cluster/${_cluster_name},Values=shared,owned" \
-                "Name=mapPublicIpOnLaunch,Values=true" \
-      --query 'Subnets[*].SubnetId' \
-      --output text | tr '\t\n' ',,' | sed 's/,*$//' | sed 's/,/\\,/g')
-    if [[ -n "$_public_subnets" ]]; then
-      helm upgrade --install istio-ingressgateway istio/gateway \
-        --namespace istio-system --version "$ISTIO_VERSION" \
-        --skip-schema-validation \
-        --set "service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-scheme=internet-facing" \
-        --set "service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-subnets=${_public_subnets}" \
-        --wait
-    else
-      helm upgrade --install istio-ingressgateway istio/gateway \
-        --namespace istio-system --version "$ISTIO_VERSION" \
-        --skip-schema-validation --wait
-    fi
-  } >> "$logfile" 2>&1
-  _ok "Istio installed"
-}
+# ── Istio gateway helpers ───────────────────────────────────────────
 
 _istio_uninstall() {
   local logfile="$1"
@@ -301,9 +269,9 @@ EOF
   _ok "Istio Gateway created"
 }
 
-_nlb_hostname() {
-  kubectl get svc istio-ingressgateway -n istio-system \
-    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo ""
+_alb_hostname() {
+  [[ "$DRY_RUN" == "true" ]] && return 0
+  _tf output -raw alb_dns_name
 }
 
 # ── Assertion helpers ─────────────────────────────────────────────────────────
@@ -417,6 +385,8 @@ run_1() {
   _write_override 'tls_certificate_source  = "none"
 enable_envoy_gateway    = false
 enable_istio_gateway    = false
+enable_nginx_ingress    = false
+enable_deployments      = false
 create_cert_manager_irsa = false'
 
   _helm_uninstall "$log"
@@ -464,6 +434,8 @@ run_2() {
 langsmith_domain        = \"${_domain}\"
 enable_envoy_gateway    = false
 enable_istio_gateway    = false
+enable_nginx_ingress    = false
+enable_deployments      = false
 create_cert_manager_irsa = false"
 
   _helm_uninstall "$log"
@@ -482,59 +454,6 @@ create_cert_manager_irsa = false"
 
   _assert_k8s_absent "No ClusterIssuer letsencrypt-prod" \
     "kubectl get clusterissuer letsencrypt-prod -o name 2>/dev/null"
-
-  _print_results "$name" "$ts"
-}
-
-run_3() {
-  local name="P3: ALB + Let's Encrypt HTTP-01"
-  local ts; ts=$(date +%Y%m%d-%H%M%S)
-  local logdir="$LOG_DIR/p3-alb-http01-$ts"
-  mkdir -p "$logdir"
-  local log="$logdir/run.log"
-  _reset_results
-
-  _section "$name"
-
-  if [[ -z "$_domain" || -z "$_le_email" ]]; then
-    _warn "Skipping $name — langsmith_domain or letsencrypt_email not set"
-    return 0
-  fi
-
-  _write_override "tls_certificate_source  = \"letsencrypt\"
-langsmith_domain        = \"${_domain}\"
-letsencrypt_email       = \"${_le_email}\"
-enable_envoy_gateway    = false
-enable_istio_gateway    = false
-create_cert_manager_irsa = false"
-
-  _helm_uninstall "$log"
-  _tf_destroy "$log"
-  _tf_apply "$log"
-  _kubeconfig
-  _helm_deploy "$log"
-
-  _step "Running assertions..."
-  _assert_k8s "ClusterIssuer letsencrypt-prod exists" \
-    "kubectl get clusterissuer letsencrypt-prod -o jsonpath='{.metadata.name}'" \
-    "letsencrypt-prod"
-  _assert_k8s "ClusterIssuer uses http01 solver" \
-    "kubectl get clusterissuer letsencrypt-prod -o jsonpath='{.spec.acme.solvers[0].http01.ingress.ingressClassName}'" \
-    "alb"
-  # Wait up to 5 min for cert
-  _step "Waiting for Let's Encrypt certificate (HTTP-01, up to 5 min)..."
-  for _ in $(seq 1 30); do
-    local ready
-    ready=$(kubectl get certificate -n langsmith -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-    [[ "$ready" == "True" ]] && break
-    sleep 10
-  done
-  local cert_ready
-  cert_ready=$(kubectl get certificate -n langsmith -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-  _assert "Let's Encrypt cert READY=True" "$([[ "$cert_ready" == "True" ]] && echo true || echo false)"
-
-  _assert_http "GET https://${_domain}/api/v1/health → 200" "https://${_domain}/api/v1/health"
-  _assert_tls_issuer "LE cert issued by Let's Encrypt" "https://${_domain}" "Let's Encrypt"
 
   _print_results "$name" "$ts"
 }
@@ -565,7 +484,6 @@ create_cert_manager_irsa = false"
   _tf_destroy "$log"
   _tf_apply "$log"
   _kubeconfig
-  _istio_install "$log"
   _istio_gateway_http "$_domain" "$log"
   _helm_deploy "$log"
 
@@ -574,9 +492,13 @@ create_cert_manager_irsa = false"
     "kubectl get deployment istiod -n istio-system -o jsonpath='{.status.readyReplicas}'" \
     "$(kubectl get deployment istiod -n istio-system -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")"
 
-  local nlb_host
-  nlb_host=$(_nlb_hostname)
-  _assert "istio-ingressgateway has NLB hostname" "$([[ -n "$nlb_host" ]] && echo true || echo false)" "$nlb_host"
+  _assert_k8s "Istio gateway Service stays ClusterIP" \
+    "kubectl get svc istio-ingressgateway -n istio-system -o jsonpath='{.spec.type}'" \
+    "ClusterIP"
+
+  local alb_host
+  alb_host=$(_alb_hostname)
+  _assert "Terraform ALB has a hostname" "$([[ -n "$alb_host" ]] && echo true || echo false)" "$alb_host"
 
   _assert_k8s "Gateway langsmith-gateway exists" \
     "kubectl get gateway langsmith-gateway -n langsmith -o jsonpath='{.metadata.name}'" \
@@ -585,7 +507,7 @@ create_cert_manager_irsa = false"
     "kubectl get gateway langsmith-gateway -n langsmith -o jsonpath='{.spec.servers[?(@.port.number==443)].port.name}'" \
     ""
 
-  _assert_http "GET http://${nlb_host}/api/v1/health → 200" "http://${nlb_host}/api/v1/health"
+  _assert_http "GET http://${alb_host}/api/v1/health → 200" "http://${alb_host}/api/v1/health"
 
   _assert_k8s_absent "No ClusterIssuer letsencrypt-prod" \
     "kubectl get clusterissuer letsencrypt-prod -o name 2>/dev/null"
@@ -623,7 +545,6 @@ cert_manager_hosted_zone_id = \"${_hosted_zone}\""
   _tf_destroy "$log"
   _tf_apply "$log"
   _kubeconfig
-  _istio_install "$log"
   # Taint Certificate + Gateway resources so pass 2 recreates them.
   # Required because _istio_uninstall removes istio-system (deleting the
   # Certificate/Gateway Kubernetes objects) but terraform state still marks
@@ -736,7 +657,6 @@ cert_manager_hosted_zone_id = \"${_hosted_zone}\""
   _tf_destroy "$log"
   _tf_apply "$log"
   _kubeconfig
-  _istio_install "$log"
   _helm_deploy "$log"
 
   # Verify initial cert
@@ -834,7 +754,6 @@ cert_manager_hosted_zone_id = \"${_hosted_zone}\""
   _istio_uninstall "$log"
   _tf_apply "$log"
   _kubeconfig
-  _istio_install "$log"
   # Taint Certificate + Gateway resources so pass 2 recreates them with Istio ready.
   if [[ "$DRY_RUN" != "true" ]]; then
     _step "Tainting Certificate + Gateway resources for pass 2"
@@ -892,6 +811,8 @@ run_8() {
 langsmith_domain        = \"${_domain}\"
 enable_envoy_gateway    = true
 enable_istio_gateway    = false
+enable_nginx_ingress    = false
+enable_deployments      = false
 create_cert_manager_irsa = false"
 
   _helm_uninstall "$log"
@@ -951,39 +872,35 @@ create_cert_manager_irsa = false"
        -o jsonpath='{.spec.listeners[?(@.port==80)].name}'" \
     "http"
 
-  # NLB provisioned by Envoy Gateway — wait up to 5 min for hostname
-  _step "Waiting for Envoy Gateway NLB hostname (up to 5 min)..."
-  local nlb_host=""
+  _assert_k8s "Envoy proxy Service stays ClusterIP" \
+    "kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway -o jsonpath='{.items[0].spec.type}'" \
+    "ClusterIP"
+
+  local alb_host=""
   if [[ "$DRY_RUN" != "true" ]]; then
-    for _ in $(seq 1 30); do
-      nlb_host=$(kubectl get svc -n envoy-gateway-system \
-        -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
-        -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
-      [[ -n "$nlb_host" ]] && break
-      sleep 10
-    done
+    alb_host=$(_alb_hostname)
   fi
-  _assert "Envoy Gateway NLB hostname provisioned" \
-    "$([[ -n "$nlb_host" ]] && echo true || echo false)" "$nlb_host"
+  _assert "Terraform ALB has a hostname" \
+    "$([[ -n "$alb_host" ]] && echo true || echo false)" "$alb_host"
 
   # HTTPRoute
   _assert_k8s_exists "HTTPRoute langsmith exists" \
     "kubectl get httproute -n langsmith -o name 2>/dev/null | grep langsmith | head -1"
 
-  # Traffic — wait up to 3 min for NLB to become traffic-ready
+  # Traffic — wait up to 3 min for ALB targets to become healthy
   # (hostname appears in AWS before the LB finishes health-check probing)
-  _step "Waiting for NLB to serve traffic on http://${nlb_host}/api/v1/health (up to 3 min)..."
-  if [[ "$DRY_RUN" != "true" && -n "$nlb_host" ]]; then
+  _step "Waiting for ALB to serve traffic on http://${alb_host}/api/v1/health (up to 3 min)..."
+  if [[ "$DRY_RUN" != "true" && -n "$alb_host" ]]; then
     for _ in $(seq 1 18); do
       local _hc
       _hc=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 \
-        "http://${nlb_host}/api/v1/health" 2>/dev/null || echo "000")
+        "http://${alb_host}/api/v1/health" 2>/dev/null || echo "000")
       [[ "$_hc" == "200" ]] && break
       sleep 10
     done
   fi
-  _assert_http "GET http://${nlb_host}/api/v1/health → 200" \
-    "http://${nlb_host}/api/v1/health"
+  _assert_http "GET http://${alb_host}/api/v1/health → 200" \
+    "http://${alb_host}/api/v1/health"
 
   _assert_k8s_absent "No ClusterIssuer letsencrypt-prod" \
     "kubectl get clusterissuer letsencrypt-prod -o name 2>/dev/null"
@@ -1025,7 +942,7 @@ _run_permutation() {
 }
 
 if [[ "$RUN_ALL" == "true" ]]; then
-  for n in 1 2 3 4 5 6 7 8; do _run_permutation "$n"; done
+  for n in 1 2 4 5 6 7 8; do _run_permutation "$n"; done
 else
   for n in "${SELECTED[@]}"; do _run_permutation "$n"; done
 fi

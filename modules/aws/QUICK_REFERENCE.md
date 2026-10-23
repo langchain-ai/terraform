@@ -164,7 +164,8 @@ kubectl logs <pod-name> -n langsmith --tail=100 -f
 kubectl logs <pod-name> -n langsmith --previous --tail=50
 
 # ALB / Ingress
-kubectl get ingress -n langsmith
+terraform -chdir=infra output -raw alb_dns_name
+kubectl get targetgroupbindings -A
 kubectl describe ingress -n langsmith
 
 # ESO secret sync status
