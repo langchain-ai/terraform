@@ -32,11 +32,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-INFRA_DIR="$HELM_DIR/../infra"
-VALUES_DIR="$HELM_DIR/values"
-EXAMPLES_DIR="$VALUES_DIR/examples"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+EXAMPLES_DIR="$HELM_DIR/values/examples"
 
-source "$INFRA_DIR/scripts/_common.sh"
+source "$HELM_DIR/../infra/scripts/_common.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
@@ -57,6 +57,8 @@ _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
 _enable_smithdb=$(_parse_tfvar "enable_smithdb") || _enable_smithdb="false"
+_enable_sandboxes=$(_parse_tfvar "enable_sandboxes") || _enable_sandboxes="false"
+_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 _langsmith_release_name=$(_parse_tfvar "langsmith_release_name") || _langsmith_release_name="langsmith"
 if [[ "$_langsmith_release_name" == *langsmith* ]]; then
   _langsmith_release_fullname="$_langsmith_release_name"
@@ -132,6 +134,7 @@ SMITHDB_METASTORE_AUTH_MODE="password"
 SMITHDB_METASTORE_USERNAME=""
 SMITHDB_CACHE_STORAGE_CLASS=""
 SMITHDB_STORAGE_BLOB_ENDPOINT=""
+SMITHDB_HELM_VALUES=""
 if [[ "${_enable_smithdb:-false}" == "true" ]]; then
   SMITHDB_STORAGE_ACCOUNT=$(_tf_out smithdb_storage_account_name) || SMITHDB_STORAGE_ACCOUNT=""
   SMITHDB_STORAGE_CONTAINER=$(_tf_out smithdb_storage_container_name) || SMITHDB_STORAGE_CONTAINER=""
@@ -140,9 +143,21 @@ if [[ "${_enable_smithdb:-false}" == "true" ]]; then
   SMITHDB_METASTORE_AUTH_MODE=$(_tf_out smithdb_metastore_auth_mode) || SMITHDB_METASTORE_AUTH_MODE="password"
   SMITHDB_METASTORE_USERNAME=$(_tf_out smithdb_metastore_username) || SMITHDB_METASTORE_USERNAME=""
   SMITHDB_CACHE_STORAGE_CLASS=$(_tf_out smithdb_cache_storage_class_name) || SMITHDB_CACHE_STORAGE_CLASS=""
+  SMITHDB_HELM_VALUES=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_helm_values 2>/dev/null) || SMITHDB_HELM_VALUES=""
   if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
     SMITHDB_STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_blob_endpoint 2>/dev/null) || SMITHDB_STORAGE_BLOB_ENDPOINT=""
   fi
+fi
+
+SANDBOX_WI_CLIENT_ID=""
+SANDBOX_JUICEFS_SECRET=""
+SANDBOX_MIN_REPLICAS=""
+SANDBOX_MAX_REPLICAS=""
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  SANDBOX_WI_CLIENT_ID=$(_tf_out sandbox_host_workload_identity_client_id) || SANDBOX_WI_CLIENT_ID=""
+  SANDBOX_JUICEFS_SECRET=$(_tf_out sandbox_juicefs_secret_name) || SANDBOX_JUICEFS_SECRET=""
+  SANDBOX_MIN_REPLICAS=$(_tf_out sandbox_host_min_replicas) || SANDBOX_MIN_REPLICAS=""
+  SANDBOX_MAX_REPLICAS=$(_tf_out sandbox_host_max_replicas) || SANDBOX_MAX_REPLICAS=""
 fi
 
 echo ""
@@ -282,6 +297,46 @@ _enable_agent_builder=$(_parse_tfvar "enable_agent_builder") || _enable_agent_bu
 _enable_insights=$(_parse_tfvar "enable_insights") || _enable_insights="false"
 _enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
 _enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
+_enable_sso_oidc=$(_parse_tfvar "enable_sso_oidc") || _enable_sso_oidc="false"
+_enable_llm_gateway=$(_parse_tfvar "enable_llm_gateway") || _enable_llm_gateway="false"
+_enable_gateway_pii_redaction=$(_parse_tfvar "enable_gateway_pii_redaction") || _enable_gateway_pii_redaction="false"
+
+# ── LangSmith images from a mirror — read from terraform.tfvars ───────────
+_ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
+_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
+_ls_pull_secret=$(_parse_tfvar "langsmith_image_pull_secret_name") || _ls_pull_secret=""
+# A chart that writes docker.io into the operator's per-deployment Redis and
+# PostgreSQL templates (the 0.17 line, 0.18 before rc.30) gets both written
+# into the agent-deploys file with the mirror (_deployment_templates_block); a
+# chart that reads images.deploymentRedisImage and images.deploymentDbImage
+# (0.18 from rc.30) takes them from the images: block. Decided from the chart
+# deploy.sh will resolve, read through helm; by version when it cannot be read.
+_chart_version=$(_resolve_chart_version)
+_chart_line=$(_chart_line_of "$_chart_version")
+_deployment_templates="false"
+if [[ -n "$_ls_image_registry" ]]; then
+  _reads_rc=0
+  _chart_reads_deployment_image_keys "$_chart_version" || _reads_rc=$?
+  if [[ "$_reads_rc" -eq 1 ]]; then
+    _deployment_templates="true"
+  elif [[ "$_reads_rc" -eq 2 ]]; then
+    warn "chart ${_chart_version} could not be read through helm; deciding the per-deployment templates from the version (deploy.sh checks the file against the chart it installs)"
+    _chart_templates_need_mirror_by_version "$_chart_version" && _deployment_templates="true"
+  fi
+fi
+if [[ -n "$_ls_image_registry" || -n "$_ls_pull_secret" ]]; then
+  echo ""
+  echo "  Images (from terraform.tfvars):"
+  info "langsmith_image_registry                   = ${_ls_image_registry:-<docker.io>}"
+  info "langsmith_image_registry_keeps_source_host = $_ls_image_keeps_host"
+  info "langsmith_image_pull_secret_name           = ${_ls_pull_secret:-<none>}"
+  if [[ "$_deployment_templates" == "true" ]]; then
+    info "operator.templates.redis and db (chart ${_chart_version}) = written with the mirror when enable_deployments = true"
+  elif [[ -n "$_ls_image_registry" ]]; then
+    info "operator.templates.redis and db (chart ${_chart_version}) = from the images: block"
+  fi
+fi
+_images_block=$(_langsmith_images_block "$_ls_image_registry" "$_ls_image_keeps_host" "$_ls_pull_secret")
 
 echo ""
 echo "  Product tier (from terraform.tfvars enable_* flags):"
@@ -291,8 +346,20 @@ info "enable_insights      = $_enable_insights"
 info "enable_polly         = $_enable_polly"
 info "enable_fleet         = $_enable_fleet"
 info "enable_smithdb       = $_enable_smithdb"
+info "enable_sandboxes     = $_enable_sandboxes"
+info "enable_sso_oidc      = $_enable_sso_oidc"
+info "enable_llm_gateway   = $_enable_llm_gateway"
+info "enable_gateway_pii_redaction = $_enable_gateway_pii_redaction"
 echo ""
 echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make init-values"
+
+# ── LLM Gateway dependency guard ───────────────────────────────────────────
+# Checked here, before any values file is written, so a refused combination
+# leaves the existing files as they were.
+if [[ "$_enable_gateway_pii_redaction" == "true" && "$_enable_llm_gateway" != "true" ]]; then
+  fail "enable_gateway_pii_redaction = true requires enable_llm_gateway = true"
+  exit 1
+fi
 
 # ── Fleet dependency guards ────────────────────────────────────────────────
 # Fleet is the standalone successor to Agent Builder. It needs host-backend
@@ -324,7 +391,63 @@ if [[ "$_smithdb_ingestion_enabled" != "true" && ("$_smithdb_migration_enabled" 
   exit 1
 fi
 
+# ── SSO/OIDC secret guard ───────────────────────────────────────────────────
+# Fail fast rather than let this surface later as a CreateContainerConfigError.
+# create-k8s-secrets.sh only adds oauth_client_id/secret/issuer_url to
+# langsmith-config-secret when they exist in Key Vault — but this script
+# unconditionally disables config.basicAuth the moment enable_sso_oidc is true,
+# regardless of Key Vault state. With no admin login path and secretKeyRef
+# optional: false on the missing key, backend/platformBackend would otherwise
+# just fail to start with no message pointing back at the actual cause.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) || [[ -z "$KV_NAME" ]]; then
+    KV_NAME=$(_derive_kv_name)
+  fi
+  _sso_timeout_bin=""
+  for _t in timeout gtimeout; do
+    if command -v "$_t" >/dev/null 2>&1; then _sso_timeout_bin="$_t"; break; fi
+  done
+  _sso_az() {
+    if [[ -n "$_sso_timeout_bin" ]]; then
+      "$_sso_timeout_bin" 10 az "$@"
+    else
+      az "$@"
+    fi
+  }
+  _sso_check() {
+    _sso_az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query name --output tsv >/dev/null 2>&1
+  }
+  _sso_missing=""
+  for _key in langsmith-oauth-client-id langsmith-oauth-client-secret langsmith-oauth-issuer-url; do
+    _sso_check "$_key" || _sso_missing="$_sso_missing $_key"
+  done
+  if [[ -n "$_sso_missing" ]]; then
+    fail "enable_sso_oidc = true but the following Key Vault secrets are missing from '$KV_NAME':"
+    for _m in $_sso_missing; do
+      echo "         $_m" >&2
+    done
+    echo "" >&2
+    echo "       basicAuth is disabled the moment this flag is on, so without these," >&2
+    echo "       backend/platformBackend would fail to start (CreateContainerConfigError)" >&2
+    echo "       instead of failing here with a clear reason." >&2
+    echo "" >&2
+    echo "       Populate all three, then re-run:" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-client-id '<value>'" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-client-secret '<value>'" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-issuer-url '<value>'" >&2
+    exit 1
+  fi
+fi
+
 # ── Generate values-overrides.yaml ────────────────────────────────────────
+# A values-overrides.yaml written under the previous default of
+# langsmith_image_registry_keeps_source_host (true, host kept) with the key
+# still unset in terraform.tfvars: regenerating it here would switch the
+# layout under a mirror that serves the host-kept one, and deploy.sh would
+# then see a file that matches its tfvars. Stop first (_common.sh).
+if [[ -f "$OUT_FILE" ]]; then
+  _stop_if_values_layout_from_old_default "$OUT_FILE" || exit 1
+fi
 echo ""
 info "Generating values-overrides.yaml..."
 
@@ -335,13 +458,18 @@ info "Generating values-overrides.yaml..."
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
 #   envoy-gateway → ""     (uses Gateway API, not Ingress — see the gateway block below)
-#   none          → ""       (bring your own)
+#   none          → ""       (the cluster's default IngressClass, or one set by
+#                             hand in this file, kept on re-run)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;
   nginx)             _ingress_class="nginx" ;;
   agic)              _ingress_class="azure-application-gateway" ;;
   *)                 _ingress_class="" ;;
 esac
+if [[ "$_ingress_controller" == "none" && -f "$OUT_FILE" ]]; then
+  _ingress_class=$(_values_ingress_class "$OUT_FILE")
+  [[ -n "$_ingress_class" ]] && info "Keeping ingressClassName from values-overrides.yaml: $_ingress_class"
+fi
 
 if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
   _ingress_block='ingress:
@@ -353,10 +481,56 @@ if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
     - secretName: langsmith-tls
       hosts:
         - "'"${HOSTNAME}"'"'
+elif [[ "$_tls_source" == "existing" ]]; then
+  # The operator supplies the Secret (deploy.sh checks it before the Helm
+  # upgrade). No cert-manager annotation: nothing here issues or renews it.
+  _ingress_block='ingress:
+  enabled: true'"${_ingress_class:+
+  ingressClassName: \"${_ingress_class}\"}"'
+  tls:
+    - secretName: langsmith-tls
+      hosts:
+        - "'"${HOSTNAME}"'"'
 else
   _ingress_block='ingress:
   enabled: true'"${_ingress_class:+
   ingressClassName: \"${_ingress_class}\"}"
+fi
+
+# Build auth block — basicAuth (chart default) and oauth (SSO) are mutually
+# exclusive per chart validation. Client id/secret/issuer URL are never
+# written here: the chart reads them from the langsmith-config-secret K8s
+# secret (config.existingSecretName, set below) at keys oauth_client_id /
+# oauth_client_secret / oauth_issuer_url, which create-k8s-secrets.sh
+# populates from Key Vault. Works with any standard OIDC provider (Entra ID,
+# Okta, Auth0, Google Workspace, etc.) — nothing here is Entra-specific.
+# WARNING: only set enable_sso_oidc = true after the initial install —
+# confirm org-admin login with basic auth first. Enabling this before an
+# admin account exists locks you out of the UI the moment basicAuth is
+# disabled below. Set up SCIM (if you're using it) after this, not before —
+# SCIM's user matching depends on the OIDC provider this creates.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  _auth_block='  basicAuth:
+    enabled: false
+  oauth:
+    enabled: true'
+else
+  _auth_block='  basicAuth:
+    enabled: true'
+fi
+
+# A CA bundle for endpoints a private CA signed. The chart (config.customCa)
+# mounts it in the pods that include langsmith.tlsVolumes: backend,
+# platform-backend, host-backend, the queues, listener, playground and the agent
+# features. The operator and the agent deployments it creates do not get it.
+_custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
+_custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
+_custom_ca_block=""
+if [[ -n "$_custom_ca_secret" ]]; then
+  _custom_ca_block="
+  customCa:
+    secretName: \"${_custom_ca_secret}\"
+    secretKey: \"${_custom_ca_key}\""
 fi
 
 # Build postgres block
@@ -439,8 +613,7 @@ config:
   authType: "mixed"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
   existingSecretName: "langsmith-config-secret"
-  basicAuth:
-    enabled: true
+${_auth_block}
   blobStorage:
     enabled: true
     engine: "Azure"
@@ -452,7 +625,9 @@ ${_blob_endpoint_line}
   deployment:
     # Full URL used by the operator to build agent deployment endpoints.
     # Must include protocol — wrong value keeps deployments stuck in DEPLOYING state.
-    url: "${_protocol}://${HOSTNAME}"
+    url: "${_protocol}://${HOSTNAME}"${_custom_ca_block}
+
+${_images_block}
 
 ${_postgres_block}
 
@@ -610,8 +785,14 @@ content = content.replace('tlsEnabled: false  # populated by init-values.sh',
                           'tlsEnabled: ${_tls_enabled}')
 open('${_dst}', 'w').write(content)
 "
+      if [[ "$_deployment_templates" == "true" ]]; then
+        { printf '\n'; _deployment_templates_block "$_ls_image_registry" "$_ls_image_keeps_host"; } >> "$_dst"
+      fi
     fi
     pass "Generated: langsmith-values-${addon_file}.yaml"
+    if [[ "$addon_file" == "agent-deploys" && "$_deployment_templates" == "true" ]]; then
+      info "operator.templates.redis and db point at ${_ls_image_registry} (chart ${_chart_version})"
+    fi
   else
     warn "Example file not found: $EXAMPLES_DIR/langsmith-values-${addon_file}.yaml"
   fi
@@ -644,6 +825,121 @@ fi
 
 [[ "$_enable_polly"         == "true" ]] && _copy_addon "polly"
 
+# LLM Gateway — generated rather than copied, because it carries the Workload
+# Identity client ID. The longer ingress timeout for /gateway/ is not set here:
+# deploy.sh gives /gateway/ an Ingress of its own, so that no other path gets it
+# (see helm/scripts/llm-gateway-ingress.py). Both pods take
+# langsmith.commonEnv (the blob storage settings), so both get the identity label
+# and the service account annotation that k8s-cluster federates for them.
+# Presidio has an overlay of its own, gated by enable_gateway_pii_redaction in
+# deploy.sh, so turning redaction off takes effect at the next make deploy.
+_llm_gateway_file="$VALUES_DIR/langsmith-values-llm-gateway.yaml"
+if [[ "$_enable_llm_gateway" == "true" ]]; then
+  {
+    cat << LLMGW_EOF
+# LLM Gateway (chart agentGateway, private beta). Auto-generated by init-values.sh
+# from enable_llm_gateway in terraform.tfvars.
+# Clients: https://${HOSTNAME}/gateway/v1 (OpenAI formats) or /gateway (Anthropic).
+agentGateway:
+  enabled: true
+  deployment:
+    labels:
+      azure.workload.identity/use: "true"
+  serviceAccount:
+    annotations:
+      azure.workload.identity/client-id: "${WI_CLIENT_ID}"
+LLMGW_EOF
+  } > "$_llm_gateway_file"
+  pass "Generated: langsmith-values-llm-gateway.yaml"
+  if [[ "$_enable_gateway_pii_redaction" == "true" ]]; then
+    cat > "$VALUES_DIR/langsmith-values-gateway-pii.yaml" << LLMGW_EOF
+# LLM Gateway PII redaction (chart presidioAnalyzer). Auto-generated by
+# init-values.sh from enable_gateway_pii_redaction in terraform.tfvars.
+presidioAnalyzer:
+  enabled: true
+  deployment:
+    labels:
+      azure.workload.identity/use: "true"
+  serviceAccount:
+    annotations:
+      azure.workload.identity/client-id: "${WI_CLIENT_ID}"
+LLMGW_EOF
+    pass "Generated: langsmith-values-gateway-pii.yaml"
+  fi
+  if [[ "$_ingress_controller" == "envoy-gateway" || "$_ingress_controller" == "none" ]]; then
+    warn "enable_llm_gateway with ingress_controller = ${_ingress_controller}: model calls longer than that controller's request timeout will fail at the ingress. Raise it there to 900 s to match the gateway."
+  fi
+fi
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────
+# Generated rather than copied, because it carries the sandbox-host Workload
+# Identity client ID. The JuiceFS format Job runs under the sandbox-host
+# ServiceAccount, so both pods take the identity label: sandbox-host mounts the
+# JuiceFS Blob container with that identity, and the Job formats it. The JuiceFS
+# Secret and the callback signing key come from Terraform and langsmith-config-
+# secret, so this file holds no secret. images.sandboxHostImage.tag is not
+# written here: deploy.sh sets it from the appVersion of the chart it resolves.
+# safe-to-evict=false stops the cluster autoscaler from removing a node that
+# runs sandbox-host and its sandbox VMs. The format Job needs no KVM: it prefers
+# a sandbox node, but runs on any Linux node rather than wait for the sandbox
+# pool to scale up from 0.
+# The elected sandbox-host scales its own Deployment between the sandboxhost
+# pool's min_count (at least 1) and max_count, and each new replica's Pending
+# pod makes the cluster autoscaler add a node. To scale further, raise
+# sandbox_host_max_count, apply, and re-run make init-values and make deploy.
+_sandboxes_file="$VALUES_DIR/langsmith-values-sandboxes.yaml"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if [[ -z "$SANDBOX_WI_CLIENT_ID" || -z "$SANDBOX_JUICEFS_SECRET" ]] \
+    || ! [[ "$SANDBOX_MIN_REPLICAS" =~ ^[0-9]+$ && "$SANDBOX_MAX_REPLICAS" =~ ^[0-9]+$ ]]; then
+    fail "enable_sandboxes = true but the sandbox Terraform outputs are missing"
+    action "Run terraform apply with enable_sandboxes = true, then re-run make init-values"
+    exit 1
+  fi
+  _sandbox_service_url_line=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_line="
+  serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
+  cat > "$_sandboxes_file" << SANDBOXES_EOF
+# Sandboxes (chart sandboxes, sandbox-host with JuiceFS on Blob). Auto-generated
+# by init-values.sh from enable_sandboxes in terraform.tfvars.
+sandboxes:
+  enabled: true${_sandbox_service_url_line}
+  juicefs:
+    existingSecretName: "${SANDBOX_JUICEFS_SECRET}"
+  sandboxHost:
+    deployment:
+      labels:
+        azure.workload.identity/use: "true"
+      nodeSelector:
+        sandbox.langsmith.com/host: "true"
+      podAnnotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    autoscaling:
+      enabled: true
+      minReplicas: ${SANDBOX_MIN_REPLICAS}
+      maxReplicas: ${SANDBOX_MAX_REPLICAS}
+    serviceAccount:
+      annotations:
+        azure.workload.identity/client-id: "${SANDBOX_WI_CLIENT_ID}"
+  juicefsFormatJob:
+    labels:
+      azure.workload.identity/use: "true"
+    nodeSelector:
+      kubernetes.io/os: linux
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: sandbox.langsmith.com/host
+                  operator: In
+                  values: ["true"]
+SANDBOXES_EOF
+  pass "Generated: langsmith-values-sandboxes.yaml"
+fi
+
 # Patch tlsEnabled in agent-deploys — derive from tls_certificate_source.
 # Example file defaults to false; patch so operator builds https:// agent URLs.
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
@@ -654,19 +950,45 @@ if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
 fi
 
 # ── SmithDB ───────────────────────────────────────────────────────────────
+# Three files, in the order deploy.sh loads them: the sizing file (written every
+# run from terraform output smithdb_helm_values), the overlay (copied once from
+# examples/, safe to hand-edit), and the overrides file (written every run from
+# the other Terraform outputs). A later file wins.
 if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_sizing="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
-
-  if [[ ! -f "$_smithdb_base" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_base"
-    pass "Generated: langsmith-values-smithdb.yaml"
-  fi
 
   if [[ -z "$SMITHDB_STORAGE_ACCOUNT" || -z "$SMITHDB_STORAGE_CONTAINER" || -z "$SMITHDB_WI_CLIENT_ID" || -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
     fail "enable_smithdb = true but the SmithDB Terraform outputs are missing"
     action "Run terraform apply with enable_smithdb = true, then re-run make init-values"
     exit 1
+  fi
+
+  # terraform output -raw can exit 0 with a warning on stdout, so check the
+  # content rather than the exit code. yamlencode quotes keys: "smithdb":
+  if [[ "$SMITHDB_HELM_VALUES" != '"smithdb":'* ]]; then
+    fail "enable_smithdb = true but the smithdb_helm_values Terraform output is missing"
+    action "The state is older than this module. Run terraform apply, then re-run make init-values"
+    exit 1
+  fi
+
+  {
+    echo "# Auto-generated by init-values.sh from terraform output smithdb_helm_values."
+    echo "# Do not edit. To change the size, set smithdb_sizing in infra/terraform.tfvars."
+    echo ""
+    printf '%s\n' "$SMITHDB_HELM_VALUES"
+  } > "$_smithdb_sizing"
+  pass "Generated: langsmith-values-smithdb-sizing.yaml"
+
+  if [[ ! -f "$_smithdb_base" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_base"
+    pass "Generated: langsmith-values-smithdb.yaml"
+  elif grep -qE '^[[:space:]]+resourceTier:' "$_smithdb_base"; then
+    # Overlays copied before smithdb_sizing existed set resourceTier: small,
+    # which loads after the sizing file and would win over it.
+    warn "langsmith-values-smithdb.yaml sets resourceTier, which overrides smithdb_sizing"
+    action "Delete the resourceTier line from $_smithdb_base"
   fi
 
   # Outside the public cloud the chart needs the account's blob endpoint: left
@@ -747,6 +1069,9 @@ smithdb:
     job:
       labels:
         azure.workload.identity/use: "true"
+    # The TaskDB credential and the migration pod count are in
+    # langsmith-values-smithdb-migration.yaml, which make
+    # smithdb-migration-job-start writes and deploy.sh loads after this file.
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}

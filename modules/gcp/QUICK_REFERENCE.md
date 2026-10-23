@@ -125,7 +125,9 @@ sizing_profile = "production"   # default | minimum | dev | production | product
 | `production` | Multi-replica with HPA — recommended for real workloads |
 | `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
 
-After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`.
+After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`. With SmithDB enabled and `smithdb_sizing` unset, the profile also sets the SmithDB size, so run `make deploy-all` ([SMITHDB.md](SMITHDB.md#sizing)).
+
+`make init-values` copies the example only when `helm/values/langsmith-values-sizing-<profile>.yaml` is missing. It does not update a copy that exists. To get a newer example, rename that file (for example, add `.bak` to the name), then run `make init-values`. Copy your own edits from the `.bak` file into the new file, then run `make deploy`. On chart 0.17, an existing install with `sizing_profile = "minimum"` must do this. The older `minimum` example lets the queue HPA scale out until the nodes have no free CPU. Backend, host-backend, and playground then fail their startup probes.
 
 > **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
 

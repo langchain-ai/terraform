@@ -1,7 +1,7 @@
 # Workload Identity for the SmithDB pods. A dedicated service account rather
 # than the shared LangSmith one: SmithDB only needs objects in its own bucket,
-# and the shared account additionally carries project-wide
-# roles/secretmanager.secretAccessor plus objectAdmin on the traces bucket.
+# and the shared account also has objectAdmin on the traces bucket (and
+# project-wide Secret Manager access with grant_project_secret_accessor = true).
 #
 # No HMAC keys anywhere — the chart's GCS object-store path takes no credential
 # fields and authenticates purely through the pod's ambient identity.

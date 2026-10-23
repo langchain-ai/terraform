@@ -64,8 +64,12 @@ _tfvar_is_true() {
 }
 
 _project_id=$(_parse_tfvar "project_id")
+# Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
+# variables.tf default. Keep identical across the GCP scripts.
 _name_prefix=$(_parse_tfvar "name_prefix")
+_name_prefix="${_name_prefix:-${TF_VAR_name_prefix:-ls}}"
 _environment=$(_parse_tfvar "environment")
+_environment="${_environment:-${TF_VAR_environment:-prod}}"
 _region=$(_parse_tfvar "region")
 _enable_sandboxes=false
 if _tfvar_is_true "enable_sandboxes"; then
@@ -78,14 +82,9 @@ if [[ -z "$_project_id" ]]; then
   return 1
 fi
 
-if [[ -z "$_name_prefix" ]]; then
-  echo "ERROR: name_prefix is not set in terraform.tfvars. Set it before sourcing setup-env.sh." >&2
-  return 1
-fi
-
 export TF_VAR_project_id="$_project_id"
 export TF_VAR_name_prefix="$_name_prefix"
-export TF_VAR_environment="${_environment:-dev}"
+export TF_VAR_environment="$_environment"
 export TF_VAR_region="$_region"
 export TF_VAR_owner="${LANGSMITH_OWNER:-}"
 export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
@@ -473,6 +472,21 @@ _validate_admin_password() {
 _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
   "" 'Initial LangSmith admin password (min 12 bytes, one lowercase, one uppercase, one symbol from !#$%()+,-./:?@[]^_{~})' \
   "true" "_validate_admin_password" || return 1
+
+# ── SSO/OIDC login (optional) ─────────────────────────────────────────────────
+# Unlike the secrets above, these can't be auto-generated — they come from an
+# external identity provider (Entra ID, Okta, Auth0, etc.), so only prompt for
+# them when enable_sso_oidc = true in terraform.tfvars. Every other secret in
+# this script runs unconditionally because a generator makes that harmless;
+# these three would otherwise force an unrelated prompt on every fresh setup.
+if _tfvar_is_true "enable_sso_oidc"; then
+  _sm_secret "oauth-client-id" "TF_VAR_langsmith_oauth_client_id" \
+    "" "OIDC client ID (from your identity provider's app registration)" "false" || return 1
+  _sm_secret "oauth-client-secret" "TF_VAR_langsmith_oauth_client_secret" \
+    "" "OIDC client secret" "true" || return 1
+  _sm_secret "oauth-issuer-url" "TF_VAR_langsmith_oauth_issuer_url" \
+    "" "OIDC issuer URL (e.g. https://login.microsoftonline.com/<tenant-id>/v2.0 for Entra ID)" "false" || return 1
+fi
 
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
 # Auto-generated and stored in Secret Manager on first run.

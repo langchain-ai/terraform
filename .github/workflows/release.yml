@@ -6,7 +6,7 @@ name: Release (auto-tag on merge)
 # deploy.sh pins, see .github/scripts/chart-line.sh). PATCH is a module revision
 # counter that increments on any repo change, regardless of provider. The tag
 # PATCH is NOT the chart version - the chart is resolved as the latest patch in
-# the pinned line (e.g. ~0.16.0).
+# the pinned line (e.g. ~0.17.0).
 #
 # Skip a release for a given merge by including "[skip release]" in the commit
 # message. Run manually with dry_run=true to preview the computed version.
@@ -61,6 +61,28 @@ jobs:
           line="$(.github/scripts/chart-line.sh)"
           echo "line=$line" >> "$GITHUB_OUTPUT"
           echo "Chart line: $line"
+
+      - name: Assert the branch matches the chart line
+        # Runs before "Compute next tag" so a wrong pin fails the run before any
+        # tag or release is published. Keep it above the tag steps.
+        if: steps.skipcheck.outputs.skip != 'true'
+        env:
+          LINE: ${{ steps.line.outputs.line }}
+          REF: ${{ github.ref_name }}
+        run: |
+          case "$REF" in
+            main) ;;
+            release/*)
+              if [[ "$REF" != "release/${LINE}" ]]; then
+                echo "::error::$REF carries chart line ${LINE}; refusing to tag" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::only main and release/* may cut tags, not $REF" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Compute next tag
         if: steps.skipcheck.outputs.skip != 'true'
@@ -131,12 +153,18 @@ jobs:
           LINE: ${{ steps.line.outputs.line }}
           PROVIDERS: ${{ steps.msg.outputs.providers }}
           SUBJECT: ${{ steps.msg.outputs.subject }}
+          REF: ${{ github.ref_name }}
         run: |
           notes="Changed: ${PROVIDERS}
           ${SUBJECT}
 
           Chart line: ${LINE} (deploys the latest ${LINE}.x)."
-          gh release create "$NEXT" --title "$NEXT" --notes "$notes"
+          # GitHub moves the "Latest" badge to every new release unless told
+          # otherwise. Only main carries the current chart line, so a release/*
+          # branch must never take the badge from it.
+          latest=false
+          if [[ "$REF" == "main" ]]; then latest=true; fi
+          gh release create "$NEXT" --title "$NEXT" --notes "$notes" --latest="$latest"
 
       - name: Dry-run summary
         if: steps.skipcheck.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.dry_run

@@ -7,7 +7,7 @@ This module creates two roles:
 | Role | Purpose | Trust |
 |------|---------|-------|
 | `var.role_name` (you choose) | Assumed by the LangSmith control-plane Crossplane controller to provision and manage resources. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
-| `LangSmithBYOCBreakGlass` | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
+| `var.break_glass_role_name` (default `LangSmithBYOCBreakGlass`) | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
 
 ## Prerequisites
 
@@ -114,6 +114,36 @@ role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
 
 When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
 
+When you use the BYOIAM module, always pass its outputs to this module. With
+default names the grants are redundant; with custom names they are required, so
+this role can still read and pass them:
+
+```hcl
+byoiam_role_arns                       = values(module.byoiam.role_arns)
+byoiam_instance_profile_name           = module.byoiam.karpenter_instance_profile_name
+byoiam_karpenter_controller_policy_arn = module.byoiam.karpenter_controller_policy_arn
+```
+
+### Naming and permissions boundaries
+
+Set `break_glass_role_name` when your naming convention does not allow
+`LangSmithBYOCBreakGlass`, and share the resulting `break_glass_role_arn` output
+with LangChain. Set `permissions_boundary_arn` to attach your permissions
+boundary to both roles when Terraform creates them. The boundary limits what the
+provisioning role can do, so confirm it allows the actions in this module's
+policies.
+
+### Self-hosted to BYOC migration
+
+When migrating a self-hosted LangSmith installation into a BYOC data plane, set
+`allow_self_hosted_migration_permissions = true` for the duration of the
+migration.
+
+The data plane can then accept a VPC peering connection from the SH instance.
+
+Set the flag back to `false` once LangChain
+confirms the migration is complete.
+
 ### Enabling break-glass assume-role access
 
 `LangSmithBYOCBreakGlass` defaults to `Deny`. To allow an approved LangChain engineer to assume the role, set `allow_break_glass_access = true` and include that engineer's Identity Store user ID and SourceIdentity email (the engineer will provide it to you):
@@ -161,6 +191,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
 | `allow_vpc_creation_permissions` | `bool` | no | `true` | Grants base-network management permissions. Set to `false` for a customer-supplied VPC. |
 | `allow_iam_management_permissions` | `bool` | no | `true` | Grants IAM creation, mutation, and deletion permissions. Set to `false` for customer-managed IAM. |
+| `allow_self_hosted_migration_permissions` | `bool` | no | `false` | Grants VPC peering acceptance and SmithDB role trust updates for a self-hosted to BYOC migration. |
 | `vpc_ids` | `set(string)` | no | `[]` | Customer VPC IDs allowed for tagged workload security-group creation; required when `allow_vpc_creation_permissions = false`. |
 
 ## Outputs
@@ -191,7 +222,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-lambda` | Lambda + EventBridge for periodic jobs |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
-The exact statements are in `policies/*.json`.
+The exact statements are in `policies/*.json`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs.
 
 ### Break-glass role
 

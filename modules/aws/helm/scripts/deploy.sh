@@ -10,14 +10,15 @@
 #   1. langsmith-values.yaml              — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
-#   4. langsmith-values-insights.yaml       — Insights (if enable_insights)
-#   5. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
-#   6. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
-#   7. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
-#   8. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
-#   9. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
-#  10. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
-#  11. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
+#   4. langsmith-values-engine.yaml         — Engine (if enable_engine)
+#   5. langsmith-values-insights.yaml       — Insights (if enable_insights)
+#   6. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
+#   7. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
+#   8. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
+#   9. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
+#  10. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
+#  11. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#  12. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -32,13 +33,13 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
+# Pin the chart *line*: deploy the latest 0.17.x, never auto-jump to 0.18.
 # Override with the CHART_VERSION env var for an exact patch if needed.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.17.0 pin."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
 # Fall back to the langsmith_helm_chart_version tfvar before the line default, so
@@ -49,7 +50,7 @@ if [[ -z "${CHART_VERSION:-}" ]]; then
   [[ -n "$CHART_VERSION" ]] && \
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
-CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -64,41 +65,55 @@ _chart_version_supports_sandboxes() {
   esac
 }
 
+# Prints "legacy" when the sandboxes block still carries the chart 0.16
+# sandboxes.juicefs.csi keys, "ok" when it has the generated chart 0.17 keys, and
+# "missing" otherwise. Chart 0.17 ignores a leftover csi block, and its own
+# validation then fails the release on sandboxes.juicefs.redis.metaURL, which names
+# neither the values file nor the fix. Keep identical to the GCP copy.
+_sandbox_values_state() {
+  awk '
+    /^[^ \t#]/ { top = $1; child = "" }
+    top != "sandboxes:" { next }
+    /^  [^ \t#]/ { child = $1 }
+    /^  enabled:[ \t]*true[ \t]*$/ { enabled = 1 }
+    child == "juicefs:" && /^    csi:/ { legacy = 1 }
+    child == "juicefs:" && /^    existingSecretName:[ \t]*"?[^" \t]+"?[ \t]*$/ { secret = 1 }
+    END { print (legacy ? "legacy" : (enabled && secret ? "ok" : "missing")) }
+  ' "$1"
+}
+
 _validate_sandbox_values_file() {
   local values_file="$1"
 
-  if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file"; then
-    echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
-    echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
-    exit 1
-  fi
+  case "$(_sandbox_values_state "$values_file")" in
+    ok) ;;
+    legacy)
+      echo "ERROR: $(basename "$values_file") carries sandboxes.juicefs.csi, the chart 0.16 sandbox schema." >&2
+      echo "       Chart 0.17 has no JuiceFS CSI driver and ignores that block." >&2
+      echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) to regenerate it." >&2
+      exit 1
+      ;;
+    *)
+      echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
+      echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
+      exit 1
+      ;;
+  esac
 }
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# These values use the chart 0.17 schema: the 0.16 layout (engineInsightsAgent,
+# top-level insights/polly, no backend.agentBootstrap) plus the sandbox-host
+# JuiceFS mount that replaced sandboxes.juicefs.csi. Chart 0.16 has no host-mount
+# keys, and chart 0.15 silently drops the external Insights Postgres/Redis wiring.
+# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
+# Refuse any other line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
+  echo "       These values require chart 0.17 or 0.18 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 or 0.18 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.17.0 make deploy" >&2
   exit 1
-fi
-# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
-# are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
-  _rc="${CHART_VERSION##*-rc.}"
-  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
-    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
-    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
-    exit 1
-  fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
@@ -134,6 +149,8 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+_enable_engine=false
+_tfvar_is_true "enable_engine" && _enable_engine=true
 _direct_polly_enabled=false
 if _tfvar_is_true "enable_polly" || _tfvar_is_true "enable_standalone_polly"; then
   _direct_polly_enabled=true
@@ -146,6 +163,27 @@ fi
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
     echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
+    exit 1
+  fi
+fi
+
+# Engine needs chart 0.17, which the chart-line check above already enforces.
+if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
+  echo "ERROR: enable_engine = true requires enable_sandboxes = true. Every Engine run executes in a sandbox." >&2
+  exit 1
+fi
+
+# The Engine IRSA role trusts the service account names that Terraform makes from
+# langsmith_release_name and langsmith_namespace. A different release or namespace
+# gives pods with no AWS credentials, and Bedrock calls then fail.
+if [[ "$_enable_engine" == "true" ]]; then
+  _tf_release_name=$(_parse_tfvar "langsmith_release_name") || _tf_release_name="langsmith"
+  _tf_namespace=$(_parse_tfvar "langsmith_namespace") || _tf_namespace="langsmith"
+  if [[ "$RELEASE_NAME" != "$_tf_release_name" || "$NAMESPACE" != "$_tf_namespace" ]]; then
+    echo "ERROR: enable_engine = true, but this deploy uses release '$RELEASE_NAME' in namespace '$NAMESPACE'." >&2
+    echo "       The Engine IRSA role trusts release '$_tf_release_name' in namespace '$_tf_namespace'" >&2
+    echo "       (langsmith_release_name and langsmith_namespace in terraform.tfvars)." >&2
+    echo "       Set RELEASE_NAME and NAMESPACE to these values, or change terraform.tfvars and run 'make apply'." >&2
     exit 1
   fi
 fi
@@ -174,13 +212,41 @@ _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/nu
   exit 1
 }
 echo "Updating kubeconfig for cluster: $_cluster_name..."
-aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
+_use_cluster_kubeconfig "$_cluster_name" "$_region"
 echo "  Active context: $(kubectl config current-context)"
 echo ""
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
+
+# Chart 0.16 mounted sandbox volumes through a bundled JuiceFS CSI driver, which
+# chart 0.17 deletes. If the upgrade removes the driver while those volumes are
+# mounted, kubelet can no longer unmount them and the old sandbox-host pods hang in
+# Terminating on juicefs.com/finalizer. Draining needs the driver alive, so stop
+# here until no JuiceFS claim or mount pod is left. Checked whatever
+# enable_sandboxes says: turning the flag off does not remove a running driver.
+# Keep identical to the GCP copy.
+if kubectl get daemonset juicefs-csi-node -n "$NAMESPACE" >/dev/null 2>&1; then
+  _jfs_workloads=$(kubectl get deployments,statefulsets -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -E 'sandbox-host$' || true)
+  _jfs_pvcs=$(kubectl get pvc -n "$NAMESPACE" -o name 2>/dev/null | grep -Ei 'juicefs|smithbox' || true)
+  _jfs_mount_pods=$(kubectl get pods -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -i 'juicefs' | grep -Eiv '/juicefs-csi-(node|controller)' || true)
+  if [[ -n "${_jfs_pvcs}${_jfs_mount_pods}" ]]; then
+    echo "ERROR: namespace $NAMESPACE still mounts sandbox volumes through the chart 0.16 JuiceFS CSI driver." >&2
+    echo "       Chart 0.17 removes that driver, and upgrading now leaves the old sandbox-host pods" >&2
+    echo "       stuck in Terminating. Drain the volumes while the driver still runs, then re-run:" >&2
+    while IFS= read -r _obj; do
+      [[ -z "$_obj" ]] && continue
+      echo "         kubectl delete -n $NAMESPACE $_obj" >&2
+    done < <(printf '%s\n%s\n' "$_jfs_workloads" "$_jfs_pvcs")
+    echo "         kubectl get pods -n $NAMESPACE | grep juicefs   # wait until only juicefs-csi-* pods remain" >&2
+    echo "       Running sandboxes stop. Their data stays in object storage and Redis, and chart 0.17" >&2
+    echo "       mounts the same JuiceFS volume." >&2
+    exit 1
+  fi
+fi
 
 # ── Apply ESO ClusterSecretStore + ExternalSecret (or direct secret for workers) ──
 # SKIP_ESO=true bypasses SSM/ESO and creates langsmith-config directly from env vars.
@@ -201,7 +267,6 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   _require_env "TF_VAR_langsmith_jwt_secret"
   _require_env "LANGSMITH_LICENSE_KEY"
   _require_env "LANGSMITH_ADMIN_PASSWORD"
-  _require_env "LANGSMITH_ADMIN_EMAIL"
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
@@ -210,6 +275,10 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   fi
   if [[ "$_direct_insights_enabled" == "true" ]]; then
     _require_env "TF_VAR_langsmith_insights_encryption_key"
+  fi
+  if [[ "$_enable_engine" == "true" ]]; then
+    _require_env "TF_VAR_langsmith_engine_encryption_key"
+    _require_env "TF_VAR_langsmith_engine_usage_signing_secret"
   fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
@@ -234,7 +303,17 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
       --from-literal=insights_encryption_key="${TF_VAR_langsmith_insights_encryption_key}"
     )
   fi
+  _engine_secret_literals=()
+  if [[ "$_enable_engine" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _engine_secret_literals=(
+      --from-literal=engine_encryption_key="${TF_VAR_langsmith_engine_encryption_key}"
+      --from-literal=engine_usage_signing_secret="${TF_VAR_langsmith_engine_usage_signing_secret}"
+    )
+  fi
 
+  # Bash 3.2 treats an empty array as unset under nounset, so each optional
+  # array expands only when it has elements.
   # shellcheck disable=SC2154  # TF_VAR_* exported by setup-env.sh; _require_env above asserts them
   kubectl create secret generic langsmith-config \
     --namespace "$NAMESPACE" \
@@ -242,10 +321,10 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=api_key_salt="${TF_VAR_langsmith_api_key_salt}" \
     --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
-    --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
-    "${_sandbox_secret_literals[@]}" \
-    "${_polly_secret_literals[@]}" \
-    "${_insights_secret_literals[@]}" \
+    ${_sandbox_secret_literals[@]+"${_sandbox_secret_literals[@]}"} \
+    ${_polly_secret_literals[@]+"${_polly_secret_literals[@]}"} \
+    ${_insights_secret_literals[@]+"${_insights_secret_literals[@]}"} \
+    ${_engine_secret_literals[@]+"${_engine_secret_literals[@]}"} \
     --dry-run=client -o yaml | kubectl apply -f -
   echo "  langsmith-config secret ready (direct)."
 else
@@ -253,6 +332,32 @@ else
   # Applied here after ESO is installed by terraform apply.
   # Run standalone to re-sync ESO without a full redeploy: ./helm/scripts/apply-eso.sh
   NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/apply-eso.sh"
+fi
+
+# Engine's pods, platform-backend, and ingest-queue read engine_encryption_key and
+# engine_usage_signing_secret from langsmith-config with optional: false. The chart
+# checks for them only when Helm can read the Secret, so check here first, by key
+# name only. ESO can take a few seconds to write a new key after apply-eso.sh.
+if [[ "$_enable_engine" == "true" ]]; then
+  _engine_missing=""
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    _engine_missing=""
+    for _key in engine_encryption_key engine_usage_signing_secret; do
+      _present=$(kubectl get secret langsmith-config -n "$NAMESPACE" \
+        -o go-template="{{with .data}}{{if index . \"${_key}\"}}yes{{end}}{{end}}" 2>/dev/null) || _present=""
+      [[ "$_present" == "yes" ]] || _engine_missing+=" ${_key}"
+    done
+    [[ -z "$_engine_missing" ]] && break
+    sleep 5
+  done
+  if [[ -n "$_engine_missing" ]]; then
+    echo "ERROR: enable_engine = true, but Secret langsmith-config in $NAMESPACE has no key:${_engine_missing}" >&2
+    echo "       Create the SSM parameters, then sync them and re-run:" >&2
+    echo "         source infra/scripts/setup-env.sh   # creates engine-encryption-key and engine-usage-signing-secret" >&2
+    echo "         make apply-eso" >&2
+    exit 1
+  fi
+  echo "  langsmith-config has engine_encryption_key and engine_usage_signing_secret."
 fi
 echo ""
 
@@ -360,8 +465,11 @@ echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 # Addon files: gated by enable_* flags in terraform.tfvars.
 # The file must exist AND the corresponding flag must be true.
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
+# Engine loads before the Insights files: Engine and Insights share the
+# engineInsightsAgent deployment, so the Insights sizing and storage settings win.
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
+  "engine:engine:$_enable_engine"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
   "fleet:fleet:$_enable_fleet"
@@ -389,6 +497,25 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# SSO is one-way (LangSmith does not support going back to basic auth), so the deploy stops rather than redeploy a live SSO install with basic auth.
+_sso_file="$VALUES_DIR/langsmith-values-sso.yaml"
+if _tfvar_is_true "enable_sso_oidc"; then
+  if [[ ! -f "$_sso_file" ]]; then
+    echo "  ✗ langsmith-values-sso.yaml (enable_sso_oidc = true but file not found — run: make init-values)" >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(-f "$_sso_file")
+  echo "  ✔ langsmith-values-sso.yaml (SSO login)"
+else
+  # The chart sets BASIC_AUTH_ENABLED to "false" only when SSO is on, and names the ConfigMap <release>-config when the release name contains "langsmith".
+  _auth_cm="${RELEASE_NAME}-langsmith-config"
+  [[ "$RELEASE_NAME" == *langsmith* ]] && _auth_cm="${RELEASE_NAME}-config"
+  if [[ "$(kubectl get configmap "$_auth_cm" -n "$NAMESPACE" -o jsonpath='{.data.BASIC_AUTH_ENABLED}' 2>/dev/null)" == "false" ]]; then
+    echo "  ✗ SSO is on in the cluster, and LangSmith does not support turning it off — set enable_sso_oidc = true in terraform.tfvars" >&2
+    exit 1
+  fi
+fi
 
 # The chart defaults Chat to enabled. Force the product and storage contract so
 # skipping a stale values file cannot enable Chat or select the wrong database.
@@ -491,6 +618,24 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   else
     echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
     exit 1
+  fi
+  # Stop if the migration gate in the overrides differs from tfvars; make init-values was skipped after a migration start or end.
+  _smithdb_migration_enabled=false
+  _tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    echo "  ✗ langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration, but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled (terraform.tfvars is the source of truth) — run: make init-values, then make deploy" >&2
+    exit 1
+  fi
+  # Written by make smithdb-migration-job-start: TaskDB source and migration sizing.
+  _smithdb_migration="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
+  if _tfvar_is_true "smithdb_migration_enabled"; then
+    if [[ ! -f "$_smithdb_migration" ]]; then
+      echo "  ✗ langsmith-values-smithdb-migration.yaml (smithdb_migration_enabled = true but file not found — run: make smithdb-migration-job-start)" >&2
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
   fi
 fi
 
@@ -673,7 +818,7 @@ fi
 # <release>-<namePrefix>-<component>; namePrefix is standalone-{fleet,polly,insights}.
 [[ "$_enable_fleet" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-fleet-api-server")
 [[ "$_enable_polly" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
-[[ "$_enable_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
+[[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do
@@ -749,6 +894,7 @@ fi
 
 echo ""
 echo "Access LangSmith:"
+echo "  Kubeconfig:    export KUBECONFIG=$KUBECONFIG"
 echo "  Port-forward:  kubectl port-forward svc/${RELEASE_NAME}-frontend -n ${NAMESPACE} 8080:80"
 echo "  Then open:     http://localhost:8080"
 if [[ -n "${_langsmith_domain:-}" ]]; then

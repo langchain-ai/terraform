@@ -65,6 +65,15 @@ locals {
   langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
+  # The chart names sandbox-host's service account <fullname>-sandbox-host.
+  sandbox_host_service_account = "${local.langsmith_release_fullname}-sandbox-host"
+  sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+
+  # JuiceFS reads the container from the first label of the bucket host and the
+  # account from access-key, so the bucket is https://<container>.core.windows.net,
+  # not the account's blob URL.
+  sandbox_juicefs_bucket = var.enable_sandboxes ? replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1") : null
+
   # A StorageClass is cluster-scoped, unlike everything else this module creates
   # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
   # the second apply fails on an object the first one owns. Suffix it the same
@@ -124,11 +133,13 @@ locals {
     public = {
       postgres_private_dns_zone = "privatelink.postgres.database.azure.com"
       blob_private_dns_zone     = "privatelink.blob.core.windows.net"
+      keyvault_private_dns_zone = "privatelink.vaultcore.azure.net"
       cloudapp_suffix           = "cloudapp.azure.com"
     }
     usgovernment = {
       postgres_private_dns_zone = "privatelink.postgres.database.usgovcloudapi.net"
       blob_private_dns_zone     = "privatelink.blob.core.usgovcloudapi.net"
+      keyvault_private_dns_zone = "privatelink.vaultcore.usgovcloudapi.net"
       cloudapp_suffix           = "cloudapp.usgovcloudapi.net"
     }
   }
@@ -139,6 +150,17 @@ locals {
   # module instead of letting both create their own.
   create_blob_private_dns_zone = var.storage_private_endpoint_enabled && var.storage_private_dns_zone_id == ""
   blob_private_dns_zone_id     = local.create_blob_private_dns_zone ? azurerm_private_dns_zone.blob[0].id : var.storage_private_dns_zone_id
+
+  # The Key Vault endpoint follows the blob endpoints into their subnet unless
+  # given its own, and its zone works the same way: supplied, or created and
+  # linked here.
+  keyvault_private_endpoint_subnet_id = var.keyvault_private_endpoint_subnet_id != "" ? var.keyvault_private_endpoint_subnet_id : local.storage_private_endpoint_subnet_id
+  create_keyvault_private_dns_zone    = var.keyvault_private_endpoint_enabled && var.keyvault_private_dns_zone_id == ""
+  keyvault_private_dns_zone_id        = local.create_keyvault_private_dns_zone ? azurerm_private_dns_zone.keyvault[0].id : var.keyvault_private_dns_zone_id
+
+  # A supplied PostgreSQL zone serves both Flexible Servers, LangSmith's and
+  # the SmithDB metastore, so neither module creates or links one.
+  postgres_private_dns_zone_supplied = var.postgres_private_dns_zone_id != ""
 
   # Bastion and AGIC are supply-only under bring-your-own: Terraform carves their
   # subnets out of a VNet it owns, and reuses a supplied one otherwise. There is
@@ -172,8 +194,12 @@ locals {
 
   # The endpoints the storage and Key Vault firewalls need on whichever subnet
   # AKS ends up in. Terraform puts both on a subnet it carves (see the
-  # networking module), so this only matters for one you supply.
-  required_aks_service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+  # networking module), so this only matters for one you supply. With the Key
+  # Vault private endpoint on, the vault's firewall no longer allowlists the
+  # subnet (public access is off), so Azure has no subnet rule to validate and
+  # Microsoft.KeyVault is not needed. Storage keeps its rule either way: both
+  # accounts stay default-deny so turning their endpoints off never opens them.
+  required_aks_service_endpoints = concat(["Microsoft.Storage"], var.keyvault_private_endpoint_enabled ? [] : ["Microsoft.KeyVault"])
 
   manage_aks_subnet_endpoints = local.byo_aks_subnet && var.manage_byo_subnet_service_endpoints
 
@@ -217,29 +243,65 @@ locals {
   aks_default_pool_max_pods = 30
 
   # Held per pool rather than as a single total, so the number and the error
-  # message that has to justify it are built from the same place.
+  # message that has to justify it are built from the same place. Only the pools
+  # Terraform creates: an attached cluster's own pools are already in the subnet,
+  # and Terraform cannot see their sizes.
   aks_pool_sizing = merge(
-    {
+    var.create_cluster ? {
       default = {
         nodes              = var.default_node_pool_max_count + 1
         addresses_per_node = local.aks_overlay ? 1 : var.default_node_pool_max_pods + 1
       }
-    },
+    } : {},
     {
-      for name, pool in local.effective_node_pools : name => {
+      for name, pool in local.aks_managed_node_pools : name => {
         nodes              = pool.max_count + 1
         addresses_per_node = local.aks_overlay ? 1 : local.aks_default_pool_max_pods + 1
       }
     }
   )
-  aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+  # concat([0], ...) keeps sum() off an empty list, which an attached cluster
+  # with no pools to add produces.
+  aks_required_ips = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node]))
 
   # Overlay hands every node a /24 of the pod range, so the range's capacity is
   # counted in nodes, surge included, across every pool.
-  aks_node_total             = sum([for pool in local.aks_pool_sizing : pool.nodes])
+  aks_node_total             = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes]))
   aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
-  effective_node_pools = var.additional_node_pools
+  # enable_sandboxes adds the sandbox-host pool. An additional_node_pools entry
+  # named sandboxhost replaces it whole, for a pool that needs other settings.
+  sandbox_host_vm_size = var.sandbox_host_vm_size != null ? var.sandbox_host_vm_size : (contains(["production", "production-large"], var.sizing_profile) ? "Standard_D32ds_v5" : "Standard_D8ds_v5")
+  sandbox_node_pools = var.enable_sandboxes ? {
+    sandboxhost = {
+      vm_size   = local.sandbox_host_vm_size
+      min_count = var.sandbox_host_min_count
+      max_count = var.sandbox_host_max_count
+      node_labels = {
+        "sandbox.langsmith.com/host"      = "true"
+        "sandbox.langsmith.com/node-pool" = "host"
+      }
+      node_taints       = ["sandbox.langsmith.com/host=true:NoSchedule"]
+      kubelet_disk_type = "OS"
+      zones             = var.availability_zones
+      os_sku            = null
+      os_disk_size_gb   = var.sandbox_host_os_disk_size_gb
+    }
+  } : {}
+
+  effective_node_pools = merge(local.sandbox_node_pools, var.additional_node_pools)
+
+  # On a pre-existing cluster whose node pools the customer owns, an empty map, so
+  # Terraform doesn't attach pools to a cluster it doesn't manage.
+  aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
+
+  # Additional pools this module creates that resolve to zones: their own, or
+  # availability_zones when they set none. One of these gives SmithDB zonal
+  # nodes for its Premium SSD v2 cache disks on a cluster whose default pool
+  # was built nonzonal.
+  zonal_node_pools = [
+    for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+  ]
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -386,17 +448,23 @@ locals {
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
-  # Customize via the environment/owner/cost_center variables.
+  # Customize via the environment/owner/cost_center/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
+  # Azure tag names are case-insensitive and merge() is not, so a built-in key
+  # is dropped when tags has it in any case: Environment replaces environment
+  # instead of sitting beside it.
   common_tags = merge(
-    {
-      environment = coalesce(var.environment, local.deployment_name, "dev")
-      project     = "langsmith"
-      managed_by  = "terraform"
-    },
-    var.owner != "" ? { owner = var.owner } : {},
-    var.cost_center != "" ? { cost_center = var.cost_center } : {}
+    { for k, v in merge(
+      {
+        environment = coalesce(var.environment, local.deployment_name, "dev")
+        project     = "langsmith"
+        managed_by  = "terraform"
+      },
+      var.owner != "" ? { owner = var.owner } : {},
+      var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    ) : k => v if !contains([for t in keys(var.tags) : lower(t)], k) },
+    var.tags
   )
 }
 
@@ -419,6 +487,7 @@ locals {
     !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24) ? "" : "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly.",
     length(local.postgres_name) <= 63 ? "" : "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly.",
     length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
+    !var.enable_sandboxes || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
     !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
   ])
 }
@@ -467,6 +536,11 @@ locals {
   # so that everything placed in the group waits for it on a first apply.
   rg_name = var.create_resource_group ? azurerm_resource_group.resource_group[0].name : data.azurerm_resource_group.existing[0].name
   rg_id   = var.create_resource_group ? azurerm_resource_group.resource_group[0].id : data.azurerm_resource_group.existing[0].id
+
+  # A pre-existing cluster lives in its own resource group, not the one this
+  # module uses for Key Vault and Storage. existing_cluster_resource_group_name
+  # is required when create_cluster = false, so this is never blank.
+  aks_rg_name = var.create_cluster ? local.rg_name : var.existing_cluster_resource_group_name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -577,6 +651,275 @@ data "azapi_resource" "byo_agic_subnet_delegations" {
   response_export_values = ["properties.delegations"]
 }
 
+# ── Cluster egress (aks_outbound_type) ───────────────────────────────────────
+# userDefinedRouting sends node egress by the supplied subnet's route table and
+# userAssignedNATGateway by the NAT gateway on it, and AKS needs either in place
+# when it creates the cluster, by which time the identities, Key Vault and
+# storage already exist. Both are therefore read here, at plan: the route table ID from the
+# subnet read above, and the NAT gateway in its own block below. The route
+# table's own routes are read too. AKS accepts a 0.0.0.0/0 route there only
+# with next hop VirtualAppliance or VirtualNetworkGateway, and refuses any
+# other (None, Internet, VnetLocal) with RouteTableInvalidNextHop (seen live
+# for None, on a test cluster in eastus2), so such a route is refused here.
+# No 0.0.0.0/0 route at all is only a warning: a default route learned over
+# BGP from ExpressRoute or VPN never appears in the table.
+# aks_network_owner_checks = false skips the read, for a deploying identity
+# that may not read the route table; Azure still checks the next hop at create,
+# but nothing replaces the two warnings below that read it.
+locals {
+  aks_outbound_custom   = var.aks_outbound_type != "loadBalancer"
+  aks_subnet_route_tbl  = try(one(data.azurerm_subnet.byo_aks_subnet[*].route_table_id), null)
+  aks_subnet_has_routes = local.aks_subnet_route_tbl != null && local.aks_subnet_route_tbl != ""
+  # Resource group and name of the route table, null when the ID has another
+  # shape, so a mocked read reaches the precondition rather than a bad index.
+  aks_route_tbl_parts = local.aks_subnet_has_routes ? try(regex("(?i)^/subscriptions/[^/]+/resourceGroups/([^/]+)/providers/Microsoft\\.Network/routeTables/([^/]+)$", local.aks_subnet_route_tbl), null) : null
+
+  # The table's 0.0.0.0/0 routes, empty when it was not read, and the ones AKS
+  # would refuse. A for over the zero-or-one tables, not an index: Terraform
+  # 1.11 evaluates both sides of || and &&, so [0] would fail with no table.
+  aks_udr_next_hops_allowed = ["virtualappliance", "virtualnetworkgateway"]
+  aks_udr_default_routes = flatten([
+    for t in data.azurerm_route_table.byo_aks_subnet : [for r in t.route : r if r.address_prefix == "0.0.0.0/0"]
+  ])
+  aks_udr_bad_default_routes = [
+    for r in local.aks_udr_default_routes : r if !contains(local.aks_udr_next_hops_allowed, lower(coalesce(r.next_hop_type, "")))
+  ]
+
+  # Routes straight to the internet. When every one of them names a service tag
+  # (AzureCloud, say) rather than an address range, the routes send only Azure's
+  # own ranges out directly, and the AKS required FQDNs, several of which
+  # resolve outside AzureCloud, depend on whatever sits behind the default route.
+  aks_udr_internet_routes = flatten([
+    for t in data.azurerm_route_table.byo_aks_subnet : [for r in t.route : r if lower(coalesce(r.next_hop_type, "")) == "internet"]
+  ])
+  aks_udr_service_tag_only_egress = length(local.aks_udr_internet_routes) > 0 && alltrue([
+    for r in local.aks_udr_internet_routes : !can(cidrnetmask(r.address_prefix))
+  ])
+
+  # The live outbound type, null until the cluster exists or when the read
+  # carries none; null never counts as a change.
+  aks_outbound_live     = try(local.aks_live.outbound, null)
+  aks_outbound_changing = local.aks_outbound_live != null && try(lower(local.aks_outbound_live), "") != lower(var.aks_outbound_type)
+}
+
+data "azurerm_route_table" "byo_aks_subnet" {
+  count               = var.create_cluster && var.aks_network_owner_checks && var.aks_outbound_type == "userDefinedRouting" && local.aks_route_tbl_parts != null ? 1 : 0
+  name                = local.aks_route_tbl_parts[1]
+  resource_group_name = local.aks_route_tbl_parts[0]
+}
+
+resource "terraform_data" "aks_outbound_guard" {
+  input = var.aks_outbound_type
+
+  lifecycle {
+    # An attached cluster's egress belongs to whoever built it.
+    precondition {
+      condition     = var.create_cluster || !local.aks_outbound_custom
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" has no effect with create_cluster = false: an attached cluster keeps the outbound type it was built with. Remove the setting, or leave it at \"loadBalancer\"."
+    }
+
+    # The route table or NAT gateway belongs to the network's owner, on a subnet
+    # they supply.
+    precondition {
+      condition     = !var.create_cluster || !local.aks_outbound_custom || local.byo_aks_subnet
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" needs create_vnet = false and aks_subnet_id set to a subnet that already carries your ${var.aks_outbound_type == "userDefinedRouting" ? "route table" : "NAT gateway"}. A subnet this module creates or carves has none."
+    }
+
+    precondition {
+      condition     = !var.create_cluster || var.aks_outbound_type != "userDefinedRouting" || !local.byo_aks_subnet || local.aks_subnet_has_routes
+      error_message = "aks_outbound_type = \"userDefinedRouting\" but aks_subnet_id has no route table, which AKS requires on the subnet for this outbound type. Associate the route table that carries your egress route with the subnet: az network vnet subnet update --ids ${var.aks_subnet_id} --route-table <route-table-id>."
+    }
+
+    precondition {
+      condition     = length(local.aks_udr_bad_default_routes) == 0
+      error_message = "aks_outbound_type = \"userDefinedRouting\", and the route table on aks_subnet_id sends 0.0.0.0/0 to next hop ${join(", ", distinct([for r in local.aks_udr_bad_default_routes : coalesce(r.next_hop_type, "unset")]))}. AKS accepts a default route only to VirtualAppliance or VirtualNetworkGateway and refuses any other at create with RouteTableInvalidNextHop. Point the route at your firewall or appliance (VirtualAppliance with its private IP) or at the VPN or ExpressRoute gateway (VirtualNetworkGateway)."
+    }
+
+    # A change moves the egress IP and drops connections, so it is never a
+    # side effect of a tfvars edit.
+    precondition {
+      condition     = !local.aks_outbound_changing || var.aks_allow_outbound_type_change
+      error_message = "Changing aks_outbound_type from ${coalesce(local.aks_outbound_live, "unknown")} to ${var.aks_outbound_type} on a cluster that already exists. Azure applies it in place, but it moves the cluster's egress IP and drops existing connections. Revert the change to keep the cluster as it is, or set aks_allow_outbound_type_change = true once firewall rules and aks_authorized_ip_ranges allow the new egress IP."
+    }
+  }
+}
+
+# ── NAT gateway on the AKS subnet (aks_nat_gateway) ───────────────────────────
+# Kept apart from the outbound guard above so either mode can change or go on
+# its own. existing: the network owner attached a NAT gateway, and plan checks
+# it is there. create: Terraform makes a Standard NAT gateway and public IP in
+# the deployment group and associates them with the supplied subnet, which is
+# the only change it makes to that subnet; route tables stay the owner's. A
+# NAT gateway serves the routes whose next hop is Internet: Azure prefers a
+# route to a virtual appliance or gateway over it, and it over the system
+# default route (Microsoft, "What is Azure NAT Gateway?").
+locals {
+  aks_nat_wanted = var.aks_nat_gateway != "none"
+  aks_nat_create = var.create_cluster && local.byo_aks_subnet && var.aks_nat_gateway == "create"
+
+  # The NAT gateway the subnet carries now, null when none; read for both modes.
+  aks_subnet_nat_id = try(data.azapi_resource.byo_aks_subnet_nat[0].output.properties.natGateway.id, null)
+
+  aks_nat_gateway_name = "${local.name_base}-nat${local.name_suffix}"
+  # A Standard NAT gateway lives in one zone or none. Pin it, and its public IP,
+  # only when availability_zones names exactly one zone; otherwise Azure places
+  # it (Microsoft: "By default, a Standard NAT gateway is placed in No zone").
+  aks_nat_zones = length(var.availability_zones) == 1 ? var.availability_zones : null
+
+  # True when the subnet's NAT gateway is the one this module creates. Compared
+  # by resource group and name, both known at plan, so a first apply (no NAT
+  # gateway yet) and later ones (ours) both pass.
+  aks_subnet_nat_is_ours = local.aks_subnet_nat_id == null ? true : (
+    lower(try(split("/", local.aks_subnet_nat_id)[4], "")) == lower(local.resource_group_name) &&
+    lower(try(split("/", local.aks_subnet_nat_id)[8], "")) == lower(local.aks_nat_gateway_name)
+  )
+}
+
+# azurerm_subnet does not expose the NAT gateway, so this goes through azapi.
+data "azapi_resource" "byo_aks_subnet_nat" {
+  count                  = var.create_cluster && local.byo_aks_subnet && local.aks_nat_wanted ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.aks_subnet_id
+  response_export_values = ["properties.natGateway"]
+}
+
+resource "terraform_data" "aks_nat_gateway_guard" {
+  input = var.aks_nat_gateway
+
+  lifecycle {
+    precondition {
+      condition     = !local.aks_nat_wanted || var.create_cluster
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" has no effect with create_cluster = false: an attached cluster keeps the egress it was built with. Leave it at \"none\"."
+    }
+
+    precondition {
+      condition     = !local.aks_nat_wanted || !var.create_cluster || local.byo_aks_subnet
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" needs create_vnet = false and aks_subnet_id set: the NAT gateway goes on a subnet you supply."
+    }
+
+    precondition {
+      condition     = !local.aks_nat_wanted || contains(["userDefinedRouting", "userAssignedNATGateway"], var.aks_outbound_type)
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" needs aks_outbound_type = \"userAssignedNATGateway\" or \"userDefinedRouting\". With \"loadBalancer\", the cluster's own outbound IP is the egress path."
+    }
+
+    precondition {
+      condition     = var.aks_outbound_type != "userAssignedNATGateway" || local.aks_nat_wanted
+      error_message = "aks_outbound_type = \"userAssignedNATGateway\" needs a NAT gateway on aks_subnet_id: set aks_nat_gateway = \"existing\" for one already attached, or \"create\" to have Terraform create and attach it."
+    }
+
+    precondition {
+      condition     = var.aks_nat_gateway != "existing" || !var.create_cluster || !local.byo_aks_subnet || try(local.aks_subnet_nat_id != null && local.aks_subnet_nat_id != "", false)
+      error_message = "aks_nat_gateway = \"existing\" but aks_subnet_id has no NAT gateway. Attach one first (az network vnet subnet update --ids ${var.aks_subnet_id} --nat-gateway <nat-gateway-id>), or set aks_nat_gateway = \"create\"."
+    }
+
+    precondition {
+      condition     = var.aks_nat_gateway != "create" || local.aks_subnet_nat_is_ours
+      error_message = "aks_nat_gateway = \"create\" but aks_subnet_id already has a NAT gateway (${coalesce(local.aks_subnet_nat_id, "unknown")}), and associating a new one would replace it. Set aks_nat_gateway = \"existing\" to use it."
+    }
+  }
+}
+
+resource "azurerm_public_ip" "aks_nat" {
+  count               = local.aks_nat_create ? 1 : 0
+  name                = "${local.aks_nat_gateway_name}-pip"
+  location            = var.location
+  resource_group_name = local.rg_name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  zones               = local.aks_nat_zones
+  tags                = local.common_tags
+
+  # Zones are creation-time on a public IP, so a change would replace it and
+  # move the egress address. See check.aks_nat_gateway_zone_drift.
+  lifecycle {
+    ignore_changes = [zones]
+  }
+}
+
+resource "azurerm_nat_gateway" "aks" {
+  count                   = local.aks_nat_create ? 1 : 0
+  name                    = local.aks_nat_gateway_name
+  location                = var.location
+  resource_group_name     = local.rg_name
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = var.aks_nat_gateway_idle_timeout_minutes
+  zones                   = local.aks_nat_zones
+  tags                    = local.common_tags
+
+  # Zones are creation-time on a NAT gateway, and local.aks_nat_zones follows
+  # availability_zones: ["1"] pins it, ["1","2","3"] leaves it unpinned. Without
+  # this, widening availability_zones on a running deployment replaces the NAT
+  # gateway and its public IP, which changes the egress address and cuts a
+  # userAssignedNATGateway cluster's egress during the replace. The cluster
+  # ignores the same edit to its node pool zones (modules/k8s-cluster), so the
+  # NAT gateway does the same, and the check below reports the drift.
+  lifecycle {
+    ignore_changes = [zones]
+  }
+
+  depends_on = [terraform_data.aks_nat_gateway_guard]
+}
+
+# ignore_changes on zones makes an availability_zones edit a no-op for the NAT
+# gateway and its public IP. Warn on every plan when the live zones differ from
+# what availability_zones now asks for, so the discarded change isn't mistaken
+# for an applied one. A check block, not a postcondition, for the same reason as
+# check.aks_node_pool_zone_drift: report the drift, don't block unrelated work.
+check "aks_nat_gateway_zone_drift" {
+  assert {
+    condition = length(azurerm_nat_gateway.aks) == 0 ? true : (
+      toset(azurerm_nat_gateway.aks[0].zones == null ? [] : azurerm_nat_gateway.aks[0].zones) ==
+      toset(local.aks_nat_zones == null ? [] : local.aks_nat_zones)
+    )
+    error_message = join("", [
+      "The NAT gateway on the AKS subnet is in zones [",
+      join(",", sort(tolist(length(azurerm_nat_gateway.aks) == 0 ? [] : (azurerm_nat_gateway.aks[0].zones == null ? [] : azurerm_nat_gateway.aks[0].zones)))),
+      "] but availability_zones now asks for [",
+      join(",", sort(local.aks_nat_zones == null ? [] : local.aks_nat_zones)),
+      "] (a NAT gateway is pinned only when availability_zones names exactly one zone). ",
+      "This module ignores zone changes on an existing NAT gateway and its public IP, because ",
+      "changing them replaces both: the egress address changes, and the cluster loses egress ",
+      "until the new one is attached. To make it take effect, revert availability_zones, or ",
+      "drop zones from ignore_changes on azurerm_nat_gateway.aks and azurerm_public_ip.aks_nat ",
+      "in main.tf and apply in a maintenance window, then update any firewall rule that names ",
+      "the old address (output aks_nat_gateway_public_ip).",
+    ])
+  }
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "aks" {
+  count                = local.aks_nat_create ? 1 : 0
+  nat_gateway_id       = azurerm_nat_gateway.aks[0].id
+  public_ip_address_id = azurerm_public_ip.aks_nat[0].id
+}
+
+# The one write to the supplied subnet. A standalone association rather than an
+# azapi patch so destroy detaches the NAT gateway before deleting it. After the
+# service-endpoint patch, so the two never write the subnet at once.
+resource "azurerm_subnet_nat_gateway_association" "aks" {
+  count          = local.aks_nat_create ? 1 : 0
+  subnet_id      = var.aks_subnet_id
+  nat_gateway_id = azurerm_nat_gateway.aks[0].id
+
+  depends_on = [azapi_update_resource.byo_aks_subnet_endpoints, azurerm_nat_gateway_public_ip_association.aks]
+}
+
+# Only a warning, for the same reason as the default-route check: a firewall
+# or proxy behind the gateway that does reach those FQDNs is invisible here.
+check "aks_route_table_service_tag_egress" {
+  assert {
+    condition     = !local.aks_udr_service_tag_only_egress
+    error_message = "aks_outbound_type = \"userDefinedRouting\", and the only routes on aks_subnet_id's route table that go straight to Internet name service tags (${join(", ", distinct([for r in local.aks_udr_internet_routes : r.address_prefix]))}). Several destinations AKS needs to bootstrap nodes resolve outside AzureCloud, among them packages.microsoft.com, mcr.microsoft.com, packages.aks.azure.com and acs-mirror.azureedge.net. If nothing behind the default route reaches them, AKS accepts the create and node bootstrap then fails with CSE exit status 99. See Microsoft's outbound network and FQDN rules for AKS."
+  }
+}
+
+check "aks_route_table_default_route" {
+  assert {
+    condition     = length(data.azurerm_route_table.byo_aks_subnet) == 0 || length(local.aks_udr_default_routes) > 0
+    error_message = "aks_outbound_type = \"userDefinedRouting\", and the route table on aks_subnet_id has no 0.0.0.0/0 route. That is expected when the default route is learned over BGP from ExpressRoute or VPN. Otherwise add one with next hop VirtualAppliance or VirtualNetworkGateway, which Microsoft's UDR page requires."
+  }
+}
+
 # ── Service endpoints on a supplied AKS subnet ────────────────────────────────
 # Only when manage_byo_subnet_service_endpoints is on. Reads the endpoints
 # already on the subnet so the patch below appends to them instead of replacing
@@ -643,6 +986,14 @@ resource "terraform_data" "validate_network" {
       error_message = "smithdb_cache_disk_throughput_mbps (${var.smithdb_cache_disk_throughput_mbps}) cannot exceed 0.25 MB/s per provisioned IOPS. Azure caps a Premium SSD v2 at 0.25 * smithdb_cache_disk_iops, which is ${var.smithdb_cache_disk_iops * 0.25} MB/s at the configured ${var.smithdb_cache_disk_iops} IOPS. Raise smithdb_cache_disk_iops or lower the throughput."
     }
 
+    # The SmithDB cache StorageClass hands the tags to the disk CSI driver as
+    # key=value,key=value. The driver splits on commas, then each pair on its
+    # first =, and fails every cache PVC on a pair it can't read.
+    precondition {
+      condition     = !var.enable_smithdb || alltrue([for k, v in local.common_tags : !strcontains(k, ",") && !strcontains(k, "=") && !strcontains(v, ",")])
+      error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, or cost_center."
+    }
+
     # SmithDB caches sit on Premium SSD v2, and in most regions that offer
     # availability zones a Premium SSD v2 disk only attaches to a zonal VM. An
     # empty availability_zones asks Azure to place the pool, which can leave the
@@ -650,10 +1001,74 @@ resource "terraform_data" "validate_network" {
     # after a clean apply, as SmithDB pods pending on a disk attach error.
     # default_node_pool[0].zones also carries ignore_changes and applies at
     # creation, so recovering from it means rebuilding the pool rather than
-    # editing a variable. Refuse at plan time instead.
+    # editing a variable. Refuse at plan time instead. A zonal additional pool
+    # also passes, because it is the non-disruptive way to add zonal nodes to a
+    # cluster built without them; the chart overrides then pin SmithDB there.
     precondition {
-      condition     = !var.enable_smithdb || length(var.availability_zones) > 0
-      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"]. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+      condition     = !var.enable_smithdb || length(var.availability_zones) > 0 || length(local.zonal_node_pools) > 0
+      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"], or an additional_node_pools entry with zones set. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+    }
+
+    # SmithDB's single-replica deployments start the new pod before stopping
+    # the old one, and the chart exposes no strategy for compaction. On a
+    # dedicated pool that cannot grow, the new pod stays Pending after any
+    # values change, including every staged gate flip. The pool is identified by
+    # the name the chart overrides pin to (kubernetes.azure.com/agentpool:
+    # smithdb). ?: rather than || so the index is skipped when the pool is absent.
+    precondition {
+      condition = (
+        var.enable_smithdb && (var.create_cluster || var.existing_cluster_node_pools_managed) && contains(keys(local.effective_node_pools), "smithdb")
+        ? local.effective_node_pools["smithdb"].max_count > local.effective_node_pools["smithdb"].min_count
+        : true
+      )
+      error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
+    }
+
+    # On a zoned cluster, a pool that sets zones = [] is regional, and SmithDB's
+    # components carry no nodeSelector by default, so they can land on it, where
+    # a Premium SSD v2 cache volume cannot attach. Refuse that. On a nonzonal
+    # cluster (availability_zones empty) the first SmithDB rule above already
+    # requires a zonal additional pool, and SMITHDB.md pins SmithDB to it; the other
+    # pools are regional by construction there, so this rule stands down. This
+    # reads the requested zones, not the live ones: a pool created regional
+    # before availability_zones reached additional pools passes, and
+    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
+    precondition {
+      condition = !var.enable_smithdb || length(var.availability_zones) == 0 || alltrue([
+        for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+      ])
+      error_message = "enable_smithdb = true with availability_zones set refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_count >= var.sandbox_host_min_count
+      error_message = "sandbox_host_max_count (${var.sandbox_host_max_count}) must be at least sandbox_host_min_count (${var.sandbox_host_min_count})."
+    }
+
+    # An additional_node_pools entry named sandboxhost replaces the generated
+    # pool whole. Without the label the chart's nodeSelector matches no node,
+    # and sandbox-host stays Pending with nothing naming the cause.
+    precondition {
+      condition = var.enable_sandboxes && contains(keys(var.additional_node_pools), "sandboxhost") ? (
+        lookup(var.additional_node_pools["sandboxhost"].node_labels, "sandbox.langsmith.com/host", "") == "true"
+        && contains(var.additional_node_pools["sandboxhost"].node_taints, "sandbox.langsmith.com/host=true:NoSchedule")
+      ) : true
+      error_message = "additional_node_pools.sandboxhost replaces the generated sandbox-host pool, so it needs node_labels \"sandbox.langsmith.com/host\" = \"true\" and node_taints \"sandbox.langsmith.com/host=true:NoSchedule\". Without them sandbox-host never schedules."
+    }
+
+    # JuiceFS metadata lives in Azure Managed Redis, which Azure Government does
+    # not offer; see redis_source.
+    precondition {
+      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment")
+      error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
+    }
+
+    # A flag rather than lifecycle prevent_destroy, which takes only a literal:
+    # selecting between a guarded and an unguarded copy of the Redis would
+    # replace it whenever the flag changed.
+    precondition {
+      condition     = var.enable_sandboxes || !var.sandbox_juicefs_redis_prevent_destroy
+      error_message = "sandbox_juicefs_redis_prevent_destroy = true refuses enable_sandboxes = false, which deletes the JuiceFS metadata Redis and every sandbox filesystem with it. To disable sandboxes, set sandbox_juicefs_redis_prevent_destroy = false as well."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips
@@ -691,6 +1106,18 @@ resource "terraform_data" "validate_network" {
       error_message = "Every supplied subnet ID must be a subnet of vnet_id. Private DNS zones and AKS routing are wired to vnet_id, so a subnet in another VNet would be unreachable."
     }
 
+    # AKS nodes, the delegated Postgres server, and the private endpoints all have
+    # to sit in the VNet's region, and Azure refuses each one partway through the
+    # apply, after the resources before it exist. The ternary guards the index,
+    # since || does not short-circuit before Terraform 1.14. Azure accepts both
+    # "East US" and "eastus" for the same region.
+    precondition {
+      condition = length(data.azurerm_virtual_network.byo_vnet) == 0 ? true : (
+        lower(replace(data.azurerm_virtual_network.byo_vnet[0].location, " ", "")) == lower(replace(var.location, " ", ""))
+      )
+      error_message = "vnet_id is in ${try(data.azurerm_virtual_network.byo_vnet[0].location, "another region")}, and location is ${var.location}. The cluster, Postgres, and the private endpoints have to be in the VNet's region, so set location to ${try(data.azurerm_virtual_network.byo_vnet[0].location, "the VNet's region")}."
+    }
+
     # Both subnets are carved only out of a VNet Terraform owns, so under
     # bring-your-own the operator has to name one that already exists.
     precondition {
@@ -720,10 +1147,11 @@ resource "terraform_data" "validate_network" {
       error_message = "The subnet given as postgres_subnet_id is not delegated to Microsoft.DBforPostgreSQL/flexibleServers. Add that delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) to the subnet, or clear postgres_subnet_id and let Terraform create a correctly delegated subnet."
     }
 
-    # The AKS subnet is allowlisted by ID on both the blob storage firewall
-    # (hardcoded default-deny) and the Key Vault firewall. Azure rejects a subnet
-    # rule whose subnet lacks the matching service endpoint, and azurerm exposes
-    # no way to skip that check, so both endpoints are required regardless of
+    # The AKS subnet is allowlisted by ID on the blob storage firewall
+    # (hardcoded default-deny) and, unless the vault is on a private endpoint,
+    # on the Key Vault firewall. Azure rejects a subnet rule whose subnet lacks
+    # the matching service endpoint, and azurerm exposes no way to skip that
+    # check, so each required endpoint is required regardless of
     # keyvault_default_action. Skipped when Terraform is the one adding them,
     # since checking first would fail the plan that would fix it.
     precondition {
@@ -731,7 +1159,7 @@ resource "terraform_data" "validate_network" {
         for endpoint in local.required_aks_service_endpoints :
         contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
       ])
-      error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add them, or clear aks_subnet_id and let Terraform create a subnet."
+      error_message = "The subnet given as aks_subnet_id must carry the ${join(" and ", local.required_aks_service_endpoints)} service endpoint${length(local.required_aks_service_endpoints) > 1 ? "s" : ""}. Without ${length(local.required_aks_service_endpoints) > 1 ? "them" : "it"} the firewall${length(local.required_aks_service_endpoints) > 1 ? "s" : ""} in front of ${var.keyvault_private_endpoint_enabled ? "blob storage" : "blob storage and Key Vault"} cannot allowlist the subnet, and LangSmith pods lose access. Add ${length(local.required_aks_service_endpoints) > 1 ? "both endpoints" : "the endpoint"} to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add ${length(local.required_aks_service_endpoints) > 1 ? "them" : "it"}, or clear aks_subnet_id and let Terraform create a subnet."
     }
 
     # The Postgres and Redis NSGs admit aks_subnet_id alone, so pods on an
@@ -763,7 +1191,7 @@ resource "terraform_data" "validate_network" {
         local.aks_demand_rows,
         [
           "",
-          local.aks_overlay ? "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves, or lower a pool's max_count. max_pods does not size the subnet in overlay mode." : "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}.",
+          local.aks_overlay ? "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves, or lower a pool's max_count. max_pods does not size the subnet in overlay mode." : "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. ${var.create_cluster ? "Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}." : "Or lower a pool's max_count in additional_node_pools."}",
         ]
       ))
     }
@@ -886,6 +1314,15 @@ check "agic_with_overlay_unverified" {
   }
 }
 
+# The Envoy Gateway controller picks the proxy image itself, so mirroring it
+# needs that default for each chart version. envoy_gateway_image_registry
+# refuses a version missing from this map.
+locals {
+  envoy_proxy_default_images = {
+    "v1.2.0" = "envoyproxy/envoy:distroless-v1.32.1"
+  }
+}
+
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
 # AKS cluster with OIDC + Workload Identity enabled, ingress controller installed.
 # The OIDC issuer URL output is consumed by module.blob for federated credentials.
@@ -903,6 +1340,7 @@ module "aks" {
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster = var.create_cluster
   create_vnet    = var.create_vnet
+  kube_auth      = var.aks_kube_auth
 
   # Both of these are passed straight from variables, never derived from another
   # resource. azurerm_resource_group.resource_group[0] is pending creation on a first
@@ -920,6 +1358,15 @@ module "aks" {
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
   default_node_pool_os_sku    = var.aks_os_sku
+  # Internal CAs for every node's trust store, such as the one behind an image
+  # mirror. A change to the list replaces every node.
+  aks_custom_ca_trust_certificate_files = var.aks_custom_ca_trust_certificate_files
+
+  # Customer-managed keys for the node OS disks and the CSI data disks: set
+  # only at creation; the Reader grant on the set is the module's only with
+  # the flag, the platform team's otherwise.
+  disk_encryption_set_id           = var.aks_disk_encryption_set_id
+  disk_encryption_set_reader_grant = var.aks_disk_encryption_set_reader_grant
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
@@ -932,17 +1379,34 @@ module "aks" {
   pod_cidr            = local.aks_pod_cidr
   network_data_plane  = local.aks_network_dataplane
   network_policy      = local.aks_network_policy
+  outbound_type       = var.aks_outbound_type
+  # A NAT gateway Terraform creates is on the subnet before the cluster is.
+  egress_dependencies = azurerm_subnet_nat_gateway_association.aks[*].id
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
-  # On a pre-existing cluster whose node pools the customer owns, pass an empty
-  # map so Terraform doesn't attach pools to a cluster it doesn't manage.
-  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
+  additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
-  ingress_controller   = var.ingress_controller
-  dns_label            = var.dns_label
+  ingress_controller = var.ingress_controller
+  dns_label          = var.dns_label
+
+  ingress_load_balancer                          = var.ingress_load_balancer
+  ingress_load_balancer_subnet_id                = var.ingress_load_balancer_subnet_id
+  ingress_load_balancer_ip                       = var.ingress_load_balancer_ip
+  ingress_load_balancer_manage_subnet_assignment = var.ingress_load_balancer_manage_subnet_assignment
+  # A ternary rather than &&, which below Terraform 1.14 evaluates both sides.
+  # A supplied node subnet is compared by ID. A carved one has no ID before
+  # apply, so it is compared by name: the load-balancer subnet is in the
+  # cluster's VNet, where the name alone identifies it.
+  ingress_load_balancer_needs_subnet_grant = var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? (
+    local.byo_aks_subnet
+    ? lower(var.ingress_load_balancer_subnet_id) != lower(var.aks_subnet_id)
+    : lower(element(split("/", var.ingress_load_balancer_subnet_id), length(split("/", var.ingress_load_balancer_subnet_id)) - 1)) != lower("${local.vnet_name}-subnet-0")
+  ) : false
   istio_version        = var.istio_version
   istio_addon_revision = var.istio_addon_revision
 
@@ -961,7 +1425,11 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version = var.envoy_gateway_version
+  envoy_gateway_version                          = var.envoy_gateway_version
+  envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
+  envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -979,6 +1447,20 @@ module "aks" {
   # Terraform-driven Helm/kubectl steps. Populate var.aks_authorized_ip_ranges
   # in terraform.tfvars to restrict to operator/CI CIDRs.
   authorized_ip_ranges = var.aks_authorized_ip_ranges
+
+  # Private API server, Entra-only access, and the control-plane identity, all
+  # off by default.
+  private_cluster_enabled      = var.aks_private_cluster_enabled
+  private_dns_zone_id          = var.aks_private_dns_zone_id
+  entra_only                   = var.aks_entra_only
+  entra_admin_group_object_ids = var.aks_entra_admin_group_object_ids
+  control_plane_identity       = var.aks_control_plane_identity
+  control_plane_identity_id    = var.aks_control_plane_identity_id
+
+  control_plane_identity_manage_grants = local.aks_control_plane_manage_grants
+  control_plane_grant_check            = var.aks_network_owner_checks
+  vnet_id                              = local.vnet_id
+  subnet_route_table_id                = local.aks_subnet_has_routes ? local.aks_subnet_route_tbl : ""
 
   tags = local.common_tags
 }
@@ -1003,8 +1485,8 @@ module "aks" {
 # ForceNewIfChange (main, read 2026-09-25): network_policy changes in place from
 # none and from azure or calico to cilium; network_data_plane from azure to
 # cilium; network_plugin_mode only towards overlay. Those in-place paths exist
-# from azurerm 4.58.0 (to cilium) and 4.59.0 (calico to cilium), which is why
-# versions.tf floors the provider at 4.59.0.
+# from azurerm 4.58.0 (to cilium) and 4.59.0 (calico to cilium), both below the
+# 4.65.0 floor in versions.tf.
 locals {
   aks_live = var.create_cluster ? module.aks.live_network_profile : null
 
@@ -1026,6 +1508,26 @@ locals {
   # The two updates Azure and the provider apply in place.
   aks_dataplane_upgrade = try(local.aks_live.dataplane, null) == "azure" && local.aks_network_dataplane == "cilium"
   aks_policy_upgrade    = try(local.aks_live.policy, null) == "none" || (contains(["azure", "calico"], try(local.aks_live.policy, "")) && local.aks_network_policy == "cilium")
+}
+
+# ── AKS disk encryption set guard ─────────────────────────────────────────────
+# The cluster's disk encryption set is fixed at creation: the provider applies a
+# change, adding one included, by replacing the cluster and everything installed
+# on it. module.aks reads the set Azure reports for the cluster at plan time
+# (null until the cluster exists), and a value that differs stops the plan.
+locals {
+  aks_live_disk_encryption_set_id = var.create_cluster ? module.aks.live_disk_encryption_set_id : null
+}
+
+resource "terraform_data" "aks_disk_encryption_set_guard" {
+  input = lower(var.aks_disk_encryption_set_id)
+
+  lifecycle {
+    precondition {
+      condition     = local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == lower(var.aks_disk_encryption_set_id)
+      error_message = "aks_disk_encryption_set_id is ${var.aks_disk_encryption_set_id == "" ? "empty" : "\"${var.aks_disk_encryption_set_id}\""}, and the cluster already exists with ${local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == "" ? "no disk encryption set" : "disk encryption set \"${local.aks_live_disk_encryption_set_id}\""}. The set is fixed at creation, and the provider would apply this by replacing the cluster and everything installed on it. Revert the value to keep the cluster as it is, or build a new cluster with the set and move the release to it."
+    }
+  }
 }
 
 resource "terraform_data" "aks_network_guard" {
@@ -1082,6 +1584,128 @@ resource "terraform_data" "aks_network_guard" {
       error_message = join(" ", [
         "aks_pod_cidr is changing from ${coalesce(try(local.aks_live.pod_cidr, null), "unknown")} to ${var.aks_pod_cidr} on a cluster that already runs overlay mode.",
         "Azure does not change a cluster's pod range, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_pod_cidr, or build a new cluster with the range you want.",
+      ])
+    }
+  }
+}
+
+# ── AKS access guard ──────────────────────────────────────────────────────────
+# Whether the API server is private, and its private DNS zone, are fixed when a
+# cluster is created: the provider applies a change to either by replacing the
+# cluster and everything installed on it. Entra integration goes one way: Azure
+# turns it on in place and refuses to turn it off. Each follows from a one-line
+# tfvars edit, so the requested access is compared with what Azure reports for
+# the cluster (module.aks reads it at plan time; null until the cluster exists)
+# and a change is refused with no override. The control-plane identity is
+# refused the same way, though Azure swaps it in place: the grants the old
+# identity holds on the network do not follow the control plane to the new one.
+# The read depends on variables alone, so a failure stops the plan before
+# anything is applied. Who owns that identity and its grants is not something
+# Azure reports, so terraform_data.aks_grants_pin keeps the setting the cluster
+# was created with, and a change to it is refused until it is made on purpose.
+locals {
+  aks_live_access = var.create_cluster ? module.aks.live_access_profile : null
+
+  # Azure reports the zone as "system", "none", or the zone ID; compare the
+  # requested one in that form.
+  aks_private_dns_zone = var.aks_private_dns_zone_id == "" ? "system" : lower(var.aks_private_dns_zone_id)
+
+  aks_private_changing  = local.aks_live_access != null && try(local.aks_live_access.private, null) != var.aks_private_cluster_enabled
+  aks_dns_zone_changing = local.aks_live_access != null && try(local.aks_live_access.private, null) == true && var.aks_private_cluster_enabled && lower(coalesce(try(local.aks_live_access.private_dns_zone, null), "system")) != local.aks_private_dns_zone
+  aks_entra_removing    = local.aks_live_access != null && try(local.aks_live_access.entra, null) == true && !var.aks_entra_only
+
+  # Azure reports the identity type and the user-assigned IDs; a cluster that
+  # reports no identity is skipped. ?: rather than && and ||, which evaluate
+  # both sides before Terraform 1.14 and would lower() a system identity's null
+  # ID.
+  aks_identity          = var.create_cluster ? module.aks.control_plane_identity : null
+  aks_live_identity     = try(local.aks_live_access.identity, null)
+  aks_identity_changing = local.aks_live_identity == null || local.aks_identity == null ? false : local.aks_live_identity != local.aks_identity.type ? true : local.aks_identity.type == "user" ? !contains(try(local.aks_live_access.identity_ids, []), lower(local.aks_identity.id)) : false
+
+  # A network the module built is the module's to grant on; a supplied one is
+  # its owner's, unless asked otherwise.
+  aks_control_plane_manage_grants = coalesce(var.aks_control_plane_identity_manage_grants, var.create_vnet)
+
+  # Whether the module creates the user-assigned identity and makes its grants.
+  # Changing either on a live cluster deletes, with a clean plan, the identity or
+  # the grants the cluster still runs on, or creates grants the owner already
+  # made. Skipped while the identity itself is changing, which the identity
+  # check already refuses.
+  aks_grants_mode = var.create_cluster && var.aks_control_plane_identity == "user" ? {
+    create_identity = var.aks_control_plane_identity_id == ""
+    manage_grants   = local.aks_control_plane_manage_grants
+  } : null
+  aks_grants_pinned   = try(one(terraform_data.aks_grants_pin[*].output).mode, local.aks_grants_mode)
+  aks_grants_changing = local.aks_live_access == null || local.aks_identity_changing ? false : local.aks_grants_pinned != local.aks_grants_mode
+}
+
+# The setting the cluster was created with. The cluster's ID holds the write
+# back until the cluster exists, so a failed first apply does not pin a setting
+# no cluster has; ignore_changes keeps it after that, and -replace records a new
+# one.
+resource "terraform_data" "aks_grants_pin" {
+  count = var.create_cluster ? 1 : 0
+  input = {
+    cluster_id = module.aks.cluster_id
+    mode       = local.aks_grants_mode
+  }
+
+  lifecycle {
+    ignore_changes = [input]
+  }
+}
+
+resource "terraform_data" "aks_access_guard" {
+  input = {
+    private          = var.aks_private_cluster_enabled
+    private_dns_zone = local.aks_private_dns_zone
+    entra_only       = var.aks_entra_only
+    identity         = local.aks_identity
+  }
+
+  lifecycle {
+    precondition {
+      condition = !local.aks_private_changing
+      error_message = join(" ", [
+        "aks_private_cluster_enabled is changing to ${var.aks_private_cluster_enabled} on a cluster that already exists.",
+        "Azure does not change whether an API server is private, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_private_cluster_enabled, or build a new cluster with the access you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_dns_zone_changing
+      error_message = join(" ", [
+        "aks_private_dns_zone_id is changing from ${coalesce(try(local.aks_live_access.private_dns_zone, null), "system")} to ${local.aks_private_dns_zone} on a cluster that already exists.",
+        "Azure does not move a private API server to another zone, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_private_dns_zone_id, or build a new cluster with the zone you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_entra_removing
+      error_message = join(" ", [
+        "aks_entra_only is false, but the cluster already has Entra integration, and Azure cannot turn it off.",
+        "Set aks_entra_only = true to keep the cluster as it is.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_identity_changing
+      error_message = join(" ", [
+        "The control-plane identity is changing on a cluster that already exists: Azure reports ${coalesce(local.aks_live_identity, "unknown")}${length(try(local.aks_live_access.identity_ids, [])) > 0 ? " (${join(", ", local.aks_live_access.identity_ids)})" : ""}, and the configuration asks for ${try(local.aks_identity.type, "unknown")}${try(local.aks_identity.id, null) != null ? " (${local.aks_identity.id})" : ""}.",
+        "The grants the current identity holds on the network and the private DNS zone do not follow the control plane to a new one. Revert aks_control_plane_identity and aks_control_plane_identity_id, or build a new cluster with the identity you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_grants_changing
+      error_message = join(" ", [
+        "The cluster was created with ${try(local.aks_grants_pinned.create_identity, false) ? "an identity the module created" : "a supplied identity"} and ${try(local.aks_grants_pinned.manage_grants, false) ? "grants the module made" : "grants left to the network's owner"}.",
+        "The configuration now asks for ${try(local.aks_grants_mode.create_identity, false) ? "an identity the module creates" : "a supplied identity"} and ${try(local.aks_grants_mode.manage_grants, false) ? "grants the module makes" : "grants left to the network's owner"}.",
+        "On apply, Terraform would delete the identity or the grants the cluster runs on, or create grants that already exist.",
+        "Revert aks_control_plane_identity_id and aks_control_plane_identity_manage_grants. To hand them over on purpose, first move them in state.",
+        "To leave them to the owner, run terraform state rm on module.aks.azurerm_role_assignment.control_plane_network_contributor[0] and module.aks.azurerm_role_assignment.control_plane_dns_zone_contributor[0], and on module.aks.azurerm_user_assigned_identity.control_plane[0] when supplying the identity the module created.",
+        "To take them over, run terraform import on the owner's assignments at the same addresses.",
+        "Then apply with -replace='terraform_data.aks_grants_pin[0]' to record the new setting.",
       ])
     }
   }
@@ -1177,6 +1801,8 @@ module "postgres" {
   subnet_id           = local.postgres_subnet_id
 
   private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
+  # A supplied central zone replaces the zone and VNet link the module creates.
+  private_dns_zone_id = local.postgres_private_dns_zone_supplied ? var.postgres_private_dns_zone_id : null
 
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
@@ -1198,10 +1824,243 @@ module "postgres" {
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
+  # Customer-managed key, set only at creation; the geo pair with geo-redundant backup.
+  customer_managed_key_id                     = var.postgres_customer_managed_key_id
+  customer_managed_key_identity_id            = var.postgres_customer_managed_key_identity_id
+  geo_backup_customer_managed_key_id          = var.postgres_geo_backup_customer_managed_key_id
+  geo_backup_customer_managed_key_identity_id = var.postgres_geo_backup_customer_managed_key_identity_id
+
   # Create the dedicated langsmith_fleet database when standalone Fleet is enabled.
   enable_fleet = var.enable_fleet
 
   tags = local.common_tags
+}
+
+# The server's encryption mode is fixed at creation, and the provider applies a
+# change to postgres_customer_managed_key_id by replacing the server, which
+# destroys the database. Read the live server and refuse a plan whose key
+# presence differs from it. Presence only, so rotating to another key or
+# version stays allowed. Server names are unique across Azure, so the name
+# alone finds it. An absent server, and a mocked provider's output, read as
+# null, which passes.
+data "azapi_resource_list" "postgres_servers" {
+  count     = var.postgres_source == "external" ? 1 : 0
+  type      = "Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    servers = "value[?name=='${local.postgres_name}'].{id: id, name: name, data_encryption: properties.dataEncryption.type}"
+  }
+}
+
+locals {
+  postgres_live_server  = var.postgres_source == "external" ? try(data.azapi_resource_list.postgres_servers[0].output.servers[0], null) : null
+  postgres_live_has_key = local.postgres_live_server == null ? null : try(local.postgres_live_server.data_encryption, "") == "AzureKeyVault"
+}
+
+resource "terraform_data" "postgres_customer_managed_key_guard" {
+  input = var.postgres_customer_managed_key_id != ""
+
+  lifecycle {
+    precondition {
+      condition     = local.postgres_live_has_key == null ? true : local.postgres_live_has_key == (var.postgres_customer_managed_key_id != "")
+      error_message = "postgres_customer_managed_key_id is ${var.postgres_customer_managed_key_id == "" ? "empty" : "set"}, and the PostgreSQL server ${local.postgres_name} already exists ${local.postgres_live_has_key == true ? "with a customer-managed key" : "with the service-managed key"}. The key is fixed at creation, and the provider would apply this by replacing the server and destroying its data. Revert the value to keep the server as it is, or move to a new server created with the key by the restore path in README \"Customer-managed keys\"."
+    }
+  }
+}
+
+# ── SmithDB sizing ───────────────────────────────────────────────────────────
+# One size sets the chart resource tier, the replicas, the default metastore
+# SKU, the namespace quota headroom, and the smithdb_helm_values output.
+
+locals {
+  smithdb_sizing_by_profile = {
+    minimum            = "minimal"
+    dev                = "small"
+    default            = "small"
+    production         = "medium"
+    "production-large" = "large"
+  }
+
+  # sizing_profile has no validation of its own, so an unlisted profile falls
+  # back to small, the same tier the chart picks when nothing is set.
+  smithdb_sizing  = coalesce(var.smithdb_sizing, lookup(local.smithdb_sizing_by_profile, var.sizing_profile, "small"))
+  smithdb_minimal = local.smithdb_sizing == "minimal"
+
+  # The chart has the small, medium, and large tiers. minimal uses small with
+  # explicit resources.
+  smithdb_resource_tier = local.smithdb_minimal ? "small" : local.smithdb_sizing
+
+  # Per-replica resources for each chart tier. Copied from chart 0.17.0-rc.42,
+  # templates/_helpers.tpl, "langsmith.smithdb.tierResources". The chart sets
+  # requests equal to limits. Update this table with the chart.
+  smithdb_tiers = {
+    small = {
+      query            = { cpu = "4", memory = "8Gi" }
+      ingestion        = { cpu = "4", memory = "8Gi" }
+      compactionWorker = { cpu = "8", memory = "16Gi" }
+      compaction       = { cpu = "2", memory = "4Gi" }
+      clusterManager   = { cpu = "250m", memory = "256Mi" }
+    }
+    medium = {
+      query            = { cpu = "28", memory = "48Gi" }
+      ingestion        = { cpu = "16", memory = "32Gi" }
+      compactionWorker = { cpu = "16", memory = "32Gi" }
+      compaction       = { cpu = "4", memory = "8Gi" }
+      clusterManager   = { cpu = "250m", memory = "256Mi" }
+    }
+    large = {
+      query            = { cpu = "28", memory = "50Gi" }
+      ingestion        = { cpu = "56", memory = "150Gi" }
+      compactionWorker = { cpu = "28", memory = "50Gi" }
+      compaction       = { cpu = "8", memory = "16Gi" }
+      clusterManager   = { cpu = "2", memory = "2Gi" }
+    }
+  }
+  smithdb_tier = local.smithdb_tiers[local.smithdb_resource_tier]
+
+  # Replicas for each tier, from the SmithDB sizing table in the LangSmith
+  # self-hosted docs. The chart tier sets only the per-replica resources, so the
+  # values set these counts as the HPA minReplicas of the three cache
+  # components. compaction and clusterManager have no HPA and one replica.
+  smithdb_tier_replicas = {
+    small  = { query = 1, ingestion = 1, compactionWorker = 1, compaction = 1, clusterManager = 1 }
+    medium = { query = 1, ingestion = 1, compactionWorker = 1, compaction = 1, clusterManager = 1 }
+    large  = { query = 4, ingestion = 2, compactionWorker = 4, compaction = 1, clusterManager = 1 }
+  }
+  smithdb_replicas = local.smithdb_tier_replicas[local.smithdb_resource_tier]
+
+  smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
+  smithdb_compute_components = ["compaction", "clusterManager"]
+
+  # minimal: explicit resources, limits 2x requests. A partial resources block
+  # keeps the chart default for each key that it omits. The chart Job default
+  # has 100Gi of ephemeral-storage, so the Job block sets every key.
+  # The taskdb keeps the chart default resources.
+  smithdb_minimal_resources = {
+    query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
+    compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
+    clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
+    migration_job = {
+      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
+    }
+  }
+
+  # Default metastore SKU for each size. The docs section "Metastore capacity"
+  # (langsmith/self-host-smithdb-scale) gives a dedicated metastore 2 vCPU /
+  # 16 GiB for small, 4 / 32 for medium, and 8 / 64 for large, which is the
+  # memory-optimized Edsv5 shape. minimal keeps the earlier default. An explicit
+  # smithdb_metastore_sku_name wins.
+  smithdb_metastore_sku_defaults = {
+    minimal = "GP_Standard_D2ds_v5"
+    small   = "MO_Standard_E2ds_v5"
+    medium  = "MO_Standard_E4ds_v5"
+    large   = "MO_Standard_E8ds_v5"
+  }
+  smithdb_metastore_sku_name = coalesce(var.smithdb_metastore_sku_name, local.smithdb_metastore_sku_defaults[local.smithdb_sizing])
+
+  # SmithDB namespace quota headroom, from the resolved resources. It covers the
+  # tier replicas of each component, one surge copy of the largest pod (a
+  # rolling update starts the new pod first), and, with the backfill, each
+  # migration pod (smithdb_migration_parallelism) and the taskdb. HPA scale-out
+  # above the tier replicas has only the surge room. CPU is in millicores and
+  # memory in MiB, so the sums are exact.
+  smithdb_quota_inputs = merge(
+    {
+      for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
+        requests = { cpu = t.cpu, memory = t.memory }
+        limits   = { cpu = t.cpu, memory = t.memory }
+      }
+    },
+    {
+      # Chart values.yaml defaults for smithdb.migration.job.resources and
+      # smithdb.migration.taskdb.postgres.statefulSet.resources.
+      migration_job = local.smithdb_minimal ? local.smithdb_minimal_resources.migration_job : {
+        requests = { cpu = "8", memory = "32Gi" }
+        limits   = { cpu = "8", memory = "32Gi" }
+      }
+      taskdb = {
+        requests = { cpu = "2", memory = "4Gi" }
+        limits   = { cpu = "4", memory = "8Gi" }
+      }
+    },
+  )
+
+  # "250m" and "4" to millicores, "256Mi" and "8Gi" to MiB.
+  smithdb_quota_numbers = {
+    for name, r in local.smithdb_quota_inputs : name => merge([
+      for side in ["requests", "limits"] : {
+        "${side}_cpu_m"     = tonumber(trimsuffix(r[side].cpu, "m")) * (endswith(r[side].cpu, "m") ? 1 : 1000)
+        "${side}_memory_mi" = tonumber(trimsuffix(trimsuffix(r[side].memory, "Gi"), "Mi")) * (endswith(r[side].memory, "Gi") ? 1024 : 1)
+      }
+    ]...)
+  }
+  smithdb_quota_total = {
+    for k in ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"] : k => (
+      sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * local.smithdb_quota_numbers[c][k]]) +
+      max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) +
+      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
+    )
+  }
+
+  # k8s-bootstrap adds the extra once to requests and twice to limits, so it
+  # must cover the requests total and half of the limits total.
+  smithdb_quota_extra_cpu = var.enable_smithdb ? max(
+    ceil(local.smithdb_quota_total.requests_cpu_m / 1000), ceil(local.smithdb_quota_total.limits_cpu_m / 2000)
+  ) : 0
+  smithdb_quota_extra_memory_gi = var.enable_smithdb ? max(
+    ceil(local.smithdb_quota_total.requests_memory_mi / 1024), ceil(local.smithdb_quota_total.limits_memory_mi / 2048)
+  ) : 0
+
+  # The SmithDB pods at the tier replicas plus the metastore migration hook,
+  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
+  # and its taskdb StatefulSet, plus 1 for each further migration pod.
+  smithdb_quota_extra_pods = var.enable_smithdb ? (
+    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
+  ) : 0
+
+  # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
+  # to helm/values/langsmith-values-smithdb-sizing.yaml. The cache StorageClass,
+  # identity, and metastore stay in the overrides file.
+  #
+  # small, medium, and large: the chart tier, with the tier replicas as each
+  # cache component's HPA minReplicas. They also go to deployment.replicas,
+  # which the chart uses only when the HPA is off.
+  smithdb_values_tier = {
+    smithdb = merge(
+      { resourceTier = local.smithdb_resource_tier },
+      {
+        for c in local.smithdb_cache_components : c => {
+          deployment  = { replicas = local.smithdb_replicas[c] }
+          autoscaling = { hpa = { minReplicas = local.smithdb_replicas[c] } }
+        }
+      },
+    )
+  }
+
+  # minimal: the explicit resources, and one replica for each autoscaled
+  # component.
+  smithdb_values_minimal = {
+    smithdb = merge(
+      { resourceTier = "small" },
+      {
+        for c in local.smithdb_cache_components : c => {
+          deployment  = { resources = local.smithdb_minimal_resources[c] }
+          autoscaling = { hpa = { minReplicas = 1, maxReplicas = 1 } }
+        }
+      },
+      { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
+      { migration = { job = { resources = local.smithdb_minimal_resources.migration_job } } },
+    )
+  }
+
+  # yamlencode per branch: the two objects have different attributes, so ?: on
+  # the objects themselves is a type error.
+  smithdb_helm_values = !var.enable_smithdb ? null : (
+    local.smithdb_minimal ? yamlencode(local.smithdb_values_minimal) : yamlencode(local.smithdb_values_tier)
+  )
 }
 
 # ── SmithDB infrastructure (optional) ────────────────────────────────────────
@@ -1224,18 +2083,26 @@ module "smithdb" {
 
   metastore_admin_username        = var.smithdb_metastore_admin_username
   metastore_admin_password        = var.smithdb_metastore_admin_password
-  metastore_sku_name              = var.smithdb_metastore_sku_name
+  metastore_sku_name              = local.smithdb_metastore_sku_name
   metastore_storage_mb            = var.smithdb_metastore_storage_mb
   metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
-  # The flag is derived from a variable so the module's count can read it. The ID
+  # The flag is derived from variables so the module's count can read it. The ID
   # beside it is a resource attribute and is unknown until apply on the external
-  # path, which is why the two are passed separately.
-  create_private_dns_zone = var.postgres_source != "external"
-  private_dns_zone_id     = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+  # path, which is why the two are passed separately. A supplied central zone
+  # serves the metastore too, so the module creates its own only when there is
+  # neither that nor LangSmith's server to share one with.
+  create_private_dns_zone = var.postgres_source != "external" && !local.postgres_private_dns_zone_supplied
+  private_dns_zone_id = (
+    local.postgres_private_dns_zone_supplied ? var.postgres_private_dns_zone_id :
+    var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+  )
 
   storage_account_name = local.smithdb_storage_name
   replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
+
+  shared_access_key_enabled = var.smithdb_storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
 
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
   # metastore's PostgreSQL zone.
@@ -1268,6 +2135,85 @@ module "redis" {
   tags = local.common_tags
 }
 
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# JuiceFS keeps sandbox filesystem metadata in Redis and the data in Blob.
+# Metadata loss loses every sandbox filesystem, so the Redis is dedicated, never
+# evicts, and writes an append-only file whenever HA is on, the only mode Azure
+# persists in. It runs NoCluster: JuiceFS issues multi-key transactions that a
+# sharded database rejects. Its private endpoint goes in the AKS subnet beside
+# the Blob endpoints, so no Redis subnet is needed when redis_source is
+# in-cluster, and it shares the LangSmith Redis's DNS zone when there is one.
+
+# On an attached cluster whose pools the customer owns, Terraform adds no
+# sandboxhost pool, and sandbox-host stays Pending until one exists. A warning
+# rather than a precondition, because bringing that pool is a supported path.
+check "sandbox_pool_on_attached_cluster" {
+  assert {
+    condition     = !var.enable_sandboxes || var.create_cluster || var.existing_cluster_node_pools_managed
+    error_message = "enable_sandboxes = true on an attached cluster with existing_cluster_node_pools_managed = false: Terraform does not create the sandboxhost pool. Add a pool with nested virtualization, the sandbox.langsmith.com/host=true label, and the sandbox.langsmith.com/host=true:NoSchedule taint, and set sandbox_host_min_count and sandbox_host_max_count to its bounds, which init-values.sh writes as the sandbox-host replica bounds. Or set existing_cluster_node_pools_managed = true so Terraform adds the pool."
+  }
+}
+
+module "sandbox_juicefs_redis" {
+  count                   = var.enable_sandboxes ? 1 : 0
+  source                  = "./modules/redis"
+  name                    = local.sandbox_juicefs_redis_name
+  location                = var.location
+  resource_group_name     = local.rg_name
+  resource_group_id       = local.rg_id
+  subnet_id               = local.aks_subnet_id
+  vnet_id                 = local.vnet_id
+  create_private_dns_zone = var.redis_source != "external"
+  private_dns_zone_id     = var.redis_source == "external" ? module.redis[0].private_dns_zone_id : null
+  amr_sku                 = var.sandbox_juicefs_amr_sku
+  clustering_policy       = "NoCluster"
+  eviction_policy         = "NoEviction"
+  high_availability       = var.sandbox_juicefs_redis_high_availability
+  aof_persistence         = var.sandbox_juicefs_redis_high_availability
+  cluster_location        = var.redis_location
+
+  tags = local.common_tags
+}
+
+# JuiceFS data goes in its own container in the LangSmith Blob account, and
+# sandbox-host gets its own identity with access to that container alone. The
+# container is outside the ttl_s/ and ttl_l/ prefixes the lifecycle rules
+# delete from.
+resource "azurerm_storage_container" "sandbox_juicefs" {
+  count                 = var.enable_sandboxes ? 1 : 0
+  name                  = var.sandbox_juicefs_name
+  storage_account_id    = module.blob.storage_account_id
+  container_access_type = "private"
+}
+
+resource "azurerm_user_assigned_identity" "sandbox_host" {
+  count               = var.enable_sandboxes ? 1 : 0
+  name                = "${local.aks_name}-sandbox-host-identity"
+  resource_group_name = local.rg_name
+  location            = var.location
+  tags                = local.common_tags
+}
+
+resource "azurerm_federated_identity_credential" "sandbox_host" {
+  count                     = var.enable_sandboxes ? 1 : 0
+  name                      = "langsmith-federated-${local.sandbox_host_service_account}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.sandbox_host[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.langsmith_namespace}:${local.sandbox_host_service_account}"
+}
+
+# principal_type is explicit for the same ABAC reason as the storage module's
+# grant. The scope is the container's ARM ID, built rather than read, because
+# the provider's id attribute for a container is its data-plane URL.
+resource "azurerm_role_assignment" "sandbox_host_blob" {
+  count                = var.enable_sandboxes ? 1 : 0
+  principal_id         = azurerm_user_assigned_identity.sandbox_host[0].principal_id
+  principal_type       = "ServicePrincipal"
+  role_definition_name = "Storage Blob Data Contributor"
+  scope                = "${module.blob.storage_account_id}/blobServices/default/containers/${azurerm_storage_container.sandbox_juicefs[0].name}"
+}
+
 # ── Blob private DNS ──────────────────────────────────────────────────────────
 # Shared by the LangSmith trace-blob account and the SmithDB object store. The
 # account keeps its usual <name>.blob.<cloud suffix> hostname; this zone is
@@ -1291,6 +2237,28 @@ resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   tags                  = local.common_tags
 }
 
+# ── Key Vault private DNS ─────────────────────────────────────────────────────
+# Only with keyvault_private_endpoint_enabled and no central zone supplied. The
+# vault keeps its <name>.vault.<cloud suffix> hostname; this zone is what makes
+# it resolve to the endpoint's address inside the VNet.
+
+resource "azurerm_private_dns_zone" "keyvault" {
+  count               = local.create_keyvault_private_dns_zone ? 1 : 0
+  name                = local.azure_cloud.keyvault_private_dns_zone
+  resource_group_name = local.rg_name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "keyvault" {
+  count                 = local.create_keyvault_private_dns_zone ? 1 : 0
+  name                  = "${local.name_base}-keyvault-dnslink"
+  resource_group_name   = local.rg_name
+  private_dns_zone_name = azurerm_private_dns_zone.keyvault[0].name
+  virtual_network_id    = local.vnet_id
+  registration_enabled  = false
+  tags                  = local.common_tags
+}
+
 # ── Blob Storage ──────────────────────────────────────────────────────────────
 # Azure Blob Storage for trace objects.
 # The Workload Identity (Managed Identity + Federated Credentials) is created
@@ -1304,6 +2272,9 @@ module "blob" {
   resource_group_name  = local.rg_name
 
   replication_type = var.storage_replication_type
+
+  shared_access_key_enabled = var.storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
 
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days
@@ -1319,6 +2290,10 @@ module "blob" {
   # via var.storage_allowed_ips.
   allowed_subnet_ids = [local.aks_subnet_id]
   allowed_ips        = var.storage_allowed_ips
+
+  # Customer-managed key; Azure accepts it on an existing account too.
+  customer_managed_key_id          = var.storage_customer_managed_key_id
+  customer_managed_key_identity_id = var.storage_customer_managed_key_identity_id
 
   # When enabled, the public endpoint is turned off and the firewall above
   # becomes inert. It stays declared so disabling the endpoint restores a
@@ -1432,7 +2407,16 @@ module "keyvault" {
   # pods can read secrets via the Microsoft.KeyVault service endpoint.
   network_default_action = var.keyvault_default_action
   allowed_ips            = var.keyvault_allowed_ips
-  allowed_subnet_ids     = [local.aks_subnet_id]
+  # With the private endpoint the vault has no public listener, so the subnet
+  # rule would filter nothing, and dropping it is what lets the AKS subnet go
+  # without the Microsoft.KeyVault service endpoint.
+  allowed_subnet_ids = var.keyvault_private_endpoint_enabled ? [] : [local.aks_subnet_id]
+
+  # Private Endpoint: public network access off, the endpoint in its subnet, and
+  # its record in the supplied zone or the one created below.
+  private_endpoint_enabled   = var.keyvault_private_endpoint_enabled
+  private_endpoint_subnet_id = local.keyvault_private_endpoint_subnet_id
+  private_dns_zone_id        = local.keyvault_private_dns_zone_id
 
   # ── Secrets ─────────────────────────────────────────────────────────────────
   # Only the two Terraform already holds in state for another reason. The
@@ -1448,7 +2432,9 @@ module "keyvault" {
 
   tags = local.common_tags
 
-  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints]
+  # The zone's VNet link comes before the endpoint and the secret writes, so a
+  # runner inside the VNet resolves the vault's private address on first apply.
+  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints, azurerm_private_dns_zone_virtual_network_link.keyvault]
 }
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
@@ -1459,8 +2445,10 @@ module "keyvault" {
 #
 # LangSmith application deployment is handled outside Terraform:
 #   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
-#   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
-#             (deploy.sh also applies the letsencrypt-prod ClusterIssuer)
+#   Pass 2:   bash helm/scripts/deploy.sh
+#             (deploy.sh runs infra/scripts/create-k8s-secrets.sh when
+#             langsmith-config-secret is missing, and applies the
+#             letsencrypt-prod ClusterIssuer)
 #   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
 #
 # Note: This module configures its own kubernetes/helm providers internally,
@@ -1476,6 +2464,7 @@ module "k8s_bootstrap" {
   client_certificate     = module.aks.client_certificate
   client_key             = module.aks.client_key
   cluster_ca_certificate = module.aks.cluster_ca_certificate
+  kube_auth              = module.aks.kube_auth
 
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace
@@ -1490,6 +2479,29 @@ module "k8s_bootstrap" {
   smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
+  tags                             = local.common_tags
+
+  # SmithDB's pods on top of the base namespace quota. Zero when disabled.
+  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
+  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
+  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+
+  # Sandboxes. No account key: the format Job and sandbox-host reach Blob
+  # through workload identity. AMR serves database 0 only.
+  enable_sandboxes            = var.enable_sandboxes
+  platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
+  network_policy_engine       = module.aks.network_policy_engine
+  node_subnet_cidrs           = local.aks_subnet_prefixes
+  sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
+  sandbox_juicefs_config = var.enable_sandboxes ? {
+    name         = var.sandbox_juicefs_name
+    metaurl      = "${module.sandbox_juicefs_redis[0].connection_url}/0"
+    storage      = "wasb"
+    bucket       = local.sandbox_juicefs_bucket
+    "access-key" = module.blob.storage_account_name
+  } : {}
+  sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id        = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].id : null
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.
@@ -1503,7 +2515,6 @@ module "k8s_bootstrap" {
   agic_subnet_cidrs = local.byo_agic_subnet ? data.azurerm_subnet.byo_agic_subnet[0].address_prefixes : var.agic_subnet_address_prefix
 
   # Backing services — connection URLs are injected as K8s secrets.
-  # generate-secrets.sh also writes these secrets with the full URL from KV.
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
   postgres_admin_password = var.postgres_source == "external" ? var.postgres_admin_password : ""
@@ -1526,15 +2537,28 @@ module "k8s_bootstrap" {
   smithdb_service_account_name       = local.smithdb_service_account
   smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
+  # Pull Secret for the pods the operator creates: agent pods run as
+  # langsmith-ksa, each deployment's Redis and PostgreSQL as the default account.
+  langsmith_image_pull_secret_name = var.langsmith_image_pull_secret_name
+
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
-  # helm/scripts/generate-secrets.sh from Azure Key Vault.
+  # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
   # Cluster components, off when the cluster already runs them, which is only
   # possible on the attach path. Helm cannot adopt a release it does not own.
   install_cert_manager = var.install_cert_manager
   install_keda         = var.install_keda
+
+  # KEDA's images and chart from a mirror. Composed paths are in the
+  # keda_images output.
+  keda_image_registry                   = var.keda_image_registry
+  keda_image_registry_keeps_source_host = var.keda_image_registry_keeps_source_host
+  keda_image_pull_secret_name           = var.keda_image_pull_secret_name
+  keda_chart_repository                 = var.keda_chart_repository
+  keda_chart_repository_username        = var.keda_chart_repository_username
+  keda_chart_repository_password        = var.keda_chart_repository_password
 
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and
@@ -1558,7 +2582,8 @@ removed {
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
 # Deploy Azure WAF policy with OWASP 3.2 + bot protection.
-# Attach to Application Gateway or Azure Front Door after creation.
+# Attached to the Application Gateway when ingress_controller = "agic".
+# Front Door needs its own policy type (azurerm_cdn_frontdoor_firewall_policy).
 # Enable with: create_waf = true in terraform.tfvars
 
 module "waf" {
@@ -1619,6 +2644,29 @@ module "bastion" {
   tags                 = local.common_tags
 
   depends_on = [module.vnet]
+}
+
+# A public Azure DNS zone answers on the internet, so with an internal load
+# balancer its A record would publish a private address that resolves for
+# everyone and connects for no one outside the network. The record exists only
+# when ingress_ip is set; the zone alone is what DNS-01 needs. A warning rather
+# than a refusal: a split-horizon setup can want exactly that record.
+# Behind an internal load balancer there is no cloudapp label, so the hostname
+# can only come from langsmith_domain. Without one, init-values.sh has nothing
+# to write, and deploy.sh creates no Istio add-on Gateway. A warning, because
+# a hostname can still be supplied to init-values.sh another way.
+check "internal_ingress_hostname" {
+  assert {
+    condition     = var.ingress_load_balancer == "public" || var.langsmith_domain != ""
+    error_message = "ingress_load_balancer = \"internal\" with no langsmith_domain: there is no cloudapp label behind a private address, so set langsmith_domain to the name your DNS resolves to the load balancer's IP."
+  }
+}
+
+check "dns_zone_with_internal_ingress" {
+  assert {
+    condition     = !(var.create_dns_zone && var.ingress_load_balancer == "internal" && var.ingress_ip != "")
+    error_message = "create_dns_zone = true and ingress_ip set with ingress_load_balancer = \"internal\": the public zone's A record would carry the load balancer's private address. Leave ingress_ip empty so the zone serves only the DNS-01 challenge, and put the record in your own DNS or an Azure Private DNS zone linked to the VNet, unless you mean to publish it."
+  }
 }
 
 # ── DNS (optional) ────────────────────────────────────────────────────────────

@@ -199,6 +199,45 @@ run "in_cluster_redis_plans_nothing" {
   }
 }
 
+# ── Workload Identity subjects follow the chart's fullname ───────────────────
+# The chart prefixes its service accounts with its fullname: the release name
+# when it contains "langsmith", otherwise <release>-langsmith. The federated
+# credential subjects have to match, or every blob-reading pod loses its identity.
+
+run "wi_subjects_default_release_name" {
+  command = plan
+
+  variables {
+    langsmith_release_name = "langsmith"
+  }
+
+  assert {
+    condition     = contains(module.aks.workload_identity_service_accounts, "langsmith-backend") && contains(module.aks.workload_identity_service_accounts, "langsmith-agent-gateway")
+    error_message = "the default release name did not give langsmith-<component> subjects"
+  }
+}
+
+run "wi_subjects_release_name_without_langsmith" {
+  command = plan
+
+  variables {
+    langsmith_release_name = "prod"
+  }
+
+  assert {
+    condition = alltrue([
+      for sa in ["prod-langsmith-backend", "prod-langsmith-platform-backend", "prod-langsmith-queue", "prod-langsmith-ingest-queue", "prod-langsmith-agent-gateway", "prod-langsmith-presidio-analyzer"] :
+      contains(module.aks.workload_identity_service_accounts, sa)
+    ])
+    error_message = "release \"prod\" did not give prod-langsmith-<component> subjects: ${join(", ", module.aks.workload_identity_service_accounts)}"
+  }
+
+  assert {
+    condition     = !contains(module.aks.workload_identity_service_accounts, "prod-backend")
+    error_message = "release \"prod\" still produced the bare prod-backend subject"
+  }
+}
+
 # ── AKS network mode, data plane and tier ────────────────────────────────────
 # What reaches the cluster resource from the one operator-facing mode variable.
 
@@ -339,8 +378,9 @@ run "agic_with_overlay_warns" {
   command = plan
 
   variables {
-    ingress_controller = "agic"
-    aks_network_mode   = "overlay"
+    ingress_controller     = "agic"
+    aks_network_mode       = "overlay"
+    tls_certificate_source = "none"
   }
 
   expect_failures = [check.agic_with_overlay_unverified]
@@ -397,42 +437,215 @@ run "a_supplied_blob_zone_is_not_created_again" {
   }
 }
 
-# ── Workload Identity subjects follow the chart's fullname ───────────────────
-# The chart prefixes its service accounts with its fullname: the release name
-# when it contains "langsmith", otherwise <release>-langsmith. The federated
-# credential subjects have to match, or every blob-reading pod loses its identity.
+# ── SmithDB sizing ───────────────────────────────────────────────────────────
+# Quota figures are the extras k8s-bootstrap adds: once to requests, twice to
+# limits. Worked from the tier table in main.tf, so a table edit that changes
+# the sums shows up here.
 
-run "wi_subjects_default_release_name" {
+run "smithdb_sizing_follows_sizing_profile_minimum" {
   command = plan
 
   variables {
-    langsmith_release_name = "langsmith"
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    sizing_profile     = "minimum"
+    smithdb_sizing     = null
   }
 
   assert {
-    condition     = contains(module.aks.workload_identity_service_accounts, "langsmith-backend") && contains(module.aks.workload_identity_service_accounts, "langsmith-queue")
-    error_message = "the default release name did not give langsmith-<component> subjects"
+    condition     = output.smithdb_sizing == "minimal"
+    error_message = "sizing_profile = minimum did not resolve smithdb_sizing to minimal"
+  }
+  assert {
+    condition     = output.smithdb_metastore_sku_name == "GP_Standard_D2ds_v5"
+    error_message = "minimal did not default the metastore SKU to GP_Standard_D2ds_v5"
+  }
+  assert {
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "small"
+    error_message = "minimal did not select the small chart tier"
+  }
+  assert {
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.query.autoscaling.hpa.maxReplicas == 1
+    error_message = "minimal did not cap the query HPA at one replica"
+  }
+  assert {
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources.requests.cpu == "1"
+    error_message = "minimal did not set explicit query resources"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 5, memory_gi = 10, pods = 12 }
+    error_message = "minimal quota extra is not 5 CPU, 10 GiB, 12 pods"
   }
 }
 
-run "wi_subjects_release_name_without_langsmith" {
+run "smithdb_sizing_follows_sizing_profile_production" {
   command = plan
 
   variables {
-    langsmith_release_name = "prod"
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    sizing_profile     = "production"
+    smithdb_sizing     = null
   }
 
   assert {
-    condition = alltrue([
-      for sa in ["prod-langsmith-backend", "prod-langsmith-platform-backend", "prod-langsmith-queue", "prod-langsmith-ingest-queue"] :
-      contains(module.aks.workload_identity_service_accounts, sa)
-    ])
-    error_message = "release \"prod\" did not give prod-langsmith-<component> subjects: ${join(", ", module.aks.workload_identity_service_accounts)}"
+    condition     = output.smithdb_sizing == "medium"
+    error_message = "sizing_profile = production did not resolve smithdb_sizing to medium"
+  }
+  assert {
+    condition     = output.smithdb_metastore_sku_name == "MO_Standard_E4ds_v5"
+    error_message = "medium did not default the metastore SKU to MO_Standard_E4ds_v5"
+  }
+}
+
+run "smithdb_small_sets_the_tier_without_resources" {
+  command = plan
+
+  variables {
+    enable_smithdb            = true
+    availability_zones        = ["1", "2", "3"]
+    smithdb_sizing            = "small"
+    smithdb_migration_enabled = false
   }
 
   assert {
-    condition     = !contains(module.aks.workload_identity_service_accounts, "prod-backend")
-    error_message = "release \"prod\" still produced the bare prod-backend subject"
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "small"
+    error_message = "small did not select the small chart tier"
+  }
+  assert {
+    condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources)
+    error_message = "small set explicit resources, which replace the chart tier"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
+    error_message = "small quota extra is not 27 CPU, 53 GiB, 12 pods"
+  }
+}
+
+run "smithdb_large_with_backfill_sets_replicas_and_quota" {
+  command = plan
+
+  variables {
+    enable_smithdb            = true
+    availability_zones        = ["1", "2", "3"]
+    sizing_profile            = "minimum"
+    smithdb_sizing            = "large"
+    smithdb_ingestion_enabled = true
+    smithdb_migration_enabled = true
+  }
+
+  assert {
+    condition     = output.smithdb_sizing == "large"
+    error_message = "An explicit smithdb_sizing did not win over sizing_profile"
+  }
+  assert {
+    condition = (
+      yamldecode(output.smithdb_helm_values).smithdb.query.autoscaling.hpa.minReplicas == 4 &&
+      yamldecode(output.smithdb_helm_values).smithdb.ingestion.autoscaling.hpa.minReplicas == 2 &&
+      yamldecode(output.smithdb_helm_values).smithdb.compactionWorker.autoscaling.hpa.minReplicas == 4
+    )
+    error_message = "large did not set the query 4, ingestion 2, compactionWorker 4 HPA minimums"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 412, memory_gi = 904, pods = 34 }
+    error_message = "large with the backfill quota extra is not 412 CPU, 904 GiB, 34 pods"
+  }
+}
+
+# Each further migration pod adds its 8 / 32Gi and one pod. Requests decide
+# both: two more pods than the single-pod backfill.
+run "smithdb_backfill_quota_follows_the_migration_parallelism" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    availability_zones            = ["1", "2", "3"]
+    smithdb_sizing                = "small"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = true
+    smithdb_migration_parallelism = 3
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 53, memory_gi = 153, pods = 22 }
+    error_message = "small with 3 migration pods did not give quota 53 CPU / 153 GiB / 22 pods"
+  }
+}
+
+# The largest pod count on the largest size stays inside the k8s-bootstrap
+# limits (1024 CPU, 2048 GiB, 400 pods), so the plan does not fail there.
+run "smithdb_large_backfill_at_the_parallelism_cap_fits_the_quota_limits" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    availability_zones            = ["1", "2", "3"]
+    smithdb_sizing                = "large"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = true
+    smithdb_migration_parallelism = 30
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 644, memory_gi = 1832, pods = 63 }
+    error_message = "large with 30 migration pods did not give quota 644 CPU / 1832 GiB / 63 pods"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra.cpu <= 1024 && output.smithdb_quota_extra.memory_gi <= 2048 && output.smithdb_quota_extra.pods <= 400
+    error_message = "large with 30 migration pods goes over a k8s-bootstrap quota limit"
+  }
+}
+
+# Without the backfill, the migration pod count does not change the quota.
+run "smithdb_migration_parallelism_needs_the_backfill" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    availability_zones            = ["1", "2", "3"]
+    smithdb_sizing                = "small"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = false
+    smithdb_migration_parallelism = 3
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
+    error_message = "smithdb_migration_parallelism changed the quota while smithdb_migration_enabled = false"
+  }
+}
+
+run "smithdb_explicit_metastore_sku_wins" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    availability_zones         = ["1", "2", "3"]
+    smithdb_sizing             = "large"
+    smithdb_metastore_sku_name = "GP_Standard_D2ds_v4"
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_sku_name == "GP_Standard_D2ds_v4"
+    error_message = "An explicit smithdb_metastore_sku_name did not win over the large default"
+  }
+}
+
+run "smithdb_off_adds_no_quota_or_values" {
+  command = plan
+
+  variables {
+    enable_smithdb = false
+    smithdb_sizing = "large"
+  }
+
+  assert {
+    condition     = output.smithdb_helm_values == null && output.smithdb_sizing == null
+    error_message = "enable_smithdb = false still produced SmithDB sizing or Helm values"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 0, memory_gi = 0, pods = 0 }
+    error_message = "enable_smithdb = false still added namespace quota headroom"
   }
 }
 
@@ -455,6 +668,10 @@ run "the_resource_group_is_created_by_default" {
   assert {
     condition     = output.resource_group_name == "langsmith-rg-wiring"
     error_message = "the resource_group_name output is not the created group's name"
+  }
+  assert {
+    condition     = output.aks_resource_group_name == "langsmith-rg-wiring"
+    error_message = "the aks_resource_group_name output is not the created group's name on a created cluster"
   }
 }
 
@@ -641,5 +858,23 @@ run "cluster_components_absent_when_flags_are_false" {
   assert {
     condition     = module.k8s_bootstrap.keda_namespace == null
     error_message = "install_keda = false still planned the KEDA release"
+  }
+}
+
+# The root accepts "existing" and passes it to k8s-bootstrap unchanged, so the
+# child's own validation must accept it too, or the documented setup fails at
+# plan. Nothing in k8s-bootstrap reacts to it: the dns01 wiring stays off.
+run "tls_existing_plans_through_k8s_bootstrap" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "existing"
+    langsmith_domain       = "langsmith.example.com"
+    install_cert_manager   = true
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_namespace != null
+    error_message = "tls_certificate_source = \"existing\" dropped the cert-manager release, which install_cert_manager still asks for"
   }
 }

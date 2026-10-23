@@ -1,7 +1,7 @@
 locals {
-  # Static names preserve the AWS role suffixes used by the compositions and
-  # customer provisioning-role allowlists.
-  roles = {
+  # Default names keep the AWS role suffixes that the provisioning role's
+  # wildcard allowlists match. Custom names need byoiam_role_arns there instead.
+  default_roles = {
     eks-cluster-role                  = { name = "byoc-smith-eks-cluster-role", service = "eks.amazonaws.com" }
     eks-node-role                     = { name = "byoc-smith-eks-node-role", service = "ec2.amazonaws.com" }
     ebs-csi-role                      = { name = "byoc-smith-ebs-csi-role", service = "pods.eks.amazonaws.com" }
@@ -19,6 +19,7 @@ locals {
     privatelink-lambda-role           = { name = "byoc-smith-privatelink-lambda-role", service = "lambda.amazonaws.com" }
     juicefs-csi-iam-role              = { name = "byoc-smith-juicefs-csi-iam-role", service = "pods.eks.amazonaws.com" }
   }
+  roles     = { for key, role in local.default_roles : key => merge(role, { name = lookup(var.role_names, key, role.name) }) }
   role_arns = { for key, role in local.roles : key => "arn:${local.partition}:iam::${local.account_id}:role/${role.name}" }
 
   pod_identities = {
@@ -30,7 +31,8 @@ locals {
       namespace = "langsmith"
       service_accounts = concat(
         [for component in ["backend", "host-backend", "listener", "platform-backend", "ingest-queue", "queue", "agent-gateway"] : "*-langsmith-${component}"],
-        ["*-fleet-tool-server", "*-fleet-trigger-server"]
+        ["*-fleet-tool-server", "*-fleet-trigger-server"],
+        ["*-standalone-insights-api-server", "*-standalone-insights-queue"]
       )
     }
     postgres-setup-iam-role    = { namespace = "langsmith", service_accounts = ["*-langsmith-postgres-setup"] }
@@ -42,6 +44,7 @@ locals {
 
   node_policy_names = ["AmazonEKSWorkerNodePolicy", "AmazonEKS_CNI_Policy", "AmazonEC2ContainerRegistryReadOnly", "AmazonSSMManagedInstanceCore"]
   managed_policy_names = {
+    workload-iam-role                 = ["AmazonBedrockMantleInferenceAccess"]
     eks-cluster-role                  = ["AmazonEKSClusterPolicy"]
     eks-node-role                     = local.node_policy_names
     karpenter-node-role               = local.node_policy_names
@@ -63,7 +66,7 @@ resource "aws_iam_role" "this" {
   permissions_boundary = var.permissions_boundary_arn
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [merge({
+    Statement = concat([merge({
       Effect    = "Allow"
       Principal = { Service = each.value.service }
       Action    = each.value.service == "pods.eks.amazonaws.com" ? ["sts:AssumeRole", "sts:TagSession"] : ["sts:AssumeRole"]
@@ -84,11 +87,23 @@ resource "aws_iam_role" "this" {
           "arn:${local.partition}:rds:${region}:${local.account_id}:db:*-smith${each.key == "postgres-monitoring-role" ? "-postgres" : "db-metastore"}"
         ] }
       }
-    } : {})]
+      } : {})], each.key == "smithdb-iam-role" && length(var.smithdb_migration_writer_principal_arns) > 0 ? [{
+      Sid       = "SelfHostedMigrationWriters"
+      Effect    = "Allow"
+      Principal = { AWS = var.smithdb_migration_writer_principal_arns }
+      Action    = ["sts:AssumeRole"]
+    }] : [])
   })
   # langsmith-byoc-role participates in EKS access-entry authorization. local.tags
   # enforces customer ownership to keep IAM outside the provisioner's write scope.
   tags = merge(local.tags, contains(["eks-node-role", "karpenter-node-role", "workload-iam-role", "privatelink-lambda-role"], each.key) ? { "langsmith-byoc-role" = "true" } : {})
+
+  lifecycle {
+    precondition {
+      condition     = length(distinct([for role in local.roles : role.name])) == length(local.roles)
+      error_message = "Every BYOIAM role needs a distinct name; check role_names against the default names."
+    }
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "managed" {

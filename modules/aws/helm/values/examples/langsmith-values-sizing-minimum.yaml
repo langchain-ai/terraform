@@ -69,7 +69,7 @@ queue:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
+        cpu: "500m"
         memory: "768Mi"
       limits:
         cpu: "1"
@@ -104,7 +104,7 @@ hostBackend:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
+        cpu: "250m"
         memory: "384Mi"
       limits:
         cpu: "500m"
@@ -118,7 +118,7 @@ listener:
     replicas: 1
     resources:
       requests:
-        cpu: "250m"
+        cpu: "500m"
         memory: "768Mi"
       limits:
         cpu: "1"
@@ -187,7 +187,8 @@ smithdb:
           memory: "8Gi"
           ephemeral-storage: "200Gi"
     autoscaling:
-      minReplicas: 1
+      hpa:
+        minReplicas: 1
 
   ingestion:
     deployment:
@@ -201,7 +202,8 @@ smithdb:
           memory: "8Gi"
           ephemeral-storage: "100Gi"
     autoscaling:
-      minReplicas: 1
+      hpa:
+        minReplicas: 1
 
   compaction:
     deployment:
@@ -226,7 +228,8 @@ smithdb:
           memory: "16Gi"
           ephemeral-storage: "100Gi"
     autoscaling:
-      minReplicas: 1
+      hpa:
+        minReplicas: 1
 
   clusterManager:
     deployment:

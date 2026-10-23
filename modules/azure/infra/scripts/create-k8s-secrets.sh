@@ -8,7 +8,7 @@ set -euo pipefail
 # create-k8s-secrets.sh — Create langsmith-config-secret from Azure Key Vault
 #
 # Usage:
-#   cd terraform/azure/infra
+#   cd terraform/modules/azure/infra
 #   ./scripts/create-k8s-secrets.sh
 #
 # Prerequisites:
@@ -20,6 +20,11 @@ set -euo pipefail
 #   langsmith-config-secret — license key, API salt, JWT secret, admin password,
 #                             and four Fernet encryption keys. Read by all LangSmith
 #                             pods via config.existingSecretName in Helm values.
+#                             With enable_sandboxes = true it also carries
+#                             sandbox_callback_signing_jwk.
+#   smithdb-taskdb          — postgres_password for the SmithDB backfill's taskdb,
+#                             when Key Vault holds smithdb-taskdb-password. Read
+#                             through smithdb.migration.taskdb.postgres.auth.
 #
 # The other two required secrets are created by Terraform (Pass 1):
 #   langsmith-postgres-secret — connection_url
@@ -56,6 +61,10 @@ _kv() {
   az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query value -o tsv
 }
 
+_kv_exists() {
+  az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query name -o tsv >/dev/null 2>&1
+}
+
 API_KEY_SALT=$(_kv "langsmith-api-key-salt")
 JWT_SECRET=$(_kv "langsmith-jwt-secret")
 LICENSE_KEY=$(_kv "langsmith-license-key")
@@ -64,6 +73,35 @@ DEPLOY_KEY=$(_kv "langsmith-deployments-encryption-key")
 AGENT_KEY=$(_kv "langsmith-agent-builder-encryption-key")
 INSIGHTS_KEY=$(_kv "langsmith-insights-encryption-key")
 POLLY_KEY=$(_kv "langsmith-polly-encryption-key")
+
+# SSO/OIDC — optional, only present when enable_sso_oidc = true (see
+# manage-keyvault.sh). Fetched here unconditionally so this script stays the
+# single source of truth for langsmith-config-secret; the --from-literal args
+# below are built conditionally so a deployment that never sets these up is
+# unaffected.
+_OAUTH_ARGS=()
+if _kv_exists "langsmith-oauth-client-id"; then
+  OAUTH_CLIENT_ID=$(_kv "langsmith-oauth-client-id")
+  OAUTH_CLIENT_SECRET=$(_kv "langsmith-oauth-client-secret")
+  OAUTH_ISSUER_URL=$(_kv "langsmith-oauth-issuer-url")
+  _OAUTH_ARGS=(
+    "--from-literal=oauth_client_id=$OAUTH_CLIENT_ID"
+    "--from-literal=oauth_client_secret=$OAUTH_CLIENT_SECRET"
+    "--from-literal=oauth_issuer_url=$OAUTH_ISSUER_URL"
+  )
+fi
+
+# Sandboxes: platform-backend and sandbox-host read sandbox_callback_signing_jwk
+# from this secret, and neither starts without it. Copied whenever the vault
+# holds it, so turning enable_sandboxes off and on again keeps the same key.
+_SANDBOX_ARGS=()
+if _kv_exists "langsmith-sandbox-callback-signing-jwk"; then
+  _SANDBOX_ARGS=("--from-literal=sandbox_callback_signing_jwk=$(_kv "langsmith-sandbox-callback-signing-jwk")")
+elif _tfvar_is_true "enable_sandboxes"; then
+  echo "  ERROR: enable_sandboxes = true but Key Vault '$KV_NAME' has no langsmith-sandbox-callback-signing-jwk." >&2
+  echo "         Run: make seed-secrets, then re-run this script." >&2
+  exit 1
+fi
 
 # The license key is the one value here that nothing has checked since the
 # setup-env prompt (#250). Written as it stands, an empty or malformed value
@@ -92,6 +130,8 @@ kubectl create secret generic langsmith-config-secret \
   --from-literal=agent_builder_encryption_key="$AGENT_KEY" \
   --from-literal=insights_encryption_key="$INSIGHTS_KEY" \
   --from-literal=polly_encryption_key="$POLLY_KEY" \
+  "${_OAUTH_ARGS[@]:+"${_OAUTH_ARGS[@]}"}" \
+  "${_SANDBOX_ARGS[@]:+"${_SANDBOX_ARGS[@]}"}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""
@@ -107,6 +147,9 @@ REQUIRED_KEYS=(
   "insights_encryption_key"
   "polly_encryption_key"
 )
+if _tfvar_is_true "enable_sandboxes"; then
+  REQUIRED_KEYS+=("sandbox_callback_signing_jwk")
+fi
 
 echo "  Verifying keys in langsmith-config-secret..."
 echo ""
@@ -130,6 +173,23 @@ if [ "$ERRORS" -eq 0 ]; then
 else
   echo -e "  ${RED}${ERRORS} key(s) missing. Re-run this script or check Key Vault secrets.${NC}"
   exit 1
+fi
+
+# ── SmithDB taskdb secret ──────────────────────────────────────────────────────
+# Piped through --from-file=/dev/stdin so the password never appears in argv.
+# A vault seeded before this secret existed skips it; deploy.sh stops the
+# backfill until make seed-secrets adds it.
+echo ""
+if _kv_exists "smithdb-taskdb-password"; then
+  TASKDB_PASSWORD=$(_kv "smithdb-taskdb-password")
+  echo "  Applying smithdb-taskdb to namespace/$NAMESPACE..."
+  printf '%s' "$TASKDB_PASSWORD" | kubectl create secret generic smithdb-taskdb \
+    --namespace "$NAMESPACE" \
+    --from-file=postgres_password=/dev/stdin \
+    --dry-run=client -o yaml | kubectl apply -f -
+  unset TASKDB_PASSWORD
+else
+  echo "  smithdb-taskdb-password not in Key Vault; skipping smithdb-taskdb (run make seed-secrets)"
 fi
 # Note: langsmith-clickhouse secret is NOT needed for in-cluster ClickHouse
 # (clickhouse_source = "in-cluster"). The chart manages the connection internally.

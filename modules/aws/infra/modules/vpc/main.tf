@@ -37,6 +37,10 @@ locals {
     length(var.private_subnets),
     length(var.public_subnets),
   )
+
+  # VPC CNI custom networking: one pod subnet per AZ, carved from a secondary
+  # CIDR. az_count is at most 3, so two extra bits always fit.
+  pod_subnets = var.pod_cidr == null ? [] : [for i in range(local.az_count) : cidrsubnet(var.pod_cidr, 2, i)]
 }
 
 module "vpc" {
@@ -51,6 +55,13 @@ module "vpc" {
   private_subnets         = slice(var.private_subnets, 0, local.az_count)
   public_subnets          = slice(var.public_subnets, 0, local.az_count)
   map_public_ip_on_launch = true
+
+  # Pod subnets get the intra route table: local routes only. Pod traffic to
+  # anything outside the VPC is SNAT'd to the node's primary IP and leaves
+  # through the node's private subnet, so it still reaches the NAT gateway.
+  secondary_cidr_blocks = var.pod_cidr == null ? [] : [var.pod_cidr]
+  intra_subnets         = local.pod_subnets
+  intra_subnet_suffix   = "pods"
 
   enable_nat_gateway   = true
   single_nat_gateway   = true

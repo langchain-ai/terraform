@@ -215,11 +215,12 @@ smithdb:
           memory: "50Gi"
           ephemeral-storage: "1000Gi"
       volumes:
-        - name: local-ssd-storage
+        - name: cache
           emptyDir:
             sizeLimit: "1000Gi"
     autoscaling:
-      minReplicas: 4
+      hpa:
+        minReplicas: 4
 
   ingestion:
     deployment:
@@ -233,11 +234,12 @@ smithdb:
           memory: "150Gi"
           ephemeral-storage: "1000Gi"
       volumes:
-        - name: local-ssd-storage
+        - name: cache
           emptyDir:
             sizeLimit: "1000Gi"
     autoscaling:
-      minReplicas: 2
+      hpa:
+        minReplicas: 2
 
   compaction:
     deployment:
@@ -262,11 +264,12 @@ smithdb:
           memory: "50Gi"
           ephemeral-storage: "300Gi"
       volumes:
-        - name: local-ssd-storage
+        - name: cache
           emptyDir:
             sizeLimit: "300Gi"
     autoscaling:
-      minReplicas: 4
+      hpa:
+        minReplicas: 4
 
   clusterManager:
     deployment:

@@ -26,6 +26,12 @@ locals {
   secrets_manager_statements = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
   vpc_statements             = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
   byovpc_vpc_statements      = jsondecode(templatefile("${path.module}/policies/vpc_byovpc.json", local.policy_template_vars))
+  self_hosted_migration_statements = [
+    for s in jsondecode(templatefile("${path.module}/policies/self_hosted_migration.json", local.policy_template_vars)) : s if var.allow_self_hosted_migration_permissions
+  ]
+  byovpc_self_hosted_migration_statements = [
+    for s in jsondecode(templatefile("${path.module}/policies/self_hosted_migration_byovpc.json", local.policy_template_vars)) : s if var.allow_self_hosted_migration_permissions
+  ]
 
   delete_statements_for_policy = {
     for policy_name, statements in local.delete_statements : policy_name => [
@@ -45,9 +51,11 @@ locals {
       [for statement in local.network_firewall_statements : statement if var.allow_vpc_creation_permissions],
       [for statement in local.delete_statements_for_policy.vpc : statement if var.allow_vpc_creation_permissions],
       [for statement in local.delete_statements_for_policy.vpc_byovpc : statement if !var.allow_vpc_creation_permissions],
+      [for statement in local.self_hosted_migration_statements : statement if var.allow_vpc_creation_permissions],
+      [for statement in local.byovpc_self_hosted_migration_statements : statement if !var.allow_vpc_creation_permissions],
     )
-    iam                        = concat(local.iam_statements, local.delete_statements_for_policy.iam)
-    iam-karpenter-eks-profiles = concat(local.iam_karpenter_eks_profiles_statements, local.delete_statements_for_policy["iam-karpenter-eks-profiles"])
+    iam                        = local.iam_statements
+    iam-karpenter-eks-profiles = concat(local.iam_karpenter_eks_profiles_statements, local.delete_statements_for_policy["iam-karpenter-eks-profiles"], local.delete_statements_for_policy.iam)
     eks                        = concat(local.eks_statements, local.delete_statements_for_policy.eks)
     elbv2                      = concat(local.elbv2_statements, local.delete_statements_for_policy.elbv2)
     data                       = concat(local.rds_statements, local.secrets_manager_statements, local.kms_statements, local.delete_statements_for_policy.data, local.delete_statements_for_policy.storage)
@@ -75,6 +83,49 @@ locals {
     "iam:PassRole",
     "iam:SimulatePrincipalPolicy",
   ]
+
+  # Exact-ARN grants for BYOIAM resources with custom names. Read and pass only,
+  # so the IAM-management filter below leaves them unchanged.
+  byoiam_role_statements = [for statement in [
+    {
+      Sid      = "BYOIAMCustomRoleRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies", "iam:GetRolePolicy", "iam:ListInstanceProfilesForRole"]
+      Resource = var.byoiam_role_arns
+    },
+    {
+      Sid      = "BYOIAMCustomRolePass"
+      Effect   = "Allow"
+      Action   = ["iam:PassRole"]
+      Resource = var.byoiam_role_arns
+      Condition = {
+        StringEquals = {
+          "iam:PassedToService" = ["eks.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com", "monitoring.rds.amazonaws.com", "lambda.amazonaws.com"]
+        }
+      }
+    },
+  ] : statement if length(var.byoiam_role_arns) > 0]
+  byoiam_instance_profile_statements = [for statement in [
+    {
+      Sid      = "BYOIAMCustomInstanceProfileRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetInstanceProfile"]
+      Resource = ["arn:aws:iam::${local.account_id}:instance-profile/${coalesce(var.byoiam_instance_profile_name, "unset")}"]
+    },
+  ] : statement if var.byoiam_instance_profile_name != null]
+  byoiam_controller_policy_statements = [for statement in [
+    {
+      Sid      = "BYOIAMCustomControllerPolicyRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"]
+      Resource = [coalesce(var.byoiam_karpenter_controller_policy_arn, "unset")]
+    },
+  ] : statement if var.byoiam_karpenter_controller_policy_arn != null]
+  byoiam_custom_name_statements = concat(
+    local.byoiam_role_statements,
+    local.byoiam_instance_profile_statements,
+    local.byoiam_controller_policy_statements,
+  )
 
   # Filter after composing teardown permissions so enabling deletes cannot
   # restore IAM writes. Mixed statements retain their permitted read actions.
@@ -113,4 +164,16 @@ resource "aws_iam_role_policy_attachment" "this" {
 
   role       = aws_iam_role.langchain_byoc.name
   policy_arn = aws_iam_policy.this[each.key].arn
+}
+
+resource "aws_iam_role_policy" "byoiam_custom_names" {
+  count = length(local.byoiam_custom_name_statements) > 0 ? 1 : 0
+
+  name = "${var.role_name}-byoiam"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.byoiam_custom_name_statements
+  })
 }

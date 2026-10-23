@@ -19,9 +19,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
-AZURE_DIR="$INFRA_DIR/.."
+AZURE_DIR="$SCRIPT_DIR/../.."
 HELM_DIR="$AZURE_DIR/helm"
-VALUES_DIR="$HELM_DIR/values"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -262,7 +262,7 @@ fi
 # ── 7. Helm Values ────────────────────────────────────────────────────────────
 header "7. Helm Values"
 
-_base_values="$VALUES_DIR/values.yaml"
+_base_values="$HELM_DIR/values/values.yaml"
 _overrides="$VALUES_DIR/values-overrides.yaml"
 
 if [[ -f "$_base_values" ]]; then
@@ -414,11 +414,17 @@ else
 
   # Ingress LoadBalancer IP — check the right service per ingress_controller
   _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+  _ingress_lb=$(_read_tfvar ingress_load_balancer 2>/dev/null) || _ingress_lb="public"
+  _ingress_scope="public"
+  [[ "$_ingress_lb" == "internal" ]] && _ingress_scope="private"
   case "${_ingress_controller:-envoy-gateway}" in
     nginx)
       _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
     istio-addon)
-      _lb_svc="aks-istio-ingressgateway-external"; _lb_ns="aks-istio-ingress" ;;
+      # The add-on runs one gateway per load-balancer type; internal is
+      # aks-istio-ingressgateway-internal.
+      _lb_svc="aks-istio-ingressgateway-external"; _lb_ns="aks-istio-ingress"
+      [[ "$_ingress_lb" == "internal" ]] && _lb_svc="aks-istio-ingressgateway-internal" ;;
     istio)
       _lb_svc="istio-ingressgateway"; _lb_ns="istio-system" ;;
     envoy-gateway)
@@ -436,7 +442,8 @@ else
     _ingress_ip=$(kubectl get svc "$_lb_svc" -n "$_lb_ns" \
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null) || _ingress_ip=""
     if [[ -n "$_ingress_ip" ]]; then
-      pass "Ingress IP (${_ingress_controller}): ${_ingress_ip}"
+      pass "Ingress IP (${_ingress_controller}, ${_ingress_scope}): ${_ingress_ip}"
+      [[ "$_ingress_scope" == "private" ]] && info "(A private address: reachable only from the VNet and networks peered or connected to it)"
       if [[ -n "${_hostname:-}" && "$_hostname" != "$_ingress_ip" ]]; then
         info "(Point your DNS A record for ${_hostname} to ${_ingress_ip})"
       fi
@@ -453,7 +460,7 @@ else
     # Extract subdomain label (e.g. "langsmith" from "langsmith.example.com")
     _subdomain="${_langsmith_domain%%.*}"
     _parent_domain="${_langsmith_domain#*.}"
-    _ns_list=$(terraform -chdir="$SCRIPT_DIR/.." output -json dns_nameservers 2>/dev/null \
+    _ns_list=$(terraform -chdir="$INFRA_DIR" output -json dns_nameservers 2>/dev/null \
       | python3 -c "import sys,json; ns=json.load(sys.stdin); print('\n'.join(ns))" 2>/dev/null) || _ns_list=""
     if [[ -n "$_ns_list" ]]; then
       echo ""

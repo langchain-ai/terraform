@@ -11,10 +11,10 @@
 #
 # Reads:
 #   - aws/infra/terraform.tfvars    → name_prefix, environment, region, tls_certificate_source
-#   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs
+#   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs,
+#                                     engine_irsa_role_arn (if Engine is enabled)
 #
-# Prompts for (on first run):
-#   - Admin email
+# Falls back to prompting for the admin email when it is not in Terraform.
 #
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
@@ -26,6 +26,7 @@
 #   - values/langsmith-values-fleet.yaml        (if Fleet is enabled)
 #   - values/langsmith-values-standalone-polly.yaml (if Chat uses external storage)
 #   - values/langsmith-values-standalone-insights.yaml (if Insights uses external storage)
+#   - values/langsmith-values-engine.yaml        (if Engine is enabled)
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
 #
@@ -198,13 +199,16 @@ HOSTNAME="${HOSTNAME#http://}"
 HOSTNAME="${HOSTNAME#https://}"
 
 # ── Admin email ───────────────────────────────────────────────────────────────
+ADMIN_EMAIL=$(_parse_tfvar "langsmith_admin_email") || ADMIN_EMAIL=""
 EXISTING_EMAIL=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_EMAIL=$(grep -E '^\s*initialOrgAdminEmail:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_EMAIL=""
 fi
 
-if [[ -n "$EXISTING_EMAIL" ]]; then
+if [[ -n "$ADMIN_EMAIL" ]]; then
+  echo "Admin email (from terraform.tfvars): $ADMIN_EMAIL"
+elif [[ -n "$EXISTING_EMAIL" ]]; then
   ADMIN_EMAIL="$EXISTING_EMAIL"
   echo "Reusing existing admin email: $ADMIN_EMAIL"
 elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
@@ -252,6 +256,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_engine=false
 _enable_sso_oidc=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
@@ -261,13 +266,20 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
+_tfvar_is_true "enable_engine"              && _enable_engine=true
 _tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
+
+# Engine runs every analysis in a sandbox, and the chart rejects Engine without them.
+if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
+  echo "ERROR: enable_engine requires enable_sandboxes = true in terraform.tfvars." >&2
+  exit 1
+fi
 
 # Fail fast rather than let this surface later as a CreateContainerConfigError.
 # apply-eso.sh gates the whole oauth block (client id/secret/issuer url) behind
 # a single existence check on oauth-client-secret and silently skips syncing
-# any of them if it's missing — but this script unconditionally disables
-# basicAuth the moment enable_sso_oidc is true, regardless of SSM state. With
+# any of them if it's missing — but the SSO values file disables basicAuth
+# whenever enable_sso_oidc is true, regardless of SSM state. With
 # no admin login path and secretKeyRef optional: false on the missing key,
 # backend/platformBackend would otherwise just fail to start with no message
 # pointing back at the actual cause.
@@ -302,6 +314,18 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
     echo "         ./infra/scripts/manage-ssm.sh set oauth-issuer-url '<value>'" >&2
     exit 1
   fi
+fi
+
+# The SSO overlay is a fixed file, kept out of the generated overrides so turning SSO on never rewrites them.
+_sso_file="$VALUES_DIR/langsmith-values-sso.yaml"
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  if [[ ! -f "$_sso_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-sso.yaml" "$_sso_file"
+    echo "  Created: langsmith-values-sso.yaml"
+  else
+    echo "  Existing: langsmith-values-sso.yaml"
+  fi
+  echo "  ✔ SSO login"
 fi
 
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
@@ -339,8 +363,19 @@ elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; 
 fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+SANDBOX_JUICEFS_CACHE_DIRS=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
+  # Instance-store NVMe mounts on the sandbox-host nodes, e.g. /mnt/juicefs-cache0.
+  # The list is empty when the nodes have no spare local NVMe, and the chart then
+  # caches under its default /var/cache/juicefs on the root volume. Kept as a
+  # space-separated string: an empty array trips set -u on the macOS bash 3.2.
+  _cache_dirs_json=$(terraform -chdir="$INFRA_DIR" output -json sandbox_juicefs_host_cache_dirs 2>/dev/null) || _cache_dirs_json=""
+  for _dir in $(printf '%s\n' "$_cache_dirs_json" | sed -e 's/[][" ]//g' -e 's/,/ /g'); do
+    if [[ "$_dir" == /* ]]; then
+      SANDBOX_JUICEFS_CACHE_DIRS+="${SANDBOX_JUICEFS_CACHE_DIRS:+ }${_dir}"
+    fi
+  done
 fi
 
 echo "Product addons (from terraform.tfvars):"
@@ -511,9 +546,26 @@ else
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
 else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
+fi
+
+# Engine: the overlay turns Engine on. Its IRSA annotation and optional settings
+# go into the overrides file below.
+_engine_file="$VALUES_DIR/langsmith-values-engine.yaml"
+if [[ "$_enable_engine" == "true" ]]; then
+  if [[ ! -f "$_engine_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-engine.yaml" "$_engine_file"
+    echo "  Created: langsmith-values-engine.yaml"
+  else
+    echo "  Existing: langsmith-values-engine.yaml"
+  fi
+  _engine_storage_label="in-cluster Postgres/Redis"
+  [[ "$_enable_insights" == "true" ]] && _engine_storage_label="Insights ${_insights_storage} Postgres/Redis"
+  echo "  ✔ Engine (Bedrock through IRSA; $_engine_storage_label)"
+else
+  echo "  ✗ Engine (enable_engine = false)"
 fi
 
 # Patch tlsEnabled in agent-deploys if present — derive from tls_certificate_source.
@@ -738,24 +790,63 @@ if [[ "$_enable_insights" == "true" ]]; then
     exit 1
   fi
   # Chart 0.16 keeps the encryption key on `insights` but moved the workload
-  # settings — including the service accounts — to `engineInsightsAgent`.
+  # settings — including the service accounts — to `engineInsightsAgent` (below).
   _standalone_block+="
 insights:
   encryptionKey: \"${_insights_key}\"
-
-engineInsightsAgent:
-  apiServer:
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
-  queue:
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+"
 else
   _standalone_block+="
 insights:
   enabled: false"
+fi
+
+# ── Engine (enable_engine) ────────────────────────────────────────────────────
+# langsmith-values-engine.yaml turns Engine on. Its keys reach the chart only
+# through the langsmith-config Secret (SSM → ESO), never through values. Engine
+# and Insights share the engineInsightsAgent deployment and its two service
+# accounts. With Engine on, both run under the Engine IRSA role from terraform
+# apply. That role trusts only these two service accounts.
+_engine_agent_role_arn="$IRSA_ROLE_ARN"
+if [[ "$_enable_engine" == "true" ]]; then
+  ENGINE_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw engine_irsa_role_arn 2>/dev/null) || ENGINE_IRSA_ROLE_ARN=""
+  if [[ "$ENGINE_IRSA_ROLE_ARN" != arn:* ]]; then
+    echo "ERROR: enable_engine = true but terraform output engine_irsa_role_arn is empty." >&2
+    echo "       Is 'terraform apply' complete in $INFRA_DIR with enable_engine = true?" >&2
+    exit 1
+  fi
+  echo "Engine: engine_irsa_role_arn = $ENGINE_IRSA_ROLE_ARN"
+  _engine_agent_role_arn="$ENGINE_IRSA_ROLE_ARN"
+
+  _engine_tenant=$(_parse_tfvar "engine_sandbox_tenant_id") || _engine_tenant=""
+  _engine_intel_url=$(_parse_tfvar "engine_intelligence_base_url") || _engine_intel_url=""
+  _engine_settings=""
+  if [[ -n "$_engine_tenant" ]]; then
+    _engine_settings+="
+  sandboxTenantId: \"${_engine_tenant}\""
+  fi
+  if [[ -n "$_engine_intel_url" ]]; then
+    _engine_settings+="
+  intelligenceBaseUrl: \"${_engine_intel_url}\""
+  fi
+  if [[ -n "$_engine_settings" ]]; then
+    _standalone_block+="
+engine:${_engine_settings}
+"
+  fi
+fi
+
+if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
+  _standalone_block+="
+engineInsightsAgent:
+  apiServer:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\"
+  queue:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\""
 fi
 
 _sandbox_config_block=""
@@ -765,20 +856,30 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
+  _sandbox_cache_dirs_block=""
+  if [[ -n "$SANDBOX_JUICEFS_CACHE_DIRS" ]]; then
+    _sandbox_cache_dirs_block="
+    hostMount:
+      cacheDirs:"
+    for _dir in $SANDBOX_JUICEFS_CACHE_DIRS; do
+      _sandbox_cache_dirs_block+="
+        - \"${_dir}\""
+    done
+  fi
+  # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
+  # under the same ServiceAccount, so the bucket role goes on sandboxHost.
   _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
   juicefs:
-    csi:
-      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
-      node:
-        serviceAccount:
-          annotations:
-            eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+    existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"${_sandbox_cache_dirs_block}
   sandboxHost:
     deployment:
       nodeSelector:
-        sandbox.langsmith.com/host: \"true\""
+        sandbox.langsmith.com/host: \"true\"
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
 fi
 
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────
@@ -804,25 +905,6 @@ config:
   # for ingress/HTTPRoute/VirtualService host matching.
   hostname: "${_protocol}://${HOSTNAME}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
-$( [[ "$_enable_sso_oidc" == "true" ]] && cat <<'OAUTH'
-  # Client id/secret/issuer URL come from the ESO-synced langsmith-config secret
-  # (SSM: oauth-client-id, oauth-client-secret, oauth-issuer-url) — apply-eso.sh
-  # only adds those secretKeys when present in SSM. authType is already "mixed"
-  # in the base values file, which this requires for a client secret. Works
-  # with any standard OIDC provider (Entra ID, Okta, Auth0, Google Workspace,
-  # etc.) — nothing here is Entra-specific.
-  # Chart validation rejects basicAuth and oauth both enabled, so SSO-only.
-  # WARNING: only set enable_sso_oidc = true after the initial install —
-  # confirm org-admin login with basic auth first. Enabling this before an
-  # admin account exists locks you out of the UI the moment basicAuth is
-  # disabled below. Set up SCIM (if you're using it) after this, not
-  # before — SCIM's user matching depends on the OIDC provider this creates.
-  basicAuth:
-    enabled: false
-  oauth:
-    enabled: true
-OAUTH
-)
   deployment:
     # URL used by the operator to build agent deployment endpoints.
     # Must match config.hostname with correct protocol — wrong value keeps

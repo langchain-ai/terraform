@@ -51,6 +51,11 @@ resource "azurerm_key_vault" "langsmith" {
   # Set false for dev environments where you need to quickly destroy and recreate.
   purge_protection_enabled = var.purge_protection_enabled
 
+  # With the private endpoint there is no public listener, and the ACLs below
+  # stop applying. They stay declared so turning the endpoint off lands on the
+  # same firewall the vault had before.
+  public_network_access_enabled = !var.private_endpoint_enabled
+
   # Network ACLs gate the data plane (azurerm_key_vault_secret etc.). Default
   # is "Allow" because both the first apply and seed-keyvault-secrets.sh write
   # secrets via the data plane, and would be 403'd under "Deny" without an
@@ -104,6 +109,42 @@ locals {
   vault_id   = var.create_keyvault ? azurerm_key_vault.langsmith[0].id : data.azurerm_key_vault.existing[0].id
   vault_name = var.create_keyvault ? azurerm_key_vault.langsmith[0].name : data.azurerm_key_vault.existing[0].name
   vault_uri  = var.create_keyvault ? azurerm_key_vault.langsmith[0].vault_uri : data.azurerm_key_vault.existing[0].vault_uri
+}
+
+# ── Private Endpoint ───────────────────────────────────────────────────────────
+# The vault keeps its <name>.vault.<cloud suffix> hostname; the zone group puts
+# its record in the privatelink.vaultcore zone the root module supplies or
+# creates, so clients inside linked networks resolve it to this address and
+# nothing else changes. Only on a vault this module creates: a supplied vault's
+# network settings stay its owner's.
+
+resource "azurerm_private_endpoint" "vault" {
+  count               = var.create_keyvault && var.private_endpoint_enabled ? 1 : 0
+  name                = "${var.name}-pe"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = var.private_endpoint_subnet_id
+
+  private_service_connection {
+    name                           = "${var.name}-psc"
+    private_connection_resource_id = azurerm_key_vault.langsmith[0].id
+    subresource_names              = ["vault"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "vault"
+    private_dns_zone_ids = [var.private_dns_zone_id]
+  }
+
+  tags = merge(var.tags, { module = "keyvault" })
+
+  lifecycle {
+    precondition {
+      condition     = var.private_endpoint_subnet_id != "" && var.private_dns_zone_id != ""
+      error_message = "private_endpoint_enabled requires both private_endpoint_subnet_id and private_dns_zone_id. The root module derives them from keyvault_private_endpoint_subnet_id and keyvault_private_dns_zone_id."
+    }
+  }
 }
 
 # ── RBAC: Terraform deployer ───────────────────────────────────────────────────
@@ -210,7 +251,9 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "postgres", module = "keyvault" })
 
-  depends_on = [time_sleep.wait_for_rbac]
+  # With the private endpoint on, its DNS record has to exist before a runner
+  # inside the network can reach the vault to write.
+  depends_on = [time_sleep.wait_for_rbac, azurerm_private_endpoint.vault]
 }
 
 resource "azurerm_key_vault_secret" "langsmith_license_key" {
@@ -221,5 +264,7 @@ resource "azurerm_key_vault_secret" "langsmith_license_key" {
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "langsmith", module = "keyvault" })
 
-  depends_on = [time_sleep.wait_for_rbac]
+  # With the private endpoint on, its DNS record has to exist before a runner
+  # inside the network can reach the vault to write.
+  depends_on = [time_sleep.wait_for_rbac, azurerm_private_endpoint.vault]
 }

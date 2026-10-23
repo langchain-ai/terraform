@@ -24,7 +24,7 @@ What it builds, all in one resource group:
 | `postgres` subnet, delegated | Flexible Server is subnet-injected. Enforced by `terraform_data.validate_network` |
 | `redis` subnet, undelegated, PE policies off | Azure Managed Redis arrives as a private endpoint. Neither condition is validated by the module, so both fail mid-apply |
 | AKS cluster, OIDC + workload identity on | Federated credentials for the LangSmith service accounts. Read off the live cluster by postconditions on `data.azurerm_kubernetes_cluster.existing` and `data.azapi_resource.existing_security_profile` |
-| Local accounts enabled | The kubernetes and helm providers use `kube_config`, which Azure returns empty for an AAD-only cluster, and there is no kubelogin path |
+| No Entra ID integration, local accounts enabled | Exercises the certificate sign-in path: the kubernetes and helm providers use the `kube_config` client certificate. An Entra-integrated cluster is signed in to through `kubelogin` instead (`aks_kube_auth`), which this fixture does not cover |
 | Azure CNI, `network_policy = "azure"` | `k8s-bootstrap` creates `NetworkPolicy` objects that a cluster with no policy engine silently ignores |
 | Service CIDR `172.16.0.0/20` | Outside the VNet, which the module checks. `langsmith_tfvars` passes it back as `aks_service_cidr`, which the module requires whenever `create_vnet = false` |
 

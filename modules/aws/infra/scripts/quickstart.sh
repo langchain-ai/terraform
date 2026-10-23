@@ -442,6 +442,9 @@ OWNER="$_REPLY"
 _ask "$(_choice_arg "cost_center")" "$(_numbered_prompt "2.5" "Cost center" " — billing label, leave blank to skip")" "$(_existing "cost_center" "")"
 COST_CENTER="$_REPLY"
 
+_ask_required "$(_choice_arg "langsmith_admin_email")" "$(_numbered_prompt "2.6" "Initial org admin email")" "$(_existing "langsmith_admin_email" "")"
+ADMIN_EMAIL="$_REPLY"
+
 echo ""
 printf "  Resources will be named: $(_cyan "${NAME_PREFIX}-${ENVIRONMENT}")-{resource}\n"
 
@@ -943,6 +946,8 @@ ALB_LOGS="$(_existing "alb_access_logs_enabled" "false")"
 CREATE_CLOUDTRAIL="$(_existing "create_cloudtrail" "false")"
 CREATE_WAF="$(_existing "create_waf" "false")"
 CREATE_FIREWALL="$(_existing "create_firewall" "false")"
+# No SSO question: `make sso` turns it on after checking its prerequisites, so keep the existing value instead of dropping it.
+ENABLE_SSO_OIDC="$(_existing "enable_sso_oidc" "false")"
 [[ "$CREATE_VPC" == "false" ]] && CREATE_FIREWALL="false"
 
 if [[ "$PROFILE" == "prod" ]]; then
@@ -1220,6 +1225,7 @@ _show_summary() {
   _summary_row "Name prefix:" "$NAME_PREFIX"
   _summary_row "Environment:" "$ENVIRONMENT"
   _summary_row "AWS region:" "$REGION"
+  _summary_row "Initial org admin email:" "$ADMIN_EMAIL"
   _summary_row "Owner:" "$OWNER"
   [[ -n "$COST_CENTER" ]] && _summary_row "Cost center:" "$COST_CENTER"
 
@@ -1287,6 +1293,7 @@ _show_summary() {
   _summary_bool_row "WAF:" "$CREATE_WAF"
   _summary_bool_row "Network Firewall:" "$CREATE_FIREWALL"
   _summary_bool_row "Bastion:" "$CREATE_BASTION"
+  _summary_bool_row "SSO login:" "$ENABLE_SSO_OIDC"
 
   _summary_section "11. S3 Data Retention"
   _summary_bool_row "S3 TTL:" "$S3_TTL"
@@ -1349,6 +1356,7 @@ name_prefix = "${NAME_PREFIX}"
 environment = "${ENVIRONMENT}"
 region      = "${REGION}"
 owner       = "${OWNER}"
+langsmith_admin_email = "${ADMIN_EMAIL}"
 TFVARS
 
 [[ -n "$COST_CENTER" ]] && echo "cost_center = \"${COST_CENTER}\"" >> "$OUTPUT"
@@ -1494,6 +1502,7 @@ create_cloudtrail       = ${CREATE_CLOUDTRAIL}
 create_waf              = ${CREATE_WAF}
 create_firewall         = ${CREATE_FIREWALL}
 create_bastion          = ${CREATE_BASTION}
+enable_sso_oidc         = ${ENABLE_SSO_OIDC}
 
 #------------------------------------------------------------------------------
 # S3 Data Retention
@@ -1604,7 +1613,7 @@ fi
 
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
-  printf "  ${DIM}SmithDB uses the repository's pinned 0.16.x chart line.${RESET}\n"
+  printf "  ${DIM}SmithDB uses the repository's pinned 0.17.x chart line.${RESET}\n"
 fi
 
 echo ""

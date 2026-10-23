@@ -48,9 +48,10 @@ variable "resource_quota_extra_cpu" {
   type        = number
   default     = 0
 
+  # SmithDB large with the backfill needs 414.
   validation {
-    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 200
-    error_message = "resource_quota_extra_cpu must be between 0 and 200. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
+    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 1024
+    error_message = "resource_quota_extra_cpu must be between 0 and 1024. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
   }
 }
 
@@ -59,9 +60,10 @@ variable "resource_quota_extra_memory_gi" {
   type        = number
   default     = 0
 
+  # SmithDB large with the backfill needs 906.
   validation {
-    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 400
-    error_message = "resource_quota_extra_memory_gi must be between 0 and 400."
+    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 2048
+    error_message = "resource_quota_extra_memory_gi must be between 0 and 2048."
   }
 }
 
@@ -76,8 +78,20 @@ variable "resource_quota_extra_pods" {
   }
 }
 
+variable "create_smithdb_cache_storage_class" {
+  description = "Create the SmithDB cache StorageClass (Hyperdisk Balanced) for SmithDB network-disk mode."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_cache_storage_class_name" {
+  description = "Name of the SmithDB cache StorageClass. StorageClass is cluster-scoped, so the root adds the resource suffix."
+  type        = string
+  default     = "smithdb-cache"
+}
+
 variable "allow_critical_priority_pods" {
-  description = "Create a PriorityClass-scoped ResourceQuota admitting system-node-critical and system-cluster-critical pods into the LangSmith namespace. Required for the JuiceFS CSI driver the sandbox feature depends on: GKE limits those priority classes to namespaces holding a matching scoped quota, and without one the CSI DaemonSet and controller are rejected at admission. Leave false when sandboxes are disabled."
+  description = "Create a PriorityClass-scoped ResourceQuota admitting system-node-critical and system-cluster-critical pods into the LangSmith namespace. Required for the chart 0.16 JuiceFS CSI driver used by sandboxes: GKE limits those priority classes to namespaces holding a matching scoped quota, and without one the CSI DaemonSet and controller are rejected at admission. Chart 0.17 has no CSI driver; keep it through the upgrade from chart 0.16. Leave false when sandboxes are disabled."
   type        = bool
   default     = false
 }

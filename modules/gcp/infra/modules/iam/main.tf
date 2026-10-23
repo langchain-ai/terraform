@@ -26,10 +26,21 @@ resource "google_storage_bucket_iam_member" "langsmith_gcs" {
   member = "serviceAccount:${google_service_account.langsmith.email}"
 }
 
+# No module component reads Secret Manager at runtime. The scripts read it with
+# the operator's credentials. The grant covers every secret in the project, so it
+# is opt-in, for a workload that an operator adds.
 resource "google_project_iam_member" "langsmith_secret_accessor" {
+  count = var.grant_project_secret_accessor ? 1 : 0
+
   project = var.gcp_project
   role    = "roles/secretmanager.secretAccessor"
   member  = "serviceAccount:${google_service_account.langsmith.email}"
+}
+
+# With the grant on, keep the existing binding instead of a destroy and a create.
+moved {
+  from = google_project_iam_member.langsmith_secret_accessor
+  to   = google_project_iam_member.langsmith_secret_accessor[0]
 }
 
 resource "google_service_account_iam_member" "workload_identity" {

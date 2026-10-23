@@ -219,7 +219,8 @@ smithdb:
           memory: "48Gi"
           ephemeral-storage: "200Gi"
     autoscaling:
-      minReplicas: 1
+      hpa:
+        minReplicas: 1
 
   ingestion:
     deployment:
@@ -233,7 +234,8 @@ smithdb:
           memory: "32Gi"
           ephemeral-storage: "100Gi"
     autoscaling:
-      minReplicas: 1
+      hpa:
+        minReplicas: 1
 
   compaction:
     deployment:
@@ -258,7 +260,8 @@ smithdb:
           memory: "32Gi"
           ephemeral-storage: "100Gi"
     autoscaling:
-      minReplicas: 1
+      hpa:
+        minReplicas: 1
 
   clusterManager:
     deployment:

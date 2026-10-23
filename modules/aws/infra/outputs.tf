@@ -22,6 +22,11 @@ output "region" {
   value       = var.region
 }
 
+output "langsmith_admin_email" {
+  description = "Initial LangSmith organization admin email used in Helm values"
+  value       = var.langsmith_admin_email
+}
+
 output "naming_convention" {
   description = "Naming convention used: {name_prefix}-{environment}-{resource}"
   value       = "${var.name_prefix}-${var.environment}-{resource}"
@@ -90,7 +95,7 @@ output "redis_security_group_id" {
 }
 
 output "sandbox_juicefs_csi_config_secret_name" {
-  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  description = "Kubernetes Secret name for the sandbox JuiceFS config when sandboxes are enabled"
   value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
 }
 
@@ -164,6 +169,14 @@ output "firewall_allowed_fqdns" {
 output "langsmith_irsa_role_arn" {
   description = "IAM role ARN for LangSmith pods (IRSA) — used for S3 access"
   value       = module.eks.langsmith_irsa_role_arn
+}
+
+#------------------------------------------------------------------------------
+# Engine (populated only when enable_engine = true)
+#------------------------------------------------------------------------------
+output "engine_irsa_role_arn" {
+  description = "IAM role ARN for Engine's API server and queue service accounts, IRSA (null when enable_engine = false). init-values.sh writes it as the eks.amazonaws.com/role-arn annotation on engineInsightsAgent.apiServer and engineInsightsAgent.queue."
+  value       = var.enable_engine ? aws_iam_role.engine[0].arn : null
 }
 
 #------------------------------------------------------------------------------
