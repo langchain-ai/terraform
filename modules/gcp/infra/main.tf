@@ -723,19 +723,11 @@ module "k8s_bootstrap" {
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
 
   # sandbox-host manages Firecracker VMs in child cgroups and must not receive
-  # a namespace-injected parent limit. Keep request and pod-count governance,
-  # and inject requests only for third-party containers that omit them.
-  resource_quota_include_limits = !var.enable_sandboxes
+  # a namespace-injected parent limit, so inject requests only, and only for
+  # third-party containers that omit them.
   default_container_requests = (
     var.enable_sandboxes ? var.sandbox_default_container_requests : {}
   )
-
-  # SmithDB does not fit inside the base namespace quota, and the failure mode is
-  # opaque: a ReplicaSet reports FailedCreate and the backfill Job reports Running
-  # with no pod, neither of which names SmithDB. Size the headroom here instead.
-  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
-  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
-  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
 
   create_smithdb_cache_storage_class = local.smithdb_create_cache_storage_class
   smithdb_cache_storage_class_name   = local.smithdb_cache_storage_class
