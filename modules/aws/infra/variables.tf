@@ -201,7 +201,7 @@ variable "eks_managed_node_groups" {
   validation {
     condition = alltrue([
       for group in values(var.eks_managed_node_groups) :
-      group.capacity_type == null || contains(["ON_DEMAND", "SPOT"], group.capacity_type)
+      contains(["ON_DEMAND", "SPOT"], coalesce(group.capacity_type, "ON_DEMAND"))
     ])
     error_message = "capacity_type must be ON_DEMAND or SPOT."
   }

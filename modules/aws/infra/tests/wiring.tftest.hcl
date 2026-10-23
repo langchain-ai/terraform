@@ -237,6 +237,20 @@ run "sandbox_host_node_group_keeps_metadata_options_and_overrides" {
   }
 }
 
+# capacity_type is optional and null by default. The validation must not call
+# contains(..., null): HCL evaluates both sides of "||" eagerly, so a
+# short-circuit guard like "group.capacity_type == null || contains(...)"
+# still errors on a null capacity_type. Every default apply hits this, since
+# the eks_managed_node_groups default omits capacity_type entirely.
+run "default_node_group_with_null_capacity_type_plans" {
+  command = plan
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["default"].desired_size == 3
+    error_message = "the default node group, whose capacity_type is left null, failed to plan"
+  }
+}
+
 run "sandbox_host_node_group_null_overrides_fall_back" {
   command = plan
 
