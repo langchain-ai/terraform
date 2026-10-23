@@ -176,12 +176,19 @@ resource "kubernetes_stateful_set_v1" "this" {
             read_only  = true
           }
 
+          # Endpoints and timeouts as RustFS's own chart sets them (helm/rustfs/values.yaml):
+          # readiness on /health/ready, which reports storage quorum, so a store whose drive is
+          # failing leaves the Service instead of taking writes; liveness on /health, with a 3 s
+          # timeout. Kubernetes' 1 s default restarted RustFS twice mid-write while it was slow, not
+          # dead, under load on a lab node (rename_data past 30 s), and each restart left rollbacks
+          # to recover and failed every SmithDB and blob write in flight.
           readiness_probe {
             http_get {
-              path = "/health"
+              path = "/health/ready"
               port = "s3"
             }
-            period_seconds = 10
+            period_seconds  = 10
+            timeout_seconds = 3
           }
           liveness_probe {
             http_get {
@@ -190,6 +197,7 @@ resource "kubernetes_stateful_set_v1" "this" {
             }
             initial_delay_seconds = 60
             period_seconds        = 20
+            timeout_seconds       = 3
             failure_threshold     = 3
           }
         }
