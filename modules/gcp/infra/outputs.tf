@@ -215,8 +215,8 @@ output "dns_name_servers" {
 }
 
 output "managed_certificate_name" {
-  description = "Google-managed certificate name (null when DNS module is disabled)"
-  value       = var.enable_dns_module ? module.dns[0].certificate_name : null
+  description = "Name of the Google-managed Certificate Manager certificate (null unless tls_certificate_source = 'google-managed'). The DNS module no longer creates a classic SSL certificate."
+  value       = local.tls_google_managed ? module.certificate_manager[0].certificate_name : null
 }
 
 #------------------------------------------------------------------------------
@@ -289,13 +289,33 @@ output "keda_namespace" {
 # TLS / cert-manager Outputs
 #------------------------------------------------------------------------------
 output "tls_certificate_source" {
-  description = "TLS certificate source: none, letsencrypt, or existing"
+  description = "TLS certificate source: none, google-managed, existing, or cert-manager"
   value       = var.tls_certificate_source
 }
 
 output "tls_secret_name" {
-  description = "Name of the TLS secret in Kubernetes"
+  description = "Name of the TLS Secret the Gateway reads (null with no TLS or a Google-managed certificate)"
   value       = module.k8s_bootstrap.tls_secret_name
+}
+
+output "tls_certificate_map_name" {
+  description = "Certificate Manager certificate map on the GKE Gateway (null unless tls_certificate_source = 'google-managed')"
+  value       = local.tls_google_managed ? module.certificate_manager[0].certificate_map_name : null
+}
+
+output "tls_dns_authorization_record" {
+  description = "CNAME record that proves control of langsmith_domain for the Google-managed certificate. Add it to your DNS unless tls_dns_authorization_record_managed is true. Null with an issuance config or another TLS source."
+  value       = local.tls_google_managed ? module.certificate_manager[0].dns_authorization_record : null
+}
+
+output "tls_dns_authorization_record_managed" {
+  description = "Whether Terraform created the DNS authorization record in the DNS module's Cloud DNS zone"
+  value       = local.tls_google_managed ? module.certificate_manager[0].dns_authorization_record_managed : false
+}
+
+output "cert_manager_version" {
+  description = "cert-manager chart version (null when cert-manager is not installed)"
+  value       = module.k8s_bootstrap.cert_manager_version
 }
 
 output "tls_configured" {
@@ -306,11 +326,6 @@ output "tls_configured" {
 output "cert_manager_installed" {
   description = "Whether cert-manager is installed for automatic TLS"
   value       = module.k8s_bootstrap.cert_manager_installed
-}
-
-output "letsencrypt_issuer" {
-  description = "Let's Encrypt ClusterIssuer name (use in ingress annotations)"
-  value       = module.k8s_bootstrap.letsencrypt_issuer_name
 }
 
 #------------------------------------------------------------------------------

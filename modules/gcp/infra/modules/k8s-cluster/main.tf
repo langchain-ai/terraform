@@ -67,6 +67,14 @@ resource "google_container_cluster" "primary" {
     channel = var.release_channel
   }
 
+  # GKE Gateway controller, for ingress_type = "gke"
+  dynamic "gateway_api_config" {
+    for_each = var.enable_gateway_api ? [1] : []
+    content {
+      channel = "CHANNEL_STANDARD"
+    }
+  }
+
   # Addons
   addons_config {
     http_load_balancing {
@@ -323,6 +331,14 @@ resource "google_container_cluster" "autopilot" {
   # Workload Identity (always enabled in Autopilot)
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
+  }
+
+  # GKE Gateway controller, for ingress_type = "gke"
+  dynamic "gateway_api_config" {
+    for_each = var.enable_gateway_api ? [1] : []
+    content {
+      channel = "CHANNEL_STANDARD"
+    }
   }
 
   # Private cluster configuration
