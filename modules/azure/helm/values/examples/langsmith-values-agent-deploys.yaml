@@ -62,8 +62,9 @@ operator:
         cpu: "500m"
         memory: "512Mi"
   # Deployment template for operator-spawned agent pods.
-  # Agent pods run as langsmith-ksa (created by deploy.sh with WI annotation).
-  # Workload Identity is used for blob storage access — no static credentials needed.
+  # Agent pods run as langsmith-ksa, which carries the image pull Secret. They
+  # have no Azure identity: no azure.workload.identity/use label here, and no
+  # federated credential for langsmith-ksa. The agent server needs none.
   templates:
     deployment: |
       apiVersion: apps/v1
