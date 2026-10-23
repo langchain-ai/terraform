@@ -9,15 +9,16 @@ This module creates these resources:
 | Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. The app gets no Microsoft Graph permissions. |
 | Resource group `langsmith-byoc-<key>` | One per data plane | LangSmith deploys the data plane into this resource group. |
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the 2 secrets that LangSmith writes. No public network access. |
-| `Contributor` and `User Access Administrator` role assignments | Two per data plane | Give the LangSmith service principal access to that resource group only. |
+| Custom roles `langsmith-byoc-<key>-<suffix>` and `langsmith-byoc-reduced-<key>-<suffix>` | Two per data plane | The actions that LangSmith needs in that resource group. Each role can only be assigned in that resource group. |
+| Role assignments: one LangSmith custom role and `User Access Administrator` | Two per data plane | Give the LangSmith service principal access to that resource group only. |
 
 > **WARNING:** LangSmith deletes the whole resource group when you delete the data plane. The resource group must contain only the Key Vault from this module when you create the data plane in LangSmith. Do not put other resources in it.
 
 ## Prerequisites
 
 1. An Azure subscription for the LangSmith data planes.
-2. Azure credentials with the `Owner` role on that subscription. The module creates role assignments, and the provider registers resource providers for the subscription.
-3. An Entra ID role that can create a service principal for a multi-tenant app, for example `Cloud Application Administrator`.
+2. Azure credentials with the `Owner` role on that subscription. The module creates custom roles and role assignments, and the provider registers resource providers for the subscription.
+3. An Entra ID role that can create and update a service principal for a multi-tenant app, for example `Cloud Application Administrator`. Terraform also updates an existing LangSmith service principal, so this role is necessary even when the service principal already exists.
 4. Terraform `>= 1.11.0`, the AzureRM provider `>= 4.42.0, < 5.0.0`, and the AzureAD provider `~> 3.0`.
 5. The client ID of the LangSmith multi-tenant app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`. Use it as `langsmith_app_client_id`.
 6. The external ID from **Settings > Data Planes** in the LangSmith UI. Copy this value and use it as `external_id`. Do not make your own value. LangSmith compares it with the description of each role assignment to verify that you own the subscription.
@@ -136,13 +137,31 @@ terraform output -json langsmith_byoc_access | jq --arg dp prod '{
 }'
 ```
 
+### Reduce access after deployment
+
+When the data plane is active in LangSmith, set `reduced_access = true` for it and run `terraform apply`:
+
+```hcl
+data_planes = {
+  prod = {
+    location       = "eastus"
+    reduced_access = true
+  }
+}
+```
+
+LangSmith then gets `langsmith-byoc-reduced` instead of `langsmith-byoc`. Terraform creates the new role assignment before it removes the old one, so LangSmith keeps access. The reduced role keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network, and it cannot write Key Vault secrets.
+
+LangSmith cannot delete or re-create a data plane with the reduced role. Set `reduced_access = false` and run `terraform apply` first.
+
 ### Delete a data plane
 
 > **CAUTION:** Do not remove the key from `data_planes` before you delete the data plane in LangSmith. Terraform then tries to delete a resource group that contains the data plane. With the default `features {}`, the AzureRM provider stops the delete.
 
-1. Delete the data plane in LangSmith. LangSmith deletes the resource group and all its contents.
-2. Remove the key from `data_planes`.
-3. Run `terraform apply` to remove the rest of that data plane from the Terraform state.
+1. If the data plane has `reduced_access = true`, set it to `false` and run `terraform apply`. Wait 5 minutes for Azure to apply the role change.
+2. Delete the data plane in LangSmith. LangSmith deletes the resource group and all its contents.
+3. Remove the key from `data_planes`.
+4. Run `terraform apply` to remove the rest of that data plane from the Terraform state.
 
 ## Inputs
 
@@ -150,7 +169,7 @@ terraform output -json langsmith_byoc_access | jq --arg dp prod '{
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes** in LangSmith. Must not be empty. The module writes it as the description of each LangSmith role assignment. |
-| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}) }))` | no | `{}` | Map of data planes. The key is the data plane name. Each data plane gets the resource group `langsmith-byoc-<key>` with only a Key Vault in it. LangSmith deletes the whole resource group when you delete the data plane. |
+| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false) }))` | no | `{}` | Map of data planes. The key is the data plane name. Each data plane gets the resource group `langsmith-byoc-<key>` with only a Key Vault in it. LangSmith deletes the whole resource group when you delete the data plane. Set `reduced_access = true` after the data plane is active (see [Reduce access after deployment](#reduce-access-after-deployment)). |
 | `key_vault_purge_protection_enabled` | `bool` | no | `true` | Enables purge protection on each data plane Key Vault. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
@@ -171,7 +190,12 @@ The module creates the service principal of the LangSmith multi-tenant app in yo
 
 ### Role assignments
 
-The LangSmith service principal gets `Contributor` and `User Access Administrator` on each data plane resource group, and on nothing else. The data plane Crossplane compositions create role assignments, one custom role definition with the resource group as its scope, and management locks. `Contributor` alone cannot do these operations.
+The LangSmith service principal gets two roles on each data plane resource group, and on nothing else:
+
+- One LangSmith custom role. `langsmith-byoc` creates, updates, and deletes the data plane. `langsmith-byoc-reduced` only keeps it up to date. [`roles.tf`](roles.tf) lists the actions of both roles. They name each action, except `*/read` and the Managed Redis access policy actions, which Azure does not list.
+- `User Access Administrator`. The data plane creates role assignments for its workload identities, one custom role definition with the resource group as its scope, and delete locks for PostgreSQL and Redis.
+
+LangSmith needs no role on the AKS node resource group (`<cluster>-nodes`). The control plane reaches the private AKS API through a private endpoint on the cluster.
 
 The description of each role assignment is the `external_id`. LangSmith reads this description to verify that the owner of the subscription is the LangSmith organization with that external ID.
 
@@ -191,6 +215,7 @@ Terraform writes nothing into the vault. Do not add other secrets to it.
 - Run `terraform apply` with credentials in the **target** tenant and subscription. The `tenant_id` output and the subscription in each `resource_group_id` come from these credentials.
 - `use_existing = true` adopts the LangSmith service principal if it is already in your tenant, for example after an earlier admin consent. `terraform destroy` deletes that service principal in all cases.
 - When you remove this module, Terraform deletes the service principal and all role assignments. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
+- The tenant has only one LangSmith service principal. If you use this module in more than one root module of the same tenant (for example one per subscription), a destroy of one root module deletes the service principal for all of them.
 
 ## License
 
