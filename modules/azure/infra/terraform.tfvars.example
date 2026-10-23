@@ -144,8 +144,7 @@ enable_smithdb = false
 
 # Roll out one stage at a time after the infrastructure-only deployment is
 # healthy. make smithdb-migration-job-start and make smithdb-migration-job-end
-# set smithdb_migration_enabled and smithdb_migration_parallelism; set the other
-# two here. See SMITHDB.md, "Staged rollout".
+# set smithdb_migration_enabled; set the other two here. See SMITHDB.md, "Staged rollout".
 smithdb_ingestion_enabled = false
 smithdb_migration_enabled = false
 smithdb_query_enabled     = false

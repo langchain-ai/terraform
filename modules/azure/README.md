@@ -1080,8 +1080,6 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
     on port 1986. Only overlay mode limits it to the nodes.
   - With Cilium, which never matches a node IP by `ipBlock`, `deploy.sh` applies a CiliumNetworkPolicy of the same
     name that admits the `host` and `remote-node` entities, and deletes it when sandboxes are off.
-- The namespace ResourceQuota caps requests only, and the LimitRange sets no default limits. `sandbox-host` runs the
-  microVMs in child cgroups of its own pod, so a container limit would cap every sandbox on the node.
 - `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy. This replaces any tag set
   in a values file, so the image always follows the chart.
 - `sandbox_service_url_base_url` sets the base URL for HTTP services that run inside sandboxes. It needs wildcard DNS

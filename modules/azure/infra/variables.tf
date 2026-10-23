@@ -1370,18 +1370,6 @@ variable "smithdb_migration_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_parallelism" {
-  type        = number
-  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
-  default     = 1
-  nullable    = false
-
-  validation {
-    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
-    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
-  }
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
@@ -1390,7 +1378,7 @@ variable "smithdb_query_enabled" {
 
 variable "smithdb_sizing" {
   type        = string
-  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
   default     = null
   nullable    = true
 
@@ -2101,6 +2089,12 @@ variable "sizing_profile" {
   type        = string
   description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing and the default sandbox_host_vm_size."
   default     = "production"
+
+  # "default" is the scripts' value for the chart's base values with no overlay.
+  validation {
+    condition     = contains(["default", "minimum", "dev", "production", "production-large"], var.sizing_profile)
+    error_message = "sizing_profile must be 'default', 'minimum', 'dev', 'production', or 'production-large'."
+  }
 }
 
 # tflint-ignore: terraform_unused_declarations
