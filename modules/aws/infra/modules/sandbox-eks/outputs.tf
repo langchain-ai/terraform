@@ -27,3 +27,8 @@ output "node_security_group_id" {
   description = "Security group attached to sandbox worker nodes and pod ENIs"
   value       = module.eks.node_security_group_id
 }
+
+output "managed_node_group_input" {
+  description = "The sandbox-host node group as passed to the upstream EKS module. Plan tests assert on this because test assertions cannot reach resources inside nested modules."
+  value       = local.sandbox_host_node_group
+}

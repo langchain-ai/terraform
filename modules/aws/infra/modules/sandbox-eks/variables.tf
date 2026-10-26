@@ -20,7 +20,7 @@ variable "subnet_ids" {
 
 variable "managed_node_group_defaults" {
   type        = any
-  description = "Default settings for the sandbox EKS managed node group"
+  description = "Default settings merged under the sandbox-host node group (group settings win), as ../eks does with eks_managed_node_group_defaults"
   default     = {}
 }
 
@@ -31,7 +31,7 @@ variable "managed_node_group" {
 
 variable "cluster_addons" {
   type        = any
-  description = "Additional EKS managed addon configuration"
+  description = "EKS add-on configuration in the root's eks_addons schema. Only the vpc-cni, kube-proxy and coredns entries apply to the sandbox cluster."
   default     = {}
 }
 
