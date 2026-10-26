@@ -66,6 +66,11 @@ output "sandbox_irsa_role_arn" {
   value       = local.separate_cluster_sandboxes ? aws_iam_role.sandbox_host[0].arn : null
 }
 
+output "sandbox_node_security_group_id" {
+  description = "Security group on the dedicated sandbox cluster's nodes. With alb_existing_security_group_id, allow it on the ALB's HTTP/HTTPS ports so sandbox-host can reach the LangSmith API."
+  value       = local.separate_cluster_sandboxes ? module.sandbox_eks[0].node_security_group_id : null
+}
+
 output "sandbox_namespace" {
   description = "Namespace containing the standalone sandbox runtime"
   value       = local.separate_cluster_sandboxes ? var.sandbox_namespace : null

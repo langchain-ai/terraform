@@ -345,16 +345,39 @@ module "sandbox_eks" {
   tags                        = merge(local.common_tags, { component = "sandbox" })
 }
 
-resource "aws_security_group_rule" "sandbox_host_from_langsmith" {
+# sandbox-host listens on TCP 19190 on each sandbox node (host network). That
+# hop is plain HTTP carrying sandbox commands, files and credentials, so it is
+# open to exactly two sources, both inside this VPC:
+#   - the LangSmith cluster's node security group, which platform-backend and
+#     ingest-queue use: pod ENIs carry it too, under custom networking as well;
+#   - the sandbox nodes themselves, which forward ingress requests, dial sandbox
+#     links and send live-migration streams to each other on 19190. The EKS
+#     module's node-to-node ephemeral-port rule covers this today; this rule
+#     states the requirement so it does not depend on that default.
+resource "aws_vpc_security_group_ingress_rule" "sandbox_host_from_langsmith" {
   count = local.separate_cluster_sandboxes ? 1 : 0
 
-  type                     = "ingress"
-  from_port                = 19190
-  to_port                  = 19190
-  protocol                 = "tcp"
-  security_group_id        = module.sandbox_eks[0].node_security_group_id
-  source_security_group_id = module.eks.node_security_group_id
-  description              = "LangSmith control plane to sandbox-host"
+  security_group_id            = module.sandbox_eks[0].node_security_group_id
+  referenced_security_group_id = module.eks.node_security_group_id
+  from_port                    = 19190
+  to_port                      = 19190
+  ip_protocol                  = "tcp"
+  description                  = "LangSmith platform-backend and ingest-queue to sandbox-host"
+
+  tags = local.common_tags
+}
+
+resource "aws_vpc_security_group_ingress_rule" "sandbox_host_from_sandbox_nodes" {
+  count = local.separate_cluster_sandboxes ? 1 : 0
+
+  security_group_id            = module.sandbox_eks[0].node_security_group_id
+  referenced_security_group_id = module.sandbox_eks[0].node_security_group_id
+  from_port                    = 19190
+  to_port                      = 19190
+  ip_protocol                  = "tcp"
+  description                  = "sandbox-host to sandbox-host: ingress forwarding, sandbox links, live migration"
+
+  tags = local.common_tags
 }
 
 # State migration: adding count changes the module address.

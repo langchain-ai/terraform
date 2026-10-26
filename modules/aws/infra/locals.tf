@@ -199,7 +199,9 @@ locals {
   #
   # Internal ALB: the request stays inside the VPC and keeps its source security
   # group, so we can name the sandbox node group directly. This is the tight,
-  # self-maintaining form and needs no operator action.
+  # self-maintaining form and needs no operator action, except with
+  # alb_existing_security_group_id: Terraform writes no rules onto a supplied
+  # group, so allow the sandbox_node_security_group_id output there yourself.
   alb_allowed_security_group_ids = (
     local.separate_cluster_sandboxes && var.alb_scheme == "internal"
   ) ? [module.sandbox_eks[0].node_security_group_id] : []
