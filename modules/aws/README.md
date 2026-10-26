@@ -435,7 +435,7 @@ enable_sandboxes       = true
 sandbox_deployment_mode = "separate_cluster"
 sandbox_namespace       = "langsmith-sandbox"
 
-langsmith_helm_chart_version = "0.17.0-rc.22"
+langsmith_helm_chart_version = "0.18.0" # exact, 0.18 or later
 ```
 
 Terraform then creates a second EKS cluster in the same VPC with only the KVM-capable sandbox node group. It also creates a sandbox-scoped IRSA role, allows the main cluster's worker and pod security group to reach sandbox nodes on TCP port 19190, and creates minimal write-only runtime and JuiceFS Secrets in the sandbox namespace. The S3 bucket and dedicated `noeviction` ElastiCache metadata store remain shared infrastructure in the VPC.
@@ -1117,7 +1117,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `sandbox_service_account_name` | `sandbox-host` | no | ServiceAccount trusted by the sandbox IRSA role. `init-values.sh` writes it into `sandboxHost.serviceAccount.name`, so change it here rather than in the values file |
 | `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
 | `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
-| `langsmith_helm_chart_version` | `""` | no | Exact 0.16.x version, or 0.17.x for separate-cluster sandboxes |
+| `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.17.x or 0.18.x chart version; empty deploys the latest 0.17.x. `separate_cluster` requires an exact version on 0.18 or later |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |

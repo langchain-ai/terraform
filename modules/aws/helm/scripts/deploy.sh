@@ -188,6 +188,22 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
 fi
 
+# separateCluster ships with chart 0.18, and the runtime chart is picked below by
+# this chart's appVersion, so the langsmith chart must be one exact version on
+# 0.18 or later: not the default 0.17 line and not a range. Terraform checks
+# langsmith_helm_chart_version the same way; this also covers CHART_VERSION.
+# Keep the pattern in step with separate_cluster_chart_version_pattern in
+# infra/locals.tf.
+_separate_cluster_chart_re='^(0\.(1[89]|[2-9][0-9])|[1-9][0-9]*\.[0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]] \
+  && ! [[ "$CHART_VERSION" =~ $_separate_cluster_chart_re ]]; then
+  echo "ERROR: sandbox_deployment_mode = separate_cluster needs one exact langsmith chart version" >&2
+  echo "       on 0.18 or later; got CHART_VERSION='$CHART_VERSION'." >&2
+  echo "       Set langsmith_helm_chart_version in terraform.tfvars, for example \"0.18.0\"." >&2
+  echo "       The langsmith-sandbox chart is then picked by that chart's appVersion." >&2
+  exit 1
+fi
+
 # Engine needs chart 0.17, which the chart-line check above already enforces.
 if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
   echo "ERROR: enable_engine = true requires enable_sandboxes = true. Every Engine run executes in a sandbox." >&2

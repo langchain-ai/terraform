@@ -22,11 +22,14 @@ locals {
 
   same_cluster_sandboxes     = var.enable_sandboxes && var.sandbox_deployment_mode == "same_cluster"
   separate_cluster_sandboxes = var.enable_sandboxes && var.sandbox_deployment_mode == "separate_cluster"
-  bucket_name                = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
-  postgres_name              = "${local.base_name}-pg"
-  alb_name                   = "${local.base_name}-alb"
-  bastion_name               = "${local.base_name}-bastion"
-  firewall_name              = "${local.base_name}-fw"
+  # One exact chart version (SemVer, optional prerelease) on 0.18 or later.
+  # Keep in step with helm/scripts/deploy.sh.
+  separate_cluster_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+  bucket_name                            = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
+  postgres_name                          = "${local.base_name}-pg"
+  alb_name                               = "${local.base_name}-alb"
+  bastion_name                           = "${local.base_name}-bastion"
+  firewall_name                          = "${local.base_name}-fw"
 
   common_tags = merge(
     {

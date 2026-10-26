@@ -95,6 +95,15 @@ resource "terraform_data" "validate_inputs" {
       error_message = "separate_cluster sandboxes require langsmith_api_key_salt and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
     }
 
+    # separateCluster ships with chart 0.18, and deploy.sh picks the runtime
+    # chart by this chart's appVersion, so the pin must be one exact version on
+    # 0.18 or later: not empty (the 0.17 line) and not a range. deploy.sh checks
+    # the same rule, since a CHART_VERSION environment variable overrides this.
+    precondition {
+      condition     = !local.separate_cluster_sandboxes || can(regex(local.separate_cluster_chart_version_pattern, var.langsmith_helm_chart_version))
+      error_message = "sandbox_deployment_mode = \"separate_cluster\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
+    }
+
     # Separate-cluster sandboxes call the LangSmith API through the ALB. With an
     # internal ALB a security group rule covers that automatically; with an
     # internet-facing ALB the call arrives from the NAT gateway and is matched by

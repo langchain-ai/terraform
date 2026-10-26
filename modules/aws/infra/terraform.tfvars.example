@@ -381,8 +381,9 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox-host loses access to the trace bucket.
 # sandbox_service_account_name = "sandbox-host"
 #
-# For separate_cluster, pin the langsmith chart:
-# langsmith_helm_chart_version = "0.17.0-rc.22"
+# separate_cluster requires an exact langsmith chart version on 0.18 or later
+# (the default 0.17 line has no separate-cluster support):
+# langsmith_helm_chart_version = "0.18.0"
 #
 # sandbox_juicefs_redis_instance_type = "cache.m6g.large"
 # sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
