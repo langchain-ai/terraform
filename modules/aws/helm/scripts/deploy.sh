@@ -53,11 +53,10 @@ if [[ -z "${CHART_VERSION:-}" ]]; then
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.17.0}"
+# separate_cluster runs sandbox-host from its own langsmith-sandbox release in
+# the sandbox cluster. That chart has no version setting here: it is the newest
+# one whose appVersion equals the langsmith chart's, resolved below.
 _sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
-if [[ -z "${SANDBOX_CHART_VERSION:-}" ]]; then
-  SANDBOX_CHART_VERSION=$(_parse_tfvar "langsmith_sandbox_helm_chart_version") || SANDBOX_CHART_VERSION=""
-fi
-SANDBOX_CHART_VERSION="${SANDBOX_CHART_VERSION:-~0.1.0-0}"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -760,23 +759,10 @@ fi
 kubectl delete job "${RELEASE_NAME}-agent-bootstrap" -n "$NAMESPACE" \
   --ignore-not-found=true 2>/dev/null || true
 
-# --devel is required for pre-release chart versions. Helm filters prereleases
-# out of the repo index before matching, so without it a constraint that only
-# a prerelease can satisfy silently resolves to nothing.
-#
-# The test is "does the constraint carry a SemVer prerelease identifier", i.e.
-# a '-' after the version core, rather than an -rc/-alpha/-beta allowlist. Both
-# forms appear in these pins: the LangSmith chart uses 0.17.0-rc.22, and the
-# sandbox chart's default is ~0.1.0-0, where -0 is the conventional way to say
-# "prereleases allowed". An allowlist matches the first and misses the second.
-# Build metadata (+meta) is stripped first so it cannot be mistaken for one.
-_needs_devel_flag() {
-  local _version="${1%%+*}"
-  [[ "$_version" == *-* ]]
-}
-
+# --devel is required for pre-release chart versions (e.g. 0.15.0-rc.14). Helm
+# silently skips any version tagged -rc./-alpha./-beta. without it.
 _devel_flag=""
-if [[ -n "$CHART_VERSION" ]] && _needs_devel_flag "$CHART_VERSION"; then
+if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|beta)\.'; then
   _devel_flag="--devel"
 fi
 
@@ -823,6 +809,38 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_clu
   fi
   VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag"
+fi
+
+# separate_cluster: the runtime chart pairs with the langsmith chart by
+# appVersion, which is the LangSmith release both deploy, never by chart
+# version. Install the newest langsmith-sandbox chart with the same appVersion.
+# Resolved here, before either release changes, so a missing runtime chart stops
+# the deploy instead of leaving the control plane upgraded without a runtime.
+_sandbox_chart_version=""
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: sandbox_deployment_mode = separate_cluster needs jq to pick the langsmith-sandbox chart." >&2
+    exit 1
+  fi
+  _langsmith_app_version=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d "\"'")
+  if [[ -z "$_langsmith_app_version" ]]; then
+    echo "ERROR: chart langchain/langsmith $_resolved_chart declares no appVersion to pair the sandbox runtime with." >&2
+    exit 1
+  fi
+  # --devel: release candidates pair with prerelease runtime charts.
+  _sandbox_chart_version=$(helm search repo langchain/langsmith-sandbox --versions --devel -o json 2>/dev/null \
+    | jq -r --arg app "$_langsmith_app_version" \
+      '[.[] | select(.name == "langchain/langsmith-sandbox" and .app_version == $app)][0].version // empty') \
+    || _sandbox_chart_version=""
+  if [[ -z "$_sandbox_chart_version" ]]; then
+    echo "ERROR: no langchain/langsmith-sandbox chart has appVersion $_langsmith_app_version," >&2
+    echo "       the appVersion of langchain/langsmith $_resolved_chart. The sandbox runtime must run" >&2
+    echo "       the same LangSmith release as the control plane. Neither Helm release was changed." >&2
+    echo "       List the published runtime charts with:" >&2
+    echo "         helm search repo langchain/langsmith-sandbox --versions --devel" >&2
+    exit 1
+  fi
+  echo "Chart: langchain/langsmith-sandbox  appVersion=${_langsmith_app_version}  resolved=${_sandbox_chart_version}"
 fi
 
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
@@ -974,59 +992,35 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate
   [[ -n "$_platform_base_path" ]] && _platform_endpoint+="/${_platform_base_path}"
   _platform_endpoint+="/api"
 
-  # Same rule as the core chart above, so the two pins cannot drift apart.
-  _sandbox_devel_flag=""
-  if _needs_devel_flag "$SANDBOX_CHART_VERSION"; then
-    _sandbox_devel_flag="--devel"
-  fi
-  _sandbox_chart_metadata=$(helm show chart langchain/langsmith-sandbox --version "$SANDBOX_CHART_VERSION" ${_sandbox_devel_flag:-} 2>/dev/null) || _sandbox_chart_metadata=""
-  _resolved_sandbox_chart=$(awk '/^version:/{print $2}' <<<"$_sandbox_chart_metadata")
-  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_sandbox_chart_metadata")
-  if [[ -z "$_resolved_sandbox_chart" || -z "$_sandbox_host_image_tag" ]]; then
-    echo "ERROR: no langchain/langsmith-sandbox chart matches '$SANDBOX_CHART_VERSION'." >&2
-    exit 1
-  fi
-
   echo ""
   echo "Deploying sandbox runtime to cluster: $_sandbox_cluster_name"
-  echo "Chart: langchain/langsmith-sandbox requested=${SANDBOX_CHART_VERSION} resolved=${_resolved_sandbox_chart}"
+  echo "Chart: langchain/langsmith-sandbox ${_sandbox_chart_version} (appVersion ${_langsmith_app_version})"
   echo "Platform endpoint: $_platform_endpoint"
 
-  # Target the sandbox cluster through a throwaway kubeconfig instead of
-  # rewriting the operator's. `aws eks update-kubeconfig` mutates the shared
-  # file in place and switches current-context; a failure between the switch
-  # and the switch back would leave the shell pointed at the sandbox cluster,
-  # and on a shared KUBECONFIG it writes credentials other people can see.
-  _sandbox_kubeconfig=$(mktemp -t langsmith-sandbox-kubeconfig.XXXXXX)
-  chmod 600 "$_sandbox_kubeconfig"
-  # shellcheck disable=SC2064  # capture the path now; it is what we must remove
-  trap "rm -f '$_sandbox_kubeconfig'" EXIT
-
-  # Subshell so the export cannot leak past the sandbox deploy, whatever the
-  # shell's POSIX mode does with `VAR=x func`. set -e still propagates: a
-  # failure in here exits the script and the trap removes the file.
+  # Subshell: the sandbox cluster gets its own kubeconfig file from main's
+  # helper (~/.kube/langsmith-<cluster>), and the KUBECONFIG export ends with
+  # the subshell. set -e still exits the script on a failure in here.
+  # No images.sandboxHost.tag: the chart runs the image of its own appVersion.
+  # No --wait or --atomic: hosts drain one at a time, so a slow roll is not a
+  # failed one; the rollout check below only warns.
   (
-    export KUBECONFIG="$_sandbox_kubeconfig"
-    aws eks update-kubeconfig --name "$_sandbox_cluster_name" --region "$_region"
+    _use_cluster_kubeconfig "$_sandbox_cluster_name" "$_region"
 
     helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
       --namespace "$_sandbox_namespace" \
       --create-namespace \
-      --version "$SANDBOX_CHART_VERSION" \
-      ${_sandbox_devel_flag:-} \
+      --version "$_sandbox_chart_version" \
       -f "$SANDBOX_VALUES_FILE" \
       --set-string "platform.endpoint=$_platform_endpoint" \
-      --set-string "images.sandboxHost.tag=$_sandbox_host_image_tag" \
+      ${_ssa_flag} \
       --timeout "$_helm_timeout"
 
-    if ! kubectl rollout status "deployment/${SANDBOX_RELEASE_NAME}-sandbox-host" \
-      -n "$_sandbox_namespace" --timeout=5m; then
+    if ! kubectl rollout status deployment -n "$_sandbox_namespace" \
+      -l "app.kubernetes.io/instance=${SANDBOX_RELEASE_NAME},app=sandbox-host" --timeout=15m; then
       echo "WARNING: sandbox-host is not ready; sandbox nodes may still be starting." >&2
     fi
   )
-
-  rm -f "$_sandbox_kubeconfig"
-  trap - EXIT
+  echo "  Sandbox cluster kubeconfig: $HOME/.kube/langsmith-${_sandbox_cluster_name}"
 fi
 
 echo ""

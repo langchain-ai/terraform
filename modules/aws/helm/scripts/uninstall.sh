@@ -33,69 +33,39 @@ DELETE_TIMEOUT="${DELETE_TIMEOUT:-120s}"
 # the volume before terraform destroy removes the driver.
 DELETE_DATA_PVCS="${DELETE_DATA_PVCS:-false}"
 
-# Names of resources of type $2 in namespace $1 whose name matches extended
-# regex $3. Resource names rather than labels: the sandbox-host workload is
-# named "sandbox-host" on some chart versions and "<release>-sandbox-host" on
+# Names of resources of type $1 whose name matches extended regex $2.
+# Resource names rather than labels: the sandbox-host workload is named
+# "sandbox-host" on some chart versions and "<release>-sandbox-host" on
 # others, and JuiceFS mount pods carry no chart labels at all.
 _names_matching() {
-  local _ns="$1" _type="$2" _pattern="$3"
-  kubectl get "$_type" -n "$_ns" \
+  local _type="$1" _pattern="$2"
+  kubectl get "$_type" -n "$NAMESPACE" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
     | grep -Ei -- "$_pattern" || true
 }
 
-# Force-delete pods stuck in Terminating in namespace $1 and strip the JuiceFS
-# finalizer that only the (now-removed) CSI controller would clear. Without
-# this, kubectl delete blocks past terminationGracePeriodSeconds with no way
-# to finish.
+# Force-delete pods stuck in Terminating and strip the JuiceFS finalizer that
+# only the (now-removed) CSI controller would clear. Without this, kubectl
+# delete blocks past terminationGracePeriodSeconds with no way to finish.
 _force_clear_stuck_pods() {
-  local _ns="$1" _pod
+  local _pod
   while IFS= read -r _pod; do
     [[ -z "$_pod" ]] && continue
     echo "  force-deleting pod $_pod"
-    kubectl patch pod "$_pod" -n "$_ns" \
+    kubectl patch pod "$_pod" -n "$NAMESPACE" \
       --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null || true
-    kubectl delete pod "$_pod" -n "$_ns" \
+    kubectl delete pod "$_pod" -n "$NAMESPACE" \
       --grace-period=0 --force --wait=false --ignore-not-found || true
   done < <(
     {
       # Pods the API server has accepted a delete for but that never finish.
-      kubectl get pods -n "$_ns" \
+      kubectl get pods -n "$NAMESPACE" \
         -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{"\n"}{end}' \
         2>/dev/null || true
       # JuiceFS mount pods, which hold juicefs.com/finalizer.
-      _names_matching "$_ns" pods 'juicefs'
+      _names_matching pods 'juicefs'
     } | sort -u
   )
-}
-
-# Drop the sandbox-host workload and its JuiceFS volumes in namespace $1 while
-# the CSI driver from the same release is still running. helm uninstall removes
-# the driver along with everything else, and a PVC that mounted through it can
-# then never be unmounted, because the controller that clears
-# juicefs.com/finalizer is gone. Same ordering the main cluster needs, so both
-# paths call this before their helm uninstall.
-_drain_juicefs_volumes() {
-  local _ns="$1" _workload _pvc
-  echo "Removing JuiceFS / sandbox volumes in '$_ns' while CSI is still present..."
-  while IFS= read -r _workload; do
-    [[ -z "$_workload" ]] && continue
-    echo "  deleting $_workload"
-    kubectl delete "$_workload" -n "$_ns" \
-      --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
-  done < <(
-    {
-      _names_matching "$_ns" deployments 'sandbox-host' | sed 's|^|deployment/|'
-      _names_matching "$_ns" statefulsets 'sandbox-host' | sed 's|^|statefulset/|'
-    }
-  )
-
-  while IFS= read -r _pvc; do
-    [[ -z "$_pvc" ]] && continue
-    echo "  deleting PVC $_pvc"
-    kubectl delete pvc "$_pvc" -n "$_ns" \
-      --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
-  done < <(_names_matching "$_ns" pvc 'juicefs|smithbox')
 }
 
 # ── Resolve config from terraform.tfvars (best effort) ────────────────────────
@@ -151,14 +121,22 @@ echo "  Active context: $_ctx"
 echo ""
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
+if [[ -n "$_sandbox_cluster_name" ]]; then
+  echo "This will first remove, from sandbox cluster '$_sandbox_cluster_name':"
+  echo "  - Helm release '$SANDBOX_RELEASE_NAME' from namespace '$_sandbox_namespace'"
+  echo ""
+elif [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  echo "WARNING: sandbox_deployment_mode = separate_cluster, but Terraform output has no sandbox"
+  echo "         cluster name, so this run cannot remove the '$SANDBOX_RELEASE_NAME' release."
+  echo "         Uninstall it from the sandbox cluster first (helm uninstall $SANDBOX_RELEASE_NAME"
+  echo "         -n <namespace> --wait), or answer N, unless that cluster is already gone."
+  echo ""
+fi
 echo "This will remove, from cluster context '$_ctx':"
 echo "  - Helm release '$RELEASE_NAME' from namespace '$NAMESPACE'"
 echo "  - ExternalSecret 'langsmith-config' from namespace '$NAMESPACE'"
 echo "  - ClusterSecretStore 'langsmith-ssm'"
 echo "  - JuiceFS / sandbox volumes (while CSI is still present)"
-if [[ -n "$_sandbox_cluster_name" ]]; then
-  echo "  - Helm release '$SANDBOX_RELEASE_NAME' from sandbox cluster '$_sandbox_cluster_name' namespace '$_sandbox_namespace'"
-fi
 if [[ "$DELETE_DATA_PVCS" == "true" ]]; then
   echo "  - ClickHouse data PVCs — TRACE DATA IS DELETED (DELETE_DATA_PVCS=true)"
 else
@@ -173,40 +151,23 @@ if [[ "$_confirm" != "y" && "$_confirm" != "Y" ]]; then
 fi
 echo ""
 
+# ── Sandbox runtime first (separate_cluster) ──────────────────────────────────
+# The runtime goes before the langsmith release that drives it, the reverse of
+# the install order. Subshell: the sandbox cluster's kubeconfig export ends with
+# it, so the steps below still target the LangSmith cluster. The runtime chart
+# mounts JuiceFS inside sandbox-host (no CSI driver, no PVCs), so there is
+# nothing to drain first; --wait covers the hosts' graceful shutdown.
 if [[ -n "$_sandbox_cluster_name" ]]; then
-  echo "Uninstalling standalone sandbox runtime from '$_sandbox_cluster_name'..."
-
-  # Throwaway kubeconfig rather than rewriting the operator's: mutating the
-  # shared file switches current-context for every other shell using it, and a
-  # failure mid-teardown would strand it pointed at the sandbox cluster.
-  _sandbox_kubeconfig=$(mktemp -t langsmith-sandbox-kubeconfig.XXXXXX)
-  chmod 600 "$_sandbox_kubeconfig"
-  # shellcheck disable=SC2064  # capture the path now; it is what we must remove
-  trap "rm -f '$_sandbox_kubeconfig'" EXIT
-
-  # Subshell so the export cannot leak into the main-cluster teardown below,
-  # whatever the shell's POSIX mode does with `VAR=x func`.
+  echo "Uninstalling the sandbox runtime from '$_sandbox_cluster_name'..."
   (
-    export KUBECONFIG="$_sandbox_kubeconfig"
-    aws eks update-kubeconfig --name "$_sandbox_cluster_name" --region "$_region"
-
+    _use_cluster_kubeconfig "$_sandbox_cluster_name" "$_region"
     if helm list -n "$_sandbox_namespace" --filter "^${SANDBOX_RELEASE_NAME}$" \
       --output json 2>/dev/null | grep -q '"name"'; then
-      # Same CSI-before-release ordering the main cluster needs: the standalone
-      # chart ships JuiceFS alongside sandbox-host, so uninstalling first would
-      # leave mount pods on juicefs.com/finalizer with no controller to clear
-      # it and hang past the timeout.
-      _drain_juicefs_volumes "$_sandbox_namespace"
-      helm uninstall "$SANDBOX_RELEASE_NAME" -n "$_sandbox_namespace" --wait --timeout 10m
-      echo "Clearing sandbox pods stuck in Terminating (JuiceFS finalizers)..."
-      _force_clear_stuck_pods "$_sandbox_namespace"
+      helm uninstall "$SANDBOX_RELEASE_NAME" -n "$_sandbox_namespace" --wait --timeout 15m
     else
       echo "Helm release '$SANDBOX_RELEASE_NAME' not found in namespace '$_sandbox_namespace' — skipping."
     fi
   )
-
-  rm -f "$_sandbox_kubeconfig"
-  trap - EXIT
   echo ""
 fi
 
@@ -215,7 +176,27 @@ fi
 # that mounts through that driver can then never be unmounted, because the
 # controller that clears juicefs.com/finalizer is gone. Drop the consumer and
 # the volume first, while the driver is still running.
-_drain_juicefs_volumes "$NAMESPACE"
+echo "Removing JuiceFS / sandbox volumes while CSI is still present..."
+_workload=""
+while IFS= read -r _workload; do
+  [[ -z "$_workload" ]] && continue
+  echo "  deleting $_workload"
+  kubectl delete "$_workload" -n "$NAMESPACE" \
+    --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
+done < <(
+  {
+    _names_matching deployments 'sandbox-host' | sed 's|^|deployment/|'
+    _names_matching statefulsets 'sandbox-host' | sed 's|^|statefulset/|'
+  }
+)
+
+_pvc=""
+while IFS= read -r _pvc; do
+  [[ -z "$_pvc" ]] && continue
+  echo "  deleting PVC $_pvc"
+  kubectl delete pvc "$_pvc" -n "$NAMESPACE" \
+    --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
+done < <(_names_matching pvc 'juicefs|smithbox')
 echo ""
 
 # ── Uninstall Helm release ────────────────────────────────────────────────────
@@ -250,7 +231,7 @@ kubectl delete deployments,pods \
 echo ""
 
 echo "Clearing pods stuck in Terminating (JuiceFS finalizers)..."
-_force_clear_stuck_pods "$NAMESPACE"
+_force_clear_stuck_pods
 echo ""
 
 # ── Reclaim dynamically provisioned EBS before terraform destroy ──────────────
@@ -258,7 +239,7 @@ echo ""
 # has no record of the volume. Destroying the cluster first leaves it billing
 # with nothing attached, because the driver that would reclaim it goes with the
 # cluster. Deleting the claim here is the only point where reclaim still works.
-_data_pvcs=$(_names_matching "$NAMESPACE" pvc 'clickhouse')
+_data_pvcs=$(_names_matching pvc 'clickhouse')
 if [[ -n "$_data_pvcs" ]]; then
   if [[ "$DELETE_DATA_PVCS" == "true" ]]; then
     echo "Deleting ClickHouse data PVCs (reclaims EBS while the CSI driver is alive)..."

@@ -811,13 +811,6 @@ variable "langsmith_helm_chart_version" {
   }
 }
 
-# tflint-ignore: terraform_unused_declarations
-variable "langsmith_sandbox_helm_chart_version" {
-  type        = string
-  description = "Pin the standalone langsmith-sandbox chart. Empty deploys the latest 0.1.x release."
-  default     = ""
-}
-
 variable "langsmith_domain" {
   type        = string
   description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set and acm_certificate_arn is empty, activates the DNS module to create or reuse a Route 53 hosted zone, request an ACM certificate, and create an ALB alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."

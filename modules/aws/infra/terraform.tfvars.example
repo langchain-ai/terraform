@@ -350,8 +350,9 @@ redis_instance_type = "cache.m6g.xlarge"
 #   sandbox.langsmith.com/host=true
 #
 # Separate-cluster mode uses private VPC routing from the main EKS worker/pod
-# security group to sandbox node port 19190. It requires LangSmith chart 0.17.x
-# and langsmith-sandbox chart 0.1.x.
+# security group to sandbox node port 19190. The langsmith-sandbox chart is not
+# pinned here: make deploy installs the newest one whose appVersion equals the
+# langsmith chart's, so the two always run the same LangSmith release.
 #
 # Requirements:
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
@@ -380,9 +381,8 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox-host loses access to the trace bucket.
 # sandbox_service_account_name = "sandbox-host"
 #
-# For separate_cluster, pin compatible charts:
+# For separate_cluster, pin the langsmith chart:
 # langsmith_helm_chart_version = "0.17.0-rc.22"
-# langsmith_sandbox_helm_chart_version = "0.1.0-rc.1"
 #
 # sandbox_juicefs_redis_instance_type = "cache.m6g.large"
 # sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
