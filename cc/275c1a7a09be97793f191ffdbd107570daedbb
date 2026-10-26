@@ -1,0 +1,21 @@
+modules/byoc/gcp/langsmith-byoc-service-account/README.md
+  s_45486f7ed92730::t_5f4979372cae20 18,29
+modules/byoc/gcp/langsmith-byoc-service-account/versions.tf
+  s_45486f7ed92730::t_1af9c28b5b346f 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc275c1a7a09be97793f191ffdbd107570daedbb",
+  "prompts": {},
+  "sessions": {
+    "s_45486f7ed92730": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b31d45c-51a5-438d-a82b-f279c83a5a53",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "ben11211 <nagengast@langchain.dev>"
+    }
+  }
+}
