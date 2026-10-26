@@ -289,3 +289,29 @@ run "a_narrowed_internet_facing_alb_is_rejected" {
 
   expect_failures = [terraform_data.validate_inputs]
 }
+
+run "a_customer_managed_bucket_key_is_granted_to_the_sandbox_role" {
+  command = plan
+
+  variables {
+    s3_kms_key_arn = "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  }
+
+  override_resource {
+    target          = module.storage.aws_s3_bucket.bucket
+    override_during = plan
+    values = {
+      arn = "arn:aws:s3:::plantest-dev-traces-0a1b2c3d"
+    }
+  }
+
+  assert {
+    condition = contains(jsondecode(aws_iam_role_policy.sandbox_host_s3[0].policy).Statement, {
+      Sid      = "JuiceFSKms"
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+      Resource = "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+    })
+    error_message = "with s3_kms_key_arn set, the sandbox role must be able to use that key and no other"
+  }
+}

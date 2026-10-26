@@ -618,7 +618,7 @@ resource "aws_iam_role_policy" "sandbox_host_s3" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid    = "JuiceFSObjects"
         Effect = "Allow"
@@ -641,7 +641,15 @@ resource "aws_iam_role_policy" "sandbox_host_s3" {
           }
         }
       },
-    ]
+      ],
+      # With a customer-managed key, JuiceFS writes need the key too.
+      var.s3_kms_key_arn != "" ? [{
+        Sid      = "JuiceFSKms"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = var.s3_kms_key_arn
+      }] : [],
+    )
   })
 }
 
