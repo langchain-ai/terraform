@@ -189,6 +189,15 @@ output "envoy_gateway_version" {
   value       = join("", helm_release.envoy_gateway[*].version)
 }
 
+output "envoy_gateway_chart_source" {
+  description = "Where the Envoy Gateway release fetches its chart (repository and chart as the release sets them), and whether it sends credentials; null without Envoy Gateway."
+  value = one([for r in helm_release.envoy_gateway : {
+    repository    = r.repository
+    chart         = r.chart
+    authenticated = var.envoy_gateway_chart_repository_username != ""
+  }])
+}
+
 output "envoy_gateway_image" {
   description = "Envoy Gateway controller image the Helm release sets, empty without a mirror or without Envoy Gateway."
   value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.image, "")])

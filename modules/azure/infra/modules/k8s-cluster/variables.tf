@@ -388,6 +388,25 @@ variable "envoy_gateway_image_registry_keeps_source_host" {
   default     = true
 }
 
+variable "envoy_gateway_chart_repository" {
+  type        = string
+  description = "Repository the gateway-helm chart is fetched from: oci://<host>/<path> or https://<host>/<path>."
+  default     = "oci://docker.io/envoyproxy"
+}
+
+variable "envoy_gateway_chart_repository_username" {
+  type        = string
+  description = "Username for envoy_gateway_chart_repository; empty fetches anonymously."
+  default     = ""
+}
+
+variable "envoy_gateway_chart_repository_password" {
+  type        = string
+  description = "Password or token for envoy_gateway_chart_repository_username."
+  default     = ""
+  sensitive   = true
+}
+
 variable "envoy_proxy_default_image" {
   type        = string
   description = "Envoy proxy image the controller uses by default for envoy_gateway_version, without a registry (e.g. 'envoyproxy/envoy:distroless-v1.32.1'). Mirrored with envoy_gateway_image_registry."
