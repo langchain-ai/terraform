@@ -89,6 +89,24 @@ variable "default_node_pool_os_sku" {
   default     = "Ubuntu"
 }
 
+variable "aks_custom_ca_trust_certificate_files" {
+  type        = list(string)
+  description = "PEM files, one CA certificate each, for every Linux node's trust store; the cluster resource reads each, trims the whitespace around its certificate block, and base64-encodes it. Validated in the root module. Empty leaves the attribute unset."
+  default     = []
+}
+
+variable "disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set AKS encrypts the node OS disks and, by default, the CSI data disks with. Set only at creation: a change replaces the cluster. Validated in the root module (aks_disk_encryption_set_id); empty keeps platform-managed keys."
+  default     = ""
+}
+
+variable "disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether to assign Reader on disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs for encrypted data disks. Needs roleAssignments/write on the set's scope; false (default) leaves the grant to whoever owns the set."
+  default     = false
+}
+
 variable "service_cidr" {
   type        = string
   description = "Service CIDR of the cluster"

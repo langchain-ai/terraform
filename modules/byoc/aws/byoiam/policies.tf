@@ -158,6 +158,23 @@ locals {
         Resource = [for region in sort(tolist(var.regions)) :
           "arn:${local.partition}:ecr:${region}:${local.artifact_account_id}:repository/byoc-smithbox-*"
         ]
+      },
+      {
+        Sid      = "AssumeSandboxECRRoles"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = {
+          StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" }
+          Null         = { "sts:ExternalId" = "false" }
+        }
+      },
+      {
+        Sid       = "TagSandboxECRRoleSessions"
+        Effect    = "Allow"
+        Action    = ["sts:TagSession"]
+        Resource  = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = { StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" } }
       }
       ], [{
         Sid    = "EngineBedrockInference"
@@ -265,10 +282,11 @@ locals {
     ]
   }
   template_vars = {
-    account_id    = local.account_id
-    partition     = local.partition
-    regions_json  = jsonencode(sort(tolist(var.regions)))
-    node_role_arn = local.role_arns["karpenter-node-role"]
+    account_id            = local.account_id
+    partition             = local.partition
+    regions_json          = jsonencode(sort(tolist(var.regions)))
+    node_role_arn         = local.role_arns["karpenter-node-role"]
+    instance_profile_name = var.karpenter_instance_profile_name
   }
   inline_policies = merge(
     { for key, statements in local.inline_statements : key => jsonencode({ Version = "2012-10-17", Statement = statements }) },
@@ -291,7 +309,7 @@ resource "aws_iam_role_policy" "this" {
 }
 
 resource "aws_iam_policy" "karpenter" {
-  name        = "byoc-smith-karpenter-controller-policy"
+  name        = var.karpenter_controller_policy_name
   path        = "/"
   description = "Customer-owned shared LangSmith Karpenter policy for a pre-created instance profile"
   policy      = jsonencode(jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars)))

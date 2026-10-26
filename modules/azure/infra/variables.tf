@@ -188,6 +188,36 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "tags" {
+  type        = map(string)
+  description = "Extra tags on all resources, for keys a tag policy requires beyond environment, owner, and cost_center (e.g. { team = \"platform\", product = \"langsmith\" }). A key here overrides environment, owner, cost_center, project, or managed_by of the same name in any case, since Azure tag names are case-insensitive. module, component, and pool are reserved: each sub-module sets them."
+  default     = {}
+
+  # Azure stores Team and team as one tag, so the map can hold only one of them.
+  validation {
+    condition     = length(distinct([for k in keys(var.tags) : lower(k)])) == length(var.tags)
+    error_message = "tags: Azure tag names are case-insensitive, so keys that differ only in case are one tag. Keep one of each."
+  }
+
+  # The sub-modules merge these over tags, so a value here would never apply.
+  validation {
+    condition     = length(setintersection([for k in keys(var.tags) : lower(k)], ["module", "component", "pool"])) == 0
+    error_message = "tags: module, component, and pool are reserved; each sub-module sets them on its own resources. Remove them from tags."
+  }
+
+  # Private DNS zones and Key Vault secrets take at most 15 tags. The secrets
+  # carry the most: these keys, the built-in ones, and module and component.
+  validation {
+    condition = length(setunion(
+      [for k in keys(var.tags) : lower(k)],
+      ["environment", "project", "managed_by", "module", "component"],
+      var.owner != "" ? ["owner"] : [],
+      var.cost_center != "" ? ["cost_center"] : [],
+    )) <= 15
+    error_message = "tags: private DNS zones and Key Vault secrets accept at most 15 tags, and these keys plus environment, project, managed_by, module, component, and owner and cost_center when set come to ${length(setunion([for k in keys(var.tags) : lower(k)], ["environment", "project", "managed_by", "module", "component"], var.owner != "" ? ["owner"] : [], var.cost_center != "" ? ["cost_center"] : []))}. Drop keys from tags until the total is 15 or fewer."
+  }
+}
+
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 variable "keyvault_name" {
@@ -1013,6 +1043,88 @@ variable "aks_os_sku" {
   }
 }
 
+variable "aks_custom_ca_trust_certificate_files" {
+  type        = list(string)
+  description = "Paths to PEM files, one entry each, that AKS installs in the trust store of every Linux node: for example the internal CA that signs an image mirror's certificate. containerd on the node does the pulling and trusts only public CAs, so a mirror behind an internal CA fails every pull with 'x509: certificate signed by unknown authority' until its CA is here. Up to 10. Paths are relative to the directory Terraform runs in (infra/) or absolute, and the files are read at plan. Empty (default) leaves the cluster's custom CA trust unset. A change replaces every node: AKS creates new nodes, drains and deletes the old ones. The module owns the setting because the provider reads it back from the cluster, so a CA added by hand with az aks update is removed by the next apply. Nodes only: pods keep their own trust store, and LangSmith's is langsmith_custom_ca_secret_name. Each file becomes one entry, its content trimmed of surrounding whitespace with one trailing newline, and an entry may hold one certificate or a bundle of several. A cluster that already holds an entry keeps it, and the nodes plan no change, only when that stored value equals the file's trimmed content plus one newline, so to adopt an existing entry write the file from the cluster's value (az aks show, securityProfile.customCATrustCertificates, base64-decoded), bundle and comment lines included; an entry stored with no trailing newline, or more than one, cannot be matched by any file and is replaced once, with every node. A file holds certificate blocks (the BEGIN and END markers alone on their lines, base64 between, as the node's PEM decoder reads them), with comment lines starting with # and blank lines around them at most; a key, a byte-order mark, an openssl Bag Attributes preamble, a note after a marker or a commented-out certificate is refused. A bundle file is one entry toward the limit of 10. Ignored when create_cluster = false, and the file checks are skipped then. The files must stay in place for the life of the cluster: Terraform reads them at every plan, including the one for destroy, so a file that has gone blocks destroy until it is restored or removed from the list."
+  default     = []
+
+  validation {
+    condition     = length(var.aks_custom_ca_trust_certificate_files) <= 10
+    error_message = "aks_custom_ca_trust_certificate_files lists ${length(var.aks_custom_ca_trust_certificate_files)} files, and AKS installs at most 10 custom CA certificates on a node. List only the CAs the nodes need to reach the image mirror: the root of each chain is enough when the mirror serves its intermediates."
+  }
+
+  validation {
+    condition     = length(distinct(var.aks_custom_ca_trust_certificate_files)) == length(var.aks_custom_ca_trust_certificate_files)
+    error_message = "aks_custom_ca_trust_certificate_files lists the same file more than once: ${join(", ", distinct([for i, f in var.aks_custom_ca_trust_certificate_files : f if contains(slice(var.aks_custom_ca_trust_certificate_files, 0, i), f)]))}. List each CA once."
+  }
+
+  # The file checks below run only for a cluster this module creates: an
+  # attached cluster ignores the list, and a missing file must not block it.
+  # A ternary rather than || : Terraform 1.11 evaluates both operands.
+  validation {
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : can(file(f))]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files Terraform cannot read: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !can(file(f))])}. Each must exist, as an absolute path or one relative to the directory Terraform runs in (infra/), and be UTF-8 text. A UTF-16 file, the default of Out-File in Windows PowerShell 5.1, is not: re-save it as UTF-8. A DER certificate converts with openssl x509 -inform der -in <file> -out <file>.pem."
+  }
+
+  validation {
+    # At least one certificate per file, counted by BEGIN markers that stand
+    # alone on their line, as the node's PEM decoder reads them: a commented-out
+    # certificate counts for nothing. AKS takes each list element as one
+    # entry and the node's trust store loads every certificate in it, so a
+    # bundle is one entry; the module never splits a file, it sends the file's
+    # trimmed content plus one newline as one entry, which is what lets a
+    # file reproduce an entry a cluster already holds. (az aks update may
+    # split a file at blank lines into several entries; the module does not.)
+    # try() rather than || : Terraform 1.11 evaluates both operands, so an
+    # unreadable file would error here instead of failing the check above.
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length(regexall("(?m)^-----BEGIN CERTIFICATE-----$", file(f))), 1) >= 1]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files that hold no certificate: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length(regexall("(?m)^-----BEGIN CERTIFICATE-----$", file(f))), 1) < 1])}. Each file holds one or more PEM certificates (-----BEGIN CERTIFICATE----- blocks); a private key, a CSR or an empty file is not a certificate."
+  }
+
+  validation {
+    # AKS fails to decode a certificate whose lines end in CRLF; the Microsoft
+    # page on custom CA trust names it as a cause of the unknown-authority error.
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : !can(file(f)) || !can(regex("\r", file(f)))]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with CRLF line endings: ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if can(file(f)) && can(regex("\r", file(f)))])}. AKS cannot decode a certificate with them. Convert with: tr -d '\\r' < <file> > <file>.lf, then list the new file."
+  }
+
+  validation {
+    # Certificate blocks, comment lines (#) and blank lines, and nothing else,
+    # anywhere in the file. A block is what the node's PEM decoder takes: the
+    # BEGIN and END markers alone on their lines and base64 lines between, so
+    # a marker with a note after it, a body that is not base64, or a block
+    # commented out line by line is not a block, and the file is refused
+    # rather than replace every node for a CA that never loads. With the
+    # blocks and the comment lines removed, only whitespace may remain. A server PEM that also holds the key passes
+    # the count above, and the cluster module would then put the key in plan
+    # output, in state and in the request to AKS; the key block remains here, so it
+    # is refused, before or after the certificate. A byte-order mark remains
+    # too: it stops the node's PEM decoder finding the first block, so the CA
+    # would be silently not loaded. An openssl pkcs12 "Bag Attributes"
+    # preamble is export cruft. Comment lines stay allowed, as do bundles:
+    # AKS keeps an entry verbatim, so a cluster can already hold one written
+    # from such a file, and stripping it would change the encoded value and
+    # replace every node once. try() so a missing file is reported by the
+    # check above.
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with content outside the certificate blocks, or a block that is not whole lines (the BEGIN and END markers alone on theirs, base64 between): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if !try(trimspace(replace(replace(file(f), "/(?m)^-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----$/", ""), "/(?m)^[ \\t]*#[^\\n]*$/", "")) == "", true)])}. A private key, a byte-order mark, an openssl Bag Attributes preamble, a note after an END marker, or a certificate commented out line by line all count; other comment lines starting with # and blank lines are fine. On a cluster that already holds the entry with that extra content, a stripped file encodes to a different value, and the next apply replaces every node once. Otherwise keep every block and drop the rest: sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' <file> > <file>.crt keeps every certificate of a bundle, where openssl x509 -in <file> -out <file>.crt writes only the first."
+  }
+
+  # A PEM block commented out line by line passes the check above, which strips
+  # every # line before looking for leftover content, and AKS keeps the file as
+  # given: a private key kept that way would reach plan output, state and every
+  # node. Refuse a comment line that is a BEGIN marker in any spelling (any run
+  # of dashes, spaces, any case), and a comment line that is one long run of
+  # base64, which is what a commented-out body with its markers deleted leaves.
+  # A commented-out certificate is refused the same way, so a bundle holds only
+  # live certificates. Prose that names the markers (a line that does not start
+  # with them) and a hex fingerprint on its own line stay allowed.
+  validation {
+    condition     = var.create_cluster ? alltrue([for f in var.aks_custom_ca_trust_certificate_files : try(length([for l in split("\n", file(f)) : l if can(regex("(?i)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN\\b", l)) || (can(regex("^[ \\t]*#[# \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[# \\t]*[0-9A-Fa-f]+[ \\t]*$", l)))]) == 0, true)]) : true
+    error_message = "aks_custom_ca_trust_certificate_files names files with a PEM block commented out line by line (a '#' line that is a BEGIN marker, or one long run of base64): ${join(", ", [for f in var.aks_custom_ca_trust_certificate_files : f if try(length([for l in split("\n", file(f)) : l if can(regex("(?i)^[ \\t]*#[# \\t]*-+[ \\t]*BEGIN\\b", l)) || (can(regex("^[ \\t]*#[# \\t]*[A-Za-z0-9+/]{40,}={0,2}[ \\t]*$", l)) && !can(regex("^[ \\t]*#[# \\t]*[0-9A-Fa-f]+[ \\t]*$", l)))]) > 0, false)])}. AKS keeps the file as given, so a commented-out private key would reach plan output, state and every node; remove the block, a commented-out certificate included. On a cluster that already holds the entry with that block, the edited file encodes to a different value, and the next apply replaces every node once."
+  }
+}
+
 # Both of these are empty by default rather than carrying the create-path value,
 # because 10.0.64.0/20 is only safe against the subnets Terraform carves. main.tf
 # fills them in for create_vnet = true and requires aks_service_cidr under
@@ -1580,6 +1692,63 @@ variable "install_keda" {
   default     = true
 }
 
+variable "keda_image_registry" {
+  type        = string
+  description = "Registry that mirrors ghcr.io for KEDA's three images (the operator, the metrics API server and the admission webhooks), as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). They are pulled as <registry>/ghcr.io/kedacore/<name>:<keda chart version> when the mirror keeps the source host, the layout LangSmith's images.registry expects, or as <registry>/kedacore/<name>:<version> with keda_image_registry_keeps_source_host = false. Empty (default) pulls from ghcr.io. Applies when install_keda is true."
+  default     = ""
+
+  validation {
+    condition     = var.keda_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.keda_image_registry))
+    error_message = "keda_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
+  }
+}
+
+variable "keda_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether keda_image_registry keeps ghcr.io as the first path segment under the registry. true (default): the images are pulled as <registry>/ghcr.io/kedacore/<name>, the layout LangSmith's images.registry expects. false: the mirror serves ghcr.io's paths directly, as a proxy repository for ghcr.io in Nexus or Artifactory does, and the images are pulled as <registry>/kedacore/<name>."
+  default     = true
+}
+
+variable "keda_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the keda namespace that KEDA's pods pull with. The Secret has to exist before the release is installed, and the module creates the keda namespace with the release, so on a new cluster the install is two applies: apply with install_keda = false, create the namespace and the Secret, set install_keda = true and apply again (the README's mirror section has the commands). Empty (default) pulls without credentials. Requires keda_image_registry."
+  default     = ""
+
+  validation {
+    condition     = var.keda_image_pull_secret_name == "" || var.keda_image_registry != ""
+    error_message = "keda_image_pull_secret_name only applies with a mirror. Set keda_image_registry, or leave keda_image_pull_secret_name empty."
+  }
+}
+
+variable "keda_chart_repository" {
+  type        = string
+  description = "Helm repository the KEDA chart is fetched from, by the machine running Terraform. The default is KEDA's own; a mirrored repository (a Helm proxy in Nexus or Artifactory, or an OCI registry as oci://<host>/<path>) keeps that machine off kedacore.github.io. The chart name and version do not change."
+  default     = "https://kedacore.github.io/charts"
+
+  validation {
+    condition     = can(regex("^(https?|oci)://[^/]+(/[^/]+)*$", var.keda_chart_repository))
+    error_message = "keda_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'https://kedacore.github.io/charts' or 'oci://nexus.example.com/helm-kedacore')."
+  }
+}
+
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for keda_chart_repository when the mirror requires a login to read charts, as a Nexus or Artifactory Helm proxy behind authentication does; the machine running Terraform sends it with the chart fetch. Empty (default) fetches anonymously, which KEDA's own repository and an open mirror allow. Set with keda_chart_repository_password."
+  default     = ""
+
+  validation {
+    condition     = (var.keda_chart_repository_username == "") == (var.keda_chart_repository_password == "")
+    error_message = "keda_chart_repository_username and keda_chart_repository_password go together: set both for a chart mirror that requires a login, or neither."
+  }
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars."
+  default     = ""
+  sensitive   = true
+}
+
 variable "postgres_admin_username" {
   type        = string
   description = "The username of the Postgres administrator"
@@ -1605,6 +1774,36 @@ variable "postgres_admin_password" {
     )
     error_message = "postgres_admin_password must not contain double quotes, backslashes, newlines, or HCL template markers ($${ or %%{)."
   }
+}
+
+variable "langsmith_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in langsmith_namespace that LangSmith's pods pull with. init-values.sh writes it as images.imagePullSecrets, so the chart's own pods use it; the pods the operator creates for each deployment take no chart value (the agent pod runs as the langsmith-ksa service account, the deployment's Redis and PostgreSQL pods as the namespace's default account), so the module also attaches the Secret to those two accounts, and to the backend and SmithDB accounts it creates, and every apply keeps it. Create the Secret in the namespace after the apply that creates the namespace and before make deploy; the accounts reference it by name. Empty (default) attaches nothing."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_image_pull_secret_name == "" || (length(var.langsmith_image_pull_secret_name) <= 253 && can(regex("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", var.langsmith_image_pull_secret_name)))
+    error_message = "langsmith_image_pull_secret_name must be a Secret name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit, at most 253 characters."
+  }
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_image_registry" {
+  type        = string
+  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. By default (langsmith_image_registry_keeps_source_host = false) the mirror serves each source registry's paths directly, the layout the chart's own scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and a proxy repository in Nexus or Artifactory serves: init-values.sh leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.17 and 0.18 chart lines, and deploy.sh refuses a chart with an image the module does not know. A mirror laid out with the source host kept as the first path segment (<registry>/docker.io/langchain/<name>:<tag>) takes langsmith_image_registry_keeps_source_host = true: the value then becomes images.registry in values-overrides.yaml and the chart composes the paths. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.langsmith_image_registry))
+    error_message = "langsmith_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
+  }
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether langsmith_image_registry keeps each image's source registry as the first path segment under the mirror. false (default): the mirror serves the source registries' paths directly, which is what the chart's scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and what a proxy repository in Nexus or Artifactory serves, so init-values.sh writes each image's repository as <registry>/langchain/<name> (and <registry>/<path> for the images from mcr.microsoft.com and registry.k8s.io, which a group repository that proxies those registries serves the same way). true: images.registry is set and the chart composes <registry>/docker.io/langchain/<name>, for a mirror laid out with the source host kept. Ignored without langsmith_image_registry."
+  default     = false
 }
 
 # ── LangSmith secrets ─────────────────────────────────────────────────────────
@@ -1733,6 +1932,152 @@ variable "postgres_geo_redundant_backup" {
   type        = bool
   description = "Enable geo-redundant backups for PostgreSQL."
   default     = false
+}
+
+# ── Customer-managed keys ────────────────────────────────────────────────────
+# Three resources encrypt at rest with a key the customer holds: the cluster's
+# managed disks through a disk encryption set, the PostgreSQL Flexible Server
+# and the blob storage account. Each takes an ID the platform team returns; the
+# module never creates a key, so a key imported into the vault works the same
+# as one generated there. The set and the server take theirs only at creation,
+# so these are set before the first apply where they can be. The provider
+# documents Key Vault key IDs for all three; a Managed HSM key has no
+# documented route for the server and is unverified for the set and the
+# storage account.
+
+variable "aks_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of a disk encryption set (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>) in the cluster's region. AKS encrypts the node OS disks with it and, by default, every managed disk the Azure Disk CSI driver creates for the cluster's persistent volumes, so the in-cluster databases' volumes take it with no storage class change. Set only when the cluster is created: the set is fixed at creation, so on an existing cluster plan compares it with the one Azure reports and refuses a change, adding one included. Ignored, and refused, with create_cluster = false. The set's own identity needs Key Vault Crypto Service Encryption User on its key's vault, and the cluster identity needs Reader on the set for the data disks (aks_disk_encryption_set_reader_grant, or a grant made after the apply). Empty (default) keeps platform-managed keys."
+  default     = ""
+
+  validation {
+    condition     = var.aks_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.aks_disk_encryption_set_id))
+    error_message = "aks_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  # Attach mode never touches the cluster, so a set given there would do nothing.
+  validation {
+    condition     = var.aks_disk_encryption_set_id == "" || var.create_cluster
+    error_message = "aks_disk_encryption_set_id is set with create_cluster = false. The module does not manage an attached cluster's disks, so the set would never apply: the cluster's OS disks and volumes keep whatever key they were created with. Remove it, and encrypt the existing cluster's disks where it was created."
+  }
+}
+
+variable "aks_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Leave it false when that grant already exists: true would create the same assignment again, and the apply fails with RoleAssignmentExists. Requires aks_disk_encryption_set_id."
+  default     = false
+
+  validation {
+    condition     = !var.aks_disk_encryption_set_reader_grant || var.aks_disk_encryption_set_id != ""
+    error_message = "aks_disk_encryption_set_reader_grant = true needs aks_disk_encryption_set_id: there is no set to grant Reader on."
+  }
+}
+
+variable "postgres_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the PostgreSQL Flexible Server encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL follows the key's newest version). The key's vault has soft delete and purge protection on, and postgres_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Set only when the server is created: the provider would apply a change by replacing the server and destroying its data, so on an existing server plan refuses adding or removing the key (moving to another key or version is allowed). Move an existing server by a point-in-time restore to a new server created with the key and the state steps in README \"Customer-managed keys\". Refused unless postgres_source = \"external\". Empty (default) keeps the service-managed key."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.postgres_customer_managed_key_id))
+    error_message = "postgres_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  # The server exists only with postgres_source = "external"; the key would do nothing otherwise.
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || var.postgres_source == "external"
+    error_message = "postgres_customer_managed_key_id is set with postgres_source = \"${var.postgres_source}\". Only the Flexible Server the module creates with postgres_source = \"external\" takes the key, so the database would not be under it. Remove the key, or set postgres_source = \"external\"; an in-cluster PostgreSQL's volume is encrypted by aks_disk_encryption_set_id."
+  }
+
+  validation {
+    condition     = (var.postgres_customer_managed_key_id == "") == (var.postgres_customer_managed_key_identity_id == "")
+    error_message = "postgres_customer_managed_key_id and postgres_customer_managed_key_identity_id are set together or not at all: the server reads the key as that identity."
+  }
+}
+
+variable "postgres_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>) the PostgreSQL Flexible Server reads postgres_customer_managed_key_id with. It is assigned to the server and must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with postgres_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.postgres_customer_managed_key_identity_id))
+    error_message = "postgres_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "postgres_geo_backup_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key that encrypts the server's geo-redundant backups, in a vault in the paired region. Takes effect with postgres_geo_redundant_backup = true and the primary pair set; postgres_geo_backup_customer_managed_key_identity_id reads it. Set only when the server is created. Required when postgres_customer_managed_key_id is set and postgres_geo_redundant_backup = true: Azure encrypts the geo-redundant backups of a customer-managed-key server only with a key in the backup region, never with the service-managed key. Empty (default) without geo-redundant backup."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.postgres_geo_backup_customer_managed_key_id))
+    error_message = "postgres_geo_backup_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_id == "" || var.postgres_source == "external"
+    error_message = "postgres_geo_backup_customer_managed_key_id is set with postgres_source = \"${var.postgres_source}\". Only the Flexible Server the module creates with postgres_source = \"external\" takes the key. Remove it, or set postgres_source = \"external\"."
+  }
+
+  validation {
+    condition     = (var.postgres_geo_backup_customer_managed_key_id == "") == (var.postgres_geo_backup_customer_managed_key_identity_id == "")
+    error_message = "postgres_geo_backup_customer_managed_key_id and postgres_geo_backup_customer_managed_key_identity_id are set together or not at all: the geo-backup key is read as that identity."
+  }
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_id == "" || (var.postgres_customer_managed_key_id != "" && var.postgres_geo_redundant_backup)
+    error_message = "postgres_geo_backup_customer_managed_key_id needs the primary postgres_customer_managed_key_id and postgres_geo_redundant_backup = true: the geo-backup key encrypts a copy that only a geo-redundant server keeps."
+  }
+
+  validation {
+    condition     = var.postgres_customer_managed_key_id == "" || !var.postgres_geo_redundant_backup || var.postgres_geo_backup_customer_managed_key_id != ""
+    error_message = "postgres_customer_managed_key_id with postgres_geo_redundant_backup = true needs postgres_geo_backup_customer_managed_key_id and its identity: Azure encrypts a customer-managed-key server's geo-redundant backups only with a key in a vault in the backup region, and the server create fails without it. Set the geo pair, or turn geo-redundant backup off."
+  }
+}
+
+variable "postgres_geo_backup_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity, in the paired region, that reads postgres_geo_backup_customer_managed_key_id. Azure requires an identity other than postgres_customer_managed_key_identity_id, holding Key Vault Crypto Service Encryption User on the paired region's vault. Required with postgres_geo_backup_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.postgres_geo_backup_customer_managed_key_identity_id))
+    error_message = "postgres_geo_backup_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+
+  validation {
+    condition     = var.postgres_geo_backup_customer_managed_key_identity_id == "" || lower(var.postgres_geo_backup_customer_managed_key_identity_id) != lower(var.postgres_customer_managed_key_identity_id)
+    error_message = "postgres_geo_backup_customer_managed_key_identity_id must differ from postgres_customer_managed_key_identity_id: Azure reads the geo-backup key with a second identity in the paired region."
+  }
+}
+
+variable "storage_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the blob storage account encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL enables automatic rotation to the key's newest version). The key's vault has soft delete and purge protection on, and storage_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Azure accepts the switch on an existing account, so this one can follow a later apply. Empty (default) keeps the service-managed key."
+  default     = ""
+
+  validation {
+    condition     = var.storage_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.storage_customer_managed_key_id))
+    error_message = "storage_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.storage_customer_managed_key_id == "") == (var.storage_customer_managed_key_identity_id == "")
+    error_message = "storage_customer_managed_key_id and storage_customer_managed_key_identity_id are set together or not at all: the account reads the key as that identity."
+  }
+}
+
+variable "storage_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>) the blob storage account reads storage_customer_managed_key_id with. It is assigned to the account and must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with storage_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.storage_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.storage_customer_managed_key_identity_id))
+    error_message = "storage_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
 }
 
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
@@ -1956,8 +2301,8 @@ variable "envoy_gateway_image_registry" {
   default     = ""
 
   validation {
-    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
-    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^((localhost|[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+)(:[0-9]+)?|[A-Za-z0-9][A-Za-z0-9-]*:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror'). A bare name such as 'nexus' needs a dot or a port, or to be 'localhost': containerd reads any other bare first segment as a Docker Hub namespace, so the pull would bypass the mirror."
   }
 
   # A version missing from local.envoy_proxy_default_images would leave the

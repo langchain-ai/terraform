@@ -25,7 +25,26 @@ resource "azurerm_storage_account" "storage_account" {
   location                 = var.location
   account_tier             = "Standard"
   account_replication_type = var.replication_type
-  tags                     = merge(var.tags, { module = "blob" })
+
+  # Customer-managed key: the account reads it as a user-assigned identity it
+  # carries. The root validates the pair; Azure takes the block on an existing
+  # account, so it may arrive after creation.
+  dynamic "identity" {
+    for_each = var.customer_managed_key_identity_id != "" ? [1] : []
+    content {
+      type         = "UserAssigned"
+      identity_ids = [var.customer_managed_key_identity_id]
+    }
+  }
+
+  dynamic "customer_managed_key" {
+    for_each = var.customer_managed_key_id != "" ? [1] : []
+    content {
+      key_vault_key_id          = var.customer_managed_key_id
+      user_assigned_identity_id = var.customer_managed_key_identity_id
+    }
+  }
+  tags = merge(var.tags, { module = "blob" })
 
   # Nothing reads this account with a key or anonymously: LangSmith uses
   # Workload Identity, and Terraform manages the account, container and

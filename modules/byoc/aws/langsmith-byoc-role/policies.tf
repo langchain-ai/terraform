@@ -84,6 +84,49 @@ locals {
     "iam:SimulatePrincipalPolicy",
   ]
 
+  # Exact-ARN grants for BYOIAM resources with custom names. Read and pass only,
+  # so the IAM-management filter below leaves them unchanged.
+  byoiam_role_statements = [for statement in [
+    {
+      Sid      = "BYOIAMCustomRoleRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetRole", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies", "iam:GetRolePolicy", "iam:ListInstanceProfilesForRole"]
+      Resource = var.byoiam_role_arns
+    },
+    {
+      Sid      = "BYOIAMCustomRolePass"
+      Effect   = "Allow"
+      Action   = ["iam:PassRole"]
+      Resource = var.byoiam_role_arns
+      Condition = {
+        StringEquals = {
+          "iam:PassedToService" = ["eks.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com", "monitoring.rds.amazonaws.com", "lambda.amazonaws.com"]
+        }
+      }
+    },
+  ] : statement if length(var.byoiam_role_arns) > 0]
+  byoiam_instance_profile_statements = [for statement in [
+    {
+      Sid      = "BYOIAMCustomInstanceProfileRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetInstanceProfile"]
+      Resource = ["arn:aws:iam::${local.account_id}:instance-profile/${coalesce(var.byoiam_instance_profile_name, "unset")}"]
+    },
+  ] : statement if var.byoiam_instance_profile_name != null]
+  byoiam_controller_policy_statements = [for statement in [
+    {
+      Sid      = "BYOIAMCustomControllerPolicyRead"
+      Effect   = "Allow"
+      Action   = ["iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions"]
+      Resource = [coalesce(var.byoiam_karpenter_controller_policy_arn, "unset")]
+    },
+  ] : statement if var.byoiam_karpenter_controller_policy_arn != null]
+  byoiam_custom_name_statements = concat(
+    local.byoiam_role_statements,
+    local.byoiam_instance_profile_statements,
+    local.byoiam_controller_policy_statements,
+  )
+
   # Filter after composing teardown permissions so enabling deletes cannot
   # restore IAM writes. Mixed statements retain their permitted read actions.
   filtered_role_policies = {
@@ -121,4 +164,16 @@ resource "aws_iam_role_policy_attachment" "this" {
 
   role       = aws_iam_role.langchain_byoc.name
   policy_arn = aws_iam_policy.this[each.key].arn
+}
+
+resource "aws_iam_role_policy" "byoiam_custom_names" {
+  count = length(local.byoiam_custom_name_statements) > 0 ? 1 : 0
+
+  name = "${var.role_name}-byoiam"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.byoiam_custom_name_statements
+  })
 }
