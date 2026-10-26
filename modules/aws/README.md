@@ -431,20 +431,66 @@ kubectl get pods -n kube-system
 `enable_sandboxes = true` uses the main EKS cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
 
 ```hcl
-enable_sandboxes       = true
+enable_sandboxes        = true
 sandbox_deployment_mode = "separate_cluster"
 sandbox_namespace       = "langsmith-sandbox"
 
 langsmith_helm_chart_version = "0.18.0" # exact, 0.18 or later
 ```
 
-Terraform then creates a second EKS cluster in the same VPC with only the KVM-capable sandbox node group. It also creates a sandbox-scoped IRSA role, allows the main cluster's worker and pod security group to reach sandbox nodes on TCP port 19190, and creates minimal write-only runtime and JuiceFS Secrets in the sandbox namespace. The S3 bucket and dedicated `noeviction` ElastiCache metadata store remain shared infrastructure in the VPC.
+`separate_cluster` needs chart 0.18 or later, pinned to one exact version: the default 0.17 line has no separate-cluster support, and the runtime chart is paired with that exact chart (see [Versions](#versions)). `terraform plan` and `make deploy` both reject anything else.
 
-`make init-values` generates both the core LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`. `make deploy` installs the core release first, then installs the standalone `langsmith-sandbox` release against the sandbox cluster and waits for `sandbox-host`. The sandbox cluster is reached through a temporary kubeconfig created for that step alone, so your own `~/.kube/config` and its current context are never modified.
+Terraform then creates a second EKS cluster in the same VPC and private subnets, with only the KVM-capable sandbox node group. Around it, Terraform creates:
 
-The sandbox IRSA role trusts exactly one ServiceAccount, named by `sandbox_service_account_name` (default `sandbox-host`). `init-values.sh` writes the same name into `sandboxHost.serviceAccount.name` in the generated values, so the two always agree. Renaming the ServiceAccount only in the values file breaks IRSA and leaves `sandbox-host` unable to reach the trace bucket — change the tfvar and re-run `make init-values` instead.
+- an IRSA role that trusts exactly one ServiceAccount, `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>`, with S3 access to the JuiceFS prefix of the trace bucket and nothing else: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:AbortMultipartUpload` on `<bucket>/<sandbox_juicefs_name>/*`, and `s3:ListBucket` for that prefix only;
+- the network rules below;
+- two write-only Secrets in the sandbox namespace: the runtime Secret and the JuiceFS config (volume name, metadata URL, bucket).
 
-The main and sandbox cluster networks must remain mutually routable: LangSmith pods reach sandbox nodes on TCP 19190, and sandbox pods reach the LangSmith API at `platform.endpoint`. If you place the sandbox cluster in another VPC, configure equivalent routing in both directions and restrict TCP port 19190 to the LangSmith control-plane source.
+The S3 bucket and the dedicated `noeviction` ElastiCache metadata store remain shared infrastructure in the VPC.
+
+#### Network
+
+- **TCP 19190 into the sandbox nodes** comes from two sources only, both named by security group: the LangSmith cluster's node security group (where `platform-backend` and `ingest-queue` run; pod ENIs carry the same group, with custom networking too) and the sandbox nodes themselves, which forward ingress requests, dial sandbox links and send live-migration streams to each other on that port. Nothing else opens 19190.
+- **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, or the traffic would leave a network you trust, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
+- **Sandbox nodes reach the LangSmith API** at `platform.endpoint` (`<config.hostname>[/<basePath>]/api`) through the ALB. With `alb_scheme = "internal"` Terraform adds an ALB rule for the sandbox node security group. With an internet-facing ALB the call leaves through the NAT gateway, so a narrowed `alb_allowed_cidr_blocks` must admit the NAT address (see `sandbox_alb_allow_nat_egress` in `terraform.tfvars.example`); `terraform plan` fails otherwise. With `alb_existing_security_group_id`, Terraform writes no rules on your group: allow the `sandbox_node_security_group_id` output on the ALB's ports yourself. With `create_firewall = true`, `langsmith_domain` is added to the allowed FQDNs.
+- **Sandbox nodes reach Redis and S3** inside the VPC: the JuiceFS Redis admits the VPC CIDR, and S3 goes through the VPC gateway endpoint.
+
+#### Secrets
+
+The runtime Secret (`sandbox_runtime_secret_name`, default `langsmith-sandbox-runtime`) holds exactly two keys, the `langsmith-sandbox` chart's defaults. Never copy the whole `langsmith-config` Secret into the sandbox cluster.
+
+| Key | Value |
+|-----|-------|
+| `sandbox_service_auth_secret` | The sandbox service-auth secret, which must equal the control plane's. Here that is the API key salt: the LangSmith release reads it from `api_key_salt` in `langsmith-config`, the chart's default for an existing Secret. |
+| `sandbox_callback_signing_jwk` | The callback-signing JWK, identical to the one in `langsmith-config`. |
+
+Terraform writes both from `TF_VAR_langsmith_api_key_salt` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. After changing either value, increment `sandbox_runtime_secret_revision` and re-apply.
+
+#### Versions
+
+Each LangSmith install runs the `langsmith-sandbox` chart whose appVersion equals the `langsmith` chart's. `make deploy` reads the appVersion of the pinned `langsmith` chart, installs the newest `langsmith-sandbox` chart with the same appVersion, and leaves `images.sandboxHost.tag` empty so the image follows that appVersion. If no runtime chart matches, it stops before changing either release. To check by hand:
+
+```bash
+APP=$(helm show chart langchain/langsmith --version 0.18.0 | awk '/^appVersion:/{print $2}' | tr -d '"')
+helm search repo langchain/langsmith-sandbox --versions --devel -o json \
+  | jq -r --arg a "$APP" '[.[] | select(.app_version == $a)][0].version // error("no langsmith-sandbox chart for appVersion \($a)")'
+```
+
+#### One runtime per install
+
+Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.deploymentMode: separateCluster`. Two runtimes reporting to one install merge into one host pool and stop each other's sandboxes. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
+
+To move an existing install from `same_cluster`, change `sandbox_deployment_mode`, then run `make apply`, `make init-values` and `make deploy`. `make deploy` switches the LangSmith release to `separateCluster` (removing the embedded runtime) before it installs the runtime chart, against the same JuiceFS metadata store and bucket. Running sandboxes stop during the switch.
+
+#### Install, upgrade and uninstall order
+
+- **Install:** `make apply`, then `make init-values`, then `make deploy`. `make init-values` writes both the LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`; `make deploy` installs `langsmith` first, then `langsmith-sandbox` in the sandbox cluster, and waits for `sandbox-host`.
+- **Upgrade:** change `langsmith_helm_chart_version` and run `make deploy`. It upgrades `langsmith` first and the runtime right after, to the matching chart. If you upgrade with other tools, keep that order and upgrade the runtime within days.
+- **Uninstall:** `make uninstall` removes the `langsmith-sandbox` release from the sandbox cluster first, then the LangSmith release; then run `make destroy`. Without Terraform outputs, uninstall the runtime release from the sandbox cluster yourself before running `make uninstall`.
+
+`make deploy` and `make uninstall` reach the sandbox cluster through their own kubeconfig file, `~/.kube/langsmith-<sandbox cluster name>`, so your current context is unchanged.
+
+The sandbox IRSA role trusts exactly one ServiceAccount, named by `sandbox_service_account_name` (default `sandbox-host`). `init-values.sh` writes the same name into `sandboxHost.serviceAccount.name` and the role into `workloadIdentity.aws.roleArn` in the generated values, so the two always agree. Renaming the ServiceAccount only in the values file breaks IRSA and leaves `sandbox-host` unable to reach the bucket — change the tfvar and re-run `make init-values` instead.
 
 ---
 
@@ -1115,6 +1161,8 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `sandbox_deployment_mode` | `same_cluster` | no | Run sandbox-host in the main EKS cluster or create a `separate_cluster` |
 | `sandbox_namespace` | `langsmith-sandbox` | separate cluster | Namespace for the standalone sandbox runtime |
 | `sandbox_service_account_name` | `sandbox-host` | no | ServiceAccount trusted by the sandbox IRSA role. `init-values.sh` writes it into `sandboxHost.serviceAccount.name`, so change it here rather than in the values file |
+| `sandbox_runtime_secret_revision` | `1` | no | Increment to rewrite the write-only runtime Secret in the sandbox cluster |
+| `sandbox_alb_allow_nat_egress` | `false` | no | Separate cluster with an internet-facing ALB: append the NAT gateway addresses to the ALB allowlist. Admits everything behind the NAT, sandboxes included; prefer an internal ALB |
 | `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
 | `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
 | `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.17.x or 0.18.x chart version; empty deploys the latest 0.17.x. `separate_cluster` requires an exact version on 0.18 or later |

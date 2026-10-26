@@ -29,6 +29,8 @@
 #   - values/langsmith-values-engine.yaml        (if Engine is enabled)
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
+#   - values/langsmith-sandbox-values-overrides.yaml (langsmith-sandbox chart, if
+#                                                     sandbox_deployment_mode = separate_cluster)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
