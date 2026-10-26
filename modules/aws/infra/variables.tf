@@ -392,7 +392,7 @@ variable "sandbox_runtime_secret_name" {
 
 variable "sandbox_runtime_secret_revision" {
   type        = number
-  description = "Revision for the write-only standalone sandbox runtime Secret. Increment to intentionally rewrite it."
+  description = "Revision for the write-only standalone sandbox runtime Secret (keys sandbox_service_auth_secret and sandbox_callback_signing_jwk). Increment to rewrite it, for example after rotating either value."
   default     = 1
 }
 
@@ -864,8 +864,11 @@ variable "clickhouse_source" {
 }
 
 #------------------------------------------------------------------------------
-# ESO-managed secrets. Terraform doesn't use these values: setup-env.sh exports
-# them as TF_VAR_* and writes them to SSM, and ESO syncs SSM into the namespace.
+# ESO-managed secrets. setup-env.sh exports them as TF_VAR_* and writes them to
+# SSM, and ESO syncs SSM into the namespace. Terraform uses none of them, except
+# that sandbox_deployment_mode = "separate_cluster" writes langsmith_api_key_salt
+# and sandbox_callback_signing_jwk into the sandbox cluster's runtime Secret
+# (write-only, kept out of state).
 # They stay declared so the module states the full set of inputs an operator has
 # to supply, and so setting one in terraform.tfvars is legal rather than a
 # "value for undeclared variable" warning on every plan. (A TF_VAR_* export for
@@ -882,7 +885,7 @@ variable "langsmith_api_key_salt" {
 # tflint-ignore: terraform_unused_declarations
 variable "sandbox_callback_signing_jwk" {
   type        = string
-  description = "Sandbox callback signing private JWK. Declared so setup-env.sh can export TF_VAR_sandbox_callback_signing_jwk without Terraform warnings; app secret sync reads it from SSM."
+  description = "Sandbox callback signing private JWK. Exported by setup-env.sh as TF_VAR_sandbox_callback_signing_jwk; app secret sync reads it from SSM. With sandbox_deployment_mode = \"separate_cluster\", Terraform also writes it into the sandbox cluster's runtime Secret."
   sensitive   = true
   default     = ""
 }

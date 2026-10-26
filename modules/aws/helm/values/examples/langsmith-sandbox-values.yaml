@@ -5,8 +5,20 @@
 platform:
   endpoint: "https://langsmith.example.com/api"
 
+# A minimal Secret in the sandbox namespace, never a copy of the LangSmith
+# application Secret. Terraform creates it with exactly these two keys:
+#   sandbox_service_auth_secret   same value the control plane uses (its
+#                                 api_key_salt today)
+#   sandbox_callback_signing_jwk  same JWK as the control plane
 serviceAuth:
   existingSecretName: "langsmith-sandbox-runtime"
+  secretKey: "sandbox_service_auth_secret"
+  callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+
+workloadIdentity:
+  provider: aws
+  aws:
+    roleArn: "arn:aws:iam::<account-id>:role/<sandbox-irsa-role>"
 
 juicefs:
   existingSecretName: "juicefs-csi-config"
@@ -21,9 +33,8 @@ sandboxHost:
       sandbox.langsmith.com/host: "true"
   # serviceAccount.name must match the sandbox IAM role's OIDC 'sub' condition
   # (Terraform: sandbox_service_account_name). The chart would otherwise default
-  # it to <release>-langsmith-sandbox-sandbox-host, which the role does not
-  # trust, and sandbox-host would fail to reach the trace bucket.
+  # it to the sandbox-host fullname (langsmith-sandbox-sandbox-host for a release
+  # named langsmith-sandbox), which the role does not trust, and sandbox-host
+  # would fail to reach the trace bucket.
   serviceAccount:
     name: "sandbox-host"
-    annotations:
-      eks.amazonaws.com/role-arn: "arn:aws:iam::<account-id>:role/<sandbox-irsa-role>"

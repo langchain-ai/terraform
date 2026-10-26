@@ -981,6 +981,13 @@ resource "kubernetes_namespace_v1" "sandbox" {
   depends_on = [module.sandbox_eks]
 }
 
+# The runtime chart's minimal Secret: never a copy of langsmith-config. Its two
+# keys are the langsmith-sandbox chart's defaults (serviceAuth.secretKey and
+# serviceAuth.callbackSigningJwkSecretKey), and each value must equal the
+# control plane's. The control plane reads its service-auth secret from
+# api_key_salt in langsmith-config (the langsmith chart's default for an
+# existing Secret), so the same salt goes in here. Write-only: neither value is
+# stored in Terraform state. Bump sandbox_runtime_secret_revision to rewrite it.
 resource "kubernetes_secret_v1" "sandbox_runtime" {
   provider = kubernetes.sandbox
   count    = local.separate_cluster_sandboxes ? 1 : 0
@@ -993,7 +1000,7 @@ resource "kubernetes_secret_v1" "sandbox_runtime" {
   type = "Opaque"
 
   data_wo = {
-    api_key_salt                 = var.langsmith_api_key_salt
+    sandbox_service_auth_secret  = var.langsmith_api_key_salt
     sandbox_callback_signing_jwk = var.sandbox_callback_signing_jwk
   }
 

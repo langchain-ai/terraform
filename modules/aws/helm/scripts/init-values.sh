@@ -400,9 +400,9 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     SANDBOX_RUNTIME_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_runtime_secret_name 2>/dev/null) || SANDBOX_RUNTIME_SECRET_NAME="langsmith-sandbox-runtime"
     # The sandbox IRSA role trusts exactly one ServiceAccount. Read that name
     # back from Terraform rather than hardcoding it here: the chart defaults
-    # sandboxHost.serviceAccount.name to <release>-langsmith-sandbox-sandbox-host,
-    # which would not match the trust policy and would fail IRSA at runtime with
-    # a WebIdentityErr that points nowhere near this file.
+    # sandboxHost.serviceAccount.name to the sandbox-host fullname, which would
+    # not match the trust policy and would fail IRSA at runtime with a
+    # WebIdentityErr that points nowhere near this file.
     SANDBOX_SERVICE_ACCOUNT_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_service_account_name 2>/dev/null) || SANDBOX_SERVICE_ACCOUNT_NAME=""
     if [[ -z "$SANDBOX_SERVICE_ACCOUNT_NAME" ]]; then
       echo "ERROR: Could not read sandbox_service_account_name. Upgrade the infra module and re-apply;" >&2
@@ -908,8 +908,19 @@ sandboxes:
 platform:
   endpoint: "${_protocol}://${HOSTNAME}/api"
 
+# Terraform writes this Secret in the sandbox cluster. The keys are the chart
+# defaults, spelled out because the Secret depends on them.
 serviceAuth:
   existingSecretName: "${SANDBOX_RUNTIME_SECRET_NAME}"
+  secretKey: "sandbox_service_auth_secret"
+  callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+
+# IRSA for sandbox-host and the JuiceFS formatter. The chart annotates the
+# ServiceAccount from this block.
+workloadIdentity:
+  provider: aws
+  aws:
+    roleArn: "${SANDBOX_IRSA_ROLE_ARN}"
 
 juicefs:
   existingSecretName: "${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}"
@@ -927,8 +938,6 @@ sandboxHost:
   # together, or sandbox-host loses access to the trace bucket.
   serviceAccount:
     name: "${SANDBOX_SERVICE_ACCOUNT_NAME}"
-    annotations:
-      eks.amazonaws.com/role-arn: "${SANDBOX_IRSA_ROLE_ARN}"
 YAML
     echo "Written: $SANDBOX_VALUES_FILE (cluster: $SANDBOX_CLUSTER_NAME, serviceAccount: $SANDBOX_SERVICE_ACCOUNT_NAME)"
   else
