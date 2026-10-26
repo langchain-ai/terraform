@@ -416,17 +416,16 @@ module "sandbox_juicefs_redis" {
 module "storage" {
   source = "./modules/storage"
 
-  bucket_name               = local.bucket_name
-  region                    = var.region
-  vpc_id                    = local.vpc_id
-  langsmith_irsa_role_arn   = module.eks.langsmith_irsa_role_arn
-  additional_irsa_role_arns = local.separate_cluster_sandboxes ? [aws_iam_role.sandbox_host[0].arn] : []
-  create_bucket_policy      = true
-  s3_ttl_enabled            = var.s3_ttl_enabled
-  s3_ttl_short_days         = var.s3_ttl_short_days
-  s3_ttl_long_days          = var.s3_ttl_long_days
-  kms_key_arn               = var.s3_kms_key_arn
-  versioning_enabled        = var.s3_versioning_enabled
+  bucket_name             = local.bucket_name
+  region                  = var.region
+  vpc_id                  = local.vpc_id
+  langsmith_irsa_role_arn = module.eks.langsmith_irsa_role_arn
+  create_bucket_policy    = true
+  s3_ttl_enabled          = var.s3_ttl_enabled
+  s3_ttl_short_days       = var.s3_ttl_short_days
+  s3_ttl_long_days        = var.s3_ttl_long_days
+  kms_key_arn             = var.s3_kms_key_arn
+  versioning_enabled      = var.s3_versioning_enabled
 }
 
 module "postgres" {
@@ -574,29 +573,42 @@ resource "aws_iam_role" "sandbox_host" {
   })
 }
 
+# JuiceFS keeps every object under "<sandbox_juicefs_name>/" in the bucket, so
+# the sandbox cluster gets that prefix and nothing else of the trace bucket.
+# The bucket policy grants nothing to this role: it only adds Allow statements,
+# so naming the role there with whole-bucket access would undo this scoping.
+# Same account, so this identity policy alone grants the access.
 resource "aws_iam_role_policy" "sandbox_host_s3" {
   count = local.separate_cluster_sandboxes ? 1 : 0
 
-  name = "sandbox-s3-access"
+  name = "sandbox-juicefs-s3-access"
   role = aws_iam_role.sandbox_host[0].name
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "S3Access"
+        Sid    = "JuiceFSObjects"
         Effect = "Allow"
         Action = [
           "s3:GetObject",
           "s3:PutObject",
           "s3:DeleteObject",
-          "s3:ListBucket",
+          "s3:AbortMultipartUpload",
         ]
-        Resource = [
-          module.storage.bucket_arn,
-          "${module.storage.bucket_arn}/*",
-        ]
-      }
+        Resource = "${module.storage.bucket_arn}/${var.sandbox_juicefs_name}/*"
+      },
+      {
+        Sid      = "JuiceFSList"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = module.storage.bucket_arn
+        Condition = {
+          StringLike = {
+            "s3:prefix" = "${var.sandbox_juicefs_name}/*"
+          }
+        }
+      },
     ]
   })
 }
