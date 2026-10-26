@@ -11,6 +11,8 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _tfvar_is_true <key>      — Return 0 if tfvar == true
+#   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
+#   _confirm <prompt>         — Yes/no prompt that defaults to no
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -40,6 +42,31 @@ _parse_tfvar() {
 # Parse a boolean tfvar (unquoted true/false). Returns 0 for true, 1 for false.
 _tfvar_is_true() {
   [[ "$(_parse_tfvar "$1")" == "true" ]]
+}
+
+# Replace the first uncommented `key = ...` line in terraform.tfvars, or append
+# one, so every other setting stays exactly as written. `cat >`, not mv, keeps
+# the file permissions.
+_set_tfvar() {
+  local _key="$1" _value="$2" _file="$INFRA_DIR/terraform.tfvars" _tmp
+  _tmp="$(mktemp)"
+  if awk -v key="$_key" -v value="$_value" '
+    !done && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { print key " = " value; done = 1; next }
+    { print }
+    END { exit done ? 0 : 3 }
+  ' "$_file" > "$_tmp"; then
+    cat "$_tmp" > "$_file"
+  else
+    [[ -s "$_file" && -n "$(tail -c 1 "$_file")" ]] && printf '\n' >> "$_file"
+    printf '%s = %s\n' "$_key" "$_value" >> "$_file"
+  fi
+  rm -f "$_tmp"
+}
+
+_confirm() {
+  local _answer
+  read -r -p "  $1 [y/N] " _answer
+  [[ "$_answer" =~ ^[Yy] ]]
 }
 
 # ── Color helpers ────────────────────────────────────────────────────────────

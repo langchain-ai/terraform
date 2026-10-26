@@ -1,0 +1,344 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadShieldSubscriptionState",
+      "Effect": "Allow",
+      "Action": [
+        "shield:GetSubscriptionState"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeAccountAttributes",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeVpcPeeringConnections",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeInstances",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeTags",
+        "ec2:GetCoipPoolUsage",
+        "ec2:DescribeCoipPools",
+        "ec2:GetSecurityGroupsForVpc",
+        "ec2:DescribeIpamPools",
+        "ec2:DescribeRouteTables",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeListenerCertificates",
+        "elasticloadbalancing:DescribeSSLPolicies",
+        "elasticloadbalancing:DescribeRules",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeTags",
+        "elasticloadbalancing:DescribeTrustStores",
+        "elasticloadbalancing:DescribeListenerAttributes",
+        "elasticloadbalancing:DescribeCapacityReservation"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Sid": "CreateClusterTaggedSecurityGroup",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateSecurityGroup"
+      ],
+      "Resource": [
+        "arn:${partition}:ec2:*:${account_id}:security-group/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": ${regions_json},
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateSecurityGroupInAccountVpc",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateSecurityGroup"
+      ],
+      "Resource": [
+        "arn:${partition}:ec2:*:${account_id}:vpc/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags"
+      ],
+      "Resource": "arn:${partition}:ec2:*:${account_id}:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": "CreateSecurityGroup",
+          "aws:RequestedRegion": ${regions_json},
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}"
+        }
+      }
+    },
+    {
+      "Sid": "ManageTagsOnClusterOwnedSecurityGroups",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "arn:${partition}:ec2:*:${account_id}:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        },
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "elbv2.k8s.aws/cluster"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "AuthorizeRevokeDeleteClusterOwnedSecurityGroups",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:DeleteSecurityGroup"
+      ],
+      "Resource": "arn:${partition}:ec2:*:${account_id}:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Sid": "AuthorizeRevokeIngressOnEksManagedClusterSG",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": "arn:${partition}:ec2:*:${account_id}:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/aws:eks:cluster-name": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Sid": "CreateLoadBalancerAndTargetGroupTaggedWithCluster",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:CreateTargetGroup"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/app/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/net/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:targetgroup/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": ${regions_json},
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateClusterOwnedLoadBalancerListeners",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:CreateListener"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/app/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/net/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Sid": "ManageClusterOwnedLoadBalancerListenersAndRules",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:CreateRule",
+        "elasticloadbalancing:DeleteRule"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/app/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/net/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener-rule/app/*/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:targetgroup/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/net/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/app/*/*"
+      ],
+      "Condition": {
+        "Null": {
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "true"
+        },
+        "StringEquals": {
+          "aws:RequestedRegion": ${regions_json},
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}"
+        },
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "elbv2.k8s.aws/cluster"
+          ]
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/net/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/app/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener-rule/net/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener-rule/app/*/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        },
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "elbv2.k8s.aws/cluster"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ModifyClusterOwnedLoadBalancersAndTargetGroups",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:SetIpAddressType",
+        "elasticloadbalancing:SetSecurityGroups",
+        "elasticloadbalancing:SetSubnets",
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:ModifyListenerAttributes",
+        "elasticloadbalancing:ModifyCapacityReservation",
+        "elasticloadbalancing:ModifyIpPools"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/app/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/net/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:targetgroup/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/app/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/net/*/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:AddTags"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:targetgroup/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/net/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:loadbalancer/app/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/net/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/app/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener-rule/net/*/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener-rule/app/*/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "elasticloadbalancing:CreateAction": [
+            "CreateTargetGroup",
+            "CreateLoadBalancer",
+            "CreateListener",
+            "CreateRule"
+          ],
+          "aws:RequestedRegion": ${regions_json},
+          "aws:RequestTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:RegisterTargets",
+        "elasticloadbalancing:DeregisterTargets"
+      ],
+      "Resource": "arn:${partition}:elasticloadbalancing:*:${account_id}:targetgroup/*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Sid": "ModifyClusterOwnedListener",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:AddListenerCertificates",
+        "elasticloadbalancing:RemoveListenerCertificates"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/net/*-sm-istio/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    }
+  ]
+}

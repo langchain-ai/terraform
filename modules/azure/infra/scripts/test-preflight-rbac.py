@@ -33,6 +33,7 @@ RG_SCOPE = f"{SUB_SCOPE}/resourceGroups/langsmith-rg-dev"
 VNET_ID = f"{SUB_SCOPE}/resourceGroups/platform-network-rg/providers/Microsoft.Network/virtualNetworks/hub-vnet"
 USER_OID = "33333333-3333-3333-3333-333333333333"
 SP_OID = "44444444-4444-4444-4444-444444444444"
+GROUP_OID = "55555555-5555-5555-5555-555555555555"
 
 OWNER_GUID = "8e3af657a8ff443ca75c2fe8c4bcb635"
 CONTRIB_GUID = "b24988ac618042a0ab8820f7382dd24c"
@@ -47,12 +48,87 @@ RESOURCE_ACTIONS = [
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    "Microsoft.Cache/redis/write",
+    "Microsoft.Cache/redisEnterprise/write",
 ]
 
 ABAC = (
     "@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
     "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7}"
+)
+
+# Two clauses, the second past the 240th character: real policies run this long,
+# and the deciding constraint is as likely to sit in the tail as the head.
+ABAC_LONG = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+    "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7, "
+    "ba92f5b4-2d11-453d-a403-e96b0029c9fe}"
+    ")) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'}"
+    ")) OR (@Resource[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# The shape that fails apply while preflight passes: roleAssignments/write is
+# permitted, but only for a ServicePrincipal, so the Key Vault Secrets Officer
+# grant is refused for omitting principal_type rather than for lacking a role.
+ABAC_PRINCIPAL_TYPE = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# The same shape widened to admit human deployers. Here terraform_principal_type
+# is the right advice, so the pinned-condition verdict must not fire on it.
+ABAC_PRINCIPAL_TYPE_ANY = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "ForAnyOfAnyValues:StringEqualsIgnoreCase {'ServicePrincipal', 'User'}))"
+)
+
+# Pinned on delete only. Nothing constrains who a new assignment may target, so
+# the deployer's own grant goes through and only its removal is fenced.
+ABAC_PRINCIPAL_TYPE_DELETE_ONLY = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (%s)) AND "
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+    "(@Resource[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))" % ABAC
+)
+
+
+# Pinned on delete with no write clause at all. Truncating to "the text from the
+# write action onwards" leaves the whole condition in hand, so the pin on delete
+# reads as a pin on write and preflight hard-fails a subscription that would have
+# applied cleanly.
+ABAC_PRINCIPAL_TYPE_NO_WRITE_CLAUSE = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# Azure's stock "Constrain roles and principal types" template. The AND sits
+# inside the write clause's own constraint, so splitting on the first AND after
+# the action drops the principalType half and the pin goes unseen.
+ABAC_ROLES_AND_PRINCIPAL_TYPE = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+    "ForAnyOfAnyValues:GuidEquals{%s} AND "
+    "@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))" % OWNER_GUID
+)
+
+# The same template with the sub-operation carve-out Azure adds so an assignment
+# to a principal it cannot resolve still goes through. Its AND lands even earlier.
+ABAC_PRINCIPAL_TYPE_SUBOP = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'}) AND NOT "
+    "SubOperationMatches{'Principal.NotFound'}) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# No action test anywhere, so the constraint governs every action including write.
+ABAC_PRINCIPAL_TYPE_NO_ACTION = (
+    "@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'"
 )
 
 
@@ -112,7 +188,139 @@ def eligibility(role, scope=SUB_SCOPE):
 
 DENY = {"id": "deny-1", "displayName": "Landing zone RBAC lock"}
 
+# The roles the default fixture assigns: blob storage always, and both Key Vault
+# grants because create_keyvault defaults to true.
+STORAGE_BLOB_CONTRIB = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+DEFAULT_ROLES = [
+    STORAGE_BLOB_CONTRIB,
+    "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",  # Key Vault Secrets Officer
+    "4633458b-17de-408a-b874-0445c86b69e6",  # Key Vault Secrets User
+]
+RBAC_ADMIN_GUID = "f58310d9-a9f6-439a-9e8d-f62e7b41a168"
+# A central AKS private zone in another group, for the control-plane grants.
+CP_ZONE_ID = (f"{SUB_SCOPE}/resourceGroups/platform-dns-rg/providers/Microsoft.Network/"
+              "privateDnsZones/privatelink.eastus.azmk8s.io")
+
+
+def abac_role_list(roles):
+    """The delegation condition: write and delete only for the listed roles."""
+    listed = ", ".join(roles)
+    return (
+        "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+        "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+        "ForAnyOfAnyValues:GuidEquals{%s})) AND "
+        "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+        "(@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+        "ForAnyOfAnyValues:GuidEquals{%s}))" % (listed, listed)
+    )
+
+
+def abac_role_exclusion(roles, action="write"):
+    """A role list negated with !(...GuidEquals), the exclusion spelled without NotEquals."""
+    attribute = "@Request" if action == "write" else "@Resource"
+    return ("((!(ActionMatches{'Microsoft.Authorization/roleAssignments/%s'})) OR "
+            "(!(%s[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+            "ForAnyOfAnyValues:GuidEquals{%s})))" % (action, attribute, ", ".join(roles)))
+
+
+def abac_delete_only(roles):
+    """A role list on delete alone; write is left unconstrained by it."""
+    return ("((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+            "(@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+            "ForAnyOfAnyValues:GuidEquals{%s}))" % ", ".join(roles))
+
+
+def rbac_admin(condition, scope=SUB_SCOPE):
+    """One row of `az role assignment list -o json`: RBAC Administrator, held
+    through a group, with a condition."""
+    return {
+        "scope": scope,
+        "roleDefinitionId": f"{SUB_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{RBAC_ADMIN_GUID}",
+        "roleDefinitionName": "Role Based Access Control Administrator",
+        "principalId": GROUP_OID,
+        "principalType": "Group",
+        "condition": condition,
+        "conditionVersion": "2.0",
+    }
+
+
+# A supplied VNet that AGIC grants Network Contributor on.
+AGIC_SUBNET = f"{VNET_ID}/subnets/agic"
+AGIC_ON_BYO_VNET = "\n".join([
+    "create_vnet        = false",
+    f'vnet_id            = "{VNET_ID}"',
+    'ingress_controller = "agic"',
+    f'agic_subnet_id     = "{AGIC_SUBNET}"',
+])
+
+# A supplied node subnet that Terraform attaches its own NAT gateway to.
+AKS_SUBNET = f"{VNET_ID}/subnets/aks"
+RT_ID = f"{SUB_SCOPE}/resourceGroups/platform-network-rg/providers/Microsoft.Network/routeTables/hub-udr"
+RT_JOIN = "Microsoft.Network/routeTables/join/action"
+NAT_ON_BYO_SUBNET = "\n".join([
+    "create_vnet       = false",
+    f'vnet_id           = "{VNET_ID}"',
+    f'aks_subnet_id     = "{AKS_SUBNET}"',
+    'aks_outbound_type = "userAssignedNATGateway"',
+    'aks_nat_gateway   = "create"',
+])
+
+# What checkNameAvailability returns for a name that exists — byte-identical
+# whether the resource belongs to this deployment or to a stranger's tenant.
+TAKEN = {
+    "nameAvailable": False,
+    "available": False,
+    "reason": "AlreadyExists",
+    "message": "The specified name is already in use.",
+}
+
+# The names the default fixture derives (name_prefix "-dev", no hash).
+PG = "langsmith-postgres-dev"
+BLOB = "langsmithblobdev"
+KV = "langsmith-kv-dev"
+REDIS = "langsmith-redis-dev"
+DNS = "langsmith-dev-ls"
+
 ALL_GOOD = response()
+
+# The quota fixtures mirror a real eastus answer: the node family nearly spent,
+# the regional total roomy, and the default Postgres family untouched. The empty
+# additional_node_pools keeps the variable's default large pool out of the sums,
+# so these cases isolate the default pool.
+NODE_POOL_D4 = "\n".join([
+    'default_node_pool_vm_size   = "Standard_D4s_v3"',
+    "default_node_pool_min_count = 2",
+    "default_node_pool_max_count = 5",
+    "additional_node_pools       = {}",
+])
+USAGE_DEFAULT = [
+    ("standardDSv3Family", 48, 64),
+    ("cores", 72, 288),
+    ("standardDDSv4Family", 0, 10),
+]
+
+# An attached cluster, and nodes in the shape `kubectl get nodes -o json` returns.
+# The D4 figures are a real Standard_D4s_v3's allocatable, not its VM size.
+ATTACHED = "\n".join([
+    "create_cluster                       = false",
+    'existing_cluster_name                = "platform-aks"',
+    'existing_cluster_resource_group_name = "platform-rg"',
+])
+
+
+def node(cpu, memory, ready=True, unschedulable=False):
+    return {
+        "spec": {"unschedulable": True} if unschedulable else {},
+        "status": {
+            "allocatable": {"cpu": cpu, "memory": memory},
+            "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+        },
+    }
+
+
+D2_NODE = node("1900m", "5160636Ki")
+D4_NODE = node("3860m", "14995576Ki")
+D16_NODE = node("15820m", "59Gi")
 
 CASES = [
     {
@@ -208,14 +416,42 @@ CASES = [
         "reject_calls": ["postgres flexible-server list-skus"],
     },
     {
-        "name": "everything permitted passes at both scopes",
+        "name": "group-inherited access is permitted at both scopes",
+        "group_ids": [GROUP_OID],
         "ca_all": ALL_GOOD,
+        # One line per verdict, not per scope: these two scopes agree, so they
+        # are named together. Splitting them back out fails here.
         "expect": [
-            f"[✓] roleAssignments/write permitted at {SUB_SCOPE}, granted by Owner held at",
-            f"[✓] roleAssignments/write permitted at {RG_SCOPE}",
-            f"[✓] Every resource type the deployment creates is writable at {SUB_SCOPE}",
+            "[✓] checkAccess answered with transitive group membership",
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE}, granted by Owner held at",
+            f"[✓] Every resource action the deployment needs is permitted at {SUB_SCOPE} and {RG_SCOPE}",
         ],
+        "assert_groups": [GROUP_OID],
         "reject": ["[✗]", "Falling back"],
+    },
+    {
+        "name": "a failed group lookup makes a denied result inconclusive",
+        "groups_fail": True,
+        "ca_all": response(write=False),
+        "expect": [
+            "[!] Azure group-based permissions could not be verified.",
+            "Before deploying, confirm this identity's access at the subscription and resource group scopes in Azure Access control (IAM) > Check access.",
+            "This denial could not be confirmed because group-based permissions were unavailable.",
+        ],
+        "reject": ["[✗] roleAssignments/write is not permitted"],
+        "exit_code": 0,
+    },
+    {
+        "name": "a failed group lookup makes a deny assignment inconclusive",
+        "groups_fail": True,
+        "ca_all": response(write=False, deny=DENY),
+        "expect": [
+            "[?] roleAssignments/write is denied at",
+            'deny assignment "Landing zone RBAC lock"',
+            "This denial could not be confirmed because group-based permissions were unavailable.",
+        ],
+        "reject": ["[✗] roleAssignments/write is denied"],
+        "exit_code": 0,
     },
     {
         "name": "contributor is named as the granting role when it is the one that answered",
@@ -231,7 +467,7 @@ CASES = [
         "name": "roleAssignments/write refused fails without inventing a reason",
         "ca_all": response(write=False),
         "expect": [
-            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE}. All eight role assignments",
+            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE} and {RG_SCOPE}. The deployment grants roles",
         ],
         "reject": ["by deny assignment", "PIM holds"],
     },
@@ -243,14 +479,15 @@ CASES = [
             'deny assignment "Landing zone RBAC lock"',
             "override every role assignment including Owner",
         ],
+        "exit_code": 1,
     },
     {
         "name": "an inactive PIM role turns the failure into an activation step",
         "ca_all": response(write=False),
         "eligibilities": [eligibility("Owner")],
         "expect": [
-            "[✗] PIM holds these roles for this identity as eligible but not active: Owner at",
-            "activating it (portal: PIM -> My roles -> Activate)",
+            "[✗] Eligible in PIM but not active, and carries roleAssignments/write: Owner at",
+            "(portal: PIM -> My roles -> Activate)",
         ],
     },
     {
@@ -258,14 +495,106 @@ CASES = [
         "ca_all": response(assignment=granted(condition=ABAC)),
         "expect": [
             "[!] That grant carries an ABAC condition",
-            "The modules assign: Storage Blob Data Contributor",
+            "This configuration assigns: Storage Blob Data Contributor",
             "GuidEquals",
         ],
     },
     {
+        "name": "a long ABAC condition is reported past its 240th character",
+        "ca_all": response(assignment=granted(condition=ABAC_LONG)),
+        "expect": [
+            "[!] That grant carries an ABAC condition",
+            "PrincipalType",
+        ],
+    },
+    {
+        # The variable declares what the principal is; it cannot make a human into
+        # a service principal, so recommending it here sends the operator down a
+        # dead end that costs an apply to discover.
+        "name": "a condition pinned to ServicePrincipal does not recommend terraform_principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "expect": [
+            "[✗] The condition admits only ServicePrincipal targets",
+            "declares the type rather than changing it",
+            "keyvault_manage_terraform_admin_assignment = false",
+        ],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        "name": "a pinned condition is silent once the grant it rejects is turned off",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "tfvars_extra": "keyvault_manage_terraform_admin_assignment = false",
+        "expect": ["keyvault_manage_terraform_admin_assignment is already false"],
+        "reject": ["[✗] The condition admits only ServicePrincipal targets"],
+    },
+    {
+        # Nothing to work around: the request this deployer sends already matches.
+        "name": "a pinned condition is not a blocker for a service principal deployer",
+        "env": {"ARM_CLIENT_ID": "app-guid"},
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "expect": [
+            "The condition tests principalType",
+            'terraform_principal_type = "ServicePrincipal"',
+        ],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "a principalType condition that admits User names terraform_principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_ANY)),
+        "expect": [
+            "The condition tests principalType",
+            'terraform_principal_type = "User"',
+        ],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "a principalType condition on delete alone does not block the write",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_DELETE_ONLY)),
+        "expect": ["The condition tests principalType"],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "an ABAC condition on roles alone does not mention principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC)),
+        "reject": ["terraform_principal_type"],
+    },
+    {
+        # Nothing constrains write, so telling the operator to disable the Key
+        # Vault grant would cost them a working assignment for no reason.
+        "name": "a condition with no write clause is not read as a pin",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_NO_WRITE_CLAUSE)),
+        "expect": ["[!] That grant carries an ABAC condition"],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "Azure's stock roles-and-principal-types template is read as a pin",
+        "ca_all": response(assignment=granted(condition=ABAC_ROLES_AND_PRINCIPAL_TYPE)),
+        "expect": [
+            "[✗] The condition admits only ServicePrincipal targets",
+            "keyvault_manage_terraform_admin_assignment = false",
+        ],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        "name": "the Principal.NotFound carve-out does not hide the pin",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_SUBOP)),
+        "expect": [
+            "[✗] The condition admits only ServicePrincipal targets",
+            "keyvault_manage_terraform_admin_assignment = false",
+        ],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        # An unqualified constraint applies to write along with everything else.
+        "name": "a pin with no action test at all still counts",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_NO_ACTION)),
+        "expect": ["[✗] The condition admits only ServicePrincipal targets"],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
         "name": "a refused resource write fails and names the action",
-        "ca_all": response(refuse_resources=("Microsoft.Cache/redis/write",)),
-        "expect": ["[✗] Not permitted at", "Microsoft.Cache/redis/write"],
+        "ca_all": response(refuse_resources=("Microsoft.Cache/redisEnterprise/write",)),
+        "expect": ["[✗] Not permitted at", "Microsoft.Cache/redisEnterprise/write"],
         "reject": ["[✗] roleAssignments/write"],
     },
     {
@@ -362,32 +691,512 @@ CASES = [
         "reject": ["PIM holds these roles"],
     },
     {
-        "name": "an invalid identifier drops the resource group scope instead of building a bad URL",
-        "tfvars_identifier": '"-Prod Corp"',
+        "name": "a name_prefix that yields an illegal group name drops the scope instead of building a bad URL",
+        "tfvars_name_prefix": '"-prod/../other"',
         "ca_all": ALL_GOOD,
-        "expect": ["[!] terraform.tfvars: identifier is not a valid resource-name suffix"],
+        "expect": ["[!] terraform.tfvars: 'langsmith-rg-prod/../other' is not a legal resource group name"],
         "reject_calls": ["resourceGroups"],
     },
     {
-        "name": "an empty identifier still yields a resource group scope",
-        "tfvars_identifier": '""',
+        "name": "an empty name_prefix still yields a resource group scope",
+        "tfvars_name_prefix": '""',
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg/providers"],
     },
+    # Each naming override moves the resource group and the probe has to follow.
+    # A group that does not exist still answers, and every RG verdict below then
+    # describes the wrong thing.
     {
-        "name": "a bring-your-own VNet is checked as its own scope",
-        "tfvars_extra": f'vnet_id = "{VNET_ID}"',
+        "name": "unique_resource_names shortens the probed group to the ls- base",
+        "tfvars_extra": "unique_resource_names = true",
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-dev/providers"],
+    },
+    {
+        "name": "name_base replaces the probed group's base outright",
+        "tfvars_extra": 'name_base = "acme"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/acme-rg-dev/providers"],
+    },
+    {
+        "name": "resource_group_name replaces the probed group entirely",
+        "tfvars_extra": 'resource_group_name = "platform-shared-rg"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/platform-shared-rg/providers"],
+    },
+    # An attached group is the deployment's whole footprint, and its deployer may
+    # hold rights there alone. Asking the subscription would fail that deployer
+    # for rights the deployment never uses.
+    {
+        "name": "an attached resource group is probed alone, without the subscription",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] Resource group platform-langsmith-rg exists"],
+        "expect_calls": [
+            f"{SUB_SCOPE}/resourceGroups/platform-langsmith-rg/providers",
+            "group show --name platform-langsmith-rg",
+        ],
+        "reject_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+    },
+    {
+        "name": "an attached resource group that cannot be read fails",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "group_missing": True,
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] Resource group platform-langsmith-rg could not be read"],
+    },
+    {
+        "name": "an attached resource group without a name fails before any RBAC call",
+        "tfvars_extra": "create_resource_group = false",
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] terraform.tfvars: create_resource_group = false needs existing_resource_group_name"],
+        "reject_calls": ["checkAccess", "role assignment list"],
+    },
+    {
+        "name": "a created resource group is still checked for resourceGroups/write",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+        "expect_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_calls": ["group show"],
+    },
+    {
+        # name_suffix_salt exists so a deployment whose four global names got
+        # burned can rotate them. Preflight has to mix it into the hash the same
+        # way local.uniq_suffix does, or bumping the salt leaves preflight
+        # checking the old names and reporting the collision it was bumped to
+        # escape. Redis is asserted because it is the one name printed in full.
+        "name": "name_suffix_salt rotates the derived global names",
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_extra": 'unique_resource_names = true\nname_suffix_salt = "2"',
+        "ca_all": ALL_GOOD,
+        "expect": ["ls-redis-prod-4352a7"],
+        "reject": ["ls-redis-prod-8a57d8"],
+    },
+    {
+        # The unsalted counterpart, pinning the default derivation so a change to
+        # the hash inputs cannot pass unnoticed.
+        "name": "an empty salt leaves the derived names unchanged",
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_extra": 'unique_resource_names = true',
+        "ca_all": ALL_GOOD,
+        "expect": ["ls-redis-prod-8a57d8"],
+    },
+    {
+        # The redis module provisions Microsoft.Cache/redisEnterprise via azapi,
+        # not the classic Microsoft.Cache/redis. Asking about the classic action
+        # passed a principal that could not create the actual cluster.
+        "name": "Redis is checked as redisEnterprise, not as classic Azure Cache",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Cache/redisEnterprise/write"],
+        "reject_actions": ["Microsoft.Cache/redis/write"],
+    },
+    {
+        # The RBAC scope used to be hardcoded to "langsmith-rg" + the legacy
+        # identifier, so it asked about a resource group Terraform never creates
+        # once unique_resource_names moved the base to "ls". Both halves are
+        # asserted here: name_prefix wins over identifier, and the base follows
+        # unique_resource_names.
+        "name": "the resource group scope follows name_prefix and unique_resource_names",
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_identifier": '"-dev"',
+        "tfvars_extra": 'unique_resource_names = true',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-prod/providers"],
+        "reject_calls": ["langsmith-rg", "ls-rg-dev"],
+    },
+    {
+        # identifier is name_prefix's retired name. A deployment whose tfvars
+        # predates the rename still has to be probed at the group it owns.
+        "name": "a tfvars with only the legacy identifier still names its group",
+        "tfvars_name_prefix": None,
+        "tfvars_identifier": '"-legacy"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg-legacy/providers"],
+    },
+    {
+        # AGIC's Network Contributor grant lands on the supplied VNet, so that is
+        # a scope the deployment writes a role assignment at, and roleAssignments
+        # is all it is asked about there.
+        "name": "a bring-your-own VNet the deployment grants a role on is checked as its own scope",
+        "tfvars_extra": AGIC_ON_BYO_VNET,
         "ca_all": ALL_GOOD,
         "ca_vnet": response(write=False, deny=DENY),
         "expect": [f"[✗] roleAssignments/write is denied at {VNET_ID}"],
         "expect_calls": [VNET_ID],
+        "assert_actions": [ROLE_WRITE, ROLE_DELETE],
+        "reject_actions": ["Microsoft.ContainerService/managedClusters/write",
+                           "Microsoft.Network/virtualNetworks/write"],
     },
     {
         "name": "a malformed vnet_id is dropped rather than interpolated",
-        "tfvars_extra": 'vnet_id = "https://evil.example.com/x"',
+        "tfvars_extra": AGIC_ON_BYO_VNET.replace(VNET_ID, "https://evil.example.com/x"),
         "ca_all": ALL_GOOD,
         "expect": ["[!] terraform.tfvars: vnet_id is not a VNet resource ID"],
         "reject_calls": ["evil.example.com"],
+    },
+    {
+        # With create_vnet = false the module joins the VNet's subnets and never
+        # writes the VNet, so asking about virtualNetworks/write reported a
+        # blocker that apply never meets. With no grant on the VNet either, the
+        # VNet is not a scope at all.
+        "name": "a supplied VNet is not checked for virtualNetworks/write",
+        "tfvars_extra": f'create_vnet = false\nvnet_id = "{VNET_ID}"',
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.ContainerService/managedClusters/write"],
+        "reject_actions": ["Microsoft.Network/virtualNetworks/write"],
+        "reject_calls": [VNET_ID],
+        "exit_code": 0,
+    },
+    {
+        "name": "a VNet Terraform builds is still checked for virtualNetworks/write",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Network/virtualNetworks/write"],
+    },
+    # The delegation pattern: RBAC Administrator, conditioned so it may assign
+    # only listed roles. checkAccess asks without naming a role, so ARM refuses
+    # write and delete at every scope, and apply then succeeds.
+    {
+        "name": "a role-list ABAC condition naming every assigned role passes",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list(DEFAULT_ROLES))],
+        "eligibilities": [eligibility("Owner")],
+        "expect": [
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE} for Storage Blob "
+            "Data Contributor, Key Vault Secrets Officer, Key Vault Secrets User through a "
+            "conditioned assignment (Role Based Access Control Administrator held at",
+            f"[✓] roleAssignments/delete permitted at {SUB_SCOPE} and {RG_SCOPE}",
+            "All checks passed.",
+        ],
+        "expect_calls": ["--include-groups --fill-principal-name false -o json"],
+        "reject": ["[✗]", "[?]", "Eligible in PIM"],
+        "exit_code": 0,
+    },
+    {
+        "name": "a role-list ABAC condition missing an assigned role fails and names it",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list([STORAGE_BLOB_CONTRIB]))],
+        "expect": [
+            "[✗] roleAssignments/write at",
+            "does not list Key Vault Secrets Officer, Key Vault Secrets User, which this configuration assigns",
+            "[!] roleAssignments/delete at",
+        ],
+        "reject": ["through a conditioned assignment"],
+        "exit_code": 1,
+    },
+    {
+        # Turning off what assigns the missing roles is the other way through,
+        # and the list follows the configuration.
+        "name": "the role list follows the configuration",
+        "tfvars_extra": "keyvault_manage_terraform_admin_assignment = false\n"
+                        "keyvault_manage_managed_identity_assignment = false",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list([STORAGE_BLOB_CONTRIB]))],
+        "expect": ["for Storage Blob Data Contributor through a conditioned assignment"],
+        "reject": ["[✗]"],
+    },
+    {
+        # An exclusion list cannot be read as an allow-list, so the refusal
+        # becomes a question for plan and apply, and the run does not fail on it.
+        "name": "an ABAC condition preflight cannot read is unconfirmed and does not fail the run",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(
+            "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+            "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+            "ForAnyOfAllValues:GuidNotEquals{%s}))" % OWNER_GUID)],
+        "expect": [
+            "[?] roleAssignments/write at",
+            "No check failed.",
+            "check(s) could not be confirmed; make plan and make apply test them exactly.",
+        ],
+        "reject": ["[✗]", "Fix the issues above"],
+        "exit_code": 0,
+    },
+    {
+        # The listing that would show a conditioned grant failed, so the refusal
+        # may be checkAccess's role-less question; it is not confirmed either way.
+        "name": "a refusal whose assignments cannot be listed is unconfirmed, not a failure",
+        "ca_all": response(write=False, delete=False),
+        "assignments_fail": True,
+        "expect": [
+            "[?] roleAssignments/write was refused at",
+            "could not be listed to see whether an ABAC condition explains it",
+            "[?] roleAssignments/delete was refused at",
+        ],
+        "reject": ["[✗] roleAssignments/write is not permitted"],
+        "exit_code": 0,
+    },
+    {
+        # Network Contributor and Private DNS Zone Contributor are granted on the
+        # supplied VNet and zone only, so a condition at the subscription and the
+        # deployment group does not need to list them there.
+        "name": "roles granted only on a supplied network are not required at the deployment scopes",
+        "tfvars_extra": "\n".join([
+            "create_vnet = false",
+            f'vnet_id = "{VNET_ID}"',
+            'aks_control_plane_identity = "user"',
+            f'aks_control_plane_identity_id = "{SUB_SCOPE}/resourceGroups/id-rg/providers/'
+            'Microsoft.ManagedIdentity/userAssignedIdentities/cp"',
+            "aks_control_plane_identity_manage_grants = true",
+            "aks_private_cluster_enabled = true",
+            f'aks_private_dns_zone_id = "{CP_ZONE_ID}"',
+        ]),
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list(DEFAULT_ROLES))],
+        "expect": [
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE} for Storage Blob "
+            "Data Contributor, Key Vault Secrets Officer, Key Vault Secrets User through",
+            "does not list Network Contributor",
+            "does not list Private DNS Zone Contributor",
+        ],
+        "reject": [f"at {SUB_SCOPE} and {RG_SCOPE} comes only through"],
+    },
+    {
+        # !(...GuidEquals{X}) excludes X. Read as an allow-list, excluding Owner
+        # would report a false failure.
+        "name": "a negated role list excluding Owner is unconfirmed, not a failure",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_exclusion([OWNER_GUID]))],
+        "expect": ["[?] roleAssignments/write at"],
+        "reject": ["[✗] roleAssignments/write"],
+        "exit_code": 0,
+    },
+    {
+        # Excluding a role the deployment assigns must not read as permitting it.
+        "name": "a negated role list excluding an assigned role is not read as a pass",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_exclusion([STORAGE_BLOB_CONTRIB]))],
+        "expect": ["[?] roleAssignments/write at"],
+        "reject": ["[✓] roleAssignments/write permitted"],
+    },
+    {
+        # A condition on delete alone leaves write unconstrained, so it cannot
+        # explain a write refusal, which stands.
+        "name": "a delete-only condition does not soften a write refusal",
+        "ca_all": response(write=False),
+        "role_assignments": [rbac_admin(abac_delete_only(DEFAULT_ROLES))],
+        "expect": ["[✗] roleAssignments/write is not permitted at"],
+        "reject": ["[?] roleAssignments/write"],
+        "exit_code": 1,
+    },
+    {
+        # The holder is named even when the list matches none of the roles.
+        "name": "a role list naming none of the assigned roles names its holder",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list([OWNER_GUID]))],
+        "expect": ["lists the roles it allows (Role Based Access Control Administrator held at"],
+        "reject": ["lists the roles it allows ()"],
+        "exit_code": 1,
+    },
+    {
+        # A conditioned grant held on a different resource group says nothing
+        # about this one, so the refusal stands.
+        "name": "a conditioned grant at an unrelated scope does not excuse a refusal",
+        "ca_all": response(write=False),
+        "role_assignments": [rbac_admin(abac_role_list(DEFAULT_ROLES),
+                                        scope=f"{SUB_SCOPE}/resourceGroups/elsewhere")],
+        "expect": ["[✗] roleAssignments/write is not permitted at"],
+    },
+    # Attaching a NAT gateway writes aks_subnet_id, and a route table on that
+    # subnet turns the write into a linked one that needs routeTables/join/action.
+    {
+        "name": "a refused route table join fails with the LinkedAuthorizationFailed explanation",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, False)],
+        "expect": [
+            f"[✗] routeTables/join/action is not permitted on {RT_ID}",
+            "LinkedAuthorizationFailed",
+        ],
+        "expect_calls": [f"network vnet subnet show --ids {AKS_SUBNET}", f"{RT_ID}/providers"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a route table join granted only through a group warns",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "expect": [
+            f"[!] routeTables/join/action is permitted on {RT_ID}, but only through a group",
+            "a direct assignment worked within minutes in testing",
+        ],
+        "exit_code": 0,
+    },
+    {
+        "name": "a route table join granted directly passes",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "direct_assignments": [{"scope": RT_ID, "roleDefinitionName": "Network Contributor"}],
+        "expect": [f"[✓] routeTables/join/action is permitted on {RT_ID}"],
+        "reject": ["only through a group"],
+    },
+    {
+        # A direct Reader at the subscription carries no join, so the join still
+        # comes only through a group.
+        "name": "a direct grant without join does not hide a group-only join",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "direct_assignments": [{"scope": SUB_SCOPE, "roleDefinitionName": "Reader"}],
+        "expect": [f"[!] routeTables/join/action is permitted on {RT_ID}, but only through a group"],
+    },
+    {
+        "name": "a direct custom role carrying join passes after reading its definition",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "direct_assignments": [{
+            "scope": RT_ID, "roleDefinitionName": "Network User",
+            "roleDefinitionId": f"{SUB_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{CUSTOM_GUID}",
+        }],
+        "role_definition": {"properties": {"permissions": [{
+            "actions": ["Microsoft.Network/*/join/action"], "notActions": []}]}},
+        "expect": [f"[✓] routeTables/join/action is permitted on {RT_ID}"],
+        "expect_calls": [f"roleDefinitions/{CUSTOM_GUID}"],
+        "reject": ["only through a group"],
+    },
+    {
+        "name": "unreadable direct assignments on the route table are unconfirmed",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "assignments_fail": True,
+        "expect": [f"[?] routeTables/join/action is permitted on {RT_ID}, but this identity's direct assignments"],
+        "reject": ["[✓] routeTables/join/action"],
+    },
+    {
+        # Managing the supplied subnet's service endpoints writes it on an
+        # attached cluster too.
+        "name": "an attached cluster that manages the subnet's endpoints checks the route table",
+        "tfvars_extra": ATTACHED + f'\ncreate_vnet = false\nvnet_id = "{VNET_ID}"\n'
+                        f'aks_subnet_id = "{AKS_SUBNET}"\nmanage_byo_subnet_service_endpoints = true',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"network vnet subnet show --ids {AKS_SUBNET}"],
+    },
+    {
+        "name": "a subnet with no route table needs no join",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] aks_subnet_id has no route table"],
+        "reject_calls": ["routeTables"],
+    },
+    {
+        "name": "no NAT gateway to attach means no route table check",
+        "tfvars_extra": f'create_vnet = false\nvnet_id = "{VNET_ID}"\naks_subnet_id = "{AKS_SUBNET}"',
+        "ca_all": ALL_GOOD,
+        "reject_calls": ["network vnet subnet show"],
+    },
+    {
+        # Azure's family for a size is not always the one its name suggests. The
+        # transform gives standardDASv6Family; list-skus is the authority.
+        "name": "the quota family comes from list-skus when it answers",
+        "tfvars_extra": "\n".join([
+            'default_node_pool_vm_size   = "Standard_D8as_v6"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_skus": [("Standard_D8as_v6", "standardDav6Family"),
+                    ("Standard_D2ds_v4", "standardDDSv4Family")],
+        "vm_usage": [("standardDav6Family", 0, 32), ("standardDDSv4Family", 0, 10), ("cores", 0, 100)],
+        "expect": ["[✓] standardDav6Family quota in eastus: 32 of 32 vCPUs free (1-2 × Standard_D8as_v6 needs up to 16)"],
+        "reject": ["standardDASv6Family", "reports no"],
+        "expect_calls": ["vm list-skus -l eastus"],
+    },
+    {
+        "name": "a quota family with no usage row is unconfirmed, not failed",
+        "tfvars_extra": "\n".join([
+            'default_node_pool_vm_size   = "Standard_D8as_v6"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDDSv4Family", 0, 10), ("cores", 0, 100)],
+        "expect": ["[?] eastus reports no standardDASv6Family quota entry"],
+        "exit_code": 0,
+    },
+    {
+        # az identity show prints /resourcegroups/; the variable's validation
+        # ignores case and the provider does not.
+        "name": "a lower-case resourcegroups in the control-plane identity ID fails with the fix",
+        "tfvars_extra": "\n".join([
+            'aks_control_plane_identity = "user"',
+            f'aks_control_plane_identity_id = "{SUB_SCOPE}/resourcegroups/id-rg/providers/'
+            'Microsoft.ManagedIdentity/userAssignedIdentities/cp"',
+        ]),
+        "ca_all": ALL_GOOD,
+        "expect": [
+            "[✗] terraform.tfvars: aks_control_plane_identity_id has /resourcegroups/ in lower case",
+            f"Change it to /resourceGroups/: {SUB_SCOPE}/resourceGroups/id-rg/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/cp",
+        ],
+        "exit_code": 1,
+    },
+    {
+        "name": "a lower-case resourcegroups in a subnet ID warns",
+        "tfvars_extra": f'create_vnet = false\nvnet_id = "{VNET_ID}"\n'
+                        f'aks_subnet_id = "{AKS_SUBNET.replace("resourceGroups", "resourcegroups")}"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[!] terraform.tfvars: aks_subnet_id has /resourcegroups/ in lower case"],
+        "reject": ["aks_control_plane_identity_id has"],
+    },
+    {
+        "name": "a vault privatelink zone answered by a private zone passes",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true",
+        "ca_all": ALL_GOOD,
+        "dig_soa": "privatelink.vaultcore.azure.net. 10 IN SOA azureprivatedns.net. "
+                   "azureprivatedns-host.microsoft.com. 1 3600 300 2419200 10",
+        "expect": ["[✓] This machine resolves privatelink.vaultcore.azure.net from an Azure private DNS zone"],
+    },
+    {
+        "name": "a vault privatelink zone that cannot be resolved is unconfirmed",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true",
+        "ca_all": ALL_GOOD,
+        "expect": [
+            "[?] Could not resolve privatelink.vaultcore.azure.net from this machine",
+            "from a machine in the VNet",
+        ],
+        "exit_code": 0,
+    },
+    {
+        "name": "a supplied vault zone answered from public DNS warns",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true\n"
+                        f'keyvault_private_dns_zone_id = "{SUB_SCOPE}/resourceGroups/dns-rg/providers/'
+                        'Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"',
+        "ca_all": ALL_GOOD,
+        "dig_soa": "azure.net. 3600 IN SOA ns1-01.azure-dns.com. "
+                   "azuredns-hostmaster.microsoft.com. 1 3600 300 2419200 300",
+        "expect": ["[!] This machine resolves privatelink.vaultcore.azure.net from public DNS"],
+    },
+    {
+        # Your own DNS servers answering the zone are not public DNS.
+        "name": "a vault zone answered by non-Azure DNS is unconfirmed, not public",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true\n"
+                        f'keyvault_private_dns_zone_id = "{SUB_SCOPE}/resourceGroups/dns-rg/providers/'
+                        'Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"',
+        "ca_all": ALL_GOOD,
+        "dig_soa": "privatelink.vaultcore.azure.net. 300 IN SOA dns1.corp.example. "
+                   "hostmaster.corp.example. 1 3600 300 2419200 300",
+        "expect": ["[?] This machine resolves privatelink.vaultcore.azure.net from DNS servers that are neither",
+                   "nslookup <vault name>.vault.azure.net"],
+        "reject": ["from public DNS"],
+    },
+    {
+        "name": "a Government vault checks the usgovcloudapi privatelink zone",
+        "tfvars_extra": 'keyvault_private_endpoint_enabled = true\nazure_environment = "usgovernment"\n'
+                        'redis_source = "in-cluster"',
+        "cloud_name": "AzureUSGovernment",
+        "ca_all": ALL_GOOD,
+        "expect_calls": ["SOA privatelink.vaultcore.usgovcloudapi.net"],
     },
     {
         "name": "an unresolvable principal skips the RBAC check entirely",
@@ -397,10 +1206,536 @@ CASES = [
         "reject": ["[✗] roleAssignments/write"],
     },
     {
+        # checkNameAvailability answers a global question and has no ownership
+        # dimension, so every name a deployment already created comes back
+        # taken. Reading Terraform state first is what stops the second
+        # `make preflight` of a live deployment from failing on its own
+        # resources. The DNS label is included because it lives under a
+        # different state attribute than the other three.
+        "name": "names this deployment already created are not collisions",
+        "tfvars_extra": f'dns_label = "{DNS}"',
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "tfstate_names": [PG, BLOB, KV],
+        "tfstate_dns_labels": [DNS],
+        "expect": [
+            f"[✓] Postgres: '{PG}' is already deployed and tracked in Terraform state",
+            f"[✓] Storage account: '{BLOB}' is already deployed",
+            f"[✓] Key Vault: '{KV}' is already deployed",
+            f"[✓] Public IP DNS label: '{DNS}' is already deployed",
+        ],
+        "reject": ["ALREADY TAKEN"],
+    },
+    {
+        # domain_name_label only reaches state through azurerm_public_ip.agw,
+        # which exists under ingress_controller = "agic" alone. On every other
+        # path the label rides a Service annotation on an AKS-managed IP,
+        # so state cannot vouch for it and the subscription has to.
+        "name": "a DNS label held by this subscription is not a collision",
+        "tfvars_extra": f'dns_label = "{DNS}"',
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "dns_held": "1",
+        "expect": [
+            f"[✓] Public IP DNS label: '{DNS}' is already held by a resource in this subscription",
+        ],
+        "reject": [f"[✗] Public IP DNS label: '{DNS}' is ALREADY TAKEN"],
+    },
+    {
+        "name": "a DNS label held by a stranger is still a collision",
+        "tfvars_extra": f'dns_label = "{DNS}"',
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "dns_held": "0",
+        "expect": [f"[✗] Public IP DNS label: '{DNS}' is ALREADY TAKEN globally"],
+    },
+    {
+        # Terraform hashes the tfvars subscription into the four global names and
+        # deploys there; every az call here answers for the CLI's active one. A
+        # silent divergence means the report describes neither.
+        "name": "a tfvars subscription that is not the active one fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_sub": "99999999-9999-9999-9999-999999999999",
+        "expect": [
+            "[✗] terraform.tfvars sets subscription_id = 99999999-9999-9999-9999-999999999999",
+            f"the active CLI subscription is {SUB}",
+            "az account set --subscription 99999999-9999-9999-9999-999999999999",
+        ],
+    },
+    {
+        # A Government subscription is invisible from the commercial cloud, so
+        # every check after this one would fail without saying why.
+        "name": "a Government tfvars against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": [
+            "[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud",
+            "az cloud set --name AzureUSGovernment && az login",
+        ],
+    },
+    {
+        "name": "a Government tfvars on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        # Open SWE on #323: the cloud can come from TF_VAR_azure_environment alone,
+        # and preflight read only terraform.tfvars, so it flagged a correctly
+        # configured Government CLI as a mismatch.
+        "name": "TF_VAR_azure_environment on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "TF_VAR_azure_environment against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
+    },
+    {
+        # The azure_environment output is the value Terraform applied with,
+        # whichever source it came from, so preflight reads it first.
+        "name": "the azure_environment output on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "the azure_environment output wins over a missing tfvar on a commercial CLI",
+        "ca_all": ALL_GOOD,
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
+    },
+    {
+        # Open SWE on #325: the output is the last apply's value, and preflight
+        # checks the next one, so a changed tfvar wins and the difference is named.
+        "name": "a tfvar changed since the last apply wins over the output, with a warning",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "public",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": ["[!] The last apply used azure_environment = public, and the configuration now says usgovernment"],
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "a commercial tfvars on the commercial CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "a matching subscription passes without comment",
+        "ca_all": ALL_GOOD,
+        "reject": ["but the active CLI subscription is"],
+    },
+    {
+        "name": "a taken name with no state behind it still fails",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "expect": [
+            f"[✗] Postgres: '{PG}' is ALREADY TAKEN globally",
+            f"[✗] Key Vault: '{KV}' is ALREADY TAKEN globally",
+        ],
+        "reject": ["tracked in Terraform state"],
+    },
+    {
+        # State exempts a name, not the run: a half-built deployment must still
+        # fail on the names it has not created yet.
+        "name": "state exempts only the names it actually holds",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "tfstate_names": [PG],
+        "expect": [
+            f"[✓] Postgres: '{PG}' is already deployed",
+            f"[✗] Key Vault: '{KV}' is ALREADY TAKEN globally",
+        ],
+    },
+    {
+        # A soft-deleted vault is ours and still holds the name, but it is in
+        # neither Terraform state nor `az keyvault list`, so state cannot see it
+        # and the generic "already in use" names no remedy.
+        "name": "a soft-deleted Key Vault is named as such, with the remedy",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "kv_deleted": 1,
+        "expect": [
+            f"[✗] Key Vault: '{KV}' is soft-deleted",
+            f"az keyvault recover --name {KV}",
+        ],
+        "reject": [f"Key Vault: '{KV}' is ALREADY TAKEN"],
+    },
+    {
+        # Redis has no working CheckNameAvailability, so it is checked against
+        # the subscription instead — which was equally blind to ownership.
+        "name": "a Redis left over from a failed apply still fails",
+        "ca_all": ALL_GOOD,
+        "redis_hit": 1,
+        "expect": [f"[✗] Redis: '{REDIS}' already exists in this subscription"],
+    },
+    {
+        "name": "a Redis that Terraform already manages does not",
+        "ca_all": ALL_GOOD,
+        "redis_hit": 1,
+        "tfstate_names": [REDIS],
+        "expect": [f"[✓] Redis: '{REDIS}' is already deployed and tracked in Terraform state"],
+        "reject": ["[✗] Redis"],
+    },
+    {
         "name": "an ARM_SUBSCRIPTION_ID mismatch fails before any verdict is trusted",
         "env": {"ARM_SUBSCRIPTION_ID": "99999999-9999-9999-9999-999999999999"},
         "ca_all": ALL_GOOD,
         "expect": ["[✗] ARM_SUBSCRIPTION_ID is 99999999", "every check in this script reads"],
+    },
+    {
+        # The floor fits and the ceiling does not: the cluster creates, and the
+        # autoscaler stops short. Postgres sits in its own family here, so it
+        # adds to the regional total only.
+        "name": "a node pool whose maximum exceeds the family quota warns",
+        "tfvars_extra": NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "vm_usage": USAGE_DEFAULT,
+        "expect": [
+            "[!] standardDSv3Family quota in eastus: 16 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 20 at the node pools' maximum",
+            "[✓] cores quota in eastus: 216 of 288 vCPUs free (2-5 × Standard_D4s_v3 plus Postgres needs up to 22)",
+            "[✓] standardDDSv4Family quota in eastus: 10 of 10 vCPUs free (GP_Standard_D2ds_v4 needs 2)",
+        ],
+        "reject": ["[✗] standardDSv3Family"],
+    },
+    {
+        "name": "a node pool whose minimum exceeds the family quota fails",
+        "tfvars_extra": NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDSv3Family", 60, 64)] + USAGE_DEFAULT[1:],
+        "expect": [
+            "[✗] standardDSv3Family quota in eastus: 4 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 8 at the node pools' minimum",
+        ],
+    },
+    {
+        # Nodes and Postgres in one family draw on the same quota, so the check
+        # has to add them together or it passes a config the apply rejects.
+        "name": "Postgres counts against the node family when they share it",
+        "tfvars_extra": "\n".join([
+            'default_node_pool_vm_size   = "Standard_D4ds_v4"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDDSv4Family", 0, 8), ("cores", 0, 100)],
+        "expect": [
+            "[!] standardDDSv4Family quota in eastus: 8 of 8 vCPUs free, 1-2 × Standard_D4ds_v4 plus Postgres needs 10 at the node pools' maximum",
+        ],
+    },
+    {
+        # Left unset, additional_node_pools is the variable's default: one D16s_v5
+        # pool scaling 0-2, in its own family beside the D4s_v3 default pool.
+        "name": "the default large pool counts toward its family and cores",
+        "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDSv3Family", 0, 64), ("standardDSv5Family", 0, 64),
+                     ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
+        "expect": [
+            "[✓] standardDSv5Family quota in eastus: 64 of 64 vCPUs free (large 0-2 × Standard_D16s_v5 needs up to 32)",
+            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v5 plus Postgres needs up to 54)",
+        ],
+    },
+    {
+        # Each pool fits its family on its own; together they overrun it, which
+        # the default-pool-only check passed.
+        "name": "additional pools in the node family add to its quota",
+        "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3] + [
+            "additional_node_pools = {",
+            '  gpu-ish = { vm_size = "Standard_D8s_v3", min_count = 1, max_count = 3 }',
+            "  batch = {",
+            '    vm_size   = "Standard_E4ds_v4" # memory heavy',
+            "    min_count = 0",
+            "    max_count = 4",
+            '    node_labels = { "workload" = "batch" }',
+            "  }",
+            "}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDSv3Family", 0, 40), ("cores", 0, 288),
+                     ("standardDDSv4Family", 0, 10), ("standardEDSv4Family", 0, 32)],
+        "expect": [
+            "[!] standardDSv3Family quota in eastus: 40 of 40 vCPUs free, 2-5 × Standard_D4s_v3, gpu-ish 1-3 × Standard_D8s_v3 needs 44 at the node pools' maximum",
+            "[✓] standardEDSv4Family quota in eastus: 32 of 32 vCPUs free (batch 0-4 × Standard_E4ds_v4 needs up to 16)",
+            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, gpu-ish 1-3 × Standard_D8s_v3, batch 0-4 × Standard_E4ds_v4 plus Postgres needs up to 62)",
+        ],
+        "reject": ["[✗] standardDSv3Family"],
+    },
+    {
+        "name": "an additional_node_pools map on one line warns and checks the default pool only",
+        "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3] + [
+            'additional_node_pools = { big = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 } }',
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": USAGE_DEFAULT,
+        "expect": [
+            "additional_node_pools is not in a shape preflight can read",
+            "[!] standardDSv3Family quota in eastus: 16 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 20 at the node pools' maximum",
+        ],
+    },
+    {
+        # The v1 Burstable Postgres SKU keeps the standardBSFamily shortcut; a
+        # B*_v2 node size takes the generic transform, and Azure's lowercase
+        # "sv2" still matches. Both checks share the one list-usage call.
+        "name": "B-series v2 node pools use their own quota family",
+        "tfvars_extra": "\n".join([
+            'postgres_sku_name           = "B_Standard_B1ms"',
+            'default_node_pool_vm_size   = "Standard_B4s_v2"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardBSFamily", 0, 10), ("standardBsv2Family", 0, 20), ("cores", 0, 100)],
+        "expect": [
+            "[✓] standardBSFamily quota in eastus: 10 of 10 vCPUs free (B_Standard_B1ms needs 1)",
+            "[✓] standardBSv2Family quota in eastus: 20 of 20 vCPUs free (1-2 × Standard_B4s_v2 needs up to 8)",
+        ],
+        "reject": ["reports no"],
+        "call_counts": {"vm list-usage": 1},
+    },
+    {
+        # A failed list-usage call is not a missing quota row. It warns once and
+        # the node pool check does not ask again.
+        "name": "a failed quota read warns once and skips the quota checks",
+        "tfvars_extra": NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "expect": ["[!] Could not read Compute quotas in eastus — skipping the quota checks"],
+        "reject": ["reports no", "quota in eastus:"],
+        "call_counts": {"vm list-usage": 1},
+        "output_counts": {"Could not read Compute quotas": 1},
+    },
+    {
+        "name": "an attached cluster needs no node pool quota",
+        "tfvars_extra": "create_cluster = false\n" + NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "vm_usage": USAGE_DEFAULT,
+        "expect": ["[✓] create_cluster = false — no node pool quota required"],
+        "reject": ["standardDSv3Family quota", "cores quota"],
+    },
+    {
+        # redis_location moves only the cluster, so that is the region the
+        # offering check has to ask about.
+        "name": "the Managed Redis region check follows redis_location",
+        "tfvars_extra": 'redis_location = "eastus2"',
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US 2", "West US 2"],
+        "expect": ["[✓] Azure Managed Redis is offered in eastus2"],
+        "reject": ["offered in eastus (", "[✗] Azure Managed Redis"],
+    },
+    {
+        "name": "a redis_location that does not offer Managed Redis fails",
+        "tfvars_extra": 'redis_location = "eastus2"',
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US"],
+        "expect": ["[✗] Azure Managed Redis is not offered in eastus2"],
+    },
+    {
+        "name": "a redis_location that is a display name warns instead of passing silently",
+        "tfvars_extra": 'redis_location = "East US"',
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US"],
+        "expect": ["is not a region name (such as eastus) — skipping the Managed Redis region check"],
+        "reject": ["Azure Managed Redis is"],
+    },
+    {
+        "name": "Managed Redis is checked in location when redis_location is unset",
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US"],
+        "expect": ["[✓] Azure Managed Redis is offered in eastus"],
+    },
+    {
+        # A custom domain replaces the cloudapp.azure.com name, so a missing
+        # dns_label is the expected shape, not something to flag.
+        "name": "a custom domain does not warn about a missing dns_label",
+        "tfvars_extra": 'langsmith_domain = "ls.example.com"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] Custom domain ls.example.com — no public IP DNS label to check"],
+        "reject": ["dns_label not set"],
+    },
+    {
+        # With no sizing_profile the chart default (3500m / 12Gi) applies, and a
+        # D4's allocatable clears it on both axes.
+        "name": "an attached cluster with a node big enough for ClickHouse passes",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE, D4_NODE],
+        "expect": ["[✓] ClickHouse (chart default: 3500m / 12288Mi) fits — the largest node allocates 3860m / 14644Mi"],
+    },
+    {
+        "name": "an attached cluster with no node big enough for ClickHouse fails",
+        "tfvars_extra": ATTACHED + '\nsizing_profile = "production-large"',
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks-admin",
+        "nodes": [D2_NODE, D4_NODE],
+        "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 3860m / 14644Mi, and the production-large sizing requests 4000m / 16384Mi"],
+        "exit_code": 1,
+    },
+    {
+        # A node that could hold the pod but is cordoned or NotReady is no
+        # evidence it ever will, so it is not the one measured.
+        "name": "a cordoned or NotReady large node does not count toward ClickHouse capacity",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE, node("15820m", "59Gi", ready=False),
+                  node("15820m", "59Gi", unschedulable=True)],
+        "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 1900m / 5039Mi"],
+    },
+    {
+        "name": "a kubectl context on another cluster skips the ClickHouse capacity check",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "some-other-aks",
+        "nodes": [D16_NODE],
+        "expect": ["[!] kubectl context is 'some-other-aks', not 'platform-aks', so ClickHouse capacity is unchecked"],
+        "reject_calls": ["kubectl get nodes"],
+    },
+    {
+        "name": "unreachable nodes leave ClickHouse capacity unchecked",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "expect": ["[!] Could not read nodes from 'platform-aks', so ClickHouse capacity is unchecked"],
+    },
+    {
+        "name": "managed pools on an attached cluster skip the ClickHouse capacity check",
+        "tfvars_extra": ATTACHED + "\nexisting_cluster_node_pools_managed = true",
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE],
+        "expect": ["[✓] existing_cluster_node_pools_managed = true — Terraform adds the large pool"],
+        "reject_calls": ["kubectl get nodes"],
+    },
+    {
+        "name": "external ClickHouse skips the capacity check",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE],
+        "expect": ["[✓] clickhouse_source = external — no ClickHouse pod to schedule"],
+        "reject_calls": ["kubectl get nodes"],
+    },
+    # ── Customer-managed keys (section 12) ──────────────────────────────────
+    {
+        "name": "customer-managed keys: nothing set runs no check",
+        "ca_all": ALL_GOOD,
+        "reject": ["Customer-managed keys"],
+        "reject_calls": ["disk-encryption-set show", "keyvault show --name", "identity show --ids"],
+    },
+    {
+        "name": "a disk encryption set in another region fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_location": "westus",
+        "expect": [
+            "[✗] aks_disk_encryption_set_id is in westus, and the cluster is created in eastus",
+        ],
+        "expect_calls": ["disk-encryption-set show --ids /subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a disk encryption set in the cluster's region passes, and an unreadable one warns",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_location": "East US",
+        "expect": ["[✓] aks_disk_encryption_set_id: the set is in eastus, the cluster's region"],
+        "reject": ["[✗] aks_disk_encryption_set_id"],
+    },
+    {
+        "name": "location left at its default (eastus) is the cluster's region for the set check",
+        "ca_all": ALL_GOOD,
+        "tfvars_no_location": True,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_location": "eastus",
+        "expect": ["[✓] aks_disk_encryption_set_id: the set is in eastus, the cluster's region"],
+        "reject": ["[✗] aks_disk_encryption_set_id"],
+    },
+    {
+        "name": "an unreadable disk encryption set warns and does not fail",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'aks_disk_encryption_set_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-1"',
+        "des_fail": True,
+        "expect": ["[!] aks_disk_encryption_set_id: the set could not be read"],
+        "reject": ["[✗] aks_disk_encryption_set_id"],
+    },
+    {
+        "name": "a key vault without purge protection fails, and the identities are read",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'postgres_customer_managed_key_id          = "https://kv-keys.vault.usgovcloudapi.net/keys/pg-key"',
+            'postgres_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pg-cmk"',
+            'storage_customer_managed_key_id           = "https://kv-keys.vault.usgovcloudapi.net/keys/blob-key/0123456789abcdef"',
+            'storage_customer_managed_key_identity_id  = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_purge_protection": "false",
+        "expect": [
+            "[✗] postgres_customer_managed_key_id: the vault kv-keys has purge protection off",
+            "[✗] storage_customer_managed_key_id: the vault kv-keys has purge protection off",
+            "az keyvault update --name kv-keys --enable-purge-protection true",
+            "[✓] postgres_customer_managed_key_identity_id: the identity resolves",
+            "[✓] storage_customer_managed_key_identity_id: the identity resolves",
+        ],
+        "expect_calls": ["keyvault show --name kv-keys --query properties.enablePurgeProtection"],
+        "reject_calls": ["keyvault show --hsm-name"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a key vault that never had purge protection reports it unset, and fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'storage_customer_managed_key_id          = "https://kv-keys.vault.usgovcloudapi.net/keys/blob-key"',
+            'storage_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_purge_protection": "",
+        "expect": [
+            "[✗] storage_customer_managed_key_id: the vault kv-keys has purge protection off",
+        ],
+        "reject": ["[!] storage_customer_managed_key_id: the vault kv-keys could not be read"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a Managed HSM without purge protection fails with the update-hsm command",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'storage_customer_managed_key_id          = "https://hsm-keys.managedhsm.usgovcloudapi.net/keys/blob-key"',
+            'storage_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_purge_protection": "",
+        "expect": [
+            "[✗] storage_customer_managed_key_id: the vault hsm-keys has purge protection off",
+            "az keyvault update-hsm --hsm-name hsm-keys --enable-purge-protection true",
+        ],
+        "reject": ["az keyvault update --name hsm-keys"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a Managed HSM key is read with --hsm-name, and an unreadable vault or identity warns",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'storage_customer_managed_key_id          = "https://hsm-keys.managedhsm.usgovcloudapi.net/keys/blob-key"',
+            'storage_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_fail": True,
+        "identity_fail": True,
+        "expect": [
+            "[!] storage_customer_managed_key_id: the vault hsm-keys could not be read",
+            "[!] storage_customer_managed_key_identity_id: the identity could not be read",
+        ],
+        "expect_calls": ["keyvault show --hsm-name hsm-keys --query properties.enablePurgeProtection"],
+        "reject": ["[✗] storage_customer_managed_key"],
     },
 ]
 
@@ -411,13 +1746,21 @@ def build_case(case, index):
     (infra / "scripts").mkdir(parents=True)
     shutil.copy2(SOURCE_SCRIPT, infra / "scripts" / "preflight.sh")
 
-    identifier = case.get("tfvars_identifier", '"-dev"')
-    (infra / "terraform.tfvars").write_text(
-        f'subscription_id = "{SUB}"\n'
-        'location    = "eastus"\n'
-        f"identifier  = {identifier}\n"
-        f"{case.get('tfvars_extra', '')}\n"
-    )
+    # tfvars_name_prefix = None omits the key, so a case can write the legacy
+    # identifier instead and exercise the fallback.
+    name_prefix = case.get("tfvars_name_prefix", '"-dev"')
+    lines = [
+        f'subscription_id = "{case.get("tfvars_sub", SUB)}"',
+    ]
+    # tfvars_no_location omits the key, so a case runs on the variable's default.
+    if not case.get("tfvars_no_location"):
+        lines.append('location    = "eastus"')
+    if name_prefix is not None:
+        lines.append(f"name_prefix = {name_prefix}")
+    if "tfvars_identifier" in case:
+        lines.append(f"identifier  = {case['tfvars_identifier']}")
+    lines.append(case.get("tfvars_extra", ""))
+    (infra / "terraform.tfvars").write_text("\n".join(lines) + "\n")
     (infra / "secrets.auto.tfvars").write_text('langsmith_license_key = "lsv2_pt_stub"\n')
 
     fixture = root / "fixtures"
@@ -446,9 +1789,54 @@ def build_case(case, index):
         (fixture / "held").write_text(case["held"])
     if "pg_caps_raw" in case:
         (fixture / "pg_caps.json").write_text(case["pg_caps_raw"])
+    if "name_availability" in case:
+        (fixture / "name_availability.json").write_text(json.dumps(case["name_availability"]))
+    if "vm_usage" in case:
+        (fixture / "vm_usage").write_text(
+            "".join(f"{name}\t{used}\t{limit}\n" for name, used, limit in case["vm_usage"])
+        )
+    if "amr_regions" in case:
+        (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
+    if "nodes" in case:
+        (fixture / "nodes.json").write_text(json.dumps({"items": case["nodes"]}))
+    for key, name in (
+        ("role_assignments", "role_assignments.json"),
+        ("direct_assignments", "direct_assignments.json"),
+        ("role_definition", "role_definition.json"),
+        ("ca_rt", "ca_rt.json"),
+    ):
+        if key in case:
+            (fixture / name).write_text(json.dumps(case[key]))
+    if "vm_skus" in case:
+        (fixture / "vm_skus").write_text(
+            "".join(f"{size}\t{family}\n" for size, family in case["vm_skus"])
+        )
+    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment",
+                "kube_ctx", "subnet_route_table", "dig_soa",
+                "des_location", "kv_purge_protection", "identity_principal"):
+        if key in case:
+            (fixture / key).write_text(str(case[key]))
+
+    # Preflight reads the local state file when no backend is initialized, which
+    # is the state a customer running `make preflight` before `make init` is in.
+    if "tfstate_names" in case or "tfstate_dns_labels" in case:
+        resources = [
+            {"type": "stub", "instances": [{"attributes": {"name": value}}]}
+            for value in case.get("tfstate_names", [])
+        ] + [
+            {"type": "azurerm_public_ip",
+             "instances": [{"attributes": {"domain_name_label": value}}]}
+            for value in case.get("tfstate_dns_labels", [])
+        ]
+        (infra / "terraform.tfstate").write_text(
+            json.dumps({"version": 4, "resources": resources})
+        )
+    if "group_ids" in case:
+        (fixture / "group_ids").write_text("\n".join(case["group_ids"]))
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
-                 "assignments_fail", "pg_caps_fail", "pg_caps_stderr"):
+                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr",
+                 "group_missing", "subnet_show_fail", "des_fail", "kv_fail", "identity_fail"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 
@@ -477,6 +1865,10 @@ def run_case(case, index):
     calls = calls_path.read_text() if calls_path.exists() else ""
 
     problems = []
+    if "exit_code" in case and proc.returncode != case["exit_code"]:
+        problems.append(
+            f"exit code was {proc.returncode}, expected {case['exit_code']}"
+        )
     for needle in case.get("expect", []):
         if needle not in output:
             problems.append(f"missing: {needle}")
@@ -489,6 +1881,14 @@ def run_case(case, index):
     for needle in case.get("reject_calls", []):
         if needle in calls:
             problems.append(f"unexpectedly requested: {needle}")
+    for needle, want in case.get("call_counts", {}).items():
+        got = calls.count(needle)
+        if got != want:
+            problems.append(f"requested {needle} {got} time(s), expected {want}")
+    for needle, want in case.get("output_counts", {}).items():
+        got = output.count(needle)
+        if got != want:
+            problems.append(f"printed {needle} {got} time(s), expected {want}")
 
     if "assert_subject" in case:
         body_path = fixture / "last_body.json"
@@ -499,10 +1899,35 @@ def run_case(case, index):
             if got != case["assert_subject"]:
                 problems.append(f"Subject was {got}, expected {case['assert_subject']}")
 
+    # The stub answers from this file's own ACTIONS list rather than from the
+    # request, so nothing above notices when the script asks about an action the
+    # deployment never performs. These two read the body the script actually sent.
+    if "assert_actions" in case or "reject_actions" in case:
+        body_path = fixture / "last_body.json"
+        if not body_path.exists():
+            problems.append("no checkAccess body was sent")
+        else:
+            sent = {a["Id"] for a in json.loads(body_path.read_text())["Actions"]}
+            for action in case.get("assert_actions", []):
+                if action not in sent:
+                    problems.append(f"never asked about: {action}")
+            for action in case.get("reject_actions", []):
+                if action in sent:
+                    problems.append(f"unexpectedly asked about: {action}")
+
+    if "assert_groups" in case:
+        body_path = fixture / "last_body.json"
+        if not body_path.exists():
+            problems.append("no checkAccess body was sent")
+        else:
+            got = json.loads(body_path.read_text())["Subject"]["Attributes"].get("Groups")
+            if got != case["assert_groups"]:
+                problems.append(f"Groups were {got}, expected {case['assert_groups']}")
+
     if problems:
         rendered = [
             line for line in output.splitlines()
-            if any(mark in line for mark in ("[✓]", "[!]", "[✗]"))
+            if any(mark in line for mark in ("[✓]", "[!]", "[✗]", "[?]"))
             and "Microsoft." not in line.split("]")[-1][:30]
         ]
         problems.append("--- rendered ---")

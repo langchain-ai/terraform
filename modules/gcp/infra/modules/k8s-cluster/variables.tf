@@ -90,6 +90,12 @@ variable "machine_type" {
   default     = "e2-standard-4"
 }
 
+variable "spot" {
+  description = "Create the primary node pool from Spot VMs. False omits the setting so an existing on-demand pool is left alone."
+  type        = bool
+  default     = false
+}
+
 variable "disk_size_gb" {
   description = "Disk size in GB for nodes"
   type        = number
@@ -139,7 +145,7 @@ variable "sandbox_host_disk_size_gb" {
 }
 
 variable "sandbox_host_ephemeral_local_ssd_count" {
-  description = "Number of local SSDs backing sandbox-host ephemeral storage, used by the JuiceFS host cache. 0 keeps ephemeral storage on the boot disk."
+  description = "Number of local SSDs that back kubelet and container runtime ephemeral storage on sandbox-host nodes. The JuiceFS host cache stays on the boot disk. 0 keeps ephemeral storage on the boot disk."
   type        = number
   default     = 0
 }

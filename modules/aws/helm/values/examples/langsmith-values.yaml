@@ -42,9 +42,11 @@ config:
   #   langsmith-jwt-secret        → jwt_secret
   #   langsmith-admin-password    → initial_org_admin_password
   #   sandbox-callback-signing-jwk → sandbox_callback_signing_jwk (sandboxes)
+  #   engine-encryption-key       → engine_encryption_key        (Engine)
+  #   engine-usage-signing-secret → engine_usage_signing_secret  (Engine)
   #
   # Required manually before enabling addons (see each addon file for instructions):
-  #   agent-builder-encryption-key  → agent_builder_encryption_key  (agent-builder addon)
+  #   agent-builder-encryption-key  → agent_builder_encryption_key  (Fleet; historical names retained)
   #   insights-encryption-key       → insights_encryption_key        (insights addon)
   existingSecretName: "langsmith-config"
   basicAuth:

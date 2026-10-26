@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Google Kubernetes Engine (GKE), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`, never `0.18`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -58,6 +58,7 @@ Terraform enables these automatically on first apply. To enable manually:
 ```bash
 gcloud services enable \
   container.googleapis.com \
+  compute.googleapis.com \
   sqladmin.googleapis.com \
   redis.googleapis.com \
   storage.googleapis.com \
@@ -66,21 +67,31 @@ gcloud services enable \
   certificatemanager.googleapis.com \
   servicenetworking.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  logging.googleapis.com \
+  monitoring.googleapis.com \
   --project <your-project-id>
 ```
 
 ### Required IAM roles
 
-| Role | Purpose |
-|------|---------|
-| `roles/container.admin` | Create and manage GKE clusters |
-| `roles/compute.networkAdmin` | Create VPC, subnets, firewall rules |
-| `roles/iam.serviceAccountAdmin` | Create service accounts for Workload Identity |
-| `roles/cloudsql.admin` | Create and manage Cloud SQL instances |
-| `roles/redis.admin` | Create and manage Memorystore Redis |
-| `roles/storage.admin` | Create GCS buckets and lifecycle policies |
-| `roles/resourcemanager.projectIamAdmin` | Grant IAM bindings during provisioning |
-| `roles/servicenetworking.networksAdmin` | Create private service connections (required for Cloud SQL + Redis) |
+The identity running Terraform needs `roles/owner`, or a set of predefined roles that includes `roles/resourcemanager.projectIamAdmin`. `roles/editor` alone fails at the first IAM binding. For the full role list, the IAM the deployment creates, and how to test access before the first apply, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+### Required outbound access
+
+LangSmith needs HTTPS egress from the cluster to **`beacon.langchain.com`** for license verification and usage reporting, unless it runs in [offline mode](https://docs.langchain.com/langsmith/self-host-egress). The module's nodes are private (`enable_private_nodes = true`) and reach the internet through the Cloud NAT it creates, and it adds no egress firewall rules, so a stock deployment works. What breaks it is an egress policy added around the module: a deny-by-default egress firewall rule or firewall policy, or a proxy. Permit `beacon.langchain.com:443` there before the first deploy.
+
+Beacon is not the only destination such a policy has to allow. The cluster also pulls images: LangSmith's from `docker.io`, and the add-ons Terraform installs from their own registries. It reaches Let's Encrypt when it issues certificates.
+
+With an `lcl_` license key this is a startup dependency, not only a reporting one. `platform-backend` exchanges the key with Beacon before it starts and caches the result in Redis. A first install has no cache, so when Beacon is unreachable `platform-backend` refuses to start, logging `failed to fetch license and no cached license available`, and the services behind it crash-loop. A later outage falls back to the cached license, but only until that license expires: it carries its own expiry date, after which `platform-backend` needs Beacon again.
+
+To check the path from inside the cluster before the Helm deploy:
+
+```bash
+kubectl run beacon-check --rm -i --restart=Never --image=curlimages/curl -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' https://beacon.langchain.com
+```
+
+Any HTTP status, such as `200` or `404`, means the cluster reached Beacon. `000` is not a status: curl made no connection at all, which means a timeout, a refused connection or a TLS failure, so something on the path is dropping or intercepting the traffic. Allow Beacon by name, with an FQDN or application rule. The IP table on LangSmith Cloud's documentation page lists LangSmith Cloud's own outbound addresses, not Beacon's, so it is no substitute.
 
 ### Authenticate
 
@@ -114,7 +125,7 @@ gcp/
 │       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
 │       ├── secrets/        ← Secret Manager secrets for credentials (optional via flags)
 │       ├── smithdb/        ← SmithDB metastore, object-store bucket, Workload Identity SA (optional)
-│       └── smithdb-nodes/  ← SmithDB Local SSD + compute GKE node pools (optional)
+│       └── smithdb-nodes/  ← SmithDB cache + compute GKE node pools (optional)
 │   └── scripts/
 │       ├── _common.sh          ← Shared helpers (tfvar parser, color/status helpers)
 │       ├── preflight.sh        ← Pre-Terraform tooling/auth/API checks
@@ -129,6 +140,8 @@ gcp/
     │   ├── get-kubeconfig.sh     ← gcloud get-credentials wrapper
     │   ├── init-values.sh        ← Generates values-overrides.yaml from Terraform outputs
     │   ├── preflight-check.sh    ← Pre-deploy validation (tools, cluster, values)
+    │   ├── smithdb-migration-job-start.sh ← Sets up the SmithDB historical migration (make smithdb-migration-job-start)
+    │   ├── smithdb-migration-job-end.sh   ← Removes the migration setup (make smithdb-migration-job-end)
     │   └── uninstall.sh          ← Helm uninstall + operator resource cleanup
     └── values/
         ├── values.yaml                    ← GCP base Helm values (Gateway, GCS HMAC)
@@ -368,7 +381,7 @@ helm upgrade langsmith langchain/langsmith \
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |
 | `langsmith_license_key` | `""` | no | License key — use `TF_VAR_langsmith_license_key` |
-| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.16.0` line; must be on the 0.16 line) |
+| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.17.0` line; must be on the 0.17 line) |
 | `install_ingress` | `true` | no | Install Envoy Gateway via Terraform |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy`, `istio`, or `other` |
 | `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing` |
@@ -392,17 +405,92 @@ helm upgrade langsmith langchain/langsmith \
 |---|---|---|
 | `enable_gcp_iam_module` | `true` | Wires `modules/iam` for Workload Identity + bucket IAM binding |
 | `enable_secret_manager_module` | `false` | Wires `modules/secrets` for Secret Manager bootstrap secret |
+| `grant_project_secret_accessor` | `false` | Grants the LangSmith service account `roles/secretmanager.secretAccessor` on the whole project. No module component needs it |
 | `enable_dns_module` | `false` | Wires `modules/dns` for Cloud DNS + managed cert |
 | `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
 | `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |
 | `dns_create_certificate` | `true` | Create a Google-managed cert when DNS module is enabled |
-| `enable_smithdb` | `false` | Wires `modules/smithdb` + `modules/smithdb-nodes` — see [SmithDB](#smithdb-chart-016) and [SMITHDB.md](SMITHDB.md) |
+| `enable_smithdb` | `false` | Wires `modules/smithdb` + `modules/smithdb-nodes` — see [SmithDB](#smithdb-chart-017) and [SMITHDB.md](SMITHDB.md) |
 
 ---
 
-## SmithDB (chart 0.16+)
+## Sandboxes (chart 0.17)
 
-SmithDB is the in-chart columnar store and query engine that runs alongside ClickHouse in the LangSmith v16 release. It runs in the LangSmith namespace as part of the same Helm release - it cannot be split into its own namespace or cluster.
+Sandboxes run agent code in Firecracker microVMs on a dedicated `sandbox-host` node
+pool. The sandbox file system is JuiceFS: data goes to the LangSmith GCS bucket, and
+metadata goes to a dedicated Memorystore Redis.
+
+### Requirements
+
+- Standard GKE. Autopilot cannot run the nested-virtualization pool.
+- `enable_gcp_iam_module = true`.
+- A machine type with nested virtualization, such as N2.
+
+### Enable
+
+1. Set `enable_sandboxes = true` in `terraform.tfvars`.
+2. Run `source infra/scripts/setup-env.sh`. The script creates the callback signing key.
+3. Run `make deploy-all`.
+
+### Host size
+
+The machine type follows `sizing_profile` unless you set `sandbox_host_machine_type`:
+
+| `sizing_profile` | `sandbox_host_machine_type` |
+|---|---|
+| `production`, `production-large` | `n2-standard-32` |
+| every other profile | `n2-standard-8` |
+
+- The pool is regional, so `sandbox_host_node_count`, `sandbox_host_min_node_count`
+  and `sandbox_host_max_node_count` are per zone.
+- `sandbox_host_min_node_count` defaults to `0`. The autoscaler keeps only the nodes
+  that sandbox-host needs: one node for each replica, and the chart default is 1
+  replica.
+- After a node or zone failure, Kubernetes waits 5 minutes (the default unreachable
+  toleration) and then replaces the sandbox-host pod. The autoscaler adds a node in
+  a healthy zone, and the node pulls the sandbox-host image. Recovery takes about
+  10 minutes. Running sandboxes on the failed node stop.
+- Set `sandbox_host_min_node_count = 1` to keep an idle node in every zone. Recovery
+  is then faster, because no node creation is necessary. Each extra zone costs one
+  idle node.
+- The `juicefs-format` Job prefers a sandbox-host node, but it can run on any Linux
+  node. It does not wait for a sandbox-host node when the pool is at 0 nodes.
+- sandbox-host has the pod annotation
+  `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so the autoscaler does
+  not remove a node that runs sandboxes.
+- `sandbox_host_ephemeral_local_ssd_count` (default `0`) adds local SSDs for kubelet
+  and container runtime storage. The JuiceFS host cache stays at
+  `/var/cache/juicefs` on the boot disk, so these disks do not speed up sandbox file
+  I/O. Compute Engine accepts only specific counts. An N2 machine with 22-40 vCPU
+  takes 4, 8, 16 or 24.
+
+### Identity
+
+- `sandbox-host` runs on the host network. GKE does not give Workload Identity to
+  host-network pods, so the JuiceFS mount uses the `<name>-sbox-node` service
+  account. Terraform grants that account `roles/storage.objectAdmin` on the bucket,
+  with an IAM condition that limits it to objects under `<sandbox_juicefs_name>/`.
+  Sandbox nodes run untrusted code, and the bucket also holds trace data.
+- The `juicefs-format` Job uses the pod network and the `langsmith-sandbox-host`
+  Workload Identity binding.
+- `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each
+  deploy. Do not set `sandbox_host_image_tag`.
+
+### Verify
+
+```bash
+kubectl get jobs -n langsmith -l app.kubernetes.io/component=juicefs-format
+kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
+kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -i "juicefs mount ready"
+```
+
+To upgrade from chart 0.16, see [MIGRATION-0.16-to-0.17.md](../../MIGRATION-0.16-to-0.17.md).
+
+---
+
+## SmithDB (chart 0.17)
+
+SmithDB is the in-chart columnar store and query engine that runs alongside ClickHouse on LangSmith chart 0.17. It runs in the LangSmith namespace as part of the same Helm release - it cannot be split into its own namespace or cluster.
 
 See [SMITHDB.md](SMITHDB.md) for the full deployment and staged-rollout guide. The rest of this section covers the GCP-specific design decisions.
 
@@ -410,22 +498,22 @@ Setting `enable_smithdb = true` provisions four things:
 
 | Resource | Module | Notes |
 |---|---|---|
-| Cloud SQL Postgres metastore | `modules/smithdb` | Dedicated instance on a private IP, `POSTGRES_18` by default |
+| Cloud SQL Postgres metastore | `modules/smithdb` | Dedicated instance on a private IP, `POSTGRES_18` by default, with a tier that follows `smithdb_sizing` |
 | GCS object-store bucket | `modules/smithdb` | Single-region, uniform access, no lifecycle deletes |
 | Workload Identity service account | `modules/smithdb` | `roles/storage.objectAdmin` on that bucket only |
-| Two GKE node pools | `modules/smithdb-nodes` | One Local SSD-backed for the cache, one for compute |
+| Two GKE node pools | `modules/smithdb-nodes` | A cache pool and a compute pool; none for `smithdb_sizing = "minimal"` |
 
 ### Requirements and constraints
 
-1) **Postgres 18 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own. On a module-created Cloud SQL instance, `smithdb_metastore_use_auth_proxy = true` runs a Cloud SQL Auth Proxy sidecar so the instance can stay `ENCRYPTED_ONLY`; AlloyDB uses the same shape through the external path. See [SMITHDB.md](SMITHDB.md) for both.
+1) **Postgres 18 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own. On a module-created Cloud SQL instance, a Cloud SQL Auth Proxy sidecar (the default) keeps the instance at `ENCRYPTED_ONLY`. AlloyDB uses the same shape through the external path. See [SMITHDB.md](SMITHDB.md) for both.
 
 2) **A dedicated object-storage bucket, single-region, in the cluster's region.** Multi-region and dual-region buckets add replication cost and unpredictable tail latency on segment reads. The module deliberately creates no object-expiry lifecycle rules and no versioning: SmithDB owns the lifecycle of its own segments, and expiring them independently makes data unavailable. Compaction already reclaims dead segments.
 
-3) **GKE Standard, not Autopilot.** Autopilot manages its own node pools, so the dedicated Local SSD pools do not exist there and SmithDB pods would sit Pending against a `nodeSelector` that never matches. The module fails at plan time rather than letting that happen.
+3) **GKE Standard, not Autopilot.** Autopilot manages its own node pools, so the dedicated SmithDB pools do not exist there. SmithDB pods would then stay Pending against a `nodeSelector` that never matches. The module fails at plan time rather than letting that happen.
 
-4) **Local SSD-backed ephemeral storage, not raw block.** The cache pool uses `ephemeral_storage_local_ssd_config`, which is the mode that makes the disks part of the filesystem kubelet reports as allocatable `ephemeral-storage` and that backs `emptyDir`. Raw block Local SSD does not, and a disk mounted at an arbitrary host path does not back `emptyDir` at all - the cache would silently fall back to the boot disk.
+4) **Local SSD-backed ephemeral storage, not raw block.** In `local-ssd` mode, the cache pool uses `ephemeral_storage_local_ssd_config`. That mode makes the disks part of the filesystem that kubelet reports as allocatable `ephemeral-storage`, and that filesystem backs `emptyDir`. Raw block Local SSD does not. A disk mounted at an arbitrary host path does not back `emptyDir` at all. The cache then goes to the boot disk with no error.
 
-5) **Machine type generation changes the disk count semantics.** N2/N2D take an explicit `smithdb_instance_store_local_ssd_count` (375 GB per disk). C3/C4/Z3 `-lssd` types have a fixed count implied by the machine type and require `smithdb_instance_store_local_ssd_count = 0`.
+5) **Machine type generation changes the disk count semantics.** N2/N2D take an explicit `smithdb_instance_store_local_ssd_count` (375 GB per disk). C3 and Z3 `-lssd` types have a fixed count implied by the machine type and require `smithdb_instance_store_local_ssd_count = 0`. C4 needs a Hyperdisk boot disk, which the SmithDB pools do not use.
 
 6) **Pin the pool zones.** The cluster is regional, so an unpinned pool tries every zone in the region and fails if the machine type or disk count is unavailable in any of them. Check availability, then set `smithdb_node_locations`.
 
@@ -441,25 +529,28 @@ Adding a private `googleapis.com` DNS zone would pin resolution to `private.goog
 
 ### Chart version
 
-SmithDB needs chart 0.16 or newer. That is already the line `deploy.sh` pins, and it refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
+SmithDB on this module needs chart 0.17. `deploy.sh` pins the 0.17 line and refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
 
 ```bash
-CHART_VERSION=0.16.3 make deploy
+CHART_VERSION=0.17.0 make deploy
 ```
 
 List what is published with `helm search repo langchain/langsmith --versions`.
 
-### Staged rollout
+### Sizing and staged rollout
 
-The services deploy with every LangSmith integration gate off. Advance them one at a time through `smithdb_ingestion_enabled`, then `smithdb_migration_enabled`, then `smithdb_query_enabled` in `infra/terraform.tfvars`, applying and validating each stage separately. Terraform enforces that migration and query both require ingestion. ClickHouse stays enabled throughout v16.
+`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) in `infra/terraform.tfvars` set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
 
-The historical ClickHouse to SmithDB backfill is owned by LangChain Product/Engineering; this module only wires the gate and the credentials it needs. Enabling it renders the migration Job plus an in-chart taskdb Postgres StatefulSet for migration task state, backed by the Terraform-created `smithdb-taskdb` secret. The Job requests 8 CPU and is deliberately left unpinned, so it lands on the core node pool - make sure that pool has room.
+The historical migration (backfill) is the one stage with its own make targets:
 
-See [SMITHDB.md](SMITHDB.md) for the per-stage validation steps.
+```bash
+make smithdb-migration-job-start   # TaskDB, sizing; sets smithdb_migration_enabled = true
+make deploy-all                    # make apply, make init-values, make deploy
+make smithdb-migration-job-end     # once the Job is Complete; sets smithdb_migration_enabled = false
+make deploy-all
+```
 
-### Sizing
-
-At chart defaults the three cache workloads request 4 CPU each and 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage, so one `n2-standard-16` with the default 2 Local SSDs (750 GB raw) holds all three with headroom. The values overlay in `helm/values/examples/` carries scheduling only and leaves sizing to the chart; if you override the resource requests upward, raise `smithdb_instance_store_local_ssd_count` to match or replicas will sit Pending. Legal counts for N2 at 12-20 vCPU are 2, 4, 8, 16 and 24 - not 3.
+See [SMITHDB.md](SMITHDB.md) for the sizing table, the stages, and the upgrade from chart 0.16.
 
 ---
 

@@ -7,16 +7,21 @@
 # Full deploy (helm):      make deploy-all
 # Manage secrets:          make keyvault
 # Where am I?              make status
+# SmithDB migration:       make smithdb-migration-job-start / smithdb-migration-job-end, then apply, init-values, deploy
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-chart-image-keys setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
+        smithdb-migration-job-start smithdb-migration-job-end \
         clean clean-force
 
 INFRA_DIR := infra
 HELM_DIR  := helm
+# The Terraform root the terraform targets run in. LANGSMITH_INFRA_DIR points it
+# (and the scripts) at a root outside this repo, such as a wrapper module.
+TF_DIR    := $(or $(LANGSMITH_INFRA_DIR),$(INFRA_DIR))
 
 help: ## Show available targets
 	@echo ""
@@ -33,6 +38,7 @@ help: ## Show available targets
 	@echo ""
 	@echo "    Note: make apply runs three targeted stages. ARGS is passed to each"
 	@echo "    stage, so it suits flags like -var / -parallelism / -refresh=false."
+	@echo "    Each stage prompts for confirmation; ARGS=\"-auto-approve\" skips all three."
 	@echo "    To apply a saved plan or one module, use: make tf ARGS=\"apply tfplan\""
 	@echo ""
 	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
@@ -41,11 +47,23 @@ help: ## Show available targets
 	@echo "    make tf      ARGS=\"state list\"               # inspect infra state"
 	@echo ""
 
-quickstart: ## Interactive setup wizard — generates terraform.tfvars
-	$(INFRA_DIR)/scripts/quickstart.sh
+quickstart: ## Setup wizard — quick setup by default, all 10 sections on request (ARGS="--yes" skips the prompts)
+	$(INFRA_DIR)/scripts/quickstart.sh $(ARGS)
 
-test-quickstart: ## Unit-test the quickstart wizard's resume layer (no Azure, no prompts)
+test-quickstart: ## Unit-test the quickstart wizard's resume layer, --yes, and quick setup (no Azure)
 	$(INFRA_DIR)/scripts/test-quickstart-state.sh
+
+test-license-key: ## Unit-test the license key check shared by setup-env, k8s-secrets and keyvault set (no Azure)
+	$(INFRA_DIR)/scripts/test-license-key.sh
+
+test-images-block: ## Unit-test the images: block init-values writes for a mirror (no Azure)
+	$(INFRA_DIR)/scripts/test-langsmith-images-block.sh
+
+test-values-stamp: ## Unit-test the stamp check that stops make deploy on a values file generated from other tfvars (no Azure)
+	$(INFRA_DIR)/scripts/test-values-stamp.sh
+
+test-chart-image-keys: ## Unit-test the parser deploy.sh reads the chart's images block with, under pipefail (no Azure)
+	$(INFRA_DIR)/scripts/test-chart-image-keys.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh
@@ -68,16 +86,20 @@ test-preflight: ## Run the pre-flight tests (stubbed az, no Azure account needed
 	python3 $(INFRA_DIR)/scripts/test-preflight-rbac.py
 
 init: ## terraform init (infra)
-	terraform -chdir=$(INFRA_DIR) init $(ARGS)
+	terraform -chdir=$(TF_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.auto.tfvars exists
-	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
-	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
+	@bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(ARGS)
+	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
+	terraform -chdir=$(TF_DIR) plan $(ARGS)
 
-apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
-	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
+apply: ## terraform apply (infra) — three stages, each prompts for confirmation: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
+	@# The stage targets are this root's addresses; a wrapper module prefixes them.
+	@if [ -n "$(LANGSMITH_INFRA_DIR)" ]; then echo "make apply stages this repo's addresses; run terraform apply in $(LANGSMITH_INFRA_DIR) instead."; exit 1; fi
+	@bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(ARGS)
+	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(TF_DIR) apply $(ARGS) \
 		-target=azurerm_resource_group.resource_group \
 		-target=module.vnet \
 		-target=module.aks \
@@ -86,7 +108,7 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.blob \
 		-target=module.keyvault
 	@echo "→ Stage 2: Kubernetes bootstrap (namespace, secrets, cert-manager, KEDA)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(TF_DIR) apply $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
@@ -98,16 +120,17 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.k8s_bootstrap.helm_release.cert_manager \
 		-target=module.k8s_bootstrap.helm_release.keda
 	@echo "→ Stage 3: remaining resources (DNS zone, WAF, anything left in k8s bootstrap)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS)
+	terraform -chdir=$(TF_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — prompts for confirmation
-	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+	terraform -chdir=$(TF_DIR) destroy $(ARGS)
 
 destroy-force: ## terraform destroy without confirmation prompt (use after make uninstall)
-	terraform -chdir=$(INFRA_DIR) destroy -auto-approve $(ARGS)
+	terraform -chdir=$(TF_DIR) destroy -auto-approve $(ARGS)
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
-	terraform -chdir=$(INFRA_DIR) $(ARGS)
+	@case "$(firstword $(ARGS))" in plan|apply) bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(wordlist 2,$(words $(ARGS)),$(ARGS)) ;; esac
+	terraform -chdir=$(TF_DIR) $(ARGS)
 
 clean: ## Remove all local secrets and generated files (run after destroy)
 	$(INFRA_DIR)/scripts/clean.sh
@@ -123,7 +146,7 @@ seed-secrets: ## Write LangSmith app secrets into Key Vault (run after apply; ne
 kubeconfig: ## Fetch AKS credentials into ~/.kube/config
 	$(HELM_DIR)/scripts/get-kubeconfig.sh
 
-k8s-secrets: ## Create langsmith-config-secret from Key Vault (all 8 keys)
+k8s-secrets: ## Create langsmith-config-secret from Key Vault
 	cd $(INFRA_DIR) && bash scripts/create-k8s-secrets.sh
 
 # ── Pass 2+: Helm Deployment ─────────────────────────────────────────────────
@@ -131,11 +154,19 @@ k8s-secrets: ## Create langsmith-config-secret from Key Vault (all 8 keys)
 init-values: ## Generate Helm values from Terraform outputs (run after terraform apply)
 	$(HELM_DIR)/scripts/init-values.sh
 
-deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + sizing + addons)
+deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + addons + sizing)
 	$(HELM_DIR)/scripts/deploy.sh
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
+
+# ── SmithDB ───────────────────────────────────────────────────────────────────
+
+smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
+
+smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

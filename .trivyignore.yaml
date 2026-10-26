@@ -222,3 +222,48 @@ misconfigurations:
       by ingress/controller configuration. These rules are not open to arbitrary
       internet source ranges.
     expired_at: 2027-01-01
+
+  - id: AZU-0040
+    paths:
+      - "modules/azure/test/existing-aks-cluster/main.tf"
+    statement: |
+      Test fixture that maintainers apply to a throwaway subscription to exercise
+      the attach path. It keeps the starter posture of
+      modules/azure/infra/modules/k8s-cluster, which suppresses the same check.
+    expired_at: 2027-01-01
+
+  - id: AZU-0041
+    paths:
+      - "modules/azure/test/existing-aks-cluster/main.tf"
+    statement: |
+      Test fixture that maintainers apply to a throwaway subscription to exercise
+      the attach path. It keeps the starter posture of
+      modules/azure/infra/modules/k8s-cluster, which suppresses the same check.
+    expired_at: 2027-01-01
+
+  - id: AZU-0065
+    paths:
+      - "modules/azure/test/existing-aks-cluster/main.tf"
+    statement: |
+      Test fixture that maintainers apply to a throwaway subscription to exercise
+      the attach path. It keeps the starter posture of
+      modules/azure/infra/modules/k8s-cluster, which suppresses the same check.
+    expired_at: 2027-01-01
+
+  - id: AZU-0066
+    paths:
+      - "modules/azure/test/existing-aks-cluster/main.tf"
+    statement: |
+      Test fixture that maintainers apply to a throwaway subscription to exercise
+      the attach path. It keeps the starter posture of
+      modules/azure/infra/modules/k8s-cluster, which suppresses the same check.
+    expired_at: 2027-01-01
+
+  - id: AZU-0067
+    paths:
+      - "modules/azure/test/existing-aks-cluster/main.tf"
+    statement: |
+      Test fixture that maintainers apply to a throwaway subscription to exercise
+      the attach path. It keeps the starter posture of
+      modules/azure/infra/modules/k8s-cluster, which suppresses the same check.
+    expired_at: 2027-01-01

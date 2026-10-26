@@ -135,7 +135,7 @@ fi
 
 if [[ -n "$_cluster_name" ]]; then
   echo "Updating kubeconfig for cluster: $_cluster_name..."
-  aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
+  _use_cluster_kubeconfig "$_cluster_name" "$_region"
 else
   echo "NOTE: cluster name unavailable from Terraform output — kubeconfig left as is."
 fi
@@ -144,7 +144,7 @@ _ctx=$(kubectl config current-context 2>/dev/null) || _ctx=""
 if [[ -z "$_ctx" ]]; then
   echo "ERROR: no active kubectl context, and no cluster resolvable from Terraform." >&2
   echo "       Point kubectl at the target cluster first:" >&2
-  echo "         aws eks update-kubeconfig --name <cluster> --region <region>" >&2
+  echo "         source infra/scripts/set-kubeconfig.sh" >&2
   exit 1
 fi
 echo "  Active context: $_ctx"
@@ -234,7 +234,7 @@ kubectl delete clustersecretstore langsmith-ssm --ignore-not-found
 echo ""
 
 # ── Clean up operator-managed resources ──────────────────────────────────────
-# platform-backend creates agent-builder and LangGraph resources at runtime with
+# platform-backend creates Fleet and LangGraph resources at runtime with
 # no Helm owner reference. Target only LangSmith resources by label so workloads
 # from other teams sharing this namespace are not affected.
 # Bounded by --timeout so a pod that cannot terminate does not block the run

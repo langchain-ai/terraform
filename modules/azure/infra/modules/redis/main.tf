@@ -11,10 +11,14 @@
 #   classic used VNet subnet INJECTION; AMR doesn't support that, so the private
 #   equivalent is a Private Endpoint into the same redis subnet + a private DNS zone.
 #
-# Connection: rediss://:<url-encoded key>@<host>:10000 (TLS, OSS clustering policy).
-# LangSmith connects via redis.external.clusterSafeMode (standalone client to the
-# endpoint hostname — the cert matches the hostname; cluster node IPs would not).
+# Connection: TLS on port 10000. Client mode follows var.clustering_policy — OSSCluster
+# needs the cluster client, EnterpriseCluster the standalone client with clusterSafeMode.
+# Mismatched, every usage-limit check fails on MOVED and the ingest path returns 503.
 # ══════════════════════════════════════════════════════════════════════════════
+
+locals {
+  private_dns_zone_id = var.create_private_dns_zone ? azurerm_private_dns_zone.redis[0].id : var.private_dns_zone_id
+}
 
 # AMR cluster — Balanced SKU, TLS 1.2, no public access (private endpoint only).
 resource "azapi_resource" "amr" {
@@ -42,19 +46,26 @@ resource "azapi_resource" "amr" {
   schema_validation_enabled = false
 }
 
-# AMR database — OSS clustering policy, TLS (Encrypted) on port 10000, key auth on.
+# AMR database — clustering policy per var, TLS (Encrypted) on port 10000, key auth on.
 resource "azapi_resource" "amr_db" {
   type      = "Microsoft.Cache/redisEnterprise/databases@2025-07-01"
   name      = "default"
   parent_id = azapi_resource.amr.id
 
+  # evictionPolicy and persistence are sent only when set, so an existing
+  # database's body, and the plan for it, stay unchanged. Azure's default
+  # eviction is VolatileLRU, and its default is no persistence.
   body = {
-    properties = {
-      clientProtocol           = "Encrypted"
-      port                     = 10000
-      clusteringPolicy         = var.clustering_policy
-      accessKeysAuthentication = "Enabled"
-    }
+    properties = merge(
+      {
+        clientProtocol           = "Encrypted"
+        port                     = 10000
+        clusteringPolicy         = var.clustering_policy
+        accessKeysAuthentication = "Enabled"
+      },
+      var.eviction_policy == null ? {} : { evictionPolicy = var.eviction_policy },
+      var.aof_persistence ? { persistence = { aofEnabled = true, aofFrequency = "1s" } } : {}
+    )
   }
 
   schema_validation_enabled = false
@@ -73,16 +84,24 @@ resource "azapi_resource_action" "amr_keys" {
 # AMR can't inject into a subnet, so a Private Endpoint in the same redis subnet +
 # a private DNS zone give equivalent VNet-only reachability. The endpoint hostname
 # (*.redis.azure.net) resolves to the PE's private IP via this zone.
+#
+# A second AMR in the same resource group sets create_private_dns_zone = false
+# and passes the first one's zone in private_dns_zone_id: the zone name is
+# fixed, so a second copy would collide. The flag, not the ID, drives count,
+# because the first zone's ID is unknown until it exists.
+# Adding count moves an existing zone and link to index [0] with no replacement.
 resource "azurerm_private_dns_zone" "redis" {
+  count               = var.create_private_dns_zone ? 1 : 0
   name                = "privatelink.redis.azure.net"
   resource_group_name = var.resource_group_name
   tags                = merge(var.tags, { module = "redis" })
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "redis" {
+  count                 = var.create_private_dns_zone ? 1 : 0
   name                  = "${var.name}-dnslink"
   resource_group_name   = var.resource_group_name
-  private_dns_zone_name = azurerm_private_dns_zone.redis.name
+  private_dns_zone_name = azurerm_private_dns_zone.redis[0].name
   virtual_network_id    = var.vnet_id
   tags                  = merge(var.tags, { module = "redis" })
 }
@@ -102,7 +121,7 @@ resource "azurerm_private_endpoint" "redis" {
 
   private_dns_zone_group {
     name                 = "redis"
-    private_dns_zone_ids = [azurerm_private_dns_zone.redis.id]
+    private_dns_zone_ids = [local.private_dns_zone_id]
   }
 
   tags = merge(var.tags, { module = "redis" })

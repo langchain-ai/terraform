@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Stub `terraform` for preflight.sh. Models only the three calls preflight makes:
+#   output -raw azure_environment  -> $FIXTURE_DIR/tf_azure_environment, else "no output"
+#   state pull                     -> no state (preflight falls back to the local file)
+#   version                        -> a fixed version line
+# Anything else exits non-zero with a STUB marker, so an unmodeled call fails loudly.
+set -uo pipefail
+FIX="${FIXTURE_DIR:?FIXTURE_DIR must be set}"
+ARGS="$*"
+case "$ARGS" in
+  *"output -raw azure_environment"*)
+    if [ -f "$FIX/tf_azure_environment" ]; then cat "$FIX/tf_azure_environment"; exit 0; fi
+    echo 'Error: Output "azure_environment" not found' >&2; exit 1 ;;
+  *"state pull"*) exit 1 ;;
+  *version*) echo "Terraform v1.16.1 (stub)"; exit 0 ;;
+esac
+echo "STUB: unmodeled terraform call: $ARGS" >&2
+exit 97

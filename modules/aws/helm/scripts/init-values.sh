@@ -11,17 +11,24 @@
 #
 # Reads:
 #   - aws/infra/terraform.tfvars    → name_prefix, environment, region, tls_certificate_source
-#   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs
+#   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs,
+#                                     engine_irsa_role_arn (if Engine is enabled)
 #
-# Prompts for (on first run):
-#   - Admin email
+# Falls back to prompting for the admin email when it is not in Terraform.
 #
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
 #   - values/langsmith-values-overrides.yaml    (auto-generated: hostname, IRSA, S3)
 #   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
-#   - values/langsmith-values-agent-*.yaml      (based on product tier)
-#   - values/langsmith-values-insights.yaml     (if tier 4 chosen)
+#   - values/langsmith-values-agent-deploys.yaml (if Deployments is enabled)
+#   - values/langsmith-values-insights.yaml     (if Insights is enabled)
+#   - values/langsmith-values-polly.yaml        (if LangSmith Chat is enabled)
+#   - values/langsmith-values-fleet.yaml        (if Fleet is enabled)
+#   - values/langsmith-values-standalone-polly.yaml (if Chat uses external storage)
+#   - values/langsmith-values-standalone-insights.yaml (if Insights uses external storage)
+#   - values/langsmith-values-engine.yaml        (if Engine is enabled)
+#   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
+#   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -195,13 +202,16 @@ HOSTNAME="${HOSTNAME#http://}"
 HOSTNAME="${HOSTNAME#https://}"
 
 # ── Admin email ───────────────────────────────────────────────────────────────
+ADMIN_EMAIL=$(_parse_tfvar "langsmith_admin_email") || ADMIN_EMAIL=""
 EXISTING_EMAIL=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_EMAIL=$(grep -E '^\s*initialOrgAdminEmail:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_EMAIL=""
 fi
 
-if [[ -n "$EXISTING_EMAIL" ]]; then
+if [[ -n "$ADMIN_EMAIL" ]]; then
+  echo "Admin email (from terraform.tfvars): $ADMIN_EMAIL"
+elif [[ -n "$EXISTING_EMAIL" ]]; then
   ADMIN_EMAIL="$EXISTING_EMAIL"
   echo "Reusing existing admin email: $ADMIN_EMAIL"
 elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
@@ -238,12 +248,10 @@ echo ""
 
 # ── Product addons (driven by enable_* flags in terraform.tfvars) ────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
-_builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
 _polly_file="$VALUES_DIR/langsmith-values-polly.yaml"
 
 _enable_deployments=false
-_enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_usage_telemetry=false
@@ -251,8 +259,9 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_engine=false
+_enable_sso_oidc=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
-_tfvar_is_true "enable_agent_builder"  && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
 _tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
@@ -260,16 +269,120 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
+_tfvar_is_true "enable_engine"              && _enable_engine=true
+_tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
+
+# Engine runs every analysis in a sandbox, and the chart rejects Engine without them.
+if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
+  echo "ERROR: enable_engine requires enable_sandboxes = true in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Fail fast rather than let this surface later as a CreateContainerConfigError.
+# apply-eso.sh gates the whole oauth block (client id/secret/issuer url) behind
+# a single existence check on oauth-client-secret and silently skips syncing
+# any of them if it's missing — but the SSO values file disables basicAuth
+# whenever enable_sso_oidc is true, regardless of SSM state. With
+# no admin login path and secretKeyRef optional: false on the missing key,
+# backend/platformBackend would otherwise just fail to start with no message
+# pointing back at the actual cause.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  _sso_ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
+  _sso_timeout_bin=""
+  for _t in timeout gtimeout; do
+    if command -v "$_t" >/dev/null 2>&1; then _sso_timeout_bin="$_t"; break; fi
+  done
+  _sso_check() {
+    if [[ -n "$_sso_timeout_bin" ]]; then
+      "$_sso_timeout_bin" 10 aws ssm get-parameter --region "$_region" --name "$1" --query Parameter.Name --output text >/dev/null 2>&1
+    else
+      aws ssm get-parameter --region "$_region" --name "$1" --query Parameter.Name --output text >/dev/null 2>&1
+    fi
+  }
+  _sso_missing=""
+  for _key in oauth-client-id oauth-client-secret oauth-issuer-url; do
+    _sso_check "${_sso_ssm_prefix}/${_key}" || _sso_missing="$_sso_missing ${_sso_ssm_prefix}/${_key}"
+  done
+  if [[ -n "$_sso_missing" ]]; then
+    echo "ERROR: enable_sso_oidc = true but the following SSM parameters are missing:" >&2
+    for _m in $_sso_missing; do echo "         $_m" >&2; done
+    echo "" >&2
+    echo "       basicAuth is disabled the moment this flag is on, so without these," >&2
+    echo "       backend/platformBackend would fail to start (CreateContainerConfigError)" >&2
+    echo "       instead of failing here with a clear reason." >&2
+    echo "" >&2
+    echo "       Populate all three, then re-run:" >&2
+    echo "         ./infra/scripts/manage-ssm.sh set oauth-client-id '<value>'" >&2
+    echo "         ./infra/scripts/manage-ssm.sh set oauth-client-secret '<value>'" >&2
+    echo "         ./infra/scripts/manage-ssm.sh set oauth-issuer-url '<value>'" >&2
+    exit 1
+  fi
+fi
+
+# The SSO overlay is a fixed file, kept out of the generated overrides so turning SSO on never rewrites them.
+_sso_file="$VALUES_DIR/langsmith-values-sso.yaml"
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  if [[ ! -f "$_sso_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-sso.yaml" "$_sso_file"
+    echo "  Created: langsmith-values-sso.yaml"
+  else
+    echo "  Existing: langsmith-values-sso.yaml"
+  fi
+  echo "  ✔ SSO login"
+fi
+
+_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
+if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
+  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
+if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
+  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_polly" == "true" ]]; then
+  _enable_polly=true
+  _polly_storage="external"
+elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
+  _enable_standalone_polly=true
+fi
+
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
+if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
+  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_insights" == "true" ]]; then
+  _enable_insights=true
+  _insights_storage="external"
+elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
+  _enable_standalone_insights=true
+fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+SANDBOX_JUICEFS_CACHE_DIRS=""
 SANDBOX_CLUSTER_NAME=""
 SANDBOX_IRSA_ROLE_ARN=""
 SANDBOX_RUNTIME_SECRET_NAME=""
 SANDBOX_SERVICE_ACCOUNT_NAME=""
-SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=""
-SANDBOX_CACHE_DIRS=()
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
+  # Instance-store NVMe mounts on the sandbox-host nodes, e.g. /mnt/juicefs-cache0.
+  # The list is empty when the nodes have no spare local NVMe, and the chart then
+  # caches under its default /var/cache/juicefs on the root volume. Kept as a
+  # space-separated string: an empty array trips set -u on the macOS bash 3.2.
+  _cache_dirs_json=$(terraform -chdir="$INFRA_DIR" output -json sandbox_juicefs_host_cache_dirs 2>/dev/null) || _cache_dirs_json=""
+  for _dir in $(printf '%s\n' "$_cache_dirs_json" | sed -e 's/[][" ]//g' -e 's/,/ /g'); do
+    if [[ "$_dir" == /* ]]; then
+      SANDBOX_JUICEFS_CACHE_DIRS+="${SANDBOX_JUICEFS_CACHE_DIRS:+ }${_dir}"
+    fi
+  done
   if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
     if [[ -z "$HOSTNAME" ]]; then
       echo "ERROR: separate_cluster sandboxes require a resolvable LangSmith hostname." >&2
@@ -296,10 +409,6 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
       echo "       without it the generated values cannot be matched to the sandbox IRSA trust policy." >&2
       exit 1
     fi
-    while IFS= read -r _cache_dir; do
-      [[ -n "$_cache_dir" ]] && SANDBOX_CACHE_DIRS+=("$_cache_dir")
-    done < <(terraform -chdir="$INFRA_DIR" output -json sandbox_juicefs_host_cache_dirs 2>/dev/null | python3 -c 'import json, sys; print("\n".join(json.load(sys.stdin)))' 2>/dev/null || true)
-    [[ ${#SANDBOX_CACHE_DIRS[@]} -gt 0 ]] || SANDBOX_CACHE_DIRS=("/var/cache/juicefs")
   fi
 fi
 
@@ -309,36 +418,13 @@ echo "Product addons (from terraform.tfvars):"
 if [[ "$_enable_deployments" == "true" ]]; then
   if [[ ! -f "$_deploys_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-    echo "  ✔ Deployments (created langsmith-values-agent-deploys.yaml)"
+    echo "  Created: langsmith-values-agent-deploys.yaml"
   else
-    echo "  ✔ Deployments (existing)"
+    echo "  Existing: langsmith-values-agent-deploys.yaml"
   fi
+  echo "  ✔ Deployments"
 else
   echo "  ✗ Deployments (enable_deployments = false)"
-fi
-
-# Agent Builder
-if [[ "$_enable_agent_builder" == "true" ]]; then
-  if [[ "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
-  # Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the
-  # bundled agent-bootstrap Job, so the two paths can no longer be combined and
-  # the legacy one has no agent runtime of its own.
-  if [[ "$_enable_fleet" == "true" ]]; then
-    echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
-    echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
-    exit 1
-  fi
-  if [[ ! -f "$_builder_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-    echo "  ✔ Agent Builder (created langsmith-values-agent-builder.yaml)"
-  else
-    echo "  ✔ Agent Builder (existing)"
-  fi
-else
-  echo "  ✗ Agent Builder (enable_agent_builder = false)"
 fi
 
 # Insights
@@ -355,11 +441,10 @@ if [[ "$_enable_insights" == "true" ]]; then
 insights:
   enabled: true
 CHEOF
-      echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
+      echo "  Created: langsmith-values-insights.yaml"
     else
       # External ClickHouse: prompt for connection details on first creation.
       cp "$EXAMPLES_DIR/langsmith-values-insights.yaml" "$_insights_file"
-      echo "  ✔ Insights (created langsmith-values-insights.yaml)"
       echo ""
       echo "  Insights requires an external ClickHouse instance."
       printf "  ClickHouse host: "
@@ -408,7 +493,7 @@ clickhouse:
     tls: ${_ch_tls_val}
     existingSecretName: "langsmith-clickhouse"
 CHEOF
-      echo "  Updated: langsmith-values-insights.yaml"
+      echo "  Created: langsmith-values-insights.yaml"
       echo ""
       echo "  Creating langsmith-clickhouse K8s Secret..."
       echo "  (deploy.sh will re-apply this if the namespace is recreated)"
@@ -427,29 +512,21 @@ CHEOF
       fi
     fi
   else
-    echo "  ✔ Insights (existing)"
+    echo "  Existing: langsmith-values-insights.yaml"
   fi
-else
-  echo "  ✗ Insights (enable_insights = false)"
 fi
 
-# Polly
+# LangSmith Chat (formerly Polly)
 if [[ "$_enable_polly" == "true" ]]; then
-  if [[ "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
   if [[ ! -f "$_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-polly.yaml" "$_polly_file"
-    echo "  ✔ Polly (created langsmith-values-polly.yaml)"
+    echo "  Created: langsmith-values-polly.yaml"
   else
-    echo "  ✔ Polly (existing)"
+    echo "  Existing: langsmith-values-polly.yaml"
   fi
-else
-  echo "  ✗ Polly (enable_polly = false)"
 fi
 
-# ── Standalone agent features (chart v0.15+): Fleet / Polly / Insights ───────
+# ── Fleet and external-storage overlays ─────────────────────────────────────
 # Top-level fleet:/polly:/insights: deployments wired to per-feature databases on
 # the shared RDS/ElastiCache (K8s Secrets created by Terraform). encryptionKey and
 # IRSA service-account annotations are injected into the overrides file below.
@@ -460,10 +537,11 @@ _standalone_insights_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ ! -f "$_fleet_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
-    echo "  ✔ Fleet (created langsmith-values-fleet.yaml)"
+    echo "  Created: langsmith-values-fleet.yaml"
   else
-    echo "  ✔ Fleet (existing)"
+    echo "  Existing: langsmith-values-fleet.yaml"
   fi
+  echo "  ✔ Fleet"
 else
   echo "  ✗ Fleet (enable_fleet = false)"
 fi
@@ -471,29 +549,57 @@ fi
 if [[ "$_enable_standalone_polly" == "true" ]]; then
   if [[ ! -f "$_standalone_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_standalone_polly_file"
-    echo "  ✔ Standalone Polly (created langsmith-values-standalone-polly.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
+    echo "  Created: langsmith-values-standalone-polly.yaml"
   else
-    echo "  ✔ Standalone Polly (existing; encryptionKey in langsmith-values-overrides.yaml)"
+    echo "  Existing: langsmith-values-standalone-polly.yaml"
   fi
-else
-  echo "  ✗ Standalone Polly (enable_standalone_polly = false)"
 fi
 
 if [[ "$_enable_standalone_insights" == "true" ]]; then
   if [[ ! -f "$_standalone_insights_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_standalone_insights_file"
-    echo "  ✔ Standalone Insights (created langsmith-values-standalone-insights.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
+    echo "  Created: langsmith-values-standalone-insights.yaml"
   else
-    echo "  ✔ Standalone Insights (existing; encryptionKey in langsmith-values-overrides.yaml)"
+    echo "  Existing: langsmith-values-standalone-insights.yaml"
   fi
+fi
+
+if [[ "$_enable_polly" == "true" ]]; then
+  _polly_storage="in-cluster Postgres/Redis"
+  [[ "$_enable_standalone_polly" == "true" ]] && _polly_storage="external Postgres/Redis"
+  echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage)"
 else
-  echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
+  echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly and enable_standalone_polly are false)"
+fi
+
+if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
+  _insights_storage_label="${_insights_storage} Postgres/Redis"
+  echo "  ✔ Insights ($_insights_storage_label)"
+else
+  echo "  ✗ Insights (enable_insights and enable_standalone_insights are false)"
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  echo "  ✔ Sandboxes (${_sandbox_deployment_mode}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  echo "  ✔ Sandboxes (${_sandbox_deployment_mode}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
 else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
+fi
+
+# Engine: the overlay turns Engine on. Its IRSA annotation and optional settings
+# go into the overrides file below.
+_engine_file="$VALUES_DIR/langsmith-values-engine.yaml"
+if [[ "$_enable_engine" == "true" ]]; then
+  if [[ ! -f "$_engine_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-engine.yaml" "$_engine_file"
+    echo "  Created: langsmith-values-engine.yaml"
+  else
+    echo "  Existing: langsmith-values-engine.yaml"
+  fi
+  _engine_storage_label="in-cluster Postgres/Redis"
+  [[ "$_enable_insights" == "true" ]] && _engine_storage_label="Insights ${_insights_storage} Postgres/Redis"
+  echo "  ✔ Engine (Bedrock through IRSA; $_engine_storage_label)"
+else
+  echo "  ✗ Engine (enable_engine = false)"
 fi
 
 # Patch tlsEnabled in agent-deploys if present — derive from tls_certificate_source.
@@ -633,21 +739,41 @@ fi
 # that are OFF get an explicit `enabled: false` so the chart's top-level default
 # (polly/insights default to enabled: true) cannot silently turn them on
 # (migration issue #6).
-_agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
+_fleet_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
 _polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
 _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
 
 _standalone_block=""
 
 if [[ "$_enable_fleet" == "true" ]]; then
-  if [[ -z "$_agent_builder_key" ]]; then
+  if [[ -z "$_fleet_key" ]]; then
     echo "ERROR: enable_fleet = true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
+  _fleet_storage_block=""
+  if [[ "$_fleet_storage" == "external" ]]; then
+    _fleet_storage_block="
+  postgres:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-fleet-postgres\"
+  redis:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-fleet-redis\""
+  else
+    _fleet_storage_block="
+  postgres:
+    external:
+      enabled: false
+  redis:
+    external:
+      enabled: false"
+  fi
   _standalone_block+="
 fleet:
-  encryptionKey: \"${_agent_builder_key}\"
+  encryptionKey: \"${_fleet_key}\"${_fleet_storage_block}
   apiServer:
     serviceAccount:
       annotations:
@@ -668,9 +794,9 @@ fleetTriggerServer:
       eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
 fi
 
-if [[ "$_enable_standalone_polly" == "true" ]]; then
+if [[ "$_enable_polly" == "true" ]]; then
   if [[ -z "$_polly_key" ]]; then
-    echo "ERROR: enable_standalone_polly = true but TF_VAR_langsmith_polly_encryption_key is not set." >&2
+    echo "ERROR: enable_polly = true but TF_VAR_langsmith_polly_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -691,31 +817,70 @@ polly:
   enabled: false"
 fi
 
-if [[ "$_enable_standalone_insights" == "true" ]]; then
+if [[ "$_enable_insights" == "true" ]]; then
   if [[ -z "$_insights_key" ]]; then
-    echo "ERROR: enable_standalone_insights = true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
+    echo "ERROR: enable_insights = true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
   # Chart 0.16 keeps the encryption key on `insights` but moved the workload
-  # settings — including the service accounts — to `engineInsightsAgent`.
+  # settings — including the service accounts — to `engineInsightsAgent` (below).
   _standalone_block+="
 insights:
   encryptionKey: \"${_insights_key}\"
-
-engineInsightsAgent:
-  apiServer:
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
-  queue:
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+"
 else
   _standalone_block+="
 insights:
   enabled: false"
+fi
+
+# ── Engine (enable_engine) ────────────────────────────────────────────────────
+# langsmith-values-engine.yaml turns Engine on. Its keys reach the chart only
+# through the langsmith-config Secret (SSM → ESO), never through values. Engine
+# and Insights share the engineInsightsAgent deployment and its two service
+# accounts. With Engine on, both run under the Engine IRSA role from terraform
+# apply. That role trusts only these two service accounts.
+_engine_agent_role_arn="$IRSA_ROLE_ARN"
+if [[ "$_enable_engine" == "true" ]]; then
+  ENGINE_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw engine_irsa_role_arn 2>/dev/null) || ENGINE_IRSA_ROLE_ARN=""
+  if [[ "$ENGINE_IRSA_ROLE_ARN" != arn:* ]]; then
+    echo "ERROR: enable_engine = true but terraform output engine_irsa_role_arn is empty." >&2
+    echo "       Is 'terraform apply' complete in $INFRA_DIR with enable_engine = true?" >&2
+    exit 1
+  fi
+  echo "Engine: engine_irsa_role_arn = $ENGINE_IRSA_ROLE_ARN"
+  _engine_agent_role_arn="$ENGINE_IRSA_ROLE_ARN"
+
+  _engine_tenant=$(_parse_tfvar "engine_sandbox_tenant_id") || _engine_tenant=""
+  _engine_intel_url=$(_parse_tfvar "engine_intelligence_base_url") || _engine_intel_url=""
+  _engine_settings=""
+  if [[ -n "$_engine_tenant" ]]; then
+    _engine_settings+="
+  sandboxTenantId: \"${_engine_tenant}\""
+  fi
+  if [[ -n "$_engine_intel_url" ]]; then
+    _engine_settings+="
+  intelligenceBaseUrl: \"${_engine_intel_url}\""
+  fi
+  if [[ -n "$_engine_settings" ]]; then
+    _standalone_block+="
+engine:${_engine_settings}
+"
+  fi
+fi
+
+if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
+  _standalone_block+="
+engineInsightsAgent:
+  apiServer:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\"
+  queue:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\""
 fi
 
 _sandbox_config_block=""
@@ -731,10 +896,11 @@ sandboxes:
   enabled: true
   deploymentMode: separateCluster${_sandbox_service_url_block}"
 
+    # The runtime chart's own default is /var/cache/juicefs on the root volume.
     _sandbox_cache_dirs_block=""
-    for _cache_dir in "${SANDBOX_CACHE_DIRS[@]}"; do
+    for _dir in ${SANDBOX_JUICEFS_CACHE_DIRS:-/var/cache/juicefs}; do
       _sandbox_cache_dirs_block+="
-      - \"${_cache_dir}\""
+      - \"${_dir}\""
     done
 
     cat > "$SANDBOX_VALUES_FILE" << YAML
@@ -766,20 +932,30 @@ sandboxHost:
 YAML
     echo "Written: $SANDBOX_VALUES_FILE (cluster: $SANDBOX_CLUSTER_NAME, serviceAccount: $SANDBOX_SERVICE_ACCOUNT_NAME)"
   else
+    _sandbox_cache_dirs_block=""
+    if [[ -n "$SANDBOX_JUICEFS_CACHE_DIRS" ]]; then
+      _sandbox_cache_dirs_block="
+    hostMount:
+      cacheDirs:"
+      for _dir in $SANDBOX_JUICEFS_CACHE_DIRS; do
+        _sandbox_cache_dirs_block+="
+        - \"${_dir}\""
+      done
+    fi
+    # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
+    # under the same ServiceAccount, so the bucket role goes on sandboxHost.
     _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
   juicefs:
-    csi:
-      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
-      node:
-        serviceAccount:
-          annotations:
-            eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+    existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"${_sandbox_cache_dirs_block}
   sandboxHost:
     deployment:
       nodeSelector:
-        sandbox.langsmith.com/host: \"true\""
+        sandbox.langsmith.com/host: \"true\"
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
   fi
 fi
 
@@ -862,6 +1038,15 @@ listener:
       eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"
 
 operator:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"
+
+# Playground calls model providers directly (e.g. Bedrock via workload
+# identity) to test prompts interactively — needs the same IRSA role as
+# backend/platformBackend, or it silently falls back to the node's instance
+# role and gets AccessDeniedException on any Bedrock call.
+playground:
   serviceAccount:
     annotations:
       eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"

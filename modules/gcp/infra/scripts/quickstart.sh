@@ -178,6 +178,14 @@ OWNER="$_REPLY"
 _ask "Cost center (for billing, leave blank to skip)" ""
 COST_CENTER="$_REPLY"
 
+while true; do
+  _ask "Initial org admin email" "${LANGSMITH_ADMIN_EMAIL:-}"
+  ADMIN_EMAIL="$_REPLY"
+  [[ -n "$ADMIN_EMAIL" ]] && break
+  _red "  ERROR: this value is required. Try again."
+  echo ""
+done
+
 echo ""
 printf "  Resources will be named: $(_cyan "${NAME_PREFIX}-${ENVIRONMENT}")-{resource}\n"
 
@@ -369,6 +377,7 @@ ENABLE_DEPLOYMENTS="false"
 ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"
 ENABLE_SMITHDB="false"
+SMITHDB_SIZING_LINES=""
 
 # SmithDB teardown posture follows the same split as the LangSmith metastore:
 # production protects the data, a dev stack stays disposable so the test cycle
@@ -396,15 +405,33 @@ else
   printf "  $(_dim "Dev profile: all features disabled. Edit terraform.tfvars to enable.")\n"
 fi
 
-# SmithDB needs dedicated node pools with Local SSD, which Autopilot cannot
-# provide, so only offer it on Standard clusters.
+# SmithDB needs its own node pools (or the general pool for minimal), which
+# Autopilot cannot provide, so only offer it on Standard clusters.
 if [[ "$USE_AUTOPILOT" == "false" ]]; then
   echo ""
-  _ask_yn "Enable SmithDB? (columnar trace store, needs Local SSD node pools)" "n" \
+  _ask_yn "Enable SmithDB? (columnar trace store, adds SmithDB node pools)" "n" \
     && ENABLE_SMITHDB="true" || true
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-    printf "  $(_dim "SmithDB services deploy with all LangSmith integration gates off.")\n"
-    printf "  $(_dim "Advance smithdb_ingestion_enabled, then migration, then query, one stage at a time.")\n"
+    _ask_choice "SmithDB size (see SMITHDB.md#sizing)" \
+      "minimal — development only, no SmithDB node pools" \
+      "small   — 10 ingest / 10 query QPS" \
+      "medium  — 100 ingest / 40 query QPS" \
+      "large   — 1000 ingest / 100 query QPS, about 350 vCPU"
+    _smithdb_sizing=$(echo "minimal small medium large" | cut -d' ' -f"$_CHOICE")
+    # minimal writes null: null gives network-disk for minimal, and a later
+    # size change gets local-ssd.
+    _smithdb_cache="network-disk"
+    _smithdb_cache_value="null"
+    if [[ "$_smithdb_sizing" != "minimal" ]]; then
+      _ask_choice "SmithDB cache storage" \
+        "local-ssd    — node Local SSD (recommended)" "network-disk — Hyperdisk Balanced on C3 nodes"
+      [[ "$_CHOICE" == "1" ]] && _smithdb_cache="local-ssd"
+      _smithdb_cache_value="\"${_smithdb_cache}\""
+    fi
+    SMITHDB_SIZING_LINES="
+smithdb_sizing            = \"${_smithdb_sizing}\"
+smithdb_cache_storage     = ${_smithdb_cache_value}"
+    printf "  $(_dim "SmithDB starts in dual write: LangSmith writes to SmithDB and ClickHouse, reads stay on ClickHouse.")\n"
   fi
 fi
 
@@ -445,6 +472,7 @@ environment = "${ENVIRONMENT}"
 region      = "${REGION}"
 zone        = "${ZONE}"
 owner       = "${OWNER}"
+langsmith_admin_email = "${ADMIN_EMAIL}"
 TFVARS
 
 if [[ -n "$COST_CENTER" ]]; then
@@ -556,14 +584,14 @@ enable_insights      = ${ENABLE_INSIGHTS}
 
 #------------------------------------------------------------------------------
 # SmithDB
-# The three gates below are a staged rollout. Stand the services up first, then
-# enable ingestion, then any historical migration, then query — applying and
-# validating each stage on its own. ClickHouse stays enabled throughout.
+# The three gates below are a staged rollout, and a new install starts with
+# ingestion (dual write). For the backfill, run make smithdb-migration-job-start;
+# for cutover, set smithdb_query_enabled = true. ClickHouse stays enabled throughout.
 #------------------------------------------------------------------------------
 enable_smithdb            = ${ENABLE_SMITHDB}
-smithdb_ingestion_enabled = false
+smithdb_ingestion_enabled = ${ENABLE_SMITHDB}
 smithdb_migration_enabled = false
-smithdb_query_enabled     = false
+smithdb_query_enabled     = false${SMITHDB_SIZING_LINES}
 
 # Teardown controls for the metastore and object store. Production keeps both
 # protected; a dev stack stays destroyable and rebuildable without manual steps.
@@ -589,6 +617,7 @@ printf "  %-22s %s\n" "Profile:"    "$PROFILE"
 printf "  %-22s %s\n" "Project:"    "$PROJECT_ID"
 printf "  %-22s %s\n" "Name:"       "${NAME_PREFIX}-${ENVIRONMENT}"
 printf "  %-22s %s\n" "Region:"     "${REGION} / ${ZONE}"
+printf "  %-22s %s\n" "Admin email:" "$ADMIN_EMAIL"
 printf "  %-22s %s\n" "GKE:"        "$( [[ "$USE_AUTOPILOT" == "true" ]] && echo "Autopilot" || echo "Standard (${MACHINE_TYPE})" )"
 printf "  %-22s %s\n" "PostgreSQL:" "$PG_SOURCE"
 printf "  %-22s %s\n" "Redis:"      "$REDIS_SOURCE"
@@ -596,7 +625,7 @@ printf "  %-22s %s\n" "ClickHouse:" "$CH_SOURCE"
 printf "  %-22s %s\n" "TLS:"        "$TLS_SOURCE"
 [[ -n "$DOMAIN" ]] && printf "  %-22s %s\n" "Domain:" "$DOMAIN"
 printf "  %-22s %s\n" "Features:"   "deployments=${ENABLE_DEPLOYMENTS}  agent_builder=${ENABLE_AGENT_BUILDER}  insights=${ENABLE_INSIGHTS}"
-printf "  %-22s %s\n" "SmithDB:"    "$ENABLE_SMITHDB"
+printf "  %-22s %s\n" "SmithDB:"    "$ENABLE_SMITHDB${_smithdb_sizing:+ (${_smithdb_sizing}, ${_smithdb_cache}, dual write)}"
 
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"
@@ -615,8 +644,7 @@ printf "  4. Deploy LangSmith:\n"
 printf "     ${CYAN}make init-values && make deploy${RESET}\n"
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
-  printf "  ${DIM}SmithDB needs chart 0.16 or newer, which the deploy pin already targets.${RESET}\n"
-  printf "  ${DIM}To name an exact patch instead:${RESET}\n"
-  printf "     ${CYAN}CHART_VERSION=0.16.3 make deploy${RESET}\n"
+  printf "  ${DIM}SmithDB historical migration (backfill), after the deploy:${RESET}\n"
+  printf "     ${CYAN}make smithdb-migration-job-start${RESET}\n"
 fi
 echo ""

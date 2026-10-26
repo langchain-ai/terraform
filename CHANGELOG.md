@@ -12,13 +12,13 @@ hand.
 Releases are global tags `vMAJOR.MINOR.PATCH`:
 
 - `MAJOR.MINOR` tracks the supported LangSmith Helm chart line. `deploy.sh`
-  installs the latest patch within that line (`~0.16.0` => latest `0.16.x`,
-  never `0.17`).
+  installs the latest patch within that line (`~0.17.0` => latest `0.17.x`,
+  never `0.18`).
 - `PATCH` is a module revision counter. It increments on any change to this
-  repo, regardless of provider, and is **not** the chart version (`v0.16.4`
-  does not mean chart `0.16.4`).
+  repo, regardless of provider, and is **not** the chart version (`v0.17.4`
+  does not mean chart `0.17.4`).
 
-Deploy from a tag (`git checkout v0.16.0`), never from a branch.
+Deploy from a tag (`git checkout v0.17.0`), never from a branch.
 
 ## Chart line cutovers
 
@@ -26,6 +26,7 @@ Moving the pinned chart line is a breaking change for existing installs, so each
 cutover gets a migration note next to this file:
 
 - 0.15 to 0.16 — [MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md)
+- 0.16 to 0.17 — [MIGRATION-0.16-to-0.17.md](MIGRATION-0.16-to-0.17.md)
 
 At each cutover the outgoing line moves to a maintenance branch and keeps
 releasing there, so `main` and the maintenance branch cut tags on their own
@@ -33,5 +34,6 @@ series in parallel:
 
 | Chart line | Releases from | Tag series |
 | --- | --- | --- |
-| 0.16 (current) | `main` | `v0.16.*` |
+| 0.17 (current) | `main` | `v0.17.*` |
+| 0.16 (maintenance) | `release/0.16` | `v0.16.*` |
 | 0.15 (maintenance) | `release/0.15` | `v0.15.*` |

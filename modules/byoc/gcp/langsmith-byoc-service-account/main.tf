@@ -1,0 +1,442 @@
+locals {
+  # Found by provisioning and tearing down data planes with nothing more.
+  base_provisioner_permissions = [
+    "cloudsql.databases.create",
+    "cloudsql.databases.delete",
+    "cloudsql.databases.get",
+    "cloudsql.databases.update",
+    "cloudsql.instances.create",
+    "cloudsql.instances.delete",
+    "cloudsql.instances.get",
+    "cloudsql.instances.update",
+    "compute.addresses.create",
+    "compute.addresses.createInternal",
+    "compute.addresses.delete",
+    "compute.addresses.deleteInternal",
+    "compute.addresses.get",
+    "compute.addresses.setLabels",
+    "compute.addresses.use",
+    "compute.addresses.useInternal",
+    "compute.forwardingRules.create",
+    "compute.forwardingRules.delete",
+    "compute.forwardingRules.get",
+    "compute.forwardingRules.pscCreate",
+    "compute.forwardingRules.pscDelete",
+    "compute.forwardingRules.pscSetLabels",
+    "compute.forwardingRules.pscUpdate",
+    "compute.forwardingRules.setLabels",
+    "compute.globalAddresses.create",
+    "compute.globalAddresses.createInternal",
+    "compute.globalAddresses.delete",
+    "compute.globalAddresses.deleteInternal",
+    "compute.globalAddresses.get",
+    "compute.globalAddresses.list",
+    "compute.globalAddresses.setLabels",
+    "compute.globalAddresses.use",
+    "compute.globalOperations.get",
+    "compute.instanceGroupManagers.get",
+    "compute.networks.addPeering",
+    "compute.networks.create",
+    "compute.networks.delete",
+    "compute.networks.get",
+    "compute.networks.removePeering",
+    "compute.networks.update",
+    "compute.networks.updatePeering",
+    "compute.networks.updatePolicy",
+    "compute.networks.use",
+    "compute.regionOperations.get",
+    "compute.routers.create",
+    "compute.routers.delete",
+    "compute.routers.get",
+    "compute.routers.update",
+    "compute.routers.use",
+    "compute.subnetworks.create",
+    "compute.subnetworks.delete",
+    "compute.subnetworks.get",
+    "compute.subnetworks.setPrivateIpGoogleAccess",
+    "compute.subnetworks.update",
+    "compute.subnetworks.use",
+    "container.clusters.create",
+    "container.clusters.delete",
+    "container.clusters.get",
+    "container.clusters.update",
+    "container.operations.get",
+    "dns.changes.create",
+    "dns.changes.get",
+    "dns.managedZones.create",
+    "dns.managedZones.delete",
+    "dns.managedZones.get",
+    # cert-manager gets roles/dns.admin on the data plane's zones only.
+    "dns.managedZones.getIamPolicy",
+    "dns.managedZones.list",
+    "dns.managedZones.setIamPolicy",
+    "dns.managedZones.update",
+    "dns.networks.bindPrivateDNSZone",
+    "dns.resourceRecordSets.create",
+    "dns.resourceRecordSets.delete",
+    "dns.resourceRecordSets.get",
+    "dns.resourceRecordSets.list",
+    "dns.resourceRecordSets.update",
+    "iam.serviceAccounts.create",
+    "iam.serviceAccounts.delete",
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.getIamPolicy",
+    "iam.serviceAccounts.list",
+    "iam.serviceAccounts.setIamPolicy",
+    "iam.serviceAccounts.update",
+    "networkconnectivity.operations.get",
+    "networkconnectivity.serviceConnectionPolicies.create",
+    "networkconnectivity.serviceConnectionPolicies.delete",
+    "networkconnectivity.serviceConnectionPolicies.get",
+    "networkconnectivity.serviceConnectionPolicies.update",
+    "redis.clusters.create",
+    "redis.clusters.delete",
+    "redis.clusters.get",
+    "redis.clusters.update",
+    "redis.operations.get",
+    "resourcemanager.projects.get",
+    "resourcemanager.projects.getIamPolicy",
+    "secretmanager.secrets.create",
+    "secretmanager.secrets.delete",
+    "secretmanager.secrets.get",
+    "secretmanager.versions.add",
+    "servicedirectory.services.create",
+    "servicedirectory.services.delete",
+    "servicenetworking.operations.get",
+    "servicenetworking.services.addPeering",
+    "servicenetworking.services.deleteConnection",
+    "servicenetworking.services.get",
+    "storage.anywhereCaches.list",
+    "storage.buckets.create",
+    "storage.buckets.delete",
+    "storage.buckets.get",
+    "storage.buckets.getIamPolicy",
+    "storage.buckets.setIamPolicy",
+    "storage.buckets.update",
+    # The sandbox hosts' grant is on the bucket's smithbox/ managed folder.
+    "storage.managedFolders.create",
+    "storage.managedFolders.delete",
+    "storage.managedFolders.get",
+    "storage.managedFolders.getIamPolicy",
+    "storage.managedFolders.list",
+    "storage.managedFolders.setIamPolicy",
+    "storage.objects.delete",
+    "storage.objects.list",
+  ]
+
+  # With byo_iam, this module creates the data plane service accounts, so the
+  # provisioner does not create, update, delete or set the IAM policy of
+  # service accounts at the project level. It keeps get, list and
+  # getIamPolicy, and gets setIamPolicy on the byo_iam accounts only.
+  byo_iam_removed_permissions = [
+    "iam.serviceAccounts.create",
+    "iam.serviceAccounts.delete",
+    "iam.serviceAccounts.update",
+    "iam.serviceAccounts.setIamPolicy",
+  ]
+
+  provisioner_permissions = (
+    var.byo_iam
+    ? sort(setsubtract(local.base_provisioner_permissions, local.byo_iam_removed_permissions))
+    : local.base_provisioner_permissions
+  )
+
+  # The project roles the data plane compositions grant: to the GKE node and
+  # sandbox host service accounts, the in-cluster workloads, and the control
+  # plane's Crossplane service account for its access to the cluster. The
+  # provisioner may grant only these.
+  granted_roles = [
+    "roles/artifactregistry.reader",
+    "roles/cloudsql.admin",
+    "roles/cloudsql.client",
+    # The app logs in to Cloud SQL as its IAM database user.
+    "roles/cloudsql.instanceUser",
+    "roles/container.admin",
+    "roles/container.defaultNodeServiceAccount",
+    "roles/redis.dbConnectionUser",
+    "roles/secretmanager.secretAccessor",
+  ]
+
+  apis = toset([
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "dns.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "networkconnectivity.googleapis.com",
+    "redis.googleapis.com",
+    "secretmanager.googleapis.com",
+    "servicedirectory.googleapis.com",
+    "servicenetworking.googleapis.com",
+    "sqladmin.googleapis.com",
+  ])
+}
+
+resource "google_project_service" "apis" {
+  for_each = var.enable_apis ? local.apis : toset([])
+
+  project            = var.project_id
+  service            = each.key
+  disable_on_destroy = false
+}
+
+resource "google_service_account" "provisioner" {
+  project      = var.project_id
+  account_id   = var.service_account_id
+  display_name = "LangSmith BYOC provisioner"
+  # LangSmith reads this description to verify that the LangSmith organization
+  # with this external ID owns the provisioner.
+  description = var.external_id
+
+  # The IAM API must be enabled first in a new project.
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_custom_role" "provisioner" {
+  project     = var.project_id
+  role_id     = "${var.custom_role_id_prefix}Provisioner"
+  title       = "LangSmith BYOC provisioner"
+  description = "Creates, updates and deletes the resources of LangSmith BYOC data planes"
+  stage       = "BETA"
+  permissions = local.provisioner_permissions
+
+  depends_on = [google_project_service.apis]
+}
+
+# Without byo_iam, the data plane compositions grant the data plane service
+# accounts their project roles. With byo_iam, this module makes those grants,
+# so the role and its binding are not created.
+resource "google_project_iam_custom_role" "project_iam_granter" {
+  count = var.byo_iam ? 0 : 1
+
+  project     = var.project_id
+  role_id     = "${var.custom_role_id_prefix}ProjectIamGranter"
+  title       = "LangSmith BYOC project IAM granter"
+  description = "Grants data plane service accounts their project roles. The binding limits which roles."
+  stage       = "BETA"
+  permissions = [
+    "resourcemanager.projects.getIamPolicy",
+    "resourcemanager.projects.setIamPolicy",
+  ]
+
+  depends_on = [google_project_service.apis]
+}
+
+# Data planes run GKE nodes and workloads as service accounts the provisioner
+# creates. IAM conditions are not evaluated for actAs, so this role is
+# unconditional. The provisioner can only create and grant within the limits
+# above. With byo_iam, the provisioner gets actAs on the node service accounts
+# only, so the role and its binding are not created.
+resource "google_project_iam_custom_role" "service_account_user" {
+  count = var.byo_iam ? 0 : 1
+
+  project     = var.project_id
+  role_id     = "${var.custom_role_id_prefix}ServiceAccountUser"
+  title       = "LangSmith BYOC service account user"
+  description = "Runs GKE nodes and workloads as the data plane service accounts"
+  stage       = "BETA"
+  permissions = ["iam.serviceAccounts.actAs"]
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "provisioner" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.provisioner.name
+  member  = "serviceAccount:${google_service_account.provisioner.email}"
+}
+
+resource "google_project_iam_member" "service_account_user" {
+  count = var.byo_iam ? 0 : 1
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.service_account_user[0].name
+  member  = "serviceAccount:${google_service_account.provisioner.email}"
+}
+
+resource "google_project_iam_member" "project_iam_granter" {
+  count = var.byo_iam ? 0 : 1
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.project_iam_granter[0].name
+  member  = "serviceAccount:${google_service_account.provisioner.email}"
+
+  condition {
+    title       = "data-plane-roles-only"
+    description = "Grant only the roles LangSmith data planes use"
+    expression  = "api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly(${jsonencode(local.granted_roles)})"
+  }
+}
+
+# These resources had no count before byo_iam. The moved blocks keep the
+# addresses of existing deployments, so byo_iam = false plans no change.
+moved {
+  from = google_project_iam_custom_role.project_iam_granter
+  to   = google_project_iam_custom_role.project_iam_granter[0]
+}
+
+moved {
+  from = google_project_iam_custom_role.service_account_user
+  to   = google_project_iam_custom_role.service_account_user[0]
+}
+
+moved {
+  from = google_project_iam_member.service_account_user
+  to   = google_project_iam_member.service_account_user[0]
+}
+
+moved {
+  from = google_project_iam_member.project_iam_granter
+  to   = google_project_iam_member.project_iam_granter[0]
+}
+
+resource "google_service_account_iam_member" "crossplane" {
+  service_account_id = google_service_account.provisioner.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${var.crossplane_service_account}"
+}
+
+# ---------------------------------------------------------------------------
+# Bring your own IAM (byo_iam = true)
+#
+# This module creates the data plane service accounts and their project role
+# grants. The data plane compositions find the accounts by account ID, so the
+# IDs below are a contract with LangSmith. All data planes in the project share
+# the accounts.
+#
+# The control plane still creates the Workload Identity bindings and the
+# workload's Token Creator grant on itself: the project's workload identity
+# pool exists only after the first GKE cluster. So the provisioner gets
+# getIamPolicy and setIamPolicy on these accounts, and actAs on the two that
+# GKE node pools run as.
+# ---------------------------------------------------------------------------
+
+locals {
+  byo_iam_service_accounts = var.byo_iam ? {
+    "langsmith-workload" = {
+      display_name = "LangSmith workload"
+      description  = "LangSmith application workloads in the data plane GKE clusters"
+      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/redis.dbConnectionUser"]
+      act_as       = false
+    }
+    # Secret Manager access is the conditional grant below.
+    "langsmith-external-secrets" = {
+      display_name = "LangSmith External Secrets"
+      description  = "External Secrets Operator in the data plane GKE clusters"
+      roles        = []
+      act_as       = false
+    }
+    # The data plane compositions grant roles/dns.admin on each data plane's
+    # DNS zones, not on the project.
+    "langsmith-cert-manager" = {
+      display_name = "LangSmith cert-manager"
+      description  = "cert-manager DNS-01 challenges in the data plane GKE clusters"
+      roles        = []
+      act_as       = false
+    }
+    "langsmith-postgres-setup" = {
+      display_name = "LangSmith Postgres setup"
+      description  = "Sets up the data plane Cloud SQL databases"
+      roles        = ["roles/cloudsql.admin"]
+      act_as       = false
+    }
+    "langsmith-node" = {
+      display_name = "LangSmith GKE nodes"
+      description  = "Nodes of the data plane GKE clusters"
+      roles        = ["roles/artifactregistry.reader", "roles/container.defaultNodeServiceAccount"]
+      act_as       = true
+    }
+    "langsmith-sandbox-host" = {
+      display_name = "LangSmith sandbox GKE nodes"
+      description  = "Sandbox nodes of the data plane GKE clusters"
+      roles        = ["roles/artifactregistry.reader", "roles/container.defaultNodeServiceAccount", "roles/redis.dbConnectionUser"]
+      act_as       = true
+    }
+  } : {}
+
+  # Keyed "<account ID>/<role>".
+  byo_iam_project_roles = merge([
+    for name, sa in local.byo_iam_service_accounts : {
+      for role in sa.roles : "${name}/${role}" => { account = name, role = role }
+    }
+  ]...)
+}
+
+resource "google_service_account" "byo_iam" {
+  for_each = local.byo_iam_service_accounts
+
+  project      = var.project_id
+  account_id   = each.key
+  display_name = each.value.display_name
+  description  = each.value.description
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "byo_iam" {
+  for_each = local.byo_iam_project_roles
+
+  project = var.project_id
+  role    = each.value.role
+  member  = "serviceAccount:${google_service_account.byo_iam[each.value.account].email}"
+}
+
+# External Secrets reads only the data plane secrets, whose IDs start with
+# "ls-". The role grants only secretmanager.versions.access, which IAM
+# evaluates on the secret version.
+resource "google_project_iam_member" "byo_iam_external_secrets" {
+  count = var.byo_iam ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.byo_iam["langsmith-external-secrets"].email}"
+
+  condition {
+    title       = "langsmith-data-plane-secrets"
+    description = "LangSmith data plane secrets"
+    expression  = "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
+  }
+}
+
+# The control plane's Crossplane service account reaches the data plane GKE
+# clusters through this role.
+resource "google_project_iam_member" "byo_iam_crossplane_container_admin" {
+  count = var.byo_iam ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/container.admin"
+  member  = "serviceAccount:${var.crossplane_service_account}"
+}
+
+resource "google_project_iam_custom_role" "service_account_iam_manager" {
+  count = var.byo_iam ? 1 : 0
+
+  project     = var.project_id
+  role_id     = "${var.custom_role_id_prefix}ServiceAccountIamManager"
+  title       = "LangSmith BYOC service account IAM manager"
+  description = "Manages Workload Identity and Token Creator grants on the data plane service accounts"
+  stage       = "BETA"
+  permissions = [
+    "iam.serviceAccounts.getIamPolicy",
+    "iam.serviceAccounts.setIamPolicy",
+  ]
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_service_account_iam_member" "byo_iam_iam_manager" {
+  for_each = local.byo_iam_service_accounts
+
+  service_account_id = google_service_account.byo_iam[each.key].name
+  role               = google_project_iam_custom_role.service_account_iam_manager[0].name
+  member             = "serviceAccount:${google_service_account.provisioner.email}"
+}
+
+# GKE node pools run as these accounts, which needs actAs on them.
+resource "google_service_account_iam_member" "byo_iam_service_account_user" {
+  for_each = { for name, sa in local.byo_iam_service_accounts : name => sa if sa.act_as }
+
+  service_account_id = google_service_account.byo_iam[each.key].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.provisioner.email}"
+}

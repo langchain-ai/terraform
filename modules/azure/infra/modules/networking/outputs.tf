@@ -37,3 +37,12 @@ output "subnet_agic_id" {
   description = "ID of the Application Gateway subnet (empty string when enable_agic = false)"
   value       = var.enable_agic ? azurerm_subnet.subnet_agic[0].id : ""
 }
+
+output "subnet_nsg_rules" {
+  description = "Security rules of the NSGs on the AKS, Postgres, and Redis subnets, keyed by subnet. Null for a subnet that has none, because enable_subnet_nsgs is false or the subnet was not created here."
+  value = {
+    aks      = one(azurerm_network_security_group.aks[*].security_rule)
+    postgres = one(azurerm_network_security_group.postgres[*].security_rule)
+    redis    = one(azurerm_network_security_group.redis[*].security_rule)
+  }
+}

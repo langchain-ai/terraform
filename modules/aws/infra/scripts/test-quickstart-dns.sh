@@ -84,17 +84,25 @@ write_fresh_answers() {
     printf '\n'                    # Region
     printf '\n'                    # Owner
     printf '\n'                    # Cost center
+    printf '%s\n' "admin@example.com" # Initial org admin email
     printf '\n'                    # Create VPC: yes
     printf '\n'                    # EKS version
     printf '\n'                    # Node instance type
     printf '\n'                    # Node min
     printf '\n'                    # Node max
-    printf '%s\n' "2"             # Backends: in-cluster
+    printf '%s\n' "2"             # PostgreSQL: in-cluster
+    printf '%s\n' "2"             # Redis: in-cluster
     printf '\n'                    # ClickHouse: in-cluster
-    printf '%s\n' "2"             # Gateway: ALB
-    printf '%s\n' "1"             # TLS: ACM
-    printf '%s\n' "$acm_arn"      # Existing ACM ARN or auto-provision
+    printf '\n'                    # SmithDB: disabled
+    printf '%s\n' "3"             # Gateway: ALB
     printf '%s\n' "$domain"       # Custom domain
+    printf '%s\n' "1"             # TLS: ACM
+    if [[ -n "$acm_arn" ]]; then
+      printf '%s\n' "2"           # Certificate: externally managed
+      printf '%s\n' "$acm_arn"    # Existing ACM ARN
+    else
+      printf '%s\n' "1"           # Certificate: Terraform-managed
+    fi
     if [[ -z "$acm_arn" ]]; then
       printf '%s\n' "$dns_choice" # Route 53: new or reuse
       if [[ "$dns_choice" == "2" ]]; then
@@ -104,9 +112,11 @@ write_fresh_answers() {
     fi
     printf '\n'                    # Sizing: dev
     printf '\n'                    # Deployments: no
+    printf '\n'                    # Fleet: no
+    printf '\n'                    # LangSmith Chat: no
     printf '\n'                    # Insights: no
-    printf '\n'                    # SmithDB: no
     printf '\n'                    # Sandboxes: no
+    printf '\n'                    # Write configuration: yes
   } > "$file"
 }
 
@@ -118,29 +128,29 @@ write_update_defaults() {
   {
     printf '\n' # Update existing file
     printf '\n' # Deployment profile
-    printf '\n' # Name prefix
-    printf '\n' # Environment
-    printf '\n' # Region
     printf '\n' # Owner
     printf '\n' # Cost center
-    printf '\n' # Create VPC
+    printf '\n' # Initial org admin email
     printf '\n' # EKS version
     printf '\n' # Node instance type
     printf '\n' # Node min
     printf '\n' # Node max
-    printf '\n' # Backends
+    printf '\n' # PostgreSQL
+    printf '\n' # Redis
     printf '\n' # ClickHouse
+    printf '\n' # SmithDB
     printf '\n' # Gateway
     printf '\n' # TLS
-    printf '\n' # ACM ARN
-    printf '\n' # Domain
+    printf '\n' # Certificate management
     printf '\n' # Route 53 choice
     printf '\n' # Existing zone ID
     printf '\n' # Sizing
     printf '\n' # Deployments
+    printf '\n' # Fleet
+    printf '\n' # LangSmith Chat
     printf '\n' # Insights
-    printf '\n' # SmithDB
     printf '\n' # Sandboxes
+    printf '\n' # Write configuration
   } > "$file"
 }
 
@@ -164,12 +174,17 @@ has_line "reuse choice is written" "$REUSE_INFRA/terraform.tfvars" \
   "dns_create_zone        = false"
 has_line "existing zone ID is written" "$REUSE_INFRA/terraform.tfvars" \
   "dns_existing_zone_id   = \"Z1ABCDEF123456\""
+has_line "admin email is written" "$REUSE_INFRA/terraform.tfvars" \
+  "langsmith_admin_email = \"admin@example.com\""
 log_has "invalid zone ID is rejected" "$TMP/reuse.log" \
   "ERROR: enter a valid Route 53 hosted zone ID starting with Z."
 log_has "summary shows reused zone" "$TMP/reuse.log" \
   "existing (Z1ABCDEF123456)"
 
-echo "2. Update mode preserves the zone choice and ID as defaults"
+echo "2. Update mode preserves the zone choice, the zone ID, and SSO"
+# Turn SSO on the way `make sso` does: by editing only that line.
+sed 's/^enable_sso_oidc[[:space:]]*=.*/enable_sso_oidc = true/' "$REUSE_INFRA/terraform.tfvars" > "$TMP/sso.tfvars"
+mv "$TMP/sso.tfvars" "$REUSE_INFRA/terraform.tfvars"
 write_update_defaults "$TMP/update.answers"
 run_wizard "existing-zone update run completes" "$REUSE_INFRA" \
   "$TMP/update.answers" "$TMP/update.log"
@@ -177,6 +192,10 @@ has_line "reuse choice survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "dns_create_zone        = false"
 has_line "existing zone ID survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "dns_existing_zone_id   = \"Z1ABCDEF123456\""
+has_line "SSO setting survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  "enable_sso_oidc         = true"
+has_line "admin email survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  "langsmith_admin_email = \"admin@example.com\""
 
 echo "3. Creating a new zone writes the choice without an existing ID"
 NEW_INFRA="$TMP/new"
@@ -187,7 +206,8 @@ has_line "new-zone choice is written" "$NEW_INFRA/terraform.tfvars" \
   "dns_create_zone        = true"
 lacks_key "new-zone mode omits an existing ID" "$NEW_INFRA/terraform.tfvars" \
   "dns_existing_zone_id"
-log_has "summary shows newly created zone" "$TMP/new.log" "new (new.example.com)"
+log_has "summary shows newly created zone" "$TMP/new.log" \
+  "Terraform-managed (new.example.com)"
 
 echo "4. A supplied ACM ARN keeps the DNS module questions disabled"
 ACM_INFRA="$TMP/acm"

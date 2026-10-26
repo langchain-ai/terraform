@@ -42,7 +42,7 @@ output "services_range_name" {
 
 output "private_service_connection" {
   description = "Private service connection for managed services (null if private networking disabled)"
-  value       = var.enable_private_service_connection ? google_service_networking_connection.private_vpc_connection[0].id : null
+  value       = try(google_service_networking_connection.private_vpc_connection[0].id, null)
 }
 
 output "private_networking_enabled" {

@@ -77,6 +77,13 @@ make init-values
 # Re-sync ESO secrets without redeploying
 make apply-eso
 
+# SmithDB historical migration: start, then make apply, init-values, deploy; end once the Job is Complete
+make smithdb-migration-job-start
+make smithdb-migration-job-end
+
+# Turn on SSO login after a working password install (one-way)
+make sso
+
 # Check SSM secrets status + TF_VAR_* export status (read-only)
 make secrets
 
@@ -113,14 +120,22 @@ Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the f
 
 ```hcl
 # infra/terraform.tfvars
-enable_deployments   = true    # LangGraph Platform (required for Agent Builder and Polly)
-enable_agent_builder = true    # Agent Builder UI
-enable_insights      = true    # ClickHouse-backed analytics
-enable_polly         = true    # Polly AI eval/monitoring
+enable_deployments   = true    # Optional full Deployments: listener + operator
+enable_fleet         = true    # No-code agents; enables its required host-backend
+fleet_storage        = "external" # Or "in-cluster"
+enable_insights      = true    # AI-powered trace analysis
+insights_storage     = "external" # Or "in-cluster"
+enable_polly         = true    # LangSmith Chat (formerly Polly)
+polly_storage        = "external" # Or "in-cluster"
 enable_usage_telemetry = false # Extended usage telemetry
+
+# Engine (chart v0.17+; requires enable_sandboxes = true; see ENGINE.md)
+enable_engine        = true    # Engine on Amazon Bedrock through a dedicated IRSA role
 ```
 
 ```bash
+# Engine only: create its SSM keys and its IRSA role first.
+# source infra/scripts/setup-env.sh && make apply
 make init-values   # copies addon values files based on enable_* flags
 make deploy
 ```
@@ -255,4 +270,9 @@ make uninstall
 cd infra
 terraform apply
 terraform destroy
+
+# After destroy succeeds, remove cloud secrets explicitly, then local files.
+cd ..
+make purge-secrets
+make clean
 ```

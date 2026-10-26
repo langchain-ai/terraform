@@ -5,12 +5,14 @@
 # Pass 2 (helm):        make init-values → make deploy
 # Full deploy:          make deploy-all
 # Where am I?           make status
+# SmithDB migration:    make smithdb-migration-job-start / smithdb-migration-job-end, then make deploy-all
 # Terraform flags:      make plan ARGS="-target=module.gke_cluster"   (see make help)
 
 .PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy tf \
         preflight kubeconfig \
         init-values deploy uninstall deploy-all \
-        patch-lgp
+        patch-lgp \
+        smithdb-migration-job-start smithdb-migration-job-end
 
 INFRA_DIR := infra
 HELM_DIR  := helm
@@ -80,8 +82,8 @@ destroy: ## terraform destroy (infra)
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 	terraform -chdir=$(INFRA_DIR) $(ARGS)
 
-preflight: ## Run GCP infra preflight checks
-	$(INFRA_DIR)/scripts/preflight.sh
+preflight: ## Run GCP infra preflight checks (ARGS="--domain <d>" / "--create-test-resources")
+	$(INFRA_DIR)/scripts/preflight.sh $(ARGS)
 
 kubeconfig: ## Fetch kubeconfig for the GKE cluster
 	$(HELM_DIR)/scripts/get-kubeconfig.sh
@@ -101,6 +103,14 @@ uninstall: ## Uninstall LangSmith Helm release
 
 patch-lgp: ## Patch LGP CRs for minimum/dev profiles (right-sizes redis sidecars + database)
 	$(HELM_DIR)/scripts/patch-lgp-resources.sh
+
+# ── SmithDB ───────────────────────────────────────────────────────────────────
+
+smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
+
+smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

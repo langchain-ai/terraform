@@ -23,6 +23,9 @@ config:
   agentBuilder:
     enabled: false
 
+hostBackend:
+  enabled: true
+
 fleet:
   enabled: true
   namePrefix: "standalone-fleet"

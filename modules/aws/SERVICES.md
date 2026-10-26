@@ -157,5 +157,5 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 | Role | Defined in | Used by | Permissions |
 |------|-----------|---------|-------------|
 | `langsmith_irsa_role` | `modules/eks` | `backend`, `platform-backend`, `queue`, `ingest-queue` | S3 get/put/delete on LangSmith bucket |
-| `aws_iam_role.eso` | `aws/infra/main.tf` | ESO controller pod | SSM `GetParameter`, `GetParameters` on `/langsmith/*` |
+| `aws_iam_role.eso` | `aws/infra/main.tf` | ESO controller pod | SSM `GetParameter`, `GetParameters`, `GetParametersByPath` on `/langsmith/{base_name}/*` |
 | `smithdb` IRSA role | `modules/smithdb` | SmithDB service account | Dedicated SmithDB bucket access and optional KMS data-key operations |

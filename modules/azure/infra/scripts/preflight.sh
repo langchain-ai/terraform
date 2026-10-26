@@ -11,11 +11,24 @@
 #   1. az CLI is installed and logged in
 #   2. Correct subscription is selected
 #   3. Required resource providers are registered
-#   4. The identity Terraform will use can write role assignments
+#   4. The identity Terraform will use can write the role assignments this
+#      configuration makes, including through an ABAC condition that lists
+#      roles, and can join the route table on a subnet Terraform writes
 #   5. Subscription offer type is not blocked from provisioning Postgres
-#   6. terraform.tfvars exists with required fields populated
-#   7. The configured Postgres version and SKU are offered in the region
-#   8. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
+#   6. Regional vCPU quota covers the node pools and the Postgres SKU family
+#   7. terraform.tfvars exists with required fields populated, any cluster or
+#      Key Vault it attaches to rather than creates is really there, pasted IDs
+#      carry the case the provider parses, and a private-endpoint vault's zone
+#      resolves privately from this machine
+#   8. The configured Postgres version and SKU are offered in the region
+#   9. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
+#  10. An attached cluster has a node large enough to hold ClickHouse
+#
+# Three results, and only one of them stops a deploy. [✗] is a check known to
+# break apply. [?] is a check this script could not settle from outside, such
+# as an ABAC condition it cannot parse or DNS it cannot reach; make plan and
+# make apply test those exactly. [!] is advice. The exit status is non-zero for
+# [✗] alone, so preflight is advisory everywhere else.
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -23,15 +36,36 @@
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-PASS="${GREEN}[✓]${NC}"; FAIL="${RED}[✗]${NC}"; WARN="${YELLOW}[!]${NC}"
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+PASS="${GREEN}[✓]${NC}"; FAIL="${RED}[✗]${NC}"; WARN="${YELLOW}[!]${NC}"; UNSURE="${CYAN}[?]${NC}"
 
-INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ERRORS=0
+UNCONFIRMED=0
 
 fail() { echo -e "${FAIL} $1"; ERRORS=$((ERRORS + 1)); }
 pass() { echo -e "${PASS} $1"; }
 warn() { echo -e "${WARN} $1"; }
+# A check that could neither pass nor fail from here. Counted apart from
+# failures so the summary can say plan and apply settle it, and it never sets
+# the exit status.
+unconfirmed() { echo -e "${UNSURE} $1"; UNCONFIRMED=$((UNCONFIRMED + 1)); }
+
+# Renders the "<severity> <message>" lines the python helpers emit. Feed it a
+# heredoc, not a pipe: a pipeline runs fail() in a subshell and loses the ERRORS
+# increment.
+_render() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      pass\ *) pass "${line#pass }" ;;
+      warn\ *) warn "${line#warn }" ;;
+      fail\ *) fail "${line#fail }" ;;
+      unconfirmed\ *) unconfirmed "${line#unconfirmed }" ;;
+      *) [ -z "$line" ] || warn "$line" ;;
+    esac
+  done
+}
 
 echo ""
 echo "══════════════════════════════════════════════════════"
@@ -89,6 +123,103 @@ for PROVIDER in "${REQUIRED_PROVIDERS[@]}"; do
   fi
 done
 
+# ── Derived resource names ────────────────────────────────────────────────────
+# Shared by the RBAC scope check and the global-name check; deriving them
+# separately is how RBAC drifted to a hardcoded "langsmith-rg".
+# Keep in sync with local.name_base / local.name_suffix in infra/main.tf.
+TFVARS="${INFRA_DIR}/terraform.tfvars"
+
+# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh, which
+# preflight.sh deliberately does not source. Non-zero when absent or empty.
+_tfvar() {
+  local raw val
+  [ -f "$TFVARS" ] || return 1
+  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
+  [ -n "$raw" ] || return 1
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
+  [ -n "$val" ] || return 1
+  echo "$val"
+}
+
+# Terraform deploys to the tfvars subscription_id; every az call below reads the
+# active CLI one. If they differ, the report describes the wrong subscription.
+TFVARS_SUB=$(_tfvar subscription_id || echo "")
+if [ -n "${SUB_ID:-}" ] && [ -n "$TFVARS_SUB" ] && [ "$TFVARS_SUB" != "$SUB_ID" ]; then
+  fail "terraform.tfvars sets subscription_id = ${TFVARS_SUB}, but the active CLI subscription is ${SUB_ID}. Terraform would deploy to the first; the checks below describe the second. Run: az account set --subscription ${TFVARS_SUB}"
+fi
+
+# Terraform targets azure_environment; every az call below goes to the CLI's
+# active cloud. A Government subscription is invisible from the commercial cloud
+# and the other way round, so a mismatch fails every check below for a reason
+# none of them would name. ARM is the Resource Manager endpoint for az rest.
+# Preflight checks the configuration the next apply will use, so the configured
+# value wins, in Terraform's own precedence: *.auto.tfvars (the last in lexical
+# order wins), then terraform.tfvars, then TF_VAR_azure_environment. The
+# azure_environment output, the value of the last apply, is the fallback when
+# nothing is configured, and a discrepancy between the two is reported. (The
+# post-apply scripts read the output first, since they act on what was applied.)
+_cloud_in_file() {
+  sed -n 's/^[[:space:]]*azure_environment[[:space:]]*=[[:space:]]*"\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' "$1" 2>/dev/null | head -1
+}
+_cloud_configured=""
+for _auto in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
+  _cloud_configured=$(_cloud_in_file "$_auto")
+  [ -n "$_cloud_configured" ] && break
+done
+[ -n "$_cloud_configured" ] || _cloud_configured=$(_tfvar azure_environment || true)
+[ -n "$_cloud_configured" ] || _cloud_configured="${TF_VAR_azure_environment:-}"
+_cloud_applied=""
+if command -v terraform >/dev/null 2>&1; then
+  _cloud_applied=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || _cloud_applied=""
+fi
+case "$_cloud_applied" in public|usgovernment) ;; *) _cloud_applied="" ;; esac
+AZURE_ENVIRONMENT="${_cloud_configured:-${_cloud_applied:-public}}"
+case "$AZURE_ENVIRONMENT" in
+  public|usgovernment) ;;
+  *) fail "azure_environment is \"${AZURE_ENVIRONMENT}\"; it must be public or usgovernment"; AZURE_ENVIRONMENT="public" ;;
+esac
+if [ -n "$_cloud_applied" ] && [ "$_cloud_applied" != "$AZURE_ENVIRONMENT" ]; then
+  warn "The last apply used azure_environment = ${_cloud_applied}, and the configuration now says ${AZURE_ENVIRONMENT}. Checking against ${AZURE_ENVIRONMENT}. Moving an existing deployment to another cloud recreates every resource."
+fi
+case "$AZURE_ENVIRONMENT" in
+  usgovernment) EXPECTED_CLI_CLOUD="AzureUSGovernment"; ARM="https://management.usgovcloudapi.net" ;;
+  *)            EXPECTED_CLI_CLOUD="AzureCloud";        ARM="https://management.azure.com" ;;
+esac
+ACTIVE_CLI_CLOUD=$(az cloud show --query name -o tsv 2>/dev/null || echo "")
+if [ -n "$ACTIVE_CLI_CLOUD" ] && [ "$ACTIVE_CLI_CLOUD" != "$EXPECTED_CLI_CLOUD" ]; then
+  fail "azure_environment is ${AZURE_ENVIRONMENT}, but the Azure CLI is on ${ACTIVE_CLI_CLOUD}. Run: az cloud set --name ${EXPECTED_CLI_CLOUD} && az login"
+fi
+
+# identifier is name_prefix's legacy name. Track which was read so warnings name
+# a key the user actually has.
+NAME_KEY="name_prefix"
+NAME_PREFIX=$(_tfvar name_prefix || echo "")
+if [ -z "$NAME_PREFIX" ] && NAME_PREFIX=$(_tfvar identifier); then
+  NAME_KEY="identifier"
+fi
+
+# The separator hyphen is optional; normalize as local.name_suffix does. Empty
+# is valid.
+NAME_SUFFIX=""
+[ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
+
+UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
+if [ "$UNIQUE_NAMES" = "true" ]; then NAME_BASE="ls"; else NAME_BASE="langsmith"; fi
+# name_base overrides the ls/langsmith switch outright, same as main.tf.
+NAME_BASE=$(_tfvar name_base || echo "$NAME_BASE")
+
+# create_resource_group = false deploys into a group someone else created, often
+# with the deployer's rights granted on that group alone.
+CREATE_RG=$(_tfvar create_resource_group || echo "true")
+if [ "$CREATE_RG" = "false" ]; then
+  RG_KEY="existing_resource_group_name"
+  RESOURCE_GROUP_NAME=$(_tfvar existing_resource_group_name || echo "")
+else
+  RG_KEY="${NAME_KEY}, name_base and resource_group_name"
+  RESOURCE_GROUP_NAME=$(_tfvar resource_group_name || echo "${NAME_BASE}-rg${NAME_SUFFIX}")
+fi
+
 # ── 4. Deployer identity and RBAC ─────────────────────────────────────────────
 # Terraform does not necessarily authenticate as your az login. The azurerm
 # provider reads its ARM_* environment variables before falling back to the CLI,
@@ -119,6 +250,8 @@ fi
 # reported as if it belonged to the service principal Terraform will use.
 PRINCIPAL_ID=""
 PRINCIPAL_IS_CALLER=1
+GROUPS_RESOLVED=0
+GROUP_IDS=""
 if [ -n "${ARM_CLIENT_ID:-}" ]; then
   PRINCIPAL_KIND="service principal from ARM_CLIENT_ID"
   PRINCIPAL_ID=$(az ad sp show --id "$ARM_CLIENT_ID" --query id -o tsv 2>/dev/null || echo "")
@@ -135,7 +268,130 @@ elif [ "$(az account show --query user.type -o tsv 2>/dev/null || echo "")" = "s
 else
   PRINCIPAL_KIND="signed-in user"
   PRINCIPAL_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
+  if [ -n "$PRINCIPAL_ID" ]; then
+    if GROUP_IDS=$(az ad user get-member-groups --id "$PRINCIPAL_ID" --query '[].id' -o tsv 2>/dev/null); then
+      GROUPS_RESOLVED=1
+    else
+      warn "Azure group-based permissions could not be verified. Before deploying, confirm this identity's access at the subscription and resource group scopes in Azure Access control (IAM) > Check access. The denied results below may be incomplete."
+    fi
+  fi
 fi
+
+# What terraform_principal_type must be set to when an ABAC condition forces
+# principalType to be sent explicitly.
+case "$PRINCIPAL_KIND" in
+*"service principal"* | *"managed identity"*) PRINCIPAL_TYPE_HINT="ServicePrincipal" ;;
+*) PRINCIPAL_TYPE_HINT="User" ;;
+esac
+
+# The deployer's Key Vault Secrets Officer grant is the only assignment whose
+# target is not a service principal, so it is the only one a ServicePrincipal pin
+# can reject. Mirrors main.tf: explicit wins, null follows create_keyvault.
+KV_ADMIN_GRANT=$(_tfvar keyvault_manage_terraform_admin_assignment || _tfvar create_keyvault || echo "true")
+
+# create_vnet = false reuses a VNet someone else owns. Terraform then writes
+# none of it but the subnets it joins or attaches to, so virtualNetworks/write is
+# asked about only when Terraform builds the VNet.
+CREATE_VNET=$(_tfvar create_vnet || echo "true")
+AKS_SUBNET_ID=$(_tfvar aks_subnet_id || echo "")
+RBAC_CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
+
+# The roles this configuration assigns, one "<guid> <name>" line each, so an
+# ABAC condition that allows role assignments only for listed role definitions
+# can be held against them. Mirrors the counts on every azurerm_role_assignment
+# in infra/ and its modules. Where a count is unclear from tfvars alone the role
+# stays in, so a condition passes only when it covers everything apply may ask
+# for. GUIDs are Azure's built-in role definition IDs (see PERMISSIONS.md).
+_role_line() {
+  case "$1" in
+    "Storage Blob Data Contributor")       echo "ba92f5b4-2d11-453d-a403-e96b0029c9fe $1" ;;
+    "Storage Blob Data Reader")            echo "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1 $1" ;;
+    "Key Vault Secrets Officer")           echo "b86a8fe4-44ce-4948-aee5-eccb2c155cd7 $1" ;;
+    "Key Vault Secrets User")              echo "4633458b-17de-408a-b874-0445c86b69e6 $1" ;;
+    "DNS Zone Contributor")                echo "befefa01-2a29-4197-83a8-272ff33ce314 $1" ;;
+    "Virtual Machine Administrator Login") echo "1c0163c0-47e6-4577-8991-ea5c82e286e4 $1" ;;
+    "Reader")                              echo "acdd72a7-3385-48ef-bd42-f606fba81ae7 $1" ;;
+    "Contributor")                         echo "b24988ac-6180-42a0-ab88-20f7382dd24c $1" ;;
+    "Network Contributor")                 echo "4d97b98b-1d4f-4787-a291-c67834d212e7 $1" ;;
+    "Private DNS Zone Contributor")        echo "b12aa53e-6015-4669-85d0-8515ebb3ae7f $1" ;;
+  esac
+}
+# ASSIGNED_ROLES is every role apply assigns, for messages; DEPLOY_ROLES the
+# ones it assigns at the subscription or deployment group, which is what a
+# condition at those scopes has to admit. A role granted only on a supplied
+# network (_net_grant) is held to that network's scope alone.
+ASSIGNED_ROLES=$(_role_line "Storage Blob Data Contributor")
+DEPLOY_ROLES="$ASSIGNED_ROLES"
+_assigns() {
+  ASSIGNED_ROLES="${ASSIGNED_ROLES}
+$(_role_line "$1")"
+  DEPLOY_ROLES="${DEPLOY_ROLES}
+$(_role_line "$1")"
+}
+[ "$KV_ADMIN_GRANT" = "false" ] || _assigns "Key Vault Secrets Officer"
+[ "$(_tfvar keyvault_manage_managed_identity_assignment || _tfvar create_keyvault || echo "true")" = "false" ] \
+  || _assigns "Key Vault Secrets User"
+[ "$(_tfvar create_bastion || echo "false")" = "true" ] && _assigns "Virtual Machine Administrator Login"
+if [ "$(_tfvar create_dns_zone || echo "false")" = "true" ] \
+  && [ "$(_tfvar tls_certificate_source || echo "letsencrypt")" = "dns01" ]; then
+  _assigns "DNS Zone Contributor"
+fi
+[ "$(_tfvar enable_smithdb || echo "false")" = "true" ] \
+  && [ "$(_tfvar smithdb_migration_enabled || echo "false")" = "true" ] && _assigns "Storage Blob Data Reader"
+
+# Grants made at a network scope outside the deployment's resource group, as
+# "<tfvars key><TAB><scope><TAB><role>" lines. Only a supplied VNet has any:
+# when Terraform builds the VNet it lands in the deployment group, which is
+# checked below anyway.
+NET_GRANTS=""
+_net_grant() {
+  ASSIGNED_ROLES="${ASSIGNED_ROLES}
+$(_role_line "$3")"
+  NET_GRANTS="${NET_GRANTS}$(printf '%s\t%s\t%s' "$1" "$2" "$3")
+"
+}
+if [ "$RBAC_CREATE_CLUSTER" != "false" ] && [ "$(_tfvar ingress_controller || echo "envoy-gateway")" = "agic" ]; then
+  _assigns "Reader"
+  _assigns "Contributor"
+  case "$(_tfvar agic_network_contributor_scope || echo "vnet")" in
+    none) ;;
+    subnet) if [ "$CREATE_VNET" = "false" ]; then _net_grant agic_subnet_id "$(_tfvar agic_subnet_id || echo "")" "Network Contributor"; else _assigns "Network Contributor"; fi ;;
+    *) if [ "$CREATE_VNET" = "false" ]; then _net_grant vnet_id "$(_tfvar vnet_id || echo "")" "Network Contributor"; else _assigns "Network Contributor"; fi ;;
+  esac
+fi
+# The control-plane grants follow aks_control_plane_identity_manage_grants, whose
+# null default is create_vnet. With a zone ID in aks_private_dns_zone_id the
+# Network Contributor grant moves from the subnet to the VNet.
+CP_GRANTS=$(_tfvar aks_control_plane_identity_manage_grants || echo "null")
+[ "$CP_GRANTS" = "null" ] && CP_GRANTS="$CREATE_VNET"
+if [ "$RBAC_CREATE_CLUSTER" != "false" ] && [ "$(_tfvar aks_control_plane_identity || echo "system")" = "user" ] \
+  && [ "$CP_GRANTS" = "true" ]; then
+  CP_ZONE=$(_tfvar aks_private_dns_zone_id || echo "")
+  if [ "$(_tfvar aks_private_cluster_enabled || echo "false")" = "true" ] \
+    && [ -n "$CP_ZONE" ] && [ "$CP_ZONE" != "System" ] && [ "$CP_ZONE" != "None" ]; then
+    if [ "$CREATE_VNET" = "false" ]; then
+      _net_grant vnet_id "$(_tfvar vnet_id || echo "")" "Network Contributor"
+    else
+      _assigns "Network Contributor"
+    fi
+    _net_grant aks_private_dns_zone_id "$CP_ZONE" "Private DNS Zone Contributor"
+  elif [ "$CREATE_VNET" = "false" ]; then
+    _net_grant aks_subnet_id "$AKS_SUBNET_ID" "Network Contributor"
+  else
+    _assigns "Network Contributor"
+  fi
+fi
+# The cluster identity's grant on a load balancer subnet other than the node one.
+ILB_SUBNET=$(_tfvar ingress_load_balancer_subnet_id || echo "")
+if [ "$RBAC_CREATE_CLUSTER" != "false" ] && [ "$(_tfvar ingress_load_balancer || echo "public")" = "internal" ] \
+  && [ -n "$ILB_SUBNET" ] && [ "$(_tfvar ingress_load_balancer_manage_subnet_assignment || echo "true")" != "false" ] \
+  && [ "$(printf '%s' "$ILB_SUBNET" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$AKS_SUBNET_ID" | tr '[:upper:]' '[:lower:]')" ]; then
+  _net_grant ingress_load_balancer_subnet_id "$ILB_SUBNET" "Network Contributor"
+fi
+# One line per role, and the names alone for messages.
+ASSIGNED_ROLES=$(printf '%s\n' "$ASSIGNED_ROLES" | awk 'NF && !seen[$0]++')
+DEPLOY_ROLES=$(printf '%s\n' "$DEPLOY_ROLES" | awk 'NF && !seen[$0]++')
+ASSIGNED_ROLE_NAMES=$(printf '%s\n' "$ASSIGNED_ROLES" | cut -d' ' -f2- | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $0 }')
 
 if [ -n "$PRINCIPAL_ID" ]; then
   pass "Terraform will authenticate as ${PRINCIPAL_KIND} (object ID ${PRINCIPAL_ID})"
@@ -168,93 +424,204 @@ trap 'rm -rf "$RBAC_TMP"' EXIT
 
 if [ -z "$PRINCIPAL_ID" ] || [ -z "$SUB_ID_CHECK" ]; then
   warn "Skipping RBAC check — no principal object ID to query"
+elif [ "$CREATE_RG" = "false" ] && [ -z "$RESOURCE_GROUP_NAME" ]; then
+  # Without a group there is no scope to ask about, and the subscription
+  # fallback would judge rights an attached deployment never uses.
+  fail "terraform.tfvars: create_resource_group = false needs existing_resource_group_name, the group to deploy into"
 else
   # Every scope the deployment writes a role assignment at is knowable before
   # apply. The subscription covers everything created beneath it by inheritance.
   # The resource group is where every LangSmith resource lands, and one of the
-  # AGIC assignments names it literally. A bring-your-own VNet can sit in a
+  # AGIC assignments names it literally. An attached group is the whole
+  # footprint, so the subscription is not asked about: a deployer scoped to the
+  # group would fail there for rights the deployment never uses. A bring-your-own VNet can sit in a
   # platform-managed resource group, which is where a landing zone puts its deny
   # assignments, so it gets checked on its own when one is configured.
   #
   # Both values come out of terraform.tfvars and end up in a request URL, so each
   # is held to the pattern its Terraform variable already validates and dropped
   # if it does not fit. An unchecked value here could aim the request elsewhere.
-  TFVARS_FILE="${INFRA_DIR}/terraform.tfvars"
+  SCOPES=()
+  RG_SCOPE=""
+  [ "$CREATE_RG" = "false" ] || SCOPES+=("/subscriptions/${SUB_ID_CHECK}")
 
-  # An absent key is a valid answer (every variable read here has a default), so
-  # the trailing || true keeps a no-match grep from tripping set -e.
-  tfvar() {
-    [ -f "$TFVARS_FILE" ] || return 0
-    grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 | cut -d'"' -f2 || true
-  }
-
-  SCOPES=("/subscriptions/${SUB_ID_CHECK}")
-
-  # printf adds the newline grep needs to see an empty identifier as a line to
-  # match rather than as no input at all. Empty is valid: it means no suffix.
-  IDENTIFIER=$(tfvar identifier)
-  if printf '%s\n' "$IDENTIFIER" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/langsmith-rg${IDENTIFIER}")
-  else
-    warn "terraform.tfvars: identifier is not a valid resource-name suffix, so the deployment resource group was not checked"
-  fi
-
-  EXISTING_VNET=$(tfvar vnet_id)
-  if [ -n "$EXISTING_VNET" ]; then
-    if printf '%s\n' "$EXISTING_VNET" \
-      | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+$'; then
-      SCOPES+=("$EXISTING_VNET")
-    else
-      warn "terraform.tfvars: vnet_id is not a VNet resource ID, so that scope was not checked"
+  # Azure's resource-group grammar, so a hand-edited terraform.tfvars cannot aim
+  # the request elsewhere. printf gives grep the newline it needs to see a line.
+  if printf '%s\n' "$RESOURCE_GROUP_NAME" | grep -qE '^[A-Za-z0-9._()-]{1,90}$'; then
+    RG_SCOPE="/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}"
+    SCOPES+=("$RG_SCOPE")
+    if [ "$CREATE_RG" = "false" ]; then
+      if az group show --name "$RESOURCE_GROUP_NAME" --query id -o tsv >/dev/null 2>&1; then
+        pass "Resource group ${RESOURCE_GROUP_NAME} exists"
+      else
+        fail "Resource group ${RESOURCE_GROUP_NAME} could not be read. It does not exist in this subscription or this identity cannot read it, and plan reads it before creating anything."
+      fi
     fi
+  else
+    warn "terraform.tfvars: '${RESOURCE_GROUP_NAME}' is not a legal resource group name (check ${RG_KEY}), so the deployment resource group was not checked"
   fi
+
+  # Every scope so far is the deployment's own and is asked the full set of
+  # actions. The network scopes below are someone else's, where the deployment
+  # only grants roles, so they are asked about roleAssignments alone. Each SCOPE
+  # line is "<kind><TAB><scope>"; the roles a condition is held against follow
+  # the kind: all of them at the deployment's scopes, the network grants' own
+  # at theirs.
+  SCOPE_LINES=""
+  for SCOPE in ${SCOPES[@]+"${SCOPES[@]}"}; do
+    SCOPE_LINES="${SCOPE_LINES}$(printf 'deployment\t%s' "$SCOPE")
+"
+  done
+  # A bring-your-own VNet can sit in a platform-managed resource group, which is
+  # where a landing zone puts its deny assignments, so each network scope the
+  # deployment grants roles at is checked on its own.
+  NET_SCOPES=$(printf '%s' "$NET_GRANTS" | awk -F'\t' 'NF == 3 && !seen[$1 FS $2]++ { print $1 "\t" $2 }')
+  while IFS="$(printf '\t')" read -r NET_KEY NET_SCOPE; do
+    [ -n "$NET_KEY" ] || continue
+    if printf '%s\n' "$NET_SCOPE" \
+      | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/(virtualNetworks/[A-Za-z0-9._-]+(/subnets/[A-Za-z0-9._-]+)?|privateDnsZones/[A-Za-z0-9._-]+)$'; then
+      SCOPE_LINES="${SCOPE_LINES}$(printf 'network\t%s' "$NET_SCOPE")
+"
+    elif [ -z "$NET_SCOPE" ]; then
+      warn "terraform.tfvars: ${NET_KEY} is empty, and this configuration grants a role there, so that scope was not checked"
+    elif [ "$NET_KEY" = "vnet_id" ]; then
+      warn "terraform.tfvars: vnet_id is not a VNet resource ID, so that scope was not checked"
+    else
+      warn "terraform.tfvars: ${NET_KEY} is not a network resource ID, so that scope was not checked"
+    fi
+  done <<EOF
+$NET_SCOPES
+EOF
+  # Two grants can share a scope (AGIC and the control plane on one VNet).
+  SCOPE_LINES=$(printf '%s' "$SCOPE_LINES" | awk -F'\t' 'NF == 2 && !seen[$2]++')
 
   # roleAssignments/write is the action that decides; the rest are what a
-  # principal without broad resource access trips over first. checkAccess batches,
-  # so all of them cost one request per scope. The object ID goes through
-  # json.dumps into a file rather than onto a command line.
-  python3 - "$PRINCIPAL_ID" > "${RBAC_TMP}/body.json" <<'PY'
+  # principal without broad resource access trips over first. resourceGroups/read
+  # is what plan exercises before any write, so an applied deployment fails there
+  # first. checkAccess batches them into one request per scope. The subject
+  # attributes go through json.dumps into a file rather than onto a command line.
+  for RBAC_KIND in deployment network; do
+  python3 - "$PRINCIPAL_ID" "$GROUPS_RESOLVED" "$GROUP_IDS" "$CREATE_RG" "$CREATE_VNET" "$RBAC_KIND" \
+    > "${RBAC_TMP}/body-${RBAC_KIND}.json" <<'PY'
 import json, sys
 
 ACTIONS = [
     "Microsoft.Authorization/roleAssignments/write",
     "Microsoft.Authorization/roleAssignments/delete",
+    "Microsoft.Resources/subscriptions/resourceGroups/read",
     "Microsoft.Resources/subscriptions/resourceGroups/write",
     "Microsoft.ContainerService/managedClusters/write",
     "Microsoft.KeyVault/vaults/write",
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    "Microsoft.Cache/redis/write",
+    # redisEnterprise is Azure Managed Redis, what the module provisions.
+    # Microsoft.Cache/redis is classic Azure Cache and a separate RBAC action.
+    "Microsoft.Cache/redisEnterprise/write",
 ]
+# An attached group already exists, so nothing writes it.
+if sys.argv[4] == "false":
+    ACTIONS.remove("Microsoft.Resources/subscriptions/resourceGroups/write")
+# A supplied VNet is joined, never written.
+if sys.argv[5] == "false":
+    ACTIONS.remove("Microsoft.Network/virtualNetworks/write")
+# A network scope only receives role assignments.
+if sys.argv[6] == "network":
+    ACTIONS = ACTIONS[:2]
+
+attributes = {"ObjectId": sys.argv[1]}
+if sys.argv[2] == "1":
+    attributes["Groups"] = [group for group in sys.argv[3].splitlines() if group]
 
 print(json.dumps({
-    "Subject": {"Attributes": {"ObjectId": sys.argv[1]}},
+    "Subject": {"Attributes": attributes},
     "Actions": [{"Id": action, "IsDataAction": False} for action in ACTIONS],
 }))
 PY
+  done
 
+  # scopes.txt carries "<kind><TAB><scope>"; roles-<n>.txt the "<guid> <name>"
+  # lines an ABAC condition at that scope has to admit.
   : > "${RBAC_TMP}/scopes.txt"
   SCOPE_COUNT=0
-  for SCOPE in "${SCOPES[@]}"; do
+  while IFS="$(printf '\t')" read -r RBAC_KIND SCOPE; do
+    [ -n "$SCOPE" ] || continue
     SCOPE_COUNT=$((SCOPE_COUNT + 1))
-    printf '%s\n' "$SCOPE" >> "${RBAC_TMP}/scopes.txt"
+    printf '%s\t%s\n' "$RBAC_KIND" "$SCOPE" >> "${RBAC_TMP}/scopes.txt"
+    if [ "$RBAC_KIND" = "network" ]; then
+      printf '%s' "$NET_GRANTS" | awk -F'\t' -v s="$SCOPE" '$2 == s { print $3 }' | sort -u \
+        | while IFS= read -r ROLE; do _role_line "$ROLE"; done > "${RBAC_TMP}/roles-${SCOPE_COUNT}.txt"
+    else
+      printf '%s\n' "$DEPLOY_ROLES" > "${RBAC_TMP}/roles-${SCOPE_COUNT}.txt"
+    fi
     az rest --method post \
-      --url "https://management.azure.com${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
+      --url "${ARM}${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
       --headers "Content-Type=application/json" \
-      --body "@${RBAC_TMP}/body.json" \
+      --body "@${RBAC_TMP}/body-${RBAC_KIND}.json" \
       -o json > "${RBAC_TMP}/response-${SCOPE_COUNT}.json" 2>/dev/null || true
-  done
+  done <<EOF
+$SCOPE_LINES
+EOF
+
+  # checkAccess asks about roleAssignments/write without naming a role. A grant
+  # conditioned on @Request[...:RoleDefinitionId] (the delegation pattern: may
+  # assign these roles and no others) cannot be satisfied by a request that
+  # names none, so ARM answers NotAllowed even when every role the deployment
+  # assigns is on the list. Where a scope refused write or delete with no deny
+  # assignment behind it, read the principal's assignments there (its groups'
+  # included) so the verdict below can hold their conditions to the roles.
+  RBAC_REFUSED=$(python3 - "$RBAC_TMP" "$SCOPE_COUNT" <<'PY' || true
+import json, os, sys
+
+tmp, count = sys.argv[1], int(sys.argv[2])
+for index in range(1, count + 1):
+    try:
+        with open(os.path.join(tmp, "response-%d.json" % index)) as fh:
+            decisions = json.load(fh)
+    except (OSError, ValueError):
+        continue
+    if not isinstance(decisions, list):
+        continue
+    for decision in decisions:
+        if not isinstance(decision, dict):
+            continue
+        action = (decision.get("actionId") or "").lower()
+        if (action.startswith("microsoft.authorization/roleassignments/")
+                and decision.get("accessDecision") != "Allowed"
+                and not decision.get("denyAssignment")):
+            print(index)
+            break
+PY
+  )
+  while IFS= read -r REFUSED_INDEX; do
+    [ -n "$REFUSED_INDEX" ] || continue
+    REFUSED_SCOPE=$(sed -n "${REFUSED_INDEX}p" "${RBAC_TMP}/scopes.txt" | cut -f2)
+    az role assignment list --scope "$REFUSED_SCOPE" --include-inherited \
+      --assignee-object-id "$PRINCIPAL_ID" --include-groups \
+      --fill-principal-name false -o json \
+      > "${RBAC_TMP}/assignments-${REFUSED_INDEX}.json" 2>/dev/null \
+      || { rm -f "${RBAC_TMP}/assignments-${REFUSED_INDEX}.json"
+           : > "${RBAC_TMP}/assignments-${REFUSED_INDEX}.failed"; }
+  done <<EOF
+$RBAC_REFUSED
+EOF
 
   # Eligible-but-inactive PIM roles are why a deployer who "has Owner" is still
   # denied: checkAccess reports what is active now. asTarget() only reports the
   # calling identity's eligibilities, so this is skipped when Terraform will
   # authenticate as somebody else rather than mislabelled as that principal's.
   echo "{}" > "${RBAC_TMP}/eligibilities.json"
+  echo "{}" > "${RBAC_TMP}/activations.json"
   if [ "$PRINCIPAL_IS_CALLER" -eq 1 ]; then
     az rest --method get \
-      --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      --url "${ARM}/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
       -o json > "${RBAC_TMP}/eligibilities.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/eligibilities.json"
+    # The sibling call for what is active now, and when it expires. An activation
+    # that lapses between preflight and plan looks like never having activated,
+    # and a first apply of AKS plus Postgres outlasts a short window.
+    az rest --method get \
+      --url "${ARM}/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      -o json > "${RBAC_TMP}/activations.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/activations.json"
   fi
 
   # One pass over the responses so the shell only renders verdicts. Each line it
@@ -263,17 +630,20 @@ PY
   RBAC_VERDICT=$(python3 - \
     "$RBAC_TMP" \
     "${RBAC_TMP}/eligibilities.json" \
-    "$PRINCIPAL_IS_CALLER" <<'PY' || echo "unavailable"
-import json, os, sys
+    "$PRINCIPAL_IS_CALLER" \
+    "$PRINCIPAL_TYPE_HINT" \
+    "$KV_ADMIN_GRANT" \
+    "$ASSIGNED_ROLE_NAMES" <<'PY' || echo "unavailable"
+import json, os, re, sys
 
-tmp, elig_path, is_caller = sys.argv[1:4]
+tmp, elig_path, is_caller, principal_type_hint, kv_admin_grant, assigned_roles = sys.argv[1:7]
 
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
 
-# checkAccess names the granting role by bare GUID. These four are the built-ins
-# that carry roleAssignments/write, verified against az role definition list;
-# anything else prints its GUID rather than a guess.
+# checkAccess names the granting role by bare GUID. The built-ins likely to
+# appear here, verified against az role definition list; anything else prints
+# its GUID rather than a guess.
 ROLE_NAMES = {
     "8e3af657a8ff443ca75c2fe8c4bcb635": "Owner",
     "b24988ac618042a0ab8820f7382dd24c": "Contributor",
@@ -281,13 +651,26 @@ ROLE_NAMES = {
     "f58310d9a9f6439a9e8df62e7b41a168": "Role Based Access Control Administrator",
 }
 
-# Assigned to the modules by name, so an ABAC condition that omits any of them
-# breaks apply even where roleAssignments/write is permitted.
-ASSIGNED_ROLES = (
-    "Storage Blob Data Contributor, Key Vault Secrets Officer, "
-    "Key Vault Secrets User, DNS Zone Contributor, "
-    "Virtual Machine Administrator Login, Reader, Contributor, "
-    "Network Contributor"
+# The subset of ROLE_NAMES worth naming in a remediation. Contributor is labelled
+# but not listed: its NotActions exclude Microsoft.Authorization/*/Write.
+ROLE_WRITE_CARRIERS = (
+    "Owner",
+    "User Access Administrator",
+    "Role Based Access Control Administrator",
+)
+
+# The attribute a delegation condition tests to allow some roles and not others,
+# and the GUID list it compares against. A GUID may come hyphenated or bare.
+ROLE_DEF_ATTR = "microsoft.authorization/roleassignments:roledefinitionid"
+ROLE_DEF_LIST = re.compile(
+    r"roledefinitionid\]\s*(?:[a-z]+:)?guidequals\s*\{([^}]*)\}")
+GUID = re.compile(r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}")
+# The negations every delegation condition carries by design: the action test
+# that scopes the clause, and the sub-operation carve-out Azure adds to it. Any
+# negation left once these are gone applies to the constraint itself.
+ACTION_NEGATIONS = (
+    re.compile(r"(?:\band\s+)?(?:\bnot\b|!)\s*suboperationmatches\s*\{[^}]*\}"),
+    re.compile(r"!\s*\(\s*actionmatches\s*\{[^}]*\}\s*\)"),
 )
 
 
@@ -315,9 +698,261 @@ def role_label(assignment):
     return "role %s" % (guid or "?")
 
 
+def deny_label(deny):
+    # The roleAssignment shape came off live responses; a populated denyAssignment
+    # never did, since you cannot create one to test with. Try the key names the
+    # RBAC APIs use elsewhere — that a deny assignment exists at all is the
+    # finding, so none of them matching is still useful.
+    return (deny.get("displayName") or deny.get("denyAssignmentName")
+            or deny.get("name") or deny.get("id") or "unnamed")
+
+
+def scope_label(expanded, props):
+    return ((expanded.get("scope") or {}).get("displayName")
+            or props.get("scope") or "?")
+
+
+def scope_list(scopes):
+    if len(scopes) == 1:
+        return scopes[0]
+    return "%s and %s" % (", ".join(scopes[:-1]), scopes[-1])
+
+
+def by_verdict(pairs):
+    # Scopes inherit from the subscription, so the same verdict normally comes
+    # back once per scope. Collapse identical ones and name the scopes together;
+    # only a real disagreement produces two findings.
+    grouped = {}
+    for key, scope in pairs:
+        grouped.setdefault(key, []).append(scope)
+    return grouped.items()
+
+
+def balanced(text):
+    """Whether every parenthesis in `text` closes, so it is a whole group."""
+    depth = 0
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def action_clause(flat, action):
+    """The top-level clause of a normalized condition that constrains `action`.
+
+    Conditions are `!(ActionMatches{<action>}) OR <constraint>` groups joined by
+    AND, and a constraint carries ANDs of its own, so the split tracks
+    parenthesis depth. None when no clause names the action.
+    """
+    while flat.startswith("(") and flat.endswith(")") and balanced(flat[1:-1]):
+        flat = flat[1:-1].strip()
+    clauses, depth, start, i = [], 0, 0, 0
+    while i < len(flat):
+        if flat[i] == "(":
+            depth += 1
+        elif flat[i] == ")":
+            depth -= 1
+        elif depth == 0 and flat.startswith(" and ", i):
+            clauses.append(flat[start:i])
+            i += 5
+            start = i
+            continue
+        i += 1
+    clauses.append(flat[start:])
+    for clause in clauses:
+        if action in clause:
+            return clause
+    return None
+
+
+def write_clause(flat):
+    return action_clause(flat, ROLE_WRITE)
+
+
+def pins_service_principal(condition):
+    """Whether an ABAC condition admits only ServicePrincipal targets for write.
+
+    Matching the quoted literal keeps a permissive {'ServicePrincipal', 'User'}
+    from reading as a pin. Anything unparseable returns False and falls through
+    to the softer advice below.
+    """
+    flat = " ".join(condition.split()).lower()
+    if ROLE_WRITE in flat:
+        clause = write_clause(flat)
+    elif "actionmatches" in flat:
+        # Every clause names an action and none is write, so a pin on delete
+        # alone leaves this deployment's assignments unconstrained.
+        clause = None
+    else:
+        # No action test anywhere, so the constraint applies to every action.
+        clause = flat
+    if clause is None:
+        return False
+    return ("principaltype" in clause
+            and "'serviceprincipal'" in clause
+            and "'user'" not in clause)
+
+
+def principal_type_advice(condition):
+    """What a condition testing principalType means for this deployer.
+
+    Terraform omits principal_type by default, and a condition testing it
+    rejects that request as a plain AuthorizationFailed, which reads like a
+    missing role.
+    """
+    if "principaltype" not in condition.lower():
+        return []
+    if pins_service_principal(condition) and principal_type_hint != "ServicePrincipal":
+        # terraform_principal_type declares the type rather than changing it, so
+        # against this shape every value is denied, including the softer
+        # branch's recommendation.
+        if kv_admin_grant == "false":
+            return ["pass The condition admits only ServicePrincipal targets, which "
+                    "this %s is not — but keyvault_manage_terraform_admin_assignment "
+                    "is already false, so no request in the apply is subject to it."
+                    % principal_type_hint.lower()]
+        return ["fail The condition admits only ServicePrincipal targets, and "
+                "Terraform will authenticate as a %s. terraform_principal_type "
+                "declares the type rather than changing it, so no value of it "
+                "satisfies this condition. Set "
+                "keyvault_manage_terraform_admin_assignment = false in "
+                "terraform.tfvars and hold Key Vault Secrets Officer some other "
+                "way — a grant inherited from the subscription or resource "
+                "group is enough, and `az role assignment list --assignee "
+                "<object-id> --all` says whether you already do. Running apply "
+                "as a service principal is the other way out, and is what this "
+                "condition exists to require."
+                % principal_type_hint.lower()]
+    return ["warn The condition tests principalType. Set terraform_principal_type "
+            "= \"%s\" in terraform.tfvars, or the Key Vault Secrets Officer grant "
+            "fails at apply with a 403 that names no condition."
+            % principal_type_hint]
+
+
+def condition_role_list(condition, action):
+    """The role definitions a condition lets `action` name, as bare GUIDs.
+
+    Returns (guids, widened), or None when the clause for the action is not a
+    plain allow-list: no GuidEquals list, a NotEquals (an exclusion list), or a
+    test on PrincipalId, whose GUIDs would read as roles. widened is true when
+    the constraint has an OR of its own, which can admit a request the list
+    does not, so a role missing from the list is not proof of a refusal.
+    """
+    flat = " ".join(condition.split()).lower()
+    if action in flat:
+        clause = action_clause(flat, action)
+    elif "actionmatches" in flat:
+        # Constrains only other actions; conditioned() skips these before here.
+        return None
+    else:
+        clause = flat
+    if clause is None or "notequals" in clause or "principalid" in clause:
+        return None
+    # A negated GuidEquals is an exclusion list in another spelling: read as an
+    # allow-list it inverts the verdict, so leave it to plan and apply.
+    rest = clause
+    for pattern in ACTION_NEGATIONS:
+        rest = pattern.sub(" ", rest)
+    if "!" in rest or re.search(r"\bnot\b", rest):
+        return None
+    guids = {guid.replace("-", "")
+             for found in ROLE_DEF_LIST.findall(clause) for guid in GUID.findall(found)}
+    if not guids:
+        return None
+    widened = clause.count(" or ") > (1 if "actionmatches" in clause else 0)
+    return guids, widened
+
+
+def scope_covers(granted_at, target):
+    """Whether an assignment at `granted_at` applies at `target`."""
+    granted_at = granted_at.lower().rstrip("/")
+    target = target.lower().rstrip("/")
+    return (granted_at in ("", target) or target.startswith(granted_at + "/")
+            or granted_at.startswith("/providers/microsoft.management/managementgroups/"))
+
+
+def roles_for(index):
+    """The "<guid> <name>" roles this configuration assigns at scope `index`."""
+    needed = {}
+    try:
+        with open(os.path.join(tmp, "roles-%d.txt" % index)) as fh:
+            for line in fh:
+                guid, _, name = line.strip().partition(" ")
+                if guid:
+                    needed[guid.replace("-", "").lower()] = name
+    except OSError:
+        pass
+    return needed
+
+
+def conditioned(index, scope, action):
+    """Re-judge a refusal against the conditions on the principal's own grants.
+
+    checkAccess asks without naming a role, so a grant conditioned on
+    RoleDefinitionId always answers NotAllowed. Returns None when there is no
+    such grant to explain the refusal, which leaves it standing, or a hashable
+    ("pass" | "fail" | "unconfirmed" | "unlisted", detail, holders, conditions)
+    verdict; "unlisted" means the principal's assignments could not be read.
+    """
+    assignments = load(os.path.join(tmp, "assignments-%d.json" % index), None)
+    needed = roles_for(index)
+    if not needed:
+        return None
+    # The listing that would show a conditioned grant failed, so the refusal
+    # may be the role-less question and may not; it cannot be confirmed.
+    if os.path.exists(os.path.join(tmp, "assignments-%d.failed" % index)):
+        return ("unlisted", ", ".join(needed.values()), "", ())
+    if not isinstance(assignments, list):
+        return None
+    covered, holders, conditions = set(), [], []
+    found = unreadable = widened_any = False
+    for assignment in assignments:
+        if not isinstance(assignment, dict):
+            continue
+        condition = " ".join((assignment.get("condition") or "").split())
+        lowered = condition.lower()
+        if ROLE_DEF_ATTR not in lowered:
+            continue
+        # A condition that tests other actions and not this one, such as one on
+        # delete alone, leaves this action unconstrained, so it cannot explain
+        # this refusal.
+        if "actionmatches" in lowered and action not in lowered:
+            continue
+        if not scope_covers(assignment.get("scope") or "", scope):
+            continue
+        found = True
+        parsed = condition_role_list(condition, action)
+        if parsed is None:
+            unreadable = True
+            conditions.append(condition)
+            continue
+        guids, widened = parsed
+        widened_any = widened_any or widened
+        role_guid = (assignment.get("roleDefinitionId") or "").rsplit("/", 1)[-1]
+        name = (assignment.get("roleDefinitionName")
+                or ROLE_NAMES.get(role_guid.replace("-", "").lower())
+                or "role %s" % (role_guid or "?"))
+        holders.append("%s held at %s" % (name, assignment.get("scope") or "?"))
+        conditions.append(condition)
+        covered |= set(needed) & guids
+    if not found:
+        return None
+    missing = ", ".join(name for guid, name in needed.items() if guid not in covered)
+    holders, conditions = "; ".join(sorted(set(holders))), tuple(sorted(set(conditions)))
+    if not missing:
+        return ("pass", ", ".join(needed.values()), holders, conditions)
+    if unreadable or widened_any:
+        return ("unconfirmed", missing, holders, conditions)
+    return ("fail", missing, holders, conditions)
+
+
 try:
     with open(os.path.join(tmp, "scopes.txt")) as fh:
-        scopes = [line.strip() for line in fh if line.strip()]
+        scopes = [line.rstrip("\n").split("\t", 1)[-1] for line in fh if line.strip()]
 except OSError:
     scopes = []
 
@@ -327,7 +962,7 @@ answered, unanswered = [], []
 for index, scope in enumerate(scopes, start=1):
     data = load(os.path.join(tmp, "response-%d.json" % index), None)
     if isinstance(data, list) and data:
-        answered.append((scope, data))
+        answered.append((index, scope, data))
     else:
         unanswered.append(scope)
 
@@ -335,91 +970,163 @@ if not answered:
     print("unavailable")
     raise SystemExit(0)
 
-out = []
+lead, out = [], []
 if unanswered:
     out.append("warn checkAccess did not answer at %s, so nothing here speaks to what the "
                "deployment can do there." % ", ".join(unanswered))
 
-denied_write = False
-for scope, decisions in answered:
+write_ok, write_no, delete_no, other = [], [], [], []
+for index, scope, decisions in answered:
+    # A network scope is asked about roleAssignments alone, so it has no
+    # resource verdict to give.
+    resource = [decision for decision in decisions
+                if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE)]
+    if resource:
+        other.append((", ".join(sorted({
+            decision.get("actionId") or "?" for decision in resource
+            if decision.get("accessDecision") != "Allowed"})), scope))
     for decision in decisions:
-        if (decision.get("actionId") or "").lower() != ROLE_WRITE:
-            continue
-        assignment = decision.get("roleAssignment") or {}
-        deny = decision.get("denyAssignment") or {}
-        if decision.get("accessDecision") == "Allowed":
-            out.append("pass roleAssignments/write permitted at %s, granted by %s held at %s"
-                       % (scope, role_label(assignment), assignment.get("scope") or "?"))
-            if assignment.get("condition"):
-                out.append("warn That grant carries an ABAC condition, so it permits only the roles "
-                           "the condition allows. The modules assign: %s. Condition: %s"
-                           % (ASSIGNED_ROLES, " ".join(assignment["condition"].split())[:240]))
-        else:
-            denied_write = True
-            if deny:
-                # The roleAssignment shape here was read off live responses; a
-                # populated denyAssignment was never one of them, because you
-                # cannot create a deny assignment to test with. Try the key names
-                # the RBAC APIs use elsewhere and stay useful if it is none of
-                # them: that a deny assignment exists at all is the finding.
-                name = (deny.get("displayName") or deny.get("denyAssignmentName")
-                        or deny.get("name") or deny.get("id") or "unnamed")
-                out.append("fail roleAssignments/write is denied at %s by deny assignment \"%s\". "
-                           "Deny assignments override every role assignment including Owner, so no "
-                           "role grant will fix this: it has to be removed, or this principal added "
-                           "to its exclusion list." % (scope, name))
+        action = (decision.get("actionId") or "").lower()
+        allowed = decision.get("accessDecision") == "Allowed"
+        if action == ROLE_WRITE:
+            assignment = decision.get("roleAssignment") or {}
+            if allowed:
+                # Kept whole: this tuple is the grouping key, so two conditions
+                # agreeing for 240 characters and diverging after would collapse
+                # into one verdict describing neither. Shortened when printed.
+                write_ok.append(((role_label(assignment), assignment.get("scope") or "?",
+                                  " ".join((assignment.get("condition") or "").split())), scope))
             else:
-                out.append("fail roleAssignments/write is not permitted at %s. All eight role "
-                           "assignments in the Azure modules need it." % scope)
+                deny = decision.get("denyAssignment") or {}
+                if deny:
+                    write_no.append(((deny_label(deny), None), scope))
+                else:
+                    write_no.append((("", conditioned(index, scope, ROLE_WRITE)), scope))
+        elif action == ROLE_DELETE and not allowed:
+            delete_no.append((None if decision.get("denyAssignment")
+                              else conditioned(index, scope, ROLE_DELETE), scope))
 
-for scope, decisions in answered:
-    refused = sorted({decision.get("actionId") or "?" for decision in decisions
-                      if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE)
-                      and decision.get("accessDecision") != "Allowed"})
-    if refused:
-        out.append("fail Not permitted at %s: %s. The deployment creates all of these."
-                   % (scope, ", ".join(refused)))
-    else:
-        out.append("pass Every resource type the deployment creates is writable at %s" % scope)
-
-    for decision in decisions:
-        if ((decision.get("actionId") or "").lower() == ROLE_DELETE
-                and decision.get("accessDecision") != "Allowed"):
-            out.append("warn roleAssignments/delete is not permitted at %s. Apply can create the "
-                       "eight assignments, but terraform destroy and any change that replaces one "
-                       "will fail." % scope)
-
-# Only reached when the decisive action was refused, which is the one case where
-# an inactive PIM role is the likely explanation and the fix is a click, not a
-# ticket. Whether an eligible role carries the action is not knowable here, so
-# they are all listed rather than filtered on a guess.
-if denied_write:
+# The PIM finding explains every roleAssignments/write refusal below it and the
+# remedy is one click, so it leads; printed last it read as a third independent
+# blocker. Only roles carrying the action are named — the raw eligibility list
+# runs a dozen that cannot help, at least one of them missing from the portal.
+# A refusal a condition explains away is not one PIM needs to.
+if any(verdict is None or verdict[0] != "pass" for (_, verdict), _ in write_no):
     if is_caller == "1":
-        eligible = []
+        eligible = set()
         for instance in (load(elig_path, {}) or {}).get("value") or []:
             props = instance.get("properties") or {}
-            expanded = (props.get("expandedProperties") or {}).get("roleDefinition") or {}
-            if expanded.get("displayName"):
-                eligible.append("%s at %s" % (expanded["displayName"], props.get("scope") or "?"))
+            expanded = props.get("expandedProperties") or {}
+            name = (expanded.get("roleDefinition") or {}).get("displayName")
+            if name not in ROLE_WRITE_CARRIERS:
+                continue
+            # The subscription or group name, matching how the role is named in
+            # the same sentence. The raw ARM path only when ARM did not expand it.
+            eligible.add("%s at %s" % (name, scope_label(expanded, props)))
+        eligible = sorted(eligible)
         if eligible:
-            out.append("fail PIM holds these roles for this identity as eligible but not active: %s. "
-                       "checkAccess reports what is active now, so if one of them carries "
-                       "roleAssignments/write, activating it (portal: PIM -> My roles -> Activate) "
-                       "fixes this. Activation is time-bound, so activate for longer than the apply "
-                       "will take." % "; ".join(sorted(set(eligible))))
+            lead.append("fail Eligible in PIM but not active, and carries roleAssignments/write: "
+                        "%s. checkAccess reports what is active now, so activating one of these "
+                        "(portal: PIM -> My roles -> Activate) is what clears the refusals below. "
+                        "Activation is time-bound, so activate for longer than the apply will "
+                        "take." % "; ".join(eligible))
     else:
-        out.append("warn Terraform will authenticate as a principal other than the one running this "
-                   "script, so its PIM eligibilities cannot be read here. A role that is held but "
-                   "not activated looks exactly like a role that is not held.")
+        lead.append("warn Terraform will authenticate as a principal other than the one running this "
+                    "script, so its PIM eligibilities cannot be read here. A role that is held but "
+                    "not activated looks exactly like a role that is not held.")
 
-print("\n".join(out))
+for (role, granted_at, condition), scopes in by_verdict(write_ok):
+    out.append("pass roleAssignments/write permitted at %s, granted by %s held at %s"
+               % (scope_list(scopes), role, granted_at))
+    if condition:
+        out.append("warn That grant carries an ABAC condition, so it permits only the roles "
+                   "the condition allows. This configuration assigns: %s. Condition: %s"
+                   % (assigned_roles, condition if len(condition) <= 400
+                      else condition[:400] + " [...]"))
+        out.extend(principal_type_advice(condition))
+
+NO_ROLE = ("checkAccess asks without naming a role, and a condition on RoleDefinitionId "
+           "refuses any request that names none, so its refusal is not the answer apply gets")
+
+for (deny_name, verdict), scopes in by_verdict(write_no):
+    if deny_name:
+        out.append("fail roleAssignments/write is denied at %s by deny assignment \"%s\". "
+                   "Deny assignments override every role assignment including Owner, so no "
+                   "role grant will fix this: it has to be removed, or this principal added "
+                   "to its exclusion list." % (scope_list(scopes), deny_name))
+    elif verdict is None:
+        out.append("fail roleAssignments/write is not permitted at %s. The deployment grants roles "
+                   "to its own managed identities, so no part of it applies without this. This "
+                   "configuration assigns: %s."
+                   % (scope_list(scopes), assigned_roles))
+    elif verdict[0] == "pass":
+        out.append("pass roleAssignments/write permitted at %s for %s through a conditioned "
+                   "assignment (%s). %s." % (scope_list(scopes), verdict[1], verdict[2], NO_ROLE))
+        for condition in verdict[3]:
+            out.extend(principal_type_advice(condition))
+    elif verdict[0] == "unlisted":
+        out.append("unconfirmed roleAssignments/write was refused at %s, and this principal's "
+                   "role assignments there could not be listed to see whether an ABAC condition "
+                   "explains it. %s. It needs to be able to assign: %s."
+                   % (scope_list(scopes), NO_ROLE, verdict[1]))
+    elif verdict[0] == "fail":
+        out.append("fail roleAssignments/write at %s comes only through an ABAC condition that "
+                   "lists the roles it allows (%s), and it does not list %s, which this "
+                   "configuration assigns. Ask for them to be added to the condition, or turn "
+                   "off what assigns them." % (scope_list(scopes), verdict[2], verdict[1]))
+    else:
+        out.append("unconfirmed roleAssignments/write at %s comes through an ABAC condition that "
+                   "preflight cannot fully read, and its list does not plainly include %s. %s. "
+                   "Conditions: %s" % (scope_list(scopes), verdict[1], NO_ROLE,
+                                       " | ".join(verdict[3])[:400]))
+
+for refused, scopes in by_verdict(other):
+    if refused:
+        out.append("fail Not permitted at %s: %s. The deployment needs all of these: the reads to "
+                   "refresh state, the writes to create it." % (scope_list(scopes), refused))
+    else:
+        out.append("pass Every resource action the deployment needs is permitted at %s"
+                   % scope_list(scopes))
+
+for verdict, scopes in by_verdict(delete_no):
+    if verdict is None:
+        out.append("warn roleAssignments/delete is not permitted at %s. Apply can create the role "
+                   "assignments, but terraform destroy and any change that replaces one will fail."
+                   % scope_list(scopes))
+    elif verdict[0] == "pass":
+        out.append("pass roleAssignments/delete permitted at %s for %s through a conditioned "
+                   "assignment (%s)." % (scope_list(scopes), verdict[1], verdict[2]))
+    elif verdict[0] == "unlisted":
+        out.append("unconfirmed roleAssignments/delete was refused at %s, and this principal's "
+                   "role assignments there could not be listed. It matters to terraform destroy "
+                   "and to changes that replace an assignment, not to a first apply."
+                   % scope_list(scopes))
+    elif verdict[0] == "fail":
+        out.append("warn roleAssignments/delete at %s comes only through an ABAC condition that "
+                   "does not list %s. Apply can create those assignments, but terraform destroy "
+                   "and any change that replaces one will fail." % (scope_list(scopes), verdict[1]))
+    else:
+        out.append("unconfirmed roleAssignments/delete at %s comes through an ABAC condition "
+                   "preflight cannot fully read. It matters to terraform destroy and to changes "
+                   "that replace an assignment, not to a first apply." % scope_list(scopes))
+
+print("\n".join(lead + out))
 PY
   )
 
   if [ "$RBAC_VERDICT" = "unavailable" ]; then
     warn "checkAccess (Microsoft.Authorization/checkAccess, 2018-09-01-preview) did not answer at any scope. It is an unversioned preview API, so it may have changed or this tenant may refuse it. Falling back to a role-name check, which cannot see deny assignments, ABAC conditions, or custom roles."
+    # The attach path's deployer may hold its roles on the group alone, so ask
+    # there; --include-inherited still picks up anything from above it.
+    if [ "$CREATE_RG" = "false" ] && [ -n "$RG_SCOPE" ]; then
+      FALLBACK_SCOPE="$RG_SCOPE"
+      FALLBACK_LABEL="the resource group"
+    else
+      FALLBACK_SCOPE="/subscriptions/${SUB_ID_CHECK}"
+      FALLBACK_LABEL="the subscription"
+    fi
     HELD=$(az role assignment list \
-      --scope "/subscriptions/${SUB_ID_CHECK}" \
+      --scope "$FALLBACK_SCOPE" \
       --include-inherited \
       --assignee-object-id "$PRINCIPAL_ID" \
       --include-groups \
@@ -427,24 +1134,252 @@ PY
     HELD_FLAT=$(printf '%s' "$HELD" | tr '\n' ',' | sed 's/,$//')
     case ",${HELD_FLAT}," in
       *,Owner,*|*,"User Access Administrator",*|*,"Role Based Access Control Administrator",*)
-        pass "Holds ${HELD_FLAT} at or above the subscription, which carries roleAssignments/write" ;;
+        pass "Holds ${HELD_FLAT} at or above ${FALLBACK_LABEL}, which carries roleAssignments/write" ;;
       ,,)
         fail "No role assignments could be read for this principal, and checkAccess did not answer. Nothing here can tell you whether apply will succeed — check the identity by hand before applying." ;;
       *)
-        fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
+        fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above ${FALLBACK_LABEL}. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
   else
-    pass "checkAccess answered, so the verdicts below are this principal's effective access with deny assignments and ABAC conditions applied"
+    if [ "$GROUPS_RESOLVED" -eq 1 ]; then
+      pass "checkAccess answered with transitive group membership, deny assignments, and ABAC conditions applied"
+    else
+      warn "Azure evaluated only permissions assigned directly to this identity; group-based permissions were not included"
+    fi
     while IFS= read -r LINE; do
       case "$LINE" in
         pass\ *) pass "${LINE#pass }" ;;
         warn\ *) warn "${LINE#warn }" ;;
-        fail\ *) fail "${LINE#fail }" ;;
+        fail\ *)
+          # Grants can arrive through groups, and checkAccess saw none, so a
+          # refusal here may be one a group grant would have reversed.
+          if [ "$GROUPS_RESOLVED" -eq 1 ]; then
+            fail "${LINE#fail }"
+          else
+            unconfirmed "${LINE#fail } This denial could not be confirmed because group-based permissions were unavailable."
+          fi
+          ;;
+        unconfirmed\ *) unconfirmed "${LINE#unconfirmed }" ;;
         *) [ -z "$LINE" ] || warn "$LINE" ;;
       esac
     done <<EOF
 $RBAC_VERDICT
 EOF
+  fi
+
+  # Reported whatever the verdicts above say: the failure this catches looks like
+  # a pass, with access real at preflight and gone by refresh. Only the calling
+  # identity's own activations are visible.
+  PIM_ACTIVE=$(python3 - "${RBAC_TMP}/activations.json" <<'PY' || echo ""
+import json, re, sys
+from datetime import datetime, timezone
+
+# An apply creating AKS and a Postgres flexible server runs 20-25 minutes. 45
+# leaves room for a retry or a slow region without claiming a shorter window
+# cannot finish.
+WARN_MINUTES = 45
+APPLY_MINUTES = "20-25 minutes"
+
+# The built-ins carrying something the deployment needs. Any other activation can
+# lapse mid-apply harmlessly, and reporting all dozen buries the one that matters.
+APPLY_ROLES = (
+    "Owner",
+    "Contributor",
+    "User Access Administrator",
+    "Role Based Access Control Administrator",
+)
+
+
+def scope_list(scopes):
+    # One activation covers every scope beneath it, so collapse the repeats and
+    # name the scopes together.
+    scopes = sorted(set(scopes))
+    if len(scopes) == 1:
+        return scopes[0]
+    return "%s and %s" % (", ".join(scopes[:-1]), scopes[-1])
+
+
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.loads(fh.read() or "{}") or {}
+except (OSError, ValueError):
+    raise SystemExit(0)
+
+now = datetime.now(timezone.utc)
+found = {}
+for instance in data.get("value") or []:
+    props = instance.get("properties") or {}
+    end = props.get("endDateTime")
+    if not end:
+        continue  # a permanent assignment has nothing to expire
+    expanded = props.get("expandedProperties") or {}
+    role = (expanded.get("roleDefinition") or {}).get("displayName") or ""
+    if role not in APPLY_ROLES:
+        continue
+    # ARM returns UTC. Parsed by pattern, not fromisoformat, which rejects the
+    # 7-digit fractional seconds Azure sometimes emits.
+    stamp = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})", end)
+    if not stamp:
+        continue
+    expires = datetime(*[int(part) for part in stamp.groups()], tzinfo=timezone.utc)
+    left = int((expires - now).total_seconds() // 60)
+    if left <= 0:
+        continue
+    # Admin-granted assignments expire alongside genuine PIM activations and both
+    # carry an endDateTime; only assignmentType separates them, and it changes the
+    # remedy, since an activation is yours to extend and an assignment is not.
+    # Absent, assume the activation it usually is.
+    assigned = props.get("assignmentType") == "Assigned"
+    # The subscription or group name, matching how the role is named in the same
+    # sentence. The raw ARM path only when ARM did not expand it.
+    where = (expanded.get("scope") or {}).get("displayName") or props.get("scope") or "?"
+    found.setdefault((left, role, assigned), []).append(where)
+
+out = []
+for (left, role, assigned), scopes in sorted(found.items()):
+    if assigned:
+        subject = "Time-bound assignment of %s at %s" % (role, scope_list(scopes))
+        remedy = ("It is an assignment rather than a PIM activation, so it is not yours to "
+                  "extend: ask whoever granted it for a longer window.")
+    else:
+        subject = "PIM activation of %s at %s" % (role, scope_list(scopes))
+        remedy = "Re-activate for a longer window before applying."
+    if left <= WARN_MINUTES:
+        out.append("warn %s expires in %d minutes. The apply runs %s, so that leaves no margin, "
+                   "and once it lapses the next plan 403s on reads while refreshing state. %s"
+                   % (subject, left, APPLY_MINUTES, remedy))
+    else:
+        out.append("pass %s has %dh%02dm left" % (subject, left // 60, left % 60))
+
+print("\n".join(out))
+PY
+  )
+  if [ -n "$PIM_ACTIVE" ]; then
+    _render <<EOF
+$PIM_ACTIVE
+EOF
+  fi
+
+  # Writing a subnet that carries a route table is a linked write: ARM also
+  # checks Microsoft.Network/routeTables/join/action on the route table, and a
+  # refusal surfaces as LinkedAuthorizationFailed partway through the apply.
+  # Terraform writes aks_subnet_id when it attaches the NAT gateway it creates
+  # (aks_nat_gateway = "create") or adds service endpoints
+  # (manage_byo_subnet_service_endpoints = true, which applies to an attached
+  # cluster too). Neither checkAccess call above asks about the route table,
+  # which usually sits in the network owner's group.
+  if [ "$CREATE_VNET" = "false" ] \
+    && { { [ "$RBAC_CREATE_CLUSTER" != "false" ] && [ "$(_tfvar aks_nat_gateway || echo "none")" = "create" ]; } \
+      || [ "$(_tfvar manage_byo_subnet_service_endpoints || echo "false")" = "true" ]; }; then
+    if ! printf '%s\n' "$AKS_SUBNET_ID" \
+      | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+/subnets/[A-Za-z0-9._-]+$'; then
+      warn "terraform.tfvars: aks_subnet_id is not a subnet resource ID, so its route table was not checked"
+    elif ! RT_ID=$(az network vnet subnet show --ids "$AKS_SUBNET_ID" --query routeTable.id -o tsv 2>/dev/null); then
+      unconfirmed "Could not read aks_subnet_id to find its route table. If it has one, Terraform's write to the subnet needs Microsoft.Network/routeTables/join/action on it."
+    elif [ -z "$RT_ID" ]; then
+      pass "aks_subnet_id has no route table, so Terraform's write to it needs no routeTables/join/action"
+    elif ! printf '%s\n' "$RT_ID" \
+      | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/routeTables/[A-Za-z0-9._-]+$'; then
+      unconfirmed "aks_subnet_id's route table came back as '${RT_ID}', which is not a route table ID, so routeTables/join/action on it was not checked"
+    else
+      python3 - "$PRINCIPAL_ID" "$GROUPS_RESOLVED" "$GROUP_IDS" > "${RBAC_TMP}/body-rt.json" <<'PY'
+import json, sys
+attributes = {"ObjectId": sys.argv[1]}
+if sys.argv[2] == "1":
+    attributes["Groups"] = [group for group in sys.argv[3].splitlines() if group]
+print(json.dumps({
+    "Subject": {"Attributes": attributes},
+    "Actions": [{"Id": "Microsoft.Network/routeTables/join/action", "IsDataAction": False}],
+}))
+PY
+      az rest --method post \
+        --url "${ARM}${RT_ID}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
+        --headers "Content-Type=application/json" \
+        --body "@${RBAC_TMP}/body-rt.json" \
+        -o json > "${RBAC_TMP}/response-rt.json" 2>/dev/null || true
+      # Direct assignments only, no --include-groups: the lab case this catches
+      # had the action through a group and was still refused 13 minutes later,
+      # while a direct grant worked within minutes. Only a direct grant whose role
+      # carries the action counts, so a Reader at the subscription does not hide
+      # a join that comes through a group. Prints how many carry it, or unknown.
+      az role assignment list --scope "$RT_ID" --include-inherited \
+        --assignee-object-id "$PRINCIPAL_ID" --fill-principal-name false -o json \
+        > "${RBAC_TMP}/direct-rt.json" 2>/dev/null || rm -f "${RBAC_TMP}/direct-rt.json"
+      DIRECT_RT=$(python3 - "${RBAC_TMP}/direct-rt.json" "$ARM" <<'PY' 2>/dev/null || true
+import fnmatch, json, subprocess, sys
+
+ACTION = "microsoft.network/routetables/join/action"
+# Built-ins decided by name; anything else is read from its definition.
+KNOWN = {"owner": True, "contributor": True, "network contributor": True, "reader": False}
+
+def carries(definition):
+    for permission in (definition.get("properties") or {}).get("permissions") or []:
+        allowed = any(fnmatch.fnmatchcase(ACTION, a.lower()) for a in permission.get("actions") or [])
+        denied = any(fnmatch.fnmatchcase(ACTION, n.lower()) for n in permission.get("notActions") or [])
+        if allowed and not denied:
+            return True
+    return False
+
+try:
+    assignments = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    assignments = None
+if not isinstance(assignments, list):
+    print("unknown")
+    raise SystemExit(0)
+count = 0
+for assignment in assignments:
+    if not isinstance(assignment, dict):
+        continue
+    known = KNOWN.get((assignment.get("roleDefinitionName") or "").lower())
+    if known is None:
+        role_id = assignment.get("roleDefinitionId") or ""
+        try:
+            out = subprocess.run(
+                ["az", "rest", "--method", "get",
+                 "--url", sys.argv[2] + role_id + "?api-version=2022-04-01", "-o", "json"],
+                capture_output=True, text=True, check=True).stdout
+            known = carries(json.loads(out))
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            print("unknown")
+            raise SystemExit(0)
+    count += 1 if known else 0
+print(count)
+PY
+      )
+      [ -n "$DIRECT_RT" ] || DIRECT_RT="unknown"
+      RT_DECISION=$(python3 -c 'import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    data = None
+decisions = [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+print(decisions[0].get("accessDecision") or "unknown" if decisions else "unknown")' \
+        "${RBAC_TMP}/response-rt.json" 2>/dev/null || echo "unknown")
+      LINKED="aks_subnet_id's route table. Terraform writes that subnet, which makes the route table part of the write"
+      case "$RT_DECISION" in
+        Allowed)
+          if [ "$DIRECT_RT" = "unknown" ]; then
+            unconfirmed "routeTables/join/action is permitted on ${RT_ID}, but this identity's direct assignments there could not be read, so whether it comes only through a group is unknown. A group grant may take a long time to apply; a direct assignment worked within minutes in testing."
+          elif [ "$DIRECT_RT" = "0" ]; then
+            warn "routeTables/join/action is permitted on ${RT_ID}, but only through a group. Terraform's write to aks_subnet_id needs it, and a group grant may take a long time to apply; a direct assignment worked within minutes in testing. Ask for Network Contributor (or a role carrying routeTables/join/action) on the route table, assigned to this identity directly."
+          else
+            pass "routeTables/join/action is permitted on ${RT_ID}, which Terraform's write to aks_subnet_id needs"
+          fi
+          ;;
+        unknown)
+          unconfirmed "checkAccess did not answer for ${RT_ID}, ${LINKED}. This identity needs Microsoft.Network/routeTables/join/action on it, or apply fails with LinkedAuthorizationFailed."
+          ;;
+        *)
+          RT_MSG="routeTables/join/action is not permitted on ${RT_ID}, ${LINKED}, so apply fails with LinkedAuthorizationFailed. Ask the network owner for Network Contributor (or a role carrying Microsoft.Network/routeTables/join/action) on that route table, assigned to this identity directly: a grant through a group may take a long time to apply."
+          if [ "$GROUPS_RESOLVED" -eq 1 ]; then
+            fail "$RT_MSG"
+          else
+            unconfirmed "${RT_MSG} This denial could not be confirmed because group-based permissions were unavailable."
+          fi
+          ;;
+      esac
+    fi
   fi
 fi
 
@@ -458,7 +1393,7 @@ fi
 echo ""
 echo "── Subscription Offer Type ───────────────────────────"
 QUOTA_ID=$(az rest --method get \
-  --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
+  --url "${ARM}/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
   --query "subscriptionPolicies.quotaId" -o tsv 2>/dev/null || echo "")
 
 if [ -z "$QUOTA_ID" ]; then
@@ -478,10 +1413,372 @@ else
   esac
 fi
 
-# ── 6. terraform.tfvars ───────────────────────────────────────────────────────
+# ── 6. Regional vCPU quota for the node pool and database SKU families ────────
+# `az postgres flexible-server list-skus` reports what a region offers, not what
+# this subscription may create. A family at quota 0 fails the apply with
+# ErrCode_InsufficientVCPUQuota once AKS exists, and clearing it takes a quota
+# request rather than a retry.
+#
+# Postgres Flexible Server draws on the Microsoft.Compute per-family vCPU quota.
+# Microsoft.DBforPostgreSQL registers no quota resource type and `az quota`
+# rejects its scope, so Compute is the only surface that answers. Fresh
+# subscriptions routinely ship the v5 families at 0, so the
+# LocationIsOfferRestricted workaround below can trade one failure for another.
+#
+# The AKS node pools, default and additional, draw on the same per-family quota
+# and on the regional total ("cores"). Their minimum counts must fit or the
+# cluster create fails; their maximums only cap how far the autoscaler can scale
+# out.
+echo ""
+echo "── Regional Quota ────────────────────────────────────"
+
+POSTGRES_SOURCE=$(_tfvar postgres_source || echo "external")
+REDIS_SOURCE=$(_tfvar redis_source || echo "external")
+QUOTA_LOCATION=$(_tfvar location || echo "eastus")
+POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
+CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
+NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v5")
+NODE_MIN=$(_tfvar default_node_pool_min_count || echo "1")
+NODE_MAX=$(_tfvar default_node_pool_max_count || echo "10")
+
+# Map a VM size to its Compute quota family. Standard_D2ds_v4 -> letter D, suffix
+# ds, version 4 -> standardDDSv4Family. The v1 B-series is the one family that is
+# not a transform of the size (B1ms lands in standardBSFamily); B2s_v2 follows the
+# pattern. Azure cases these names unevenly (standardBsv2Family beside
+# standardDASv5Family), so _quota_row matches without regard to case. tr rather
+# than ${var^^}: bash 3.2. Empty when the size does not fit the pattern.
+#
+# The transform is a fallback. Azure's own answer, from az vm list-skus, wins
+# whenever it has one: the name does not always predict the family (a
+# Standard_D8as_v6 is counted under the Dav6 family, not the standardDASv6Family
+# the pattern gives), and a family the pattern invents reads as a missing quota.
+_quota_family() {
+  local size="$1" letter suffix version family
+  family=$(printf '%s\n' "$SKU_ROWS" | awk -F'\t' -v s="$size" \
+    'tolower($1) == tolower(s) && $2 != "" { print $2; exit }')
+  if [ -n "$family" ]; then
+    echo "$family"
+    return
+  fi
+  case "$size" in
+    Standard_B*_v[0-9]*) ;;
+    Standard_B*) echo "standardBSFamily"; return ;;
+  esac
+  letter=$(printf '%s\n' "$size" | sed -n 's/^Standard_\([A-Za-z]\)[0-9].*/\1/p')
+  suffix=$(printf '%s\n' "$size" | sed -n 's/^Standard_[A-Za-z][0-9]*\([a-z]*\)_v[0-9]*$/\1/p')
+  version=$(printf '%s\n' "$size" | sed -n 's/.*_v\([0-9]*\)$/\1/p')
+  if [ -n "$letter" ] && [ -n "$version" ]; then
+    echo "standard$(printf '%s%s' "$letter" "$suffix" | tr '[:lower:]' '[:upper:]')v${version}Family"
+  fi
+}
+
+# vCPU count is the leading digits of the size: Standard_D2ds_v4 needs 2.
+_sku_vcpus() {
+  printf '%s\n' "$1" | sed -n 's/^Standard_[A-Za-z]\([0-9]*\).*/\1/p'
+}
+
+# One list-usage call serves every family below. tsv keeps this jq-free; az is
+# all this section needs. The limit comes back as a string, which tsv flattens.
+# Call _load_usage in this shell, never inside $(...), or the result is lost with
+# the subshell. It returns 1 when az fails or answers with nothing, warning the
+# first time only, so a throttled call or an unregistered Compute provider does
+# not read as a missing quota row.
+USAGE_ROWS=""
+USAGE_STATE="unread"
+# "size<TAB>family" for every VM size in the region, read alongside the usage
+# rows. One list-skus call answers every size below; empty on any failure, and
+# _quota_family then falls back to the transform.
+SKU_ROWS=""
+_load_usage() {
+  case "$USAGE_STATE" in
+    ok) return 0 ;;
+    failed) return 1 ;;
+  esac
+  USAGE_ROWS=$(az vm list-usage -l "$QUOTA_LOCATION" --only-show-errors \
+    --query "[].[name.value,currentValue,limit]" -o tsv 2>/dev/null) || USAGE_ROWS=""
+  if [ -n "$USAGE_ROWS" ]; then
+    USAGE_STATE="ok"
+    SKU_ROWS=$(az vm list-skus -l "$QUOTA_LOCATION" --resource-type virtualMachines --only-show-errors \
+      --query "[].[name,family]" -o tsv 2>/dev/null) || SKU_ROWS=""
+    return 0
+  fi
+  USAGE_STATE="failed"
+  warn "Could not read Compute quotas in ${QUOTA_LOCATION} — skipping the quota checks"
+  warn "  Retry, or check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+  return 1
+}
+# Echo "used<TAB>limit" for a quota name, empty when the region has no such row.
+_quota_row() {
+  printf '%s\n' "$USAGE_ROWS" | awk -F'\t' -v k="$1" \
+    'tolower($1) == tolower(k) { print $2 "\t" $3; exit }'
+}
+
+# Echo one "name<TAB>vm_size<TAB>min_count<TAB>max_count" line per additional
+# node pool in terraform.tfvars, nothing for an empty map, and the variable's
+# default (keep it in step with variables.tf) when the key is absent. Returns 1
+# for a shape it cannot read, such as the whole map on one line.
+_additional_pools() {
+  if ! grep -qE '^[[:space:]]*additional_node_pools[[:space:]]*=' "$TFVARS" 2>/dev/null; then
+    printf 'large\tStandard_D16s_v5\t0\t2\n'
+    return 0
+  fi
+  local rows
+  rows=$(awk '
+    !found { if ($0 ~ /^[[:space:]]*additional_node_pools[[:space:]]*=/) found = 1; else next }
+    {
+      line = $0; sub(/#.*/, "", line)
+      if (depth == 1 && !inpool && line ~ /^[[:space:]]*"?[A-Za-z0-9_-]+"?[[:space:]]*=[[:space:]]*\{/) {
+        name = line; sub(/^[[:space:]]*"?/, "", name); sub(/"?[[:space:]]*=.*/, "", name)
+        inpool = 1; vm = ""; mn = ""; mx = ""
+      }
+      if (inpool) {
+        if (match(line, /vm_size[[:space:]]*=[[:space:]]*"[^"]*"/)) { s = substr(line, RSTART, RLENGTH); sub(/[^"]*"/, "", s); sub(/"$/, "", s); vm = s }
+        if (match(line, /min_count[[:space:]]*=[[:space:]]*[0-9]+/)) { s = substr(line, RSTART, RLENGTH); sub(/.*=[[:space:]]*/, "", s); mn = s }
+        if (match(line, /max_count[[:space:]]*=[[:space:]]*[0-9]+/)) { s = substr(line, RSTART, RLENGTH); sub(/.*=[[:space:]]*/, "", s); mx = s }
+      }
+      t = line; gsub(/"[^"]*"/, "", t)
+      opens = gsub(/\{/, "{", t); closes = gsub(/\}/, "}", t)
+      if (depth == 0 && opens > 1) { print "BAD"; exit }
+      depth += opens - closes
+      if (inpool && depth <= 1) { print name "\t" vm "\t" mn "\t" mx; inpool = 0 }
+      if (depth <= 0) { closed = 1; exit }
+    }
+    END { if (found && !closed) print "BAD" }
+  ' "$TFVARS")
+  [ -z "$rows" ] && return 0
+  printf '%s\n' "$rows" | awk -F'\t' '
+    NF != 4 || $2 !~ /^Standard_[A-Za-z0-9_]+$/ || $3 !~ /^[0-9]+$/ || $4 !~ /^[0-9]+$/ { bad = 1 }
+    END { exit bad }
+  ' || return 1
+  printf '%s\n' "$rows"
+}
+
+# Verdict for a quota row against the vCPUs the node pools need at their minimum
+# (the floor, which blocks the apply) and at their maximum (the ceiling, which
+# only caps scale-out).
+_node_quota_verdict() {
+  local key="$1" floor="$2" ceiling="$3" what="$4" row used limit free
+  row=$(_quota_row "$key")
+  used=$(printf '%s\n' "$row" | cut -f1)
+  limit=$(printf '%s\n' "$row" | cut -f2)
+  if ! printf '%s|%s\n' "$used" "$limit" | grep -qE '^[0-9]+\|[0-9]+$'; then
+    unconfirmed "${QUOTA_LOCATION} reports no ${key} quota entry — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+    return
+  fi
+  free=$((limit - used))
+  if [ "$free" -lt "$floor" ]; then
+    fail "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${floor} at the node pools' minimum"
+    warn "  Request an increase under Subscriptions > Usage + quotas, or lower a node pool's min_count"
+  elif [ "$free" -lt "$ceiling" ]; then
+    warn "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${ceiling} at the node pools' maximum"
+    warn "  The autoscaler stops short of the node pools' max_count; request more quota or lower one"
+  else
+    pass "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free (${what} needs up to ${ceiling})"
+  fi
+}
+
+# With no tfvars the defaults describe a region and SKU nobody picked, and
+# failing on those sends someone to request quota they may not need. Section 7
+# reports the missing file.
+#
+# Both values reach an az invocation, so each is held to the shape Azure accepts
+# and dropped if it does not fit.
+PG_FAMILY=""
+PG_VCPUS=0
+if [ ! -f "$TFVARS" ]; then
+  warn "terraform.tfvars not found — skipping quota checks until a region and SKU are set"
+elif ! printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+  warn "terraform.tfvars: location '${QUOTA_LOCATION}' is not a region name — skipping quota checks"
+elif [ "$POSTGRES_SOURCE" = "in-cluster" ]; then
+  pass "postgres_source = in-cluster — no Flexible Server quota required"
+elif ! printf '%s\n' "$POSTGRES_SKU" | grep -qE '^(B|GP|MO)_Standard_[A-Za-z0-9_]+$'; then
+  warn "terraform.tfvars: postgres_sku_name '${POSTGRES_SKU}' is not a Flexible Server SKU — skipping quota check"
+elif ! _load_usage; then
+  :   # _load_usage warned
+else
+  # Derive the quota family from the SKU name, then trust it only if the API
+  # reports a family by that name; a miss warns rather than invents a failure.
+  SIZE="${POSTGRES_SKU#*_}"
+  QUOTA_FAMILY=$(_quota_family "$SIZE")
+  SKU_VCPUS=$(_sku_vcpus "$SIZE")
+
+  if [ -z "$QUOTA_FAMILY" ] || [ -z "$SKU_VCPUS" ]; then
+    warn "Could not map ${POSTGRES_SKU} to a quota family — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+  else
+    PG_FAMILY="$QUOTA_FAMILY"
+    PG_VCPUS="$SKU_VCPUS"
+    QUOTA_ROW=$(_quota_row "$QUOTA_FAMILY")
+
+    if [ -z "$QUOTA_ROW" ]; then
+      unconfirmed "${QUOTA_LOCATION} reports no ${QUOTA_FAMILY} quota entry — confirm ${POSTGRES_SKU} is offered there"
+      warn "  az postgres flexible-server list-skus -l ${QUOTA_LOCATION}"
+    else
+      QUOTA_USED=$(printf '%s\n' "$QUOTA_ROW" | head -1 | cut -f1)
+      QUOTA_LIMIT=$(printf '%s\n' "$QUOTA_ROW" | head -1 | cut -f2)
+      QUOTA_FREE=$((QUOTA_LIMIT - QUOTA_USED))
+
+      if [ "$QUOTA_LIMIT" -eq 0 ]; then
+        fail "${QUOTA_FAMILY} quota in ${QUOTA_LOCATION} is 0 — ${POSTGRES_SKU} cannot be created"
+        warn "  Request an increase at https://aka.ms/postgres-request-quota-increase, or"
+        warn "  choose a family that has quota: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+      elif [ "$QUOTA_FREE" -lt "$SKU_VCPUS" ]; then
+        fail "${QUOTA_FAMILY} quota in ${QUOTA_LOCATION}: ${QUOTA_FREE} of ${QUOTA_LIMIT} vCPUs free, ${POSTGRES_SKU} needs ${SKU_VCPUS}"
+      else
+        pass "${QUOTA_FAMILY} quota in ${QUOTA_LOCATION}: ${QUOTA_FREE} of ${QUOTA_LIMIT} vCPUs free (${POSTGRES_SKU} needs ${SKU_VCPUS})"
+      fi
+    fi
+  fi
+fi
+
+# The node pool check. Postgres counts against the regional total always, and
+# against the node family too when both land in the same one.
+if [ ! -f "$TFVARS" ] || ! printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+  :   # already reported above
+elif [ "$CREATE_CLUSTER" = "false" ]; then
+  pass "create_cluster = false — no node pool quota required"
+elif ! printf '%s\n' "$NODE_VM_SIZE" | grep -qE '^Standard_[A-Za-z0-9_]+$' \
+  || ! printf '%s|%s\n' "$NODE_MIN" "$NODE_MAX" | grep -qE '^[0-9]+\|[0-9]+$'; then
+  warn "terraform.tfvars: node pool size or counts are not literals preflight can read — skipping the node pool quota check"
+elif ! _load_usage; then
+  :   # _load_usage warned, or the Postgres check above already did
+else
+  NODE_FAMILY=$(_quota_family "$NODE_VM_SIZE")
+  NODE_VCPUS=$(_sku_vcpus "$NODE_VM_SIZE")
+  if [ -z "$NODE_FAMILY" ] || [ -z "$NODE_VCPUS" ]; then
+    warn "Could not map ${NODE_VM_SIZE} to a quota family — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+  else
+    # One "family<TAB>floor<TAB>ceiling<TAB>label" row per pool, default first.
+    POOL_ROWS=$(printf '%s\t%s\t%s\t%s' "$NODE_FAMILY" $((NODE_MIN * NODE_VCPUS)) \
+      $((NODE_MAX * NODE_VCPUS)) "${NODE_MIN}-${NODE_MAX} × ${NODE_VM_SIZE}")
+    if EXTRA_POOLS=$(_additional_pools); then
+      while IFS="$(printf '\t')" read -r p_name p_size p_min p_max; do
+        [ -n "$p_name" ] || continue
+        p_family=$(_quota_family "$p_size")
+        p_vcpus=$(_sku_vcpus "$p_size")
+        if [ -z "$p_family" ] || [ -z "$p_vcpus" ]; then
+          warn "Could not map node pool ${p_name} (${p_size}) to a quota family — it is left out of the checks below"
+          continue
+        fi
+        POOL_ROWS="${POOL_ROWS}
+$(printf '%s\t%s\t%s\t%s' "$p_family" $((p_min * p_vcpus)) $((p_max * p_vcpus)) "${p_name} ${p_min}-${p_max} × ${p_size}")"
+      done <<EOF
+$EXTRA_POOLS
+EOF
+    else
+      warn "terraform.tfvars: additional_node_pools is not in a shape preflight can read — checking the default node pool only"
+    fi
+
+    # enable_sandboxes adds the sandboxhost pool, unless additional_node_pools
+    # already defines one (it replaces the generated pool). Preflight runs
+    # before terraform init, so the sizes and counts below copy
+    # local.sandbox_host_vm_size and the variable defaults, sizing_profile's
+    # included, and tests/sandboxes.tftest.hcl fails when they drift.
+    if [ "$(_tfvar enable_sandboxes || echo false)" = "true" ] \
+      && ! printf '%s\n' "${EXTRA_POOLS:-}" | cut -f1 | grep -qx sandboxhost; then
+      SB_SIZE=$(_tfvar sandbox_host_vm_size || echo "")
+      if [ -z "$SB_SIZE" ] || [ "$SB_SIZE" = "null" ]; then
+        case "$(_tfvar sizing_profile || echo production)" in
+          production|production-large) SB_SIZE="Standard_D32ds_v5" ;;
+          *) SB_SIZE="Standard_D8ds_v5" ;;
+        esac
+      fi
+      SB_MIN=$(_tfvar sandbox_host_min_count || echo "0")
+      SB_MAX=$(_tfvar sandbox_host_max_count || echo "5")
+      SB_FAMILY=$(_quota_family "$SB_SIZE")
+      SB_VCPUS=$(_sku_vcpus "$SB_SIZE")
+      if [ -z "$SB_FAMILY" ] || [ -z "$SB_VCPUS" ] \
+        || ! printf '%s|%s\n' "$SB_MIN" "$SB_MAX" | grep -qE '^[0-9]+\|[0-9]+$'; then
+        warn "Could not read the sandboxhost pool (${SB_SIZE}, ${SB_MIN}-${SB_MAX}) — it is left out of the checks below"
+      else
+        POOL_ROWS="${POOL_ROWS}
+$(printf '%s\t%s\t%s\t%s' "$SB_FAMILY" $((SB_MIN * SB_VCPUS)) $((SB_MAX * SB_VCPUS)) "sandboxhost ${SB_MIN}-${SB_MAX} × ${SB_SIZE}")"
+      fi
+    fi
+
+    # Pools that share a family share its quota. Postgres adds to the family it
+    # shares, and to the regional total always.
+    POOL_FAMILIES=$(printf '%s\n' "$POOL_ROWS" | cut -f1 | awk '!seen[$0]++')
+    while read -r fam; do
+      FAM_ROW=$(printf '%s\n' "$POOL_ROWS" | awk -F'\t' -v f="$fam" '
+        $1 == f { lo += $2; hi += $3; what = what (what ? ", " : "") $4 }
+        END { print lo "\t" hi "\t" what }')
+      FAM_FLOOR=$(printf '%s\n' "$FAM_ROW" | cut -f1)
+      FAM_CEILING=$(printf '%s\n' "$FAM_ROW" | cut -f2)
+      FAM_WHAT=$(printf '%s\n' "$FAM_ROW" | cut -f3)
+      if [ "$PG_FAMILY" = "$fam" ]; then
+        FAM_FLOOR=$((FAM_FLOOR + PG_VCPUS))
+        FAM_CEILING=$((FAM_CEILING + PG_VCPUS))
+        FAM_WHAT="${FAM_WHAT} plus Postgres"
+      fi
+      _node_quota_verdict "$fam" "$FAM_FLOOR" "$FAM_CEILING" "$FAM_WHAT"
+    done <<EOF
+$POOL_FAMILIES
+EOF
+
+    ALL_ROW=$(printf '%s\n' "$POOL_ROWS" | awk -F'\t' '
+      { lo += $2; hi += $3; what = what (what ? ", " : "") $4 }
+      END { print lo "\t" hi "\t" what }')
+    CORES_WHAT=$(printf '%s\n' "$ALL_ROW" | cut -f3)
+    [ "$PG_VCPUS" -gt 0 ] && CORES_WHAT="${CORES_WHAT} plus Postgres"
+    _node_quota_verdict "cores" \
+      $(( $(printf '%s\n' "$ALL_ROW" | cut -f1) + PG_VCPUS )) \
+      $(( $(printf '%s\n' "$ALL_ROW" | cut -f2) + PG_VCPUS )) "$CORES_WHAT"
+  fi
+fi
+
+# Azure Managed Redis has neither a quota surface nor a capacity API: a region
+# offering redisEnterprise can still refuse the create with InsufficientCapacity,
+# discoverable only by trying. That the resource type reaches the region is all
+# that is knowable up front. Provider metadata returns display names ("East US"),
+# so normalize before comparing. redis_location moves only the cluster, so that
+# is the region to check when it is set.
+AMR_LOCATION=$(_tfvar redis_location || echo "")
+[ "$AMR_LOCATION" = "null" ] && AMR_LOCATION=""
+AMR_LOCATION="${AMR_LOCATION:-$QUOTA_LOCATION}"
+if [ ! -f "$TFVARS" ]; then
+  :   # already reported above
+elif [ "$REDIS_SOURCE" = "in-cluster" ]; then
+  pass "redis_source = in-cluster — no Managed Redis region check needed"
+elif printf '%s\n' "$AMR_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+  # JSON, not tsv, so the shape can be checked before the answer becomes a
+  # verdict: a tsv line is indistinguishable from an error string, and a "not
+  # offered" built on one blocks a deploy over a parse. Only a JSON array of
+  # region names produces a verdict; anything else warns and skips.
+  AMR_REGIONS=$(az provider show -n Microsoft.Cache \
+    --query "resourceTypes[?resourceType=='redisEnterprise'].locations | [0]" -o json 2>/dev/null \
+    | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(d, list) or not d:
+    sys.exit(0)
+names = [str(x).lower().replace(' ', '') for x in d if isinstance(x, str) and x.strip()]
+if len(names) != len(d):
+    sys.exit(0)
+print('\\n'.join(names))
+" 2>/dev/null || echo "")
+
+  if [ -z "$AMR_REGIONS" ]; then
+    warn "Could not read Microsoft.Cache regions — skipping the Managed Redis region check"
+  elif printf '%s\n' "$AMR_REGIONS" | grep -qx "$AMR_LOCATION"; then
+    pass "Azure Managed Redis is offered in ${AMR_LOCATION} (capacity is not queryable ahead of the apply)"
+  else
+    fail "Azure Managed Redis is not offered in ${AMR_LOCATION}"
+    warn "  Offered regions: $(printf '%s' "$AMR_REGIONS" | tr '\n' ' ')"
+  fi
+else
+  warn "'${AMR_LOCATION}' is not a region name (such as eastus) — skipping the Managed Redis region check"
+fi
+
+# ── 7. terraform.tfvars ───────────────────────────────────────────────────────
+# Declared before the file check so section 8 can read them either way; with no
+# tfvars both sections skip.
+CREATE_CLUSTER="true"
+CREATE_KEYVAULT="true"
 echo ""
 echo "── Terraform Config ──────────────────────────────────"
-TFVARS="${INFRA_DIR}/terraform.tfvars"
 if [ ! -f "$TFVARS" ]; then
   fail "terraform.tfvars not found. Copy the example: cp infra/terraform.tfvars.example infra/terraform.tfvars"
 else
@@ -514,21 +1811,123 @@ else
       pass "secrets.auto.tfvars: langsmith_license_key is set"
     fi
   fi
+
+  # Attach mode: create_cluster / create_keyvault = false point at a resource the
+  # customer's platform team owns. The modules have preconditions for an unset
+  # name, but a name that is set and wrong reaches Azure as a 404 partway through
+  # the apply. No shape check — these are quoted into az argv, never a URL, and
+  # group names legitimately carry underscores and periods.
+  CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
+  CREATE_KEYVAULT=$(_tfvar create_keyvault || echo "true")
+
+  if [ "$CREATE_CLUSTER" = "false" ]; then
+    EXISTING_AKS=$(_tfvar existing_cluster_name || echo "")
+    EXISTING_AKS_RG=$(_tfvar existing_cluster_resource_group_name || echo "")
+    if [ -z "$EXISTING_AKS" ] || [ -z "$EXISTING_AKS_RG" ]; then
+      fail "create_cluster = false requires both existing_cluster_name and existing_cluster_resource_group_name"
+    elif [ -z "${SUB_ID:-}" ]; then
+      warn "create_cluster = false — cannot confirm cluster '${EXISTING_AKS}' exists without an active az login"
+    elif az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --only-show-errors -o none 2>/dev/null; then
+      pass "Attaching to AKS cluster '${EXISTING_AKS}' in resource group '${EXISTING_AKS_RG}'"
+      # An Entra ID cluster returns no client certificate, so the Kubernetes and
+      # Helm providers sign in through kubelogin (aks_kube_auth = auto or entra).
+      KUBE_AUTH=$(_tfvar aks_kube_auth || echo "auto")
+      AAD_PROFILE=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null || echo "")
+      if [ "$KUBE_AUTH" = "entra" ] && [ "$AAD_PROFILE" = "false" ]; then
+        fail "aks_kube_auth = \"entra\" but cluster '${EXISTING_AKS}' has no Entra ID integration, so it accepts no Entra token — use \"auto\""
+      elif [ "$KUBE_AUTH" = "entra" ] || { [ "$KUBE_AUTH" = "auto" ] && [ "$AAD_PROFILE" = "true" ]; }; then
+        if command -v kubelogin >/dev/null 2>&1; then
+          pass "Entra ID cluster: kubelogin found, the providers sign in with your az session"
+        else
+          fail "Cluster '${EXISTING_AKS}' uses Entra ID and kubelogin is not on the PATH — install it with 'az aks install-cli'. The identity running apply also needs cluster-admin rights: an Azure Kubernetes Service RBAC role under Azure RBAC, or an admin group or ClusterRoleBinding under Kubernetes RBAC"
+        fi
+      elif [ "$KUBE_AUTH" = "certificate" ] && [ "$AAD_PROFILE" = "true" ]; then
+        fail "aks_kube_auth = \"certificate\" but cluster '${EXISTING_AKS}' uses Entra ID, where azurerm returns no client certificate — use \"auto\""
+      fi
+    else
+      fail "AKS cluster '${EXISTING_AKS}' not found in resource group '${EXISTING_AKS_RG}' — check both names and the subscription"
+    fi
+  fi
+
+  if [ "$CREATE_KEYVAULT" = "false" ]; then
+    EXISTING_KV=$(_tfvar existing_keyvault_name || echo "")
+    EXISTING_KV_RG=$(_tfvar existing_keyvault_resource_group_name || echo "")
+    if [ -z "$EXISTING_KV" ] || [ -z "$EXISTING_KV_RG" ]; then
+      fail "create_keyvault = false requires both existing_keyvault_name and existing_keyvault_resource_group_name"
+    elif [ -z "${SUB_ID:-}" ]; then
+      warn "create_keyvault = false — cannot confirm vault '${EXISTING_KV}' exists without an active az login"
+    elif az keyvault show -n "$EXISTING_KV" -g "$EXISTING_KV_RG" --only-show-errors -o none 2>/dev/null; then
+      pass "Attaching to Key Vault '${EXISTING_KV}' in resource group '${EXISTING_KV_RG}'"
+    else
+      fail "Key Vault '${EXISTING_KV}' not found in resource group '${EXISTING_KV_RG}' — check both names and the subscription"
+    fi
+  fi
+
+  # The private endpoint turns the vault's public network access off, so every
+  # data-plane call has to come from inside the network. Nothing here can tell
+  # whether this machine is, before the vault exists, so this is a reminder
+  # rather than a check. Terraform refuses the flag with create_keyvault = false.
+  KV_PRIVATE_ENDPOINT=$(_tfvar keyvault_private_endpoint_enabled || echo "false")
+  if [ "$KV_PRIVATE_ENDPOINT" = "true" ] && [ "$CREATE_KEYVAULT" != "false" ]; then
+    KV_MANAGE_SECRETS=$(_tfvar keyvault_manage_secrets || echo "true")
+    if [ "$KV_MANAGE_SECRETS" = "false" ]; then
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network)"
+    else
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. terraform plan and apply (which read and write two secrets on every run), make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network), or set keyvault_manage_secrets = false"
+    fi
+
+    # Which DNS this machine sees for the vault's privatelink zone. An Azure
+    # private DNS zone answers SOA with azureprivatedns.net as its primary; the
+    # public zone of the same name does not. A supplied zone already exists, so
+    # a public answer means this machine is not on the network that links it. A
+    # zone Terraform creates does not exist yet, so a public answer proves
+    # nothing until after apply. Blob storage is not checked: Terraform reaches
+    # it through the management plane, so this machine's DNS does not decide
+    # whether apply reaches it.
+    case "$AZURE_ENVIRONMENT" in
+      usgovernment) KV_ZONE="privatelink.vaultcore.usgovcloudapi.net"; KV_HOST_SUFFIX="vault.usgovcloudapi.net" ;;
+      *)            KV_ZONE="privatelink.vaultcore.azure.net"; KV_HOST_SUFFIX="vault.azure.net" ;;
+    esac
+    KV_ZONE_SUPPLIED=$(_tfvar keyvault_private_dns_zone_id || echo "")
+    KV_RUN_HINT="Run make preflight from a machine in the VNet or a peered network to check."
+    if ! command -v dig >/dev/null 2>&1; then
+      unconfirmed "dig is not installed, so whether this machine resolves ${KV_ZONE} from a private zone is unknown. ${KV_RUN_HINT}"
+    elif ! KV_SOA=$(dig +time=3 +tries=1 +noall +answer +authority SOA "$KV_ZONE" 2>/dev/null) \
+      || ! printf '%s\n' "$KV_SOA" | grep -q 'SOA'; then
+      unconfirmed "Could not resolve ${KV_ZONE} from this machine (3-second limit), so whether it sees a private zone is unknown. ${KV_RUN_HINT}"
+    elif printf '%s\n' "$KV_SOA" | grep -qi 'azureprivatedns\.net'; then
+      pass "This machine resolves ${KV_ZONE} from an Azure private DNS zone, so it reaches the vault over its private endpoint"
+    elif ! printf '%s\n' "$KV_SOA" | grep -qiE 'azure-dns\.(com|net|org|info|us)'; then
+      unconfirmed "This machine resolves ${KV_ZONE} from DNS servers that are neither an Azure private zone nor Azure's public DNS, likely your own forwarders. Whether they return the vault's private endpoint is unknown: once the vault exists, nslookup <vault name>.${KV_HOST_SUFFIX} should return an address in the private-endpoint subnet."
+    elif [ -n "$KV_ZONE_SUPPLIED" ]; then
+      warn "This machine resolves ${KV_ZONE} from public DNS, not the private zone in keyvault_private_dns_zone_id, so it will reach for the vault's public endpoint, which the private endpoint turns off. ${KV_RUN_HINT}"
+    else
+      unconfirmed "This machine resolves ${KV_ZONE} from public DNS. Terraform creates and links that private zone during apply, so whether this machine will see it can only be known afterwards. ${KV_RUN_HINT}"
+    fi
+  fi
+
+  # The azurerm provider parses some resource IDs case-sensitively, and az
+  # identity show prints /resourcegroups/ in lower case. Pasted as-is into
+  # aks_control_plane_identity_id it passes the variable's own validation, which
+  # ignores case, and then fails plan with: parsing segment "resourceGroups".
+  CP_IDENTITY_ID=$(_tfvar aks_control_plane_identity_id || echo "")
+  case "$CP_IDENTITY_ID" in
+    */resourcegroups/*)
+      fail "terraform.tfvars: aks_control_plane_identity_id has /resourcegroups/ in lower case, and the azurerm provider rejects it at plan (parsing segment \"resourceGroups\"). Change it to /resourceGroups/: ${CP_IDENTITY_ID%%/resourcegroups/*}/resourceGroups/${CP_IDENTITY_ID#*/resourcegroups/}" ;;
+  esac
+  # The same paste into the other IDs this module takes. Not every one of them
+  # is parsed strictly, so these warn rather than fail.
+  for ID_KEY in vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id agic_subnet_id bastion_subnet_id \
+    storage_private_endpoint_subnet_id keyvault_private_endpoint_subnet_id ingress_load_balancer_subnet_id \
+    aks_private_dns_zone_id storage_private_dns_zone_id keyvault_private_dns_zone_id postgres_private_dns_zone_id; do
+    case "$(_tfvar "$ID_KEY" || echo "")" in
+      */resourcegroups/*)
+        warn "terraform.tfvars: ${ID_KEY} has /resourcegroups/ in lower case. The azurerm provider parses some IDs case-sensitively and fails plan on it; change it to /resourceGroups/." ;;
+    esac
+  done
 fi
 
-# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
-# preflight.sh deliberately has no external sourcing.
-_tfvar() {
-  local raw val
-  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
-  [ -n "$raw" ] || return 1
-  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
-  [ -n "$val" ] || return 1
-  echo "$val"
-}
-
-# ── 7. PostgreSQL regional capabilities ─────────────────────────────────────
+# ── 8. PostgreSQL regional capabilities ─────────────────────────────────────
 # The offer-type check above is only a heuristic. This command asks the
 # subscription-scoped capability API what can actually be created in the chosen
 # region, and also lets us check the exact version and SKU before apply.
@@ -696,39 +2095,35 @@ EOF
   fi
 fi
 
-# ── 8. Globally-unique resource names ────────────────────────────────────────
-# Postgres, Redis, Storage, and Key Vault names live in a namespace shared by
-# every Azure tenant, as does the public-IP DNS label. A collision surfaces as a
-# raw Azure 400 partway through the apply, after the resource group, VNet, and
-# AKS already exist — so check up front instead.
+# ── 9. Globally-unique resource names ────────────────────────────────────────
+# Postgres, Redis, Storage, Key Vault, and the public-IP DNS label share a
+# namespace across every Azure tenant. A collision surfaces as a raw 400 partway
+# through the apply, after the resource group, VNet, and AKS already exist. A
+# name this deployment already owns is not a collision, so state is read first.
 echo ""
 echo "── Global Name Availability ──────────────────────────"
 
 if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
   warn "Skipping name checks (need terraform.tfvars and an active az login)"
 else
-  NAME_PREFIX=$(_tfvar name_prefix || _tfvar identifier || echo "")
   LOCATION=$(_tfvar location || echo "")
   DNS_LABEL=$(_tfvar dns_label || echo "")
-  UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
 
-  # Recompute exactly what main.tf's locals derive, so the check covers the names
-  # Terraform will actually request. name_prefix may carry a leading hyphen or
-  # not; normalize the same way local.name_suffix does. Keep in sync with
-  # local.name_base / local.name_suffix / local.uniq_suffix in infra/main.tf.
-  NAME_SUFFIX=""
-  [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
-
+  # Only these four names carry the hash, so it is derived here rather than above.
+  # Keep in sync with local.uniq_suffix in infra/main.tf, salt included: omit the
+  # salt and preflight keeps checking the names it was bumped to escape. The
+  # subscription comes from tfvars because that is what Terraform hashes and what
+  # _derive_kv_name reads.
+  SALT=$(_tfvar name_suffix_salt || echo "")
+  HASH_SUB="${TFVARS_SUB:-$SUB_ID}"
   if [ "$UNIQUE_NAMES" = "true" ]; then
-    NAME_BASE="ls"
     if command -v shasum &>/dev/null; then
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | shasum -a 256 | cut -c1-6)
+      HASH=$(printf '%s' "${HASH_SUB}${NAME_SUFFIX}${SALT}" | shasum -a 256 | cut -c1-6)
     else
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | sha256sum | cut -c1-6)
+      HASH=$(printf '%s' "${HASH_SUB}${NAME_SUFFIX}${SALT}" | sha256sum | cut -c1-6)
     fi
     UNIQ_SUFFIX="-${HASH}"
   else
-    NAME_BASE="langsmith"
     UNIQ_SUFFIX=""
     warn "unique_resource_names is false — using the legacy shared-namespace names, which collide between deployments"
   fi
@@ -745,12 +2140,49 @@ else
     echo "$1" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$'
   }
 
-  # _check_name <label> <name> <url> <json-body> <availability-field>
+  # checkNameAvailability has no notion of ownership: a name this deployment
+  # holds reports "taken" exactly like a stranger's, so state decides which it
+  # is. Preflight runs before `terraform init`, so `state pull` only answers on
+  # an initialized backend — fall back to the local file, and treat no state as
+  # the first run, where every name genuinely has to be free.
+  STATE_JSON=$(terraform -chdir="$INFRA_DIR" state pull </dev/null 2>/dev/null || true)
+  if [ -z "$STATE_JSON" ] && [ -f "${INFRA_DIR}/terraform.tfstate" ]; then
+    STATE_JSON=$(cat "${INFRA_DIR}/terraform.tfstate")
+  fi
+  STATE_NAMES=$(printf '%s' "$STATE_JSON" | python3 -c "
+import json, sys
+try:
+    state = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for res in state.get('resources', []):
+    for inst in res.get('instances', []):
+        attrs = inst.get('attributes') or {}
+        for key in ('name', 'domain_name_label'):
+            value = attrs.get(key)
+            if isinstance(value, str) and value:
+                print(value)
+" 2>/dev/null || true)
+
+  _in_state() {
+    [ -n "$STATE_NAMES" ] && printf '%s\n' "$STATE_NAMES" | grep -qxF "$1"
+  }
+
+  # _check_name <label> <name> <url> <json-body> <availability-field> <max-len> <remedy> [owned]
   # A definitive "taken" fails the run. Anything else (auth blip, api-version
   # drift, unparseable body) only warns — preflight must never block a deploy
-  # because Azure rotated an API version.
+  # because Azure rotated an API version. Callers pass owned=1 when they have
+  # established ownership by a route state cannot answer.
   _check_name() {
-    local label="$1" name="$2" url="$3" body="$4" field="$5" resp avail msg
+    local label="$1" name="$2" url="$3" body="$4" field="$5" max_len="$6" remedy="$7"
+    local owned="${8:-0}" resp avail reason msg
+    # Length is decided here, not by Azure: the API reports an over-long name as
+    # nameAvailable false, which reads as a collision, and its rule text carries
+    # no count. Same sentence main.tf's preconditions print.
+    if [ "${#name}" -gt "$max_len" ]; then
+      fail "${label} name '${name}' is ${#name} chars; Azure allows at most ${max_len}. ${remedy}"
+      return 0
+    fi
     if ! _name_is_safe "$name"; then
       warn "${label}: '${name}' is not a valid Azure resource name — check skipped"
       return 0
@@ -765,35 +2197,89 @@ else
       return 0
     fi
     avail=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('${field}',''))" 2>/dev/null || echo "")
+    reason=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('reason',''))" 2>/dev/null || echo "")
     # Azure's Key Vault message runs several hundred chars of soft-delete prose;
     # keep the first sentence so one failure doesn't bury the rest of the report.
     msg=$(echo "$resp" | python3 -c "
 import sys, json
 m = (json.load(sys.stdin).get('message', '') or '').strip()
 print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null || echo "")
+    # nameAvailable is false for two reasons with opposite remedies, so reporting
+    # both as taken contradicts the Azure message printed underneath. The
+    # providers spell the illegal case differently: Microsoft.DBforPostgreSQL
+    # returns "Invalid", Storage and Key Vault return "AccountNameInvalid".
+    # The length gate above does not cover these — a pinned storage_account_name
+    # with an uppercase letter passes _name_is_safe.
     case "$avail" in
       True)  pass "${label}: '${name}' is available" ;;
-      False) fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
+      False)
+        case "$reason" in
+          Invalid|AccountNameInvalid)
+                 fail "${label}: '${name}' is not a legal Azure resource name. ${msg}" ;;
+          *)
+            if _in_state "$name"; then
+              pass "${label}: '${name}' is already deployed and tracked in Terraform state"
+            elif [ "$owned" = "1" ]; then
+              pass "${label}: '${name}' is already held by a resource in this subscription"
+            else
+              fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}"
+            fi ;;
+        esac ;;
       *)     warn "${label}: '${name}' — unexpected API response; collision would surface during apply" ;;
     esac
   }
 
   _check_name "Postgres" "$PG_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
-    "{\"name\":\"${PG_NAME}\",\"type\":\"Microsoft.DBforPostgreSQL/flexibleServers\"}" "nameAvailable"
+    "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
+    "{\"name\":\"${PG_NAME}\",\"type\":\"Microsoft.DBforPostgreSQL/flexibleServers\"}" "nameAvailable" \
+    63 "Shorten var.name_prefix or set var.postgres_name explicitly."
 
   _check_name "Storage account" "$BLOB_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
-    "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable"
+    "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
+    "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable" \
+    24 "Shorten var.name_prefix or set var.storage_account_name explicitly."
 
-  _check_name "Key Vault" "$KV_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
-    "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable"
+  # A soft-deleted vault holds its name for the retention window while appearing
+  # in neither state nor `az keyvault list`, and the generic "already in use"
+  # message names no remedy.
+  KV_DELETED=0
+  if [ "$CREATE_KEYVAULT" != "false" ] && _name_is_safe "$KV_NAME"; then
+    KV_DELETED=$(az keyvault list-deleted --query "length([?name=='${KV_NAME}'])" -o tsv 2>/dev/null || echo "0")
+    echo "$KV_DELETED" | grep -qE '^[0-9]+$' || KV_DELETED=0
+  fi
+  # With create_keyvault = false the vault is meant to exist, so
+  # checkNameAvailability reports it taken and fails the run on its own config.
+  # Section 7 confirms that vault instead.
+  if [ "$CREATE_KEYVAULT" = "false" ]; then
+    pass "create_keyvault = false — no Key Vault name to reserve"
+  elif [ "$KV_DELETED" -gt "0" ]; then
+    fail "Key Vault: '${KV_NAME}' is soft-deleted, which still reserves the name. Recover it (az keyvault recover --name ${KV_NAME}) or purge it (az keyvault purge --name ${KV_NAME})."
+  else
+    _check_name "Key Vault" "$KV_NAME" \
+      "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+      "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable" \
+      24 "Shorten var.name_prefix or set var.keyvault_name explicitly."
+  fi
 
   if [ -n "$DNS_LABEL" ]; then
+    # State carries the label only under ingress_controller = "agic". Every
+    # other controller sets it as a Service annotation on an AKS-managed IP,
+    # so _in_state cannot see it — ask the subscription who holds it instead.
+    DNS_OWNED=0
+    if _name_is_safe "$DNS_LABEL"; then
+      DNS_HELD=$(az network public-ip list --query "length([?dnsSettings.domainNameLabel=='${DNS_LABEL}'])" -o tsv 2>/dev/null || echo "0")
+      if echo "$DNS_HELD" | grep -qE '^[0-9]+$' && [ "$DNS_HELD" -gt "0" ]; then
+        DNS_OWNED=1
+      fi
+    fi
     _check_name "Public IP DNS label" "$DNS_LABEL" \
-      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
-      "" "available"
+      "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
+      "" "available" \
+      63 "Shorten var.dns_label." "$DNS_OWNED"
+  elif LANGSMITH_DOMAIN=$(_tfvar langsmith_domain); then
+    # A custom domain replaces the <label>.<region>.cloudapp.azure.com name, so
+    # there is no Azure-scoped name left to collide.
+    pass "Custom domain ${LANGSMITH_DOMAIN} — no public IP DNS label to check"
   else
     warn "dns_label not set — skipping DNS label check"
   fi
@@ -805,18 +2291,137 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   # in-subscription case can be pre-checked — a leftover from a failed apply.
   # A cross-tenant Redis collision still surfaces at apply time; the hashed name
   # under unique_resource_names is what makes that unlikely.
-  if _name_is_safe "$REDIS_NAME"; then
+  if [ "${#REDIS_NAME}" -gt 60 ]; then
+    fail "Redis name '${REDIS_NAME}' is ${#REDIS_NAME} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly."
+  elif _name_is_safe "$REDIS_NAME"; then
     REDIS_HIT=$(az redisenterprise list --query "length([?name=='${REDIS_NAME}'])" -o tsv 2>/dev/null || echo "0")
     echo "$REDIS_HIT" | grep -qE '^[0-9]+$' || REDIS_HIT=0
     if [ "$REDIS_HIT" -gt "0" ]; then
-      fail "Redis: '${REDIS_NAME}' already exists in this subscription — import it or delete it before applying"
+      if _in_state "$REDIS_NAME"; then
+        pass "Redis: '${REDIS_NAME}' is already deployed and tracked in Terraform state"
+      else
+        fail "Redis: '${REDIS_NAME}' already exists in this subscription — import it or delete it before applying"
+      fi
     else
       warn "Redis: '${REDIS_NAME}' not present in this subscription (Azure exposes no global name check for Managed Redis)"
     fi
   fi
 fi
 
-# ── 8. Other tooling ──────────────────────────────────────────────────────────
+# ── 10. Existing-cluster node capacity ────────────────────────────────────────
+# Attach mode only. Nothing else checks that some node in an attached cluster
+# can hold ClickHouse, the largest pod LangSmith schedules. It is one replica, so
+# cluster-wide totals don't answer it; only the node's allocatable does, and
+# allocatable is below the VM size (a Standard_D4s_v3 sells 4 vCPU / 16 GiB and
+# allocates 3860m / 14.3 GiB). This asks whether the pod can ever fit: a node
+# that is big enough but full is the autoscaler's problem, while a node too small
+# needs a new pool.
+echo ""
+echo "── Existing Cluster Capacity ─────────────────────────"
+
+CH_SOURCE=$(_tfvar clickhouse_source || echo "in-cluster")
+POOLS_MANAGED=$(_tfvar existing_cluster_node_pools_managed || echo "false")
+CLUSTER_NAME=$(_tfvar existing_cluster_name || echo "")
+
+# The ClickHouse request in each helm/values/examples sizing overlay. With none,
+# init-values.sh applies no overlay and the chart default holds.
+case "$(_tfvar sizing_profile || echo "default")" in
+  minimum)          REQ_CPU_M=1000; REQ_MEM_MI=2048;  REQ_LABEL="minimum" ;;
+  dev)              REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="dev" ;;
+  production)       REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="production" ;;
+  production-large) REQ_CPU_M=4000; REQ_MEM_MI=16384; REQ_LABEL="production-large" ;;
+  *)                REQ_CPU_M=3500; REQ_MEM_MI=12288; REQ_LABEL="chart default" ;;
+esac
+
+if [ "$CREATE_CLUSTER" != "false" ]; then
+  pass "create_cluster = true — Terraform builds the large pool ClickHouse runs on"
+elif [ "$CH_SOURCE" = "external" ]; then
+  pass "clickhouse_source = external — no ClickHouse pod to schedule"
+elif [ "$POOLS_MANAGED" = "true" ]; then
+  pass "existing_cluster_node_pools_managed = true — Terraform adds the large pool"
+elif ! command -v kubectl &>/dev/null; then
+  warn "kubectl not found — cannot read node allocatable, so ClickHouse capacity is unchecked"
+elif ! [[ "$CLUSTER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$ ]]; then
+  warn "existing_cluster_name is empty or not a valid AKS name — ClickHouse capacity is unchecked"
+else
+  # A kubeconfig pointed at another cluster would return its nodes and a
+  # confidently wrong verdict. get-credentials names the context after the
+  # cluster, with -admin appended for --admin.
+  KUBE_CTX=$(kubectl config current-context 2>/dev/null || echo "")
+  if [ "$KUBE_CTX" != "$CLUSTER_NAME" ] && [ "$KUBE_CTX" != "${CLUSTER_NAME}-admin" ]; then
+    # With no private DNS zone, only the public FQDN resolves (to the private IP).
+    GC_FLAG=""
+    if [ -n "${EXISTING_AKS_RG:-}" ] && [ "$(az aks show -n "$CLUSTER_NAME" -g "$EXISTING_AKS_RG" --query "apiServerAccessProfile.privateDnsZone" -o tsv --only-show-errors 2>/dev/null | tr '[:upper:]' '[:lower:]')" = "none" ]; then
+      GC_FLAG=" --public-fqdn"
+    fi
+    warn "kubectl context is '${KUBE_CTX:-unset}', not '${CLUSTER_NAME}', so ClickHouse capacity is unchecked. Run: az aks get-credentials --resource-group ${EXISTING_AKS_RG:-<rg>} --name ${CLUSTER_NAME}${GC_FLAG}"
+  elif ! NODES_JSON=$(kubectl get nodes -o json --request-timeout=10s 2>/dev/null); then
+    warn "Could not read nodes from '${KUBE_CTX}', so ClickHouse capacity is unchecked"
+  else
+    VERDICT=$(printf '%s' "$NODES_JSON" | python3 -c '
+import json, sys
+
+req_cpu, req_mem = int(sys.argv[1]), int(sys.argv[2])
+
+def cpu_m(v):
+    return int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
+
+# The suffixes kubelet emits for allocatable memory; a bare number is bytes.
+UNITS = {"Ki": 1 / 1024, "Mi": 1, "Gi": 1024, "Ti": 1024 * 1024}
+
+def mem_mi(v):
+    for suffix, factor in UNITS.items():
+        if v.endswith(suffix):
+            return int(float(v[: -len(suffix)]) * factor)
+    return int(v) // (1024 * 1024)
+
+try:
+    nodes = json.load(sys.stdin).get("items", [])
+except (ValueError, AttributeError):
+    print("ERR unreadable node JSON")
+    sys.exit(0)
+
+best = None
+for n in nodes:
+    if n.get("spec", {}).get("unschedulable"):
+        continue
+    if not any(c.get("type") == "Ready" and c.get("status") == "True"
+               for c in n.get("status", {}).get("conditions", [])):
+        continue
+    alloc = n.get("status", {}).get("allocatable", {})
+    try:
+        c, m = cpu_m(alloc["cpu"]), mem_mi(alloc["memory"])
+    except (KeyError, ValueError):
+        continue
+    # Rank by the tighter dimension, so the reported node is the one closest to
+    # holding the pod rather than the widest on one axis.
+    score = min(c / req_cpu, m / req_mem)
+    if best is None or score > best[0]:
+        best = (score, c, m)
+
+if best is None:
+    print("ERR no schedulable Ready nodes")
+else:
+    _, c, m = best
+    print("%s %d %d" % ("FIT" if c >= req_cpu and m >= req_mem else "NOFIT", c, m))
+' "$REQ_CPU_M" "$REQ_MEM_MI" || echo "ERR node parse failed")
+
+    read -r VERDICT_KIND BEST_CPU_M BEST_MEM_MI <<<"$VERDICT"
+    case "$VERDICT_KIND" in
+      FIT)
+        pass "ClickHouse (${REQ_LABEL}: ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi) fits — the largest node allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi"
+        ;;
+      NOFIT)
+        fail "No node in '${CLUSTER_NAME}' can hold ClickHouse: the largest allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi, and the ${REQ_LABEL} sizing requests ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi. More nodes of this size won't help. Add a larger pool (az aks nodepool add --node-vm-size Standard_D16s_v5), set existing_cluster_node_pools_managed = true so Terraform adds one, or pick a smaller sizing_profile."
+        ;;
+      *)
+        warn "ClickHouse capacity check inconclusive: ${VERDICT#ERR }"
+        ;;
+    esac
+  fi
+fi
+
+# ── 11. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do
@@ -828,13 +2433,101 @@ for TOOL in terraform kubectl helm; do
   fi
 done
 
+# The documented floor is Helm 3.12, and deploy.sh picks the apply mode from the
+# major, so 3.12+ and 4.x both work. Checked here rather than at the last step of
+# Pass 2, where a wrong version fails after every resource is already metered.
+HELM_VER=$(helm version --template '{{.Version}}' 2>/dev/null | sed 's/^v//') || HELM_VER=""
+HELM_MAJ=${HELM_VER%%.*}
+HELM_MIN=$(echo "$HELM_VER" | cut -s -d. -f2)
+if ! echo "${HELM_MAJ}|${HELM_MIN}" | grep -qE '^[0-9]+\|[0-9]+$'; then
+  warn "helm: could not parse a version from '${HELM_VER:-no output}', so the 3.12 minimum is unverified"
+elif [ "$HELM_MAJ" -lt 3 ] || { [ "$HELM_MAJ" -eq 3 ] && [ "$HELM_MIN" -lt 12 ]; }; then
+  fail "helm ${HELM_VER} is below the documented 3.12 minimum. Upgrade before Pass 2."
+elif [ "$HELM_MAJ" -ge 4 ]; then
+  pass "helm ${HELM_VER}: deploy.sh will pass --server-side=false to keep client-side apply"
+else
+  pass "helm ${HELM_VER}: client-side apply is Helm 3's only mode, so no flag is needed"
+fi
+
+# ── 12. Customer-managed keys ─────────────────────────────────────────────────
+# Read-only checks on the objects the platform team hands over: the disk
+# encryption set must be in the cluster's region (a set serves disks in its
+# own region only), each key's vault must have purge protection on (the
+# services refuse a key without it), and each identity must resolve. A read
+# that fails is a warning, since the identity running preflight may hold
+# nothing on the platform team's scopes; the apply is the authority.
+CMK_DES=$(_tfvar aks_disk_encryption_set_id || echo "")
+CMK_KEYS=""
+for KEY_VAR in postgres_customer_managed_key_id postgres_geo_backup_customer_managed_key_id storage_customer_managed_key_id; do
+  KEY_URL=$(_tfvar "$KEY_VAR" || echo "")
+  [ -n "$KEY_URL" ] && CMK_KEYS="${CMK_KEYS}${KEY_VAR}=${KEY_URL} "
+done
+CMK_IDS=""
+for ID_VAR in postgres_customer_managed_key_identity_id postgres_geo_backup_customer_managed_key_identity_id storage_customer_managed_key_identity_id; do
+  ID_VAL=$(_tfvar "$ID_VAR" || echo "")
+  [ -n "$ID_VAL" ] && CMK_IDS="${CMK_IDS}${ID_VAR}=${ID_VAL} "
+done
+if [ -n "$CMK_DES" ] || [ -n "$CMK_KEYS" ] || [ -n "$CMK_IDS" ]; then
+  echo ""
+  echo "── Customer-managed keys ─────────────────────────────"
+  CMK_LOCATION=$(_tfvar location || echo "eastus")
+  CMK_LOCATION_NORM=$(printf '%s' "$CMK_LOCATION" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+  if [ -n "$CMK_DES" ]; then
+    DES_LOCATION=$(az disk-encryption-set show --ids "$CMK_DES" --query location -o tsv 2>/dev/null || echo "")
+    DES_LOCATION_NORM=$(printf '%s' "$DES_LOCATION" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+    if [ -z "$DES_LOCATION_NORM" ]; then
+      warn "aks_disk_encryption_set_id: the set could not be read (az disk-encryption-set show --ids ...), so its region is unverified. The apply fails if it is not in ${CMK_LOCATION}; the platform team can confirm it."
+    elif [ "$DES_LOCATION_NORM" != "$CMK_LOCATION_NORM" ]; then
+      fail "aks_disk_encryption_set_id is in ${DES_LOCATION}, and the cluster is created in ${CMK_LOCATION}: a disk encryption set serves disks in its own region only. Use a set the platform team creates in ${CMK_LOCATION}."
+    else
+      pass "aks_disk_encryption_set_id: the set is in ${CMK_LOCATION}, the cluster's region"
+    fi
+  fi
+  for ENTRY in $CMK_KEYS; do
+    KEY_VAR=${ENTRY%%=*}; KEY_URL=${ENTRY#*=}
+    KEY_HOST=${KEY_URL#https://}; KEY_HOST=${KEY_HOST%%/*}; VAULT_NAME=${KEY_HOST%%.*}
+    case "$KEY_HOST" in
+      *.managedhsm.*) KV_SHOW_FLAG="--hsm-name"; KV_FIX="az keyvault update-hsm --hsm-name ${VAULT_NAME} --enable-purge-protection true" ;;
+      *)              KV_SHOW_FLAG="--name";     KV_FIX="az keyvault update --name ${VAULT_NAME} --enable-purge-protection true" ;;
+    esac
+    # Purge protection cannot be turned off once on, so a vault that never had
+    # it reports the property unset, which az prints as an empty line with a
+    # zero exit. Only a failed read is unverified; any value but true is off.
+    if ! PURGE=$(az keyvault show "$KV_SHOW_FLAG" "$VAULT_NAME" --query properties.enablePurgeProtection -o tsv 2>/dev/null); then
+      warn "${KEY_VAR}: the vault ${VAULT_NAME} could not be read (az keyvault show), so purge protection is unverified. The apply fails without it; the platform team can confirm it."
+    elif [ "$PURGE" != "true" ]; then
+      fail "${KEY_VAR}: the vault ${VAULT_NAME} has purge protection off, and the services refuse a customer-managed key in such a vault. The platform team enables it, which cannot be undone: ${KV_FIX}"
+    else
+      pass "${KEY_VAR}: the vault ${VAULT_NAME} has purge protection on"
+    fi
+  done
+  for ENTRY in $CMK_IDS; do
+    ID_VAR=${ENTRY%%=*}; ID_VAL=${ENTRY#*=}
+    if az identity show --ids "$ID_VAL" --query principalId -o tsv >/dev/null 2>&1; then
+      pass "${ID_VAR}: the identity resolves"
+    else
+      warn "${ID_VAR}: the identity could not be read (az identity show --ids ...), so it is unverified. The apply fails if it does not exist or lacks Key Vault Crypto Service Encryption User on the key's vault."
+    fi
+  done
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════"
-if [ "$ERRORS" -eq 0 ]; then
+# Only [✗] sets the exit status. A [?] is a question preflight could not answer
+# from outside; make plan and make apply ask it exactly, so it is reported
+# without blocking.
+UNCONFIRMED_LINE="${UNCONFIRMED} check(s) could not be confirmed; make plan and make apply test them exactly."
+if [ "$ERRORS" -eq 0 ] && [ "$UNCONFIRMED" -eq 0 ]; then
   echo -e "${GREEN}  All checks passed. Ready for terraform apply.${NC}"
+elif [ "$ERRORS" -eq 0 ]; then
+  echo -e "${GREEN}  No check failed.${NC}"
+  echo -e "${CYAN}  ${UNCONFIRMED_LINE}${NC}"
 else
-  echo -e "${RED}  ${ERRORS} check(s) failed. Fix the issues above before continuing.${NC}"
+  echo -e "${RED}  ${ERRORS} check(s) failed. Each is known to break apply.${NC}"
+  [ "$UNCONFIRMED" -eq 0 ] || echo -e "${CYAN}  ${UNCONFIRMED_LINE}${NC}"
+  echo "══════════════════════════════════════════════════════"
+  echo ""
   exit 1
 fi
 echo "══════════════════════════════════════════════════════"

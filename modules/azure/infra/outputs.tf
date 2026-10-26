@@ -10,8 +10,13 @@ output "redis_connection_url" {
   value       = var.redis_source == "external" ? module.redis[0].connection_url : ""
 }
 
+output "redis_cluster_enabled" {
+  description = "Sets redis.external.cluster.enabled. True for the OSSCluster policy; read by init-values.sh."
+  value       = var.redis_source == "external" ? module.redis[0].cluster_enabled : false
+}
+
 output "redis_cluster_safe_mode" {
-  description = "Whether LangSmith should set redis.external.clusterSafeMode (true for AMR). init-values.sh reads this."
+  description = "Sets redis.external.clusterSafeMode. True for the EnterpriseCluster policy."
   value       = var.redis_source == "external" ? module.redis[0].cluster_safe_mode : false
 }
 
@@ -35,7 +40,7 @@ output "storage_account_k8s_managed_identity_client_id" {
 
 output "resource_group_name" {
   description = "Name of the Azure resource group containing all LangSmith resources"
-  value       = azurerm_resource_group.resource_group.name
+  value       = local.rg_name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -69,6 +74,11 @@ output "aks_cluster_name" {
   value       = module.aks.cluster_name
 }
 
+output "aks_resource_group_name" {
+  description = "Resource group containing the AKS cluster: the module's group, or existing_cluster_resource_group_name when create_cluster = false"
+  value       = local.aks_rg_name
+}
+
 output "aks_cluster_id" {
   description = "Resource ID of the AKS cluster"
   value       = module.aks.cluster_id
@@ -77,6 +87,97 @@ output "aks_cluster_id" {
 output "aks_oidc_issuer_url" {
   description = "OIDC issuer URL of the AKS cluster (used for Workload Identity federation)"
   value       = module.aks.oidc_issuer_url
+}
+
+output "aks_control_plane_principal_id" {
+  description = "Principal ID of the user-assigned AKS control-plane identity, for the network owner's grants when aks_control_plane_identity_manage_grants = false. null with a system-assigned identity."
+  value       = module.aks.control_plane_principal_id
+}
+
+# ── SmithDB ──────────────────────────────────────────────────────────────────
+
+output "smithdb_metastore_host" {
+  description = "Private hostname of the SmithDB PostgreSQL metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_host : null
+}
+
+output "smithdb_metastore_database" {
+  description = "Database name of the SmithDB metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_database : null
+}
+
+output "smithdb_storage_account_name" {
+  description = "Storage Account containing SmithDB durable data."
+  value       = var.enable_smithdb ? module.smithdb[0].storage_account_name : null
+}
+
+output "smithdb_storage_container_name" {
+  description = "Blob container containing SmithDB durable data."
+  value       = var.enable_smithdb ? module.smithdb[0].container_name : null
+}
+
+output "smithdb_workload_identity_client_id" {
+  description = "Client ID to annotate on the SmithDB Kubernetes ServiceAccount."
+  value       = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : null
+}
+
+output "smithdb_metastore_port" {
+  description = "Port of the SmithDB PostgreSQL metastore."
+  value       = var.enable_smithdb ? "5432" : null
+}
+
+output "smithdb_metastore_use_ssl" {
+  description = "Whether SmithDB must use TLS for its PostgreSQL metastore."
+  value       = var.enable_smithdb ? true : null
+}
+
+output "smithdb_metastore_secret_name" {
+  description = "Kubernetes Secret containing the SmithDB metastore connection fields."
+  value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_metastore_secret_name : null
+}
+
+output "smithdb_metastore_auth_mode" {
+  description = "SmithDB metastore authentication mode: entra or password."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_auth_mode : null
+}
+
+output "smithdb_metastore_username" {
+  description = "Username SmithDB uses to connect to its PostgreSQL metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_username : null
+}
+
+output "smithdb_cache_storage_class_name" {
+  description = "StorageClass used by SmithDB per-pod cache volumes."
+  value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_cache_storage_class_name : null
+}
+
+output "smithdb_sizing" {
+  description = "Resolved SmithDB size (minimal, small, medium, or large), or null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_sizing : null
+}
+
+output "smithdb_metastore_sku_name" {
+  description = "Flexible Server SKU of the SmithDB metastore, resolved from smithdb_metastore_sku_name and smithdb_sizing. Null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_metastore_sku_name : null
+}
+
+output "smithdb_helm_values" {
+  description = "SmithDB chart tier, replicas, and minimal-size resources as YAML. init-values.sh writes it to helm/values/langsmith-values-smithdb-sizing.yaml. Null when SmithDB is disabled."
+  value       = local.smithdb_helm_values
+}
+
+output "smithdb_migration_parallelism" {
+  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
+  value       = var.smithdb_migration_parallelism
+}
+
+output "smithdb_quota_extra" {
+  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
+  value = {
+    cpu       = local.smithdb_quota_extra_cpu
+    memory_gi = local.smithdb_quota_extra_memory_gi
+    pods      = local.smithdb_quota_extra_pods
+  }
 }
 
 output "kubeconfig" {
@@ -101,7 +202,7 @@ output "langsmith_url" {
   description = "URL where LangSmith is accessible."
   value = (
     var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
-    var.dns_label != "" ? "https://${var.dns_label}.${var.location}.cloudapp.azure.com" :
+    var.dns_label != "" ? "https://${var.dns_label}.${var.location}.${local.azure_cloud.cloudapp_suffix}" :
     var.ingress_controller == "agic" && module.aks.agw_public_ip_fqdn != null && module.aks.agw_public_ip_fqdn != "" ? "https://${module.aks.agw_public_ip_fqdn}" :
     "No domain configured — set dns_label or langsmith_domain in terraform.tfvars"
   )
@@ -117,13 +218,39 @@ output "langsmith_namespace" {
   value       = module.k8s_bootstrap.langsmith_namespace
 }
 
+output "envoy_gateway_proxy_image" {
+  description = "Envoy proxy image from envoy_gateway_image_registry, empty without a mirror. helm/scripts/deploy.sh sets it on the EnvoyProxy."
+  value       = module.aks.envoy_gateway_proxy_image
+}
+
+output "envoy_gateway_image_pull_secret_name" {
+  description = "Pull Secret for the Envoy proxy pods, empty without one. helm/scripts/deploy.sh sets it on the EnvoyProxy."
+  value       = module.aks.envoy_gateway_image_pull_secret_name
+}
+
+output "keda_images" {
+  description = "The three images KEDA's pods pull, keyed by name, from keda_image_registry when set and ghcr.io otherwise. Empty when install_keda is false."
+  value       = module.k8s_bootstrap.keda_images
+}
+
+output "keda_image_pull_secret_name" {
+  description = "Pull Secret KEDA's pods use, empty without one."
+  value       = module.k8s_bootstrap.keda_image_pull_secret_name
+}
+
+output "langsmith_image_pull_secret_name" {
+  description = "Pull Secret the service accounts in the LangSmith namespace carry for the pods the operator creates, empty without one."
+  value       = module.k8s_bootstrap.langsmith_image_pull_secret_name
+}
+
+output "langsmith_image_pull_secret_service_accounts" {
+  description = "The service accounts in the LangSmith namespace that carry langsmith_image_pull_secret_name. Empty without one."
+  value       = module.k8s_bootstrap.langsmith_image_pull_secret_service_accounts
+}
+
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
-  # A pre-existing cluster lives in its own resource group, not the one this module
-  # creates for Key Vault and Storage, so the created group would name a resource
-  # group that does not contain the cluster. existing_cluster_resource_group_name is
-  # required when create_cluster = false, so this branch is never blank.
-  value = "az aks get-credentials --resource-group ${var.create_cluster ? azurerm_resource_group.resource_group.name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
+  value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing${module.aks.api_server_public_fqdn == true ? " --public-fqdn" : ""}"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -140,7 +267,7 @@ output "keyvault_uri" {
 
 # ── WAF ───────────────────────────────────────────────────────────────────────
 output "waf_policy_id" {
-  description = "WAF policy resource ID (attach to App Gateway or Front Door)"
+  description = "WAF policy resource ID (attach to an Application Gateway; Front Door cannot use this policy type)"
   value       = var.create_waf ? module.waf[0].waf_policy_id : ""
 }
 
@@ -172,6 +299,21 @@ output "ingress_controller" {
   value       = var.ingress_controller
 }
 
+output "ingress_load_balancer" {
+  description = "'public' or 'internal': whether the ingress controller's load balancer has a public or a private IP."
+  value       = var.ingress_load_balancer
+}
+
+output "ingress_internal_annotations" {
+  description = "Service annotations that make the ingress controller's load balancer internal; make deploy puts them on the Envoy Gateway proxy Service. Empty with ingress_load_balancer = \"public\"."
+  value       = module.aks.ingress_internal_annotations
+}
+
+output "ingress_load_balancer_subnet_grant" {
+  description = "With an internal load balancer in a subnet other than the node subnet: the role, actions, scope and principal the cluster identity needs there, and whether Terraform makes the grant (made_by = \"terraform\") or the network owner must (\"owner\"). Null when no grant is needed."
+  value       = module.aks.ingress_load_balancer_subnet_grant
+}
+
 output "tls_certificate_source" {
   description = "TLS certificate source passed through from var.tls_certificate_source"
   value       = var.tls_certificate_source
@@ -187,4 +329,91 @@ output "cert_manager_identity_client_id" {
 output "dns_nameservers" {
   description = "Azure nameservers for the DNS zone — configure at your registrar"
   value       = var.create_dns_zone ? module.dns[0].nameservers : []
+}
+
+output "aks_network" {
+  description = "Effective AKS network mode, pod range, data plane, policy engine, outbound type and tier, as planned or created. null for an attached cluster."
+  value = module.aks.network_profile == null ? null : {
+    mode         = coalesce(module.aks.network_profile.network_plugin_mode, "node-subnet")
+    pod_cidr     = module.aks.network_profile.pod_cidr
+    data_plane   = module.aks.network_profile.network_data_plane
+    policy       = module.aks.network_profile.network_policy
+    outbound     = try(module.aks.network_profile.outbound_type, null)
+    sku_tier     = module.aks.sku_tier
+    support_plan = module.aks.support_plan
+  }
+}
+
+output "network_policy_engine" {
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. Read for an attached cluster too. deploy.sh applies the sandbox-host CiliumNetworkPolicy when it is cilium."
+  value       = module.aks.network_policy_engine
+}
+
+output "aks_nat_gateway_public_ip" {
+  description = "Public IP of the NAT gateway Terraform created on the AKS subnet (aks_nat_gateway = \"create\"): the source address of traffic that leaves through it, for firewall rules and aks_authorized_ip_ranges. null otherwise."
+  value       = one(azurerm_public_ip.aks_nat[*].ip_address)
+}
+
+# The chart builds https://<account>.blob.core.windows.net/ when no override is
+# set, which is the commercial name only. init-values.sh writes these into
+# config.blobStorage.azureStorageServiceUrlOverride and the SmithDB object-store
+# endpoint outside commercial Azure.
+output "azure_environment" {
+  description = "Azure cloud this deployment targets: public or usgovernment."
+  value       = var.azure_environment
+}
+
+output "storage_blob_endpoint" {
+  description = "Blob service endpoint of the LangSmith trace-blob account."
+  value       = module.blob.blob_endpoint
+}
+
+output "smithdb_storage_blob_endpoint" {
+  description = "Blob service endpoint of the SmithDB object-store account. Null when enable_smithdb = false."
+  value       = var.enable_smithdb ? module.smithdb[0].storage_blob_endpoint : null
+}
+
+output "aks_kubeconfig_public_fqdn" {
+  description = "true when az aks get-credentials needs --public-fqdn: a private cluster with no private DNS zone, from aks_private_dns_zone_id = \"None\" or, when attaching, from the cluster. The helm scripts read it."
+  value       = module.aks.api_server_public_fqdn == true
+}
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# Read by init-values.sh for the sandboxes overlay. Null when enable_sandboxes = false.
+
+output "enable_sandboxes" {
+  description = "Whether sandboxes are provisioned; gates the sandboxes values overlay."
+  value       = var.enable_sandboxes
+}
+
+output "sandbox_host_workload_identity_client_id" {
+  description = "Client ID to annotate on the sandbox-host Kubernetes ServiceAccount (sandboxes.sandboxHost.serviceAccount.annotations)."
+  value       = var.enable_sandboxes ? azurerm_user_assigned_identity.sandbox_host[0].client_id : null
+}
+
+output "sandbox_juicefs_secret_name" {
+  description = "Kubernetes Secret holding the JuiceFS config, for sandboxes.juicefs.existingSecretName."
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+# The chart runs one sandbox-host per node, so its autoscaler follows the
+# sandboxhost pool's bounds. The chart requires minReplicas >= 1.
+output "sandbox_host_min_replicas" {
+  description = "sandboxes.sandboxHost.autoscaling.minReplicas: the sandboxhost pool's min_count, raised to the chart minimum of 1."
+  value       = var.enable_sandboxes ? max(1, local.effective_node_pools["sandboxhost"].min_count) : null
+}
+
+output "sandbox_host_max_replicas" {
+  description = "sandboxes.sandboxHost.autoscaling.maxReplicas: the sandboxhost pool's max_count."
+  value       = var.enable_sandboxes ? local.effective_node_pools["sandboxhost"].max_count : null
+}
+
+output "sandbox_juicefs_container_name" {
+  description = "Blob container holding JuiceFS sandbox data."
+  value       = var.enable_sandboxes ? azurerm_storage_container.sandbox_juicefs[0].name : null
+}
+
+output "sandbox_juicefs_redis_name" {
+  description = "Azure Managed Redis cluster holding JuiceFS metadata."
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
 }

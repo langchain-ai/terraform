@@ -41,8 +41,14 @@ variable "amr_sku" {
 
 variable "clustering_policy" {
   type        = string
-  description = "AMR clustering policy. OSSCluster is what LangSmith expects."
+  description = "AMR clustering policy. OSSCluster selects the LangSmith cluster client; EnterpriseCluster the standalone client with clusterSafeMode. NoCluster is a single shard, for clients such as JuiceFS that need multi-key operations on plain Redis."
   default     = "OSSCluster"
+
+  # The outputs branch on this string, so a typo silently picks the wrong client.
+  validation {
+    condition     = contains(["OSSCluster", "EnterpriseCluster", "NoCluster"], var.clustering_policy)
+    error_message = "clustering_policy must be 'OSSCluster', 'EnterpriseCluster' or 'NoCluster'."
+  }
 }
 
 variable "high_availability" {
@@ -57,6 +63,30 @@ variable "high_availability" {
     condition     = !(var.high_availability && var.amr_sku == "Balanced_B0")
     error_message = "Balanced_B0 cannot run high availability. Use Balanced_B1 or larger, or set redis_high_availability = false."
   }
+}
+
+variable "eviction_policy" {
+  type        = string
+  description = "AMR database eviction policy, for example NoEviction. null leaves it unset, which Azure treats as VolatileLRU."
+  default     = null
+}
+
+variable "aof_persistence" {
+  type        = bool
+  description = "Write every change to an append-only file once a second, so the database survives losing its primary and replica together. Azure supports persistence only with high_availability = true."
+  default     = false
+}
+
+variable "create_private_dns_zone" {
+  type        = bool
+  description = "Create the privatelink.redis.azure.net zone and its VNet link here. false uses private_dns_zone_id."
+  default     = true
+}
+
+variable "private_dns_zone_id" {
+  type        = string
+  description = "Existing privatelink.redis.azure.net zone for the private endpoint, already linked to the VNet. Used when create_private_dns_zone = false."
+  default     = null
 }
 
 variable "tags" {

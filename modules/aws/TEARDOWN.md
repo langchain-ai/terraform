@@ -35,7 +35,7 @@ helm list -A
 kubectl get namespaces
 ```
 
-**Data warning:** Teardown permanently deletes the RDS instance, S3 bucket contents, and SSM parameters. Export any data you need to retain before proceeding.
+**Data warning:** Teardown permanently deletes the RDS instance and S3 bucket contents. `make purge-secrets` permanently deletes this deployment's SSM parameters. Export any data you need to retain before proceeding.
 
 ---
 
@@ -68,14 +68,14 @@ kubectl delete crd lgps.apps.langchain.ai
 
 ## A2 — Uninstall LangSmith Helm Release
 
-Use the provided script — it handles the Helm release, ESO resources, and operator-managed pods (agent-builder, LangGraph) in one pass:
+Use the provided script — it handles the Helm release, ESO resources, and operator-managed pods (Fleet, LangGraph) in one pass:
 
 ```bash
 cd aws/helm
 ./scripts/uninstall.sh
 ```
 
-**Sandboxes / JuiceFS:** the JuiceFS CSI driver is part of the LangSmith Helm release. Uninstalling the release before the JuiceFS PVCs leaves mount pods holding `juicefs.com/finalizer` with no controller left to clear it, so `kubectl delete` blocks past the grace period and never returns. `uninstall.sh` therefore deletes the sandbox-host workload and the JuiceFS claims first, while the driver is still running, and force-clears any pod still in `Terminating` afterwards.
+**Sandboxes / JuiceFS (chart 0.16 releases):** chart 0.16 ships the JuiceFS CSI driver in the LangSmith Helm release. Uninstalling the release before the JuiceFS PVCs leaves mount pods holding `juicefs.com/finalizer` with no controller left to clear it, so `kubectl delete` blocks past the grace period and never returns. `uninstall.sh` therefore deletes the sandbox-host workload and the JuiceFS claims first, while the driver is still running, and force-clears any pod still in `Terminating` afterwards. Chart 0.17 has no CSI driver: sandbox-host mounts JuiceFS itself, so these steps find no claims or mount pods and change nothing.
 
 **In-cluster ClickHouse volumes:** `data-langsmith-clickhouse-*` is provisioned by the EBS CSI driver, so Terraform has no record of the volume. `uninstall.sh` keeps the claim by default, because uninstall is also the path to a clean Helm reinstall. When the cluster is going away, delete the claim during uninstall so the driver reclaims the volume — after `terraform destroy` the driver is gone and the EBS volume is orphaned:
 
@@ -203,9 +203,30 @@ Terraform will destroy in dependency order:
 - ElastiCache Redis cluster
 - S3 bucket
 - ALB (pre-provisioned)
-- IAM roles (IRSA, ESO)
+- IAM roles (IRSA, ESO, Engine)
 - EKS node groups and cluster
 - VPC, subnets, NAT gateway, route tables
+
+### Customer-supplied security groups in a Terraform-created VPC
+
+Terraform leaves a supplied security group alone. AWS will not delete the VPC
+while that group remains. If `terraform destroy` finishes every other resource
+but reports that the VPC still has dependencies, delete the supplied groups and
+run destroy again:
+
+```bash
+# From modules/aws/
+make teardown-byo-sg BYO_SECURITY_GROUP_IDS="sg-0123456789abcdef0 sg-0123456789abcdef1"
+make destroy
+```
+
+`make teardown-byo-sg` verifies that every supplied ID belongs to the VPC Terraform is
+destroying and asks you to confirm the VPC ID. After confirmation, it removes
+inbound and outbound rules referencing other groups in your list, then deletes
+the listed groups. It leaves groups and references outside that list untouched;
+references from an unlisted group can still block deletion. Do not run it for a
+customer-owned VPC (`create_vpc = false`); that command refuses to delete groups
+from one.
 
 **Note on `source ./scripts/setup-env.sh`:** The script sets `TF_VAR_postgres_password` and `TF_VAR_redis_auth_token`. If those SSM parameters don't exist (e.g. they were never stored there), the variables will be unset and Terraform will fail provider validation even during destroy. In that case, set them manually before running destroy:
 
@@ -236,6 +257,19 @@ aws ec2 describe-vpcs \
   --query "Vpcs[].VpcId" \
   --output text
 ```
+
+---
+
+## A7 — Purge SSM Parameters and Local Files
+
+After `terraform destroy` succeeds and Terraform state has no managed resources, run this from `modules/aws/`:
+
+```bash
+make purge-secrets
+make clean
+```
+
+`make purge-secrets` displays the exact SSM prefix and region, then asks for confirmation before deletion. Run it only when the state-backed teardown above is complete.
 
 ---
 
@@ -296,9 +330,9 @@ kubectl config current-context
 
 ```bash
 # Uninstall LangSmith app. Use the script rather than `helm uninstall` directly:
-# the JuiceFS CSI driver ships in this release, so removing the release first
-# strands mount pods on juicefs.com/finalizer with no controller left to clear
-# them. The script deletes sandbox-host and the JuiceFS claims while the driver
+# on chart 0.16 the JuiceFS CSI driver ships in this release, so removing the
+# release first strands mount pods on juicefs.com/finalizer with no controller left
+# to clear them. The script deletes sandbox-host and the JuiceFS claims while the driver
 # is still up, and works without Terraform state (it falls back to the active
 # kubectl context). Add DELETE_DATA_PVCS=true to also reclaim the ClickHouse EBS
 # volume, which Terraform does not track.
@@ -391,22 +425,61 @@ aws s3 rb s3://$PREFIX-traces
 
 ## B6 — Delete SSM Parameters
 
-```bash
-# List parameters first to confirm
-aws ssm describe-parameters --region $REGION \
-  --parameter-filters "Key=Name,Option=BeginsWith,Values=/langsmith/$PREFIX" \
-  --query 'Parameters[*].Name' --output json
+When Terraform reports no state file and no local state backup exists,
+`make purge-secrets` can remove the parameters after its typed-prefix confirmation.
+Use this manual fallback only when Terraform state cannot be read, and only after
+confirming that the deployment has been removed.
 
-# Delete all
-aws ssm delete-parameters --region $REGION --names \
-  "/langsmith/$PREFIX/agent-builder-encryption-key" \
-  "/langsmith/$PREFIX/insights-encryption-key" \
-  "/langsmith/$PREFIX/langsmith-admin-password" \
-  "/langsmith/$PREFIX/langsmith-api-key-salt" \
-  "/langsmith/$PREFIX/langsmith-jwt-secret" \
-  "/langsmith/$PREFIX/langsmith-license-key" \
-  "/langsmith/$PREFIX/postgres-password" \
-  "/langsmith/$PREFIX/redis-auth-token"
+```bash
+set -euo pipefail
+
+SSM_PREFIX="/langsmith/$PREFIX"
+if ! SSM_PARAMS=$(aws ssm get-parameters-by-path \
+  --region "$REGION" \
+  --path "$SSM_PREFIX/" \
+  --recursive \
+  --query 'Parameters[].Name' \
+  --output text); then
+  echo "Could not list SSM parameters under $SSM_PREFIX/" >&2
+  exit 1
+fi
+
+if [ -z "$SSM_PARAMS" ] || [ "$SSM_PARAMS" = "None" ]; then
+  echo "No SSM parameters found under $SSM_PREFIX/"
+  exit 0
+fi
+
+# AWS CLI text output can contain tabs and newlines across pages.
+PARAMETER_NAMES=()
+while IFS= read -r name; do
+  [ -n "$name" ] && PARAMETER_NAMES+=("$name")
+done < <(printf '%s\n' "$SSM_PARAMS" | tr '\t' '\n')
+
+echo "This permanently deletes ${#PARAMETER_NAMES[@]} SSM parameter(s):"
+printf "  %s\n" "${PARAMETER_NAMES[@]}"
+printf "Type '%s/' in region '%s' to continue: " "$SSM_PREFIX" "$REGION"
+read -r CONFIRM
+if [ "$CONFIRM" != "$SSM_PREFIX/" ]; then
+  echo "Aborted."
+  exit 0
+fi
+
+# SSM accepts at most 10 names per delete-parameters call.
+for ((i=0; i<${#PARAMETER_NAMES[@]}; i+=10)); do
+  BATCH=("${PARAMETER_NAMES[@]:i:10}")
+  if ! INVALID_COUNT=$(aws ssm delete-parameters \
+    --region "$REGION" \
+    --names "${BATCH[@]}" \
+    --query 'length(InvalidParameters)' \
+    --output text); then
+    echo "SSM deletion failed for batch starting at parameter $i." >&2
+    exit 1
+  fi
+  if [ "$INVALID_COUNT" != "0" ]; then
+    echo "SSM reported $INVALID_COUNT invalid parameter(s); cleanup is incomplete." >&2
+    exit 1
+  fi
+done
 ```
 
 ## B7 — Delete ALBs and Target Groups
@@ -473,6 +546,9 @@ delete_iam_role "$PREFIX-eso"
 
 # IRSA role
 delete_iam_role "$PREFIX-eks-irsa-role"
+
+# Engine role (enable_engine = true)
+delete_iam_role "$PREFIX-engine-irsa"
 
 # EKS cluster role (name has a timestamp suffix)
 delete_iam_role "$(aws iam list-roles --query "Roles[?starts_with(RoleName, \`$PREFIX-eks-cluster\`)].RoleName" --output text)"
@@ -549,8 +625,25 @@ for igw_id in $(aws ec2 describe-internet-gateways \
 done
 
 # 6. Delete security groups (revoke cross-references first)
-for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION \
+#
+# Set this to the effective managed-by tag value for this deployment. It is
+# "terraform" by default; for tags = { "managed-by" = "platform" }, use
+# "platform". List every supplied group so it is excluded even when it has the
+# same tag value as Terraform-created groups.
+MANAGED_BY_TAG_VALUE="terraform"
+BYO_SECURITY_GROUP_IDS=""
+
+is_byo_security_group() {
+  local candidate_id="$1"
+  for byo_security_group_id in $BYO_SECURITY_GROUP_IDS; do
+    [ "$candidate_id" = "$byo_security_group_id" ] && return 0
+  done
+  return 1
+}
+for sg_id in $(aws ec2 describe-security-groups \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:managed-by,Values=$MANAGED_BY_TAG_VALUE" --region $REGION \
   --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text); do
+  is_byo_security_group "$sg_id" && continue
   # Revoke all rules (ingress and egress) to break circular dependencies
   for rule_id in $(aws ec2 describe-security-group-rules --filters "Name=group-id,Values=$sg_id" --region $REGION \
     --query 'SecurityGroupRules[?!IsEgress].SecurityGroupRuleId' --output text); do
@@ -562,8 +655,10 @@ for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$V
   done
 done
 # Now delete them
-for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION \
+for sg_id in $(aws ec2 describe-security-groups \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:managed-by,Values=$MANAGED_BY_TAG_VALUE" --region $REGION \
   --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text); do
+  is_byo_security_group "$sg_id" && continue
   aws ec2 delete-security-group --group-id "$sg_id" --region $REGION
 done
 
@@ -578,6 +673,10 @@ aws ec2 delete-vpc --vpc-id $VPC_ID --region $REGION
 ```
 
 **Known issue — EKS security groups:** EKS creates node and cluster security groups that reference each other. You must revoke all rules from both before either can be deleted, which is why the script above revokes rules in a separate pass before deleting.
+
+**Manual teardown preserves supplied security groups.** If you set `existing_security_group_id` (alb/bastion/postgres/redis) or `smithdb_existing_metastore_security_group_id`, add every supplied ID to `BYO_SECURITY_GROUP_IDS`. Step 6 excludes those groups from rule removal and deletion, even when they share the deployment's ownership tag.
+
+With `smithdb_manage_byo_security_group_rules = true`, Terraform manages the tcp/5432-from-EKS-nodes ingress rule on your supplied group. `terraform destroy` (Option A) removes that rule. The Option B script preserves it along with the supplied group; remove the ingress rule yourself if you want the group back to its original state.
 
 ## B10 — Clean Up Remaining Resources
 

@@ -4,8 +4,13 @@
 # Gateway API CRDs
 #------------------------------------------------------------------------------
 locals {
-  # Use standard-install.yaml (v1.4.1) for production stability
-  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+  # Gateway API standard channel. Envoy Gateway v1.9 needs Gateway API v1.6, and
+  # the upstream upgrade order is Gateway API first, then Envoy Gateway.
+  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
+
+  envoy_gateway_version = "v1.9.2"
+  # The Envoy Gateway CRDs of that release, without the Gateway API CRDs.
+  envoy_gateway_crds_url = "https://github.com/envoyproxy/gateway/releases/download/${local.envoy_gateway_version}/envoy-gateway-crds.yaml"
 
   # Every kubectl provisioner in this module starts with this. Without it kubectl
   # uses whatever context the operator's kubeconfig happens to have selected,
@@ -27,6 +32,11 @@ locals {
 resource "null_resource" "install_gateway_api_crds" {
   count = var.ingress_type == "envoy" ? 1 : 0
 
+  # A new URL runs the step again, so an existing cluster gets the new CRDs.
+  triggers = {
+    crds_url = local.gateway_api_crds_url
+  }
+
   provisioner "local-exec" {
     command = <<-EOT
       ${local.kubectl_creds}
@@ -39,23 +49,47 @@ resource "null_resource" "install_gateway_api_crds" {
         sleep 2
       done
       
-      # Install Gateway API CRDs
-      kubectl apply -f ${local.gateway_api_crds_url}
+      # Install Gateway API CRDs. Server-side apply with --force-conflicts takes
+      # over the fields that an earlier client-side apply or Helm wrote.
+      kubectl apply --server-side --force-conflicts -f ${local.gateway_api_crds_url}
     EOT
   }
 
 }
 
+# Helm installs CRDs only on the first install and never upgrades them, so a
+# chart version bump alone leaves the old Envoy Gateway CRDs in place. This step
+# applies the CRDs of the pinned release, and runs again when the version
+# changes. Two of the CRDs are too large for a client-side apply.
+resource "null_resource" "install_envoy_gateway_crds" {
+  count = var.ingress_type == "envoy" ? 1 : 0
+
+  triggers = {
+    crds_url = local.envoy_gateway_crds_url
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      ${local.kubectl_creds}
+      kubectl apply --server-side --force-conflicts -f ${local.envoy_gateway_crds_url}
+    EOT
+  }
+
+  depends_on = [null_resource.install_gateway_api_crds]
+}
+
 #------------------------------------------------------------------------------
 # Envoy Gateway
 #------------------------------------------------------------------------------
+# v1.9 supports Kubernetes 1.33 to 1.36. Upgrade from v1.2 in one step: stops on
+# v1.8.0 to v1.8.3 or v1.9.0 break the controller or TLS listeners.
 resource "helm_release" "envoy_gateway" {
   count = var.ingress_type == "envoy" ? 1 : 0
 
   name             = "envoy-gateway"
   repository       = "oci://docker.io/envoyproxy"
   chart            = "gateway-helm"
-  version          = "v1.2.0"
+  version          = local.envoy_gateway_version
   namespace        = "envoy-gateway-system"
   create_namespace = true
 
@@ -65,10 +99,24 @@ resource "helm_release" "envoy_gateway" {
     value = "ClusterIP"
   }
 
+  # The two CRD steps above own the CRDs. With the chart copy on, the chart also
+  # adds a Gateway API admission policy.
+  set {
+    name  = "crds.enabled"
+    value = "false"
+  }
+
+  # The module does not use zone-aware routing, and the control plane of a
+  # private cluster may not reach the injector webhook port (9443).
+  set {
+    name  = "topologyInjector.enabled"
+    value = "false"
+  }
+
   wait    = true
   timeout = 600
 
-  depends_on = [null_resource.install_gateway_api_crds]
+  depends_on = [null_resource.install_gateway_api_crds, null_resource.install_envoy_gateway_crds]
 }
 
 #------------------------------------------------------------------------------
@@ -217,6 +265,74 @@ resource "null_resource" "apply_gateway" {
   }
 
   depends_on = [null_resource.apply_gateway_class, local_file.gateway]
+}
+
+#------------------------------------------------------------------------------
+# Gateway delete on destroy
+#------------------------------------------------------------------------------
+# Envoy Gateway gives the Gateway a LoadBalancer Service. Without this step,
+# terraform destroy removes the Envoy Gateway release and the GKE cluster while
+# that Service still holds a Google Cloud load balancer, and GKE can leave load
+# balancer resources and k8s-* firewall rules on the VPC. GKE recommends that
+# you delete LoadBalancer Services before the cluster. This step deletes the
+# Gateway and waits for the Service to go, before the release and the cluster
+# are destroyed. GKE can still leave the shared k8s-<cluster-id>-node-http-hc
+# rule, so TEARDOWN.md tells the operator to check for it.
+#
+# The step is not on apply_gateway, because a Gateway change replaces that
+# resource. A destroy step there would delete the Gateway and release its IP on
+# each change. These triggers change only with the project, the region, the
+# cluster name, or the Gateway name.
+#
+# A destroy provisioner can read only self, so the triggers hold the cluster
+# coordinates. The step exits 0 when the cluster is already gone, and
+# on_failure = continue stops a kubectl error from blocking the destroy.
+resource "null_resource" "delete_gateway_on_destroy" {
+  count = var.ingress_type == "envoy" ? 1 : 0
+
+  triggers = {
+    project_id   = var.project_id
+    region       = var.region
+    cluster_name = var.cluster_name
+    gateway_name = var.gateway_name
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    on_failure = continue
+    command    = <<-EOT
+      KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+      export KUBECONFIG
+      trap 'rm -f "$KUBECONFIG"' EXIT
+      if ! gcloud container clusters get-credentials ${self.triggers.cluster_name} \
+        --region ${self.triggers.region} --project ${self.triggers.project_id} --quiet; then
+        echo "Cluster ${self.triggers.cluster_name} is not reachable. Skipping the Gateway delete."
+        exit 0
+      fi
+      kubectl delete gateway ${self.triggers.gateway_name} -n envoy-gateway-system \
+        --ignore-not-found --timeout=120s || true
+      # Envoy Gateway deletes the proxy Service. GKE removes the Service only
+      # after it deletes the load balancer.
+      i=0
+      while [ "$i" -lt 60 ]; do
+        if ! SVC=$(kubectl get svc -n envoy-gateway-system \
+          -l gateway.envoyproxy.io/owning-gateway-name=${self.triggers.gateway_name} \
+          -o name 2>/dev/null); then
+          echo "WARNING: cannot list the Gateway Services. See TEARDOWN.md."
+          exit 0
+        fi
+        if [ -z "$SVC" ]; then
+          exit 0
+        fi
+        i=$((i + 1))
+        echo "Waiting for the Gateway LoadBalancer Service to go... ($i/60)"
+        sleep 5
+      done
+      echo "WARNING: the Gateway LoadBalancer Service is still present. See TEARDOWN.md."
+    EOT
+  }
+
+  depends_on = [helm_release.envoy_gateway, null_resource.apply_gateway]
 }
 
 #------------------------------------------------------------------------------

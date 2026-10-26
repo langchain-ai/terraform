@@ -139,6 +139,14 @@ else
     )
   fi
 
+  # Engine reads both keys from langsmith-config, which apply-eso.sh fills from SSM.
+  if _tfvar_is_true "enable_engine"; then
+    _required_params+=(
+      engine-encryption-key
+      engine-usage-signing-secret
+    )
+  fi
+
   for param in "${_required_params[@]}"; do
     if aws ssm get-parameter --name "${_ssm_prefix}/${param}" \
         --query Parameter.Name --output text &>/dev/null; then
@@ -240,12 +248,12 @@ else
     pass "kubectl context points to ${_cluster_name}"
   elif [[ -n "$_current_ctx" ]]; then
     warn "kubectl context is '${_current_ctx}' — expected *${_cluster_name}*"
-    action "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
-    set_next "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
+    action "source infra/scripts/set-kubeconfig.sh"
+    set_next "source infra/scripts/set-kubeconfig.sh"
   else
     fail "No kubectl context set"
-    action "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
-    set_next "aws eks update-kubeconfig --name ${_cluster_name} --region ${_region:-us-east-2}"
+    action "source infra/scripts/set-kubeconfig.sh"
+    set_next "source infra/scripts/set-kubeconfig.sh"
   fi
 
   if kubectl cluster-info --request-timeout=5s &>/dev/null; then
@@ -286,7 +294,7 @@ else
 fi
 
 # Report addon files
-for addon in sizing-production sizing-production-large sizing-dev agent-deploys agent-builder insights; do
+for addon in sizing-production sizing-production-large sizing-dev agent-deploys fleet insights polly standalone-polly standalone-insights engine; do
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
   if [[ -f "$f" ]]; then
     pass "langsmith-values-${addon}.yaml (addon)"
@@ -341,6 +349,16 @@ else
     pass "Secret: langsmith-config"
   else
     warn "Secret langsmith-config not found (created by ESO after deploy.sh)"
+  fi
+
+  _smithdb_ingestion=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_INGESTION_ENABLED}' 2>/dev/null) || _smithdb_ingestion=""
+  _smithdb_query=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_QUERY_ENABLED}' 2>/dev/null) || _smithdb_query=""
+  if [[ -n "$_smithdb_ingestion" || -n "$_smithdb_query" ]]; then
+    info "SmithDB status: ingestion=${_smithdb_ingestion:-not set}  query=${_smithdb_query:-not set}"
+  else
+    skip "SmithDB status — not present in langsmith-config"
   fi
 fi
 

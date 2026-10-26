@@ -2,12 +2,17 @@ terraform {
   required_version = ">= 1.11.0"
 
   required_providers {
-    # 4.27 is the release that accepts Microsoft.Network/applicationGateways as a
-    # subnet service_delegation name, which the AGIC subnet needs. Older 4.x rejects
-    # it during validation, before any API call.
+    # 4.65.0 renamed azurerm_federated_identity_credential's parent_id to
+    # user_assigned_identity_id, the argument k8s-cluster uses, so nothing older
+    # validates. It also covers the guard's need: 4.58.0 made network_data_plane
+    # and network_policy updatable to cilium and 4.59.0 added calico to cilium,
+    # so on those releases aks_allow_network_upgrade = true updates in place
+    # rather than replacing the cluster. (4.59.0 was the previous floor, and 4.27
+    # before it: the release that accepts Microsoft.Network/applicationGateways
+    # as a subnet delegation.)
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 4.27.0, < 5.0.0"
+      version = ">= 4.65.0, < 5.0.0"
     }
     # Azure Managed Redis (Microsoft.Cache/redisEnterprise) Balanced SKUs aren't
     # reliably exposed by azurerm yet — the redis module provisions AMR via azapi.
@@ -37,5 +42,25 @@ terraform {
 
 provider "azurerm" {
   subscription_id = var.subscription_id
-  features {}
+  environment     = var.azure_environment
+  features {
+    # No resource here needs the storage data plane: the trace-blob and SmithDB
+    # accounts, the container (by storage_account_id) and the lifecycle policy
+    # are all managed through the management plane. With the data plane on, the
+    # provider waits after creating an account until its blob, queue and file
+    # endpoints answer, which never happens from a machine outside the VNet once
+    # public access is off and the private endpoint does not exist yet, and it
+    # needs Shared Key or a data role to read them.
+    storage {
+      data_plane_available = false
+    }
+  }
+}
+
+# Configured explicitly so both providers target the same cloud and the same
+# subscription. Left implicit, azapi read ARM_ENVIRONMENT and the CLI's default
+# subscription, which need not match what azurerm was given.
+provider "azapi" {
+  subscription_id = var.subscription_id
+  environment     = var.azure_environment
 }

@@ -29,9 +29,9 @@ set -euo pipefail
 #   .terraform/                     — provider cache, not sensitive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-AZURE_DIR="$(cd "$INFRA_DIR/.." && pwd)"
-HELM_VALUES_DIR="$AZURE_DIR/helm/values"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+AZURE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+HELM_VALUES_DIR="${LANGSMITH_VALUES_DIR:-$AZURE_DIR/helm/values}"
 
 source "$SCRIPT_DIR/_common.sh"
 
@@ -80,6 +80,9 @@ _rm() {
 # ── Terraform secrets and live config ─────────────────────────────────────────
 header "Terraform"
 _rm "$INFRA_DIR/terraform.tfvars"
+# The wizard's backup of the old config. It carries the same deployment details
+# as terraform.tfvars, so leaving it behind leaves the directory unclean.
+_rm "$INFRA_DIR/terraform.tfvars.bak"
 _rm "$INFRA_DIR/secrets.auto.tfvars"
 
 # Temp secret files written by setup-env.sh before Key Vault exists

@@ -70,3 +70,9 @@ variable "tags" {
   description = "Tags to apply to bastion resources"
   default     = {}
 }
+
+variable "existing_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the bastion instead of creating one. Terraform does not manage rules on a supplied group; it must already allow the access this bastion needs. enable_ssh/ssh_allowed_cidrs then only gate the SSH ingress rule Terraform would otherwise write, which is skipped for a supplied group."
+  default     = null
+}

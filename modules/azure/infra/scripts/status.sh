@@ -19,9 +19,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
-AZURE_DIR="$INFRA_DIR/.."
+AZURE_DIR="$SCRIPT_DIR/../.."
 HELM_DIR="$AZURE_DIR/helm"
-VALUES_DIR="$HELM_DIR/values"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -44,7 +44,9 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _pg_source=$(_read_tfvar postgres_source)
   _redis_source=$(_read_tfvar redis_source)
   _sizing=$(_read_tfvar sizing_profile)
-  _kv_name=$(_derive_kv_name)
+  # status.sh reports rather than acts, so a missing name is blank here instead
+  # of fatal; the Key Vault section below already handles an empty name.
+  _kv_name=$(_derive_kv_name) || _kv_name=""
 
   if [[ -n "$_subscription" ]]; then
     pass "Required fields: subscription_id set  name_prefix=${_name_prefix:-'(empty)'}  environment=${_environment:-${_name_prefix:-dev}}"
@@ -227,13 +229,28 @@ else
       fi
     fi
 
-    # Bootstrap components
-    for ns in cert-manager keda ingress-nginx; do
+    # Bootstrap components, plus the namespace of the ingress controller in use.
+    # agic and none run no controller pods in the cluster.
+    _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+    case "$_ingress_controller" in
+      envoy-gateway) _ingress_ns="envoy-gateway-system" ;;
+      nginx)         _ingress_ns="ingress-nginx" ;;
+      istio)         _ingress_ns="istio-system" ;;
+      istio-addon)   _ingress_ns="aks-istio-ingress" ;;
+      *)             _ingress_ns="" ;;
+    esac
+    for ns in cert-manager keda $_ingress_ns; do
       if kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -v "Running\|Completed" | grep -q .; then
         warn "$ns: some pods not Running"
       else
-        _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || echo 0)
-        pass "$ns: ${_running_count} pod(s) Running"
+        _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || true)
+        # A cluster that already ran cert-manager or KEDA (install_* = false) may
+        # run it in another namespace, so an empty one here is not a pass.
+        if [[ "$_running_count" == "0" ]]; then
+          warn "$ns: no pods Running"
+        else
+          pass "$ns: ${_running_count} pod(s) Running"
+        fi
       fi
     done
   else
@@ -245,7 +262,7 @@ fi
 # ── 7. Helm Values ────────────────────────────────────────────────────────────
 header "7. Helm Values"
 
-_base_values="$VALUES_DIR/values.yaml"
+_base_values="$HELM_DIR/values/values.yaml"
 _overrides="$VALUES_DIR/values-overrides.yaml"
 
 if [[ -f "$_base_values" ]]; then
@@ -321,6 +338,16 @@ else
   else
     skip "langsmith-ksa WI annotation not set (set by Terraform k8s-bootstrap)"
   fi
+
+  _smithdb_ingestion=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_INGESTION_ENABLED}' 2>/dev/null) || _smithdb_ingestion=""
+  _smithdb_query=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_QUERY_ENABLED}' 2>/dev/null) || _smithdb_query=""
+  if [[ -n "$_smithdb_ingestion" || -n "$_smithdb_query" ]]; then
+    info "SmithDB status: ingestion=${_smithdb_ingestion:-not set}  query=${_smithdb_query:-not set}"
+  else
+    skip "SmithDB status — not present in langsmith-config"
+  fi
 fi
 
 # ── 9. Helm Release ───────────────────────────────────────────────────────────
@@ -386,16 +413,27 @@ else
   fi
 
   # Ingress LoadBalancer IP — check the right service per ingress_controller
-  _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="nginx"
-  case "${_ingress_controller:-nginx}" in
+  _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+  _ingress_lb=$(_read_tfvar ingress_load_balancer 2>/dev/null) || _ingress_lb="public"
+  _ingress_scope="public"
+  [[ "$_ingress_lb" == "internal" ]] && _ingress_scope="private"
+  case "${_ingress_controller:-envoy-gateway}" in
     nginx)
       _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
     istio-addon)
-      _lb_svc="aks-istio-ingressgateway-external"; _lb_ns="aks-istio-ingress" ;;
+      # The add-on runs one gateway per load-balancer type; internal is
+      # aks-istio-ingressgateway-internal.
+      _lb_svc="aks-istio-ingressgateway-external"; _lb_ns="aks-istio-ingress"
+      [[ "$_ingress_lb" == "internal" ]] && _lb_svc="aks-istio-ingressgateway-internal" ;;
     istio)
       _lb_svc="istio-ingressgateway"; _lb_ns="istio-system" ;;
     envoy-gateway)
-      _lb_svc="envoy-langsmith-langsmith-gateway"; _lb_ns="langsmith" ;;
+      # Envoy Gateway names the proxy Service with a hash suffix; find it by its Gateway.
+      _lb_ns="envoy-gateway-system"
+      _lb_svc=$(kubectl get svc -n "$_lb_ns" \
+        -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || _lb_svc=""
+      [[ -z "$_lb_svc" ]] && skip "Ingress IP (envoy-gateway): no proxy Service for langsmith-gateway yet (run make deploy)" ;;
     *)
       _lb_svc=""; _lb_ns="" ;;
   esac
@@ -404,7 +442,8 @@ else
     _ingress_ip=$(kubectl get svc "$_lb_svc" -n "$_lb_ns" \
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null) || _ingress_ip=""
     if [[ -n "$_ingress_ip" ]]; then
-      pass "Ingress IP (${_ingress_controller}): ${_ingress_ip}"
+      pass "Ingress IP (${_ingress_controller}, ${_ingress_scope}): ${_ingress_ip}"
+      [[ "$_ingress_scope" == "private" ]] && info "(A private address: reachable only from the VNet and networks peered or connected to it)"
       if [[ -n "${_hostname:-}" && "$_hostname" != "$_ingress_ip" ]]; then
         info "(Point your DNS A record for ${_hostname} to ${_ingress_ip})"
       fi
@@ -421,7 +460,7 @@ else
     # Extract subdomain label (e.g. "langsmith" from "langsmith.example.com")
     _subdomain="${_langsmith_domain%%.*}"
     _parent_domain="${_langsmith_domain#*.}"
-    _ns_list=$(terraform -chdir="$SCRIPT_DIR/.." output -json dns_nameservers 2>/dev/null \
+    _ns_list=$(terraform -chdir="$INFRA_DIR" output -json dns_nameservers 2>/dev/null \
       | python3 -c "import sys,json; ns=json.load(sys.stdin); print('\n'.join(ns))" 2>/dev/null) || _ns_list=""
     if [[ -n "$_ns_list" ]]; then
       echo ""
@@ -449,8 +488,12 @@ else
     fi
   fi
 
-  # Ingress and TLS certificate
-  kubectl get ingress -n "$_NAMESPACE" 2>/dev/null || true
+  # Ingress (or Gateway API routes) and TLS certificate
+  if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+    kubectl get gateway,httproute -n "$_NAMESPACE" 2>/dev/null || true
+  else
+    kubectl get ingress -n "$_NAMESPACE" 2>/dev/null || true
+  fi
   CERT_STATUS=$(kubectl get certificate -n "$_NAMESPACE" --no-headers 2>/dev/null) || CERT_STATUS=""
   if [[ -n "$CERT_STATUS" ]]; then
     echo "$CERT_STATUS" | while read -r line; do

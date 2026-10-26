@@ -9,12 +9,13 @@
 # Post-infra check:  make preflight-post
 # Full deploy:       make deploy-all
 # Teardown:          make uninstall → make destroy → make purge-secrets → make clean
+# BYO SG teardown:   make teardown-byo-sg BYO_SECURITY_GROUP_IDS="sg-..." → make destroy
 # Where am I?        make status
 # Terraform flags:   make plan ARGS="-target=module.eks"   (see make help)
 
-.PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy purge-secrets tf \
+.PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
-        init-values deploy apply-eso uninstall clean deploy-all \
+        init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end sso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
@@ -35,6 +36,7 @@ help: ## Show available targets
 	@echo "    make apply   ARGS=\"tfplan\"                   # apply that saved plan"
 	@echo "    make apply   ARGS=\"-auto-approve\"            # skip the approval prompt"
 	@echo "    make destroy ARGS=\"-target=module.redis\"     # destroy one module"
+	@echo "    make teardown-byo-sg BYO_SECURITY_GROUP_IDS=\"sg-... sg-...\"  # delete supplied SGs after destroy"
 	@echo ""
 	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
 	@echo "    make tf      ARGS=\"output\"                   # all infra outputs"
@@ -85,6 +87,15 @@ apply: ## terraform apply (infra)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
 	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+	@echo ""
+	@echo "  ✔ Infrastructure destroyed."
+	@echo ""
+	@echo "  Next step: delete this deployment's SSM secrets."
+	@echo "    make purge-secrets"
+	@echo ""
+
+teardown-byo-sg: ## Delete supplied SGs from a Terraform-created VPC after make destroy
+	BYO_SECURITY_GROUP_IDS="$(BYO_SECURITY_GROUP_IDS)" $(INFRA_DIR)/scripts/teardown-byo-sg.sh
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 	terraform -chdir=$(INFRA_DIR) $(ARGS)
@@ -92,8 +103,8 @@ tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 purge-secrets: ## Delete SSM secrets after Terraform has no managed resources
 	$(INFRA_DIR)/scripts/purge-secrets.sh
 
-preflight: ## Run infra preflight checks
-	$(INFRA_DIR)/scripts/preflight.sh
+preflight: ## Run infra preflight checks (ARGS="--domain <d>" / "--create-test-resources")
+	$(INFRA_DIR)/scripts/preflight.sh $(ARGS)
 
 preflight-post: kubeconfig ## Post-infra preflight: kubectl + SSM params + helm values
 	$(INFRA_DIR)/scripts/preflight.sh --post-infra
@@ -138,6 +149,15 @@ deploy: ## Deploy LangSmith via Helm
 
 apply-eso: ## Re-apply ESO ClusterSecretStore + ExternalSecret (no Helm redeploy)
 	$(HELM_DIR)/scripts/apply-eso.sh
+
+smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
+
+smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
+
+sso: ## Turn on SSO (OIDC) login after a working password install — one-way
+	$(HELM_DIR)/scripts/sso.sh
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh

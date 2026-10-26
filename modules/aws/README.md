@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`, never `0.18`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -22,11 +22,11 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Dev** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
+| **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster ClickHouse | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
 >
-> **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
+> **In-cluster ClickHouse is recommended for production during the transition to SmithDB.** It runs as a single StatefulSet. Customers who prefer a managed ClickHouse lifecycle can use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ---
 
@@ -57,17 +57,7 @@ brew install eksctl
 
 ### Required AWS IAM permissions
 
-The IAM user or role running Terraform needs the following managed policies (or equivalent inline policies):
-
-| Policy | Purpose |
-|--------|---------|
-| `AmazonEKSClusterPolicy` | Create and manage EKS clusters |
-| `AmazonVPCFullAccess` | Create VPC, subnets, route tables, NAT |
-| `AmazonRDSFullAccess` | Create and manage RDS instances |
-| `AmazonElastiCacheFullAccess` | Create ElastiCache clusters |
-| `AmazonS3FullAccess` | Create S3 buckets and VPC endpoints |
-| `IAMFullAccess` | Create IRSA roles and policies |
-| `ElasticLoadBalancingFullAccess` | Create ALB via Terraform |
+The IAM user or role running Terraform needs `AdministratorAccess`, or `PowerUserAccess` plus `IAMFullAccess`. `PowerUserAccess` alone fails at the first IAM role the apply creates. For a custom policy, the IAM roles the deployment creates, and how to test access before the first apply, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
 ### Authenticate
 
@@ -108,7 +98,7 @@ aws sts get-caller-identity   # verify
 
 After this, `terraform`, `kubectl`, `helm`, and all the `make` targets in this repo pick up the SSO credentials automatically via `AWS_PROFILE`.
 
-**IAM permissions note:** the policies listed in the table above must be attached to the **SSO permission set** (or federated role) you assume — not to you directly. Ask your AWS admin which permission set to use and confirm it covers those policies. The LangChain training account's `AdministratorAccessTraining` permission set already does.
+**IAM permissions note:** the policies in [PERMISSIONS.md](PERMISSIONS.md) must be attached to the **SSO permission set** (or federated role) you assume — not to you directly. Ask your AWS admin which permission set to use and confirm it covers those policies. The LangChain training account's `AdministratorAccessTraining` permission set already does.
 
 **Optional helper:** some sub-tooling in this repo (parallel test workers, scripts that assume a `[default]` block in `~/.aws/credentials`) doesn't honor `AWS_PROFILE`. For those, run `./infra/scripts/hydrate-creds.sh` after `aws sso login` to dump the temporary key/secret/session-token triple into `~/.aws/credentials [default]`. Re-run it whenever your SSO session expires.
 
@@ -156,6 +146,7 @@ aws/
     ├── scripts/
     │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
     │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
+    │   ├── sso.sh                  ← Turn on SSO login after a working password install (make sso)
     │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
     │   ├── preflight-check.sh      ← Pre-deploy validation
     │   └── uninstall.sh            ← Helm uninstall + cleanup
@@ -166,9 +157,13 @@ aws/
         │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
         │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
         │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
-        │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
-        │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
-        │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
+        │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
+        │   ├── langsmith-values-insights.yaml           ← Insights
+        │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
+        │   ├── langsmith-values-standalone-polly.yaml   ← Chat external-storage overlay
+        │   ├── langsmith-values-standalone-insights.yaml ← Insights external-storage overlay
+        │   ├── langsmith-values-engine.yaml             ← Engine (see ENGINE.md)
+        │   ├── langsmith-values-smithdb.yaml            ← SmithDB base
         │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
         │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
         │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
@@ -268,6 +263,134 @@ terraform {
 
 ---
 
+## Pod networking
+
+By default each pod gets an IP address from its node's subnet, so the private
+subnets must hold an address for every pod as well as every node. To move pods
+onto dedicated pod subnets instead (VPC CNI custom networking), set:
+
+```hcl
+eks_network_mode = "custom-networking"
+eks_pod_cidr     = "100.64.0.0/16"   # default; create_vpc = true only
+```
+
+With `create_vpc = true`, Terraform adds `eks_pod_cidr` to the VPC as a
+secondary CIDR and splits it into one pod subnet per AZ (a /18 each from the
+default /16). The pod subnets carry only local routes. Traffic from a pod to a
+destination outside the VPC leaves with the node's IP address through the
+private subnet's NAT route.
+
+With `create_vpc = false`, create the pod subnets yourself and pass their IDs:
+
+```hcl
+eks_network_mode   = "custom-networking"
+eks_pod_subnet_ids = ["subnet-0aaa", "subnet-0bbb", "subnet-0ccc"]
+```
+
+Supply one pod subnet per AZ in `vpc_id`, covering every AZ that
+`private_subnets` and `public_subnets` are in. The plan fails if two pod
+subnets share an AZ, a pod subnet is in another VPC, or a cluster AZ has no
+pod subnet.
+
+Pod IPs stay routable VPC addresses, so the ALB still targets pods directly.
+Terraform adds the pod CIDRs to the ingress rules on the RDS and ElastiCache
+security groups and to the ALB's ingress and egress rules, so in-cluster
+callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configures the `vpc-cni`
+add-on with one ENIConfig per AZ and holds node group creation for two minutes
+after the cluster is active, so the add-on is configured before the first
+nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
+into that add-on. When `enable_smithdb = true`, it also sets Karpenter's
+`settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
+node's primary ENI.
+
+Choose the mode at cluster creation. Switching an existing cluster changes the
+add-on configuration only: nodes that joined before the switch keep their pod
+IPs in the node subnets until you replace them. If the cluster already sets
+`eks_addons["vpc-cni"]`, move that add-on's state before the first apply in
+the new mode, or the apply tries to create a second `vpc-cni` add-on next to
+the existing one:
+
+```bash
+terraform state mv \
+  'module.eks.module.eks_blueprints_addons.aws_eks_addon.this["vpc-cni"]' \
+  'module.eks.module.eks.aws_eks_addon.before_compute["vpc-cni"]'
+```
+
+Switching back to `node-subnet` does not turn custom networking off. Terraform
+removes the add-on with `preserve = true`, so the CNI keeps its custom
+networking settings. Treat the mode as fixed for the life of the cluster.
+
+---
+
+## Bring your own security groups
+
+By default, every module that needs one creates a dedicated security group: ALB,
+bastion, RDS PostgreSQL, ElastiCache Redis, and (when `enable_smithdb = true`) the
+SmithDB metastore RDS instance. If your network team requires a pre-approved
+security group instead, for example one that already carries a compliance tag
+set or a mandated egress policy, supply its ID and Terraform skips creating its
+own:
+
+```hcl
+alb_existing_security_group_id               = "sg-0123456789abcdef0"
+bastion_existing_security_group_id           = "sg-0123456789abcdef1"
+postgres_existing_security_group_id          = "sg-0123456789abcdef2"
+redis_existing_security_group_id             = "sg-0123456789abcdef3"
+smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+```
+
+Each is independent: supply one, some, or all of them. Leave a variable unset
+(the default) and that component keeps creating its own security group as before.
+
+### Attach-only: Terraform does not manage rules on a supplied group
+
+For every component above, a supplied security group is **attach-only**. Terraform
+associates it with the resource but never writes an ingress or egress rule onto
+it. The group must already allow what that component needs before you apply.
+With `eks_network_mode = "custom-networking"`, every "VPC CIDR" rule in the
+table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
+`eks_pod_subnet_ids`):
+
+| Component | Your security group must allow |
+|-----------|-------------------------------|
+| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
+| Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
+| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
+| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |
+| SmithDB metastore (RDS) | See below. This one component can have its ingress rule managed by Terraform |
+
+### The one exception: SmithDB's metastore security group
+
+The SmithDB metastore's required ingress rule allows tcp/5432 from the **EKS node
+security group**, an ID that doesn't exist until the `eks` module creates it in
+the same `apply`. You can't look that ID up and pre-provision the rule yourself
+before running Terraform. So this one case has an opt-in escape hatch:
+
+```hcl
+smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+smithdb_manage_byo_security_group_rules      = true   # default: false
+```
+
+Leave `smithdb_manage_byo_security_group_rules` at its default (`false`) and the
+supplied group is attach-only, same as everywhere else, but then you're
+responsible for adding tcp/5432 ingress from the EKS node security group
+yourself (`module.eks.node_security_group_id` after a first apply, or from the
+EKS console) before SmithDB pods can reach the metastore. Set it to `true` and
+Terraform adds that ingress rule to your security group. `terraform destroy`
+removes the rule. Manual teardown without Terraform state leaves the rule in
+place; see [Teardown](#teardown) / `TEARDOWN.md` for removal instructions.
+
+### What Terraform does not check
+
+Unlike the [Azure bring-your-own-VNet path](../azure/README.md#bring-your-own-vnet),
+plan-time validation here is minimal: Terraform does not verify that a supplied
+security group ID exists, belongs to the target VPC, or actually permits the
+traffic in the table above. A typo or a group with the wrong rules fails at
+`apply` (wrong VPC) or shows up later as a connectivity failure (missing rule),
+not as a clear plan-time error. Double-check the ID and its rules before applying.
+
+---
+
 ## Pass 1 — Infrastructure
 
 Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC endpoint, ALB, IRSA role, ESO IRSA role, SSM secrets.
@@ -345,11 +468,13 @@ make quickdeploy-auto
 ```bash
 cd terraform/aws
 
-make init-values       # prompts: admin email; reads sizing + addons from terraform.tfvars
+make init-values       # reads admin email, sizing, and addons from Terraform
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
 `init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
+
+Pod autoscaling is built into the `dev`, `production`, and `production-large` sizing templates; `minimum` keeps core services fixed while retaining SmithDB HPAs. These settings do not enable node autoscaling. Existing sizing files are preserved, so merge template updates into your current values when upgrading. See [sizing guidance](helm/values/examples/SIZING.md).
 
 ---
 
@@ -475,7 +600,7 @@ make deploy
 
 ### Important notes
 
-- The bastion's IAM role has `AmazonSSMManagedInstanceCore` and `AmazonEKSClusterPolicy` attached. Add additional policies if you need the bastion to manage other AWS resources.
+- The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
 - The bastion lives in a **public subnet** (for SSM agent connectivity). It does not need a public IP if your VPC has VPC endpoints for SSM (`ssm`, `ssmmessages`, `ec2messages`).
 - When the EKS API is private, `terraform plan/apply` targeting EKS resources **must** be run from within the VPC (i.e., the bastion). Running from your laptop will timeout.
 
@@ -498,9 +623,9 @@ All commands are run from `terraform/aws/`. Run `make help` for a quick summary.
 
 ### `make quickstart`
 
-**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. When `terraform.tfvars` already exists the wizard pre-selects your current values at every prompt — press Enter to keep them, or type a different number to change.
+**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. During updates, the wizard keeps the existing name prefix, environment, and AWS region unchanged because they identify the deployment and its SSM secrets. It also keeps the custom domain unchanged because changing it requires a guided DNS and certificate migration. Other prompts pre-select their current values.
 
-Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, addons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu shows a `(default)` marker on the pre-selected option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
+Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, add-ons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu marks the current or default option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
 
 ```bash
 make quickstart
@@ -533,20 +658,30 @@ For each secret it follows this priority order:
 
 | SSM key | How it's set | Notes |
 |---|---|---|
-| `postgres-password` | You enter it | Terraform sets RDS with this password |
+| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. Override with `TF_VAR_postgres_password`; setup-env.sh rejects a value RDS will not accept. |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
 | `langsmith-license-key` | You enter it | From your LangChain account |
 | `langsmith-admin-password` | You enter it | Min 12 chars; must include a lowercase letter, an uppercase letter, and a symbol (`!#$%()+,-./:?@[\]^_{~}`) |
 | `deployments-encryption-key` | Auto-generated (Fernet key) | For Deployments/LangGraph Platform feature |
-| `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Agent Builder feature |
+| `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Fleet; historical key name retained for compatibility |
 | `insights-encryption-key` | Auto-generated (Fernet key) | For Insights feature |
-| `polly-encryption-key` | Auto-generated (Fernet key) | For Polly AI eval feature |
+| `polly-encryption-key` | Auto-generated (Fernet key) | For LangSmith Chat (formerly Polly) |
+| `engine-encryption-key` | Auto-generated (Fernet key) | For Engine. Keep it stable. See [ENGINE.md](ENGINE.md) |
+| `engine-usage-signing-secret` | Auto-generated (`openssl rand -hex 32`) | For Engine usage reports. Keep it stable |
 
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
 After running, you'll see a summary of all values (masked) and the SSM prefix. Terraform then reads the secrets as `TF_VAR_*` variables during `plan` / `apply`.
+
+If an apply updates `langsmith-postgres` or the Fleet/Polly/Insights Postgres secrets (for example after password URL-encoding), restart every deployment in the Helm release so its pods load the new `connection_url`:
+
+```bash
+kubectl rollout restart deployment -n langsmith -l "app.kubernetes.io/instance=langsmith"
+```
+
+Running `./helm/scripts/deploy.sh` alone is not enough because it explicitly restarts only the frontend. Terraform recreates a failed `langsmith-standalone-*-db-init` Job when the encoded admin URL changes. The Job skips `CREATE DATABASE` when the database already exists.
 
 > **Why SSM?** Secrets are never in git or `.tfvars`. ESO reads them from SSM at runtime and syncs them into the `langsmith-config` Kubernetes Secret that the Helm chart mounts.
 
@@ -603,10 +738,10 @@ After apply, all outputs (cluster name, ALB DNS, S3 bucket, IRSA role ARN) are p
 
 **When to use:** After `make apply` to configure `kubectl`, or when switching between deployments.
 
-Runs `infra/scripts/set-kubeconfig.sh` which calls `aws eks update-kubeconfig` with the cluster name from Terraform outputs. Merges the cluster credentials into `~/.kube/config`.
+Prints the command to source `infra/scripts/set-kubeconfig.sh`, which writes the cluster credentials to `~/.kube/langsmith-<cluster>` and exports `KUBECONFIG` in your shell. `~/.kube/config` is left alone. Make runs in a subshell, so it can't export the variable for you.
 
 ```bash
-make kubeconfig
+source infra/scripts/set-kubeconfig.sh
 kubectl get nodes   # verify
 ```
 
@@ -657,9 +792,10 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
 3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
 4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
    - `enable_deployments = true` → copies `langsmith-values-agent-deploys.yaml`
-   - `enable_agent_builder = true` → copies `langsmith-values-agent-builder.yaml`
+   - `enable_fleet = true` → copies `langsmith-values-fleet.yaml`
    - `enable_insights = true` → copies `langsmith-values-insights.yaml`
    - `enable_polly = true` → copies `langsmith-values-polly.yaml`
+   - `enable_engine = true` → copies `langsmith-values-engine.yaml`, and writes the Engine IRSA role annotation into the overrides file
 5. Copies the appropriate sizing file if `sizing_profile` is set
 
 Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
@@ -672,35 +808,43 @@ Re-running is safe — it refreshes Terraform outputs and preserves your admin e
 
 Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here is the exact sequence:
 
-**Step 1 — Kubeconfig.** Reads `cluster_name` from `terraform output` and runs `aws eks update-kubeconfig`.
+**Step 1 — Kubeconfig.** Reads `cluster_name` from `terraform output` and runs `aws eks update-kubeconfig` into `~/.kube/langsmith-<cluster>`, the file `set-kubeconfig.sh` writes. `~/.kube/config` is left alone; the script prints the `export KUBECONFIG=...` line for your shell when it finishes.
 
 **Step 2 — Preflight checks** (`preflight-check.sh`). Confirms `aws`, `kubectl`, `helm`, `terraform` are installed; validates AWS credentials with `aws sts get-caller-identity`; verifies `kubectl` can reach the cluster; adds the `langchain` Helm repo if missing.
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads `enable_deployments`, `enable_agent_builder`, `enable_insights`, `enable_polly` from `terraform.tfvars`. Validates addon dependencies (agent_builder and polly require deployments).
+**Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet storage can run in-cluster or use the external Postgres and Redis services.
 
 **Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
 ```
 -f langsmith-values.yaml                      (base — always)
 -f langsmith-values-overrides.yaml            (your env — always)
 -f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
--f langsmith-values-agent-builder.yaml        (enable_agent_builder = true)
+-f langsmith-values-engine.yaml               (enable_engine = true)
 -f langsmith-values-insights.yaml             (enable_insights = true)
 -f langsmith-values-polly.yaml                (enable_polly = true)
--f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default, loaded LAST)
+-f langsmith-values-fleet.yaml                (enable_fleet = true)
+-f langsmith-values-standalone-polly.yaml     (enable_standalone_polly = true)
+-f langsmith-values-standalone-insights.yaml  (enable_standalone_insights = true)
+-f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default)
+-f langsmith-values-smithdb.yaml              (enable_smithdb = true)
+-f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
 ```
-The sizing file is always loaded last so it can override replicas/resources set by addon files.
+The sizing file overrides replicas and resources set by add-on files. SmithDB
+loads afterward so its object-store, identity, and staged integration settings
+take final precedence.
 
 **Step 6 — Pre-deploy hostname check.** If the ingress already exists and `langsmith_domain` is not set, compares `config.hostname` in the overrides file against the live ALB hostname. Auto-updates it if stale (prevents agent deployments getting stuck in `DEPLOYING` state with the wrong endpoint URL).
 
 **Step 7 — Broken release recovery.** Checks the current Helm release status. If `pending-upgrade` (left by a Ctrl+C'd upgrade), rolls back automatically. If `failed` (common after a first deploy timeout), logs a warning and proceeds — Helm upgrade works fine on a failed release.
 
-**Step 8 — Helm upgrade.** Runs `helm upgrade --install` with `--server-side=false`. Server-side apply (Helm 3.14+ default) conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules` — client-side apply avoids this. Does **not** use `--wait` because the chart's post-install hooks and the operator's agent pods can take 10+ minutes to settle on new nodes.
+**Step 8 — Helm upgrade.** Runs `helm upgrade --install`, adding `--server-side=false` only when the installed Helm is 4.x. Server-side apply is a Helm 4 feature and its default for a fresh install, and it conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules`, so the deploy asks for client-side apply. Helm 3 has no such flag and applies client-side regardless, so the flag is omitted there. Does **not** use `--wait` because the chart's post-install hooks and the operator's agent pods can take 10+ minutes to settle on new nodes.
 
 **Step 9 — Core readiness.** Polls each core deployment with `kubectl rollout status --timeout=5m`:
 - `langsmith-frontend`, `langsmith-backend`, `langsmith-platform-backend`, `langsmith-ingest-queue`, `langsmith-queue`
-- Plus `langsmith-host-backend`, `langsmith-listener`, `langsmith-operator` if Deployments is enabled
+- Plus `langsmith-host-backend` if Fleet or Deployments is enabled
+- Plus `langsmith-listener` and `langsmith-operator` if Deployments is enabled
 
 **Step 10 — IRSA annotation for `langsmith-ksa`.** The `langsmith-ksa` service account is created by the operator at runtime (not part of the Helm release). It's used by all operator-spawned agent deployment pods. After every deploy, `deploy.sh` ensures this SA exists and carries the IRSA role ARN annotation — without it, new agent pod revisions can't access S3/SSM and stay unschedulable.
 
@@ -730,8 +874,33 @@ Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` a
    | `.../insights-encryption-key` | `insights_encryption_key` *(only if key exists in SSM)* |
    | `.../deployments-encryption-key` | `deployments_encryption_key` *(only if key exists in SSM)* |
    | `.../polly-encryption-key` | `polly_encryption_key` *(only if key exists in SSM)* |
+   | `.../engine-encryption-key` | `engine_encryption_key` *(only if key exists in SSM)* |
+   | `.../engine-usage-signing-secret` | `engine_usage_signing_secret` *(only if key exists in SSM)* |
+   | `.../engine-encryption-key-previous` | `engine_encryption_key_previous` *(only if key exists in SSM; Engine key rotation, see [ENGINE.md](ENGINE.md#keys))* |
 
 The optional keys are dynamically included — `apply-eso.sh` probes SSM for each one and only adds it to the ExternalSecret if it exists. This prevents ESO from failing to sync because a disabled addon's key isn't in SSM yet.
+
+---
+
+### `make sso`
+
+**When to use:** Once the install works with password login and the org admin can log in, to switch to SSO through any OIDC provider (Entra ID, Okta, Auth0, Google Workspace, etc.).
+
+**One-way:** LangSmith does not support moving a self-hosted install from SSO back to password login.
+
+Runs `helm/scripts/sso.sh`. It stops with a clear message at the first check that fails, and changes `terraform.tfvars` only after all checks pass:
+
+1. Reads `name_prefix`, `environment`, and `region`, and requires the deployed hostname in `langsmith-values-overrides.yaml` to use HTTPS; LangSmith SSO only works over HTTPS.
+2. Checks AWS credentials, points kubectl at this deployment's cluster (as `deploy.sh` does), and checks the Helm release is deployed.
+3. Asks you to confirm the org admin can log in, and that the same email exists in your identity provider.
+4. Prints the redirect URI to register in your identity provider: `https://<host>/api/v1/oauth/custom-oidc/callback`.
+5. Checks SSM for `oauth-client-id`, `oauth-client-secret`, and `oauth-issuer-url`, and asks for any that are missing (the secret is typed hidden).
+6. Checks the issuer URL serves an OIDC discovery document.
+7. Runs `apply-eso.sh` and checks `langsmith-config` has the three OIDC keys.
+8. Sets `enable_sso_oidc = true` in `terraform.tfvars`, changing only that line.
+9. Copies `helm/values/examples/langsmith-values-sso.yaml` to `helm/values/` if it is not there yet, then asks before running `make deploy`.
+
+It never runs `init-values.sh`, so `langsmith-values-overrides.yaml` is not rewritten. `deploy.sh` layers `langsmith-values-sso.yaml` whenever `enable_sso_oidc = true`, and stops if that file is missing, or if SSO is already on in the cluster but `enable_sso_oidc` is not true, rather than deploying with password login.
 
 ---
 
@@ -867,7 +1036,7 @@ These scripts are not exposed as `make` targets but are used internally by the s
 
 ### `infra/scripts/_common.sh`
 
-Shared library sourced by every script. Provides:
+Shared library sourced by scripts that need its shared helpers. Provides:
 - `_parse_tfvar <key>` — extracts a value from `terraform.tfvars` using sed
 - `_tfvar_is_true <key>` — returns 0 if a variable is set to `true` in tfvars
 - `INFRA_DIR` — absolute path to `infra/`, resolved from the sourcing script's location
@@ -910,9 +1079,11 @@ Exits non-zero on any failure so `deploy.sh` aborts before touching the cluster.
 
 ### `infra/scripts/set-kubeconfig.sh`
 
-Called by `make kubeconfig`. Reads `cluster_name` from `terraform output` and runs:
+Sourced, as `make kubeconfig` prints. Builds the cluster name from `name_prefix` and `environment` in `terraform.tfvars` and runs:
 ```bash
-aws eks update-kubeconfig --name <cluster_name> --region <region>
+aws eks update-kubeconfig --name <cluster_name> --region <region> \
+  --alias <cluster_name> --kubeconfig ~/.kube/langsmith-<cluster_name>
+export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 ```
 
 ---
@@ -934,6 +1105,9 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |
+| `eks_network_mode` | `node-subnet` | no | `node-subnet` or `custom-networking` (pods on dedicated pod subnets). See [pod networking](#pod-networking) |
+| `eks_pod_cidr` | `100.64.0.0/16` | no | Secondary VPC CIDR split into the pod subnets (custom networking with `create_vpc = true`) |
+| `eks_pod_subnet_ids` | `[]` | when custom networking and !create_vpc | Existing pod subnet IDs, one per cluster AZ |
 | `create_gp3_storage_class` | `true` | no | Create and set gp3 as default StorageClass |
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
@@ -957,9 +1131,11 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
 | `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
+| `postgres_existing_security_group_id` | `null` | no | Attach an existing SG to RDS instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
+| `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
@@ -976,12 +1152,14 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `clickhouse_source` | `in-cluster` | no | `in-cluster` or `external` |
 | `alb_scheme` | `internet-facing` | no | ALB scheme: `internet-facing` or `internal` |
 | `alb_access_logs_enabled` | `false` | no | Enable ALB access logging to S3 |
+| `alb_existing_security_group_id` | `null` | no | Attach an existing SG to the ALB instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `create_bastion` | `false` | no | Create EC2 bastion host for private cluster access (SSM or SSH) |
 | `bastion_instance_type` | `t3.micro` | no | EC2 instance type for bastion |
 | `bastion_key_name` | `null` | no | EC2 key pair for SSH (empty = SSM only) |
 | `bastion_enable_ssh` | `false` | no | Open port 22 on bastion security group |
 | `bastion_ssh_allowed_cidrs` | `[]` | no | CIDRs allowed to SSH to bastion |
 | `bastion_root_volume_size_gb` | `20` | no | Root EBS volume size for bastion |
+| `bastion_existing_security_group_id` | `null` | no | Attach an existing SG to the bastion instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `create_cloudtrail` | `false` | no | Create CloudTrail trail for AWS API audit |
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |
 | `cloudtrail_log_retention_days` | `365` | no | Days to retain CloudTrail logs |
@@ -990,21 +1168,32 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `firewall_allowed_fqdns` | `["beacon.langchain.com"]` | no | Domains allowed for outbound internet traffic when `create_firewall = true`. Matched against TLS SNI (HTTPS) and HTTP Host header. All other destinations are dropped. |
 | `firewall_subnet_cidr` | `"10.0.64.0/21"` | no | CIDR for the firewall subnet. Must not overlap with private (10.0.0.0/21–10.0.32.0/21) or public (10.0.40.0/21–10.0.56.0/21) subnets. |
 | `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
-| `enable_deployments` | `false` | no | Enable LangGraph Platform (listener, operator, host-backend) |
-| `enable_agent_builder` | `false` | no | Enable Agent Builder (requires `enable_deployments`) |
-| `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
-| `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
+| `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
+| `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
+| `fleet_storage` | `external` | no | Fleet storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
+| `enable_insights` | `false` | no | Enable AI-powered trace analysis |
+| `insights_storage` | `external` | no | Insights storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
+| `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
+| `polly_storage` | `external` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 requires an explicit compatible chart version. See [SMITHDB.md](SMITHDB.md). |
+| `enable_engine` | `false` | no | Enable Engine (chart 0.17+). Requires `enable_sandboxes`. Creates the Engine IRSA role with Amazon Bedrock Mantle access. See [ENGINE.md](ENGINE.md) |
+| `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
+| `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
+| `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
+| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
+| `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
 | `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
 | `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
 | `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
-| `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Agent Builder |
+| `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |
+| `langsmith_engine_encryption_key` | `""` | no | Fernet key for Engine. Set by `setup-env.sh` |
+| `langsmith_engine_usage_signing_secret` | `""` | no | Engine usage signing secret, at least 32 characters. Set by `setup-env.sh` |
 | `owner` | `""` | no | Owner tag applied to all resources |
 | `cost_center` | `""` | no | Cost center tag for billing |
 | `tags` | `{}` | no | Additional tags applied to all resources |
@@ -1029,4 +1218,9 @@ make uninstall
 cd terraform/aws/infra
 terraform apply
 terraform destroy
+
+# After destroy succeeds, remove cloud secrets explicitly, then local files.
+cd ..
+make purge-secrets
+make clean
 ```

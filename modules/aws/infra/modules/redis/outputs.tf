@@ -19,3 +19,8 @@ output "port" {
   description = "Redis port"
   value       = 6379
 }
+
+output "security_group_id" {
+  description = "Security group ID attached to Redis (created by this module, or the supplied existing_security_group_id)"
+  value       = local.security_group_id
+}

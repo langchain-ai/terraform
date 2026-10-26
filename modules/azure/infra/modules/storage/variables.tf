@@ -60,6 +60,54 @@ variable "allowed_ips" {
 
 variable "allowed_subnet_ids" {
   type        = list(string)
-  description = "Subnet IDs allowlisted via the Microsoft.Storage service endpoint. Typically the AKS subnet so pods can reach the blob data plane while the rest of the internet is denied. The subnet must have service_endpoints = [\"Microsoft.Storage\", ...] configured."
+  description = "Subnet IDs allowlisted via the Microsoft.Storage service endpoint. Typically the AKS subnet so pods can reach the blob data plane while the rest of the internet is denied. The subnet must have service_endpoints = [\"Microsoft.Storage\", ...] configured. Ignored when private_endpoint_enabled is true, because the account then has no public endpoint to filter."
   default     = []
+}
+
+variable "replication_type" {
+  type        = string
+  description = "account_replication_type for the account. Validated, and guarded against a zone-redundancy change on an existing account, in the root module."
+  default     = "LRS"
+}
+
+variable "private_endpoint_enabled" {
+  type        = bool
+  description = "Reach this account over a Private Endpoint and turn off its public endpoint. Terraform manages the account through Azure Resource Manager, so provisioning is unaffected."
+  default     = false
+}
+
+variable "private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet that holds the Private Endpoint. Required when private_endpoint_enabled is true."
+  default     = ""
+}
+
+variable "private_dns_zone_id" {
+  type        = string
+  description = "privatelink.blob.core.windows.net zone the endpoint registers in. Owned by the root module, because a zone name links to a VNet once and both storage accounts share it. Required when private_endpoint_enabled is true."
+  default     = ""
+}
+
+variable "shared_access_key_enabled" {
+  type        = bool
+  description = "Whether the account accepts Shared Key (access key) authorization. Validated and documented in the root module (storage_shared_access_key_enabled)."
+  default     = false
+}
+
+variable "allowed_copy_scope" {
+  type        = string
+  description = "Which accounts copy operations may source from: \"AAD\" or \"PrivateLink\", or null for any. Validated in the root module (storage_allowed_copy_scope)."
+  default     = "AAD"
+}
+
+variable "customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the account encrypts with; with customer_managed_key_identity_id it becomes the customer_managed_key block, which Azure accepts on an existing account. Validated in the root module (storage_customer_managed_key_id); empty keeps the service-managed key."
+  default     = ""
+}
+
+variable "customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity that reads customer_managed_key_id; assigned to the account. Validated in the root module."
+  default     = ""
 }

@@ -62,11 +62,13 @@ kubectl cluster-info
 aws sts get-caller-identity
 ```
 
-If the cluster was created with a different IAM role, grant `aws-auth` ConfigMap access:
+If the cluster was created with a different IAM role, the cluster creator adds an access entry for yours. See [Authenticate](PERMISSIONS.md#authenticate) in PERMISSIONS.md:
 
 ```bash
-kubectl edit configmap aws-auth -n kube-system
-# Add your IAM user/role under mapUsers or mapRoles
+aws eks create-access-entry --cluster-name <cluster-name> --principal-arn <role-arn>
+aws eks associate-access-policy --cluster-name <cluster-name> --principal-arn <role-arn> \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster
 ```
 
 ---
@@ -401,8 +403,9 @@ orphaned ALB. `init-values.sh` no longer emits it.
 **Prevention:**
 - Ensure the `group.name` annotation is set (`init-values.sh` does this automatically)
 - Never delete the ingress unless you plan to update all hostname-dependent config
-- Avoid `helm rollback` without `--server-side=false` — the ingress SSA conflict
-  can trigger a delete/recreate cycle
+- On Helm 4, avoid `helm rollback` without `--server-side=false`: the ingress SSA
+  conflict can trigger a delete/recreate cycle. Helm 3 has no server-side apply, so
+  it is unaffected and rejects the flag.
 
 **Fix:**
 ```bash
@@ -537,11 +540,11 @@ If either was entered and the script failed afterwards, clear them first (or ope
 unset LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD
 ```
 
-Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently; only what is missing is prompted for.
+Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently. Missing generated secrets (including postgres-password) are created; remaining gaps are prompted.
 
 ---
 
-### Issue #20 — manage-ssm.sh set fails: invalid choice 'none'
+### Issue #20 — manage-ssm.sh set or migrate-ssm.sh fails: invalid choice 'none'
 
 **Symptom:**
 ```
@@ -549,7 +552,9 @@ Secrets already in SSM (postgres password, redis token, api key salt, jwt secret
 aws: [ERROR]: An error occurred (ParamValidation): argument --output: Found invalid choice 'none'
 ```
 
-**Cause:** The script passes `--output none` to `aws ssm put-parameter`. The AWS CLI accepts `json`, `text`, `table`, `yaml`, and `yaml-stream` — `none` is not valid, so the call fails before anything is written to SSM.
+`migrate-ssm.sh` hides that error and prints `FAILED` for every parameter instead.
+
+**Cause:** The script passes `--output none` to `aws ssm put-parameter`. The AWS CLI accepts `json`, `text`, `table`, `yaml`, and `yaml-stream`; `none` is not valid, so the call fails before anything is written to SSM. `manage-ssm.sh` is fixed from v0.16.53 and `migrate-ssm.sh` from the release after v0.17.18.
 
 **Fix:** Write the parameter with the CLI directly, then verify:
 
@@ -563,8 +568,6 @@ aws ssm put-parameter \
 
 ./infra/scripts/manage-ssm.sh list
 ```
-
-In the script itself, `--output none` should be replaced with `--output text >/dev/null`.
 
 ---
 

@@ -45,16 +45,16 @@ variable "release_channel_auto_upgrade" {
 }
 
 #------------------------------------------------------------------------------
-# Instance-store pool — Local SSD-backed ephemeral storage for the SmithDB cache
+# Instance-store pool — the SmithDB cache pool
 #------------------------------------------------------------------------------
 variable "instance_store_machine_type" {
-  description = "Machine type for the Local SSD pool. Second-generation types (N2/N2D) take an explicit local SSD count; third/fourth-generation -lssd types (C3, C4, Z3) have a fixed count implied by the machine type and must set instance_store_local_ssd_count = 0. At chart defaults the three cache workloads request 4 CPU each, which fits within the ~15.9 allocatable vCPU of an n2-standard-16."
+  description = "Machine type for the cache pool. Second-generation types (N2/N2D) take an explicit local SSD count. Third-generation -lssd types (C3, Z3) have a fixed count implied by the machine type and must set instance_store_local_ssd_count = 0. The root passes the default for the SmithDB size; see SMITHDB.md#sizing."
   type        = string
   default     = "n2-standard-16"
 }
 
 variable "instance_store_local_ssd_count" {
-  description = "Number of 375 GB Local SSD disks per node, combined into one ephemeral-storage filesystem. Compute Engine only accepts specific counts per machine type, so this is not a free-form number: N2 types with 12-20 vCPU (which includes the default n2-standard-16) take 2, 4, 8, 16 or 24. At chart defaults the three cache workloads request 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker), needing roughly 430 GB of allocatable ephemeral storage, which the default 2 disks (750 GB raw) covers with headroom for kubelet reservations and the image cache. Step up to 4 if you raise the resource requests or expect several replicas per node. Set 0 for -lssd machine types that bundle their own disks."
+  description = "Number of 375 GB Local SSD disks per node, combined into one ephemeral-storage filesystem. Compute Engine only accepts specific counts per machine type, so this is not a free-form number: N2 types with 12-20 vCPU (which includes the default n2-standard-16) take 2, 4, 8, 16 or 24. Set 0 for no Local SSD (network-disk mode), or for -lssd machine types, which GKE uses as ephemeral storage by default. See SMITHDB.md#sizing for the default for each size."
   type        = number
   default     = 2
 
@@ -70,19 +70,19 @@ variable "instance_store_local_ssd_count" {
 }
 
 variable "instance_store_disk_size_gb" {
-  description = "Boot disk size in GB for Local SSD pool nodes. The cache lives on Local SSD, so this only holds the OS and images."
+  description = "Boot disk size in GB for cache pool nodes. With no Local SSD (network-disk mode), node ephemeral storage, including the backfill Job's, is on this disk."
   type        = number
   default     = 100
 }
 
 variable "instance_store_min_nodes" {
-  description = "Minimum nodes per zone in the Local SSD pool. 0 lets the cluster autoscaler scale to zero when SmithDB is idle, which is the closest analogue to Karpenter consolidation."
+  description = "Minimum nodes per zone in the cache pool. 0 lets the cluster autoscaler scale to zero when SmithDB is idle, which is the closest match to Karpenter consolidation."
   type        = number
   default     = 0
 }
 
 variable "instance_store_max_nodes" {
-  description = "Maximum nodes per zone in the Local SSD pool"
+  description = "Maximum nodes per zone in the cache pool"
   type        = number
   default     = 3
 }

@@ -104,3 +104,9 @@ variable "skip_final_snapshot" {
   description = "Skip the final snapshot when the RDS instance is destroyed. Set true for dev/test environments that are rebuilt under the same name."
   default     = false
 }
+
+variable "existing_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the RDS instance instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/5432 from ingress_cidrs and outbound within the VPC CIDR."
+  default     = null
+}

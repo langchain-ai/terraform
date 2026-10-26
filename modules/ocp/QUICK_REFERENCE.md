@@ -24,6 +24,36 @@ oc version
 
 ---
 
+## Secrets
+
+The chart reads existing secrets on this module — see the key table in
+[README.md](README.md#secrets).
+
+```bash
+# Create or update them
+export LANGSMITH_LICENSE_KEY=...
+export INITIAL_ORG_ADMIN_PASSWORD=...
+export POSTGRES_CONNECTION_URL=...
+export REDIS_CONNECTION_URL=...
+./helm/scripts/generate-secrets.sh
+```
+
+```bash
+# Which keys are in the secret (names only, no values)
+oc get secret langsmith-secrets -n langsmith -o jsonpath='{range $k,$v := .data}{$k}{"\n"}{end}'
+```
+
+```bash
+# Confirm the chart is reading them rather than generating its own
+helm get values langsmith -n langsmith --all | grep -B1 -A1 existingSecretName
+```
+
+Rotating a secret does not restart the pods: with `existingSecretName` set the
+chart drops its `checksum/secrets` annotation, so roll the deployments yourself
+(`oc rollout restart deployment -n langsmith`) or run Reloader.
+
+---
+
 ## Planned Deployment
 
 ```bash
@@ -35,10 +65,11 @@ terraform apply
 helm repo add langchain https://langchain-ai.github.io/helm
 helm repo update
 
+# The license key comes from the secret above, not --set: with
+# config.existingSecretName set, config.langsmithLicenseKey is ignored.
 helm install langsmith langchain/langsmith \
   -f langsmith-values.yaml \
-  -n langsmith --create-namespace \
-  --set config.langsmithLicenseKey="<license-key>"
+  -n langsmith --create-namespace
 ```
 
 ---

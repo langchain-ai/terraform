@@ -17,8 +17,9 @@
 #   8. langsmith-values-fleet.yaml                      — Fleet standalone v0.15+ (if enable_fleet)
 #   9. langsmith-values-standalone-polly.yaml           — Polly standalone v0.15+ (if enable_standalone_polly)
 #  10. langsmith-values-standalone-insights.yaml        — Insights standalone v0.15+ (if enable_standalone_insights)
-#  11. langsmith-values-smithdb.yaml                    — SmithDB overlay (if enable_smithdb)
-#  12. langsmith-values-smithdb-overrides.yaml          — SmithDB env-specific: bucket, WI, metastore (if enable_smithdb)
+#  11. langsmith-values-smithdb-sizing.yaml             — SmithDB sizing and placement, from terraform output (if enable_smithdb)
+#  12. langsmith-values-smithdb.yaml                    — SmithDB overlay (if enable_smithdb)
+#  13. langsmith-values-smithdb-overrides.yaml          — SmithDB env-specific: bucket, WI, metastore (if enable_smithdb)
 #
 # Generate values files: ./helm/scripts/init-values.sh
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -37,20 +38,63 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
+
+# Defined here rather than further down because CHART_VERSION resolution below
+# needs it, and the chart-line guard runs before the old definition site.
+_parse_tfvar() {
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+}
 VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
+# Pin the chart *line*: deploy the latest 0.17.x, never auto-jump to 0.18.
 # Override with the CHART_VERSION env var for an exact patch if needed.
+#
+# Read the pin from the Terraform output, not from terraform.tfvars. That file is
+# only one of Terraform's variable sources, and not the highest priority one, so
+# a parse of the file alone misses a value set in an .auto.tfvars file, a
+# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_helm_chart_version, and
+# Helm then installs a different chart than the applied configuration declares.
+# The output is a plain string and carries no secret.
+#
+# The read fails when the state carries outputs but not this one, which is a
+# state applied before this output existed, and when terraform cannot run at all.
+# Fall back to the file parse there, so an older state keeps its documented pin.
+# An empty result is an answer rather than a failure: it means no pin, so let the
+# chart line default below apply. A tree with no state at all also reads as
+# empty, and the cluster_name check further down stops that run regardless.
+_chart_version_pin_source="terraform output"
+if ! _chart_version_pin=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_helm_chart_version 2>/dev/null); then
+  _chart_version_pin_source="terraform.tfvars"
+  _chart_version_pin=$(_parse_tfvar "langsmith_helm_chart_version") || _chart_version_pin=""
+fi
+
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
-# a different chart than the branch intends.
+# a different chart than the branch intends, and name the version that an unset
+# returns to, which is the pin when there is one.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
-  echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment."
+  if [[ -n "$_chart_version_pin" ]]; then
+    echo "      It overrides langsmith_helm_chart_version=${_chart_version_pin} (${_chart_version_pin_source})."
+    echo "      Run 'unset CHART_VERSION' to deploy ${_chart_version_pin}."
+  else
+    echo "      It overrides the ~0.17.0 chart line pin."
+    echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+  fi
+elif [[ -n "$_chart_version_pin" ]]; then
+  CHART_VERSION="$_chart_version_pin"
+  echo "Chart version pinned by langsmith_helm_chart_version (${_chart_version_pin_source}): ${CHART_VERSION}"
 fi
-CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -65,42 +109,53 @@ _chart_version_supports_sandboxes() {
   esac
 }
 
-_validate_sandbox_values_file() {
-  local values_file="$1"
+# Prints "legacy" when the sandboxes block still carries the chart 0.16
+# sandboxes.juicefs.csi keys, "ok" when it has the generated chart 0.17 keys, and
+# "missing" otherwise. Chart 0.17 ignores a leftover csi block, and its own
+# validation then fails the release on sandboxes.juicefs.redis.metaURL, which names
+# neither the values file nor the fix. Keep identical to the AWS copy.
+_sandbox_values_state() {
+  awk '
+    /^[^ \t#]/ { top = $1; child = "" }
+    top != "sandboxes:" { next }
+    /^  [^ \t#]/ { child = $1 }
+    /^  enabled:[ \t]*true[ \t]*$/ { enabled = 1 }
+    child == "juicefs:" && /^    csi:/ { legacy = 1 }
+    child == "juicefs:" && /^    existingSecretName:[ \t]*"?[^" \t]+"?[ \t]*$/ { secret = 1 }
+    END { print (legacy ? "legacy" : (enabled && secret ? "ok" : "missing")) }
+  ' "$1"
+}
 
-  if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file"; then
+_validate_sandbox_values_file() {
+  local values_file="$1" state
+
+  state="$(_sandbox_values_state "$values_file")"
+  if [[ "$state" == "legacy" ]]; then
+    echo "ERROR: $(basename "$values_file") carries sandboxes.juicefs.csi, the chart 0.16 sandbox schema." >&2
+    echo "       Chart 0.17 has no JuiceFS CSI driver and ignores that block." >&2
+    echo "       Run: ./helm/scripts/init-values.sh to regenerate it." >&2
+    exit 1
+  fi
+  if [[ "$state" != "ok" ]]; then
     echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
     echo "       Run: ./helm/scripts/init-values.sh after applying infra." >&2
     exit 1
   fi
 }
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# These values use the chart 0.17 schema: the 0.16 layout (engineInsightsAgent,
+# top-level insights/polly, no backend.agentBootstrap) plus the sandbox-host
+# JuiceFS mount that replaced sandboxes.juicefs.csi. Chart 0.16 has no host-mount
+# keys, and chart 0.15 silently drops the external Insights Postgres/Redis wiring.
+# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
+# Refuse any other line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
+  echo "       These values require chart 0.17 or 0.18 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 or 0.18 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.17.0 make deploy" >&2
   exit 1
-fi
-# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
-# are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
-  _rc="${CHART_VERSION##*-rc.}"
-  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
-    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
-    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
-    exit 1
-  fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
@@ -133,19 +188,9 @@ fi
 # Values are cut at the closing quote, or at an inline # for bare booleans and
 # numbers, so a commented flag line still reads as a flag. Keep identical to the
 # other copies of this function.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
 _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
 
-# SmithDB needs chart 0.16 or newer, which the line guard above already
+# SmithDB on this module needs chart 0.17, which the line guard above already
 # guarantees for every deploy, so there is no SmithDB-specific version gate
 # here. These flags drive the values chain and the rollout wait below.
 _smithdb_enabled=false
@@ -210,13 +255,100 @@ echo ""
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
 
+# Chart 0.16 mounted sandbox volumes through a bundled JuiceFS CSI driver, which
+# chart 0.17 deletes. If the upgrade removes the driver while those volumes are
+# mounted, kubelet can no longer unmount them and the old sandbox-host pods hang in
+# Terminating on juicefs.com/finalizer. Draining needs the driver alive, so stop
+# here until no JuiceFS claim or mount pod is left. Checked whatever
+# enable_sandboxes says: turning the flag off does not remove a running driver.
+# Keep identical to the AWS copy.
+if kubectl get daemonset juicefs-csi-node -n "$NAMESPACE" >/dev/null 2>&1; then
+  _jfs_workloads=$(kubectl get deployments,statefulsets -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -E 'sandbox-host$' || true)
+  _jfs_pvcs=$(kubectl get pvc -n "$NAMESPACE" -o name 2>/dev/null | grep -Ei 'juicefs|smithbox' || true)
+  _jfs_mount_pods=$(kubectl get pods -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -i 'juicefs' | grep -Eiv '/juicefs-csi-(node|controller)' || true)
+  if [[ -n "${_jfs_pvcs}${_jfs_mount_pods}" ]]; then
+    echo "ERROR: namespace $NAMESPACE still mounts sandbox volumes through the chart 0.16 JuiceFS CSI driver." >&2
+    echo "       Chart 0.17 removes that driver, and upgrading now leaves the old sandbox-host pods" >&2
+    echo "       stuck in Terminating. Drain the volumes while the driver still runs, then re-run:" >&2
+    while IFS= read -r _obj; do
+      [[ -z "$_obj" ]] && continue
+      echo "         kubectl delete -n $NAMESPACE $_obj" >&2
+    done < <(printf '%s\n%s\n' "$_jfs_workloads" "$_jfs_pvcs")
+    echo "         kubectl get pods -n $NAMESPACE | grep juicefs   # wait until only juicefs-csi-* pods remain" >&2
+    echo "       Running sandboxes stop. Their data stays in object storage and Redis, and chart 0.17" >&2
+    echo "       mounts the same JuiceFS volume." >&2
+    exit 1
+  fi
+fi
+
 # ── Pre-deploy Gateway IP staleness check ────────────────────────────────────
 # If the Envoy Gateway IP has changed since last deploy (e.g. after Gateway
 # resource recreation), warn the operator and update values-overrides.yaml
 # to prevent the Deployments operator from hitting stale endpoints.
+#
+# This only applies to IP-based installs. When langsmith_domain is set,
+# config.hostname must remain the DNS name: Terraform creates the Gateway
+# listener with that hostname, so rewriting the chart's hostname to the IP
+# leaves no intersection between the HTTPRoute and the listener. The route then
+# reports NoMatchingListenerHostname and every request 404s behind an otherwise
+# valid TLS certificate. The AWS module already guards this the same way.
+#
+# Read the domain from the Terraform output, not from terraform.tfvars. That
+# file is only one of Terraform's variable sources and not the highest priority
+# one, so a file parse misses a value set in an .auto.tfvars file, a
+# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_domain. Reading empty
+# there takes this branch for a domain-based install and rewrites the hostname
+# to the Gateway IP — the exact failure this guard exists to prevent. A domain
+# name is not a secret.
+#
+# A read failure means the state predates the langsmith_domain output, so fall
+# back to the file parse. An empty result from a successful read is an answer:
+# no domain is configured, so this is an IP-based install.
+if ! _langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null); then
+  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+fi
 _live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
-if [[ -n "$_live_gateway_ip" ]]; then
+if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
+  # Domain-based install: never rewrite the hostname. Surface a DNS mismatch
+  # instead, since that is the actual thing an operator needs to fix.
+  #
+  # Only claim a resolution result when a resolver is actually available —
+  # otherwise an absent dig would report "does not resolve yet" for a domain that
+  # resolves perfectly well.
+  if command -v dig >/dev/null 2>&1; then
+    # Compare the whole A-record set against the one Gateway address. Taking a
+    # single record instead ties the verdict to the order the resolver happens
+    # to return, which rotates: a domain answering with both the Gateway IP and
+    # a stale one then passes on some runs and warns on others, and a run that
+    # passes hides that part of the traffic never reaches this cluster.
+    # Keep only IPv4 literals, since dig prints the CNAME target as well when
+    # the name is an alias.
+    _resolved_ips=$(dig +short "$_langsmith_domain" A 2>/dev/null \
+      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') || _resolved_ips=""
+    if [[ -z "$_resolved_ips" ]]; then
+      echo "NOTE: ${_langsmith_domain} does not resolve yet."
+      echo "      Point its DNS A record at ${_live_gateway_ip} — TLS issuance and"
+      echo "      ingress stay pending until it does."
+      echo ""
+    elif ! printf '%s\n' "$_resolved_ips" | grep -qxF "$_live_gateway_ip"; then
+      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ips//$'\n'/, }, not the"
+      echo "         Gateway IP ${_live_gateway_ip}. Update the DNS A record."
+      echo ""
+    elif [[ $(printf '%s\n' "$_resolved_ips" | wc -l) -gt 1 ]]; then
+      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ips//$'\n'/, }."
+      echo "         Only ${_live_gateway_ip} is this Gateway. Requests that take one of"
+      echo "         the other addresses do not reach it. Remove the stale A records."
+      echo ""
+    fi
+  else
+    echo "NOTE: Gateway IP is ${_live_gateway_ip}; config.hostname stays"
+    echo "      ${_langsmith_domain}. Install dig to have this checked against DNS."
+    echo ""
+  fi
+elif [[ -n "$_live_gateway_ip" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
   if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_gateway_ip" ]]; then
@@ -273,6 +405,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_sso_oidc=false
 _any_flag_set=false
 _tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _any_flag_set=true; }
 _tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _any_flag_set=true; }
@@ -282,6 +415,17 @@ _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;             
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
 _tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
+_tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
+
+# An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
+# addon keys falls back to loading every addon file on disk. Keep this list in
+# step with the one in init-values.sh, or the two scripts disagree on which
+# addons a tfvars file asks for.
+for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
+          enable_usage_telemetry enable_fleet enable_standalone_polly \
+          enable_standalone_insights enable_sandboxes; do
+  if [[ -n "$(_parse_tfvar "$_k")" ]]; then _any_flag_set=true; fi
+done
 
 # Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -307,6 +451,65 @@ if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
   echo "         tool/trigger servers, but chart 0.16 removed the bundled agent-bootstrap Job that" >&2
   echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
 fi
+
+# With config.existingSecretName set, the chart reads the OIDC client ID, secret,
+# and issuer URL from langsmith-config. Check them first, for a clear message.
+# The payload check below covers every key.
+if [[ "$_enable_sso_oidc" == "true" ]] && \
+   [[ -z "${TF_VAR_langsmith_oauth_client_id:-}" || -z "${TF_VAR_langsmith_oauth_client_secret:-}" || -z "${TF_VAR_langsmith_oauth_issuer_url:-}" ]]; then
+  echo "ERROR: enable_sso_oidc = true but OIDC credentials are not set." >&2
+  echo "       Run: source infra/scripts/setup-env.sh" >&2
+  exit 1
+fi
+
+# Build the whole payload before kubectl runs. In a pipe, a failed ${VAR:?} ends
+# only the left side, and kubectl apply then replaces langsmith-config with the
+# keys printed before the failure.
+if ! _langsmith_config_env=$(
+  printf 'langsmith_license_key=%s\n' "${TF_VAR_langsmith_license_key:?}"
+  printf 'api_key_salt=%s\n' "${TF_VAR_langsmith_api_key_salt:?}"
+  printf 'jwt_secret=%s\n' "${TF_VAR_langsmith_jwt_secret:?}"
+  printf 'initial_org_admin_password=%s\n' "${TF_VAR_langsmith_admin_password:?}"
+  if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ]]; then
+    printf 'agent_builder_encryption_key=%s\n' "${TF_VAR_langsmith_agent_builder_encryption_key:?}"
+  fi
+  if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
+    printf 'insights_encryption_key=%s\n' "${TF_VAR_langsmith_insights_encryption_key:?}"
+  fi
+  if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
+    printf 'polly_encryption_key=%s\n' "${TF_VAR_langsmith_polly_encryption_key:?}"
+  fi
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
+  fi
+  if [[ "$_enable_sso_oidc" == "true" ]]; then
+    printf 'oauth_client_id=%s\n' "${TF_VAR_langsmith_oauth_client_id:?}"
+    printf 'oauth_client_secret=%s\n' "${TF_VAR_langsmith_oauth_client_secret:?}"
+    printf 'oauth_issuer_url=%s\n' "${TF_VAR_langsmith_oauth_issuer_url:?}"
+  fi
+); then
+  echo "ERROR: a langsmith-config value is not set. The Secret was not changed." >&2
+  echo "       Run: source infra/scripts/setup-env.sh" >&2
+  exit 1
+fi
+printf '%s\n' "$_langsmith_config_env" | kubectl create secret generic langsmith-config \
+  --namespace "$NAMESPACE" \
+  --from-env-file=/dev/stdin \
+  --dry-run=client -o yaml | kubectl apply -f -
+VALUES_ARGS+=(
+  --set "config.existingSecretName=langsmith-config"
+  --set-string "config.langsmithLicenseKey="
+  --set-string "config.apiKeySalt="
+  --set-string "config.basicAuth.jwtSecret="
+  --set-string "config.basicAuth.initialOrgAdminPassword="
+  --set-string "config.agentBuilder.encryptionKey="
+  --set-string "fleet.encryptionKey="
+  --set-string "insights.encryptionKey="
+  --set-string "polly.encryptionKey="
+  --set-string "sandboxes.callbackSigningJwk="
+  --set-string "config.oauth.oauthClientSecret="
+)
+echo "  ✔ langsmith-config secret"
 
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
@@ -349,20 +552,98 @@ for entry in "${_addon_gate[@]}"; do
   fi
 done
 
-# SmithDB last, so its overrides beat every sizing and addon file above.
+# Prints each chart 0.16 SmithDB value in a values file. Chart 0.17 rejects
+# them, and its error does not name the file. Chart 0.17 has no deployment key
+# at any depth under smithdb.migration. Keys can be quoted, and a flow-style
+# smithdb line is also read for the volume name.
+_smithdb_legacy_values() {
+  awk '
+    { sub(/[ \t]+#.*$/, "") }
+    /^[ \t]*(#|$)/ { next }
+    { match($0, /^ */); ind = RLENGTH }
+    ind == 0 { sdb = ($0 ~ /^.?smithdb.?:/); child = -1; if (sdb && /local-ssd-storage/) ssd = 1; next }
+    !sdb { next }
+    /local-ssd-storage/ { ssd = 1 }
+    child < 0 { child = ind }
+    ind <= child { mig = ($0 ~ /^[ \t]*.?migration.?:/); next }
+    mig && /^[ \t]*.?deployment.?:/ { dep = 1 }
+    END {
+      if (ssd) print "the volume name local-ssd-storage (chart 0.17 requires cache)"
+      if (dep) print "smithdb.migration.deployment (chart 0.17 uses smithdb.migration.job)"
+    }
+  ' "$1"
+}
+
+# Fleet needs host-backend, which the base values leave off. A fleet file copied
+# before the overlay set it is never replaced by init-values.sh, so set it here.
+if [[ "$_enable_fleet" == "true" ]]; then
+  VALUES_ARGS+=(--set "hostBackend.enabled=true")
+fi
+
+# SmithDB last, so its overrides beat every sizing and addon file above. The
+# generated sizing file goes first, so the hand-edited overlay can override it.
 if [[ "$_smithdb_enabled" == "true" ]]; then
+  _smithdb_sizing_file="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides_file="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
 
-  if [[ ! -f "$_smithdb_file" || ! -f "$_smithdb_overrides_file" ]]; then
+  if [[ ! -f "$_smithdb_sizing_file" || ! -f "$_smithdb_file" || ! -f "$_smithdb_overrides_file" ]]; then
     echo "ERROR: enable_smithdb = true but the SmithDB values files are missing." >&2
     echo "Run: ./helm/scripts/init-values.sh" >&2
     exit 1
   fi
 
-  VALUES_ARGS+=(-f "$_smithdb_file" -f "$_smithdb_overrides_file")
+  # init-values.sh copies the overlay only once, so a chart 0.16 copy stays.
+  _smithdb_legacy=$(_smithdb_legacy_values "$_smithdb_file")
+  if [[ -n "$_smithdb_legacy" ]]; then
+    echo "ERROR: langsmith-values-smithdb.yaml has chart 0.16 SmithDB values that chart 0.17 rejects:" >&2
+    sed 's/^/         /' <<< "$_smithdb_legacy" >&2
+    echo "       The sizing file now sets the cache volume, resources, and placement." >&2
+    echo "       Save a copy of your edits, then replace the overlay with the 0.17 example:" >&2
+    echo "         cp helm/values/langsmith-values-smithdb.yaml helm/values/langsmith-values-smithdb-0.16.yaml" >&2
+    echo "         cp helm/values/examples/langsmith-values-smithdb.yaml helm/values/langsmith-values-smithdb.yaml" >&2
+    echo "       Then add back only the edits that do not set nodeSelector, tolerations," >&2
+    echo "       volumes, volumeMounts, or resources." >&2
+    exit 1
+  fi
+
+  VALUES_ARGS+=(-f "$_smithdb_sizing_file" -f "$_smithdb_file" -f "$_smithdb_overrides_file")
+  echo "  ✔ langsmith-values-smithdb-sizing.yaml"
   echo "  ✔ langsmith-values-smithdb.yaml"
   echo "  ✔ langsmith-values-smithdb-overrides.yaml"
+
+  # init-values.sh writes the migration gate into the overrides. A run of
+  # make smithdb-migration-job-end without make init-values leaves it on, and the
+  # chart then fails on the TaskDB password with no hint of the cause.
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides_file")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    echo "ERROR: langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration," >&2
+    echo "       but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled." >&2
+    echo "Run: make init-values, then make deploy" >&2
+    exit 1
+  fi
+
+  # Written by make smithdb-migration-job-start: TaskDB source and migration pod count.
+  _smithdb_migration_file="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
+  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
+    if [[ ! -f "$_smithdb_migration_file" ]]; then
+      echo "ERROR: langsmith-values-smithdb-migration.yaml not found, and smithdb_migration_enabled = true." >&2
+      echo "Run: make smithdb-migration-job-start" >&2
+      exit 1
+    fi
+    # The last make apply sized the namespace quota for this pod count. A larger
+    # count in the file leaves the extra pods refused by the quota.
+    _file_parallelism=$(awk '/^[[:space:]]*parallelism:/ { print $2; exit }' "$_smithdb_migration_file")
+    _tf_parallelism=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_migration_parallelism 2>/dev/null) || _tf_parallelism=""
+    if [[ "${_file_parallelism:-1}" != "$_tf_parallelism" ]]; then
+      echo "ERROR: langsmith-values-smithdb-migration.yaml has parallelism ${_file_parallelism:-1}," >&2
+      echo "       but the last make apply sized the namespace quota for ${_tf_parallelism:-an unknown count of} migration pods." >&2
+      echo "       Run make apply (smithdb_migration_parallelism in terraform.tfvars must match the file), then make deploy." >&2
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration_file")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
+  fi
 elif [[ -f "$VALUES_DIR/langsmith-values-smithdb.yaml" ]]; then
   echo "  ○ langsmith-values-smithdb.yaml (file exists but enable_smithdb=false — skipped)"
 fi
@@ -372,7 +653,21 @@ helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain
 
 # Guard: pending Helm states (often from interrupted --wait) block upgrades.
-# Recover automatically before proceeding.
+# Recover automatically before proceeding, but never uninstall a release that
+# has a revision to roll back to: stop and print the rollback instead.
+#
+# Prints the newest revision a rollback can restore: one Helm counts as good
+# (deployed or superseded), or the one an interrupted uninstall left behind.
+# Prints nothing when there is none; fails when the history cannot be read or
+# holds no revision.
+_last_good_revision() {
+  local _history
+  _history=$(helm history "$RELEASE_NAME" -n "$NAMESPACE" --output json 2>/dev/null) || return 1
+  # Every release in these states has a revision. No parsable revision is a read failure.
+  grep -q '"revision":[0-9]' <<< "$_history" || return 1
+  tr '{' '\n' <<< "$_history" | grep -E '"status":"(deployed|superseded|uninstalling)"' \
+    | grep -o '"revision":[0-9]*' | cut -d: -f2 | sort -n | tail -1 || true
+}
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
 case "$_release_status" in
@@ -382,22 +677,39 @@ case "$_release_status" in
     helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
     echo ""
     ;;
-  pending-install|pending-rollback|pending-uninstall)
+  pending-install|pending-rollback|uninstalling)
+    # An uninstall deletes every workload and the revision history, so only a
+    # release with nothing to restore (an interrupted first install) is cleared here.
+    # A history that cannot be read counts as one with a revision to restore.
+    _good_rev=$(_last_good_revision || echo "<revision>")
+    if [[ -n "$_good_rev" ]]; then
+      echo "ERROR: Helm release '${RELEASE_NAME}' is in '${_release_status}' state." >&2
+      echo "       deploy.sh does not uninstall a release that has a revision to restore." >&2
+      echo "       Check the history, roll back, then deploy again:" >&2
+      echo "         helm history $RELEASE_NAME -n $NAMESPACE --max 5" >&2
+      if [[ "$_good_rev" == "<revision>" ]]; then
+        echo "       (helm history could not be read, so the revision number is not known.)" >&2
+      fi
+      echo "         helm rollback $RELEASE_NAME $_good_rev -n $NAMESPACE --wait --timeout 5m" >&2
+      echo "         make deploy" >&2
+      exit 1
+    fi
     echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in '${_release_status}' state."
     echo "         Uninstalling stale release to clear lock before reinstall..."
     helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait
     echo ""
     ;;
   failed)
-    # `helm upgrade --install` aborts with "has no deployed releases" when the
-    # history holds no revision in deployed status, which is what a failed first
-    # install leaves behind. A release with a good revision behind it can upgrade
-    # in place, so only clear the record when there is nothing to upgrade from.
-    if helm history "$RELEASE_NAME" -n "$NAMESPACE" --output json 2>/dev/null \
-      | grep -q '"status":"deployed"'; then
+    # A failed first install leaves no revision to upgrade from, and
+    # `helm upgrade --install` can then abort with "has no deployed releases".
+    # Upgrade in place when a deployed, superseded or uninstalling revision
+    # exists, or when the history cannot be read. Clear the record only when no
+    # such revision exists.
+    if [[ -n "$(_last_good_revision || echo "<revision>")" ]]; then
       echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
       echo "         This is commonly a hook timeout and does not always indicate unhealthy workloads."
-      echo "         An earlier revision did deploy, so upgrading in place..."
+      echo "         An earlier revision deployed, or helm history could not be read,"
+      echo "         so upgrading in place..."
       echo ""
     else
       echo "WARNING: Helm release '${RELEASE_NAME}' failed on its first install, so no"
@@ -413,11 +725,11 @@ echo "Deploying LangSmith (sizing: ${_sizing_profile})..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
-# --devel is required for pre-release chart versions (any 0.15.x or 0.16.x
-# release candidate). Helm silently skips any version carrying a semver prerelease
-# component without it. Keyed off the prerelease component itself rather than a
-# list of known tags, so forms like -rc22 or -alpha-3 are not missed; the part
-# after a + is build metadata and never makes a version a prerelease.
+# --devel is required for pre-release chart versions (any release candidate).
+# Helm silently skips any version carrying a semver prerelease component without
+# it. Keyed off the prerelease component itself rather than a list of known tags,
+# so forms like -rc22 or -alpha-3 are not missed; the part after a + is build
+# metadata and never makes a version a prerelease.
 _devel_flag=""
 if [[ "${CHART_VERSION%%+*}" == *-* ]]; then
   _devel_flag="--devel"
@@ -425,37 +737,31 @@ fi
 
 # Resolve the pin to a concrete version and print it. Without this the only place
 # the installed version shows up is `helm list`, after the release is already out.
-_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-  | awk '/^version:/{print $2}') || _resolved_chart=""
+_chart_metadata=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
 echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
 fi
 
-# The historical backfill reads the LangSmith traces bucket, and before chart
-# 0.16.6 the migration Job asked for the s3 provider whatever
-# config.blobStorage.engine said. On GCP that means AWS4-signing every read with
-# the empty blob_storage_access_key, so storage.googleapis.com answers 403
-# SignatureDoesNotMatch. The Job still reports Running while every task fails and
-# the taskdb marks those failures non-retryable, so the visible symptom is
-# planned-row progress stuck at 0% with nothing naming the chart version.
-#
-# This module used to carry a values override for that. It does not any more, so
-# refuse the combination rather than let it fail in a way nobody attributes to a
-# pinned patch. Only this one gate is affected; the others work on any 0.16 patch,
-# which is why the check sits here rather than beside the chart-line guard above.
-if [[ "$_smithdb_migration_enabled" == "true" ]]; then
-  _mig_patch="${_resolved_chart#0.16.}"
-  _mig_patch="${_mig_patch%%-*}"
-  if [[ "$_mig_patch" =~ ^[0-9]+$ && "$_mig_patch" -lt 6 ]]; then
-    echo "ERROR: smithdb_migration_enabled = true needs chart 0.16.6 or newer; resolved $_resolved_chart." >&2
-    echo "       Earlier patches point the backfill's source blob store at s3 even when" >&2
-    echo "       config.blobStorage.engine is GCS, so every read of the traces bucket fails" >&2
-    echo "       with 403 SignatureDoesNotMatch while the Job still reports Running." >&2
-    echo "       Leave CHART_VERSION unset to take the latest 0.16.x, or name 0.16.6+:" >&2
-    echo "         CHART_VERSION=0.16.6 make deploy" >&2
+# Chart 0.17 fails the release when images.sandboxHostImage.tag is empty. A tag
+# pinned in a file lags every chart upgrade. The old sandbox-host image then runs,
+# and the juicefs-format Job uses the same image. So set the tag from the
+# appVersion of the resolved chart on every deploy, as the AWS module does.
+# --set-string overrides any tag that an older init-values.sh wrote into a file.
+# helm upgrade below installs the same resolved version, so the tag matches it.
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: chart $_resolved_chart does not declare an appVersion for the sandbox-host image." >&2
     exit 1
+  fi
+  VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
+  echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
+  _legacy_sandbox_tag=$(_parse_tfvar "sandbox_host_image_tag") || _legacy_sandbox_tag=""
+  if [[ -n "$_legacy_sandbox_tag" && "$_legacy_sandbox_tag" != "$_sandbox_host_image_tag" ]]; then
+    echo "  ⚠️  sandbox_host_image_tag = \"$_legacy_sandbox_tag\" in terraform.tfvars is ignored. Remove it."
   fi
 fi
 
@@ -469,7 +775,9 @@ fi
 # Compare the template Helm is about to send with the one on the cluster, and
 # stop first if they differ. Only the fields Helm controls are compared, because
 # the live object also carries controller-uid labels and API-server defaults that
-# would otherwise read as drift on every run.
+# would otherwise read as drift on every run. The pod template also carries the
+# label helm.sh/chart=langsmith-<version>, so every chart version change fails
+# the apply. That check needs only kubectl.
 #
 # Deleting the Job is safe and is not the same as losing the backfill: task state
 # lives in the taskdb StatefulSet, which the chart keeps, so a fresh Job re-plans
@@ -480,18 +788,29 @@ if [[ "$_smithdb_migration_enabled" == "true" ]] \
   && kubectl get job "$_migration_job" -n "$NAMESPACE" >/dev/null 2>&1; then
 
   _live_job=$(kubectl get job "$_migration_job" -n "$NAMESPACE" -o json 2>/dev/null) || _live_job=""
+
+  # The label value as templates/_helpers.tpl "langsmith.chart" builds it.
+  _drift=""
+  _next_chart_label="langsmith-${_resolved_chart//+/_}"
+  _live_chart_label=$(kubectl get job "$_migration_job" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.metadata.labels.helm\.sh/chart}' 2>/dev/null) || _live_chart_label=""
+  if [[ -n "$_live_chart_label" && "$_live_chart_label" != "$_next_chart_label" ]]; then
+    _drift="         - pod template label helm.sh/chart ${_live_chart_label} -> ${_next_chart_label}"
+  fi
+
   # helm template emits YAML, and kubectl converts it to JSON without needing a
   # YAML library on the host. Both sides can fail for unrelated reasons, in which
-  # case the check is skipped rather than allowed to block a deploy.
+  # case the check is skipped rather than allowed to block a deploy. The render
+  # uses the resolved version, the same one that the chart label check uses.
   _next_job=$(helm template "$RELEASE_NAME" langchain/langsmith \
     --namespace "$NAMESPACE" \
-    ${CHART_VERSION:+--version "$CHART_VERSION"} \
+    --version "$_resolved_chart" \
     ${_devel_flag} \
     "${VALUES_ARGS[@]}" \
     --show-only templates/smithdb/migration-job.yaml 2>/dev/null \
     | kubectl create --dry-run=client -o json -f - 2>/dev/null) || _next_job=""
 
-  if [[ -n "$_live_job" && -n "$_next_job" ]]; then
+  if [[ -z "$_drift" && -n "$_live_job" && -n "$_next_job" ]]; then
     _drift=$(LIVE_JOB="$_live_job" NEXT_JOB="$_next_job" python3 -c '
 import json, os
 
@@ -519,10 +838,15 @@ def signature(pod):
             }
     return out
 
-live = signature(json.loads(os.environ["LIVE_JOB"])["spec"]["template"]["spec"])
-nxt = signature(json.loads(os.environ["NEXT_JOB"])["spec"]["template"]["spec"])
+live_pod = json.loads(os.environ["LIVE_JOB"])["spec"]["template"]["spec"]
+next_pod = json.loads(os.environ["NEXT_JOB"])["spec"]["template"]["spec"]
+live = signature(live_pod)
+nxt = signature(next_pod)
 
 reasons = []
+for field in ("nodeSelector", "tolerations"):
+    if (live_pod.get(field) or None) != (next_pod.get(field) or None):
+        reasons.append("pod %s changed" % field)
 for name in sorted(set(live) | set(nxt)):
     if name not in live:
         reasons.append("container %s is new" % name)
@@ -546,25 +870,25 @@ for name in sorted(set(live) | set(nxt)):
 
 print("\n".join("         - " + r for r in reasons))
 ' 2>/dev/null) || _drift=""
+  fi
 
-    if [[ -n "$_drift" ]]; then
-      echo "ERROR: the existing $_migration_job Job does not match what this deploy renders," >&2
-      echo "       and a Job's pod template cannot be changed in place:" >&2
-      echo "$_drift" >&2
-      echo "       Delete the Job, then deploy again. Backfill progress is kept in the" >&2
-      echo "       taskdb, so a fresh Job resumes rather than starting over:" >&2
-      echo "         kubectl delete job $_migration_job -n $NAMESPACE --cascade=foreground --wait=true" >&2
-      echo "       Failures already recorded are non-retryable and survive the delete:" >&2
-      echo "         ./smithdb migrate --self-hosted diagnose retry-failed --all --yes" >&2
-      exit 1
-    fi
+  if [[ -n "$_drift" ]]; then
+    echo "ERROR: the existing $_migration_job Job does not match what this deploy renders," >&2
+    echo "       and a Job's pod template cannot be changed in place:" >&2
+    echo "$_drift" >&2
+    echo "       Delete the Job, then deploy again. Backfill progress is kept in the" >&2
+    echo "       taskdb, so a fresh Job resumes rather than starting over:" >&2
+    echo "         kubectl delete job $_migration_job -n $NAMESPACE --cascade=foreground --wait=true" >&2
+    echo "       Failures already recorded are non-retryable and survive the delete:" >&2
+    echo "         ./smithdb migrate --self-hosted diagnose retry-failed --all --yes" >&2
+    exit 1
   fi
 fi
 
 if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
-  ${CHART_VERSION:+--version "$CHART_VERSION"} \
+  --version "$_resolved_chart" \
   ${_devel_flag} \
   "${VALUES_ARGS[@]}" \
   --timeout 20m; then
@@ -596,7 +920,7 @@ fi
 [[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("langsmith-standalone-insights-api-server")
 
 # SmithDB pods wait on the cluster autoscaler adding a node to the tainted
-# Local SSD pool, which is slower than a normal rollout on a warm cluster.
+# SmithDB pools, which is slower than a normal rollout on a warm cluster.
 _smithdb_deployments=()
 if [[ "$_smithdb_enabled" == "true" ]]; then
   _smithdb_deployments=(
@@ -621,15 +945,63 @@ done
 if [[ ${#_smithdb_deployments[@]} -gt 0 ]]; then
   for dep in "${_smithdb_deployments[@]}"; do
     if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=10m 2>/dev/null; then
-      echo "  ⏳ $dep not ready within 10m (Local SSD nodes may still be provisioning)"
+      echo "  ⏳ $dep not ready within 10m (SmithDB nodes may still be provisioning)"
       _all_ready=false
     fi
   done
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
-    echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
+  # The format Job name carries a hash, so select it by label. It writes to the
+  # bucket through the langsmith-sandbox-host Workload Identity binding. Helm
+  # does not run a failed Job again when the manifest is unchanged, so a failed
+  # Job must be deleted before the next deploy.
+  _format_selector="app.kubernetes.io/instance=${RELEASE_NAME},app.kubernetes.io/component=juicefs-format"
+  _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+    -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  _format_waited=true
+  if [[ "$_format_failed" != *True* ]] \
+    && ! kubectl wait --for=condition=complete job -n "$NAMESPACE" -l "$_format_selector" --timeout=5m 2>/dev/null; then
+    _format_waited=false
+    _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  fi
+  if [[ "$_format_failed" == *True* ]]; then
+    _format_reason=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].reason}' 2>/dev/null) || _format_reason=""
+    echo "  ✗ The JuiceFS format Job for release ${RELEASE_NAME} failed (${_format_reason:-no reason})."
+    case "$_format_reason" in
+      *DeadlineExceeded*)
+        echo "     The Job did not finish in 300 s. Look for FailedScheduling or a slow image pull:"
+        echo "     kubectl describe job -n $NAMESPACE -l $_format_selector"
+        ;;
+      *)
+        echo "     Check the langsmith-sandbox-host Workload Identity binding (run: make apply):"
+        echo "     kubectl logs -n $NAMESPACE -l $_format_selector"
+        ;;
+    esac
+    echo "     Then delete the Job and deploy again. Helm creates it again:"
+    echo "     kubectl delete job -n $NAMESPACE -l $_format_selector && make deploy"
+    _all_ready=false
+  elif ! kubectl get job -n "$NAMESPACE" -l "$_format_selector" -o name 2>/dev/null | grep -q .; then
+    echo "  ⏳ No JuiceFS format Job found for release ${RELEASE_NAME}."
+    _all_ready=false
+  elif [[ "$_format_waited" == "false" ]]; then
+    echo "  ⏳ The JuiceFS format Job for release ${RELEASE_NAME} is not complete within 5m."
+    echo "     kubectl get jobs -n $NAMESPACE -l $_format_selector"
+    _all_ready=false
+  fi
+
+  # Helm's fullname can include the chart name or an override, so select by the
+  # release labels. rollout status exits 0 when nothing matches, so check first.
+  _sandbox_host_selector="app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host"
+  if ! kubectl get deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" -o name 2>/dev/null | grep -q .; then
+    echo "  ⏳ No sandbox-host Deployment found for release ${RELEASE_NAME}."
+    _all_ready=false
+  elif ! kubectl rollout status deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ sandbox-host for release ${RELEASE_NAME} not ready within 5m (sandbox-host nodes may still be starting)."
+    echo "     If JuiceFS does not mount, check the sandbox node bucket grant (run: make apply):"
+    echo "     kubectl logs -n $NAMESPACE -l $_sandbox_host_selector -c sandbox-host --tail=50"
     _all_ready=false
   fi
 fi
@@ -646,6 +1018,7 @@ else
     echo "         advertise enough allocatable ephemeral-storage:"
     echo "           kubectl get nodes -l smithdb-local/instance-store=true"
     echo "           kubectl get node NODE -o jsonpath='{.status.allocatable.ephemeral-storage}'"
+    echo "         In network-disk mode, check the cache volumes: kubectl get pvc -n $NAMESPACE"
   fi
 fi
 
@@ -696,8 +1069,12 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
   echo "SmithDB services are deployed. LangSmith integration advances in stages,"
   echo "driven by infra/terraform.tfvars; ClickHouse stays enabled throughout."
   echo "  ingestion: $_smithdb_ingestion_enabled   migration: $_smithdb_migration_enabled   query: $_smithdb_query_enabled"
+  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
+    echo "  Watch the migration Job; run make smithdb-migration-job-end once it is Complete:"
+    echo "    kubectl get job ${RELEASE_NAME}-smithdb-migration -n $NAMESPACE"
+  fi
   echo ""
-  echo "  Verify the cache mount is on Local SSD, not the boot disk:"
+  echo "  Verify the cache mount (Local SSD for local-ssd, a PVC for network-disk):"
   echo "    kubectl exec -n $NAMESPACE deploy/${RELEASE_NAME}-smithdb-query -- df -h /data"
   echo ""
   echo "  Confirm the metastore migration Job completed:"
@@ -707,7 +1084,6 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     echo "  Confirm segments are landing in the bucket:"
     echo "    gcloud storage ls gs://\$(terraform -chdir=$INFRA_DIR output -raw smithdb_object_store_bucket)/**"
   else
-    echo "  Advance to the next stage by setting smithdb_ingestion_enabled = true in"
-    echo "  $INFRA_DIR/terraform.tfvars, then re-running: make init-values && make deploy"
+    echo "  Next stage: set smithdb_ingestion_enabled = true in infra/terraform.tfvars, then make deploy-all"
   fi
 fi

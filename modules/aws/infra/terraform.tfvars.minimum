@@ -22,9 +22,10 @@
 #------------------------------------------------------------------------------
 # REQUIRED — Change these
 #------------------------------------------------------------------------------
-name_prefix = "myco"       # 1-11 chars, lowercase. Your company/team name.
-environment = "dev"
-region      = "us-west-2"
+name_prefix           = "myco" # 1-11 chars, lowercase. Your company/team name.
+environment           = "dev"
+region                = "us-west-2"
+langsmith_admin_email = "admin@example.com"
 
 #------------------------------------------------------------------------------
 # Tagging

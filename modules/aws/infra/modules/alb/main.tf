@@ -9,8 +9,10 @@
 terraform {
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+      source = "hashicorp/aws"
+      # Widened to stay compatible with the root module's >= 6.33 constraint
+      # (see ../../versions.tf). No version-specific syntax here.
+      version = ">= 5.0.0, < 7.0.0"
     }
   }
 }
@@ -25,6 +27,9 @@ locals {
   # Istio ingress gateway: listens directly on port 80 (envoy with NET_BIND_SERVICE).
   # NGINX ingress controller: listens on port 80.
   gateway_target_port = var.enable_envoy_gateway ? 10080 : 80
+
+  byo_security_group = var.existing_security_group_id != null && var.existing_security_group_id != ""
+  security_group_id  = local.byo_security_group ? var.existing_security_group_id : aws_security_group.alb[0].id
 }
 
 # ── Access Logs S3 Bucket ──────────────────────────────────────────────────────
@@ -76,8 +81,20 @@ resource "aws_s3_bucket_policy" "access_logs" {
 }
 
 # ── Security Group ─────────────────────────────────────────────────────────────
+# Skipped when var.existing_security_group_id is set. Terraform never writes
+# rules onto a customer-supplied security group (attach-only BYO).
+
+# Preserves state: without this, existing deployments would see their ALB
+# security group destroyed and recreated just from the count above changing
+# its address from aws_security_group.alb to aws_security_group.alb[0].
+moved {
+  from = aws_security_group.alb
+  to   = aws_security_group.alb[0]
+}
 
 resource "aws_security_group" "alb" {
+  count = local.byo_security_group ? 0 : 1
+
   name        = "${var.name}-sg"
   description = "Allow inbound HTTP/HTTPS to LangSmith ALB"
   vpc_id      = var.vpc_id
@@ -127,13 +144,14 @@ resource "aws_security_group" "alb" {
   }
 
   # Egress scoped to VPC CIDR: ALB only needs to reach EKS pod IPs (target-type: ip).
+  # Under VPC CNI custom networking the pods live in pod_cidr_blocks instead.
   # If using VPC peering for targets outside this VPC, add those CIDRs here.
   egress {
     description = "Allow all outbound to VPC"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = [var.vpc_cidr_block]
+    cidr_blocks = concat([var.vpc_cidr_block], var.pod_cidr_blocks)
   }
 
   tags = var.tags
@@ -147,7 +165,7 @@ resource "aws_lb" "this" {
   idle_timeout               = 3600
   internal                   = var.internal
   load_balancer_type         = "application"
-  security_groups            = [aws_security_group.alb.id]
+  security_groups            = [local.security_group_id]
   subnets                    = var.subnets
 
   dynamic "access_logs" {

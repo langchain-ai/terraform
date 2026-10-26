@@ -27,10 +27,6 @@
 #   run `terraform apply` again — the second apply will succeed.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Current Azure identity running Terraform (az login user or service principal).
-# Used to grant the deployer permission to create/update Key Vault secrets.
-data "azurerm_client_config" "current" {}
-
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 resource "azurerm_key_vault" "langsmith" {
@@ -39,7 +35,7 @@ resource "azurerm_key_vault" "langsmith" {
   name                = var.name
   location            = var.location
   resource_group_name = var.resource_group_name
-  tenant_id           = data.azurerm_client_config.current.tenant_id
+  tenant_id           = var.tenant_id
   sku_name            = "standard"
 
   # RBAC mode: access controlled by Azure role assignments on this vault's
@@ -54,6 +50,11 @@ resource "azurerm_key_vault" "langsmith" {
   # Purge protection: vault cannot be immediately destroyed after deletion.
   # Set false for dev environments where you need to quickly destroy and recreate.
   purge_protection_enabled = var.purge_protection_enabled
+
+  # With the private endpoint there is no public listener, and the ACLs below
+  # stop applying. They stay declared so turning the endpoint off lands on the
+  # same firewall the vault had before.
+  public_network_access_enabled = !var.private_endpoint_enabled
 
   # Network ACLs gate the data plane (azurerm_key_vault_secret etc.). Default
   # is "Allow" because both the first apply and seed-keyvault-secrets.sh write
@@ -110,6 +111,42 @@ locals {
   vault_uri  = var.create_keyvault ? azurerm_key_vault.langsmith[0].vault_uri : data.azurerm_key_vault.existing[0].vault_uri
 }
 
+# ── Private Endpoint ───────────────────────────────────────────────────────────
+# The vault keeps its <name>.vault.<cloud suffix> hostname; the zone group puts
+# its record in the privatelink.vaultcore zone the root module supplies or
+# creates, so clients inside linked networks resolve it to this address and
+# nothing else changes. Only on a vault this module creates: a supplied vault's
+# network settings stay its owner's.
+
+resource "azurerm_private_endpoint" "vault" {
+  count               = var.create_keyvault && var.private_endpoint_enabled ? 1 : 0
+  name                = "${var.name}-pe"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = var.private_endpoint_subnet_id
+
+  private_service_connection {
+    name                           = "${var.name}-psc"
+    private_connection_resource_id = azurerm_key_vault.langsmith[0].id
+    subresource_names              = ["vault"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "vault"
+    private_dns_zone_ids = [var.private_dns_zone_id]
+  }
+
+  tags = merge(var.tags, { module = "keyvault" })
+
+  lifecycle {
+    precondition {
+      condition     = var.private_endpoint_subnet_id != "" && var.private_dns_zone_id != ""
+      error_message = "private_endpoint_enabled requires both private_endpoint_subnet_id and private_dns_zone_id. The root module derives them from keyvault_private_endpoint_subnet_id and keyvault_private_dns_zone_id."
+    }
+  }
+}
+
 # ── RBAC: Terraform deployer ───────────────────────────────────────────────────
 # "Key Vault Secrets Officer" allows: create, read, update, delete, list secrets.
 # This grants the person running `terraform apply` full secret management rights.
@@ -137,7 +174,7 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
 
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = var.terraform_principal_id
   principal_type       = var.terraform_principal_type
 }
 
@@ -173,10 +210,11 @@ resource "azurerm_role_assignment" "managed_identity_kv_reader" {
 # Only the deployer's grant is worth waiting on, because the secret writes below
 # are what would 403 without it. The managed-identity grant is read at runtime by
 # pods that start long after this apply, and an access grant that came from
-# outside this apply propagated long ago.
+# outside this apply propagated long ago. manage_secrets = false leaves no
+# writes to wait for either way.
 
 resource "time_sleep" "wait_for_rbac" {
-  count = var.manage_terraform_admin_assignment ? 1 : 0
+  count = var.manage_terraform_admin_assignment && var.manage_secrets ? 1 : 0
 
   create_duration = "30s"
   depends_on      = [azurerm_role_assignment.terraform_kv_admin]
@@ -196,26 +234,37 @@ resource "time_sleep" "wait_for_rbac" {
 # vault by infra/scripts/seed-keyvault-secrets.sh after apply — matching how the
 # AWS module writes SSM and the GCP module writes Secret Manager.
 #
+# var.manage_secrets = false writes neither, for a deployer with no Key Vault
+# data-plane access; seed-keyvault-secrets.sh writes all nine afterwards.
+# Flipping it on a live deployment deletes both from the vault — `terraform
+# state rm` them first. See PERMISSIONS.md.
+#
 # Naming convention: kebab-case, matching the TF variable names.
 # Scripts read these by name: az keyvault secret show --name <name>
 
 resource "azurerm_key_vault_secret" "postgres_admin_password" {
+  count = var.manage_secrets ? 1 : 0
+
   name         = "postgres-admin-password"
   value        = var.postgres_admin_password
   key_vault_id = local.vault_id
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "postgres", module = "keyvault" })
 
-  depends_on = [time_sleep.wait_for_rbac]
+  # With the private endpoint on, its DNS record has to exist before a runner
+  # inside the network can reach the vault to write.
+  depends_on = [time_sleep.wait_for_rbac, azurerm_private_endpoint.vault]
 }
 
 resource "azurerm_key_vault_secret" "langsmith_license_key" {
-  count        = var.langsmith_license_key != "" ? 1 : 0
+  count        = var.manage_secrets && var.langsmith_license_key != "" ? 1 : 0
   name         = "langsmith-license-key"
   value        = var.langsmith_license_key
   key_vault_id = local.vault_id
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "langsmith", module = "keyvault" })
 
-  depends_on = [time_sleep.wait_for_rbac]
+  # With the private endpoint on, its DNS record has to exist before a runner
+  # inside the network can reach the vault to write.
+  depends_on = [time_sleep.wait_for_rbac, azurerm_private_endpoint.vault]
 }

@@ -94,7 +94,7 @@ make tf ARGS="providers"
 |---------|-------------|
 | `make status` | Check deployment state across all 10 layers and show what to run next |
 | `make status-quick` | Same as `status` but skips SSM and K8s queries (faster, for shell credential checks) |
-| `make kubeconfig` | Update `~/.kube/config` with EKS cluster credentials (`aws eks update-kubeconfig`) |
+| `make kubeconfig` | Print the `source infra/scripts/set-kubeconfig.sh` command, which writes `~/.kube/langsmith-<cluster>` and exports `KUBECONFIG` |
 | `make ssm` | Interactive SSM parameter manager — view, set, rotate, validate, diff vs K8s secret |
 | `make tls` | BYO ACM cert + Route53 A alias — use when `langsmith_domain` is set and you need DNS wiring |
 | `make purge-secrets` | Delete this deployment's SSM parameters after Terraform has no managed resources |

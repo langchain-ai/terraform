@@ -45,6 +45,20 @@ redis_name = "langsmith-redis-mycorp-dev"
 The available overrides are `postgres_name`, `redis_name`, `storage_account_name`,
 and `keyvault_name`.
 
+**Fix — a failed first apply burned the names.** The hash derives from your
+subscription and `name_prefix`, both fixed, so a retry asks for the same four
+names and hits the same collision. Bump the salt to rotate all four at once:
+
+```hcl
+name_suffix_salt = "2"
+```
+
+The resource group, VNet and AKS names do not carry the hash, so they stay put.
+Only do this before the first successful apply, or on a deployment you are willing
+to lose: on an existing one it renames Postgres, Redis, Storage and Key Vault,
+which Terraform executes as destroy-and-recreate. To dodge a single collision on a
+live deployment, pin that one name instead.
+
 A soft-deleted Key Vault holds its name for the duration of the retention window,
 so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destroy`:
 
@@ -52,6 +66,11 @@ so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destr
 az keyvault list-deleted --query "[].{name:name, scheduledPurgeDate:properties.scheduledPurgeDate}" -o table
 az keyvault purge --name langsmith-kv-dev   # only if you are certain
 ```
+
+Purging is the cleaner fix, because it frees the name rather than working around
+it. It fails when the vault was created with `keyvault_purge_protection = true`
+(the default), which holds the name for the full `soft_delete_retention_days`
+window — 90 days out of the box. Salt or pin the name in that case.
 
 **Catch it before applying:** `make preflight` checks Postgres, Storage, Key Vault
 and `dns_label` against Azure's availability APIs.
@@ -109,31 +128,31 @@ Normal   NotTriggerScaleUp pod/langsmith-backend-xxx  pod didn't trigger scale-u
 ```
 Error: creating temporary Agent Pool ... Agent Pool Name: "defaulttmp"
 "code": "ErrCode_InsufficientVCPUQuota",
-"message": "Insufficient vcpu quota requested 8, remaining 2 for family standardDSv3Family for region eastus."
+"message": "Insufficient vcpu quota requested 8, remaining 2 for family standardDSv5Family for region eastus."
 ```
 
-**Cause:** Azure subscriptions have per-region vCPU quotas per VM family. The default for `standardDSv3Family` in eastus is often 10 cores. One `Standard_D8s_v3` node uses 8 cores — only 2 remain. Autoscaler needs 8 more for a second node; node pool rotation creates a temporary surge node of the same size.
+**Cause:** Azure subscriptions have per-region vCPU quotas per VM family. The default for `standardDSv5Family` in eastus is often 10 cores. One `Standard_D8s_v5` node uses 8 cores — only 2 remain. Autoscaler needs 8 more for a second node; node pool rotation creates a temporary surge node of the same size.
 
 **Why `max_pods = 30` triggers this:** AKS default is 30 pods per node. Pass 2 alone deploys ~37 pods (17 LangSmith + 20 system). The autoscaler tries to add a second node, hits quota, and enters backoff. The fix is `default_node_pool_max_pods = 60` in `terraform.tfvars` — all pods fit on one node and no scale-out is needed.
 
 **Recommended quota for multi-dataplane (3 dataplanes):**
-- Pass 2 + 3 dataplanes: ~46 pods — fits on 1× D8s_v3 with `max_pods = 60`
+- Pass 2 + 3 dataplanes: ~46 pods — fits on 1× D8s_v5 with `max_pods = 60`
 - Set quota to **32 cores** to allow autoscaler headroom for rolling upgrades and burst
 
 **Fix — request quota increase:**
 ```bash
 # Option 1 — Azure portal (usually auto-approves within minutes)
-# Portal → Subscriptions → <sub-id> → Usage + Quotas → search "DSv3" → eastus → Request increase → 32
+# Portal → Subscriptions → <sub-id> → Usage + Quotas → search "DSv5" → eastus → Request increase → 32
 
 # Option 2 — CLI
 az quota update \
-  --resource-name "standardDSv3Family" \
+  --resource-name "standardDSv5Family" \
   --scope /subscriptions/<sub-id>/providers/Microsoft.Compute/locations/eastus \
   --limit-object value=32 limit-type=Independent \
   --resource-type dedicated
 
 # Verify current usage
-az vm list-usage --location eastus --query "[?contains(name.value,'DSv3')]" -o table
+az vm list-usage --location eastus --query "[?contains(name.value,'DSv5')]" -o table
 ```
 
 **Fix — ensure max_pods is set correctly in terraform.tfvars:**
@@ -143,17 +162,17 @@ default_node_pool_max_pods = 60   # must be set before first apply — immutable
 
 > **Note:** `max_pods` is immutable on an existing node pool. Changing it after initial apply requires a node pool rotation (temporary node = more quota). Always set it before the first `terraform apply`.
 
-**Alternative — switch VM family if DSv3 quota is fully exhausted:**
+**Alternative — switch VM family if DSv5 quota is fully exhausted:**
 
-If `az vm list-usage` shows `standardDSv3Family` at 100% (`Current == Limit`) and a quota increase is not possible, switch to an equivalent family in `terraform.tfvars`:
+If `az vm list-usage` shows `standardDSv5Family` at 100% (`Current == Limit`) and a quota increase is not possible, switch to an equivalent family in `terraform.tfvars`:
 
 ```hcl
-# DSv2 family — equivalent vCPU count, slightly less RAM, different quota pool
-default_node_pool_vm_size = "Standard_DS4_v2"   # 8 vCPU, 28 GiB (vs D8s_v3: 8 vCPU, 32 GiB)
+# DSv3 family — same vCPU and RAM, different quota pool
+default_node_pool_vm_size = "Standard_D8s_v3"   # 8 vCPU, 32 GiB
 
 additional_node_pools = {
   large = {
-    vm_size   = "Standard_DS5_v2"   # 16 vCPU, 56 GiB (vs D16s_v3: 16 vCPU, 64 GiB)
+    vm_size   = "Standard_D16s_v3"   # 16 vCPU, 64 GiB
     min_count = 0
     max_count = 2
   }
@@ -167,12 +186,12 @@ az vm list-usage --location eastus \
   -o table
 ```
 
-| Recommended | Alternative | vCPU | RAM difference |
+| Recommended | Alternative | vCPU | RAM |
 |---|---|---|---|
-| `Standard_D8s_v3` | `Standard_DS4_v2` | 8 | −4 GiB (28 vs 32) |
-| `Standard_D16s_v3` | `Standard_DS5_v2` | 16 | −8 GiB (56 vs 64) |
+| `Standard_D8s_v5` | `Standard_D8s_v3` | 8 | 32 GiB |
+| `Standard_D16s_v5` | `Standard_D16s_v3` | 16 | 64 GiB |
 
-Validated: full pass 2–5 deploy (production sizing, all addons) ran successfully on DS4_v2 / DS5_v2 on 2026-03-30.
+Dsv3 was this module's default before v5. It is previous-generation and scheduled to retire in 2029, so treat it as a stopgap and move back to v5 once the quota arrives. Do not fall back to DSv2 (`Standard_DS4_v2`, `Standard_DS5_v2`): Azure retired it on 2026-05-01.
 
 ---
 
@@ -223,9 +242,40 @@ az rest --method get \
 
 1. **Convert the subscription to Pay-As-You-Go.** For a trial or credit-based subscription this removes the restriction outright, with no ticket and no configuration change.
 2. **Request an exemption** at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), quota type "Azure Database for PostgreSQL Flexible Server". Requests for offer restrictions are frequently approved the same day, and the region and SKU stay as configured.
-3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation.
+3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation. Check the family has quota before re-applying, because subscriptions frequently carry a limit of 0 on the v5 families and the retry then fails on quota instead. `make preflight` reports both.
 4. **Use in-cluster Postgres** for a dev or demo deployment. Set `postgres_source = "in-cluster"` and the Helm chart runs its own Postgres pod, so nothing is provisioned through the PostgreSQL resource provider. Not suitable for production.
 5. **Change the region.** Set `location` in `terraform.tfvars`. Because Postgres uses a delegated subnet it must sit in the same region as the VNet, so the whole deployment moves. Any resources already created are destroyed and recreated.
+
+---
+
+### Database SKU family has no quota in the region
+
+**Symptom:** the apply builds the resource group, VNet, and AKS, then fails on the Flexible Server with a quota error naming a vCPU family and the region, such as `standardDDSv5Family` in `eastus`.
+
+**Cause:** `az postgres flexible-server list-skus` reports what a region *offers*, which is a different question from what your subscription may *create*. Postgres Flexible Server draws on the `Microsoft.Compute` per-family vCPU quota, and a family whose limit is 0 refuses every size in it. Fresh subscriptions commonly ship the v5 families at 0 while older families have room, so a SKU that reads as available in the docs still fails.
+
+`Microsoft.DBforPostgreSQL` registers no quota resource type of its own and `az quota` rejects a DBforPostgreSQL scope, so Compute is the surface to query:
+
+```bash
+az vm list-usage -l eastus --only-show-errors --query "[?limit=='0'].name.value" -o tsv
+```
+
+`limit` comes back as a JSON string, so the quoting on `'0'` is required: a numeric literal matches nothing and reads as a clean bill of health.
+
+`make preflight` maps the configured `postgres_sku_name` to its family and fails on this before the apply starts.
+
+**Fix:** request an increase at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), or set `postgres_sku_name` to a family that already has room. The quota-increase mechanics are the same as [vCPU quota exceeded](#vcpu-quota-exceeded--autoscaler-backoff-or-node-pool-rotation-fails) above.
+
+**Not the same as a capacity shortage.** Two failures read alike and have opposite fixes:
+
+| | Quota at 0 | `InsufficientCapacity` / `AllocationFailed` |
+|---|---|---|
+| What it means | Your subscription is not allowed this family here | Azure has no hardware for it here right now |
+| Visible before apply | Yes, `make preflight` catches it | No, only the create call reveals it |
+| Fix | Quota request, region and SKU unchanged | Move regions, or wait |
+| Changing SKU size | Helps, if another family has quota | Rarely helps, the shortage is regional |
+
+Azure Managed Redis has no quota surface and no capacity API at all, so only the second column applies to it. A region that offers `redisEnterprise` can still refuse the create, and the fallbacks are moving `location` or setting `redis_source = "in-cluster"` for a dev deployment. Bumping the AMR SKU does not clear a capacity refusal.
 
 ---
 
@@ -239,9 +289,30 @@ The client '<user>' with object id '<oid>' does not have authorization to
 perform action 'Microsoft.Authorization/roleAssignments/write' over scope '<scope>'
 ```
 
-**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates eight of them.
+**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates one for each of its own managed identities.
 
 **Fix:** Grant `Role Based Access Control Administrator` at subscription scope, or `Owner` in place of both roles. When one role assignment succeeds and another on the same scope fails, an ABAC condition is restricting which role definitions the identity may grant. For the full permission inventory, the `checkAccess` probe, and how to read the condition, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+---
+
+### AuthorizationFailed on a read, during plan rather than apply
+
+**Symptom:** `terraform plan` against an already-applied deployment fails while refreshing, before it proposes any change:
+
+```text
+Error: retrieving Public IP Address ...: unexpected status 403 (403 Forbidden)
+  ... does not have authorization to perform action
+  'Microsoft.Network/publicIPAddresses/read' over scope ...
+
+Error: reading resource group: ...
+  'Microsoft.Resources/subscriptions/resourceGroups/read'
+```
+
+Azure closes that message with "if access was recently granted, please refresh your credentials", which reads as an instruction to run `az login` again. That is rarely the fix.
+
+**Cause:** Refresh reads every resource in state, so plan needs read access on all of them before it needs write access on anything. When a read that worked an hour ago starts failing, the usual reason is a PIM activation that expired. The roles are still eligible, so the portal still lists them, and nothing in the error says the window closed. The other case is an identity that never had read access, which `make preflight` now probes for directly.
+
+**Fix:** Re-activate the role (portal: PIM → My roles → Activate) for longer than the apply will take. A first apply of AKS plus Postgres runs 20-25 minutes. `make preflight` prints the time remaining on any active PIM activation and warns when it is under 45 minutes, so run it again after re-activating. If nothing was activated in the first place, [PERMISSIONS.md](PERMISSIONS.md) lists the roles to ask for.
 
 ---
 
@@ -325,7 +396,9 @@ Error: a resource with the ID "https://langsmith-kv-<id>.vault.azure.net/secrets
 already exists - to be managed via Terraform this resource needs to be imported into the State.
 ```
 
-**Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The seven LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
+**Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The eight LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
+
+Seeding is the usual way in: `make seed-secrets` writes both of these too, so running it against a deployment that has not applied yet leaves Terraform to collide with what the script wrote. Setting `keyvault_manage_secrets = false` is the other resolution, and it makes the collision impossible rather than importing past it.
 
 **Fix:** Import the conflicting secret, then re-run apply:
 ```bash
@@ -373,7 +446,22 @@ terraform_principal_type = "ServicePrincipal" # CI pipeline / OIDC federation
 
 Leave it unset in any subscription without the condition, which is the common case. Azure infers the type server-side and the default reproduces that.
 
-**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant, because the request is rejected whatever type it declares. Either run the apply as a service principal, or have a subscription owner create that one assignment out of band and import it:
+**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant. The variable declares what the principal is rather than changing it, and ARM resolves the real type from the object ID either way, so the request is rejected whatever it declares. Omitting it fails the same way: an ABAC comparison against an absent attribute is false.
+
+That grant exists only to give the apply identity data-plane rights on the vault, so the cheapest way through is to stop asking for it:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+```
+
+Check first that the identity holds `Key Vault Secrets Officer` or `Key Vault Administrator` some other way, since a grant at subscription or resource-group scope inherits down to the vault:
+
+```bash
+az role assignment list --assignee <your-object-id> --all -o table
+```
+
+If it holds neither, run the apply as a service principal, which is what the condition exists to require, or have a subscription owner create that one assignment out of band and import it:
 
 ```bash
 # Run by a subscription owner, who is not subject to the delegation condition
@@ -385,6 +473,18 @@ RA_ID=$(az role assignment create --role "Key Vault Secrets Officer" \
 terraform -chdir=infra import \
   'module.keyvault.azurerm_role_assignment.terraform_kv_admin' "$RA_ID"
 ```
+
+Or take Terraform out of the vault's data plane, which removes the reason that grant exists:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+keyvault_manage_secrets                    = false
+```
+
+Apply then touches only the vault's control plane, and `make seed-secrets` writes all ten secrets afterwards under your own credentials. This is the one route that needs no Key Vault role on the deployer, inherited or otherwise. Both flags are required together: the first is what stops the request the condition rejects, and the second is what makes the role that request was asking for unnecessary. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+
+It does not reduce the deployment's need for `roleAssignments/write`. The other seven assignments still run, so a subscription that delegates none of them fails at `Storage Blob Data Contributor` in the storage module instead.
 
 **Note:** on versions predating the `principal_type` declarations, the first failure came earlier, on `module.blob.azurerm_role_assignment.blob_data_contributor`. Every role assignment in the module was affected.
 
@@ -400,7 +500,7 @@ Failure responding to request: StatusCode=403 -- Original Error: autorest/azure:
 Service returned an error. Status=403 Code="Forbidden"
 ```
 
-`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes the seven app secrets over the data plane too.
+`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes all ten secrets over the data plane too.
 
 **Cause:** one of three, and the 403 looks the same for all of them. Read the message body: a network denial names `ForbiddenByFirewall` or client address, an authorization denial names the caller and action.
 
@@ -430,6 +530,13 @@ az role assignment create --role "Key Vault Secrets Officer" \
 az keyvault secret list --vault-name <vault> --query "length(@)"
 ```
 
+**Fix for causes 2 and 3 — take Terraform out of the data plane entirely:**
+```hcl
+keyvault_manage_secrets = false
+```
+
+Terraform then writes no secrets, so neither a missing grant nor an unpropagated one can stop an apply. `make seed-secrets` writes all ten afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. This does nothing for cause 1: the script reaches the same data plane from the same host, so a firewall that denies the apply host denies the script too, and the allowlisting above is still the fix. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+
 **Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
 
 ---
@@ -440,11 +547,23 @@ az keyvault secret list --vault-name <vault> --query "length(@)"
 
 **Symptom:** After `make deploy`, `nslookup langsmith-demo.eastus.cloudapp.azure.com` returns NXDOMAIN. The cert-manager ACME challenge can't complete and the TLS certificate stays `READY: False`.
 
-**Cause:** The `service.beta.kubernetes.io/azure-dns-label-name` annotation must be present on the NGINX LoadBalancer service for Azure to assign the DNS label to the public IP. If the annotation is missing, the IP is provisioned but has no DNS name.
+**Cause:** The `service.beta.kubernetes.io/azure-dns-label-name` annotation must be present on the ingress controller's LoadBalancer service for Azure to assign the DNS label to the public IP. If the annotation is missing, the IP is provisioned but has no DNS name.
 
 `make deploy` sets this annotation automatically via `deploy.sh`. If you deployed without `make deploy` (e.g. ran `helm upgrade` directly), the annotation was never set.
 
-**Fix — set the annotation manually:**
+**Fix with `ingress_controller = "envoy-gateway"`:** the EnvoyProxy `langsmith-proxy` lists the annotation, and Envoy Gateway copies it onto the proxy service. Check both:
+```bash
+kubectl get envoyproxy langsmith-proxy -n envoy-gateway-system \
+  -o jsonpath='{.spec.provider.kubernetes.envoyService.annotations}'
+kubectl get svc -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway \
+  -o jsonpath='{.items[0].metadata.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}'
+# Expected: langsmith-demo (or your dns_label value)
+```
+
+If either is missing, set `dns_label` in `terraform.tfvars` and run `make deploy`, which re-applies the EnvoyProxy. Once DNS resolves, delete the stuck cert as in the nginx fix that follows.
+
+**Fix with `ingress_controller = "nginx"`:** set the annotation manually.
 ```bash
 kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
   service.beta.kubernetes.io/azure-dns-label-name=<dns_label> \
@@ -486,13 +605,12 @@ kubectl get challenge -n langsmith
 
 1. **Wrong gateway label.** Kubernetes Ingress with `ingressClassName: istio` targets pods with label `istio: ingressgateway`. The AKS managed external gateway uses label `istio: aks-istio-ingressgateway-external`. Istio never creates Envoy listeners → gateway pod has no routes → all traffic is dropped.
 
-2. **ClusterIssuer created with `class: nginx`.** The ACME HTTP-01 solver ingress gets class `nginx`, not `istio` → cert-manager solver is never routed through the istio gateway.
+2. **HTTP-01 cannot work here.** The addon registers no IngressClass, so the ACME solver's Ingress is never routed and the challenge stays `pending`. Terraform now rejects `tls_certificate_source = "letsencrypt"` with `istio-addon`; use `dns01` with `langsmith_domain`, `existing`, or `none` (see [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md)).
 
 3. **TLS secret in wrong namespace.** Istio SDS reads the `credentialName` secret from the **gateway pod namespace** (`aks-istio-ingress`), not the app namespace (`langsmith`). TLS handshake fails even after the cert is issued.
 
-**Fix — `make deploy` handles all three automatically** (current version):
+**Fix:** switch TLS as in item 2, then run `make deploy`, which handles items 1 and 3:
 - Creates a `Gateway` resource targeting `istio: aks-istio-ingressgateway-external` on ports 80 and 443
-- Applies `ClusterIssuer` with `ingressClassName: istio`
 - Waits for cert-manager to issue the cert, then syncs `langsmith-tls` to `aks-istio-ingress`
 - Creates a `VirtualService` routing traffic to the LangSmith frontend
 
@@ -527,13 +645,7 @@ spec:
     - "langsmith-dz.eastus.cloudapp.azure.com"
 EOF
 
-# 2. Fix the ClusterIssuer (patch solver class from nginx → istio)
-kubectl patch clusterissuer letsencrypt-prod --type=json \
-  -p='[{"op":"replace","path":"/spec/acme/solvers/0/http01/ingress/ingressClassName","value":"istio"}]'
-# Then delete the stuck challenge to force retry:
-kubectl delete challenge -n langsmith --all
-
-# 3. Once the cert is issued, sync the secret to the gateway namespace
+# 2. Once the cert is issued, sync the secret to the gateway namespace
 kubectl get secret langsmith-tls -n langsmith -o json | \
   python3 -c "
 import sys, json
@@ -545,7 +657,7 @@ s['metadata']['annotations'] = {}
 print(json.dumps(s))
 " | kubectl apply -f -
 
-# 4. Create the VirtualService
+# 3. Create the VirtualService
 kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -608,7 +720,7 @@ kubectl describe certificate langsmith-tls -n langsmith
 
 **Cause:** `deploy.sh` applies the `letsencrypt-prod` ClusterIssuer when `tls_certificate_source` is `letsencrypt` or `dns01`. Terraform never creates it. You hit this when `make deploy` has not run yet, when `tls_certificate_source` was unset in tfvars at the time it ran, or when the `dns01` branch skipped the issuer because `langsmith_domain` was empty (`make deploy` prints a warning in that case).
 
-**Fix — apply it manually:**
+**Fix — apply it manually.** With `ingress_controller = "envoy-gateway"`, replace the `ingress:` solver in this command with the `gatewayHTTPRoute` solver that follows it.
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: cert-manager.io/v1
@@ -636,7 +748,18 @@ kubectl get clusterissuer letsencrypt-prod
 kubectl delete certificate langsmith-tls -n langsmith
 ```
 
-**Note:** `kubernetes_manifest` cannot be used for this in Terraform — it requires a live k8s API connection during `terraform plan`, which fails on fresh deploy. The ClusterIssuer is therefore applied by `make deploy` (`deploy.sh`) via `kubectl apply`, with the correct `ingressClassName` for the active ingress controller. This is already the case in the current version of the scripts.
+Solver for `ingress_controller = "envoy-gateway"`:
+```yaml
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+          - name: langsmith-gateway
+            namespace: langsmith
+            kind: Gateway
+```
+
+**Note:** `kubernetes_manifest` cannot be used for this in Terraform — it requires a live k8s API connection during `terraform plan`, which fails on fresh deploy. The ClusterIssuer is therefore applied by `make deploy` (`deploy.sh`) via `kubectl apply`, with the correct solver for the active ingress controller. This is already the case in the current version of the scripts.
 
 ---
 
@@ -651,7 +774,7 @@ infra/scripts/_common.sh: No such file or directory
 
 **Cause:** These scripts are tracked in git but were untracked (`??`) files — meaning they existed locally but had never been committed. After a fresh clone or `git clean -f`, they are absent.
 
-**Fix:** These scripts are now committed to the repo. After pulling the latest branch, they will be present. If you are on an older branch without them, they can be recreated from the source in `BUILDING_LIGHT_LANGSMITH.md` or by cherry-picking the commit that adds them.
+**Fix:** These scripts are now committed to the repo. After pulling the latest branch, they will be present. If you are on an older branch without them, cherry-pick the commit that adds them.
 
 **Scripts that were added (now committed):**
 | Script | Purpose |
@@ -719,10 +842,10 @@ Error: UPGRADE FAILED: post-upgrade hooks failed: resource Job/langsmith/langsmi
 
 **Cause:** LangSmith DB migrations are one-way (Alembic forward-only). A newer chart version applies schema migrations that older chart versions don't know about. Downgrading the chart leaves the DB at a revision the older app image can't locate.
 
-**Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy. It must be on the chart 0.16 line — `deploy.sh` rejects anything else, because these values use the 0.16 schema:
+**Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy. It must be on the chart line `deploy.sh` requires, which rejects anything else because the generated values target one schema. That line is 0.17 — see [SMITHDB.md](SMITHDB.md#version-requirements). A deployment that runs a 0.17 chart cannot roll back to the 0.16 line; the `release/0.16` modules are for installs that never left it:
 ```hcl
 # terraform.tfvars
-langsmith_helm_chart_version = "0.16.0"   # pin to working version
+langsmith_helm_chart_version = "0.17.0"   # pin to working version
 ```
 ```bash
 make init-values && make deploy
@@ -776,7 +899,7 @@ config:
   deployment:
     enabled: true
     url: "https://langsmith-demo.eastus.cloudapp.azure.com"   # must include https://
-    tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt or dns01
+    tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt, dns01 or existing
 ```
 
 ---
@@ -1023,12 +1146,16 @@ az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningStat
 
 **Symptom:** `terraform destroy` hangs waiting to delete the VNet or subnet with no progress.
 
-**Cause:** The Azure Load Balancer provisioned by `ingress-nginx-controller` is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
+**Cause:** The Azure Load Balancer provisioned for the ingress controller's LoadBalancer service (the Envoy proxy service for `envoy-gateway`, `ingress-nginx-controller` for `nginx`) is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
 
 **Fix — correct teardown order:**
 ```bash
 # 1. Uninstall LangSmith — removes pods, services, and the Azure Load Balancer
+#    (for envoy-gateway, make uninstall deletes the Gateway, which removes the proxy service)
 make uninstall
+
+# 1b. With ingress_controller = "nginx": remove the ingress-nginx Load Balancer
+helm uninstall ingress-nginx -n ingress-nginx --wait
 
 # 2. Delete the namespace (clears any lingering finalizers)
 kubectl delete namespace langsmith --timeout=60s
@@ -1063,15 +1190,9 @@ The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. See
 
 **Symptom:** `langsmith-listener` pods repeatedly crash. `kubectl describe pod` shows `Reason: OOMKilled` / `Exit Code: 137`. Cluster memory looks fine overall.
 
-**Cause:** The `langsmith-values-sizing-dev.yaml` sets `listener.deployment.resources.limits.memory: 512Mi`. When Deployments (Pass 3) are enabled, the listener is heavier and exceeds this limit.
+**Cause:** `make deploy` loads the sizing file last, so its listener limit wins over the `langsmith-values-agent-deploys.yaml` overlay. The `dev` and `production` profiles cap the listener at 2Gi and `minimum` caps it at 1536Mi. When Deployments (Pass 3) are enabled, the listener is heavier and can exceed that limit.
 
-**Fix:** The `langsmith-values-agent-deploys.yaml` overlay (loaded after the sizing file) correctly sets `listener.deployment.resources.limits.memory: 4Gi`. Verify both files are in your values chain:
-
-```
-make deploy   # values chain: values.yaml → overrides → sizing-dev → agent-deploys
-```
-
-If you see only the sizing file without agent-deploys, re-run `make init-values` to regenerate the overlay files.
+**Fix:** Set `sizing_profile = "production-large"` in `terraform.tfvars`, which gives the listener 4Gi, then run `make init-values` and `make deploy`. To stay on your profile, raise `listener.deployment.resources.limits.memory` in `helm/values/langsmith-values-sizing-<profile>.yaml` and run `make deploy`. `make init-values` copies the sizing file again, so repeat the edit after each run.
 
 **Key gotcha — `resources` vs `deployment.resources`:** The LangSmith chart uses `listener.deployment.resources` (not `listener.resources`) for container resource limits. Setting `listener.resources` in an overlay file is silently ignored. Always use the `deployment.resources` path.
 

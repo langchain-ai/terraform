@@ -45,6 +45,29 @@ locals {
   public_subnets  = var.create_vpc ? module.vpc[0].public_subnets : var.public_subnets
   vpc_cidr_block  = var.create_vpc ? module.vpc[0].vpc_cidr_block : var.vpc_cidr_block
 
+  # VPC CNI custom networking. A created VPC carves the pod subnets out of
+  # eks_pod_cidr; a BYO VPC brings them in eks_pod_subnet_ids, and their AZs and
+  # CIDRs come from the subnet lookups in main.tf. Grouping (the trailing ...)
+  # keeps a duplicate AZ from failing here, so the precondition that rejects it
+  # can name the problem instead.
+  custom_networking = var.eks_network_mode == "custom-networking"
+  byo_pod_subnets_by_az = {
+    for az, ids in { for s in data.aws_subnet.pod : s.availability_zone => s.id... } : az => ids[0]
+  }
+  pod_subnet_ids_by_az = !local.custom_networking ? {} : (
+    var.create_vpc ? zipmap(module.vpc[0].azs, module.vpc[0].pod_subnets) : local.byo_pod_subnets_by_az
+  )
+  # Pods talk to VPC destinations from their own IPs, so every CIDR rule that
+  # admits the cluster lists these alongside the VPC CIDR.
+  pod_cidr_blocks = !local.custom_networking ? [] : (
+    var.create_vpc ? [var.eks_pod_cidr] : [for s in data.aws_subnet.pod : s.cidr_block]
+  )
+  # In-cluster callers of the LangSmith hostname reach an internal ALB from
+  # their pod IPs, so a restricted alb_allowed_cidr_blocks still admits them.
+  # sandbox_nat_egress_cidrs is empty unless separate-cluster sandboxes opt in
+  # (see below).
+  alb_ingress_cidr_blocks = distinct(concat(var.alb_allowed_cidr_blocks, local.pod_cidr_blocks, local.sandbox_nat_egress_cidrs))
+
   # Envoy Gateway is the default ingress mode, but a bare default of `true` would
   # silently add a second gateway controller to every existing Istio/NGINX tfvars
   # that never mentioned Envoy. Deriving it instead means "Envoy unless you already
@@ -52,11 +75,26 @@ locals {
   # change behaviour. An explicit true/false in terraform.tfvars still wins.
   enable_envoy_gateway = var.enable_envoy_gateway != null ? var.enable_envoy_gateway : !(var.enable_istio_gateway || var.enable_nginx_ingress)
 
-  sandbox_host_cache_dirs = var.sandbox_host_local_nvme_bootstrap_enabled && var.sandbox_host_local_nvme_expected_device_count > 1 ? [
+  # A bare-metal type (*.metal, *.metal-*) keeps local NVMe bootstrap and does
+  # not get nested virtualization, which AWS rejects on bare metal. Any other
+  # type gets nested virtualization and skips NVMe bootstrap. Null uses that
+  # derivation; an explicit value always wins. A virtual d type with instance
+  # store sets sandbox_host_local_nvme_bootstrap_enabled = true.
+  sandbox_host_is_metal = anytrue([
+    for t in var.sandbox_host_instance_types : endswith(t, ".metal") || strcontains(t, ".metal-")
+  ])
+  sandbox_host_nested_virtualization = coalesce(
+    var.sandbox_host_nested_virtualization, !local.sandbox_host_is_metal
+  )
+  sandbox_host_local_nvme_bootstrap_enabled = coalesce(
+    var.sandbox_host_local_nvme_bootstrap_enabled, local.sandbox_host_is_metal
+  )
+
+  sandbox_host_cache_dirs = local.sandbox_host_local_nvme_bootstrap_enabled && var.sandbox_host_local_nvme_expected_device_count > 1 ? [
     for idx in range(var.sandbox_host_local_nvme_expected_device_count - 1) : "/mnt/juicefs-cache${idx}"
   ] : []
 
-  sandbox_host_pre_nodeadm = var.sandbox_host_local_nvme_bootstrap_enabled ? [
+  sandbox_host_pre_nodeadm = local.sandbox_host_local_nvme_bootstrap_enabled ? [
     {
       content_type = "text/x-shellscript; charset=\"us-ascii\""
       content      = <<-EOT
@@ -99,6 +137,12 @@ locals {
     },
   ] : []
 
+  sandbox_host_cpu_options = local.sandbox_host_nested_virtualization ? {
+    cpu_options = {
+      nested_virtualization = "enabled"
+    }
+  } : {}
+
   sandbox_host_node_group = merge({
     name                     = "node-group-sandbox-host"
     instance_types           = var.sandbox_host_instance_types
@@ -138,12 +182,12 @@ locals {
         }
       }
     }
-  }, var.sandbox_host_node_group_overrides)
+  }, local.sandbox_host_cpu_options, var.sandbox_host_node_group_overrides)
 
-  eks_managed_node_groups = merge(
-    var.eks_managed_node_groups,
-    local.same_cluster_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {},
-  )
+  # Passed outside the typed eks_managed_node_groups input, which would drop
+  # metadata_options and any override attribute the object type doesn't declare.
+  # In separate_cluster mode the same group goes to module.sandbox_eks instead.
+  extra_eks_managed_node_groups = local.same_cluster_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {}
 
   sandbox_juicefs_bucket_url = "https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com"
 
@@ -173,8 +217,6 @@ locals {
     && var.sandbox_alb_allow_nat_egress
     && var.create_vpc
   ) ? [for ip in module.vpc[0].nat_public_ips : "${ip}/32"] : []
-
-  alb_ingress_cidr_blocks = distinct(concat(var.alb_allowed_cidr_blocks, local.sandbox_nat_egress_cidrs))
 
   # Egress filtering is FQDN-based and applies to the shared private route tables,
   # so the sandbox cluster's callback is dropped unless the LangSmith hostname is

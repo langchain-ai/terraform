@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Machine grading for HCL and shell edits. Enforced in CI by
 # .github/workflows/checks.yaml, and run locally before handing back:
-#   bash agents/check.sh                    # every root, plus every script
-#   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
-#   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
+#   bash scripts/check.sh                   # every root, plus every script
+#   bash scripts/check.sh modules/aws       # the roots under one dir, terraform only
+#   bash scripts/check.sh --scripts         # every tracked *.sh, no terraform
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
 # state) and tflint with the provider's pinned ruleset. Scripts are linted
@@ -11,6 +11,9 @@
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
+#
+# Exit 0 clean or nothing to run, 1 a failing check, 2 a check could not run,
+# as in plan-tests.sh. Across roots the highest code wins.
 set -u
 
 unset CDPATH
@@ -22,9 +25,15 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 SHELLCHECK_SEVERITY=${SHELLCHECK_SEVERITY:-warning}
 TFLINT_SEVERITY=${TFLINT_SEVERITY:-error}
 
+# Every root inits its own providers, and the aws provider alone is ~650MB, so
+# without a shared cache a full run puts several GB into each checkout.
+: "${TF_PLUGIN_CACHE_DIR:=$HOME/.terraform.d/plugin-cache}"
+export TF_PLUGIN_CACHE_DIR
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
 # Every tracked *.sh at one bar, whole repo, once. Not scoped per provider:
 # the sweep takes about a second, and scoping it left the scripts outside a
-# provider tree (agents/, .github/scripts/, modules/ocp/) with no cover at all.
+# provider tree (scripts/, .github/scripts/, modules/ocp/) with no cover at all.
 # git ls-files rather than find, so ignored trees (.terraform/, a worktree under
 # .claude/) drop out without an exclude list.
 lint_scripts() {
@@ -46,10 +55,11 @@ lint_scripts() {
 # CI leg can scope itself to modules/<provider> without carrying a second copy
 # of the rule. A root is any directory with its own versions.tf, minus the
 # internal child modules under modules/<provider>/<root>/modules/<child>/:
-# those are validated transitively via --call-module-type=all, and two of them
-# (azure keyvault, azure redis) do carry a versions.tf, so depth alone cannot
-# tell them apart from a root. Depth varies anyway, modules/aws/infra is two
-# levels down and modules/byoc/aws/langsmith-byoc-role is three.
+# those are validated transitively via --call-module-type=all, and four of them
+# (azure keyvault, redis, k8s-cluster, smithdb) do carry a versions.tf, so depth
+# alone cannot tell them apart from a root. Depth varies anyway,
+# modules/aws/infra is two levels down and modules/byoc/aws/langsmith-byoc-role
+# is three.
 discover_roots() {
   local versions
   while IFS= read -r versions; do
@@ -91,16 +101,28 @@ for arg in "$@"; do
 $(discover_roots "$arg")
 EOF
   if [ "${#roots[@]}" -eq "$before" ]; then
-    echo "check: no terraform root under $arg, so this run would have checked" >&2
-    echo "nothing. The directory was renamed, or its versions.tf is gone." >&2
+    echo "check: no terraform root under $arg. A root has its own versions.tf; child" >&2
+    echo "modules (modules/*/infra/modules/*) are checked via their parent root." >&2
     exit 2
   fi
 done
+
+# Skipped rather than failed, like tflint and shellcheck below and like
+# plan-tests.sh. CI installs terraform, so this never passes a CI leg.
+if ! command -v terraform >/dev/null 2>&1; then
+  echo "   (terraform not installed, skipping validate and tflint)"
+  if [ "$lint_all" -eq 1 ]; then
+    lint_scripts; exit $?
+  fi
+  exit 0
+fi
 
 # Provider dirs already handled, so tflint --init runs once per provider rather
 # than per root. Space-delimited for bash 3.2 (no associative arrays).
 tflint_inited=" "
 status=0
+# Raise status, never lower it, so a later failing check cannot mask a 2.
+fail() { [ "$1" -le "$status" ] || status=$1; }
 
 for rel in "${roots[@]}"; do
   dir="$REPO_ROOT/$rel"
@@ -111,12 +133,15 @@ for rel in "${roots[@]}"; do
 
   echo "== check $rel"
 
-  if [ ! -d "$dir/.terraform" ]; then
-    (cd "$dir" && terraform init -backend=false -input=false -no-color) || {
-      status=1; continue; }
-  fi
+  # Init every run, not only when .terraform is missing: one left from before a
+  # child module was added fails validate with "Module not installed". With the
+  # plugin cache warm, a re-init only relinks providers. -backend=false keeps
+  # whatever backend the root was already initialized with. Stdout is dropped
+  # as in plan-tests.sh, since it now repeats every run; errors go to stderr.
+  (cd "$dir" && terraform init -backend=false -input=false -no-color >/dev/null) || {
+    fail 2; continue; }
 
-  (cd "$dir" && terraform validate -no-color) || status=1
+  (cd "$dir" && terraform validate -no-color) || fail 1
 
   if command -v tflint >/dev/null 2>&1; then
     # The provider plugin pin lives in modules/<provider>/.tflint.hcl. tflint
@@ -135,21 +160,21 @@ for rel in "${roots[@]}"; do
         *" $provider "*) ;;
         *)
           tflint --init --config="$tflint_cfg" >/dev/null || {
-            echo "   tflint --init failed for $provider" >&2; status=1; }
+            echo "   tflint --init failed for $provider" >&2; fail 2; }
           tflint_inited="$tflint_inited$provider "
           ;;
       esac
     else
       echo "   (no $provider/.tflint.hcl, bundled terraform rules only)"
     fi
-    tflint "${tflint_args[@]}" || status=1
+    tflint "${tflint_args[@]}" || fail 1
   else
     echo "   (tflint not installed, skipping lint)"
   fi
 done
 
 if [ "$lint_all" -eq 1 ]; then
-  lint_scripts || status=1
+  lint_scripts || fail $?
 fi
 
 exit "$status"

@@ -11,8 +11,10 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
-#   _quickstart_gateway_default — Resolve fresh/update gateway menu default
-#   _resolve_infra_dir        — Set INFRA_DIR relative to this script
+#   _use_cluster_kubeconfig <cluster> <region> — Export KUBECONFIG for one cluster
+#   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
+#   _ssm_exists / _ssm_put    — Check or write an SSM parameter in $_region
+#   _confirm <prompt>         — Yes/no prompt that defaults to no
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -51,6 +53,49 @@ _tfvar_is_true() {
   [[ "$val" == "true" ]]
 }
 
+# Edits only KEY's line (or appends it), so every other setting stays exactly as written.
+_set_tfvar() {
+  local _key="$1" _value="$2" _file="${INFRA_DIR}/terraform.tfvars" _tmp
+  _tmp="$(mktemp)"
+  if grep -qE "^[[:space:]]*${_key}[[:space:]]*=" "$_file"; then
+    sed -E "s/^([[:space:]]*${_key}[[:space:]]*=).*/\1 ${_value}/" "$_file" > "$_tmp"
+  else
+    cat "$_file" > "$_tmp"
+    printf '\n%s = %s\n' "$_key" "$_value" >> "$_tmp"
+  fi
+  cat "$_tmp" > "$_file"
+  rm -f "$_tmp"
+}
+
+# _region is set by the calling script from terraform.tfvars.
+# shellcheck disable=SC2154
+_ssm_exists() {
+  local _err
+  _err=$(aws ssm get-parameter --region "$_region" --name "$1" --query Parameter.Name --output text 2>&1) && return 0
+  [[ "$_err" == *"(ParameterNotFound)"* ]] && return 1
+  # Callers use this in conditions, so returning an error would look like a missing parameter.
+  echo "ERROR: SSM check for $1 failed: $_err" >&2
+  exit 1
+}
+
+# Passes the value through a private temp file so it never appears in the process list or shell history.
+_ssm_put() {
+  local _path="$1" _value="$2" _tmp _rc=0
+  _tmp="$(mktemp)"
+  chmod 600 "$_tmp"
+  printf '%s' "$_value" > "$_tmp"
+  aws ssm put-parameter --region "$_region" --name "$_path" --type SecureString \
+    --value "file://$_tmp" --overwrite --output text >/dev/null || _rc=$?
+  rm -f "$_tmp"
+  return $_rc
+}
+
+_confirm() {
+  local _answer
+  read -r -p "  $1 [y/N] " _answer
+  [[ "$_answer" =~ ^[Yy] ]]
+}
+
 # Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway /
 # enable_nginx_ingress) for post-apply scripts.
 #
@@ -68,26 +113,12 @@ _read_gateway_flag() {
   echo "$val"
 }
 
-# Return the gateway menu choice for quickstart.
-# Fresh configurations recommend Envoy (1). Updates preserve the existing
-# controller; ALB is represented by all three controller flags being false (2).
-_quickstart_gateway_default() {
-  local update_mode="$1"
-  local envoy_enabled="$2"
-  local istio_enabled="$3"
-  local nginx_enabled="$4"
-
-  if [[ "$update_mode" != "true" ]]; then
-    echo "1"
-  elif [[ "$envoy_enabled" == "true" ]]; then
-    echo "1"
-  elif [[ "$nginx_enabled" == "true" ]]; then
-    echo "3"
-  elif [[ "$istio_enabled" == "true" ]]; then
-    echo "4"
-  else
-    echo "2"
-  fi
+# Point kubectl and helm at one cluster without touching ~/.kube/config: write
+# the same per-cluster file set-kubeconfig.sh writes, and export it.
+_use_cluster_kubeconfig() {
+  local cluster="$1" region="$2"
+  export KUBECONFIG="$HOME/.kube/langsmith-${cluster}"
+  aws eks update-kubeconfig --name "$cluster" --region "$region" --alias "$cluster" --kubeconfig "$KUBECONFIG"
 }
 
 # ── AWS credential helpers ───────────────────────────────────────────────────

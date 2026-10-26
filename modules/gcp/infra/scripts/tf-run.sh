@@ -25,6 +25,11 @@ fi
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Source setup-env.sh silently — output suppressed, errors still surface
+# Source setup-env.sh silently. Its output goes to /dev/null, so the trap reports
+# a failure. Under set -e, a failed command can exit inside setup-env.sh while
+# stderr still goes to /dev/null, so the trap writes to a copy of stderr (fd 3).
+exec 3>&2
+trap 'echo "ERROR: infra/scripts/setup-env.sh failed. To see why, run: source infra/scripts/setup-env.sh" >&3' EXIT
 source "$SCRIPT_DIR/setup-env.sh" > /dev/null 2>&1
-exec terraform -chdir="$(dirname "$SCRIPT_DIR")" "$@"
+trap - EXIT
+exec terraform -chdir="$(dirname "$SCRIPT_DIR")" "$@" 3>&-
