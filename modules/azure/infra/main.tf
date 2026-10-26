@@ -1121,12 +1121,14 @@ resource "terraform_data" "validate_network" {
 
     # Each node takes a /24 from the pod range, so a small range caps the node
     # count the same way a small subnet does in node-subnet mode: the cluster
-    # starts, and the autoscaler stalls once the range is spent.
+    # starts, and the autoscaler stalls once the range is spent. Terraform 1.17
+    # renders error_message even when the condition holds, so the log() gets a
+    # floor of 1: an attached cluster with no managed pools totals 0 nodes.
     precondition {
       condition = !local.aks_overlay || local.aks_node_total <= local.aks_pod_cidr_node_capacity
       error_message = join(" ", [
         "aks_pod_cidr (${var.aks_pod_cidr}) holds ${local.aks_pod_cidr_node_capacity} /24 blocks, one per node, but the configured pools can reach ${local.aks_node_total} nodes (max_count + 1 surge node per pool).",
-        "Widen the range: a /${24 - ceil(log(local.aks_node_total, 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
+        "Widen the range: a /${24 - ceil(log(max(local.aks_node_total, 1), 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
       ])
     }
 
@@ -1326,6 +1328,9 @@ module "aks" {
   envoy_gateway_version                          = var.envoy_gateway_version
   envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
   envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_gateway_chart_repository                 = var.envoy_gateway_chart_repository
+  envoy_gateway_chart_repository_username        = var.envoy_gateway_chart_repository_username
+  envoy_gateway_chart_repository_password        = var.envoy_gateway_chart_repository_password
   envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
   envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
