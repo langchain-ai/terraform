@@ -1964,7 +1964,7 @@ variable "aks_disk_encryption_set_id" {
 
 variable "aks_disk_encryption_set_reader_grant" {
   type        = bool
-  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Requires aks_disk_encryption_set_id."
+  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Leave it false when that grant already exists: true would create the same assignment again, and the apply fails with RoleAssignmentExists. Requires aks_disk_encryption_set_id."
   default     = false
 
   validation {

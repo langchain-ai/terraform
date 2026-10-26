@@ -72,7 +72,9 @@
     "Action": ["rds:CreateDBSnapshot"],
     "Resource": [
       "arn:aws:rds:*:${account_id}:db:*-smith-*",
-      "arn:aws:rds:*:${account_id}:snapshot:*-smith-*"
+      "arn:aws:rds:*:${account_id}:db:*-smithdb-*",
+      "arn:aws:rds:*:${account_id}:snapshot:*-smith-*",
+      "arn:aws:rds:*:${account_id}:snapshot:*-smithdb-*"
     ],
     "Condition": {
       "StringEquals": {
@@ -84,7 +86,10 @@
     "Sid": "RDSSnapshotAddTags",
     "Effect": "Allow",
     "Action": ["rds:AddTagsToResource"],
-    "Resource": "arn:aws:rds:*:${account_id}:snapshot:*-smith-*",
+    "Resource": [
+      "arn:aws:rds:*:${account_id}:snapshot:*-smith-*",
+      "arn:aws:rds:*:${account_id}:snapshot:*-smithdb-*"
+    ],
     "Condition": {
       "StringEquals": {
         "aws:RequestTag/managed_by": "langsmith"
