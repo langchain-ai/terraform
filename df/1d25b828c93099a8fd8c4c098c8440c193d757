@@ -1,0 +1,193 @@
+modules/azure/infra/tests/validation.tftest.hcl
+  s_2926a993332809::t_d285b23bf7390d 406
+  s_2926a993332809::t_6547aa1db0a47b 407-409
+  s_2926a993332809::t_e4e380feb6f4fa 43-46,187-192,198,202-239,410-598,813,815-816,828-841,921-939
+.trivyignore.yaml
+  s_2926a993332809::t_c9c3da832d67ea 225-269
+modules/aws/Makefile
+  s_2926a993332809::t_88551808e90315 106-107
+modules/aws/PERMISSIONS.md
+  s_2926a993332809::t_0f166e5c7782e9 1-196
+modules/aws/README.md
+  s_2926a993332809::t_540473b821b9b3 60,101,518
+modules/aws/SERVICES.md
+  s_2926a993332809::t_00f75e0efccdbf 160
+modules/aws/TEST_CYCLE.md
+  s_2926a993332809::t_7bfccc6b9dc357 19
+modules/aws/TROUBLESHOOTING.md
+  s_2926a993332809::t_33e84bddadacad 65,68-71
+modules/aws/infra/scripts/status.sh
+  s_2926a993332809::t_5af995c2ba33e1 345-354
+modules/azure/ARCHITECTURE.md
+  s_2926a993332809::t_2aa2d0b55c3b57 20,78-79,84,104,119,255-256
+modules/azure/INGRESS_CONTROLLERS.md
+  s_2926a993332809::t_a69b0c25a0ff5e 6-7,10-17,26,54,58-59,69-114,122,348,389-391,424,437-438
+modules/azure/Makefile
+  s_2926a993332809::t_260510ec142072 78,83,116
+modules/azure/PERMISSIONS.md
+  s_2926a993332809::t_3c7c22bf308e65 15,168
+modules/azure/QUICK_REFERENCE.md
+  s_2926a993332809::t_bc44b69fe3decd 232,244,298-301,368,370,378
+modules/azure/README.md
+  s_2926a993332809::t_9192c67878320c 52,56-59,62-63,161-188,415-416,420-426,432,440,495,594,627,629,694,708-709,734,749,752,831,860,935,961,1074-1099,1133-1135,1139,1272,1280,1304-1321,1332
+modules/azure/SERVICES.md
+  s_2926a993332809::t_c9408f328ea55f 12,164-168,170,172
+modules/azure/TEARDOWN.md
+  s_2926a993332809::t_78c6aaa2f1043f 39-43,68,137
+modules/azure/TEST_CYCLE.md
+  s_2926a993332809::t_4b71da0ce7219d 45,112,183,199-204,388,390,396,423
+modules/azure/TROUBLESHOOTING.md
+  s_2926a993332809::t_4c13512f274268 131,134,139,145,149,155,165,167,170-171,175,189,191-192,194,550,554-566,730,758-769,1156,1161,1164-1166
+modules/azure/helm/scripts/deploy.sh
+  s_2926a993332809::t_e87e3162a11616 76-110,112,116,128-129,133,168-176,185-187,243,245,596,600-602,608-611,613-628,635-639,643-650,652,669,674,697,779-781,784,786-789,793-794,796-824,898,937-938
+modules/azure/helm/scripts/get-kubeconfig.sh
+  s_2926a993332809::t_3913eecbd156ce 27,30
+modules/azure/helm/scripts/init-values.sh
+  s_2926a993332809::t_6391668c6f7e0b 58,97,101,105,120-122,125,136-142,189,399,515-519
+modules/azure/helm/scripts/uninstall.sh
+  s_2926a993332809::t_7d81b5ea9bbdf1 17-19,39-40,75-85,103-104
+modules/azure/helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml
+  s_2926a993332809::t_db8a79f0ae4f6d 3-4,8-9,11-13,17,21-27,30-33,39,41-43,48-49,51-52
+modules/azure/helm/values/examples/langsmith-values-sizing-dev.yaml
+  s_2926a993332809::t_df0831e2f10f3d 7
+modules/azure/helm/values/examples/langsmith-values-sizing-minimum.yaml
+  s_2926a993332809::t_9db7bb4d3e06e0 7,21
+modules/azure/helm/values/values.yaml
+  s_2926a993332809::t_b8da71c15a4e14 5-6,19-21
+modules/azure/infra/main.tf
+  s_2926a993332809::t_b89f40a29cfb9a 50,268,273-280,290-292,296-312,317,319,342-348,357-363,377,403-425,429,436-437,439-457,459-460,465-471,482,486,501-502,508-510,542-551,737-743,807-809,812,824-832,844-847,849-858,879,885,890,897,908,943,1175,1215,1259-1262,1280,1287,1304,1405,1494-1497,1534-1538,1568,1582,1613,1632
+modules/azure/infra/modules/dns/main.tf
+  s_2926a993332809::t_280546faed351e 5
+modules/azure/infra/modules/dns/variables.tf
+  s_2926a993332809::t_b24d5f1bb9f33a 13
+modules/azure/infra/modules/k8s-bootstrap/main.tf
+  s_2926a993332809::t_dbc7a413cad20b 349-355,357-360,391-402,435-436
+modules/azure/infra/modules/k8s-bootstrap/outputs.tf
+  s_2926a993332809::t_4e08352550449f 7-13,17-18
+modules/azure/infra/modules/k8s-bootstrap/variables.tf
+  s_2926a993332809::t_1ae02462d84546 185-193,202-209,237-243
+modules/azure/infra/modules/k8s-cluster/main.tf
+  s_2926a993332809::t_df5c22c7450fa2 18-21,23-25,220,295,300,461,846-851
+modules/azure/infra/modules/k8s-cluster/variables.tf
+  s_2926a993332809::t_22d8dda24219d0 54,59,106,115-116,248
+modules/azure/infra/modules/networking/main.tf
+  s_2926a993332809::t_1a205a217d72a4 10,15,117-121,166-326
+modules/azure/infra/modules/networking/outputs.tf
+  s_2926a993332809::t_b7b12735c2fa8f 41-47
+modules/azure/infra/modules/networking/variables.tf
+  s_2926a993332809::t_173704eac675e1 99-110
+modules/azure/infra/outputs.tf
+  s_2926a993332809::t_394fc9287b1a12 43,188
+modules/azure/infra/scripts/_common.sh
+  s_2926a993332809::t_a4ffb1e74ceff0 15,73-84
+modules/azure/infra/scripts/create-k8s-secrets.sh
+  s_2926a993332809::t_a691ba12e734ee 38,44
+modules/azure/infra/scripts/guard-ingress-default.sh
+  s_2926a993332809::t_261b1c2e57156c 1-70
+modules/azure/infra/scripts/manage-keyvault.sh
+  s_2926a993332809::t_04621856825ef4 25
+modules/azure/infra/scripts/preflight.sh
+  s_2926a993332809::t_aa8f3a7e113f06 195-204,306-309,314-316,323-325,330-338,340,358,375-377,391-392,730-738,740,748,752,926,991,1629-1630
+modules/azure/infra/scripts/quickstart.sh
+  s_2926a993332809::t_09cd7d6b79255c 199,253,365,368-370,381,398,578,623-624,629-630,753,942,952-954,962,966,1031,1038-1044,1047,1052-1053,1060-1064,1109,1475,1477,1479,1520,1615-1619,1627-1629,1734-1740,1766-1770,1984-1985
+modules/azure/infra/scripts/seed-keyvault-secrets.sh
+  s_2926a993332809::t_e2ba4814cf3543 58-59
+modules/azure/infra/scripts/status.sh
+  s_2926a993332809::t_a72787c6724bb7 232-242,246-253,341-350,416-417,425-430,484-489
+modules/azure/infra/scripts/test-preflight-rbac.py
+  s_2926a993332809::t_0350627a2d6602 627-662,762-763,969-970,974-975,977-978,1178-1179
+modules/azure/infra/scripts/test-support/az
+  s_2926a993332809::t_663ab3a4635ea9 59-62
+modules/azure/infra/scripts/tf-run.sh
+  s_2926a993332809::t_9473319179e92b 28-31
+modules/azure/infra/terraform.tfvars.dev
+  s_2926a993332809::t_505663bfca2229 52,54,56,65,74
+modules/azure/infra/terraform.tfvars.example
+  s_2926a993332809::t_1f18a6c7606f48 79,81,87,102-103,105,122,156-157,165,185,196,301-314,362
+modules/azure/infra/terraform.tfvars.minimum
+  s_2926a993332809::t_48a523ff9de3bd 6,46,48,61
+modules/azure/infra/terraform.tfvars.production
+  s_2926a993332809::t_ae5085b3b0138a 54,56,65,76,85,89
+modules/azure/infra/tests/byo_network.tftest.hcl
+  s_2926a993332809::t_c4ddbdbcafad6b 351-448
+modules/azure/infra/tests/network_mode_guard.tftest.hcl
+  s_2926a993332809::t_8dae4a05af2940 42,87,147,188,227,269,308,345,386,429,469
+modules/azure/infra/variables.tf
+  s_2926a993332809::t_a2e22e92e3051c 94-127,329-348,575-580,609,707,710,713,727-728,733,761,766,830,833,1058-1059,1121-1141,1235-1240,1269,1379,1387
+modules/azure/test/existing-aks-cluster/README.md
+  s_2926a993332809::t_e4b8d59aa176d5 1-83
+modules/azure/test/existing-aks-cluster/main.tf
+  s_2926a993332809::t_2928bf8dbb7775 1-157
+modules/azure/test/existing-aks-cluster/outputs.tf
+  s_2926a993332809::t_a6959ec376573c 1-75
+modules/azure/test/existing-aks-cluster/variables.tf
+  s_2926a993332809::t_e80f3b442a723b 1-102
+modules/azure/test/existing-aks-cluster/versions.tf
+  s_2926a993332809::t_158199f0b3e818 1-14
+modules/gcp/Makefile
+  s_2926a993332809::t_057a389c41fd74 85-86
+modules/gcp/PERMISSIONS.md
+  s_2926a993332809::t_9063576c42f1b5 1-170
+modules/gcp/README.md
+  s_2926a993332809::t_2a6f1400f5c911 61,70-71,77
+modules/gcp/TEST_CYCLE.md
+  s_2926a993332809::t_2bed3c65469674 19
+modules/gcp/TROUBLESHOOTING.md
+  s_2926a993332809::t_cdf45465fa876a 66,79
+modules/gcp/helm/values/examples/langsmith-values-fleet.yaml
+  s_2926a993332809::t_0f618a0b9380d3 26-28
+modules/gcp/helm/values/values.yaml
+  s_2926a993332809::t_3c19e5608a649b 111-112,114
+modules/gcp/infra/modules/networking/outputs.tf
+  s_2926a993332809::t_52f541fb40300d 45
+modules/gcp/infra/scripts/preflight.sh
+  s_2926a993332809::t_2b9f9aca92bd27 12-16,137-138,240,252,263-266,271,275-280,297,533-536
+modules/gcp/infra/scripts/status.sh
+  s_2926a993332809::t_abafaa23ccff00 358-367
+modules/ocp/QUICK_REFERENCE.md
+  s_2926a993332809::t_461ea11d791a52 27-56,68-69,72
+modules/ocp/README.md
+  s_2926a993332809::t_29a36a7fe9fbd1 39-129
+modules/ocp/helm/scripts/generate-secrets.sh
+  s_2926a993332809::t_a58115a5932b6e 7-35,39,41-43,45-49,51-82,84-89,91-102,104-194,196-283,285
+modules/ocp/helm/values/values-overrides.yaml.example
+  s_2926a993332809::t_4b1ef8edb8bc64 3-26,29,32-69,78
+modules/ocp/helm/values/values.yaml
+  s_2926a993332809::t_ec84e65ed97755 3-4,11-17,25-32
+modules/ocp/infra/main.tf
+  s_2926a993332809::t_dfd085449ef85c 60-63,67-68
+modules/ocp/infra/modules/secrets/main.tf
+  s_2926a993332809::t_64334e3489a609 2,4-22,24-33,36-38,40,45
+modules/ocp/infra/modules/secrets/outputs.tf
+  s_2926a993332809::t_1111b9b9d0e81b 1-8
+modules/ocp/infra/modules/secrets/variables.tf
+  s_2926a993332809::t_724de122bbee07 7-8,11,14-15
+modules/ocp/infra/terraform.tfvars.example
+  s_2926a993332809::t_8e0345feebc813 6-12
+modules/ocp/infra/variables.tf
+  s_2926a993332809::t_573e8aceb332aa 27-40
+modules/azure/infra/modules/k8s-cluster/outputs.tf
+  s_2926a993332809::t_35bb172e91efa9 134-143
+modules/azure/infra/tests/wiring.tftest.hcl
+  s_2926a993332809::t_d6922482703ded 438-645
+modules/gcp/helm/scripts/deploy.sh
+  s_2926a993332809::t_bbea042ec01ea2 420-426,575-580
+modules/gcp/helm/scripts/init-values.sh
+  s_2926a993332809::t_5c2d2650033a3a 432-439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "df1d25b828c93099a8fd8c4c098c8440c193d757",
+  "prompts": {},
+  "sessions": {
+    "s_2926a993332809": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74e8dd08-a25c-416c-af69-16376d4459c4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}

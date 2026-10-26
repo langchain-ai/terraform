@@ -1,0 +1,30 @@
+modules/gcp/infra/scripts/setup-env.sh
+  s_2926a993332809::t_392e74695f0638 50-55
+  s_2926a993332809::t_5d49d61d61af73 432
+  s_2926a993332809::t_6e6b1ae99ca32c 426-431,433-440
+modules/gcp/infra/variables.tf
+  s_2926a993332809::t_dc6515cd866aae 950-956
+modules/gcp/helm/scripts/init-values.sh
+  s_2926a993332809::t_892338e87669ac 1079,1081
+  s_2926a993332809::t_d438d8e02d6f62 400
+  s_2926a993332809::t_fb3de76117bb04 972-996
+  s_2926a993332809::t_9f83a1da2957de 419
+modules/gcp/infra/terraform.tfvars.example
+  s_2926a993332809::t_9161b3496c81f0 355-368
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dac23a0dc7ad56058a017c68e1eed6be9e3b8a7c",
+  "prompts": {},
+  "sessions": {
+    "s_2926a993332809": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74e8dd08-a25c-416c-af69-16376d4459c4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}

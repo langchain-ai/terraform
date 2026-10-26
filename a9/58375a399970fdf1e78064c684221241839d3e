@@ -1,0 +1,184 @@
+modules/baremetal/infra/modules/metallb/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-14
+modules/baremetal/SMITHDB.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-88
+README.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 21
+modules/baremetal/ARCHITECTURE.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-147
+modules/baremetal/infra/modules/cloudflared/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-14
+modules/baremetal/infra/modules/envoy-gateway/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-14
+modules/baremetal/infra/modules/local-path/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-30
+modules/baremetal/infra/modules/rustfs/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-18
+modules/baremetal/helm/values/langsmith-values-local.yaml.example
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-47
+agents/plan-tests.sh
+  s_b081d01eaf8fac::t_662f30fa35a1d9 84,111,116-127,131,136
+modules/baremetal/infra/modules/cloudflared/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-36
+modules/baremetal/infra/modules/postgres/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-18
+modules/baremetal/infra/modules/metrics-server/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-13
+.github/scripts/changed-providers.sh
+  s_b081d01eaf8fac::t_662f30fa35a1d9 16
+modules/baremetal/SIZING.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-103
+modules/baremetal/infra/modules/metrics-server/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-35
+modules/baremetal/infra/modules/postgres/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-41
+modules/baremetal/infra/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-27
+modules/baremetal/infra/main.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-289
+modules/baremetal/infra/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-93
+modules/baremetal/TROUBLESHOOTING.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-67
+modules/baremetal/infra/modules/cloudflared/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-9
+modules/README.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 48,52
+  s_b081d01eaf8fac::t_857b5051dbc8b2 53
+modules/baremetal/infra/helm_values.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-161
+modules/baremetal/infra/modules/metallb/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-36
+modules/baremetal/infra/modules/redis/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-18
+modules/baremetal/helm/scripts/deploy.sh
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-276
+modules/baremetal/LICENSE
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-27
+modules/baremetal/infra/modules/envoy-gateway/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-27
+modules/baremetal/infra/modules/rustfs/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-61
+modules/baremetal/infra/modules/local-path/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-14
+modules/baremetal/infra/terraform.tfvars.example
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-79
+modules/baremetal/infra/modules/local-path/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-20
+modules/baremetal/TEARDOWN.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-51
+modules/baremetal/infra/modules/rustfs/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-31
+modules/baremetal/infra/modules/redis/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-60
+modules/baremetal/infra/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-319
+modules/baremetal/infra/modules/envoy-gateway/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-91
+modules/baremetal/infra/modules/rustfs/main.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-377
+modules/baremetal/infra/modules/redis/main.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-254
+modules/baremetal/infra/locals.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-423
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/templates/backend-traffic-policy.yaml
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-18
+modules/baremetal/infra/modules/redis/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-26
+modules/baremetal/infra/modules/postgres/variables.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-77
+modules/baremetal/.gitignore
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-40
+modules/baremetal/infra/tests/budget.tftest.hcl
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-431
+modules/baremetal/infra/modules/metrics-server/outputs.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-13
+modules/baremetal/README.md
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-279
+modules/baremetal/infra/modules/metallb/versions.tf
+  s_b081d01eaf8fac::t_662f30fa35a1d9 1-17
+modules/baremetal/helm/values/examples/langsmith-values-agent-deploys.yaml
+  s_b081d01eaf8fac::t_420883adcfb252 1-116
+modules/baremetal/helm/values/examples/langsmith-values-fleet.yaml
+  s_b081d01eaf8fac::t_15c9b2709fc28e 1-124
+modules/baremetal/helm/values/examples/langsmith-values-sizing-dev.yaml
+  s_b081d01eaf8fac::t_b639fece40e8f1 1-221
+modules/baremetal/helm/values/examples/langsmith-values-sizing-minimum.yaml
+  s_b081d01eaf8fac::t_a86347791151f6 1-257
+modules/baremetal/helm/values/examples/langsmith-values-sizing-production-large.yaml
+  s_b081d01eaf8fac::t_3eeadcc37c3526 1-225
+modules/baremetal/helm/values/examples/langsmith-values-sizing-production.yaml
+  s_b081d01eaf8fac::t_d7117018be1b82 1-220
+modules/baremetal/helm/values/examples/langsmith-values-standalone-insights.yaml
+  s_b081d01eaf8fac::t_5e602ca85497ce 1-83
+modules/baremetal/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_b081d01eaf8fac::t_1e494c763855b9 1-75
+modules/baremetal/helm/values/values.yaml
+  s_b081d01eaf8fac::t_7f8bd91fa3ed21 1-40
+modules/baremetal/infra/backend.tf
+  s_b081d01eaf8fac::t_4fec1ef5ef1383 1-10
+modules/baremetal/infra/budget.tf
+  s_b081d01eaf8fac::t_af64263ffdfd6a 1-52
+modules/baremetal/infra/modules/cloudflared/main.tf
+  s_90885f123e046f::t_bbbb3afdb25c7c 1-158
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/Chart.yaml
+  s_b081d01eaf8fac::t_edd8a2d7e02d0b 1-5
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/templates/gateway.yaml
+  s_b081d01eaf8fac::t_ac8c1478afe62d 1-46
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/templates/lan-route.yaml
+  s_90885f123e046f::t_a1730b3c313c4a 1-22
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/values.yaml
+  s_b081d01eaf8fac::t_bea469e4c049cf 1-14
+modules/baremetal/infra/modules/envoy-gateway/main.tf
+  s_b081d01eaf8fac::t_885ac189d27c33 1-67
+modules/baremetal/infra/modules/local-path/main.tf
+  s_b081d01eaf8fac::t_3e74118f166b16 1-277
+modules/baremetal/infra/modules/metallb/charts/metallb-config/Chart.yaml
+  s_b081d01eaf8fac::t_6f48e3e58724c6 1-5
+modules/baremetal/infra/modules/metallb/charts/metallb-config/templates/pool.yaml
+  s_b081d01eaf8fac::t_109ffbd1a21f7e 1-21
+modules/baremetal/infra/modules/metallb/charts/metallb-config/values.yaml
+  s_b081d01eaf8fac::t_b34e1ef0222220 1-3
+modules/baremetal/infra/modules/metallb/main.tf
+  s_b081d01eaf8fac::t_b9733faa3a7e42 1-71
+modules/baremetal/infra/modules/metrics-server/main.tf
+  s_b081d01eaf8fac::t_971cf14436bec4 1-28
+modules/baremetal/infra/modules/postgres/main.tf
+  s_b081d01eaf8fac::t_9412e24fa9c908 1-322
+modules/baremetal/infra/providers.tf
+  s_b081d01eaf8fac::t_c62fb525824237 1-15
+modules/baremetal/infra/scripts/_common.sh
+  s_b081d01eaf8fac::t_4ed65a2823806c 1-224
+modules/baremetal/infra/scripts/setup-env.sh
+  s_b081d01eaf8fac::t_5db1dcfecf2075 1-135
+modules/baremetal/infra/smithdb_nodes.tf
+  s_b081d01eaf8fac::t_b5f1a69a4d6b11 1-51
+modules/baremetal/Makefile
+  s_b081d01eaf8fac::t_15fa30b5c0c84b 1-58
+modules/baremetal/helm/scripts/init-values.sh
+  s_b081d01eaf8fac::t_68d8ca9e19ee49 1-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a958375a399970fdf1e78064c684221241839d3e",
+  "prompts": {},
+  "sessions": {
+    "s_90885f123e046f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "00817991-b418-4d90-a458-a40d104472eb",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    },
+    "s_b081d01eaf8fac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "60a35b35-90eb-4a7e-b6de-e8caa7a6fc70",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}

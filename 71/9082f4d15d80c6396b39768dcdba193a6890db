@@ -1,0 +1,62 @@
+modules/gcp/infra/scripts/setup-env.sh
+  s_2926a993332809::t_4e559c31857733 50-55,426-439
+  s_2926a993332809::t_f1d3ec1c3a8362 440
+modules/gcp/infra/terraform.tfvars.example
+  s_2926a993332809::t_4e559c31857733 355-368
+modules/gcp/TEARDOWN.md
+  s_2926a993332809::t_08d78a6a217ceb 218,517-518
+  s_2926a993332809::t_bbe53ebf0919fc 215-217
+  s_2926a993332809::t_646ce0d8ba7bc8 515-516
+  s_2926a993332809::t_a603a50ea937ba 519-521
+  s_2926a993332809::t_245a3800830806 95,97,126-132,209-210,213-214,231,239,244-279,333-339,347-350,461-463,509-510,522-523,977,982,988
+modules/gcp/infra/tests/teardown.tftest.hcl
+  s_2926a993332809::t_df7c715a2c51e2 1-96
+modules/aws/helm/scripts/init-values.sh
+  s_2926a993332809::t_afab83fe2d9c22 255,264-305,828-846
+modules/aws/infra/main.tf
+  s_2926a993332809::t_602a0888e9889f 15-16,358-404,1215-1264
+modules/aws/infra/terraform.tfvars.example
+  s_2926a993332809::t_2eac18c343b661 749-779
+modules/aws/infra/variables.tf
+  s_2926a993332809::t_0a14b9b8a06c84 567-572,846-852
+modules/azure/helm/scripts/init-values.sh
+  s_2926a993332809::t_e6733e271f66c8 268,278,312-359,395-416,473
+modules/azure/infra/scripts/create-k8s-secrets.sh
+  s_2926a993332809::t_372bc71c378440 59-62,72-88,116
+modules/azure/infra/scripts/manage-keyvault.sh
+  s_2926a993332809::t_d4a18bccd0707d 46-48,67-69,80-82
+modules/azure/infra/terraform.tfvars.example
+  s_2926a993332809::t_4b07d30beadb13 231-251
+modules/azure/infra/variables.tf
+  s_2926a993332809::t_e09e033e5e6d38 970-976
+modules/gcp/QUICK_REFERENCE.md
+  s_2926a993332809::t_58ba224f31b206 130-131
+modules/gcp/helm/scripts/init-values.sh
+  s_2926a993332809::t_36ce5ca5fb0928 411,430,888-891,897-898,904-905,996-1020,1103,1105
+modules/gcp/helm/scripts/uninstall.sh
+  s_2926a993332809::t_593c65e30f38f8 36-38,141,143,210-234,237,245
+modules/gcp/helm/values/examples/langsmith-values-sizing-minimum.yaml
+  s_2926a993332809::t_5a739b17eeb2ae 20-30,42,44-48,60-64,76-80,90,92-102,114-118,130-134,146-150,162,164-168
+modules/gcp/infra/modules/ingress/main.tf
+  s_2926a993332809::t_f2519334ef85ee 222-289
+modules/gcp/infra/modules/networking/main.tf
+  s_2926a993332809::t_46b0909ad54fab 95-100,107
+modules/gcp/infra/variables.tf
+  s_2926a993332809::t_505820ef0eae30 950-956
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "719082f4d15d80c6396b39768dcdba193a6890db",
+  "prompts": {},
+  "sessions": {
+    "s_2926a993332809": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74e8dd08-a25c-416c-af69-16376d4459c4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}

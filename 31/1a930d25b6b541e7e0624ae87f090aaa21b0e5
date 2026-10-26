@@ -1,0 +1,25 @@
+modules/azure/SMITHDB.md
+  s_032f2a8bc23303::t_3522c543e28b7b 11-17
+  s_032f2a8bc23303::t_76b7be42ad9583 93-94
+  s_032f2a8bc23303::t_ca865f4bf796a9 105
+  s_032f2a8bc23303::t_a7b5ddace11961 3-5
+  s_032f2a8bc23303::t_4a6536d64d1775 18-20
+modules/azure/README.md
+  s_032f2a8bc23303::t_9788c44eb9a5cc 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "311a930d25b6b541e7e0624ae87f090aaa21b0e5",
+  "prompts": {},
+  "sessions": {
+    "s_032f2a8bc23303": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "db0f0167-f292-442c-8d04-f2e2f70ce476",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

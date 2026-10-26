@@ -1,0 +1,33 @@
+modules/gcp/TEARDOWN.md
+  s_3aa052601998c5::t_3f94741cec749d 620-623,626,628-629,631,634-641,644,646
+  s_3aa052601998c5::t_bddee9a5cd782d 327-329,333-352,354
+  s_3aa052601998c5::t_ab9705f698d507 814
+  s_3aa052601998c5::t_27ce4e7ea08ae7 813
+  s_3aa052601998c5::t_5602cf66488032 749-764,768-784
+  s_3aa052601998c5::t_208ec5053505e3 235-237,246,252
+  s_3aa052601998c5::t_453f1e457dd142 592-593,596-597,599-612
+  s_3aa052601998c5::t_eeb630a87ec20d 765-767
+  s_3aa052601998c5::t_fec024e1835b50 417-426
+  s_3aa052601998c5::t_0cd645044ef4f6 548,551-552,554-555,558-566,570,574-575
+  s_3aa052601998c5::t_aca3d7afa2dce4 308-310
+  s_3aa052601998c5::t_0197e184bbf69e 522-525
+  s_3aa052601998c5::t_bd002533837609 440-443
+  s_3aa052601998c5::t_4147d23ea5d6c0 284-286
+  s_3aa052601998c5::t_a004f5899caac3 373-374
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "44310401eeb030be33a34f7a21a480ba670f5ca8",
+  "prompts": {},
+  "sessions": {
+    "s_3aa052601998c5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "63fd4eef-f691-4e7b-8893-aaa2d9f842bf",
+        "model": "auto-smart"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

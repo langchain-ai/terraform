@@ -1,0 +1,20 @@
+modules/gcp/helm/scripts/deploy.sh
+  s_69600e958473f5::t_74a5f7298e66b2 59-66,73-78,81-82,84-94
+  s_69600e958473f5::t_f5547336085842 67-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3bb260287d14f07efead12591ef1aa9b397e9df7",
+  "prompts": {},
+  "sessions": {
+    "s_69600e958473f5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "ea18d317-fda8-4b01-998a-c3e86c001808",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

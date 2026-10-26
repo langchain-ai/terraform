@@ -1,0 +1,28 @@
+MIGRATION-0.16-to-0.17.md
+  s_a4f8bbc6c9f21e::t_cb15c3f8bbd873 279
+  s_a4f8bbc6c9f21e::t_ac72e4e5a114a6 306-307
+  s_a4f8bbc6c9f21e::t_91c9f695fc4918 13-16
+  s_a4f8bbc6c9f21e::t_cca9ff2ba1e320 256-278,280-300
+modules/azure/infra/terraform.tfvars.example
+  s_a4f8bbc6c9f21e::t_2d8adbb1ec0d5c 155-157
+modules/azure/SMITHDB.md
+  s_a4f8bbc6c9f21e::t_68e937b330bf25 539-540
+  s_a4f8bbc6c9f21e::t_b12b58f37ad1ca 215-217,221-229
+  s_a4f8bbc6c9f21e::t_0d66dcccfed897 218-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "04447ccace8b81bf1a9856bb35fb6808f403ed07",
+  "prompts": {},
+  "sessions": {
+    "s_a4f8bbc6c9f21e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a25674f6-5c07-4ba8-a1be-2f785b952c0a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

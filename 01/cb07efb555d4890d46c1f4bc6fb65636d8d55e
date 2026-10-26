@@ -1,0 +1,27 @@
+modules/aws/COMMANDS.md
+  s_b1487d7356bcac::t_e2423194f7c7af 99
+modules/aws/Makefile
+  s_b1487d7356bcac::t_570546cfdcfa7d 139
+  s_b1487d7356bcac::t_3d4ef29d296798 5
+modules/aws/helm/scripts/tls.sh
+  s_b1487d7356bcac::t_266e10572928a8 142
+  s_b1487d7356bcac::t_6bcf24056b4d5b 12-21
+  s_b1487d7356bcac::t_490e788c12c900 73-93
+  s_b1487d7356bcac::t_ca71839309ed0b 116-119,125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "01cb07efb555d4890d46c1f4bc6fb65636d8d55e",
+  "prompts": {},
+  "sessions": {
+    "s_b1487d7356bcac": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7fc49cf0-0096-4929-9080-e50739690ff9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

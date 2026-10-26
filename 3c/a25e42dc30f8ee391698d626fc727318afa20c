@@ -1,0 +1,25 @@
+modules/gcp/infra/scripts/setup-env.sh
+  s_69600e958473f5::t_d4a8ce0a6579e4 145-173,184-187,194,197,202-209,212,223-229
+  s_69600e958473f5::t_7f0942370b1085 287-293
+  s_69600e958473f5::t_da584cb1ebb56d 373-382,388-389,391,393-398,401-418
+  s_69600e958473f5::t_dc7adffb6ca157 384-387
+  s_69600e958473f5::t_03904303e23a78 245-250,252-271
+  s_69600e958473f5::t_d8748c90466dbb 383,390
+  s_69600e958473f5::t_21e6df1fc32f5a 230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3ca25e42dc30f8ee391698d626fc727318afa20c",
+  "prompts": {},
+  "sessions": {
+    "s_69600e958473f5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "ea18d317-fda8-4b01-998a-c3e86c001808",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

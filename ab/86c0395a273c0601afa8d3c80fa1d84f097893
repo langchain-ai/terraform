@@ -1,0 +1,27 @@
+modules/gcp/helm/scripts/deploy.sh
+  s_2926a993332809::t_49f66bbfffb2f5 443-446,464-469,590-604,614-630,637-642,645-646
+modules/gcp/infra/modules/ingress/main.tf
+  s_2926a993332809::t_bb066129c4b401 52-54,61
+modules/gcp/infra/scripts/setup-env.sh
+  s_2926a993332809::t_da49c2aadb6f1e 23-24,103-105,159-163,167-168,172-183,239,262-276,509-519
+modules/gcp/infra/scripts/tf-run.sh
+  s_2926a993332809::t_6b6418565da7f8 28-32,34-35
+modules/gcp/infra/tests/teardown.tftest.hcl
+  s_2926a993332809::t_cc93823e828930 74-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ab86c0395a273c0601afa8d3c80fa1d84f097893",
+  "prompts": {},
+  "sessions": {
+    "s_2926a993332809": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74e8dd08-a25c-416c-af69-16376d4459c4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}

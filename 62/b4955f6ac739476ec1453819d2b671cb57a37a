@@ -1,0 +1,40 @@
+modules/azure/README.md
+  s_1cb73393c88004::t_0674364f7d94c8 526
+  s_1cb73393c88004::t_6f7023f4babd26 676
+modules/azure/infra/terraform.tfvars.example
+  s_1cb73393c88004::t_26700f2d766cce 161
+modules/aws/helm/values/examples/SIZING.md
+  s_1cb73393c88004::t_441f982819c57f 12,14,16-18,20-22
+modules/azure/helm/scripts/deploy.sh
+  s_1cb73393c88004::t_135f7283505a50 16
+modules/azure/infra/variables.tf
+  s_1cb73393c88004::t_2fca124079e6f2 417
+  s_1cb73393c88004::t_7fcace4432061b 542
+modules/gcp/helm/scripts/patch-lgp-resources.sh
+  s_1cb73393c88004::t_8335bdd073c00e 9
+modules/azure/QUICK_REFERENCE.md
+  s_1cb73393c88004::t_3f2f9219266e95 195-199
+  s_1cb73393c88004::t_a1cba3352bac79 234
+modules/azure/helm/values/examples/SIZING.md
+  s_1cb73393c88004::t_5eb7e79a3022f6 12,14,16-18,20-22
+modules/gcp/ARCHITECTURE.md
+  s_1cb73393c88004::t_54a5b7c4686f30 22
+modules/azure/SERVICES.md
+  s_1cb73393c88004::t_735227fb8e2b5a 142,144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "62b4955f6ac739476ec1453819d2b671cb57a37a",
+  "prompts": {},
+  "sessions": {
+    "s_1cb73393c88004": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a77f586f-02a9-4649-be18-d8eb46402624",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+modules/aws/infra/scripts/clean.sh
+  s_3aa052601998c5::t_8d5a41bea69d33 149-150,153,181-182
+  s_3aa052601998c5::t_b3cc62309f99fe 183
+modules/aws/helm/scripts/uninstall.sh
+  s_3aa052601998c5::t_a9a890861e880c 47-48,50-60,62-64
+modules/aws/TEARDOWN.md
+  s_3aa052601998c5::t_718d90ac802783 416-417
+modules/aws/infra/scripts/purge-secrets.sh
+  s_3aa052601998c5::t_47f4bb96fe454a 96-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "d70a5667afdd75eaebc8496aebb2b105ba83966d",
+  "prompts": {},
+  "sessions": {
+    "s_3aa052601998c5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "63fd4eef-f691-4e7b-8893-aaa2d9f842bf",
+        "model": "auto-smart"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+modules/aws/infra/tests/preconditions.tftest.hcl
+  s_08b7859c81e12b::t_ce3b1e30068b4b 133-141,143,147-149,155,159-161,167,171-173,179-180
+modules/aws/infra/tests/validation.tftest.hcl
+  s_08b7859c81e12b::t_40218d26109376 41-43,56-58,62-72
+  s_08b7859c81e12b::t_ab936b76b84312 73-74
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_08b7859c81e12b::t_3578cc8da5250a 331-375
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "62c6afdf4896d3b39ea3685d9ec53f120c98cd93",
+  "prompts": {},
+  "sessions": {
+    "s_08b7859c81e12b": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "01305ffb-1940-4efd-854e-b27246db0572",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

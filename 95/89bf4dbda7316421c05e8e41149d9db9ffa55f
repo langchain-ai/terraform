@@ -1,0 +1,19 @@
+modules/azure/SMITHDB.md
+  s_032f2a8bc23303::t_c657f59430fae8 169-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9589bf4dbda7316421c05e8e41149d9db9ffa55f",
+  "prompts": {},
+  "sessions": {
+    "s_032f2a8bc23303": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "db0f0167-f292-442c-8d04-f2e2f70ce476",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

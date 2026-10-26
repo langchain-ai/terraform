@@ -1,0 +1,49 @@
+modules/gcp/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_1cb73393c88004::t_c0e16385a08e1f 23-27,34
+  s_1cb73393c88004::t_d2c9c9db1fc984 3-6
+modules/gcp/helm/values/examples/langsmith-values-insights.yaml
+  s_1cb73393c88004::t_2dcb37f592728d 11-21
+modules/aws/helm/values/examples/langsmith-values-insights.yaml
+  s_1cb73393c88004::t_5e9174db2e7f6a 11-22
+modules/gcp/helm/values/examples/langsmith-values-polly.yaml
+  s_1cb73393c88004::t_7f753a49288b09 4-14,16-30
+modules/aws/helm/values/examples/langsmith-values-polly.yaml
+  s_1cb73393c88004::t_262dee3c99f99d 4-14,16-30
+modules/azure/helm/scripts/init-values.sh
+  s_1cb73393c88004::t_154c92e5221e47 444-453
+  s_1cb73393c88004::t_867c524771ca00 215,222
+modules/aws/helm/scripts/init-values.sh
+  s_1cb73393c88004::t_8d654b87e3230c 260-267
+  s_1cb73393c88004::t_a0cb92ea0bf271 289-290,332-333
+modules/gcp/helm/scripts/init-values.sh
+  s_1cb73393c88004::t_436c093e47cc16 274-281
+  s_1cb73393c88004::t_4cbac4f1293f97 419,456,539-542,545,554-557,563,570-586
+  s_1cb73393c88004::t_8f82fd1e99448b 679
+  s_1cb73393c88004::t_4864cf93045afd 420
+  s_1cb73393c88004::t_c25fc9004ed762 457
+  s_1cb73393c88004::t_6b271f54ddb015 587
+modules/ocp/helm/values/values.yaml
+  s_1cb73393c88004::t_a6224919f76cc7 29-38
+modules/aws/helm/values/examples/langsmith-values-standalone-insights.yaml
+  s_1cb73393c88004::t_aef54dd03a39e4 3-6
+modules/aws/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_1cb73393c88004::t_6381446b09f7b7 3-6
+modules/gcp/helm/values/examples/langsmith-values-standalone-insights.yaml
+  s_1cb73393c88004::t_47fc7e6abb0f34 3-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e560a6f34a5bd94f7051d4e0a4542677339855d0",
+  "prompts": {},
+  "sessions": {
+    "s_1cb73393c88004": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a77f586f-02a9-4649-be18-d8eb46402624",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

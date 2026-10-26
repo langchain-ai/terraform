@@ -1,0 +1,28 @@
+modules/aws/infra/variables.tf
+  s_b1487d7356bcac::t_06e1624d57b2df 888
+modules/aws/infra/main.tf
+  s_b1487d7356bcac::t_f5e3e8ca5002d6 453-456
+modules/aws/infra/modules/cert-manager/main.tf
+  s_b1487d7356bcac::t_34ea3a348c8a99 6
+  s_b1487d7356bcac::t_483f9b3e781915 57-58
+modules/aws/helm/scripts/setup-tls.sh
+  s_b1487d7356bcac::t_7da49afc3d46c2 38-42
+modules/aws/infra/terraform.tfvars.example
+  s_b1487d7356bcac::t_6b8755f770107c 632-634,638
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a0978692b20ed16d19e9d61a29a04747e6921e14",
+  "prompts": {},
+  "sessions": {
+    "s_b1487d7356bcac": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7fc49cf0-0096-4929-9080-e50739690ff9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

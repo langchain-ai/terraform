@@ -1,0 +1,20 @@
+modules/azure/infra/variables.tf
+  s_0cc43e343b78a4::t_0a957150064c77 662
+  s_0cc43e343b78a4::t_1f5d605f989ba0 664
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cde603a5498fb9d97f3ba3fc2048a609d155b2f1",
+  "prompts": {},
+  "sessions": {
+    "s_0cc43e343b78a4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "312b9fbc-41df-42d7-965a-f1edcc1983ca",
+        "model": "auto-smart"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

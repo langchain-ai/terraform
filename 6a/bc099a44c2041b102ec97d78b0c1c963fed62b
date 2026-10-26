@@ -1,0 +1,20 @@
+modules/gcp/PERMISSIONS.md
+  s_b1487d7356bcac::t_333ac5c7f39a8f 141
+  s_b1487d7356bcac::t_6381d027287df6 132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6abc099a44c2041b102ec97d78b0c1c963fed62b",
+  "prompts": {},
+  "sessions": {
+    "s_b1487d7356bcac": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7fc49cf0-0096-4929-9080-e50739690ff9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

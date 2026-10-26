@@ -1,0 +1,21 @@
+modules/azure/helm/scripts/init-values.sh
+  s_032f2a8bc23303::t_2ceeaac9767042 695
+modules/azure/helm/scripts/deploy.sh
+  s_032f2a8bc23303::t_07e3b8d951a428 512-535
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f4b06bcffb5eb965b1a7fb1d5289264fbd5b281d",
+  "prompts": {},
+  "sessions": {
+    "s_032f2a8bc23303": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "db0f0167-f292-442c-8d04-f2e2f70ce476",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

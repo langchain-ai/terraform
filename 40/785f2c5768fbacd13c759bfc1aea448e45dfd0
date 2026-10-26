@@ -1,0 +1,27 @@
+modules/azure/infra/terraform.tfvars.example
+  s_0d7b32b2530503::t_9e22c85ff3b98c 104
+modules/azure/infra/main.tf
+  s_0d7b32b2530503::t_9e22c85ff3b98c 193
+modules/azure/infra/variables.tf
+  s_0d7b32b2530503::t_9e22c85ff3b98c 619
+modules/azure/SMITHDB.md
+  s_0d7b32b2530503::t_9e22c85ff3b98c 46-47
+modules/azure/ARCHITECTURE.md
+  s_0d7b32b2530503::t_9e22c85ff3b98c 257,282
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "40785f2c5768fbacd13c759bfc1aea448e45dfd0",
+  "prompts": {},
+  "sessions": {
+    "s_0d7b32b2530503": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a035f8-f260-7171-a941-1453b8e9dbba",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "ben11211 <nagengast@langchain.dev>"
+    }
+  }
+}

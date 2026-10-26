@@ -1,0 +1,32 @@
+modules/gcp/TEARDOWN.md
+  s_69600e958473f5::t_ae293e40233a98 854
+  s_69600e958473f5::t_1c0cf0367650af 786-792,794,797,802-805
+  s_69600e958473f5::t_0eae50d263ff7e 376-377
+  s_69600e958473f5::t_23f3ff9983cf92 509-511,527-537
+  s_69600e958473f5::t_480a0f37f27b88 655-684
+  s_69600e958473f5::t_7e5302679da1af 546-551
+  s_69600e958473f5::t_2452ae6292fcc6 862-864
+  s_69600e958473f5::t_fdd454f42bf707 767-773
+  s_69600e958473f5::t_6e9e72fddf81df 614-618
+  s_69600e958473f5::t_85c5c5c5c4f929 399-413
+  s_69600e958473f5::t_d15c26310926c4 728-733,735-736
+  s_69600e958473f5::t_4cdcaf00da11cb 855
+  s_69600e958473f5::t_09681bfd6f89b6 349-350
+  s_69600e958473f5::t_4580749e9dd1f2 538
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "061d0a796c62a453131f901ce93e37195e6741cf",
+  "prompts": {},
+  "sessions": {
+    "s_69600e958473f5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "ea18d317-fda8-4b01-998a-c3e86c001808",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

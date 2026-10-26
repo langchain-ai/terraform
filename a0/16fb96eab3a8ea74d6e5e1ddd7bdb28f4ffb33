@@ -1,0 +1,41 @@
+modules/gcp/infra/modules/k8s-bootstrap/main.tf
+  s_6e46f9c799feb2::t_1976ccc9fe9d70 196-202,209-211
+  s_6e46f9c799feb2::t_a2de97c798bb95 203-207
+  s_6e46f9c799feb2::t_d55c10657e8c7f 214-217,219-220
+modules/gcp/infra/modules/smithdb/iam.tf
+  s_6e46f9c799feb2::t_caf05e0bb1d5e4 31-57
+modules/gcp/infra/modules/smithdb/variables.tf
+  s_6e46f9c799feb2::t_3e1dac7d8338d6 203-214
+modules/gcp/helm/scripts/init-values.sh
+  s_6e46f9c799feb2::t_16eb84e5f1475a 774-801
+modules/gcp/infra/scripts/status.sh
+  s_6e46f9c799feb2::t_72b989fb09992a 338-345
+  s_6e46f9c799feb2::t_e6d6e7b5cd1fba 328-337,346-357
+modules/gcp/SMITHDB.md
+  s_6e46f9c799feb2::t_dff6f21e25f2c9 288-392
+  s_6e46f9c799feb2::t_a38beb32a4cfa8 262-264
+modules/gcp/infra/main.tf
+  s_6e46f9c799feb2::t_c259f23333ee12 664-670
+  s_6e46f9c799feb2::t_5bd9ff4411e5c0 515-520
+modules/gcp/infra/locals.tf
+  s_6e46f9c799feb2::t_66ca7d3034fc1e 68-71
+  s_6e46f9c799feb2::t_f5b04a784b0513 54-67,72-92
+modules/gcp/infra/modules/k8s-bootstrap/variables.tf
+  s_6e46f9c799feb2::t_9334804208fcbd 46-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a016fb96eab3a8ea74d6e5e1ddd7bdb28f4ffb33",
+  "prompts": {},
+  "sessions": {
+    "s_6e46f9c799feb2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cc1d929e-8ca6-4ba5-9a9f-87fcd9a9d5b2",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
