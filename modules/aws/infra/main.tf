@@ -90,9 +90,17 @@ resource "terraform_data" "validate_inputs" {
 
     precondition {
       condition = !local.separate_cluster_sandboxes || (
-        var.langsmith_api_key_salt != "" && var.sandbox_callback_signing_jwk != ""
+        length(var.sandbox_service_auth_secret) >= 32 && var.sandbox_callback_signing_jwk != ""
       )
-      error_message = "separate_cluster sandboxes require langsmith_api_key_salt and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
+      error_message = "separate_cluster sandboxes require sandbox_service_auth_secret (at least 32 characters) and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
+    }
+
+    # The sandbox cluster runs untrusted code, so its service-auth secret must
+    # not be the API key salt, which also backs LangSmith's own service auth.
+    # The chart cannot compare the two when they live in an existing Secret.
+    precondition {
+      condition     = !local.separate_cluster_sandboxes || var.sandbox_service_auth_secret != var.langsmith_api_key_salt
+      error_message = "sandbox_service_auth_secret must differ from langsmith_api_key_salt: the separate sandbox cluster must not hold the API key salt. Delete the sandbox-service-auth-secret SSM parameter, unset TF_VAR_sandbox_service_auth_secret, and re-run: source ./scripts/setup-env.sh."
     }
 
     # separateCluster ships with chart 0.18, and deploy.sh picks the runtime
@@ -1001,10 +1009,21 @@ resource "kubernetes_namespace_v1" "sandbox" {
 # The runtime chart's minimal Secret: never a copy of langsmith-config. Its two
 # keys are the langsmith-sandbox chart's defaults (serviceAuth.secretKey and
 # serviceAuth.callbackSigningJwkSecretKey), and each value must equal the
-# control plane's. The control plane reads its service-auth secret from
-# api_key_salt in langsmith-config (the langsmith chart's default for an
-# existing Secret), so the same salt goes in here. Write-only: neither value is
-# stored in Terraform state. Bump sandbox_runtime_secret_revision to rewrite it.
+# control plane's. The control plane reads its service-auth secret from the
+# dedicated sandbox_service_auth_secret key in langsmith-config
+# (init-values.sh sets sandboxes.serviceAuth.secretKey to it), never from
+# api_key_salt, so the salt stays out of the sandbox cluster.
+locals {
+  # A local so the plan tests can check the wiring: data_wo is not readable,
+  # not even in a plan.
+  sandbox_runtime_secret_data = {
+    sandbox_service_auth_secret  = var.sandbox_service_auth_secret
+    sandbox_callback_signing_jwk = var.sandbox_callback_signing_jwk
+  }
+}
+
+# Write-only: neither value is stored in Terraform state. Bump
+# sandbox_runtime_secret_revision to rewrite it.
 resource "kubernetes_secret_v1" "sandbox_runtime" {
   provider = kubernetes.sandbox
   count    = local.separate_cluster_sandboxes ? 1 : 0
@@ -1016,10 +1035,7 @@ resource "kubernetes_secret_v1" "sandbox_runtime" {
 
   type = "Opaque"
 
-  data_wo = {
-    sandbox_service_auth_secret  = var.langsmith_api_key_salt
-    sandbox_callback_signing_jwk = var.sandbox_callback_signing_jwk
-  }
+  data_wo = local.sandbox_runtime_secret_data
 
   data_wo_revision = var.sandbox_runtime_secret_revision
 }

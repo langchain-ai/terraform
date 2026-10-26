@@ -88,17 +88,30 @@ _sandbox_values_state() {
   ' "$1"
 }
 
+# Prints sandboxes.serviceAuth.secretKey from a values file, or nothing.
+_sandbox_service_auth_secret_key() {
+  awk '
+    /^[^ \t#]/ { top = $1; child = "" }
+    top != "sandboxes:" { next }
+    /^  [^ \t#]/ { child = $1 }
+    child == "serviceAuth:" && /^    secretKey:/ { v = $2; gsub(/"/, "", v); print v; exit }
+  ' "$1"
+}
+
 _validate_sandbox_values_file() {
   local values_file="$1"
 
   # separate_cluster: the langsmith release runs no sandbox-host, so its values
   # carry deploymentMode instead of the JuiceFS block; the runtime's values live
-  # in their own generated file.
+  # in their own generated file. They must also name the dedicated service-auth
+  # key: in separateCluster mode the chart refuses api_key_salt, the default
+  # key for an existing Secret.
   if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
     if [[ "$(_sandbox_values_state "$values_file")" == "legacy" ]] \
       || ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
       || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
       || ! grep -Eq '^[[:space:]]{2}deploymentMode:[[:space:]]*separateCluster[[:space:]]*$' "$values_file" \
+      || [[ "$(_sandbox_service_auth_secret_key "$values_file")" != "sandbox_service_auth_secret" ]] \
       || [[ ! -f "$SANDBOX_VALUES_FILE" ]]; then
       echo "ERROR: separate_cluster sandbox values are missing or stale. Run: make init-values" >&2
       exit 1
@@ -317,6 +330,9 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
+  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+    _require_env "TF_VAR_sandbox_service_auth_secret"
+  fi
   if [[ "$_direct_polly_enabled" == "true" ]]; then
     _require_env "TF_VAR_langsmith_polly_encryption_key"
   fi
@@ -334,6 +350,14 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _sandbox_secret_literals=(
       --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+    )
+  fi
+  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+    # The dedicated service-auth secret; Terraform writes the same value into
+    # the sandbox cluster's runtime Secret.
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _sandbox_secret_literals+=(
+      --from-literal=sandbox_service_auth_secret="${TF_VAR_sandbox_service_auth_secret}"
     )
   fi
   _polly_secret_literals=()

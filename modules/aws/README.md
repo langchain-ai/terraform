@@ -461,10 +461,23 @@ The runtime Secret (`sandbox_runtime_secret_name`, default `langsmith-sandbox-ru
 
 | Key | Value |
 |-----|-------|
-| `sandbox_service_auth_secret` | The sandbox service-auth secret, which must equal the control plane's. Here that is the API key salt: the LangSmith release reads it from `api_key_salt` in `langsmith-config`, the chart's default for an existing Secret. |
+| `sandbox_service_auth_secret` | A dedicated sandbox service-auth secret, identical to `sandbox_service_auth_secret` in `langsmith-config`. It is never the API key salt: `api_key_salt` also signs LangSmith's own service calls, and the sandbox cluster runs untrusted code. |
 | `sandbox_callback_signing_jwk` | The callback-signing JWK, identical to the one in `langsmith-config`. |
 
-Terraform writes both from `TF_VAR_langsmith_api_key_salt` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. After changing either value, increment `sandbox_runtime_secret_revision` and re-apply.
+With `sandbox_deployment_mode = "separate_cluster"`, `setup-env.sh` generates the service-auth secret (64 hex characters) into the SSM parameter `sandbox-service-auth-secret`, `apply-eso.sh` syncs it into `langsmith-config` as `sandbox_service_auth_secret`, and `init-values.sh` sets `sandboxes.serviceAuth.secretKey: sandbox_service_auth_secret` in the LangSmith values. `same_cluster` creates none of this and keeps the chart default, `api_key_salt`.
+
+Terraform writes both runtime keys from `TF_VAR_sandbox_service_auth_secret` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. `terraform plan` fails if the service-auth secret is missing, shorter than 32 characters, or equal to the API key salt.
+
+Write-only values reach the cluster only when `sandbox_runtime_secret_revision` changes, so after changing either value, increment it and re-apply. Both releases read these values only at startup, so a new value takes effect when the LangSmith pods and `sandbox-host` restart on it together; sandboxes fail while the two sides disagree.
+
+A sandbox cluster applied with an earlier version of this module holds the API key salt under `sandbox_service_auth_secret`. To move it to the dedicated secret: run `source infra/scripts/setup-env.sh` (it creates the SSM parameter), increment `sandbox_runtime_secret_revision`, run `make apply`, `make init-values` and `make deploy`, then restart `sandbox-host` in the sandbox cluster:
+
+```bash
+kubectl --kubeconfig ~/.kube/langsmith-<sandbox cluster name> -n <sandbox_namespace> \
+  rollout restart deployment -l app=sandbox-host
+```
+
+`make deploy` restarts the LangSmith pods because their service-auth key changes, but `sandbox-host` picks up the rewritten Secret only when it restarts.
 
 #### Versions
 
@@ -480,7 +493,7 @@ helm search repo langchain/langsmith-sandbox --versions --devel -o json \
 
 Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.deploymentMode: separateCluster`. Two runtimes reporting to one install merge into one host pool and stop each other's sandboxes. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
 
-To move an existing install from `same_cluster`, change `sandbox_deployment_mode`, then run `make apply`, `make init-values` and `make deploy`. `make deploy` switches the LangSmith release to `separateCluster` (removing the embedded runtime) before it installs the runtime chart, against the same JuiceFS metadata store and bucket. Running sandboxes stop during the switch.
+To move an existing install from `same_cluster`, change `sandbox_deployment_mode`, run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret), then run `make apply`, `make init-values` and `make deploy`. `make deploy` switches the LangSmith release to `separateCluster` (removing the embedded runtime) and to the dedicated service-auth secret before it installs the runtime chart, against the same JuiceFS metadata store and bucket, so both sides start on the new secret together. Running sandboxes stop during the switch.
 
 #### Install, upgrade and uninstall order
 
@@ -715,6 +728,7 @@ For each secret it follows this priority order:
 | `polly-encryption-key` | Auto-generated (Fernet key) | For LangSmith Chat (formerly Polly) |
 | `engine-encryption-key` | Auto-generated (Fernet key) | For Engine. Keep it stable. See [ENGINE.md](ENGINE.md) |
 | `engine-usage-signing-secret` | Auto-generated (`openssl rand -hex 32`) | For Engine usage reports. Keep it stable |
+| `sandbox-service-auth-secret` | Auto-generated (`openssl rand -hex 32`), only with `sandbox_deployment_mode = "separate_cluster"` | Signs calls between LangSmith and the separate sandbox cluster in place of the API key salt. Keep it stable; see [Secrets](#secrets) |
 
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
@@ -915,6 +929,8 @@ Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` a
    | `.../langsmith-api-key-salt` | `api_key_salt` |
    | `.../langsmith-jwt-secret` | `jwt_secret` |
    | `.../langsmith-admin-password` | `initial_org_admin_password` |
+   | `.../sandbox-callback-signing-jwk` | `sandbox_callback_signing_jwk` *(only with `enable_sandboxes = true`)* |
+   | `.../sandbox-service-auth-secret` | `sandbox_service_auth_secret` *(only with `sandbox_deployment_mode = "separate_cluster"`)* |
    | `.../agent-builder-encryption-key` | `agent_builder_encryption_key` *(only if key exists in SSM)* |
    | `.../insights-encryption-key` | `insights_encryption_key` *(only if key exists in SSM)* |
    | `.../deployments-encryption-key` | `deployments_encryption_key` *(only if key exists in SSM)* |

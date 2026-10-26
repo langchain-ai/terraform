@@ -7,8 +7,9 @@ platform:
 
 # A minimal Secret in the sandbox namespace, never a copy of the LangSmith
 # application Secret. Terraform creates it with exactly these two keys:
-#   sandbox_service_auth_secret   same value the control plane uses (its
-#                                 api_key_salt today)
+#   sandbox_service_auth_secret   same value as sandbox_service_auth_secret in
+#                                 langsmith-config, a dedicated secret that is
+#                                 never the API key salt
 #   sandbox_callback_signing_jwk  same JWK as the control plane
 serviceAuth:
   existingSecretName: "langsmith-sandbox-runtime"

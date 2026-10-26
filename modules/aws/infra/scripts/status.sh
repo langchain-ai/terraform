@@ -87,6 +87,9 @@ if _tfvar_is_true "enable_sandboxes"; then
              TF_VAR_sandbox_callback_signing_jwk; do
     _check_var "$var" || _env_ok=false
   done
+  if [[ "$(_parse_tfvar "sandbox_deployment_mode" || true)" == "separate_cluster" ]]; then
+    _check_var TF_VAR_sandbox_service_auth_secret || _env_ok=false
+  fi
 fi
 
 if [[ "$_env_ok" == "false" ]]; then
@@ -137,6 +140,9 @@ else
       sandbox-juicefs-redis-auth-token
       sandbox-callback-signing-jwk
     )
+    if [[ "$(_parse_tfvar "sandbox_deployment_mode" || true)" == "separate_cluster" ]]; then
+      _required_params+=(sandbox-service-auth-secret)
+    fi
   fi
 
   # Engine reads both keys from langsmith-config, which apply-eso.sh fills from SSM.

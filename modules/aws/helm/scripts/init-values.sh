@@ -893,10 +893,15 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
   if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+    # The sandbox cluster runs untrusted code, so sandbox service auth uses a
+    # dedicated key in langsmith-config (synced from SSM by apply-eso.sh), never
+    # api_key_salt. Terraform writes the same value into the runtime Secret.
     _sandbox_config_block="
 sandboxes:
   enabled: true
-  deploymentMode: separateCluster${_sandbox_service_url_block}"
+  deploymentMode: separateCluster${_sandbox_service_url_block}
+  serviceAuth:
+    secretKey: \"sandbox_service_auth_secret\""
 
     # The runtime chart's own default is /var/cache/juicefs on the root volume.
     _sandbox_cache_dirs_block=""
@@ -911,7 +916,8 @@ platform:
   endpoint: "${_protocol}://${HOSTNAME}/api"
 
 # Terraform writes this Secret in the sandbox cluster. The keys are the chart
-# defaults, spelled out because the Secret depends on them.
+# defaults, spelled out because the Secret depends on them. Both values match
+# the same keys in langsmith-config; neither is the API key salt.
 serviceAuth:
   existingSecretName: "${SANDBOX_RUNTIME_SECRET_NAME}"
   secretKey: "sandbox_service_auth_secret"

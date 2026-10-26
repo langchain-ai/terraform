@@ -385,6 +385,11 @@ redis_instance_type = "cache.m6g.xlarge"
 # (the default 0.17 line has no separate-cluster support):
 # langsmith_helm_chart_version = "0.18.0"
 #
+# separate_cluster also needs sandbox_service_auth_secret, a dedicated secret
+# that the sandbox cluster holds instead of the API key salt. Do not put it in
+# this file: setup-env.sh generates it into SSM and exports
+# TF_VAR_sandbox_service_auth_secret.
+#
 # sandbox_juicefs_redis_instance_type = "cache.m6g.large"
 # sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
 # Do not put it in this file. Export it manually with:

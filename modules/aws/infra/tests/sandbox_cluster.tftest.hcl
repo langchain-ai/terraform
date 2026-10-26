@@ -30,14 +30,20 @@ variables {
   langsmith_helm_chart_version     = "0.18.0"
   langsmith_api_key_salt           = "fixture-not-a-real-salt"
   sandbox_callback_signing_jwk     = "fixture-not-a-real-jwk"
+  sandbox_service_auth_secret      = "fixture-not-a-real-sandbox-service-auth-secret"
 }
 
 run "same_cluster_plans_no_sandbox_cluster" {
   command = plan
 
+  # same_cluster keeps the chart's default service-auth key, api_key_salt, so it
+  # needs no dedicated secret. Both empty would trip the separate_cluster
+  # secret checks if they were not gated on the mode.
   variables {
     sandbox_deployment_mode      = "same_cluster"
     langsmith_helm_chart_version = ""
+    sandbox_service_auth_secret  = ""
+    langsmith_api_key_salt       = ""
   }
 
   assert {
@@ -91,6 +97,29 @@ run "separate_cluster_moves_sandbox_host_to_its_own_cluster" {
       length(kubernetes_secret_v1.sandbox_juicefs_csi_config) == 0
     )
     error_message = "separate_cluster should plan its Secrets in the sandbox cluster only"
+  }
+}
+
+# data_wo is never readable, so the runtime Secret's contents are checked
+# through the local that feeds it.
+run "separate_cluster_runtime_secret_uses_the_dedicated_service_auth_secret" {
+  command = plan
+
+  assert {
+    condition     = jsonencode(sort(keys(local.sandbox_runtime_secret_data))) == jsonencode(["sandbox_callback_signing_jwk", "sandbox_service_auth_secret"])
+    error_message = "the runtime Secret must hold exactly the langsmith-sandbox chart's two default keys"
+  }
+  assert {
+    condition     = nonsensitive(local.sandbox_runtime_secret_data.sandbox_service_auth_secret == "fixture-not-a-real-sandbox-service-auth-secret")
+    error_message = "the runtime Secret's sandbox_service_auth_secret must be sandbox_service_auth_secret"
+  }
+  assert {
+    condition     = nonsensitive(local.sandbox_runtime_secret_data.sandbox_service_auth_secret != var.langsmith_api_key_salt)
+    error_message = "the runtime Secret must not carry the API key salt"
+  }
+  assert {
+    condition     = nonsensitive(local.sandbox_runtime_secret_data.sandbox_callback_signing_jwk == "fixture-not-a-real-jwk")
+    error_message = "the runtime Secret's sandbox_callback_signing_jwk must be sandbox_callback_signing_jwk"
   }
 }
 
@@ -274,6 +303,37 @@ run "a_missing_runtime_secret_value_is_rejected" {
 
   variables {
     sandbox_callback_signing_jwk = ""
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "a_missing_service_auth_secret_is_rejected" {
+  command = plan
+
+  variables {
+    sandbox_service_auth_secret = ""
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "a_short_service_auth_secret_is_rejected" {
+  command = plan
+
+  variables {
+    sandbox_service_auth_secret = "fixture-too-short"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "reusing_the_api_key_salt_as_the_service_auth_secret_is_rejected" {
+  command = plan
+
+  variables {
+    langsmith_api_key_salt      = "fixture-not-a-real-salt-reused-for-sandboxes"
+    sandbox_service_auth_secret = "fixture-not-a-real-salt-reused-for-sandboxes"
   }
 
   expect_failures = [terraform_data.validate_inputs]

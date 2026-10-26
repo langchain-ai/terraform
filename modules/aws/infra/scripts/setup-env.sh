@@ -88,6 +88,7 @@ _enable_sandboxes=false
 if _tfvar_is_true "enable_sandboxes"; then
   _enable_sandboxes=true
 fi
+_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: name_prefix is not set in terraform.tfvars. Set it before sourcing setup-env.sh." >&2
   return 1
@@ -376,6 +377,19 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     "_ed25519_private_jwk_gen" "" "true"
 fi
 
+# ── Sandbox service-auth secret (separate_cluster only) ───────────────────────
+# Signs calls between LangSmith and the sandbox hosts. A separate sandbox cluster
+# runs untrusted code, so it gets this dedicated value instead of api_key_salt,
+# which also backs LangSmith's own service auth. apply-eso.sh syncs it into
+# langsmith-config and Terraform writes it into the sandbox cluster's runtime
+# Secret. same_cluster keeps the chart default (api_key_salt) and skips it.
+# Hex, like the other generated tokens: 64 characters, safe in shell and YAML.
+# Keep this gate identical to the ones in apply-eso.sh and deploy.sh.
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  _ssm_secret "sandbox-service-auth-secret" "" "TF_VAR_sandbox_service_auth_secret" \
+    "openssl rand -hex 32" "" "true"
+fi
+
 # ── LangSmith app secrets (consumed by ESO → K8s Secret → Helm chart) ────────
 _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENSE_KEY" \
   "" "LangSmith license key" "true"
@@ -475,6 +489,9 @@ echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-sa
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
 if [[ "$_enable_sandboxes" == "true" ]]; then
   echo "  sandbox_cb_jwk    = (hidden — SSM: ${_ssm_prefix}/sandbox-callback-signing-jwk)"
+fi
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  echo "  sandbox_auth      = (hidden — SSM: ${_ssm_prefix}/sandbox-service-auth-secret)"
 fi
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
