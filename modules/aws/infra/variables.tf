@@ -931,7 +931,7 @@ variable "sandbox_service_url_base_url" {
 
 variable "enable_envoy_gateway" {
   type        = bool
-  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true. Set it to false to use a standard ALB-backed Kubernetes Ingress instead."
+  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true. Set it to false (with Istio and NGINX disabled) to route the Terraform ALB directly to langsmith-frontend (NGINX). ALB-only mode supports Sandboxes and Engine with ACM or HTTP-only; agent deployment endpoints require a gateway."
   # Unset (null) means "derive" — see local.enable_envoy_gateway in locals.tf.
   # An explicit true or false in terraform.tfvars always wins over the derivation,
   # so existing Istio/NGINX deployments keep working without a tfvars edit.

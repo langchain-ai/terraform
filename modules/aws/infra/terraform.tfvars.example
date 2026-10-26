@@ -627,33 +627,29 @@ langsmith_namespace = "langsmith"
 #------------------------------------------------------------------------------
 # INGRESS / GATEWAY MODE
 #------------------------------------------------------------------------------
-# Three mutually exclusive options — enabling two is rejected at plan time,
-# because all gateway modes share one ALB target group and only one port can be
-# health-checked on it.
+# Terraform owns one ALB in every mode. The AWS Load Balancer Controller
+# registers pod IPs through TargetGroupBindings without creating another ALB.
 #
-#   ALB only
-#     enable_envoy_gateway = false
-#     enable_istio_gateway = false
-#     → Chart creates a standard Kubernetes Ingress; the AWS LB Controller
-#       provisions an Application Load Balancer.
+#   1. Envoy Gateway (default, recommended)
+#      enable_envoy_gateway = true
+#      enable_istio_gateway = false
+#      ALB → Envoy → HTTPRoute → frontend or agent services.
 #
-#   Envoy Gateway (default)
-#     enable_envoy_gateway = true
-#     enable_istio_gateway = false
-#     → Chart creates one HTTPRoute (Gateway API); Envoy Gateway proxies traffic.
-#       Supports split dataplane routing across namespaces.
+#   2. Istio Gateway
+#      enable_envoy_gateway = false
+#      enable_istio_gateway = true
+#      ALB → Istio → VirtualService → frontend or agent services.
 #
-#   Istio Gateway
-#     enable_envoy_gateway = false
-#     enable_istio_gateway = true
-#     → Chart uses istioGateway:; requires istiod + istio-ingressgateway + a
-#       Gateway resource already installed in the cluster.
-#       Also opens port 15017 on the node SG for the istiod webhook.
+#   3. No gateway
+#      enable_envoy_gateway = false
+#      enable_istio_gateway = false
+#      enable_nginx_ingress = false
+#      ALB → langsmith-frontend (NGINX) → application services. ACM or HTTP-only.
+#      Agent deployment endpoints require Envoy or Istio.
+#      make deploy installs the frontend binding after Helm creates its Service.
 #
-# enable_envoy_gateway has no hardcoded default. Leave it out entirely and Envoy
-# Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true,
-# so existing Istio/NGINX configurations keep working untouched. Setting it
-# explicitly — as below — always wins over that derivation.
+# Leave enable_envoy_gateway unset to use Envoy unless another controller is
+# selected. All modes use alb_allowed_cidr_blocks (or your supplied ALB SG).
 enable_envoy_gateway = true
 enable_istio_gateway = false
 
@@ -661,14 +657,8 @@ enable_istio_gateway = false
 # CERT-MANAGER (Let's Encrypt + Route 53 DNS-01)
 #------------------------------------------------------------------------------
 # Required when using Istio Gateway with Let's Encrypt TLS on EKS.
-# cert-manager handles certificate issuance and renewal via DNS-01 challenge —
-# no HTTP endpoint exposure needed, works behind internal NLBs.
-#
-# Why DNS-01 instead of HTTP-01?
-#   EKS NLBs have a hairpin NAT limitation: pods cannot reach the NLB's own
-#   external IP from inside the cluster. cert-manager's HTTP-01 self-check
-#   connects to the NLB to verify ownership and times out. DNS-01 creates a
-#   TXT record instead — no inbound HTTP needed.
+# cert-manager issues and renews certificates using Route 53 DNS-01 records.
+# No inbound HTTP challenge endpoint is needed.
 #
 # How it works:
 #   1. Terraform creates an IAM role with Route 53 write access (this section).

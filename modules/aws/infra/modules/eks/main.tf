@@ -187,7 +187,7 @@ module "eks_blueprints_addons" {
 
   enable_aws_load_balancer_controller = true
   # Disable the ALB controller's cluster-wide Service mutating webhook
-  # (mservice.elbv2.k8s.aws). This module uses ALB Ingress + TargetGroupBinding,
+  # (mservice.elbv2.k8s.aws). This module uses TargetGroupBinding,
   # not Service type=LoadBalancer, so the mutator is unnecessary. Leaving it on
   # makes the controller intercept ALL Service creations, which races with other
   # Helm releases on a fresh apply - notably Karpenter, whose Service fails with
