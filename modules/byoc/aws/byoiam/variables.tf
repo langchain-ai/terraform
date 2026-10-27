@@ -51,13 +51,13 @@ variable "karpenter_controller_policy_name" {
   }
 }
 
-variable "karpenter_kms_key_arns" {
-  description = "Optional. Customer-managed KMS key ARNs that Karpenter node volumes use: keys of encrypted custom AMI snapshots, including cross-account keys, and the EBS default encryption key. The key owner must also allow the Karpenter controller role on each key."
+variable "ebs_kms_key_arns" {
+  description = "Optional. Customer-managed KMS key ARNs for EBS volumes: keys of encrypted custom AMI snapshots, including cross-account keys, and the EBS default encryption key. The Karpenter controller and EBS CSI roles may use them through EC2. The key owner must also allow those roles on each key."
   type        = list(string)
   default     = []
 
   validation {
-    condition     = length(var.karpenter_kms_key_arns) <= 5 && alltrue([for arn in var.karpenter_kms_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    condition     = length(var.ebs_kms_key_arns) <= 5 && alltrue([for arn in var.ebs_kms_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
     error_message = "Provide at most five KMS key ARNs."
   }
 }
