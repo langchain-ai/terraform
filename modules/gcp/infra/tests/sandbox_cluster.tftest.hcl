@@ -260,9 +260,12 @@ run "separate_cluster_firewall" {
       && google_compute_firewall.sandbox_host_deny_private_services[0].direction == "EGRESS"
       && google_compute_firewall.sandbox_host_deny_private_services[0].priority == 950
       && one(google_compute_firewall.sandbox_host_deny_private_services[0].deny).protocol == "all"
-      && toset(google_compute_firewall.sandbox_host_deny_private_services[0].target_service_accounts) == toset(["ls-prod-sbox-node@langsmith-plan-tests.iam.gserviceaccount.com"])
+      && toset(google_compute_firewall.sandbox_host_deny_private_services[0].target_service_accounts) == toset([
+        "ls-prod-sbox-node@langsmith-plan-tests.iam.gserviceaccount.com",
+        "ls-prod-sbox-sys@langsmith-plan-tests.iam.gserviceaccount.com",
+      ])
     )
-    error_message = "sandbox nodes must be denied the rest of the private services range"
+    error_message = "both sandbox pools must be denied the rest of the private services range"
   }
 }
 

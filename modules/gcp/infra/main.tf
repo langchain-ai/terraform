@@ -669,9 +669,10 @@ resource "google_compute_firewall" "sandbox_deny_from_langsmith" {
   ]
 }
 
-# What sandbox nodes reach. They run untrusted code, and Cloud SQL and the
-# LangSmith Redis sit in the private services range, which every subnet in the
-# VPC can reach. Sandbox nodes need only the JuiceFS Redis there.
+# What the sandbox cluster's nodes reach. They run untrusted code, and Cloud
+# SQL and the LangSmith Redis sit in the private services range, which every
+# subnet in the VPC can reach. Sandbox-host nodes need only the JuiceFS Redis
+# there, and the system pool nothing.
 resource "google_compute_firewall" "sandbox_host_to_juicefs_redis" {
   count = local.separate_cluster_sandboxes ? 1 : 0
 
@@ -697,7 +698,7 @@ resource "google_compute_firewall" "sandbox_host_deny_private_services" {
   name        = "${local.vpc_name}-sbox-deny-private-services"
   project     = var.project_id
   network     = module.networking.vpc_name
-  description = "Sandbox nodes reach nothing else in the private services range (Cloud SQL, LangSmith Redis)"
+  description = "The sandbox cluster's nodes reach nothing else in the private services range (Cloud SQL, LangSmith Redis)"
   direction   = "EGRESS"
   priority    = 950
 
@@ -705,8 +706,13 @@ resource "google_compute_firewall" "sandbox_host_deny_private_services" {
     protocol = "all"
   }
 
-  destination_ranges      = [module.networking.private_service_range_cidr]
-  target_service_accounts = [google_service_account.sandbox_host_node[0].email]
+  # Both pools: the system pool needs nothing in that range either, and pod
+  # traffic on it follows the node's targeting.
+  destination_ranges = [module.networking.private_service_range_cidr]
+  target_service_accounts = [
+    google_service_account.sandbox_host_node[0].email,
+    google_service_account.sandbox_system_node[0].email,
+  ]
 }
 
 #------------------------------------------------------------------------------
