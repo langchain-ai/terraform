@@ -32,6 +32,7 @@ INFRA_DIR="$HELM_DIR/../infra"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
+SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
 DELETE_TIMEOUT="${DELETE_TIMEOUT:-120s}"
 # In-cluster ClickHouse, Postgres, and Redis hold data, so their claims are
 # kept by default. Set this to true when the cluster is going away. The GCE PD
@@ -101,6 +102,8 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _environment="${_environment:-${TF_VAR_environment:-prod}}"
   _region=$(_parse_tfvar "region")
   _region="${_region:-us-west2}"
+  _sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode")
+  _sandbox_deployment_mode="${_sandbox_deployment_mode:-same_cluster}"
   echo "Resolved from terraform.tfvars:"
   echo "  name_prefix  = $_name_prefix"
   echo "  environment  = $_environment"
@@ -111,6 +114,17 @@ else
   echo "      Falling back to the active kubectl context (TEARDOWN.md Option B)."
 fi
 echo ""
+
+# ── Sandbox cluster (separate_cluster), if Terraform can tell us ──────────────
+_sandbox_cluster_name=""
+_sandbox_cluster_location=""
+_sandbox_namespace="langsmith-sandbox"
+if [[ "${_sandbox_deployment_mode:-same_cluster}" == "separate_cluster" && -n "$_project_id" ]]; then
+  _sandbox_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || _sandbox_cluster_name=""
+  [[ "$_sandbox_cluster_name" == "null" ]] && _sandbox_cluster_name=""
+  _sandbox_cluster_location=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_location 2>/dev/null) || _sandbox_cluster_location="$_region"
+  _sandbox_namespace=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace="langsmith-sandbox"
+fi
 
 # ── Point kubeconfig at the right cluster, if Terraform can tell us ───────────
 _cluster_name=""
@@ -137,6 +151,17 @@ echo "  Active context: $_ctx"
 echo ""
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
+if [[ -n "$_sandbox_cluster_name" ]]; then
+  echo "This will first remove, from sandbox cluster '$_sandbox_cluster_name':"
+  echo "  - Helm release '$SANDBOX_RELEASE_NAME' from namespace '$_sandbox_namespace'"
+  echo ""
+elif [[ "${_sandbox_deployment_mode:-same_cluster}" == "separate_cluster" ]]; then
+  echo "WARNING: sandbox_deployment_mode = separate_cluster, but Terraform output has no sandbox"
+  echo "         cluster name, so this run cannot remove the '$SANDBOX_RELEASE_NAME' release."
+  echo "         Uninstall it from the sandbox cluster first (helm uninstall $SANDBOX_RELEASE_NAME"
+  echo "         -n <namespace> --wait), or answer N, unless that cluster is already gone."
+  echo ""
+fi
 echo "This will remove, from cluster context '$_ctx':"
 echo "  - Helm release '$RELEASE_NAME' from namespace '$NAMESPACE'"
 echo "  - Operator-managed LangSmith resources in namespace '$NAMESPACE'"
@@ -154,6 +179,30 @@ if [[ "$_confirm" != "y" && "$_confirm" != "Y" ]]; then
   exit 0
 fi
 echo ""
+
+# ── Sandbox runtime first (separate_cluster) ──────────────────────────────────
+# The runtime goes before the langsmith release that drives it, the reverse of
+# the install order. It gets a throwaway kubeconfig, so the steps below still
+# target the LangSmith cluster. The runtime chart mounts JuiceFS inside
+# sandbox-host (no CSI driver, no PVCs), so there is nothing to drain first;
+# --wait covers the hosts' graceful shutdown.
+if [[ -n "$_sandbox_cluster_name" ]]; then
+  echo "Uninstalling the sandbox runtime from '$_sandbox_cluster_name'..."
+  (
+    _sandbox_kubeconfig=$(mktemp)
+    trap 'rm -f "$_sandbox_kubeconfig"' EXIT
+    export KUBECONFIG="$_sandbox_kubeconfig"
+    gcloud container clusters get-credentials "$_sandbox_cluster_name" \
+      --region "$_sandbox_cluster_location" --project "$_project_id" >/dev/null
+    if helm list -n "$_sandbox_namespace" --filter "^${SANDBOX_RELEASE_NAME}$" \
+      --output json 2>/dev/null | grep -q '"name"'; then
+      helm uninstall "$SANDBOX_RELEASE_NAME" -n "$_sandbox_namespace" --wait --timeout 15m
+    else
+      echo "Helm release '$SANDBOX_RELEASE_NAME' not found in namespace '$_sandbox_namespace' — skipping."
+    fi
+  )
+  echo ""
+fi
 
 # ── Pre-Helm: tear down JuiceFS while CSI can still unmount ───────────────────
 # Helm uninstall removes the JuiceFS CSI driver with the release. Delete the

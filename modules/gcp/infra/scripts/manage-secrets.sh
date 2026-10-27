@@ -63,6 +63,7 @@ OPTIONAL_KEYS=(
   insights-encryption-key
   polly-encryption-key
   sandbox-callback-signing-jwk
+  sandbox-service-auth-secret
 )
 
 # Encryption keys that must NEVER change after first deploy.
@@ -84,6 +85,7 @@ DIFF_SM_KEYS=(
   insights-encryption-key
   polly-encryption-key
   sandbox-callback-signing-jwk
+  sandbox-service-auth-secret
 )
 DIFF_TF_VARS=(
   TF_VAR_postgres_password
@@ -93,6 +95,7 @@ DIFF_TF_VARS=(
   TF_VAR_langsmith_insights_encryption_key
   TF_VAR_langsmith_polly_encryption_key
   TF_VAR_sandbox_callback_signing_jwk
+  TF_VAR_sandbox_service_auth_secret
 )
 
 ALL_KEYS=("${REQUIRED_KEYS[@]}" "${OPTIONAL_KEYS[@]}")

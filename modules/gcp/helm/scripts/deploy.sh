@@ -126,8 +126,36 @@ _sandbox_values_state() {
   ' "$1"
 }
 
+# Prints sandboxes.serviceAuth.secretKey from a values file, or nothing.
+_sandbox_service_auth_secret_key() {
+  awk '
+    /^[^ \t#]/ { top = $1; child = "" }
+    top != "sandboxes:" { next }
+    /^  [^ \t#]/ { child = $1 }
+    child == "serviceAuth:" && /^    secretKey:/ { v = $2; gsub(/"/, "", v); print v; exit }
+  ' "$1"
+}
+
 _validate_sandbox_values_file() {
   local values_file="$1" state
+
+  # separate_cluster: the langsmith release runs no sandbox-host, so its values
+  # carry deploymentMode instead of the JuiceFS block; the runtime's values live
+  # in their own generated file. They must also name the dedicated service-auth
+  # key: in separateCluster mode the chart refuses api_key_salt, the default
+  # key for an existing Secret. Keep identical to the AWS copy.
+  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+    if [[ "$(_sandbox_values_state "$values_file")" == "legacy" ]] \
+      || ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
+      || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
+      || ! grep -Eq '^[[:space:]]{2}deploymentMode:[[:space:]]*separateCluster[[:space:]]*$' "$values_file" \
+      || [[ "$(_sandbox_service_auth_secret_key "$values_file")" != "sandbox_service_auth_secret" ]] \
+      || [[ ! -f "$SANDBOX_VALUES_FILE" ]]; then
+      echo "ERROR: separate_cluster sandbox values are missing or stale. Run: ./helm/scripts/init-values.sh" >&2
+      exit 1
+    fi
+    return 0
+  fi
 
   state="$(_sandbox_values_state "$values_file")"
   if [[ "$state" == "legacy" ]]; then
@@ -207,6 +235,47 @@ _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
     echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
+    exit 1
+  fi
+fi
+
+# separate_cluster runs sandbox-host from its own langsmith-sandbox release in
+# the sandbox cluster. That chart has no version setting here: it is the newest
+# one whose appVersion equals the langsmith chart's, resolved below.
+SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
+SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
+_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode")
+_sandbox_deployment_mode="${_sandbox_deployment_mode:-same_cluster}"
+_separate_cluster_sandboxes=false
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  _separate_cluster_sandboxes=true
+fi
+
+# separateCluster ships with chart 0.18, and the runtime chart is picked below by
+# this chart's appVersion, so the langsmith chart must be one exact version on
+# 0.18 or later: not the default 0.17 line and not a range. Terraform checks
+# langsmith_helm_chart_version the same way; this also covers CHART_VERSION.
+# Keep the pattern in step with separate_cluster_chart_version_pattern in
+# infra/locals.tf.
+_separate_cluster_chart_re='^(0\.(1[89]|[2-9][0-9])|[1-9][0-9]*\.[0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+if [[ "$_separate_cluster_sandboxes" == "true" ]] && ! [[ "$CHART_VERSION" =~ $_separate_cluster_chart_re ]]; then
+  echo "ERROR: sandbox_deployment_mode = separate_cluster needs one exact langsmith chart version" >&2
+  echo "       on 0.18 or later; got CHART_VERSION='$CHART_VERSION'." >&2
+  echo "       Set langsmith_helm_chart_version in terraform.tfvars, for example \"0.18.0\"." >&2
+  echo "       The langsmith-sandbox chart is then picked by that chart's appVersion." >&2
+  exit 1
+fi
+
+_sandbox_cluster_name=""
+_sandbox_cluster_location=""
+_sandbox_namespace=""
+if [[ "$_separate_cluster_sandboxes" == "true" ]]; then
+  _sandbox_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || _sandbox_cluster_name=""
+  _sandbox_cluster_location=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_location 2>/dev/null) || _sandbox_cluster_location=""
+  _sandbox_namespace=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace=""
+  if [[ -z "$_sandbox_cluster_name" || "$_sandbox_cluster_name" == "null" || -z "$_sandbox_cluster_location" || -z "$_sandbox_namespace" ]]; then
+    echo "ERROR: Could not read the sandbox cluster outputs (sandbox_cluster_name, sandbox_cluster_location," >&2
+    echo "       sandbox_namespace). Is terraform apply complete with sandbox_deployment_mode = separate_cluster?" >&2
     exit 1
   fi
 fi
@@ -362,6 +431,10 @@ elif [[ -n "$_live_gateway_ip" ]]; then
     echo "  Updating $(basename "$OVERRIDES_FILE") before deploy..."
     sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_live_gateway_ip}\"|" "$OVERRIDES_FILE" && rm -f "$OVERRIDES_FILE.bak"
     sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_live_gateway_ip}\"|" "$OVERRIDES_FILE" && rm -f "$OVERRIDES_FILE.bak"
+    # The sandbox runtime reaches the API through the same address.
+    if [[ "$_separate_cluster_sandboxes" == "true" && -f "$SANDBOX_VALUES_FILE" ]]; then
+      sed -i.bak "s|endpoint: \"${_protocol}://[^\"/]*/api\"|endpoint: \"${_protocol}://${_live_gateway_ip}/api\"|" "$SANDBOX_VALUES_FILE" && rm -f "$SANDBOX_VALUES_FILE.bak"
+    fi
     echo "  Done."
     echo ""
   fi
@@ -481,6 +554,11 @@ if ! _langsmith_config_env=$(
   fi
   if [[ "$_enable_sandboxes" == "true" ]]; then
     printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
+  fi
+  # The dedicated service-auth secret; Terraform writes the same value into the
+  # sandbox cluster's runtime Secret.
+  if [[ "$_separate_cluster_sandboxes" == "true" ]]; then
+    printf 'sandbox_service_auth_secret=%s\n' "${TF_VAR_sandbox_service_auth_secret:?}"
   fi
   if [[ "$_enable_sso_oidc" == "true" ]]; then
     printf 'oauth_client_id=%s\n' "${TF_VAR_langsmith_oauth_client_id:?}"
@@ -751,7 +829,9 @@ fi
 # appVersion of the resolved chart on every deploy, as the AWS module does.
 # --set-string overrides any tag that an older init-values.sh wrote into a file.
 # helm upgrade below installs the same resolved version, so the tag matches it.
-if [[ "$_enable_sandboxes" == "true" ]]; then
+# With separate_cluster this release runs no sandbox-host, and the runtime chart
+# runs the image of its own appVersion.
+if [[ "$_enable_sandboxes" == "true" && "$_separate_cluster_sandboxes" != "true" ]]; then
   _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: chart $_resolved_chart does not declare an appVersion for the sandbox-host image." >&2
@@ -763,6 +843,40 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   if [[ -n "$_legacy_sandbox_tag" && "$_legacy_sandbox_tag" != "$_sandbox_host_image_tag" ]]; then
     echo "  ⚠️  sandbox_host_image_tag = \"$_legacy_sandbox_tag\" in terraform.tfvars is ignored. Remove it."
   fi
+fi
+
+# separate_cluster: the runtime chart pairs with the langsmith chart by
+# appVersion, which is the LangSmith release both deploy, never by chart
+# version. Install the newest langsmith-sandbox chart with the same appVersion.
+# Resolved here, before either release changes, so a missing runtime chart stops
+# the deploy instead of leaving the control plane upgraded without a runtime.
+# Keep identical to the AWS copy.
+_sandbox_chart_version=""
+_langsmith_app_version=""
+if [[ "$_separate_cluster_sandboxes" == "true" ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: sandbox_deployment_mode = separate_cluster needs jq to pick the langsmith-sandbox chart." >&2
+    exit 1
+  fi
+  _langsmith_app_version=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d "\"'")
+  if [[ -z "$_langsmith_app_version" ]]; then
+    echo "ERROR: chart langchain/langsmith $_resolved_chart declares no appVersion to pair the sandbox runtime with." >&2
+    exit 1
+  fi
+  # --devel: release candidates pair with prerelease runtime charts.
+  _sandbox_chart_version=$(helm search repo langchain/langsmith-sandbox --versions --devel -o json 2>/dev/null \
+    | jq -r --arg app "$_langsmith_app_version" \
+      '[.[] | select(.name == "langchain/langsmith-sandbox" and .app_version == $app)][0].version // empty') \
+    || _sandbox_chart_version=""
+  if [[ -z "$_sandbox_chart_version" ]]; then
+    echo "ERROR: no langchain/langsmith-sandbox chart has appVersion $_langsmith_app_version," >&2
+    echo "       the appVersion of langchain/langsmith $_resolved_chart. The sandbox runtime must run" >&2
+    echo "       the same LangSmith release as the control plane. Neither Helm release was changed." >&2
+    echo "       List the published runtime charts with:" >&2
+    echo "         helm search repo langchain/langsmith-sandbox --versions --devel" >&2
+    exit 1
+  fi
+  echo "Chart: langchain/langsmith-sandbox  appVersion=${_langsmith_app_version}  resolved=${_sandbox_chart_version}"
 fi
 
 # A Job's spec.template is immutable, and the backfill Job is a plain resource
@@ -951,7 +1065,7 @@ if [[ ${#_smithdb_deployments[@]} -gt 0 ]]; then
   done
 fi
 
-if [[ "$_enable_sandboxes" == "true" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_separate_cluster_sandboxes" != "true" ]]; then
   # The format Job name carries a hash, so select it by label. It writes to the
   # bucket through the langsmith-sandbox-host Workload Identity binding. Helm
   # does not run a failed Job again when the manifest is unchanged, so a failed
@@ -1004,6 +1118,53 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     echo "     kubectl logs -n $NAMESPACE -l $_sandbox_host_selector -c sandbox-host --tail=50"
     _all_ready=false
   fi
+fi
+
+# separate_cluster: install the runtime after the control plane, the upgrade
+# order the charts document (langsmith first, the runtime within 72 hours).
+# The sandbox cluster gets a throwaway kubeconfig, so the operator's current
+# context stays on the LangSmith cluster. No --wait: hosts drain one at a time,
+# so a slow roll is not a failed one, and the checks below only warn.
+if [[ "$_separate_cluster_sandboxes" == "true" ]]; then
+  echo ""
+  echo "Deploying the sandbox runtime to cluster: $_sandbox_cluster_name (namespace $_sandbox_namespace)"
+  echo "Chart: langchain/langsmith-sandbox ${_sandbox_chart_version} (appVersion ${_langsmith_app_version})"
+  if ! (
+    _sandbox_kubeconfig=$(mktemp)
+    trap 'rm -f "$_sandbox_kubeconfig"' EXIT
+    export KUBECONFIG="$_sandbox_kubeconfig"
+    # set -e does not apply inside a subshell an if tests, so each step that
+    # must stop the deploy exits explicitly.
+    gcloud container clusters get-credentials "$_sandbox_cluster_name" \
+      --region "$_sandbox_cluster_location" --project "$_project_id" >/dev/null || exit 1
+
+    helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
+      --namespace "$_sandbox_namespace" \
+      --version "$_sandbox_chart_version" \
+      ${_devel_flag} \
+      -f "$SANDBOX_VALUES_FILE" \
+      --timeout 20m || exit 1
+
+    # The formatter runs on the host network as the sandbox node service
+    # account, which Terraform grants on the JuiceFS bucket.
+    _format_selector="app.kubernetes.io/instance=${SANDBOX_RELEASE_NAME},app.kubernetes.io/component=juicefs-format"
+    if ! kubectl wait --for=condition=complete job -n "$_sandbox_namespace" -l "$_format_selector" --timeout=10m 2>/dev/null; then
+      echo "  ⏳ The JuiceFS format Job is not complete within 10m (sandbox nodes may still be starting)."
+      echo "     If it failed, check the sandbox node bucket grant (run: make apply), then delete it and deploy again:"
+      echo "     kubectl logs -n $_sandbox_namespace -l $_format_selector"
+      echo "     kubectl delete job -n $_sandbox_namespace -l $_format_selector && make deploy"
+    fi
+    _sandbox_host_selector="app.kubernetes.io/instance=${SANDBOX_RELEASE_NAME},app=sandbox-host"
+    if ! kubectl rollout status deployment -n "$_sandbox_namespace" -l "$_sandbox_host_selector" --timeout=15m; then
+      echo "  ⏳ sandbox-host is not ready within 15m; sandbox nodes may still be starting."
+      echo "     kubectl logs -n $_sandbox_namespace -l $_sandbox_host_selector -c sandbox-host --tail=50"
+    fi
+  ); then
+    echo "ERROR: the langsmith-sandbox release in $_sandbox_cluster_name failed. The control plane is" >&2
+    echo "       upgraded; fix the error and run make deploy again within 72 hours." >&2
+    exit 1
+  fi
+  echo "  Sandbox cluster credentials: gcloud container clusters get-credentials $_sandbox_cluster_name --region $_sandbox_cluster_location --project $_project_id"
 fi
 
 if [[ "$_all_ready" == "true" ]]; then
