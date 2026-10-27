@@ -48,6 +48,41 @@ resource "google_compute_subnetwork" "subnet" {
 }
 
 #------------------------------------------------------------------------------
+# Sandbox Subnet (sandbox_deployment_mode = "separate_cluster")
+#------------------------------------------------------------------------------
+# The dedicated sandbox GKE cluster gets its own subnet so firewall rules can
+# tell its nodes apart from LangSmith's: the allow-internal rule below admits
+# only the main subnet's ranges, and the root module narrows what those ranges
+# may reach on sandbox nodes. Cloud NAT covers every subnet in the region.
+resource "google_compute_subnetwork" "sandbox" {
+  count = var.create_sandbox_subnet ? 1 : 0
+
+  name                     = "${var.vpc_name}-sbox-subnet"
+  project                  = var.project_id
+  region                   = var.region
+  network                  = google_compute_network.vpc.id
+  ip_cidr_range            = var.sandbox_subnet_cidr
+  private_ip_google_access = true
+  description              = "Subnet for the LangSmith sandbox GKE cluster (${var.environment})"
+
+  secondary_ip_range {
+    range_name    = "sbox-pods"
+    ip_cidr_range = var.sandbox_pods_cidr
+  }
+
+  secondary_ip_range {
+    range_name    = "sbox-services"
+    ip_cidr_range = var.sandbox_services_cidr
+  }
+
+  log_config {
+    aggregation_interval = "INTERVAL_10_MIN"
+    flow_sampling        = 0.5
+    metadata             = "INCLUDE_ALL_METADATA"
+  }
+}
+
+#------------------------------------------------------------------------------
 # Cloud Router for NAT
 #------------------------------------------------------------------------------
 resource "google_compute_router" "router" {
@@ -90,6 +125,10 @@ resource "google_compute_global_address" "private_ip_range" {
   prefix_length = 16
   network       = google_compute_network.vpc.id
   description   = "Private IP range for VPC peering (${var.environment})"
+
+  # Google picks a free /16 when the range is created. Create the sandbox
+  # subnet first so a fresh apply never hands that /16 to private services.
+  depends_on = [google_compute_subnetwork.sandbox]
 }
 
 # The delete of this connection fails for some time after Cloud SQL or

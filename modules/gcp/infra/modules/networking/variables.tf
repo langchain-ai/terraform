@@ -60,6 +60,33 @@ variable "services_cidr" {
 }
 
 #------------------------------------------------------------------------------
+# Sandbox Cluster Subnet (sandbox_deployment_mode = "separate_cluster")
+#------------------------------------------------------------------------------
+variable "create_sandbox_subnet" {
+  description = "Create a second subnet, with its own pods and services ranges, for the dedicated sandbox GKE cluster."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_subnet_cidr" {
+  description = "Primary CIDR range of the sandbox subnet (sandbox node IPs)"
+  type        = string
+  default     = "10.10.0.0/20"
+}
+
+variable "sandbox_pods_cidr" {
+  description = "Secondary CIDR range for the sandbox cluster's pods"
+  type        = string
+  default     = "10.12.0.0/16"
+}
+
+variable "sandbox_services_cidr" {
+  description = "Secondary CIDR range for the sandbox cluster's services"
+  type        = string
+  default     = "10.10.16.0/20"
+}
+
+#------------------------------------------------------------------------------
 # Private Service Connection
 #------------------------------------------------------------------------------
 variable "enable_private_service_connection" {
