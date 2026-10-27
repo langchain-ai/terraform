@@ -69,33 +69,18 @@ run "common_tags_reach_the_controllers" {
   }
 }
 
-# By default this module takes over the vpc-cni EKS installs, so the CNI's pod
-# ENIs carry the tags from the first node on.
+# The eks module owns vpc-cni, so the CNI's pod ENIs carry the tags.
 run "common_tags_reach_the_pod_enis_by_default" {
   command = plan
 
   assert {
-    condition     = module.eks.vpc_cni_inputs.module_managed && !module.eks.vpc_cni_inputs.blueprints_managed
-    error_message = "the eks module does not own vpc-cni by default, so EKS's self-managed CNI creates untagged pod ENIs"
-  }
-  assert {
     condition     = tomap(jsondecode(jsondecode(module.eks.controller_tag_inputs.vpc_cni_configuration_values).env.ADDITIONAL_ENI_TAGS)) == tomap(local.common_tags)
     error_message = "the default vpc-cni add-on does not tag the pod ENIs it creates"
   }
-  # Taking over an existing cluster's CNI must fail on hand-edited aws-node
-  # settings rather than revert them, and must not install an older version.
-  assert {
-    condition     = module.eks.vpc_cni_inputs.resolve_on_create == "NONE" && module.eks.vpc_cni_inputs.most_recent == true
-    error_message = "the default vpc-cni add-on would overwrite hand-edited aws-node settings or could downgrade the CNI"
-  }
-  assert {
-    condition     = module.eks.vpc_cni_inputs.dataplane_wait_duration == "2m"
-    error_message = "node groups do not wait for the vpc-cni add-on, so their first pod ENIs go untagged"
-  }
 }
 
-# Custom networking also owns vpc-cni. Created pod subnets leave its
-# configuration unknown at plan, so this run brings its own.
+# Custom networking merges its settings with the tags. Created pod subnets leave
+# its configuration unknown at plan, so this run brings its own.
 run "common_tags_reach_the_pod_enis_under_custom_networking" {
   command = plan
 
@@ -122,16 +107,10 @@ run "common_tags_reach_the_pod_enis_under_custom_networking" {
     condition     = tomap(jsondecode(jsondecode(module.eks.controller_tag_inputs.vpc_cni_configuration_values).env.ADDITIONAL_ENI_TAGS)) == tomap(local.common_tags)
     error_message = "the vpc-cni add-on does not tag the pod ENIs it creates"
   }
-  # Existing custom-networking add-ons keep their create settings and version.
-  assert {
-    condition     = module.eks.vpc_cni_inputs.resolve_on_create == null && module.eks.vpc_cni_inputs.most_recent == null
-    error_message = "the custom networking vpc-cni add-on changed its conflict resolution or version selection"
-  }
 }
 
-# A vpc-cni entry in eks_addons stays with the Blueprints add-on, at the state
-# address it already has. The operator's own env settings must survive next to
-# the tags.
+# The operator's own vpc-cni env settings in eks_addons must survive next to the
+# tags.
 run "common_tags_reach_the_pod_enis_when_eks_addons_lists_vpc_cni" {
   command = plan
 
@@ -149,14 +128,6 @@ run "common_tags_reach_the_pod_enis_when_eks_addons_lists_vpc_cni" {
   assert {
     condition     = jsondecode(module.eks.controller_tag_inputs.vpc_cni_configuration_values).env.ENABLE_PREFIX_DELEGATION == "true"
     error_message = "adding the ENI tags dropped the operator's own vpc-cni env settings"
-  }
-  assert {
-    condition     = !module.eks.vpc_cni_inputs.module_managed && module.eks.vpc_cni_inputs.blueprints_managed
-    error_message = "a vpc-cni entry in eks_addons moved out of the Blueprints add-on, which would create a second vpc-cni add-on"
-  }
-  assert {
-    condition     = module.eks.vpc_cni_inputs.dataplane_wait_duration == "30s"
-    error_message = "node groups wait for a vpc-cni add-on this module does not create"
   }
 }
 

@@ -194,7 +194,7 @@
     {
       "Sid": "AllowInstanceProfileReadActions",
       "Effect": "Allow",
-      "Resource": "arn:${partition}:iam::${account_id}:instance-profile/byoc-smith-karpenter-node-profile",
+      "Resource": "arn:${partition}:iam::${account_id}:instance-profile/${instance_profile_name}",
       "Action": "iam:GetInstanceProfile"
     },
     {

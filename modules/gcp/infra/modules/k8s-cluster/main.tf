@@ -160,6 +160,7 @@ resource "google_container_node_pool" "primary_nodes" {
   # Node configuration
   node_config {
     machine_type    = var.machine_type
+    spot            = var.spot ? true : null
     disk_size_gb    = var.disk_size_gb
     disk_type       = "pd-ssd"
     image_type      = "COS_CONTAINERD"
