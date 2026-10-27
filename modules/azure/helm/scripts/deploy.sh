@@ -1088,44 +1088,6 @@ EOF
   fi
 fi
 
-# ── Agent run streams through Envoy Gateway ──────────────────────────────
-# With Deployments on, the operator creates one HTTPRoute per agent
-# deployment (/lgp/<deployment>/...), at runtime and named by a hash, with no
-# timeouts field, so runs/stream is cut at Envoy Gateway's 15 s default while
-# the run carries on server-side. The chart has no value for those routes'
-# timeouts, and the routes do not exist yet at deploy time, so a route list
-# cannot name them. Their labels are per deployment (app, ls_project_id,
-# ls_tenant_id) or per tier (deployment_type), none a stable selector, so the
-# policy targets the Gateway: every route on it, the chart's catch-all and the
-# API routes included, gets a 3600 s request timeout instead of 15 s. Applied
-# with Deployments on, removed when it is off.
-if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  if [[ "$_enable_deployments" == "true" ]]; then
-    if kubectl apply -f - >/dev/null <<EOF
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: BackendTrafficPolicy
-metadata:
-  name: langsmith-stream-timeouts
-  namespace: ${NAMESPACE}
-spec:
-  targetRefs:
-  - group: gateway.networking.k8s.io
-    kind: Gateway
-    name: langsmith-gateway
-  timeout:
-    http:
-      requestTimeout: 3600s
-EOF
-    then
-      pass "BackendTrafficPolicy langsmith-stream-timeouts: 3600 s request timeout on every route of langsmith-gateway, so agent run streams are not cut at 15 s"
-    else
-      warn "kubectl could not apply the BackendTrafficPolicy langsmith-stream-timeouts (written by this script); agent run streams on /lgp/<deployment>/runs/stream keep Envoy Gateway's 15 s timeout until it applies. Re-run make deploy after fixing the error above."
-    fi
-  else
-    kubectl delete backendtrafficpolicy langsmith-stream-timeouts -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
-  fi
-fi
-
 # ── Post-deploy Envoy Gateway: LoadBalancer IP ────────────────────────────
 # The EnvoyProxy (pre-deploy block above) put the DNS label on the proxy Service;
 # this only reports the address Azure gave it.

@@ -61,6 +61,15 @@ operator:
       limits:
         cpu: "500m"
         memory: "512Mi"
+    # The operator writes this timeout on every HTTPRoute it creates for an
+    # agent deployment (/lgp/<deployment>/...). Without it those routes keep
+    # Envoy Gateway's 15 s default and cut runs/stream mid-response. Read only
+    # when the operator creates HTTPRoutes (envoy-gateway); other ingress
+    # controllers ignore it. Helm replaces lists, so this list replaces any
+    # operator.deployment.extraEnv set in values-overrides.yaml.
+    extraEnv:
+      - name: HTTPROUTE_REQUEST_TIMEOUT
+        value: "3600s"
   # Deployment template for operator-spawned agent pods.
   # Agent pods run as langsmith-ksa (created by deploy.sh with WI annotation).
   # Workload Identity is used for blob storage access — no static credentials needed.

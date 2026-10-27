@@ -87,7 +87,6 @@ fi
 _ingress_controller=$(_parse_tfvar ingress_controller) || _ingress_controller="envoy-gateway"
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   kubectl delete httproute langsmith-fleet-streams -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
-  kubectl delete backendtrafficpolicy langsmith-stream-timeouts -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete gateway langsmith-gateway -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s >/dev/null 2>&1 || true
   kubectl delete gatewayclass langsmith-eg --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete envoyproxy langsmith-proxy -n envoy-gateway-system --ignore-not-found >/dev/null 2>&1 || true
