@@ -13,29 +13,29 @@ output "budget" {
 
 output "metrics_server" {
   description = "metrics-server Helm release."
-  value       = module.metrics_server.release
+  value       = var.install_metrics_server ? module.metrics_server[0].release : null
 }
 
 output "storage_classes" {
-  description = "local-path StorageClasses: delete (default) and retain (datastores)."
+  description = "StorageClasses: delete (default) and retain (datastores); the cluster's own when install_local_path = false."
   value = {
-    default   = module.local_path.storage_class_delete
-    retain    = module.local_path.storage_class_retain
-    node_path = module.local_path.node_path
+    default   = local.storage_class_delete
+    retain    = local.storage_class_retain
+    node_path = var.install_local_path ? module.local_path[0].node_path : null
   }
 }
 
 output "metallb" {
   description = "MetalLB LoadBalancer IP pool."
-  value = {
-    namespace = module.metallb.namespace
-    addresses = module.metallb.addresses
-  }
+  value = var.install_metallb ? {
+    namespace = module.metallb[0].namespace
+    addresses = module.metallb[0].addresses
+  } : null
 }
 
 output "gateway" {
   description = "Gateway the LangSmith chart attaches HTTPRoutes to (gateway.name / gateway.namespace) and its LAN IP."
-  value       = module.envoy_gateway.gateway
+  value       = local.gateway
 }
 
 output "cloudflare_tunnel" {
@@ -43,7 +43,7 @@ output "cloudflare_tunnel" {
   value = {
     enabled            = var.enable_cloudflare_tunnel
     namespace          = var.enable_cloudflare_tunnel ? module.cloudflared[0].namespace : null
-    origin_service_url = module.envoy_gateway.proxy_service.url
+    origin_service_url = var.install_envoy_gateway ? module.envoy_gateway[0].proxy_service.url : null
     lan_route          = var.langsmith_domain != ""
   }
 }
@@ -80,6 +80,8 @@ output "features" {
     blob_storage = var.enable_blob_storage
     keda         = local.install_keda
     sso_oidc     = var.enable_sso_oidc
+    sandboxes    = var.enable_sandboxes
+    engine       = var.enable_engine
     standalone = {
       for name, db in local.standalone_features : name => {
         database        = db
@@ -89,4 +91,9 @@ output "features" {
       }
     }
   }
+}
+
+output "pods" {
+  description = "Every pod the budget counts, as numbers: name, pool, replicas, cpu_n (cores), mem_gi, disk_gi. The datastores Terraform creates are here and nowhere in the chart, so a tool checking where each pod fits reads them from this. No secrets."
+  value       = local.pods_parsed
 }

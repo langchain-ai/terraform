@@ -8,6 +8,8 @@ proxyReplicas: 1
 proxyResources: {}
 # Request timeout for routes on the Gateway (BackendTrafficPolicy); empty = Envoy default (15 s).
 routeTimeout: "60s"
+# An HTTPS listener for this hostname, from a kubernetes.io/tls Secret in the Gateway's namespace; null for none.
+tls: null
 lanRoute:
   enabled: false
   backendService: langsmith-frontend

@@ -117,6 +117,35 @@ _secret_gen_b64() {
 
 # 32 random bytes, URL-safe base64 — the format Fernet keys require
 # (fleet — stored as AGENT_BUILDER_ENCRYPTION_KEY, the chart's key name — insights, polly).
+# Base64url without padding, and an Ed25519 private JWK for the sandbox callback signature: the
+# same generator as modules/aws/infra/scripts/setup-env.sh, kept identical so the two agree.
+_b64url_nopad() {
+  base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+_ed25519_private_jwk_gen() {
+  local _tmpdir _key _d _x _kid
+  _tmpdir="$(mktemp -d)" || return 1
+  _key="${_tmpdir}/ed25519.pem"
+  if ! openssl genpkey -algorithm ED25519 -out "$_key" >/dev/null 2>&1 \
+    || ! openssl pkey -in "$_key" -outform DER -out "${_tmpdir}/private.der" >/dev/null 2>&1 \
+    || ! openssl pkey -in "$_key" -pubout -outform DER -out "${_tmpdir}/public.der" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+  _d="$(tail -c 32 "${_tmpdir}/private.der" | _b64url_nopad)"
+  _x="$(tail -c 32 "${_tmpdir}/public.der" | _b64url_nopad)"
+  rm -rf "$_tmpdir"
+  [[ -n "$_d" && -n "$_x" ]] || return 1
+  _kid="sandbox-callback-$(openssl rand -hex 8)"
+  printf '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"%s","x":"%s","d":"%s"}\n' "$_kid" "$_x" "$_d"
+}
+
+# Engine's usage signing secret: at least 32 random characters (docs engine-self-hosted).
+_secret_gen_hex32() {
+  openssl rand -hex 32
+}
+
 _secret_gen_fernet() {
   openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'
 }

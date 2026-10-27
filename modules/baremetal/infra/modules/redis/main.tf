@@ -254,6 +254,14 @@ resource "kubernetes_network_policy_v1" "allow_clients" {
           }
         }
       }
+      dynamic "from" {
+        for_each = toset(var.allowed_cidrs)
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
       ports {
         port     = "6379"
         protocol = "TCP"

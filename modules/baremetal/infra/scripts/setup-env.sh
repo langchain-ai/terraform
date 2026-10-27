@@ -122,11 +122,20 @@ _ensure_secret JWT_SECRET "" false "" _secret_gen_b64
 if _tfvar_is_true enable_fleet; then
   _ensure_secret AGENT_BUILDER_ENCRYPTION_KEY "" false "" _secret_gen_fernet
 fi
-if _tfvar_is_true enable_standalone_insights; then
+# Engine runs on the Insights deployment, which reads this key whichever of the two turned it on.
+if _tfvar_is_true enable_standalone_insights || _tfvar_is_true enable_engine; then
   _ensure_secret INSIGHTS_ENCRYPTION_KEY "" false "" _secret_gen_fernet
 fi
 if _tfvar_is_true enable_standalone_polly; then
   _ensure_secret POLLY_ENCRYPTION_KEY "" false "" _secret_gen_fernet
+fi
+if _tfvar_is_true enable_sandboxes; then
+  _ensure_secret SANDBOX_CALLBACK_SIGNING_JWK "" false "" _ed25519_private_jwk_gen
+fi
+# Engine's own two keys: the 0.17 chart rejects Engine without the usage signing secret.
+if _tfvar_is_true enable_engine; then
+  _ensure_secret ENGINE_ENCRYPTION_KEY "" false "" _secret_gen_fernet
+  _ensure_secret ENGINE_USAGE_SIGNING_SECRET "" false "" _secret_gen_hex32
 fi
 
 _secrets_file_check

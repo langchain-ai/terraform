@@ -44,3 +44,19 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
+    {{- with .Values.tls }}
+    # TLS for the domain only: the LAN IP keeps plain HTTP on :80 (lanRoute), so nothing that
+    # reaches LangSmith by IP changes. Routes without a sectionName attach to both listeners.
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: {{ required "tls.hostname is required" .hostname | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ required "tls.secretName is required" .secretName }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}

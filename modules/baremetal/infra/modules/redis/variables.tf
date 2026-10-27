@@ -58,3 +58,9 @@ variable "datastore_label" {
   type        = map(string)
   description = "Label shared by every datastore pod, for anti-affinity spreading."
 }
+
+variable "allowed_cidrs" {
+  type        = list(string)
+  default     = []
+  description = "Addresses allowed to connect on 6379 besides those namespaces: clients on the host network, which no namespace selector matches."
+}

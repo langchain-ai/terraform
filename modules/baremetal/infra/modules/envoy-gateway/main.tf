@@ -10,8 +10,9 @@
 #                               the LangSmith chart attaches HTTPRoutes to it
 #
 # Names match modules/azure (langsmith-proxy, langsmith-eg, langsmith-gateway).
-# The listener is HTTP only for now: the IP is LAN-only, and TLS arrives with
-# the Cloudflare / cert-manager step.
+# The listener is HTTP; with tls set, an HTTPS listener for the domain is added
+# beside it, from a certificate Secret made outside this module (cert-manager,
+# or the customer's own CA).
 #------------------------------------------------------------------------------
 
 resource "helm_release" "envoy_gateway" {
@@ -55,6 +56,7 @@ resource "helm_release" "gateway_config" {
       proxyReplicas    = var.proxy_replicas
       proxyResources   = var.proxy_resources
       routeTimeout     = var.route_timeout
+      tls              = var.tls == null ? null : { hostname = var.tls.hostname, secretName = var.tls.secret_name }
       lanRoute = {
         enabled        = var.lan_route.enabled
         backendService = var.lan_route.backend_service

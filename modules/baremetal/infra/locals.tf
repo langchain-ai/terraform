@@ -80,7 +80,7 @@ locals {
       clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "250m", memory = "256Mi" }, cache = "0" }
     }
   }
-  smithdb_tier_name = local.smithdb_tier_by_profile[var.sizing_profile]
+  smithdb_tier_name = var.smithdb_tier != "" ? var.smithdb_tier : local.smithdb_tier_by_profile[var.sizing_profile]
   smithdb_tier      = local.smithdb_tiers[local.smithdb_tier_name]
 
   #----------------------------------------------------------------------------
@@ -145,9 +145,10 @@ locals {
   # shared Postgres, and Redis DB 0 LangSmith, 1 Fleet, 2 Polly, 3 Insights.
   redis_db_index = { langsmith = 0, fleet = 1, polly = 2, insights = 3 }
   standalone_feature_flags = {
-    fleet    = var.enable_fleet
-    polly    = var.enable_standalone_polly
-    insights = var.enable_standalone_insights
+    fleet = var.enable_fleet
+    polly = var.enable_standalone_polly
+    # Engine runs on the Insights deployment (docs engine-self-hosted), so it brings that deployment with it.
+    insights = var.enable_standalone_insights || var.enable_engine
   }
   standalone_features = { for name, on in local.standalone_feature_flags : name => "langsmith_${name}" if on }
   shared_products = [
@@ -180,7 +181,8 @@ locals {
       }) : d
     )
   }
-  datastores = local.datastores_core
+  # The JuiceFS metadata Redis is a datastore like the others, so the budget and its StatefulSet read one size.
+  datastores = merge(local.datastores_core, var.enable_sandboxes ? { redis_juicefs = local.juicefs_size } : {})
 
   # Kubernetes strings for the resources that will consume these sizes.
   datastores_k8s = {
@@ -236,18 +238,21 @@ locals {
   # enable_langsmith_deployment). Sizes match the gcp helm_release; the
   # admission webhook sets no requests there, so it's an estimate.
   install_keda = var.enable_deployments
+  # Only the add-ons this module installs (platform.tf): a cluster's own are not ours to budget.
   addon_pods = merge(
-    {
-      "metrics-server"         = { replicas = 1, cpu_m = 100, mem_mi = 200 }
-      "local-path-provisioner" = { replicas = 1, cpu_m = 50, mem_mi = 64 }
-      "metallb-controller"     = { replicas = 1, cpu_m = 100, mem_mi = 100 }
-      "metallb-speaker"        = { replicas = length(local.workers), cpu_m = 50, mem_mi = 64 }
-      "envoy-gateway"          = { replicas = 1, cpu_m = 100, mem_mi = 256 }
-      "envoy-proxy"            = { replicas = 1, cpu_m = 200, mem_mi = 256 }
+    var.install_metrics_server ? { "metrics-server" = { replicas = 1, cpu_m = 100, mem_mi = 200 } } : {},
+    var.install_local_path ? { "local-path-provisioner" = { replicas = 1, cpu_m = 50, mem_mi = 64 } } : {},
+    var.install_metallb ? {
+      "metallb-controller" = { replicas = 1, cpu_m = 100, mem_mi = 100 }
+      "metallb-speaker"    = { replicas = length(local.workers), cpu_m = 50, mem_mi = 64 }
+    } : {},
+    var.install_envoy_gateway ? {
+      "envoy-gateway" = { replicas = 1, cpu_m = 100, mem_mi = 256 }
+      "envoy-proxy"   = { replicas = 1, cpu_m = 200, mem_mi = 256 }
       # Envoy Gateway adds a shutdown-manager sidecar to each proxy pod (drains
       # connections on shutdown). Seen on the live pod: 10m / 32Mi.
       "envoy-proxy-shutdown-manager" = { replicas = 1, cpu_m = 10, mem_mi = 32 }
-    },
+    } : {},
     var.enable_cloudflare_tunnel ? {
       "cloudflared" = { replicas = 2, cpu_m = 50, mem_mi = 64 }
     } : {},
@@ -297,6 +302,7 @@ locals {
       }
     ],
     local.trace_store_pods,
+    local.sandbox_pods,
   )
   pods_parsed = concat(
     [
@@ -396,7 +402,8 @@ locals {
 # (a.b.c.d-a.b.c.e) and CIDRs can be compared.
 #------------------------------------------------------------------------------
 locals {
-  lb_ip_octets = [for o in split(".", var.envoy_gateway_lb_ip) : tonumber(o)]
+  # Empty when the module installs no MetalLB or Envoy: nothing to compare against the pool then.
+  lb_ip_octets = var.envoy_gateway_lb_ip == "" ? [0, 0, 0, 0] : [for o in split(".", var.envoy_gateway_lb_ip) : tonumber(o)]
   lb_ip_num    = local.lb_ip_octets[0] * 16777216 + local.lb_ip_octets[1] * 65536 + local.lb_ip_octets[2] * 256 + local.lb_ip_octets[3]
 
   metallb_bounds = [

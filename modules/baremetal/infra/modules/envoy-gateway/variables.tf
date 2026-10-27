@@ -89,3 +89,12 @@ variable "lan_route" {
     specific route still wins for the domain.
   EOT
 }
+
+variable "tls" {
+  type = object({
+    hostname    = string
+    secret_name = string
+  })
+  default     = null
+  description = "An HTTPS :443 listener for hostname, terminating with the kubernetes.io/tls Secret secret_name in gateway_namespace. null: HTTP only."
+}

@@ -47,6 +47,17 @@ variable "smithdb_query_enabled" {
   description = "Reads come from SmithDB instead of ClickHouse."
 }
 
+variable "smithdb_tier" {
+  type        = string
+  default     = ""
+  description = "SmithDB's resource tier (minimal, small, medium), when the load and not the sizing profile should set it: the SmithDB scale docs give each tier its ingest and query QPS (read per replica, this is what adding replicas buys), and production's medium tier asks 28 cores a query pod whatever the load. Empty: the profile's tier, as before."
+
+  validation {
+    condition     = contains(["", "minimal", "small", "medium"], var.smithdb_tier)
+    error_message = "smithdb_tier must be empty, minimal, small or medium."
+  }
+}
+
 variable "smithdb_migration_parallelism" {
   type        = number
   default     = 1
@@ -135,7 +146,7 @@ locals {
         persistence = {
           enabled          = true
           size             = "${local.clickhouse_storage_gi}Gi"
-          storageClassName = module.local_path.storage_class_retain
+          storageClassName = local.storage_class_retain
         }
       }
     }
@@ -165,7 +176,7 @@ locals {
           }
           statefulSet = {
             resources   = { requests = local.smithdb_migration_size.taskdb.requests, limits = local.smithdb_migration_size.taskdb.limits }
-            persistence = { enabled = true, size = local.smithdb_migration_size.taskdb.storage, storageClassName = module.local_path.storage_class_delete }
+            persistence = { enabled = true, size = local.smithdb_migration_size.taskdb.storage, storageClassName = local.storage_class_delete }
           }
         }
       }

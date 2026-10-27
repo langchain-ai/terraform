@@ -18,6 +18,7 @@
 
 module "metrics_server" {
   source = "./modules/metrics-server"
+  count  = var.install_metrics_server ? 1 : 0
 
   chart_version        = var.metrics_server_chart_version
   kubelet_insecure_tls = var.metrics_server_kubelet_insecure_tls
@@ -31,6 +32,7 @@ module "metrics_server" {
 
 module "local_path" {
   source = "./modules/local-path"
+  count  = var.install_local_path ? 1 : 0
 
   image        = var.local_path_image
   helper_image = var.local_path_helper_image
@@ -45,6 +47,7 @@ module "local_path" {
 
 module "metallb" {
   source = "./modules/metallb"
+  count  = var.install_metallb ? 1 : 0
 
   chart_version    = var.metallb_chart_version
   gateway_ip       = var.envoy_gateway_lb_ip
@@ -67,6 +70,8 @@ module "metallb" {
 resource "kubernetes_namespace_v1" "langsmith" {
   metadata {
     name = "langsmith"
+    # sandbox-host runs privileged with host networking: Pod Security Admission must allow it here.
+    labels = var.enable_sandboxes ? { "pod-security.kubernetes.io/enforce" = "privileged" } : {}
   }
 
   depends_on = [terraform_data.budget]
@@ -74,6 +79,7 @@ resource "kubernetes_namespace_v1" "langsmith" {
 
 module "envoy_gateway" {
   source = "./modules/envoy-gateway"
+  count  = var.install_envoy_gateway ? 1 : 0
 
   chart_version     = var.envoy_gateway_chart_version
   load_balancer_ip  = var.envoy_gateway_lb_ip
@@ -87,6 +93,7 @@ module "envoy_gateway" {
     requests = { cpu = "${local.addon_pods["envoy-proxy"].cpu_m}m", memory = "${local.addon_pods["envoy-proxy"].mem_mi}Mi" }
     limits   = { cpu = "1", memory = "512Mi" }
   }
+  tls = var.gateway_tls_secret == "" ? null : { hostname = var.langsmith_domain, secret_name = var.gateway_tls_secret }
   # With a domain, the chart's HTTPRoute matches only that Host; keep the LAN IP
   # serving LangSmith too.
   lan_route = {
@@ -104,7 +111,7 @@ resource "terraform_data" "envoy_lb_ip_check" {
 
   lifecycle {
     precondition {
-      condition     = !local.lb_ip_in_pool
+      condition     = !var.install_metallb || !local.lb_ip_in_pool
       error_message = "envoy_gateway_lb_ip ${var.envoy_gateway_lb_ip} is inside metallb_addresses (${join(", ", var.metallb_addresses)}). The gateway gets its own pool; keep its IP out of metallb_addresses so no other Service can take it."
     }
   }
@@ -180,7 +187,7 @@ module "postgres_langsmith" {
   database           = "langsmith"
   username           = "langsmith"
   storage_size       = local.datastores_k8s.postgres_langsmith.storage
-  storage_class      = module.local_path.storage_class_retain
+  storage_class      = local.storage_class_retain
   resources          = { requests = local.datastores_k8s.postgres_langsmith.requests, limits = local.datastores_k8s.postgres_langsmith.limits }
   memory_limit_mi    = local.datastores.postgres_langsmith.lim_mem_mi
   allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
@@ -198,7 +205,7 @@ module "postgres_smithdb" {
   database           = "smithdb_metastore"
   username           = "smithdb"
   storage_size       = local.datastores_k8s.postgres_smithdb.storage
-  storage_class      = module.local_path.storage_class_retain
+  storage_class      = local.storage_class_retain
   resources          = { requests = local.datastores_k8s.postgres_smithdb.requests, limits = local.datastores_k8s.postgres_smithdb.limits }
   memory_limit_mi    = local.datastores.postgres_smithdb.lim_mem_mi
   allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
@@ -249,7 +256,7 @@ module "redis_langsmith" {
   image              = var.redis_image
   persistence        = "rdb"
   storage_size       = local.datastores_k8s.redis_langsmith.storage
-  storage_class      = module.local_path.storage_class_retain
+  storage_class      = local.storage_class_retain
   resources          = { requests = local.datastores_k8s.redis_langsmith.requests, limits = local.datastores_k8s.redis_langsmith.limits }
   memory_limit_mi    = local.datastores.redis_langsmith.lim_mem_mi
   allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
@@ -280,14 +287,15 @@ module "rustfs_smithdb" {
   namespace          = "rustfs-smithdb"
   image              = var.rustfs_image
   bucket             = "smithdb"
-  extra_buckets      = var.enable_blob_storage ? [local.blob_bucket] : []
+  extra_buckets      = concat(var.enable_blob_storage ? [local.blob_bucket] : [], var.enable_sandboxes ? [local.juicefs_bucket] : [])
   ttl_buckets        = var.enable_blob_storage ? [local.blob_bucket] : []
   ttl_days           = var.blob_storage_ttl_days
   aws_cli_image      = var.aws_cli_image
   storage_size       = local.datastores_k8s.rustfs_smithdb.storage
-  storage_class      = module.local_path.storage_class_retain
+  storage_class      = local.storage_class_retain
   resources          = { requests = local.datastores_k8s.rustfs_smithdb.requests, limits = local.datastores_k8s.rustfs_smithdb.limits }
   allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
+  allowed_cidrs      = var.enable_sandboxes ? var.sandbox_source_cidrs : []
   datastore_label    = local.datastore_label
 
   depends_on = [terraform_data.budget]

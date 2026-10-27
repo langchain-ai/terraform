@@ -158,3 +158,22 @@ run "gates_without_smithdb_are_refused" {
 
   expect_failures = [terraform_data.trace_store]
 }
+
+run "the_load_can_set_the_smithdb_tier" {
+  command = plan
+
+  variables {
+    sizing_profile = "production"
+    smithdb_tier   = "small"
+    cluster_nodes = {
+      control-plane = { cpu = 64, memory_gi = 256, disk_gi = 2000, role = "control-plane" }
+      worker-1      = { cpu = 64, memory_gi = 256, disk_gi = 2000 }
+      worker-2      = { cpu = 64, memory_gi = 256, disk_gi = 2000 }
+    }
+  }
+
+  assert {
+    condition     = length([for p in output.pods : p if p.name == "smithdb/query" && p.cpu_n == 4]) == 1
+    error_message = "smithdb_tier overrides the profile's tier: small's query pod asks 4 cores, not medium's 28."
+  }
+}

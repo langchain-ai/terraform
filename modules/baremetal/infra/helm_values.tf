@@ -14,7 +14,7 @@ variable "langsmith_domain" {
 variable "langsmith_url_scheme" {
   type        = string
   default     = "http"
-  description = "Scheme of the URL users reach LangSmith on. https when TLS terminates in front of the gateway (e.g. a Cloudflare Tunnel); the gateway listener itself stays HTTP."
+  description = "Scheme of the URL users reach LangSmith on. https when TLS terminates at the gateway (gateway_tls_secret) or in front of it (e.g. a Cloudflare Tunnel)."
 
   validation {
     condition     = contains(["http", "https"], var.langsmith_url_scheme)
@@ -105,13 +105,16 @@ locals {
         } : {},
       )
       gateway = {
-        enabled   = true
-        name      = module.envoy_gateway.gateway.name
-        namespace = module.envoy_gateway.gateway.namespace
+        enabled = true
+        # try(): without a Gateway the precondition in platform.tf says why; a null read here said less.
+        name      = try(local.gateway.name, "")
+        namespace = try(local.gateway.namespace, "")
       }
     },
     local.feature_values,
     local.clickhouse_values,
+    local.sandbox_values,
+    local.engine_values,
     # Same env var as modules/aws: extended usage reporting on every component.
     var.enable_usage_telemetry ? {
       commonEnv = [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }]
@@ -190,7 +193,7 @@ locals {
           }
         }
       },
-      local.smithdb_minimal ? {} : { cache = { storageClassName = module.local_path.storage_class_delete } },
+      local.smithdb_minimal ? {} : { cache = { storageClassName = local.storage_class_delete } },
       local.smithdb_component_values,
     )
   }

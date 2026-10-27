@@ -139,6 +139,8 @@ config_pairs=(
 _feature_on fleet    && config_pairs+=("agent_builder_encryption_key:AGENT_BUILDER_ENCRYPTION_KEY")
 _feature_on insights && config_pairs+=("insights_encryption_key:INSIGHTS_ENCRYPTION_KEY")
 _feature_on polly    && config_pairs+=("polly_encryption_key:POLLY_ENCRYPTION_KEY")
+_feature_on sandboxes && config_pairs+=("sandbox_callback_signing_jwk:SANDBOX_CALLBACK_SIGNING_JWK")
+_feature_on engine   && config_pairs+=("engine_encryption_key:ENGINE_ENCRYPTION_KEY" "engine_usage_signing_secret:ENGINE_USAGE_SIGNING_SECRET")
 if ! config_env="$(_config_payload "${config_pairs[@]}")"; then
   fail "The langsmith-config Secret was not changed."
   exit 1

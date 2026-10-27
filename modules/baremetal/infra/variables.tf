@@ -252,10 +252,11 @@ variable "envoy_gateway_chart_version" {
 
 variable "envoy_gateway_lb_ip" {
   type        = string
-  description = "LAN IP pinned to the Envoy proxy LoadBalancer Service. MetalLB serves it from its own pool (autoAssign off), so it must be an unused address on the node subnet OUTSIDE metallb_addresses."
+  default     = ""
+  description = "LAN IP pinned to the Envoy proxy LoadBalancer Service. MetalLB serves it from its own pool (autoAssign off), so it must be an unused address on the node subnet OUTSIDE metallb_addresses. Required when this module installs both MetalLB and Envoy Gateway (platform.tf)."
 
   validation {
-    condition     = can(regex("^\\d{1,3}(\\.\\d{1,3}){3}$", var.envoy_gateway_lb_ip))
+    condition     = var.envoy_gateway_lb_ip == "" || can(regex("^\\d{1,3}(\\.\\d{1,3}){3}$", var.envoy_gateway_lb_ip))
     error_message = "envoy_gateway_lb_ip must be an IPv4 address."
   }
 }
