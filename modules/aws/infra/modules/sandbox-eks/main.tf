@@ -17,7 +17,8 @@ locals {
   # tolerate it or it never schedules: the add-on stays DEGRADED and the apply
   # times out. The tolerations follow the node group's own taints, after the
   # EKS defaults or any tolerations given in var.cluster_addons, and the rest
-  # of a configuration_values given there is kept.
+  # of a configuration_values given there is kept. A taint's value is optional
+  # upstream; one without a value is tolerated with operator Exists.
   k8s_taint_effects = {
     NO_SCHEDULE        = "NoSchedule"
     NO_EXECUTE         = "NoExecute"
@@ -31,12 +32,10 @@ locals {
         { key = "node-role.kubernetes.io/control-plane", effect = "NoSchedule" },
       ]),
       [
-        for taint in values(try(var.managed_node_group.taints, {})) : {
-          key      = taint.key
-          operator = "Equal"
-          value    = taint.value
-          effect   = local.k8s_taint_effects[taint.effect]
-        }
+        for taint in values(try(var.managed_node_group.taints, {})) : merge(
+          { key = taint.key, effect = local.k8s_taint_effects[taint.effect] },
+          try(taint.value, null) == null ? { operator = "Exists" } : { operator = "Equal", value = taint.value },
+        )
       ],
     )
   }))

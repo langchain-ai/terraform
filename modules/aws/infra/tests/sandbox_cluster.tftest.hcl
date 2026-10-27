@@ -409,3 +409,23 @@ run "coredns_keeps_its_eks_addons_configuration_in_the_sandbox_cluster" {
     error_message = "the sandbox cluster's CoreDNS must keep the eks_addons configuration and add the sandbox-host toleration"
   }
 }
+
+run "coredns_tolerates_an_override_taint_without_a_value" {
+  command = plan
+
+  variables {
+    sandbox_host_node_group_overrides = {
+      taints = {
+        dedicated = { key = "example.com/dedicated", effect = "NO_SCHEDULE" }
+      }
+    }
+  }
+
+  assert {
+    condition = contains(
+      jsondecode(module.sandbox_eks[0].addons_input["coredns"].configuration_values).tolerations,
+      { key = "example.com/dedicated", operator = "Exists", effect = "NoSchedule" },
+    )
+    error_message = "CoreDNS must tolerate a node-group taint that has no value, with operator Exists"
+  }
+}
