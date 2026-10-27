@@ -431,6 +431,27 @@ run "separate_cluster_rejects_overlapping_ranges" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+# The same CIDR in two variables is the plainest overlap of all.
+run "separate_cluster_rejects_a_range_equal_to_a_langsmith_range" {
+  command = plan
+
+  variables {
+    sandbox_pods_cidr = "10.4.0.0/14"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "separate_cluster_rejects_two_equal_sandbox_ranges" {
+  command = plan
+
+  variables {
+    sandbox_services_cidr = "10.10.0.0/20"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 run "separate_cluster_rejects_overlapping_sandbox_ranges" {
   command = plan
 

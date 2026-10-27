@@ -54,12 +54,12 @@ locals {
 
   # The sandbox ranges must not overlap each other or the LangSmith ranges. Two
   # CIDRs overlap when either one's network address, masked to the other's
-  # prefix, is the other's network address.
+  # prefix, is the other's network address. Pairs are built by position, not
+  # value, so two variables set to the same CIDR still count as an overlap.
+  vpc_cidrs = [var.subnet_cidr, var.pods_cidr, var.services_cidr, var.sandbox_subnet_cidr, var.sandbox_pods_cidr, var.sandbox_services_cidr]
   sandbox_cidr_pairs = [
-    for pair in setproduct(
-      [var.sandbox_subnet_cidr, var.sandbox_pods_cidr, var.sandbox_services_cidr],
-      [var.subnet_cidr, var.pods_cidr, var.services_cidr, var.sandbox_subnet_cidr, var.sandbox_pods_cidr, var.sandbox_services_cidr],
-    ) : pair if pair[0] != pair[1]
+    for pair in setproduct(range(3, 6), range(6)) : [local.vpc_cidrs[pair[0]], local.vpc_cidrs[pair[1]]]
+    if pair[0] != pair[1]
   ]
   sandbox_cidr_overlaps = [
     for pair in local.sandbox_cidr_pairs : "${pair[0]} and ${pair[1]}"
