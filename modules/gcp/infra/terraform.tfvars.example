@@ -216,7 +216,8 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # of the LangSmith cluster. Needs one exact langsmith chart on 0.18 or later, a
 # sandbox namespace that differs from langsmith_namespace, and either an
 # internal gateway or TLS, because the sandbox cluster calls the LangSmith API
-# through the gateway. With langsmith_domain = "" the gateway IP is used.
+# through the gateway, so its name must resolve from the VPC: set
+# langsmith_domain = "" to use the gateway IP.
 # setup-env.sh generates the dedicated sandbox service-auth secret. See the
 # README, "Optional dedicated sandbox cluster".
 # sandbox_deployment_mode      = "separate_cluster"
