@@ -36,7 +36,7 @@ make uninstall
 
 1. Deletes all `lgp` custom resources (LangGraph Platform deployments) and waits for operator-managed pods to terminate
 2. Deletes the `lgps.apps.langchain.ai` CRD (has `helm.sh/resource-policy: keep` — Helm leaves it behind intentionally)
-3. With sandboxes on: deletes the sandbox-host Deployment first and waits up to 6 minutes while it unmounts JuiceFS and stops its sandboxes, then force-deletes any pod still running
+3. With sandboxes on: deletes the sandbox-host Deployment first and waits up to 6 minutes while it unmounts JuiceFS and stops its sandboxes, then force-deletes any pod still running. With `sandbox_deployment_mode = "separate_cluster"` it does this in the sandbox cluster and uninstalls the `langsmith-sandbox` release there before it touches the `langsmith` release
 4. Helm uninstall: `langsmith`
 5. With `ingress_controller = "envoy-gateway"`: deletes the Gateway `langsmith-gateway` (which removes the Envoy proxy LB service and its Azure LB IP), the GatewayClass `langsmith-eg`, and the EnvoyProxy `langsmith-proxy`
 6. Prompts before deleting the `langsmith` namespace
@@ -65,6 +65,7 @@ Runs `terraform destroy -auto-approve` from `azure/infra/`.
 - Redis Cache Premium
 - Blob Storage account + container + managed identity + federated credentials
 - With `enable_sandboxes = true`: the sandbox-host node pool, the JuiceFS Azure Managed Redis, the JuiceFS Blob container, and the sandbox-host managed identity
+- With `sandbox_deployment_mode = "separate_cluster"`: the sandbox AKS cluster and its node resource group, the sandbox subnet and its NSG
 - Azure Key Vault (enters soft-delete — see below)
 - VNet + subnets
 - Resource group, unless `create_resource_group = false` attached an existing one
