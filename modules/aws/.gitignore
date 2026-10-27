@@ -26,6 +26,7 @@ infra/.admin_email
 # Helm generated values — contain real credentials
 **/helm/values/langsmith-values*.yaml
 !**/helm/values/langsmith-values*.yaml.example
+**/helm/values/langsmith-sandbox-values*.yaml
 **/values-overrides.yaml
 
 # Crash logs
