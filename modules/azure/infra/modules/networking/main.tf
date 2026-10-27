@@ -350,6 +350,15 @@ resource "azurerm_subnet" "subnet_sandbox" {
 # cluster traffic, pod addresses included, stays inside the subnet. Everything
 # else from the VNet is denied, which leaves the LangSmith cluster no other way
 # onto a sandbox node.
+#
+# Outbound is closed the same way, so code that escapes a sandbox onto its node
+# cannot reach LangSmith's nodes, pods or private endpoints. Sandbox nodes reach
+# their own subnet and pod range, the platform address 168.63.129.16 (DNS and
+# the node agent), the LangSmith ingress on 80 and 443 (sandbox_ingress_prefixes:
+# where its load balancer frontend can sit), and the JuiceFS Redis private
+# endpoint on 10000 in the AKS subnet; the rest of the VNet is denied. Internet
+# egress, Blob through its service endpoint among it, stays open: sandboxes
+# need it, and aks_outbound_type routes it through the operator's firewall.
 resource "azurerm_network_security_group" "sandbox" {
   count               = var.create_sandbox_subnet ? 1 : 0
   name                = "${var.network_name}-subnet-sandbox-nsg"
@@ -405,6 +414,68 @@ resource "azurerm_network_security_group" "sandbox" {
     destination_port_range     = "*"
     source_address_prefix      = "VirtualNetwork"
     destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                         = "allow-sandbox-cluster-out"
+    priority                     = 100
+    direction                    = "Outbound"
+    access                       = "Allow"
+    protocol                     = "*"
+    source_port_range            = "*"
+    destination_port_range       = "*"
+    source_address_prefix        = "*"
+    destination_address_prefixes = concat(var.sandbox_subnet_address_prefix, var.sandbox_pod_cidr != "" ? [var.sandbox_pod_cidr] : [])
+  }
+
+  # The VirtualNetwork tag covers 168.63.129.16, so the deny below would cut
+  # off DNS and the node agent without this.
+  security_rule {
+    name                       = "allow-azure-platform-out"
+    priority                   = 110
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "*"
+    destination_address_prefix = "168.63.129.16/32"
+  }
+
+  security_rule {
+    name                         = "allow-langsmith-ingress-out"
+    priority                     = 120
+    direction                    = "Outbound"
+    access                       = "Allow"
+    protocol                     = "Tcp"
+    source_port_range            = "*"
+    destination_port_ranges      = ["80", "443"]
+    source_address_prefix        = "*"
+    destination_address_prefixes = var.sandbox_ingress_prefixes
+  }
+
+  security_rule {
+    name                         = "allow-juicefs-redis-out"
+    priority                     = 130
+    direction                    = "Outbound"
+    access                       = "Allow"
+    protocol                     = "Tcp"
+    source_port_range            = "*"
+    destination_port_range       = "10000"
+    source_address_prefix        = "*"
+    destination_address_prefixes = var.aks_source_prefixes
+  }
+
+  security_rule {
+    name                       = "deny-vnet-outbound"
+    priority                   = 4096
+    direction                  = "Outbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "*"
+    destination_address_prefix = "VirtualNetwork"
   }
 }
 

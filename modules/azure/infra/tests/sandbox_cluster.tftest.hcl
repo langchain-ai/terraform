@@ -221,6 +221,70 @@ run "the_sandbox_subnet_admits_sandbox_host_from_the_aks_subnet_only" {
     ]) == 1
     error_message = "The sandbox NSG does not deny the rest of the VNet"
   }
+
+  # Outbound: code that escapes a sandbox must not reach LangSmith's nodes,
+  # pods or private endpoints.
+  assert {
+    condition = length([
+      for r in module.vnet.sandbox_nsg_rules : r
+      if r.direction == "Outbound" && r.access == "Deny" && r.destination_address_prefix == "VirtualNetwork" && r.priority == 4096
+    ]) == 1
+    error_message = "The sandbox NSG does not deny the rest of the VNet outbound"
+  }
+  assert {
+    condition = length([
+      for r in module.vnet.sandbox_nsg_rules : r
+      if r.direction == "Outbound" && r.access == "Allow" && r.destination_address_prefix == "168.63.129.16/32"
+    ]) == 1
+    error_message = "The sandbox NSG blocks the platform address (DNS and the node agent)"
+  }
+  assert {
+    condition = length([
+      for r in module.vnet.sandbox_nsg_rules : r
+      if r.direction == "Outbound" && r.access == "Allow" && toset(r.destination_port_ranges) == toset(["80", "443"]) && toset(r.destination_address_prefixes) == toset(var.aks_subnet_address_prefix)
+    ]) == 1
+    error_message = "Sandbox nodes cannot reach the LangSmith ingress in the AKS subnet on 80 and 443"
+  }
+  assert {
+    condition = length([
+      for r in module.vnet.sandbox_nsg_rules : r
+      if r.direction == "Outbound" && r.access == "Allow" && r.destination_port_range == "10000" && toset(r.destination_address_prefixes) == toset(var.aks_subnet_address_prefix)
+    ]) == 1
+    error_message = "Sandbox nodes cannot reach the JuiceFS Redis private endpoint in the AKS subnet"
+  }
+  assert {
+    condition = length([
+      for r in module.vnet.sandbox_nsg_rules : r
+      if r.direction == "Outbound" && r.access == "Allow" && r.protocol == "*" && toset(r.destination_address_prefixes) == toset(concat(var.sandbox_subnet_address_prefix, [var.aks_pod_cidr]))
+    ]) == 1
+    error_message = "Sandbox nodes cannot reach their own subnet and pod range"
+  }
+}
+
+run "an_internal_load_balancer_subnet_is_reachable_from_sandbox_nodes" {
+  command = plan
+
+  variables {
+    ingress_load_balancer           = "internal"
+    tls_certificate_source          = "none"
+    langsmith_domain                = "langsmith.internal.example.com"
+    ingress_load_balancer_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/langsmith-rg/providers/Microsoft.Network/virtualNetworks/langsmith-vnet/subnets/ingress"
+  }
+
+  override_data {
+    target = data.azurerm_subnet.sandbox_ingress_lb_subnet
+    values = {
+      address_prefixes = ["10.0.40.0/24"]
+    }
+  }
+
+  assert {
+    condition = length([
+      for r in module.vnet.sandbox_nsg_rules : r
+      if r.direction == "Outbound" && toset(r.destination_port_ranges) == toset(["80", "443"]) && toset(r.destination_address_prefixes) == toset(concat(var.aks_subnet_address_prefix, ["10.0.40.0/24"]))
+    ]) == 1
+    error_message = "Sandbox nodes cannot reach an internal load balancer in its own subnet"
+  }
 }
 
 run "same_cluster_plans_no_sandbox_cluster" {
@@ -509,6 +573,43 @@ run "sandbox_aks_runs_overlay_with_a_critical_addons_system_pool" {
   assert {
     condition     = output.kube_auth == "certificate" && output.api_server_public_fqdn == false
     error_message = "A public cluster without Entra should sign in by certificate"
+  }
+}
+
+run "sandbox_aks_takes_the_outbound_type" {
+  command = plan
+
+  module {
+    source = "./modules/sandbox-aks"
+  }
+
+  variables {
+    cluster_name        = "langsmith-sbox-aks"
+    location            = "eastus"
+    resource_group_name = "langsmith-rg"
+    kubernetes_version  = "1.35"
+    sku_tier            = "Standard"
+    support_plan        = "KubernetesOfficial"
+    subnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/sandbox"
+    pod_cidr            = "10.244.0.0/16"
+    service_cidr        = "10.0.64.0/20"
+    dns_service_ip      = "10.0.64.10"
+    system_node_vm_size = "Standard_D4s_v5"
+    system_node_count   = 1
+    outbound_type       = "userDefinedRouting"
+    sandbox_host_pool = {
+      vm_size         = "Standard_D8ds_v5"
+      min_count       = 0
+      max_count       = 5
+      node_labels     = { "sandbox.langsmith.com/host" = "true", "sandbox.langsmith.com/node-pool" = "host" }
+      node_taints     = ["sandbox.langsmith.com/host=true:NoSchedule"]
+      os_disk_size_gb = 200
+    }
+  }
+
+  assert {
+    condition     = azurerm_kubernetes_cluster.sandbox.network_profile[0].outbound_type == "userDefinedRouting"
+    error_message = "The sandbox cluster did not take the outbound type"
   }
 }
 

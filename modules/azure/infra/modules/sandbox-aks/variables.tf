@@ -133,3 +133,14 @@ variable "tags" {
   description = "Tags for the cluster and its node pools."
   default     = {}
 }
+
+variable "outbound_type" {
+  type        = string
+  description = "How the sandbox nodes reach the internet; the root passes aks_outbound_type, so sandbox egress takes the same path as the LangSmith cluster's. userDefinedRouting and userAssignedNATGateway need the route table or NAT gateway on the sandbox subnet."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting", "userAssignedNATGateway"], var.outbound_type)
+    error_message = "outbound_type must be \"loadBalancer\", \"userDefinedRouting\" or \"userAssignedNATGateway\"."
+  }
+}

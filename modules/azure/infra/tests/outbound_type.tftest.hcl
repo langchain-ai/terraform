@@ -752,3 +752,116 @@ run "a_live_read_without_an_outbound_type_is_not_a_change" {
     aks_outbound_type = "userDefinedRouting"
   }
 }
+
+# ── separate_cluster: the sandbox cluster takes the same egress path ─────────
+
+run "separate_cluster_with_user_defined_routing_needs_a_sandbox_subnet" {
+  command = plan
+
+  variables {
+    aks_outbound_type             = "userDefinedRouting"
+    enable_sandboxes              = true
+    sandbox_deployment_mode       = "separate_cluster"
+    langsmith_helm_chart_version  = "0.18.0"
+    sandbox_subnet_address_prefix = ["10.0.40.0/24"]
+  }
+
+  override_module {
+    target = module.sandbox_aks
+    outputs = {
+      cluster_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-sbox-aks-test"
+      cluster_name           = "ls-sbox-aks-test"
+      oidc_issuer_url        = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/sandbox/"
+      host                   = "https://ls-sbox-aks-test.hcp.eastus.azmk8s.io:443"
+      client_certificate     = ""
+      client_key             = ""
+      cluster_ca_certificate = ""
+      kube_auth              = "certificate"
+      api_server_public_fqdn = false
+      node_resource_group    = "MC_ls-rg-test_ls-sbox-aks-test_eastus"
+    }
+  }
+
+  expect_failures = [terraform_data.sandbox_cluster_guard]
+}
+
+run "separate_cluster_with_user_defined_routing_needs_a_routed_sandbox_subnet" {
+  command = plan
+
+  variables {
+    aks_outbound_type            = "userDefinedRouting"
+    enable_sandboxes             = true
+    sandbox_deployment_mode      = "separate_cluster"
+    langsmith_helm_chart_version = "0.18.0"
+    sandbox_subnet_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/sandbox"
+  }
+
+  override_data {
+    target = data.azurerm_subnet.byo_sandbox_subnet
+    values = {
+      address_prefixes  = ["10.0.40.0/24"]
+      service_endpoints = ["Microsoft.Storage"]
+      route_table_id    = ""
+    }
+  }
+
+  override_module {
+    target = module.sandbox_aks
+    outputs = {
+      cluster_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-sbox-aks-test"
+      cluster_name           = "ls-sbox-aks-test"
+      oidc_issuer_url        = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/sandbox/"
+      host                   = "https://ls-sbox-aks-test.hcp.eastus.azmk8s.io:443"
+      client_certificate     = ""
+      client_key             = ""
+      cluster_ca_certificate = ""
+      kube_auth              = "certificate"
+      api_server_public_fqdn = false
+      node_resource_group    = "MC_ls-rg-test_ls-sbox-aks-test_eastus"
+    }
+  }
+
+  expect_failures = [terraform_data.sandbox_cluster_guard]
+}
+
+run "separate_cluster_with_user_defined_routing_and_a_routed_sandbox_subnet_plans" {
+  command = plan
+
+  variables {
+    aks_outbound_type            = "userDefinedRouting"
+    enable_sandboxes             = true
+    sandbox_deployment_mode      = "separate_cluster"
+    langsmith_helm_chart_version = "0.18.0"
+    sandbox_subnet_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/sandbox"
+  }
+
+  override_data {
+    target = data.azurerm_subnet.byo_sandbox_subnet
+    values = {
+      address_prefixes  = ["10.0.40.0/24"]
+      service_endpoints = ["Microsoft.Storage"]
+      route_table_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/routeTables/platform-egress"
+    }
+  }
+
+  override_module {
+    target = module.sandbox_aks
+    outputs = {
+      cluster_id             = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-sbox-aks-test"
+      cluster_name           = "ls-sbox-aks-test"
+      oidc_issuer_url        = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/sandbox/"
+      host                   = "https://ls-sbox-aks-test.hcp.eastus.azmk8s.io:443"
+      client_certificate     = ""
+      client_key             = ""
+      cluster_ca_certificate = ""
+      kube_auth              = "certificate"
+      api_server_public_fqdn = false
+      node_resource_group    = "MC_ls-rg-test_ls-sbox-aks-test_eastus"
+    }
+  }
+
+  assert {
+    condition     = output.sandbox_subnet_id == var.sandbox_subnet_id
+    error_message = "A routed sandbox subnet with userDefinedRouting should plan"
+  }
+}

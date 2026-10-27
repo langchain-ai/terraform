@@ -142,6 +142,12 @@ locals {
   redis_subnet_id    = local.byo_redis_subnet ? var.redis_subnet_id : module.vnet.subnet_redis_id
   sandbox_subnet_id  = local.byo_sandbox_subnet ? var.sandbox_subnet_id : module.vnet.subnet_sandbox_id
 
+  # Where sandbox nodes may reach the LangSmith ingress on 80 and 443.
+  sandbox_ingress_prefixes = distinct(concat(
+    local.aks_subnet_prefixes,
+    coalesce(one(data.azurerm_subnet.sandbox_ingress_lb_subnet[*].address_prefixes), []),
+  ))
+
   # The sandbox subnet's prefixes, read back from a supplied subnet or the ones
   # Terraform is about to carve, for the capacity check below.
   sandbox_subnet_prefixes = local.byo_sandbox_subnet ? coalesce(one(data.azurerm_subnet.byo_sandbox_subnet[*].address_prefixes), []) : var.sandbox_subnet_address_prefix
@@ -628,6 +634,7 @@ module "vnet" {
   create_sandbox_subnet         = local.create_sandbox_subnet
   sandbox_subnet_address_prefix = var.sandbox_subnet_address_prefix
   sandbox_pod_cidr              = var.aks_pod_cidr
+  sandbox_ingress_prefixes      = local.sandbox_ingress_prefixes
 
   tags = local.common_tags
 }
@@ -682,6 +689,16 @@ data "azurerm_subnet" "byo_aks_subnet" {
 
 # Reads an operator-supplied sandbox cluster subnet for its address prefixes and
 # for the Microsoft.Storage endpoint the Blob firewall needs to allowlist it.
+# An internal ingress load balancer can take its frontend from a subnet of its
+# own. The sandbox subnet's NSG lets sandbox nodes reach it there on 80 and 443,
+# so read its prefixes.
+data "azurerm_subnet" "sandbox_ingress_lb_subnet" {
+  count                = local.separate_cluster_sandboxes && var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? 1 : 0
+  name                 = split("/", var.ingress_load_balancer_subnet_id)[10]
+  virtual_network_name = split("/", var.ingress_load_balancer_subnet_id)[8]
+  resource_group_name  = split("/", var.ingress_load_balancer_subnet_id)[4]
+}
+
 data "azurerm_subnet" "byo_sandbox_subnet" {
   count                = local.separate_cluster_sandboxes && local.byo_sandbox_subnet ? 1 : 0
   name                 = split("/", var.sandbox_subnet_id)[10]
@@ -2350,6 +2367,20 @@ resource "terraform_data" "sandbox_cluster_guard" {
       error_message = "The subnet given as sandbox_subnet_id must carry the Microsoft.Storage service endpoint. The Blob firewall allowlists it for the JuiceFS container, and Azure rejects the rule without the endpoint."
     }
 
+    # With egress through a route table or NAT gateway, the sandbox subnet has
+    # to carry one too, or the sandbox cluster would leave the network some
+    # other way. Both belong to whoever owns the network, so the subnet is
+    # supplied, as aks_subnet_id is.
+    precondition {
+      condition     = var.aks_outbound_type == "loadBalancer" || local.byo_sandbox_subnet
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" with sandbox_deployment_mode = \"separate_cluster\" needs sandbox_subnet_id: a subnet you own that carries the same egress path (a route table to your firewall, or a NAT gateway) as aks_subnet_id. Otherwise the sandbox cluster, which runs untrusted code, would get its own outbound IP and skip that path."
+    }
+
+    precondition {
+      condition     = var.aks_outbound_type != "userDefinedRouting" || length(data.azurerm_subnet.byo_sandbox_subnet) == 0 ? true : try(data.azurerm_subnet.byo_sandbox_subnet[0].route_table_id, "") != ""
+      error_message = "aks_outbound_type = \"userDefinedRouting\" needs a route table on the subnet given as sandbox_subnet_id, as on aks_subnet_id. AKS refuses userDefinedRouting on a subnet without one."
+    }
+
     # Undersized, the sandbox pool stalls short of max_count once the subnet
     # runs dry, after a clean apply.
     precondition {
@@ -2378,6 +2409,10 @@ module "sandbox_aks" {
   pod_cidr           = var.aks_pod_cidr
   service_cidr       = local.aks_service_cidr
   dns_service_ip     = local.aks_dns_service_ip
+
+  # Sandbox egress follows the LangSmith cluster's: through the operator's
+  # firewall or NAT gateway when aks_outbound_type says so, never around it.
+  outbound_type = var.aks_outbound_type
 
   system_node_vm_size = var.sandbox_system_node_vm_size
   system_node_count   = var.sandbox_system_node_count

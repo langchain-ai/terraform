@@ -1138,13 +1138,24 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
   each cluster.
 - **Subnet:** `<vnet>-subnet-sandbox` from `sandbox_subnet_address_prefix` (default `10.0.112.0/24`), with the
   `Microsoft.Storage` endpoint. The Blob firewall allowlists it for the JuiceFS container.
-- **NSG on that subnet:**
+- **NSG on that subnet, inbound:**
   - It admits TCP 19190 (`sandbox-host`) from the AKS node subnet only.
   - It admits all traffic from the sandbox subnet and its pod range.
   - It denies the rest of the VNet.
   - Port 19190 carries plain HTTP with sandbox secrets, commands and files, so it stays inside the VNet.
+- **NSG on that subnet, outbound,** so code that escapes a sandbox onto its node cannot reach LangSmith's nodes, pods
+  or private endpoints:
+  - It allows the sandbox subnet and its pod range, and the platform address `168.63.129.16` (DNS and the node agent).
+  - It allows TCP 80 and 443 to the LangSmith ingress: the AKS node subnet, plus `ingress_load_balancer_subnet_id`
+    when an internal load balancer has a subnet of its own.
+  - It allows TCP 10000 to the AKS node subnet, where the JuiceFS Redis private endpoint sits.
+  - It denies the rest of the VNet. Internet egress stays open: sandboxes need it.
 - **Bringing your own subnet:** with `create_vnet = false`, pass `sandbox_subnet_id`. The NSG on it is then yours, and
-  should follow the same rules.
+  should follow the same rules in both directions.
+- **Egress:** the sandbox cluster takes `aks_outbound_type` from the LangSmith cluster, so its internet traffic follows
+  the same path. With `userDefinedRouting` or `userAssignedNATGateway`, pass `sandbox_subnet_id`: a subnet you own
+  that carries the same route table or NAT gateway as `aks_subnet_id`. Plan refuses `separate_cluster` without it,
+  and with `userDefinedRouting` checks that the subnet has a route table.
 - **Workload Identity:** the `sandbox-host` identity's federated credential moves to the sandbox cluster's issuer and
   trusts `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>` (`langsmith-sandbox:sandbox-host`
   by default). `init-values.sh` writes the same name into the runtime chart.

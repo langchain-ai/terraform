@@ -121,6 +121,12 @@ variable "sandbox_subnet_address_prefix" {
   default     = ["10.0.112.0/24"]
 }
 
+variable "sandbox_ingress_prefixes" {
+  type        = list(string)
+  description = "Prefixes where the LangSmith ingress load balancer frontend can sit: the AKS node subnet, plus the internal load balancer's own subnet when it has one. The sandbox NSG lets sandbox nodes reach them on 80 and 443 for platform.endpoint."
+  default     = []
+}
+
 variable "sandbox_pod_cidr" {
   type        = string
   description = "Overlay pod range of the sandbox cluster. Its NSG admits the range alongside the subnet, because overlay pod traffic between nodes is not encapsulated and the subnet NSG sees pod addresses."
