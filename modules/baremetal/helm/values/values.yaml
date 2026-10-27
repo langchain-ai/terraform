@@ -19,7 +19,8 @@ frontend:
   service:
     type: ClusterIP
 
-# SmithDB-only: no ClickHouse.
+# SmithDB-only unless clickhouse_source = "in-cluster": Terraform's
+# langsmith-values-overrides.yaml (after this file) then turns ClickHouse on.
 clickhouse:
   enabled: false
 

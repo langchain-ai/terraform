@@ -287,7 +287,7 @@ locals {
   string_pods = concat(
     [for c, p in local.app_pods : { name = "app/${c}", pool = "workers", replicas = p.replicas, cpu = p.cpu, memory = p.memory, disk = "0" }],
     [
-      for c, s in local.smithdb_tier : {
+      for c, s in(var.enable_smithdb ? local.smithdb_tier : {}) : {
         name     = "smithdb/${c}"
         pool     = contains(local.smithdb_cache_components, c) ? local.smithdb_pool.cache : local.smithdb_pool.compute
         replicas = 1
@@ -296,6 +296,7 @@ locals {
         disk     = s.cache
       }
     ],
+    local.trace_store_pods,
   )
   pods_parsed = concat(
     [

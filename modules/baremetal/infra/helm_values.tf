@@ -111,6 +111,7 @@ locals {
       }
     },
     local.feature_values,
+    local.clickhouse_values,
     # Same env var as modules/aws: extended usage reporting on every component.
     var.enable_usage_telemetry ? {
       commonEnv = [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }]
@@ -161,14 +162,11 @@ locals {
 
   smithdb_values = {
     smithdb = merge(
+      # enabled and the three gates come from trace_store.tf.
+      local.smithdb_gate_values,
+      local.smithdb_migration_values,
       {
-        enabled      = true
         resourceTier = local.smithdb_minimal ? "small" : local.smithdb_tier_name
-        langsmith = {
-          ingestion = { enabled = true }
-          query     = { enabled = true }
-          migration = { enabled = false } # needs ClickHouse; we run SmithDB-only
-        }
         config = {
           existingSecretName = kubernetes_secret_v1.smithdb_config.metadata[0].name
           metastore = {

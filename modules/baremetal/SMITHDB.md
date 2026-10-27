@@ -1,11 +1,42 @@
 # SmithDB on bare metal
 
 SmithDB is LangSmith's trace store. It writes traces as columnar (Vortex) files to S3-compatible object storage and
-indexes them in a PostgreSQL metastore. This example runs it **without ClickHouse**.
+indexes them in a PostgreSQL metastore. By default this example runs it **without ClickHouse**; the inputs below
+run it beside ClickHouse for a migration, as the cloud modules do.
 
 This page covers only what is specific to running SmithDB on self-managed Kubernetes. For everything else, see the
 official [SmithDB troubleshooting](https://docs.langchain.com/langsmith/self-host-smithdb-troubleshooting) guide. Behavior described here was observed
 with LangSmith chart 0.17.x (SmithDB 0.17.33); later versions may differ.
+
+## Beside ClickHouse: dual ingest and migration
+
+The same inputs as `modules/aws` and `modules/azure`, in `infra/terraform.tfvars`. The defaults are SmithDB-only, the
+install this page describes.
+
+| Input | Default | Does |
+|:--|:--|:--|
+| `clickhouse_source` | `off` | `in-cluster`: the chart's ClickHouse StatefulSet on local-path (one pod, no replication: what a customer on ClickHouse starts a migration from, not a production store). Its connection is the `langsmith-clickhouse` Secret Terraform makes, not the chart's default password |
+| `enable_smithdb` | `true` | SmithDB's services; `false` leaves ClickHouse alone (needs `clickhouse_source = "in-cluster"`) |
+| `smithdb_ingestion_enabled` | `true` | new writes go to SmithDB; with ClickHouse on, to both |
+| `smithdb_migration_enabled` | `false` | the backfill Job and its chart-managed TaskDB (the `smithdb-taskdb` Secret); needs ClickHouse and ingestion |
+| `smithdb_query_enabled` | `true` | reads come from SmithDB |
+| `smithdb_migration_parallelism` | `1` | backfill pods at once; the budget counts each |
+
+A migration is one change per stage, each followed by `make apply` and `make deploy`, in the order of the
+[install guide](https://docs.langchain.com/langsmith/self-host-smithdb-install):
+
+1. Customer state: `clickhouse_source = "in-cluster"`, `enable_smithdb = false` and the three gates `false`.
+2. SmithDB up: `enable_smithdb = true`. Wait for every smithdb pod and the metastore migration Job.
+3. Dual write: `smithdb_ingestion_enabled = true`. `/api/v1/info` shows `sdb_ingestion_enabled` true.
+4. Backfill: `smithdb_migration_enabled = true`. Wait for the migration Job to report `Complete`; turning it off
+   earlier deletes TaskDB and the Job's progress.
+5. Switch reads: `smithdb_query_enabled = true`, `smithdb_migration_enabled = false`.
+6. ClickHouse off: `clickhouse_source = "off"`. Its data is deleted with the StatefulSet.
+
+A combination the chart refuses (a backfill without ClickHouse, nothing taking writes or reads, a gate without
+SmithDB) fails `terraform plan` with the reason, before anything changes. At `minimum` and `lab` the backfill Job
+and TaskDB are sized down to fit 6-core nodes (1 CPU / 2Gi and 250m / 512Mi); those sizes are not yet measured
+against a real backfill. Plan tests: `infra/tests/trace_store.tftest.hcl`.
 
 ## Components
 
