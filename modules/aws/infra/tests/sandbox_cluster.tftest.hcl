@@ -90,6 +90,14 @@ run "separate_cluster_moves_sandbox_host_to_its_own_cluster" {
     condition     = module.sandbox_eks[0].managed_node_group_input.labels["sandbox.langsmith.com/host"] == "true"
     error_message = "the sandbox cluster's node group lost the sandbox-host label"
   }
+  # The sandbox-host nodes are the only nodes in this cluster.
+  assert {
+    condition = contains(
+      jsondecode(module.sandbox_eks[0].addons_input["coredns"].configuration_values).tolerations,
+      { key = "sandbox.langsmith.com/host", operator = "Equal", value = "true", effect = "NoSchedule" },
+    )
+    error_message = "CoreDNS does not tolerate the sandbox-host taint, so it cannot schedule in the sandbox cluster"
+  }
   assert {
     condition = (
       length(kubernetes_secret_v1.sandbox_runtime) == 1 &&
@@ -373,5 +381,31 @@ run "a_customer_managed_bucket_key_is_granted_to_the_sandbox_role" {
       Resource = "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
     })
     error_message = "with s3_kms_key_arn set, the sandbox role must be able to use that key and no other"
+  }
+}
+
+run "coredns_keeps_its_eks_addons_configuration_in_the_sandbox_cluster" {
+  command = plan
+
+  variables {
+    eks_addons = {
+      coredns = {
+        configuration_values = jsonencode({
+          replicaCount = 3
+          tolerations  = [{ key = "example.com/dedicated", operator = "Exists" }]
+        })
+      }
+    }
+  }
+
+  assert {
+    condition = jsondecode(module.sandbox_eks[0].addons_input["coredns"].configuration_values) == {
+      replicaCount = 3
+      tolerations = [
+        { key = "example.com/dedicated", operator = "Exists" },
+        { key = "sandbox.langsmith.com/host", operator = "Equal", value = "true", effect = "NoSchedule" },
+      ]
+    }
+    error_message = "the sandbox cluster's CoreDNS must keep the eks_addons configuration and add the sandbox-host toleration"
   }
 }
