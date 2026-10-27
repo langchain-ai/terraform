@@ -2211,7 +2211,7 @@ variable "ingress_load_balancer" {
 
 variable "ingress_load_balancer_subnet_id" {
   type        = string
-  description = "With ingress_load_balancer = \"internal\": the resource ID of a subnet in the cluster's VNet to take the load balancer's private IP from. Empty uses the AKS node subnet. A subnet other than the node subnet needs subnets/join/action and subnets/read for the cluster identity; see ingress_load_balancer_manage_subnet_assignment."
+  description = "With ingress_load_balancer = \"internal\": the resource ID of a subnet in the cluster's VNet to take the load balancer's private IP from. Empty uses the AKS node subnet. The cluster identity needs subnets/join/action and subnets/read on whichever subnet the load balancer uses (a user-assigned control plane holds them on the node subnet already); see ingress_load_balancer_manage_subnet_assignment."
   default     = ""
 
   validation {
@@ -2253,7 +2253,7 @@ variable "ingress_load_balancer_ip" {
 
 variable "ingress_load_balancer_manage_subnet_assignment" {
   type        = bool
-  description = "With ingress_load_balancer_subnet_id set to a subnet other than the node subnet: whether Terraform grants the cluster identity Network Contributor on that subnet, which carries the subnets/join/action and subnets/read the internal load balancer needs. Set false when the network owner makes that grant; the ingress_load_balancer_subnet_grant output names the role, scope and principal."
+  description = "With ingress_load_balancer = \"internal\": whether Terraform grants the cluster identity Network Contributor, which carries the subnets/join/action and subnets/read the load balancer needs, on its subnet. That is ingress_load_balancer_subnet_id when it is a subnet other than the node subnet, and the node subnet when the module creates the cluster with aks_control_plane_identity = \"system\", after the cluster and its identity exist (a user-assigned identity holds the grant already). Set false when the network owner makes that grant; the ingress_load_balancer_subnet_grant output names the role, scope and principal."
   default     = true
 }
 
