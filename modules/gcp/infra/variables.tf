@@ -110,6 +110,43 @@ variable "services_cidr" {
   }
 }
 
+# Used only when sandbox_deployment_mode = "separate_cluster". They must not
+# overlap each other, the ranges above, or the private services range Google
+# picked when the VPC was first applied (see the README if the subnet create
+# fails with an overlap error).
+variable "sandbox_subnet_cidr" {
+  description = "Primary CIDR range of the sandbox cluster's subnet (sandbox node IPs). Used only when sandbox_deployment_mode = \"separate_cluster\"."
+  type        = string
+  default     = "10.10.0.0/20"
+
+  validation {
+    condition     = can(cidrhost(var.sandbox_subnet_cidr, 0))
+    error_message = "sandbox_subnet_cidr must be a valid CIDR notation."
+  }
+}
+
+variable "sandbox_pods_cidr" {
+  description = "Secondary CIDR range for the sandbox cluster's pods. Used only when sandbox_deployment_mode = \"separate_cluster\"."
+  type        = string
+  default     = "10.12.0.0/16"
+
+  validation {
+    condition     = can(cidrhost(var.sandbox_pods_cidr, 0))
+    error_message = "sandbox_pods_cidr must be a valid CIDR notation."
+  }
+}
+
+variable "sandbox_services_cidr" {
+  description = "Secondary CIDR range for the sandbox cluster's services. Used only when sandbox_deployment_mode = \"separate_cluster\"."
+  type        = string
+  default     = "10.10.16.0/20"
+
+  validation {
+    condition     = can(cidrhost(var.sandbox_services_cidr, 0))
+    error_message = "sandbox_services_cidr must be a valid CIDR notation."
+  }
+}
+
 #------------------------------------------------------------------------------
 # GKE Configuration
 #------------------------------------------------------------------------------
@@ -519,6 +556,68 @@ variable "sandbox_service_url_base_url" {
   default     = ""
 }
 
+variable "sandbox_deployment_mode" {
+  type        = string
+  description = "Sandbox topology when enable_sandboxes = true. same_cluster runs sandbox-host in the LangSmith GKE cluster; separate_cluster creates a dedicated GKE cluster for it and deploys the langsmith-sandbox chart there."
+  default     = "same_cluster"
+
+  validation {
+    condition     = contains(["same_cluster", "separate_cluster"], var.sandbox_deployment_mode)
+    error_message = "sandbox_deployment_mode must be 'same_cluster' or 'separate_cluster'."
+  }
+}
+
+variable "sandbox_namespace" {
+  type        = string
+  description = "Kubernetes namespace for the langsmith-sandbox release in the dedicated sandbox cluster (separate_cluster only). It must differ from langsmith_namespace: GKE Workload Identity trusts a namespace and ServiceAccount name across every cluster in the project."
+  default     = "langsmith-sandbox"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,62}$", var.sandbox_namespace))
+    error_message = "sandbox_namespace must be a valid Kubernetes namespace name."
+  }
+}
+
+variable "sandbox_runtime_secret_name" {
+  type        = string
+  description = "Name of the minimal Secret Terraform writes into the sandbox cluster for the langsmith-sandbox chart (separate_cluster only). It holds sandbox_service_auth_secret and sandbox_callback_signing_jwk."
+  default     = "langsmith-sandbox-runtime"
+}
+
+variable "sandbox_runtime_secret_revision" {
+  type        = number
+  description = "Revision for the write-only sandbox runtime Secret (keys sandbox_service_auth_secret and sandbox_callback_signing_jwk). Increment to rewrite it, for example after rotating either value."
+  default     = 1
+}
+
+variable "sandbox_gke_master_ipv4_cidr" {
+  type        = string
+  description = "/28 control-plane range for the dedicated sandbox GKE cluster (separate_cluster only). The LangSmith cluster uses 172.17.0.0/28, and two private clusters in one VPC cannot share a range."
+  default     = "172.17.0.16/28"
+
+  validation {
+    condition     = can(cidrhost(var.sandbox_gke_master_ipv4_cidr, 0)) && endswith(var.sandbox_gke_master_ipv4_cidr, "/28")
+    error_message = "sandbox_gke_master_ipv4_cidr must be a /28 CIDR, for example 172.17.0.16/28."
+  }
+}
+
+variable "sandbox_system_node_machine_type" {
+  type        = string
+  description = "Machine type for the sandbox cluster's system node pool (separate_cluster only). It runs GKE's own add-ons, such as kube-dns, which cannot tolerate the sandbox-host taint."
+  default     = "e2-standard-4"
+}
+
+variable "sandbox_system_node_max_count" {
+  type        = number
+  description = "Maximum nodes per zone in the sandbox cluster's system pool (separate_cluster only). The pool starts with one node per zone."
+  default     = 3
+
+  validation {
+    condition     = var.sandbox_system_node_max_count >= 1
+    error_message = "sandbox_system_node_max_count must be at least 1."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Cloud Storage Configuration
 #------------------------------------------------------------------------------
@@ -651,6 +750,17 @@ variable "ingress_type" {
   validation {
     condition     = contains(["envoy", "istio", "other"], var.ingress_type)
     error_message = "Ingress type must be 'envoy' (currently implemented), 'istio', or 'other' (reserved for future)."
+  }
+}
+
+variable "gateway_load_balancer_type" {
+  description = "Load balancer for the Envoy Gateway: 'external' (the default, a public IP) or 'internal' (a private IP in the VPC, reachable only from inside it). Separate-cluster sandboxes call the LangSmith API through this load balancer; 'internal' keeps that call inside the VPC. Choose it before the first deploy: GKE does not move an existing load balancer between external and internal, so a later change needs the Envoy proxy Service deleted and recreated."
+  type        = string
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "internal"], var.gateway_load_balancer_type)
+    error_message = "gateway_load_balancer_type must be 'external' or 'internal'."
   }
 }
 
@@ -836,8 +946,10 @@ variable "enable_insights" {
 # Secret Manager-managed core secrets
 # Declared so setup-env.sh can export TF_VAR_* values without Terraform
 # discarding them as undeclared. Helm reads the same values from the environment.
+# Terraform uses none of them, except that sandbox_deployment_mode =
+# "separate_cluster" checks that sandbox_service_auth_secret is not the API key
+# salt.
 #------------------------------------------------------------------------------
-# tflint-ignore: terraform_unused_declarations
 variable "langsmith_api_key_salt" {
   type        = string
   description = "API key salt for LangSmith. Auto-generated by setup-env.sh and stored in Secret Manager. Must never change after first deployment."
@@ -905,10 +1017,16 @@ variable "langsmith_polly_encryption_key" {
   default     = ""
 }
 
-# tflint-ignore: terraform_unused_declarations
 variable "sandbox_callback_signing_jwk" {
   type        = string
-  description = "Sandbox callback signing private JWK. Generate once and keep stable. Used by init-values.sh when sandboxes are enabled."
+  description = "Sandbox callback signing private JWK. Generate once and keep stable. Used by init-values.sh when sandboxes are enabled. With sandbox_deployment_mode = \"separate_cluster\", Terraform also writes it into the sandbox cluster's runtime Secret (write-only, kept out of state)."
+  sensitive   = true
+  default     = ""
+}
+
+variable "sandbox_service_auth_secret" {
+  type        = string
+  description = "Dedicated sandbox service-auth secret for sandbox_deployment_mode = \"separate_cluster\": it signs calls between LangSmith and the sandbox hosts, so the sandbox cluster never holds langsmith_api_key_salt. At least 32 characters and different from the salt. Auto-generated by setup-env.sh and stored in Secret Manager as sandbox-service-auth-secret. deploy.sh adds it to langsmith-config, and Terraform writes the same value into the sandbox cluster's runtime Secret. Unused in same_cluster mode."
   sensitive   = true
   default     = ""
 }

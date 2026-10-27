@@ -34,6 +34,41 @@ locals {
     "roles/stackdriver.resourceMetadata.writer",
   ])
 
+  # sandbox_deployment_mode = "separate_cluster": a dedicated sandbox GKE
+  # cluster runs the langsmith-sandbox chart; the LangSmith cluster gets none of
+  # the same-cluster sandbox pieces.
+  same_cluster_sandboxes     = var.enable_sandboxes && var.sandbox_deployment_mode == "same_cluster"
+  separate_cluster_sandboxes = var.enable_sandboxes && var.sandbox_deployment_mode == "separate_cluster"
+  sandbox_cluster_name       = "${local.base_name}-sbox-gke"
+  # GKE system add-ons (kube-dns and friends) cannot tolerate the sandbox-host
+  # taint, so the sandbox cluster keeps a small untainted pool for them.
+  sandbox_system_node_sa_account_id = "${local.base_name}-sbox-sys"
+  sandbox_system_node_sa_project_roles = toset([
+    "roles/container.defaultNodeServiceAccount",
+    "roles/monitoring.metricWriter",
+    "roles/stackdriver.resourceMetadata.writer",
+  ])
+  # One exact chart version (SemVer, optional prerelease) on 0.18 or later.
+  # Keep in step with helm/scripts/deploy.sh and the AWS module.
+  separate_cluster_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+
+  # The sandbox ranges must not overlap each other or the LangSmith ranges. Two
+  # CIDRs overlap when either one's network address, masked to the other's
+  # prefix, is the other's network address.
+  sandbox_cidr_pairs = [
+    for pair in setproduct(
+      [var.sandbox_subnet_cidr, var.sandbox_pods_cidr, var.sandbox_services_cidr],
+      [var.subnet_cidr, var.pods_cidr, var.services_cidr, var.sandbox_subnet_cidr, var.sandbox_pods_cidr, var.sandbox_services_cidr],
+    ) : pair if pair[0] != pair[1]
+  ]
+  sandbox_cidr_overlaps = [
+    for pair in local.sandbox_cidr_pairs : "${pair[0]} and ${pair[1]}"
+    if can(cidrhost(pair[0], 0)) && can(cidrhost(pair[1], 0)) && (
+      cidrhost("${cidrhost(pair[0], 0)}/${split("/", pair[1])[1]}", 0) == cidrhost(pair[1], 0)
+      || cidrhost("${cidrhost(pair[1], 0)}/${split("/", pair[0])[1]}", 0) == cidrhost(pair[0], 0)
+    )
+  ]
+
   # The sandbox-host machine type follows sizing_profile unless it is set.
   sandbox_host_production_profile = contains(["production", "production-large"], var.sizing_profile)
   sandbox_host_machine_type = coalesce(
@@ -52,6 +87,9 @@ locals {
 
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"
+  # separate_cluster gives JuiceFS its own bucket, so the sandbox node service
+  # account's grant needs no IAM condition and never reaches trace data.
+  sandbox_juicefs_bucket_name = "${var.project_id}-${local.base_name}-jfs${local.suffix}"
 
   # SmithDB (optional, enable_smithdb)
   smithdb_name                    = "${local.base_name}-smithdb"

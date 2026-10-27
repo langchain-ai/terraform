@@ -141,8 +141,11 @@ output "sandbox_juicefs_redis_instance_name" {
 }
 
 output "sandbox_juicefs_bucket_url" {
-  description = "GCS bucket URL passed to JuiceFS for sandbox object storage"
-  value       = var.enable_sandboxes ? module.storage.bucket_url : null
+  description = "GCS bucket URL passed to JuiceFS for sandbox object storage: the trace bucket in same_cluster mode, a JuiceFS-only bucket in separate_cluster mode"
+  value = (
+    local.separate_cluster_sandboxes ? google_storage_bucket.sandbox_juicefs[0].url
+    : var.enable_sandboxes ? module.storage.bucket_url : null
+  )
 }
 
 output "sandbox_host_machine_type" {
@@ -153,6 +156,31 @@ output "sandbox_host_machine_type" {
 output "sandbox_host_node_service_account_email" {
   description = "Restricted GCP service account email assigned to sandbox-host GKE nodes"
   value       = var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+}
+
+output "sandbox_deployment_mode" {
+  description = "Sandbox topology: same_cluster or separate_cluster (null when sandboxes are disabled)"
+  value       = var.enable_sandboxes ? var.sandbox_deployment_mode : null
+}
+
+output "sandbox_cluster_name" {
+  description = "Dedicated sandbox GKE cluster name (separate_cluster only)"
+  value       = local.separate_cluster_sandboxes ? module.sandbox_gke[0].cluster_name : null
+}
+
+output "sandbox_cluster_location" {
+  description = "Dedicated sandbox GKE cluster location (separate_cluster only)"
+  value       = local.separate_cluster_sandboxes ? module.sandbox_gke[0].location : null
+}
+
+output "sandbox_namespace" {
+  description = "Namespace of the langsmith-sandbox release in the sandbox cluster (separate_cluster only)"
+  value       = local.separate_cluster_sandboxes ? var.sandbox_namespace : null
+}
+
+output "sandbox_runtime_secret_name" {
+  description = "Secret in the sandbox namespace holding sandbox_service_auth_secret and sandbox_callback_signing_jwk (separate_cluster only)"
+  value       = local.separate_cluster_sandboxes ? var.sandbox_runtime_secret_name : null
 }
 
 #------------------------------------------------------------------------------
