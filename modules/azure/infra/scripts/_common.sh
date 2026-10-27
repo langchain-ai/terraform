@@ -305,7 +305,7 @@ _validate_license_key() {
 # enable_sso_oidc is the exception: it is baked into the generated auth block
 # (basicAuth off, oauth on), so a flip after init-values would deploy the old
 # login path.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count sandbox_deployment_mode sandbox_namespace sandbox_service_account_name sandbox_runtime_secret_name enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
 # The chart line deploy.sh installs when neither CHART_VERSION in the
 # environment nor langsmith_helm_chart_version in terraform.tfvars names one:
