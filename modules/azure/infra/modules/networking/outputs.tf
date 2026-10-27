@@ -47,9 +47,12 @@ output "subnet_nsg_rules" {
   }
 }
 
+# Read off the NSG association rather than the subnet, so the sandbox cluster
+# waits for it: Azure serializes writes to a subnet, and an association landing
+# while AKS joins the nodes to the subnet fails one of the two.
 output "subnet_sandbox_id" {
-  value       = one(azurerm_subnet.subnet_sandbox[*].id)
-  description = "The ID of the sandbox cluster subnet, if created."
+  value       = one(azurerm_subnet_network_security_group_association.sandbox[*].subnet_id)
+  description = "The ID of the sandbox cluster subnet, if created. Known once its NSG is attached."
 }
 
 output "sandbox_nsg_rules" {

@@ -400,12 +400,12 @@ output "sandbox_juicefs_secret_name" {
 # sandboxhost pool's bounds. The chart requires minReplicas >= 1.
 output "sandbox_host_min_replicas" {
   description = "sandboxes.sandboxHost.autoscaling.minReplicas: the sandboxhost pool's min_count, raised to the chart minimum of 1."
-  value       = var.enable_sandboxes ? max(1, local.effective_node_pools["sandboxhost"].min_count) : null
+  value       = var.enable_sandboxes ? max(1, local.sandbox_host_min_count) : null
 }
 
 output "sandbox_host_max_replicas" {
   description = "sandboxes.sandboxHost.autoscaling.maxReplicas: the sandboxhost pool's max_count."
-  value       = var.enable_sandboxes ? local.effective_node_pools["sandboxhost"].max_count : null
+  value       = var.enable_sandboxes ? local.sandbox_host_max_count : null
 }
 
 output "sandbox_juicefs_container_name" {
@@ -416,4 +416,48 @@ output "sandbox_juicefs_container_name" {
 output "sandbox_juicefs_redis_name" {
   description = "Azure Managed Redis cluster holding JuiceFS metadata."
   value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+}
+
+# ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
+# Read by init-values.sh, create-k8s-secrets.sh, deploy.sh and uninstall.sh.
+# Null unless sandbox_deployment_mode = "separate_cluster".
+
+output "sandbox_deployment_mode" {
+  description = "Sandbox topology: same_cluster or separate_cluster. Null when enable_sandboxes = false."
+  value       = var.enable_sandboxes ? var.sandbox_deployment_mode : null
+}
+
+output "sandbox_cluster_name" {
+  description = "Name of the dedicated sandbox AKS cluster."
+  value       = local.separate_cluster_sandboxes ? module.sandbox_aks[0].cluster_name : null
+}
+
+output "sandbox_cluster_resource_group_name" {
+  description = "Resource group of the dedicated sandbox AKS cluster."
+  value       = local.separate_cluster_sandboxes ? local.rg_name : null
+}
+
+output "sandbox_kubeconfig_public_fqdn" {
+  description = "true when az aks get-credentials needs --public-fqdn for the sandbox cluster (aks_private_dns_zone_id = \"None\")."
+  value       = local.separate_cluster_sandboxes ? module.sandbox_aks[0].api_server_public_fqdn : null
+}
+
+output "sandbox_subnet_id" {
+  description = "Resource ID of the subnet holding the sandbox cluster's nodes."
+  value       = local.separate_cluster_sandboxes ? local.sandbox_subnet_id : null
+}
+
+output "sandbox_namespace" {
+  description = "Namespace of the langsmith-sandbox release in the sandbox cluster."
+  value       = local.separate_cluster_sandboxes ? kubernetes_namespace_v1.sandbox[0].metadata[0].name : null
+}
+
+output "sandbox_service_account_name" {
+  description = "ServiceAccount sandbox-host runs as in the sandbox cluster, which the federated credential trusts. init-values.sh writes it as sandboxHost.serviceAccount.name."
+  value       = local.separate_cluster_sandboxes ? var.sandbox_service_account_name : null
+}
+
+output "sandbox_runtime_secret_name" {
+  description = "Secret in sandbox_namespace with the sandbox service-auth secret and the callback signing JWK, written by create-k8s-secrets.sh."
+  value       = local.separate_cluster_sandboxes ? var.sandbox_runtime_secret_name : null
 }
