@@ -51,6 +51,17 @@ variable "karpenter_controller_policy_name" {
   }
 }
 
+variable "karpenter_kms_key_arns" {
+  description = "Optional. Customer-managed KMS key ARNs that Karpenter node volumes use: keys of encrypted custom AMI snapshots, including cross-account keys, and the EBS default encryption key. The key owner must also allow the Karpenter controller role on each key."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.karpenter_kms_key_arns) <= 5 && alltrue([for arn in var.karpenter_kms_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Provide at most five KMS key ARNs."
+  }
+}
+
 variable "permissions_boundary_arn" {
   description = "Optional customer IAM permissions boundary applied to all 16 application/infrastructure roles (not AWS service-linked roles)."
   type        = string

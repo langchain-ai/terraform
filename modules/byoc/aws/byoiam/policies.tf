@@ -288,6 +288,29 @@ locals {
     node_role_arn         = local.role_arns["karpenter-node-role"]
     instance_profile_name = var.karpenter_instance_profile_name
   }
+  karpenter_policy_base = jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars))
+  karpenter_kms_condition = {
+    StringEquals = { "kms:ViaService" = [for region in sort(tolist(var.regions)) : "ec2.${region}.amazonaws.com"] }
+  }
+  karpenter_kms_statements = [for statement in [
+    {
+      Sid       = "AllowNodeVolumeKMS"
+      Effect    = "Allow"
+      Action    = ["kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext"]
+      Resource  = var.karpenter_kms_key_arns
+      Condition = local.karpenter_kms_condition
+    },
+    {
+      Sid       = "AllowNodeVolumeKMSGrants"
+      Effect    = "Allow"
+      Action    = ["kms:CreateGrant"]
+      Resource  = var.karpenter_kms_key_arns
+      Condition = merge(local.karpenter_kms_condition, { Bool = { "kms:GrantIsForAWSResource" = "true" } })
+    }
+  ] : statement if length(var.karpenter_kms_key_arns) > 0]
+  karpenter_policy = jsonencode(merge(local.karpenter_policy_base, {
+    Statement = concat(local.karpenter_policy_base.Statement, local.karpenter_kms_statements)
+  }))
   inline_policies = merge(
     { for key, statements in local.inline_statements : key => jsonencode({ Version = "2012-10-17", Statement = statements }) },
     { lbc-role = jsonencode(jsondecode(templatefile("${path.module}/policies/load_balancer_controller.json.tftpl", local.template_vars))) }
@@ -312,13 +335,13 @@ resource "aws_iam_policy" "karpenter" {
   name        = var.karpenter_controller_policy_name
   path        = "/"
   description = "Customer-owned shared LangSmith Karpenter policy for a pre-created instance profile"
-  policy      = jsonencode(jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars)))
+  policy      = local.karpenter_policy
   tags        = local.tags
 
   lifecycle {
     precondition {
-      condition     = length(jsonencode(jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars)))) <= 6144
-      error_message = "Karpenter policy exceeds IAM's 6,144-character managed-policy limit. Reduce configured regions."
+      condition     = length(local.karpenter_policy) <= 6144
+      error_message = "Karpenter policy exceeds IAM's 6,144-character managed-policy limit. Reduce configured regions or KMS keys."
     }
   }
 }

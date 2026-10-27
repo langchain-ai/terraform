@@ -27,6 +27,7 @@ module "byoiam" {
 | `role_names` | Optional. Custom names for some or all roles, keyed by role purpose (the keys of the `role_names` output). Unset keys keep the default `byoc-smith-*` names. |
 | `karpenter_instance_profile_name` | Optional. Custom name for the Karpenter instance profile. |
 | `karpenter_controller_policy_name` | Optional. Custom name for the Karpenter controller policy. |
+| `karpenter_kms_key_arns` | Optional. Customer-managed KMS keys for Karpenter node volumes: keys of encrypted custom AMI snapshots and the EBS default encryption key. The key owner must also allow the Karpenter controller role. |
 | `service_linked_roles_to_create` | Missing service-linked roles to create. Defaults to none. Import existing roles or leave them out. |
 | `smithdb_migration_writer_principal_arns` | Optional. Self-hosted LangSmith roles or users that may assume the SmithDB role during a self-hosted to BYOC migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |
