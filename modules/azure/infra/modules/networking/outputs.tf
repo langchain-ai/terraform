@@ -46,3 +46,13 @@ output "subnet_nsg_rules" {
     redis    = one(azurerm_network_security_group.redis[*].security_rule)
   }
 }
+
+output "subnet_sandbox_id" {
+  value       = one(azurerm_subnet.subnet_sandbox[*].id)
+  description = "The ID of the sandbox cluster subnet, if created."
+}
+
+output "sandbox_nsg_rules" {
+  description = "Security rules of the NSG on the sandbox cluster subnet. Null when the subnet was not created here."
+  value       = one(azurerm_network_security_group.sandbox[*].security_rule)
+}

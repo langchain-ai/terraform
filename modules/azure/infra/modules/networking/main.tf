@@ -8,6 +8,7 @@
 #   Postgres      10.0.32.0/20  — delegated to PostgreSQL Flexible Server (4 k IPs)
 #   Redis         10.0.48.0/20  — Premium Redis requires a dedicated subnet (4 k IPs)
 #   K8s svc CIDR  10.0.64.0/20  — defined in AKS module, must NOT overlap any subnet
+#   Sandbox       10.0.112.0/24 — dedicated sandbox cluster nodes (separate_cluster only)
 #
 # Why dedicated subnets?
 #   • PostgreSQL Flexible Server requires its own delegated subnet (Azure restriction).
@@ -323,4 +324,92 @@ resource "azurerm_subnet_network_security_group_association" "redis" {
   count                     = length(azurerm_network_security_group.redis)
   subnet_id                 = azurerm_subnet.subnet_redis[0].id
   network_security_group_id = azurerm_network_security_group.redis[0].id
+}
+
+# ── Sandbox cluster subnet ───────────────────────────────────────────────────
+# Created for sandbox_deployment_mode = "separate_cluster" when the operator
+# supplies no sandbox_subnet_id. The sandbox cluster runs Azure CNI overlay, so
+# only its nodes take addresses here. Microsoft.Storage lets the Blob firewall
+# allowlist the subnet for the JuiceFS container; the sandbox cluster never
+# reads Key Vault.
+resource "azurerm_subnet" "subnet_sandbox" {
+  count                = var.create_sandbox_subnet ? 1 : 0
+  name                 = "${var.network_name}-subnet-sandbox"
+  resource_group_name  = local.subnet_resource_group_name
+  virtual_network_name = local.subnet_vnet_name
+  address_prefixes     = var.sandbox_subnet_address_prefix
+  service_endpoints    = ["Microsoft.Storage"]
+}
+
+# Always on with the subnet, not behind enable_subnet_nsgs: sandbox nodes run
+# untrusted code, and sandbox-host's port 19190 carries plain HTTP with sandbox
+# secrets, commands and files. LangSmith reaches it from the AKS node subnet
+# (node-subnet pods have addresses there, and overlay pods leave their node with
+# its address). Sandbox nodes reach each other on 19190 too, to forward requests,
+# carry sandbox links and stream live migrations, and the rest of their own
+# cluster traffic, pod addresses included, stays inside the subnet. Everything
+# else from the VNet is denied, which leaves the LangSmith cluster no other way
+# onto a sandbox node.
+resource "azurerm_network_security_group" "sandbox" {
+  count               = var.create_sandbox_subnet ? 1 : 0
+  name                = "${var.network_name}-subnet-sandbox-nsg"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = merge(var.tags, { module = "vnet" })
+
+  security_rule {
+    name                       = "allow-langsmith-sandbox-host"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "19190"
+    source_address_prefixes    = var.aks_source_prefixes
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "allow-sandbox-cluster"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefixes    = concat(var.sandbox_subnet_address_prefix, var.sandbox_pod_cidr != "" ? [var.sandbox_pod_cidr] : [])
+    destination_address_prefix = "*"
+  }
+
+  # The VirtualNetwork tag covers the host address 168.63.129.16, so the deny
+  # below would otherwise win over Azure's own AllowAzureLoadBalancerInBound.
+  security_rule {
+    name                       = "allow-azure-load-balancer"
+    priority                   = 4095
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "AzureLoadBalancer"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "deny-vnet-inbound"
+    priority                   = 4096
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "sandbox" {
+  count                     = length(azurerm_network_security_group.sandbox)
+  subnet_id                 = azurerm_subnet.subnet_sandbox[0].id
+  network_security_group_id = azurerm_network_security_group.sandbox[0].id
 }
