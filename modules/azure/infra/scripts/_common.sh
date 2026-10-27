@@ -15,6 +15,8 @@
 #   _set_tfvar <key> <value>        — Set one key in terraform.tfvars, editing only its line
 #   _confirm <prompt>               — Yes/no prompt that defaults to no
 #   _tf_out <name>                  — Read one terraform output, or return 1
+#   _separate_cluster_sandboxes     — Return 0 for sandbox_deployment_mode = separate_cluster
+#   _sandbox_kubeconfig <file>      — Write the sandbox cluster's credentials to <file>
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
 #   _langsmith_images_block         — images: block for values-overrides.yaml from a mirror
@@ -159,6 +161,28 @@ _aks_get_credentials() {
   [[ "$(_tf_out aks_kubeconfig_public_fqdn || true)" == "true" ]] && flags=(--public-fqdn)
   az aks get-credentials --name "$cluster" --resource-group "$rg" \
     --overwrite-existing ${flags[@]+"${flags[@]}"}
+}
+
+# ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
+# Returns 0 when enable_sandboxes = true and sandbox_deployment_mode =
+# "separate_cluster" in terraform.tfvars.
+_separate_cluster_sandboxes() {
+  _tfvar_is_true "enable_sandboxes" || return 1
+  [[ "$(_parse_tfvar sandbox_deployment_mode || true)" == "separate_cluster" ]]
+}
+
+# Credentials for the dedicated sandbox cluster, written to the file named by $1
+# rather than ~/.kube/config, so the current context stays on the LangSmith
+# cluster and no command meant for one cluster reaches the other. Callers point
+# KUBECONFIG at the file. Returns 1 when the outputs or the fetch fail.
+_sandbox_kubeconfig() {
+  local file="$1" cluster rg flags=()
+  cluster=$(_tf_out sandbox_cluster_name) || return 1
+  rg=$(_tf_out sandbox_cluster_resource_group_name) || return 1
+  [[ "$(_tf_out sandbox_kubeconfig_public_fqdn || true)" == "true" ]] && flags=(--public-fqdn)
+  az aks get-credentials --name "$cluster" --resource-group "$rg" \
+    --file "$file" --overwrite-existing ${flags[@]+"${flags[@]}"} >/dev/null || return 1
+  KUBECONFIG="$file" _aks_kubelogin_convert "$cluster" "$rg"
 }
 
 # ── Entra ID sign-in for kubectl and Helm ───────────────────────────────────
