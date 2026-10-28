@@ -500,9 +500,10 @@ To move an existing install from `same_cluster`, change `sandbox_deployment_mode
 
 - **Install:** `make apply`, then `make init-values`, then `make deploy`. `make init-values` writes both the LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`; `make deploy` installs `langsmith` first, then `langsmith-sandbox` in the sandbox cluster, and waits for `sandbox-host`.
 - **Upgrade:** change `langsmith_helm_chart_version` and run `make deploy`. It upgrades `langsmith` first and the runtime right after, to the matching chart. If you upgrade with other tools, keep that order and upgrade the runtime within days.
-- **Uninstall:** `make uninstall` removes the `langsmith-sandbox` release from the sandbox cluster first, then the LangSmith release; then run `make destroy`. Without Terraform outputs, uninstall the runtime release from the sandbox cluster yourself before running `make uninstall`.
+- **Uninstall:** `make uninstall` removes the `langsmith-sandbox` release from the sandbox cluster first, then the LangSmith release; then empty the trace bucket, which also holds the JuiceFS data, and run `make destroy` ([TEARDOWN.md](TEARDOWN.md), A5). Without Terraform outputs, uninstall the runtime release from the sandbox cluster yourself before running `make uninstall`.
+- **Status:** `make status` also checks the sandbox cluster: the `langsmith-sandbox` release, that its appVersion matches the `langsmith` release, and the runtime pods.
 
-`make deploy` and `make uninstall` reach the sandbox cluster through their own kubeconfig file, `~/.kube/langsmith-<sandbox cluster name>`, so your current context is unchanged.
+`make deploy`, `make uninstall` and `make status` reach the sandbox cluster through their own kubeconfig file, `~/.kube/langsmith-<sandbox cluster name>`, so your current context is unchanged.
 
 The sandbox IRSA role trusts exactly one ServiceAccount, named by `sandbox_service_account_name` (default `sandbox-host`). `init-values.sh` writes the same name into `sandboxHost.serviceAccount.name` and the role into `workloadIdentity.aws.roleArn` in the generated values, so the two always agree. Renaming the ServiceAccount only in the values file breaks IRSA and leaves `sandbox-host` unable to reach the bucket — change the tfvar and re-run `make init-values` instead.
 
