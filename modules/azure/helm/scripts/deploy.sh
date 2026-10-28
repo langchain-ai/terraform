@@ -1402,8 +1402,10 @@ print(json.dumps(s))
 fi
 
 # ── Ensure langsmith-ksa carries the WI annotation ───────────────────────
-# langsmith-ksa is used by operator-spawned agent deployment pods.
-# It is created by the operator on first use (not part of Helm release).
+# langsmith-ksa is used by operator-spawned agent deployment pods. The infra
+# apply creates it (k8s-bootstrap); this creates it only if it is missing. The
+# annotation gives those pods no Azure identity: langsmith-ksa has no
+# federated credential and the agent template sets no Workload Identity label.
 _wi_client_id=$(_tf_out storage_account_k8s_managed_identity_client_id || true)
 if [[ -n "$_wi_client_id" ]]; then
   kubectl create serviceaccount langsmith-ksa -n "$NAMESPACE" \
