@@ -140,6 +140,13 @@ if _tfvar_is_true enable_engine; then
   _ensure_secret ENGINE_USAGE_SIGNING_SECRET "" false "" _secret_gen_hex32
 fi
 
+# SSO: the identity provider's OIDC client, read by the chart from langsmith-config.
+if _tfvar_is_true enable_sso_oidc; then
+  _ensure_secret OAUTH_CLIENT_ID "OIDC client ID" false "" ""
+  _ensure_secret OAUTH_CLIENT_SECRET "OIDC client secret (input hidden)" true "" ""
+  _ensure_secret OAUTH_ISSUER_URL "OIDC issuer URL (https://...)" false _validate_https_url ""
+fi
+
 _secrets_file_check
 header "Done"
 info "Values are stored, never printed. Back up $SECRETS_FILE with terraform.tfstate."

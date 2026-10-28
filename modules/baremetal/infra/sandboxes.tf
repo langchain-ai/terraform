@@ -73,9 +73,10 @@ locals {
   ])
 
   # Pods the budget adds: one sandbox-host per sandbox node at the chart's requests, with its JuiceFS cache on that node's disk.
+  sandbox_nodes = var.enable_sandboxes ? var.sandbox_hosts : []
   sandbox_pods = var.enable_sandboxes ? [{
     name     = "sandboxes/sandbox-host"
-    pool     = "workers"
+    pool     = "sandbox"
     replicas = length(var.sandbox_hosts)
     cpu      = "2"   # chart 0.17.26 sandboxes.sandboxHost.deployment.resources.requests
     memory   = "2Gi" # same

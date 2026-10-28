@@ -227,7 +227,7 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 | `enable_engine`, `engine_sandbox_tenant_id`, `engine_intelligence_base_url` | no | Engine, on Sandboxes ([below](#sandboxes-and-engine-optional)) |
 | `blob_storage_ttl_days` | no (`{short = 14, long = 400}`) | days before the blob bucket deletes `ttl_s/` and `ttl_l/` payloads, as the cloud modules expire them |
 | `envoy_gateway_route_timeout` | no (`60s`) | with this module's Envoy Gateway, the request timeout on the chart's route and the LAN route; Envoy's own default of 15 s cuts off slow trace reads. Fleet and Deployments streams have none: with either on, `deploy.sh` applies the `langsmith-fleet-streams` route, and the operator writes `0s` on its agent routes (`HTTPROUTE_REQUEST_TIMEOUT` in the agent-deploys example values) |
-| `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules |
+| `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules; with SSO, `make setup-env` asks the OIDC client ID, secret and issuer, and `deploy.sh` turns basic auth off |
 | `enable_cloudflare_tunnel` + `TF_VAR_cloudflare_tunnel_token` | no | public HTTPS through a Cloudflare Tunnel |
 | `node_reserved`, `max_request_ratio` | no | budget gate headroom |
 | `*_image`, `*_chart_version` | no | pinned versions |
@@ -298,7 +298,7 @@ With `enable_deployments = true` (and the Deployments entitlement in your licens
 
 `enable_sandboxes = true` runs Sandboxes on the nodes named in `sandbox_hosts`: amd64 machines with `/dev/kvm`, TUN
 and FUSE, each from `cluster_nodes`. The module labels and taints them `sandbox.langsmith.com/host=true:NoSchedule`, so
-only the sandbox runtime lands there, and gives JuiceFS a Redis of its own (AOF, `noeviction`) and a `sandbox-juicefs`
+only the sandbox runtime lands there (the budget counts them as a pool of their own, never as worker capacity), and gives JuiceFS a Redis of its own (AOF, `noeviction`) and a `sandbox-juicefs`
 bucket on the same RustFS. The runtime uses the host network, which no NetworkPolicy namespace selector matches, so
 `sandbox_source_cidrs` names the addresses its traffic comes from (each sandbox node's own, and the pod CIDR). With
 Sandboxes on, the `langsmith` namespace runs at the privileged Pod Security level, and `make setup-env` makes the

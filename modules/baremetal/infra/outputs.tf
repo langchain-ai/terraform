@@ -82,6 +82,7 @@ output "features" {
   description = "Enabled features and their wiring (init-values.sh / deploy.sh read this; no secrets)."
   value = {
     deployments  = var.enable_deployments
+    smithdb      = var.enable_smithdb
     blob_storage = var.enable_blob_storage
     keda         = local.install_keda
     sso_oidc     = var.enable_sso_oidc

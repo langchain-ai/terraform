@@ -246,6 +246,14 @@ _validate_admin_password() {
   return 0
 }
 
+# Shape check only: an https URL with a host.
+_validate_https_url() {
+  if [[ ! "$1" =~ ^https://[^[:space:]/]+ ]]; then
+    echo "must start with https:// and name a host"
+    return 1
+  fi
+}
+
 # Shape check only: something@something.tld, no whitespace.
 _validate_email() {
   if [[ ! "$1" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then

@@ -12,13 +12,16 @@ spec:
         container:
           resources:
             {{- toYaml .Values.proxyResources | nindent 12 }}
-      {{- with .Values.loadBalancerIP }}
       envoyService:
+        # Local (Envoy Gateway's default) lets MetalLB L2 announce the IP only from a node
+        # running a proxy pod and a speaker; Cluster answers from any speaker node.
+        externalTrafficPolicy: Cluster
+        {{- with .Values.loadBalancerIP }}
         annotations:
           # MetalLB hands this exact IP to the proxy Service, so DNS can point
           # at it permanently. Set only with our MetalLB.
           metallb.io/loadBalancerIPs: {{ . | quote }}
-      {{- end }}
+        {{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass

@@ -196,10 +196,11 @@ names = []
 if f.get("deployments"): names.append("agent-deploys")
 for name, file in (("fleet", "fleet"), ("polly", "standalone-polly"), ("insights", "standalone-insights")):
     if name in f.get("standalone", {}): names.append(file)
+if f.get("sso_oidc"): names.append("sso")
 print(" ".join(names))
 ' "$features_json")"
 
-for feature in agent-deploys fleet standalone-polly standalone-insights; do
+for feature in agent-deploys fleet standalone-polly standalone-insights sso; do
   file="$VALUES_DIR/langsmith-values-$feature.yaml"
   if [[ " $enabled " == *" $feature "* ]]; then
     if [[ -f "$file" ]]; then

@@ -76,6 +76,23 @@ run "production_large_fits_large_cluster" {
   }
 }
 
+run "feature_pods_count_their_hpa_floor" {
+  command = plan
+
+  variables {
+    sizing_profile     = "production-large"
+    enable_deployments = true
+    cluster_nodes = {
+      for i in range(8) : "worker-${i}" => { cpu = 32, memory_gi = 128, disk_gi = 1000 }
+    }
+  }
+
+  assert {
+    condition     = length([for p in output.pods : p if contains(["feature/host-backend", "feature/listener"], p.name) && p.replicas == 4]) == 2
+    error_message = "host-backend and listener are counted at production-large's HPA floor of 4, not one replica."
+  }
+}
+
 run "lab_with_deployments_fits" {
   command = plan
 

@@ -154,7 +154,7 @@ locals {
   shared_products = [
     for p, on in {
       polly    = var.enable_standalone_polly
-      insights = var.enable_standalone_insights
+      insights = var.enable_standalone_insights || var.enable_engine
       fleet    = var.enable_fleet
     } : p if on
   ]
@@ -218,11 +218,20 @@ locals {
     for f, on in {
       deployments = var.enable_deployments
       fleet       = var.enable_fleet
-      insights    = var.enable_standalone_insights
+      insights    = var.enable_standalone_insights || var.enable_engine
       polly       = var.enable_standalone_polly
     } : f if on
   ]
   feature_pods = merge({}, [for f in local.enabled_features : local.feature_pod_sizes[f]]...)
+  # The production sizing files give host-backend and listener HPA floors of 2 and 4; one replica undercounted them.
+  feature_chart_keys = { "host-backend" = "hostBackend" }
+  feature_replicas = {
+    for n, _ in local.feature_pods : n => (
+      try(local.app_values[lookup(local.feature_chart_keys, n, n)].autoscaling.hpa.enabled, false)
+      ? try(local.app_values[lookup(local.feature_chart_keys, n, n)].autoscaling.hpa.minReplicas, 1)
+      : try(local.app_values[lookup(local.feature_chart_keys, n, n)].deployment.replicas, 1)
+    )
+  }
 
   # Each agent deployment runs an API server, a queue worker, and its own
   # Postgres and Redis, created at runtime by the operator with its own sizes
@@ -273,7 +282,9 @@ locals {
   # minimal tier.
   #----------------------------------------------------------------------------
   node_pools = {
-    workers           = { for k, n in var.cluster_nodes : k => n if n.role == "worker" }
+    # A sandbox node is tainted for sandbox-host alone, so its capacity is not the workers'.
+    workers           = { for k, n in var.cluster_nodes : k => n if n.role == "worker" && !contains(local.sandbox_nodes, k) }
+    sandbox           = { for k, n in var.cluster_nodes : k => n if contains(local.sandbox_nodes, k) }
     "smithdb-cache"   = { for k, n in var.cluster_nodes : k => n if n.role == "smithdb-cache" }
     "smithdb-compute" = { for k, n in var.cluster_nodes : k => n if n.role == "smithdb-compute" }
   }
@@ -316,7 +327,7 @@ locals {
       }
     ],
     [for n, d in local.datastores : { name = "datastore/${n}", pool = "workers", replicas = 1, cpu_n = d.cpu_m / 1000, mem_gi = d.mem_mi / 1024, disk_gi = d.storage_gi }],
-    [for n, f in local.feature_pods : { name = "feature/${n}", pool = "workers", replicas = 1, cpu_n = f.cpu_m / 1000, mem_gi = f.mem_mi / 1024, disk_gi = 0 }],
+    [for n, f in local.feature_pods : { name = "feature/${n}", pool = "workers", replicas = local.feature_replicas[n], cpu_n = f.cpu_m / 1000, mem_gi = f.mem_mi / 1024, disk_gi = 0 }],
     [for n, a in local.addon_pods : { name = "addon/${n}", pool = "workers", replicas = a.replicas, cpu_n = a.cpu_m / 1000, mem_gi = a.mem_mi / 1024, disk_gi = 0 }],
     var.expected_agent_deployments > 0 ? [{
       name     = "agents/estimate-per-deployment"

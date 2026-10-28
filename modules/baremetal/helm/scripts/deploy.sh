@@ -18,11 +18,11 @@
 #      langsmith-values-overrides.yaml         hostname, gateway (Terraform output)
 #      langsmith-values-admin.yaml             initial org admin email
 #      langsmith-values-sizing-<profile>.yaml  app sizing
-#      langsmith-values-<feature>.yaml         enabled features (same order as modules/gcp)
+#      langsmith-values-<feature>.yaml         enabled features (same order as modules/gcp), then sso
 #      langsmith-values-smithdb.yaml           SmithDB sizing + wiring (Terraform output)
 #      langsmith-values-local.yaml             optional local experiments (gitignored)
 # 3. helm upgrade --install langsmith langchain/langsmith --version $CHART_VERSION
-# 4. Waits for SmithDB (cluster-manager first) and the core Deployments.
+# 4. Waits for SmithDB (cluster-manager first, when it is on) and the core Deployments.
 
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
   bash "${BASH_SOURCE[0]}" ${@+"$@"}
@@ -141,6 +141,7 @@ _feature_on insights && config_pairs+=("insights_encryption_key:INSIGHTS_ENCRYPT
 _feature_on polly    && config_pairs+=("polly_encryption_key:POLLY_ENCRYPTION_KEY")
 _feature_on sandboxes && config_pairs+=("sandbox_callback_signing_jwk:SANDBOX_CALLBACK_SIGNING_JWK")
 _feature_on engine   && config_pairs+=("engine_encryption_key:ENGINE_ENCRYPTION_KEY" "engine_usage_signing_secret:ENGINE_USAGE_SIGNING_SECRET")
+_feature_on sso_oidc && config_pairs+=("oauth_client_id:OAUTH_CLIENT_ID" "oauth_client_secret:OAUTH_CLIENT_SECRET" "oauth_issuer_url:OAUTH_ISSUER_URL")
 if ! config_env="$(_config_payload "${config_pairs[@]}")"; then
   fail "The langsmith-config Secret was not changed."
   exit 1
@@ -194,6 +195,7 @@ _feature_on deployments && _require_values langsmith-values-agent-deploys.yaml
 _feature_on fleet       && _require_values langsmith-values-fleet.yaml
 _feature_on polly       && _require_values langsmith-values-standalone-polly.yaml
 _feature_on insights    && _require_values langsmith-values-standalone-insights.yaml
+_feature_on sso_oidc    && _require_values langsmith-values-sso.yaml
 _require_values langsmith-values-smithdb.yaml
 # Optional, last: your local experiments (e.g. a short trace TTL for a load
 # test). Gitignored; delete the file to go back to the generated values.
@@ -233,7 +235,7 @@ done
 
 # A release stuck in pending-* (an interrupted run) blocks upgrades. Don't
 # guess the fix: print it.
-release_status="$(_helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}\$" -o json \
+release_status="$(_helm list -a -n "$NAMESPACE" --filter "^${RELEASE_NAME}\$" -o json \
   | python3 -I -c 'import json,sys; r=json.load(sys.stdin); print(r[0]["status"] if r else "")')"
 case "$release_status" in
   pending-*|uninstalling)
@@ -355,11 +357,13 @@ fi
 header "Rollout"
 
 # cluster-manager first: ingestion pods fail to start until it answers.
-deployments=(
+deployments=()
+# enable_smithdb = false (ClickHouse alone) renders no SmithDB Deployment to wait for.
+_feature_on smithdb && deployments+=(
   smithdb-cluster-manager
   smithdb-ingestion smithdb-query smithdb-compaction smithdb-compaction-worker
-  frontend backend platform-backend ingest-queue queue playground ace-backend
 )
+deployments+=(frontend backend platform-backend ingest-queue queue playground ace-backend)
 _feature_on deployments && deployments+=(host-backend listener operator)
 
 all_ready=true

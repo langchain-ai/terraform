@@ -71,6 +71,12 @@ run "sandboxes_on" {
     error_message = "The budget counts each sandbox-host with its JuiceFS cache, and the JuiceFS Redis."
   }
 
+  # Tainted for sandbox-host alone, a sandbox node gives the app pods nothing.
+  assert {
+    condition     = output.budget.pools.sandbox.nodes == 2 && output.budget.pools.workers.nodes == 1 && length([for p in output.pods : p if p.name == "sandboxes/sandbox-host" && p.pool == "sandbox"]) == 1
+    error_message = "Sandbox nodes are their own pool: sandbox-host counts there, and the workers lose their capacity."
+  }
+
   assert {
     condition     = kubernetes_namespace_v1.langsmith.metadata[0].labels["pod-security.kubernetes.io/enforce"] == "privileged"
     error_message = "The langsmith namespace admits the privileged sandbox-host."
@@ -161,5 +167,10 @@ run "engine_on" {
   assert {
     condition     = output.features.engine && contains(keys(output.features.standalone), "insights")
     error_message = "Engine brings the Insights deployment it runs on."
+  }
+
+  assert {
+    condition     = contains(output.budget.features, "insights")
+    error_message = "The budget counts and sizes the Insights pods Engine brings."
   }
 }
