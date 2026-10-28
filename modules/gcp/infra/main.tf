@@ -1154,7 +1154,7 @@ resource "kubernetes_namespace_v1" "sandbox" {
 
 # The runtime chart's minimal Secret: never a copy of langsmith-config. Its two
 # keys are the langsmith-sandbox chart's defaults (serviceAuth.secretKey and
-# serviceAuth.callbackSigningJwkSecretKey), and each value must equal the
+# config.callbackSigningJwkSecretKey), and each value must equal the
 # control plane's. The control plane reads its service-auth secret from the
 # dedicated sandbox_service_auth_secret key in langsmith-config
 # (init-values.sh sets sandboxes.serviceAuth.secretKey to it), never from
