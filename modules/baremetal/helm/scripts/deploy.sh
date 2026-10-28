@@ -46,13 +46,17 @@ NAMESPACE="langsmith"
 CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 
 # These values use the chart 0.17 schema (SmithDB per-component sizing, the
-# gateway HTTPRoute, standalone Insights/Polly wiring). Chart 0.18 has not been
-# validated against them, so refuse anything off the 0.17 line rather than
-# deploy a half-configured release.
+# gateway HTTPRoute, standalone Insights/Polly wiring). Chart 0.18 keeps that
+# layout and only adds keys, so it is accepted too, as on the other providers
+# (#433). Refuse any other line rather than deploy a half-configured release.
+# With blob storage on (the default) the chart is given this module's RustFS as
+# its bucket (helm_values.tf, config.blobStorage). helm#1182, open, has 0.18
+# bundle a RustFS of its own when no bucket is set: recheck when it merges that
+# the one given keeps it from doing so, and that blob storage off is refused.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.17" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 line." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 patch explicitly:" >&2
+if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 or 0.18 patch explicitly:" >&2
   echo "         CHART_VERSION=0.17.10 make deploy" >&2
   exit 1
 fi
@@ -255,6 +259,23 @@ ssa_args=()
 
 # No --wait: hooks (DB migrations, smithdb metastore migration) still run to
 # completion; the rollout checks below report per component.
+# A failed hook leaves Helm reporting only "job failed: BackoffLimitExceeded",
+# which never names the job. The chart's hooks use hook-delete-policy
+# before-hook-creation, so the failed Job and its pod are still there to read,
+# as the AWS module does (#476).
+_report_failed_hook_jobs() {
+  local job failed
+  _kubectl get jobs -n "$NAMESPACE" >&2 || true
+  while read -r job failed; do
+    [[ -n "$job" && "${failed:-}" =~ ^[0-9]+$ ]] || continue
+    ((failed > 0)) || continue
+    echo "── failed hook job: ${job} ──" >&2
+    _kubectl describe job "$job" -n "$NAMESPACE" >&2 || true
+    _kubectl logs "job/$job" -n "$NAMESPACE" --all-containers --tail=200 >&2 || true
+  done < <(_kubectl get jobs -n "$NAMESPACE" \
+    -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.failed}{"\n"}{end}' 2>/dev/null || true)
+}
+
 info "running hooks (Postgres + SmithDB metastore migrations) — a few minutes"
 if ! _helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
@@ -263,7 +284,7 @@ if ! _helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   "${values_args[@]}" \
   --timeout 20m; then
   fail "helm upgrade failed"
-  action "kubectl --context $kube_context get jobs,pods -n $NAMESPACE"
+  _report_failed_hook_jobs
   exit 1
 fi
 pass "helm release applied"
