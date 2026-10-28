@@ -123,7 +123,7 @@ variable "sandbox_subnet_address_prefix" {
 
 variable "sandbox_ingress_prefixes" {
   type        = list(string)
-  description = "Prefixes where the LangSmith ingress load balancer frontend can sit: the AKS node subnet, plus the internal load balancer's own subnet when it has one. The sandbox NSG lets sandbox nodes reach them on 80 and 443 for platform.endpoint."
+  description = "Prefixes where the LangSmith ingress load balancer frontend can sit: the AKS node subnet, plus the internal load balancer's own subnet when it has one. The sandbox NSG lets sandbox nodes reach them on 80 and 443 for the runtime chart's config.endpoint."
   default     = []
 }
 
