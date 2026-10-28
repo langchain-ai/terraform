@@ -355,8 +355,8 @@ table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
 |-----------|-------------------------------|
 | ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
 | Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
-| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
-| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |
+| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR. With `sandbox_deployment_mode = "separate_cluster"`, admit the LangSmith node security group (and the bastion's) instead of the VPC CIDR, which also contains the sandbox nodes |
+| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR. With `separate_cluster`, the same narrowing as Postgres |
 | SmithDB metastore (RDS) | See below. This one component can have its ingress rule managed by Terraform |
 
 ### The one exception: SmithDB's metastore security group
@@ -454,6 +454,7 @@ The S3 bucket and the dedicated `noeviction` ElastiCache metadata store remain s
 - **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, or the traffic would leave a network you trust, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
 - **Sandbox nodes reach the LangSmith API** at `platform.endpoint` (`<config.hostname>[/<basePath>]/api`) through the ALB. With `alb_scheme = "internal"` Terraform adds an ALB rule for the sandbox node security group. With an internet-facing ALB the call leaves through the NAT gateway, so a narrowed `alb_allowed_cidr_blocks` must admit the NAT address (see `sandbox_alb_allow_nat_egress` in `terraform.tfvars.example`); `terraform plan` fails otherwise. With `alb_existing_security_group_id`, Terraform writes no rules on your group: allow the `sandbox_node_security_group_id` output on the ALB's ports yourself. With `create_firewall = true`, `langsmith_domain` is added to the allowed FQDNs.
 - **Sandbox nodes reach Redis and S3** inside the VPC: the JuiceFS Redis admits the VPC CIDR, and S3 goes through the VPC gateway endpoint.
+- **Sandbox nodes cannot reach the LangSmith Postgres or Redis.** The sandbox nodes share the private subnets, so in this mode the RDS and ElastiCache security groups admit the LangSmith node security group (which pod ENIs carry, with custom networking too) and the bastion's, not the VPC CIDR. Other clients in the VPC lose access to those databases in this mode. If one needs them, supply your own groups with `postgres_existing_security_group_id` and `redis_existing_security_group_id`; Terraform writes no rules on those, so keep the sandbox nodes out of them.
 
 #### Secrets
 

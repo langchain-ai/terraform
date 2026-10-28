@@ -413,14 +413,15 @@ module "redis" {
   source = "./modules/redis"
   count  = var.redis_source == "external" ? 1 : 0
 
-  name                 = local.redis_name
-  vpc_id               = local.vpc_id
-  subnet_ids           = local.private_subnets
-  instance_type        = var.redis_instance_type
-  ingress_cidrs        = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
-  vpc_cidr_block       = local.vpc_cidr_block
-  auth_token           = var.redis_auth_token
-  parameter_group_name = "default.redis7"
+  name                       = local.redis_name
+  vpc_id                     = local.vpc_id
+  subnet_ids                 = local.private_subnets
+  instance_type              = var.redis_instance_type
+  ingress_cidrs              = local.data_store_ingress_cidrs
+  ingress_security_group_ids = local.data_store_ingress_security_group_ids
+  vpc_cidr_block             = local.vpc_cidr_block
+  auth_token                 = var.redis_auth_token
+  parameter_group_name       = "default.redis7"
 
   existing_security_group_id = var.redis_existing_security_group_id
 }
@@ -472,17 +473,18 @@ module "postgres" {
   source = "./modules/postgres"
   count  = var.postgres_source == "external" ? 1 : 0
 
-  identifier     = local.postgres_name
-  engine_version = var.postgres_engine_version
-  vpc_id         = local.vpc_id
-  subnet_ids     = local.private_subnets
-  ingress_cidrs  = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
-  vpc_cidr_block = local.vpc_cidr_block
-  instance_type  = var.postgres_instance_type
-  storage_gb     = var.postgres_storage_gb
-  max_storage_gb = var.postgres_max_storage_gb
-  username       = var.postgres_username
-  password       = var.postgres_password
+  identifier                 = local.postgres_name
+  engine_version             = var.postgres_engine_version
+  vpc_id                     = local.vpc_id
+  subnet_ids                 = local.private_subnets
+  ingress_cidrs              = local.data_store_ingress_cidrs
+  ingress_security_group_ids = local.data_store_ingress_security_group_ids
+  vpc_cidr_block             = local.vpc_cidr_block
+  instance_type              = var.postgres_instance_type
+  storage_gb                 = var.postgres_storage_gb
+  max_storage_gb             = var.postgres_max_storage_gb
+  username                   = var.postgres_username
+  password                   = var.postgres_password
 
   iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
   iam_database_user                   = var.postgres_iam_database_user
