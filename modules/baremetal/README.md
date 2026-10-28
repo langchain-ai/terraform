@@ -35,14 +35,19 @@ What carries over to any Kubernetes deployment, whatever you swap: the Helm valu
 | Distribution | Kubernetes | Runtime | CNI | Nodes | Chart | Tested |
 |---|---|---|---|---|---|---|
 | kubeadm on Ubuntu 22.04 | v1.36.5 | containerd 2.4.1 | Calico v3.33.0 | 4 (1 control plane, 3 workers) | langsmith 0.17.11 (app and SmithDB 0.17.38); earlier load tests on 0.17.6 | install, upgrade, deploy, load test, blob offload, an agent deployment |
+| k3s | v1.34.5+k3s1 | containerd (k3s) | flannel (k3s) | 5 (1 amd64 server holding all state, 4 arm64 agents with 16K pages, so SmithDB is pinned to the server) | langsmith 0.17.20 | SmithDB-only install, load to its knee (about 21 traces/s), an hour at 72% of it with every trace stored |
+
+**Plan tests only, not yet run on a cluster:** ClickHouse in the cluster, dual ingest, the backfill and the read
+switch; Sandboxes and Engine; the HTTPS listener; the add-on toggles for a cluster that has its own; the
+`langsmith-fleet-streams` route and the stream timeouts; chart 0.18.
 
 Add-ons as tested: MetalLB 0.16.1, Envoy Gateway v1.9.2, metrics-server chart 3.14.0, KEDA 2.21.0.
 
 **Other distributions need changes.** k3s ships servicelb, local-storage and metrics-server by default
 ([packaged components](https://docs.k3s.io/installation/packaged-components)), which collide with the MetalLB, local-path
 and metrics-server this example installs: start k3s with `--disable servicelb --disable local-storage --disable
-metrics-server`. RKE2 ships its own metrics-server, so the same collision applies there: disable it, or remove
-`module.metrics_server` from this example.
+metrics-server`, or set `install_metallb`, `install_local_path` and `install_metrics_server` to `false` and use k3s's own. RKE2
+ships its own metrics-server, so the same collision applies there: disable it, or set `install_metrics_server = false`.
 
 ## Architecture
 
@@ -208,7 +213,15 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 | `envoy_gateway_lb_ip`, `metallb_addresses` | yes | the gateway's IP (its own pool), and a separate range for other LoadBalancer Services |
 | `sizing_profile` | no (`minimum`) | see above |
 | `langsmith_domain`, `langsmith_url_scheme` | no | hostname and scheme (default `http://<gateway IP>`) |
-| `envoy_gateway_route_timeout` | no (`60s`) | request timeout on every route; Envoy's own default of 15 s cuts off slow trace reads |
+| `langsmith_admin_email` | no | the first org admin's email, written to `initialOrgAdminEmail` as on the cloud modules; empty: `make setup-env` asks |
+| `gateway_tls_secret` | no | a `kubernetes.io/tls` Secret in the `langsmith` namespace: adds an HTTPS listener for `langsmith_domain` beside HTTP (needs `langsmith_url_scheme = "https"`) |
+| `clickhouse_source`, `enable_smithdb`, `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, `smithdb_query_enabled`, `smithdb_migration_parallelism` | no (SmithDB only) | the trace store, as the cloud modules name these inputs: ClickHouse in the cluster, dual ingest, the backfill and the read switch, one Helm change each ([SMITHDB.md](SMITHDB.md)) |
+| `smithdb_tier` | no (the profile's) | SmithDB's tier (`minimal`, `small`, `medium`) when the load, not the profile, should set it: the medium tier asks 28 cores a query pod at any load |
+| `install_metrics_server`, `install_local_path` (+ `storage_class`), `install_metallb`, `install_envoy_gateway` (+ `existing_gateway`) | no (all `true`) | skip each add-on a cluster already has; the budget counts only what is installed |
+| `enable_sandboxes`, `sandbox_hosts`, `sandbox_source_cidrs`, `sandbox_juicefs_cache_gi` | no | Sandboxes on KVM nodes ([below](#sandboxes-and-engine-optional)) |
+| `enable_engine`, `engine_sandbox_tenant_id`, `engine_intelligence_base_url` | no | Engine, on Sandboxes ([below](#sandboxes-and-engine-optional)) |
+| `blob_storage_ttl_days` | no (`{short = 14, long = 400}`) | days before the blob bucket deletes `ttl_s/` and `ttl_l/` payloads, as the cloud modules expire them |
+| `envoy_gateway_route_timeout` | no (`60s`) | request timeout on the chart's route and the LAN route; Envoy's own default of 15 s cuts off slow trace reads. Fleet and Deployments streams have none: with either on, `deploy.sh` applies the `langsmith-fleet-streams` route, and the operator writes no timeout on its agent routes |
 | `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules |
 | `enable_cloudflare_tunnel` + `TF_VAR_cloudflare_tunnel_token` | no | public HTTPS through a Cloudflare Tunnel |
 | `node_reserved`, `max_request_ratio` | no | budget gate headroom |
@@ -276,6 +289,20 @@ With `enable_deployments = true` (and the Deployments entitlement in your licens
   `lg-<id>`) with a 20 GiB volume on the default StorageClass. `expected_agent_deployments` reserves that much each in
   the budget gate.
 
+## Sandboxes and Engine (optional)
+
+`enable_sandboxes = true` runs Sandboxes on the nodes named in `sandbox_hosts`: amd64 machines with `/dev/kvm`, TUN
+and FUSE, each from `cluster_nodes`. The module labels and taints them `sandbox.langsmith.com/host=true:NoSchedule`, so
+only the sandbox runtime lands there, and gives JuiceFS a Redis of its own (AOF, `noeviction`) and a `sandbox-juicefs`
+bucket on the same RustFS. The runtime uses the host network, which no NetworkPolicy namespace selector matches, so
+`sandbox_source_cidrs` names the addresses its traffic comes from (each sandbox node's own, and the pod CIDR). With
+Sandboxes on, the `langsmith` namespace runs at the privileged Pod Security level, and `make setup-env` makes the
+callback signing key. Needs the Sandboxes entitlement.
+
+`enable_engine = true` adds Engine on the shared Insights deployment, with its two keys in the app Secret. It needs
+Sandboxes, the Engine entitlement, and `https` with a domain, which its callbacks reach it on; `make plan` refuses it
+otherwise. `engine_intelligence_base_url` says where Engine runs its models.
+
 ## Verify
 
 ```bash
@@ -285,6 +312,9 @@ curl -s -o /dev/null -w '%{http_code}\n' http://<gateway IP>/api/v1/info   # 200
 ```
 
 Then send a test trace with the LangSmith SDK (`LANGSMITH_ENDPOINT=http://<gateway IP>/api/v1`) and open it in the UI.
+
+The `pods` output lists every pod the budget counted (name, pool, replicas, cores, GiB, disk), the datastores
+Terraform creates included, so a tool can check where each fits, or compare the module's view with the rendered chart.
 
 ## Repository layout
 
