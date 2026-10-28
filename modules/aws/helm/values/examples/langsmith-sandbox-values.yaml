@@ -2,19 +2,19 @@
 # init-values.sh generates helm/values/langsmith-sandbox-values-overrides.yaml
 # with deployment-specific values from Terraform outputs.
 
-platform:
-  endpoint: "https://langsmith.example.com/api"
-
-# A minimal Secret in the sandbox namespace, never a copy of the LangSmith
-# application Secret. Terraform creates it with exactly these two keys:
+# config.existingSecretName is a minimal Secret in the sandbox namespace, never
+# a copy of the LangSmith application Secret. Terraform creates it with
+# exactly these two keys:
 #   sandbox_service_auth_secret   same value as sandbox_service_auth_secret in
 #                                 langsmith-config, a dedicated secret that is
 #                                 never the API key salt
 #   sandbox_callback_signing_jwk  same JWK as the control plane
-serviceAuth:
+config:
+  endpoint: "https://langsmith.example.com/api"
   existingSecretName: "langsmith-sandbox-runtime"
-  secretKey: "sandbox_service_auth_secret"
   callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+serviceAuth:
+  secretKey: "sandbox_service_auth_secret"
 
 workloadIdentity:
   provider: aws
