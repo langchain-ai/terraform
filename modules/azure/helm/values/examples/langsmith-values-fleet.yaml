@@ -55,8 +55,8 @@ fleet:
 
   # redis: intentionally omitted → the chart deploys its own in-cluster Fleet Redis
   # StatefulSet (<release>-standalone-fleet-redis). See the header note above.
-  # The langsmith-defaults LimitRange (infra/modules/k8s-bootstrap) supplies the
-  # cpu/memory the bundled Redis/Postgres StatefulSets need to satisfy the ResourceQuota.
+  # The langsmith-defaults LimitRange (infra/modules/k8s-bootstrap) gives the
+  # bundled Redis/Postgres StatefulSets default cpu/memory requests.
 
 # fleetToolServer / fleetTriggerServer are separate top-level Deployments. Chart
 # v0.15 renamed them from agentBuilderToolServer / agentBuilderTriggerServer.
@@ -70,8 +70,8 @@ fleetToolServer:
   # Fix = a longer startup window (below: 30 × 5s = 150s); CPU settles to < 20m
   # once it's up. No resources override: the chart already sizes this container at
   # 2 CPU / 4Gi (limits), which is adequate, and the namespace langsmith-defaults
-  # LimitRange only sets `default`/`defaultRequest` (applied to containers that
-  # declare no limits) — it has no `max`, so it never reduces a chart-sized pod.
+  # LimitRange only sets `defaultRequest` (applied to containers that
+  # declare no requests) — it has no `max`, so it never reduces a chart-sized pod.
   deployment:
     startupProbe:
       httpGet:
