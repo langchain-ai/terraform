@@ -448,17 +448,23 @@ locals {
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
-  # Customize via the environment/owner/cost_center variables.
+  # Customize via the environment/owner/cost_center/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
+  # Azure tag names are case-insensitive and merge() is not, so a built-in key
+  # is dropped when tags has it in any case: Environment replaces environment
+  # instead of sitting beside it.
   common_tags = merge(
-    {
-      environment = coalesce(var.environment, local.deployment_name, "dev")
-      project     = "langsmith"
-      managed_by  = "terraform"
-    },
-    var.owner != "" ? { owner = var.owner } : {},
-    var.cost_center != "" ? { cost_center = var.cost_center } : {}
+    { for k, v in merge(
+      {
+        environment = coalesce(var.environment, local.deployment_name, "dev")
+        project     = "langsmith"
+        managed_by  = "terraform"
+      },
+      var.owner != "" ? { owner = var.owner } : {},
+      var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    ) : k => v if !contains([for t in keys(var.tags) : lower(t)], k) },
+    var.tags
   )
 }
 
@@ -980,6 +986,14 @@ resource "terraform_data" "validate_network" {
       error_message = "smithdb_cache_disk_throughput_mbps (${var.smithdb_cache_disk_throughput_mbps}) cannot exceed 0.25 MB/s per provisioned IOPS. Azure caps a Premium SSD v2 at 0.25 * smithdb_cache_disk_iops, which is ${var.smithdb_cache_disk_iops * 0.25} MB/s at the configured ${var.smithdb_cache_disk_iops} IOPS. Raise smithdb_cache_disk_iops or lower the throughput."
     }
 
+    # The SmithDB cache StorageClass hands the tags to the disk CSI driver as
+    # key=value,key=value. The driver splits on commas, then each pair on its
+    # first =, and fails every cache PVC on a pair it can't read.
+    precondition {
+      condition     = !var.enable_smithdb || alltrue([for k, v in local.common_tags : !strcontains(k, ",") && !strcontains(k, "=") && !strcontains(v, ",")])
+      error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, or cost_center."
+    }
+
     # SmithDB caches sit on Premium SSD v2, and in most regions that offer
     # availability zones a Premium SSD v2 disk only attaches to a zonal VM. An
     # empty availability_zones asks Azure to place the pool, which can leave the
@@ -1209,12 +1223,14 @@ resource "terraform_data" "validate_network" {
 
     # Each node takes a /24 from the pod range, so a small range caps the node
     # count the same way a small subnet does in node-subnet mode: the cluster
-    # starts, and the autoscaler stalls once the range is spent.
+    # starts, and the autoscaler stalls once the range is spent. Terraform 1.17
+    # renders error_message even when the condition holds, so the log() gets a
+    # floor of 1: an attached cluster with no managed pools totals 0 nodes.
     precondition {
       condition = !local.aks_overlay || local.aks_node_total <= local.aks_pod_cidr_node_capacity
       error_message = join(" ", [
         "aks_pod_cidr (${var.aks_pod_cidr}) holds ${local.aks_pod_cidr_node_capacity} /24 blocks, one per node, but the configured pools can reach ${local.aks_node_total} nodes (max_count + 1 surge node per pool).",
-        "Widen the range: a /${24 - ceil(log(local.aks_node_total, 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
+        "Widen the range: a /${24 - ceil(log(max(local.aks_node_total, 1), 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
       ])
     }
 
@@ -1414,6 +1430,9 @@ module "aks" {
   envoy_gateway_version                          = var.envoy_gateway_version
   envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
   envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_gateway_chart_repository                 = var.envoy_gateway_chart_repository
+  envoy_gateway_chart_repository_username        = var.envoy_gateway_chart_repository_username
+  envoy_gateway_chart_repository_password        = var.envoy_gateway_chart_repository_password
   envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
   envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
@@ -2465,6 +2484,7 @@ module "k8s_bootstrap" {
   smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
+  tags                             = local.common_tags
 
   # SmithDB's pods on top of the base namespace quota. Zero when disabled.
   resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu

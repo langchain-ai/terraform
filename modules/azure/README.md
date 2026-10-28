@@ -477,6 +477,53 @@ any value. A deployment that set `identifier = "-prod"` and never set
 replaced, but cost allocation and Azure Policy rules keyed on the old value stop
 matching. Set `environment = "dev"` explicitly to keep the old tag.
 
+### Tags required by Azure Policy
+
+Every resource Terraform creates carries `environment`, `project = "langsmith"`,
+and `managed_by = "terraform"`, plus `owner` and `cost_center` when you set
+them. Put any other key a tag policy requires in `tags`:
+
+```hcl
+owner       = "platform-team@example.com"
+environment = "prod"
+tags        = { team = "platform", product = "langsmith" }
+```
+
+A key in `tags` overrides the built-in tag of the same name in any case, so
+`Environment` replaces `environment`, because Azure tag names are
+case-insensitive. `module`, `component`, and `pool` are reserved for the tags
+each sub-module sets. `make quickstart` asks for these as "Other tags" in
+`team=platform,product=langsmith` form, and keeps a `tags` map it cannot parse,
+such as one with comments, exactly as written. Changing tags later updates
+resources in place, except the SmithDB cache StorageClass, which is replaced.
+
+AKS also creates resources of its own, and they get tags in different ways:
+
+| Created by AKS | Tags it gets |
+|---|---|
+| Node resource group (`MC_...`), its load balancer, outbound public IP, NSG, route table, and managed identities | The cluster's tags ([AKS tags](https://learn.microsoft.com/en-us/azure/aks/use-tags)) |
+| Node pool scale sets and their VMs | Each node pool's tags, which the module sets to the same set |
+| SmithDB cache disks | The `tags` parameter of the SmithDB cache StorageClass, which the module sets to the same set. A tag change replaces the StorageClass, and disks already provisioned keep their old tags |
+| Disks for other PersistentVolumeClaims, such as in-cluster Postgres, Redis, or ClickHouse | None. They come from the AKS built-in StorageClasses, which carry no `tags` parameter |
+| Public IPs for LoadBalancer Services, such as the ingress controller | Only those in the `service.beta.kubernetes.io/azure-pip-tags` annotation, which the module does not set |
+
+A deny policy that applies to the node resource group therefore blocks those
+last two rows: PVCs stay `Pending` and the ingress Service gets no external IP.
+Scope the policy to exclude the node resource group, or use `modify`/`append`
+in place of `deny` there. The policy also needs to allow the `aks-managed` and
+`k8s-azure` tags AKS sets itself ([AKS FAQ](https://learn.microsoft.com/en-us/azure/aks/faq)).
+
+Private DNS zones and Key Vault secrets accept at most 15 tags, and the module uses up
+to 7 of them, so keep `tags` to 8 new keys or fewer. The plan fails above that.
+With SmithDB on, no tag key can hold a comma or `=`, and no tag value a comma,
+because the StorageClass `tags` parameter is a `key=value,key=value` string. The
+plan fails on one.
+
+The StorageClass always carries `environment`, `project`, and `managed_by`, so the
+first apply of this version replaces the SmithDB cache StorageClass on an existing
+deployment, whether or not `tags` is set. The name stays the same, bound volumes
+are unaffected, and disks already provisioned stay untagged.
+
 ### Keeping deployment config outside this repo
 
 By default the scripts and `make` targets read `terraform.tfvars`,
@@ -848,7 +895,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Refreshes kubeconfig via `az aks get-credentials`
 - Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `nginx`, `istio-addon`, and `istio`
 - With `ingress_load_balancer = "internal"`, writes the internal load-balancer annotations into the Envoy Gateway EnvoyProxy, binds the Istio add-on Gateway to the add-on's internal gateway, and puts the subnet and IP annotations on it
-- For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on. With `enable_fleet` or `enable_deployments` on, it also applies the `langsmith-fleet-streams` HTTPRoute after the chart: the same Gateway and hostname, only the Fleet run-stream paths (`/api/v1/fleet/threads`, `/api/v1/fleet/lg`) and the Deployments proxy (`/api-host/v2`), with `timeouts.request: 0s`, because Envoy Gateway's effective 15 s response timeout on the chart's catch-all route resets those streams mid-response. Every other path keeps the default; with both features off the route is removed.
+- For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on. With `enable_fleet` or `enable_deployments` on, it also applies the `langsmith-fleet-streams` HTTPRoute after the chart: the same Gateway and hostname, only the Fleet run-stream paths (`/api/v1/fleet/threads`, `/api/v1/fleet/lg`) and the Deployments proxy (`/api-host/v2`), with `timeouts.request: 0s`, because Envoy Gateway's effective 15 s response timeout on the chart's catch-all route resets those streams mid-response. Every other path keeps the default; with both features off the route is removed. With `enable_deployments` on, the agent-deploys values file sets the operator's `HTTPROUTE_REQUEST_TIMEOUT` to `0s` (`operator.deployment.extraEnv`), so every HTTPRoute the operator creates for an agent deployment (`/lgp/<deployment>/...`) carries `timeouts.request: 0s`, no request timeout, as on `langsmith-fleet-streams`, and agent run streams are not cut at 15 s. The operator rewrites its routes on every reconcile, so an existing install picks it up after `make init-values` and `make deploy`.
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
 - Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
 - Verifies `langsmith-config-secret` exists — auto-creates it from Key Vault if missing
@@ -1571,7 +1618,16 @@ decides what the cluster can reach, and nothing works until it allows:
   `envoy_gateway_image_registry_keeps_source_host = false` (the layout of a
   Docker Hub proxy repository in Nexus or Artifactory), with an optional pull
   Secret in `envoy-gateway-system` (`envoy_gateway_image_pull_secret_name`). The
-  machine running Terraform still pulls the chart from `oci://docker.io`.
+  machine running Terraform fetches the chart from `oci://docker.io/envoyproxy`
+  unless `envoy_gateway_chart_repository` points at a mirror: an OCI registry
+  (`oci://`, which includes a Docker Hub proxy that serves OCI artifacts), or
+  an https hosted Helm repository holding an uploaded copy of the chart
+  (`helm pull oci://docker.io/envoyproxy/gateway-helm --version
+  <envoy_gateway_version>`, then upload). Envoy publishes the chart only as an
+  OCI artifact, with no `index.yaml`, so a Helm proxy repository cannot serve
+  it. A mirror that requires a login takes
+  `envoy_gateway_chart_repository_username` and
+  `envoy_gateway_chart_repository_password`.
   For KEDA, `keda_image_registry` does the same for its three images (the
   operator, the metrics API server and the admission webhooks, from
   `ghcr.io/kedacore`), laid out as `<registry>/ghcr.io/kedacore/...`, or as
@@ -1819,7 +1875,9 @@ there, and every variable takes the ID the platform team returns.
   persistent volume: `aks_disk_encryption_set_reader_grant = true` makes that
   grant from the module when the identity running apply holds
   roleAssignments/write on the set's scope. Otherwise the platform team makes it
-  after the apply that creates the cluster. Plan refuses the set with
+  after the apply that creates the cluster. Leave the flag false when the
+  platform team has already made the grant: true would create the same
+  assignment again, and the apply fails with RoleAssignmentExists. Plan refuses the set with
   `create_cluster = false`, since the module does not manage an attached
   cluster's disks.
 - **PostgreSQL.** `postgres_customer_managed_key_id` and

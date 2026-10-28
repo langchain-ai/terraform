@@ -188,6 +188,36 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "tags" {
+  type        = map(string)
+  description = "Extra tags on all resources, for keys a tag policy requires beyond environment, owner, and cost_center (e.g. { team = \"platform\", product = \"langsmith\" }). A key here overrides environment, owner, cost_center, project, or managed_by of the same name in any case, since Azure tag names are case-insensitive. module, component, and pool are reserved: each sub-module sets them."
+  default     = {}
+
+  # Azure stores Team and team as one tag, so the map can hold only one of them.
+  validation {
+    condition     = length(distinct([for k in keys(var.tags) : lower(k)])) == length(var.tags)
+    error_message = "tags: Azure tag names are case-insensitive, so keys that differ only in case are one tag. Keep one of each."
+  }
+
+  # The sub-modules merge these over tags, so a value here would never apply.
+  validation {
+    condition     = length(setintersection([for k in keys(var.tags) : lower(k)], ["module", "component", "pool"])) == 0
+    error_message = "tags: module, component, and pool are reserved; each sub-module sets them on its own resources. Remove them from tags."
+  }
+
+  # Private DNS zones and Key Vault secrets take at most 15 tags. The secrets
+  # carry the most: these keys, the built-in ones, and module and component.
+  validation {
+    condition = length(setunion(
+      [for k in keys(var.tags) : lower(k)],
+      ["environment", "project", "managed_by", "module", "component"],
+      var.owner != "" ? ["owner"] : [],
+      var.cost_center != "" ? ["cost_center"] : [],
+    )) <= 15
+    error_message = "tags: private DNS zones and Key Vault secrets accept at most 15 tags, and these keys plus environment, project, managed_by, module, component, and owner and cost_center when set come to ${length(setunion([for k in keys(var.tags) : lower(k)], ["environment", "project", "managed_by", "module", "component"], var.owner != "" ? ["owner"] : [], var.cost_center != "" ? ["cost_center"] : []))}. Drop keys from tags until the total is 15 or fewer."
+  }
+}
+
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 variable "keyvault_name" {
@@ -1934,7 +1964,7 @@ variable "aks_disk_encryption_set_id" {
 
 variable "aks_disk_encryption_set_reader_grant" {
   type        = bool
-  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Requires aks_disk_encryption_set_id."
+  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Leave it false when that grant already exists: true would create the same assignment again, and the apply fails with RoleAssignmentExists. Requires aks_disk_encryption_set_id."
   default     = false
 
   validation {
@@ -2287,6 +2317,35 @@ variable "envoy_gateway_image_registry_keeps_source_host" {
   type        = bool
   description = "Whether envoy_gateway_image_registry keeps docker.io as the first path segment under the registry. true (default): the controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version>, the layout LangSmith's images.registry expects. false: the mirror serves Docker Hub's paths directly, as a Docker Hub proxy repository in Nexus or Artifactory does, and the controller is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. The proxy image follows the same rule. Ignored without envoy_gateway_image_registry."
   default     = true
+}
+
+variable "envoy_gateway_chart_repository" {
+  type        = string
+  description = "Repository the Envoy Gateway chart (gateway-helm) is fetched from, by the machine running Terraform. The default is Envoy's own OCI registry on Docker Hub. A mirror keeps that machine off docker.io: an OCI registry as oci://<host>/<path> serves the chart as <path>/gateway-helm (a Docker Hub proxy in Nexus or Artifactory that serves OCI artifacts is this form). Envoy publishes the chart only as an OCI artifact, with no index.yaml, so a Helm proxy repository cannot serve it; https://<host>/<path> is for a hosted Helm repository holding an uploaded copy (helm pull oci://docker.io/envoyproxy/gateway-helm --version <envoy_gateway_version>, then upload). The chart name and version (envoy_gateway_version) do not change. envoy_gateway_image_registry is the separate setting for the images the cluster pulls."
+  default     = "oci://docker.io/envoyproxy"
+
+  validation {
+    condition     = can(regex("^(https|oci)://[^/]+(/[^/]+)*$", var.envoy_gateway_chart_repository))
+    error_message = "envoy_gateway_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'oci://docker.io/envoyproxy' or 'oci://nexus.example.com/docker-hub/envoyproxy')."
+  }
+}
+
+variable "envoy_gateway_chart_repository_username" {
+  type        = string
+  description = "Username for envoy_gateway_chart_repository when the mirror requires a login to read charts; the machine running Terraform sends it with the chart fetch. Empty (default) fetches anonymously, which Docker Hub and an open mirror allow. Set with envoy_gateway_chart_repository_password."
+  default     = ""
+
+  validation {
+    condition     = (var.envoy_gateway_chart_repository_username == "") == (var.envoy_gateway_chart_repository_password == "")
+    error_message = "envoy_gateway_chart_repository_username and envoy_gateway_chart_repository_password go together: set both for a chart mirror that requires a login, or neither."
+  }
+}
+
+variable "envoy_gateway_chart_repository_password" {
+  type        = string
+  description = "Password or token for envoy_gateway_chart_repository_username. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars."
+  default     = ""
+  sensitive   = true
 }
 
 variable "envoy_gateway_image_pull_secret_name" {

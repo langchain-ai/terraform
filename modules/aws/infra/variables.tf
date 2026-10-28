@@ -242,7 +242,7 @@ variable "create_gp3_storage_class" {
 
 variable "eks_managed_node_group_defaults" {
   type        = any
-  description = "Default configuration for EKS managed node groups"
+  description = "Default configuration for EKS managed node groups. Merged over the v20 IMDS, monitoring, and AMI pins in the EKS module, so a partial override keeps those pins. Group settings still win."
   default = {
     ami_type = "AL2023_x86_64_STANDARD"
   }
@@ -250,19 +250,24 @@ variable "eks_managed_node_group_defaults" {
 
 variable "eks_managed_node_groups" {
   type = map(object({
-    name                         = string
-    instance_types               = list(string)
-    min_size                     = optional(number, 1)
-    desired_size                 = optional(number, null)
-    max_size                     = optional(number, 10)
-    labels                       = optional(map(string), {})
-    taints                       = optional(any, {})
-    block_device_mappings        = optional(any, {})
-    update_config                = optional(any, {})
+    name                  = string
+    instance_types        = list(string)
+    min_size              = optional(number, 1)
+    desired_size          = optional(number, null)
+    max_size              = optional(number, 10)
+    labels                = optional(map(string), {})
+    taints                = optional(any, {})
+    block_device_mappings = optional(any, {})
+    # The upstream eks module (>= 21.x) requires update_config.max_unavailable
+    # or max_unavailable_percentage to be set; it no longer defaults one in.
+    # 1 matches the EKS console default (roll one node at a time).
+    update_config                = optional(any, { max_unavailable = 1 })
     cloudinit_pre_nodeadm        = optional(any, [])
     iam_role_name                = optional(string, null)
     iam_role_use_name_prefix     = optional(bool, null)
     iam_role_additional_policies = optional(map(string), {})
+    # Null leaves the upstream default, ON_DEMAND, so an existing group is unchanged.
+    capacity_type = optional(string, null)
   }))
   description = "EKS managed node groups. desired_size defaults to min_size when omitted."
   default = {
@@ -272,6 +277,14 @@ variable "eks_managed_node_groups" {
       min_size       = 3
       max_size       = 10
     }
+  }
+
+  validation {
+    condition = alltrue([
+      for group in values(var.eks_managed_node_groups) :
+      contains(["ON_DEMAND", "SPOT"], coalesce(group.capacity_type, "ON_DEMAND"))
+    ])
+    error_message = "capacity_type must be ON_DEMAND or SPOT."
   }
 }
 
@@ -426,7 +439,7 @@ variable "redis_existing_security_group_id" {
 #------------------------------------------------------------------------------
 variable "enable_sandboxes" {
   type        = bool
-  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires external Redis and dedicated sandbox-host nodes with usable Linux KVM (/dev/kvm). On AWS, use x86_64 EC2 bare metal instance types."
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires external Redis and dedicated sandbox-host nodes with usable Linux KVM (/dev/kvm)."
   default     = false
 }
 
@@ -443,14 +456,25 @@ variable "sandbox_host_node_count" {
 
 variable "sandbox_host_instance_types" {
   type        = list(string)
-  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal; other bare-metal examples include m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl, r6i.metal, and i4i.metal. Virtual instances also work where EC2 supports nested virtualization (m7i, c7i, r7i, m8i, c8i, r8i and their d variants), which is cheaper than renting a whole host; set sandbox_host_local_nvme_bootstrap_enabled = false on families without instance store, and note that the EKS vpc-cni addon must be v1.21 or newer because v1.20 crashes on 8th-generation Intel instances."
+  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal. Virtual instances also work where EC2 supports nested virtualization (m7i, c7i, r7i, m8i, c8i, r8i and their d variants). sandbox_host_nested_virtualization and sandbox_host_local_nvme_bootstrap_enabled derive from the type when left unset. 8th-generation Intel instances need the EKS vpc-cni addon at v1.21 or newer."
   default     = ["m5d.metal"]
+}
+
+variable "sandbox_host_nested_virtualization" {
+  type        = bool
+  description = "Set cpu_options.nested_virtualization = enabled on the sandbox-host launch template. Null derives it from sandbox_host_instance_types: enabled unless every type is bare metal (*.metal, *.metal-*). AWS rejects nested virtualization on bare metal, so explicit true with a bare-metal type fails validation."
+  default     = null
+
+  validation {
+    condition     = var.sandbox_host_nested_virtualization != true || !anytrue([for t in var.sandbox_host_instance_types : endswith(t, ".metal") || strcontains(t, ".metal-")])
+    error_message = "sandbox_host_nested_virtualization = true is incompatible with a bare-metal sandbox_host_instance_types entry (*.metal or *.metal-*); AWS does not support nested virtualization on bare metal."
+  }
 }
 
 variable "sandbox_host_local_nvme_bootstrap_enabled" {
   type        = bool
-  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Disable when using an instance type without local NVMe instance store."
-  default     = true
+  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Null derives it from sandbox_host_instance_types: enabled when a type is bare metal (*.metal, *.metal-*). Set true for a virtual type that still has instance store, such as m8id, m6id, c6id, r6id, or i4i."
+  default     = null
 }
 
 variable "sandbox_host_local_nvme_expected_device_count" {

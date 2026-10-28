@@ -398,8 +398,8 @@ run "sandbox_host_node_group_gets_the_iam_and_ebs_key_settings" {
   }
 }
 
-# Upstream takes a key the group sets over eks_managed_node_group_defaults, even
-# a null one, so unset root inputs must leave the IAM keys off the group.
+# eks_managed_node_group_defaults is merged into every group, so unset root
+# inputs must not override the IAM keys it sets.
 run "node_group_iam_defaults_apply_when_the_root_inputs_are_unset" {
   command = plan
 
@@ -414,11 +414,13 @@ run "node_group_iam_defaults_apply_when_the_root_inputs_are_unset" {
   }
 
   assert {
-    condition = length(setintersection(
-      keys(module.eks.eks_managed_node_group_inputs["default"]),
-      ["create_iam_role", "iam_role_arn", "iam_role_permissions_boundary", "iam_role_path"],
-    )) == 0
-    error_message = "the default node group sets IAM keys that override eks_managed_node_group_defaults"
+    condition = (
+      module.eks.eks_managed_node_group_inputs["default"].create_iam_role == false &&
+      module.eks.eks_managed_node_group_inputs["default"].iam_role_arn == "arn:aws:iam::123456789012:role/plantest-node" &&
+      module.eks.eks_managed_node_group_inputs["default"].iam_role_permissions_boundary == "arn:aws:iam::123456789012:policy/plantest-boundary" &&
+      module.eks.eks_managed_node_group_inputs["default"].iam_role_path == "/langsmith/"
+    )
+    error_message = "unset root inputs overrode the IAM keys in eks_managed_node_group_defaults"
   }
 }
 
@@ -437,6 +439,20 @@ run "sandbox_host_node_group_uses_the_existing_node_role" {
       module.eks.eks_managed_node_group_inputs["sandbox_host"].iam_role_arn == "arn:aws:iam::123456789012:role/plantest-node"
     )
     error_message = "existing_iam_role_arns.node_group did not reach the sandbox-host node group"
+  }
+}
+
+# capacity_type is optional and null by default. The validation must not call
+# contains(..., null): HCL evaluates both sides of "||" eagerly, so a
+# short-circuit guard like "group.capacity_type == null || contains(...)"
+# still errors on a null capacity_type. Every default apply hits this, since
+# the eks_managed_node_groups default omits capacity_type entirely.
+run "default_node_group_with_null_capacity_type_plans" {
+  command = plan
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["default"].desired_size == 3
+    error_message = "the default node group, whose capacity_type is left null, failed to plan"
   }
 }
 
@@ -465,6 +481,96 @@ run "sandbox_host_node_group_null_overrides_fall_back" {
     condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].metadata_options.http_put_response_hop_limit == 1
     error_message = "the sandbox-host node group lost its IMDS hop limit of 1 on the way to the EKS module"
   }
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].instance_types[0] == "m5d.metal"
+    error_message = "the sandbox-host node group no longer defaults to m5d.metal"
+  }
+  assert {
+    condition     = can(module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization) == false
+    error_message = "the default bare-metal sandbox host enabled nested virtualization"
+  }
+}
+
+# A stack that only overrides sandbox_host_instance_types to a bare-metal type
+# (the pre-m7i.2xlarge default, and the terraform.tfvars.example pattern) must
+# keep its pre-existing behavior: no nested virtualization (AWS rejects it on
+# bare metal) and local NVMe bootstrap still on, both derived without the
+# caller setting either variable.
+run "sandbox_host_bare_metal_instance_type_keeps_local_nvme_and_skips_nested_virt" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types      = ["m5d.metal"]
+  }
+
+  assert {
+    condition     = can(module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization) == false
+    error_message = "a bare-metal sandbox_host_instance_types still enabled nested virtualization"
+  }
+  assert {
+    condition     = length(module.eks.eks_managed_node_group_inputs["sandbox_host"].cloudinit_pre_nodeadm) > 0
+    error_message = "a bare-metal sandbox_host_instance_types no longer bootstraps local NVMe for swap/JuiceFS cache"
+  }
+}
+
+# Opting into a virtual type derives nested virtualization and skips local NVMe
+# bootstrap. The module default stays bare metal.
+run "sandbox_host_virtual_instance_type_enables_nested_virt_and_skips_local_nvme" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types      = ["m7i.2xlarge"]
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization == "enabled"
+    error_message = "a virtual sandbox_host_instance_types did not enable nested virtualization"
+  }
+  assert {
+    condition     = length(module.eks.eks_managed_node_group_inputs["sandbox_host"].cloudinit_pre_nodeadm) == 0
+    error_message = "a virtual sandbox_host_instance_types unexpectedly bootstrapped local NVMe"
+  }
+}
+
+# A virtual d type can still opt into local NVMe bootstrap. The derived default
+# skips it, and an explicit true must not be rejected.
+run "sandbox_host_virtual_instance_store_can_enable_local_nvme" {
+  command = plan
+
+  variables {
+    enable_sandboxes                          = true
+    sandbox_juicefs_redis_auth_token          = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types               = ["m8id.2xlarge"]
+    sandbox_host_local_nvme_bootstrap_enabled = true
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["sandbox_host"].cpu_options.nested_virtualization == "enabled"
+    error_message = "a virtual instance-store type lost nested virtualization"
+  }
+  assert {
+    condition     = length(module.eks.eks_managed_node_group_inputs["sandbox_host"].cloudinit_pre_nodeadm) > 0
+    error_message = "an explicit local NVMe bootstrap on a virtual type was ignored"
+  }
+}
+
+run "sandbox_host_nested_virt_true_rejects_bare_metal" {
+  command = plan
+
+  variables {
+    enable_sandboxes                   = true
+    sandbox_juicefs_redis_auth_token   = "fixture-not-a-real-token-0123456789"
+    sandbox_host_instance_types        = ["m5d.metal"]
+    sandbox_host_nested_virtualization = true
+  }
+
+  expect_failures = [
+    var.sandbox_host_nested_virtualization,
+  ]
 }
 
 run "enable_smithdb_adds_only_smithdb" {

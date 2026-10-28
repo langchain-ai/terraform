@@ -1693,6 +1693,35 @@ CASES = [
         "exit_code": 1,
     },
     {
+        "name": "a key vault that never had purge protection reports it unset, and fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'storage_customer_managed_key_id          = "https://kv-keys.vault.usgovcloudapi.net/keys/blob-key"',
+            'storage_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_purge_protection": "",
+        "expect": [
+            "[✗] storage_customer_managed_key_id: the vault kv-keys has purge protection off",
+        ],
+        "reject": ["[!] storage_customer_managed_key_id: the vault kv-keys could not be read"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a Managed HSM without purge protection fails with the update-hsm command",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": '\n'.join([
+            'storage_customer_managed_key_id          = "https://hsm-keys.managedhsm.usgovcloudapi.net/keys/blob-key"',
+            'storage_customer_managed_key_identity_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/blob-cmk"',
+        ]),
+        "kv_purge_protection": "",
+        "expect": [
+            "[✗] storage_customer_managed_key_id: the vault hsm-keys has purge protection off",
+            "az keyvault update-hsm --hsm-name hsm-keys --enable-purge-protection true",
+        ],
+        "reject": ["az keyvault update --name hsm-keys"],
+        "exit_code": 1,
+    },
+    {
         "name": "a Managed HSM key is read with --hsm-name, and an unreadable vault or identity warns",
         "ca_all": ALL_GOOD,
         "tfvars_extra": '\n'.join([

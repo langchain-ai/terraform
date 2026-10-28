@@ -158,6 +158,12 @@ variable "gke_machine_type" {
   default     = "e2-standard-4"
 }
 
+variable "gke_spot" {
+  description = "Create the primary GKE node pool from Spot VMs. False leaves the pool on demand. Sandbox-host and SmithDB pools stay on demand."
+  type        = bool
+  default     = false
+}
+
 variable "gke_disk_size" {
   description = "Disk size in GB for GKE nodes"
   type        = number

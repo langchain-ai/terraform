@@ -179,6 +179,19 @@ output "node_pool_zones" {
   value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.zones }
 }
 
+output "node_pool_tags" {
+  description = "Tags each node pool is planned or created with, keyed by pool name, the default pool under \"default\". The default pool is absent when create_cluster = false."
+  value = merge(
+    { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.tags },
+    { for cluster in azurerm_kubernetes_cluster.main : "default" => cluster.default_node_pool[0].tags },
+  )
+}
+
+output "cluster_tags" {
+  description = "Tags the cluster is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].tags)
+}
+
 output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
@@ -187,6 +200,15 @@ output "support_plan" {
 output "envoy_gateway_version" {
   description = "Version of the Envoy Gateway release, empty when ingress_controller is not 'envoy-gateway'. k8s-bootstrap reads it to install cert-manager after the Gateway API CRDs this release ships."
   value       = join("", helm_release.envoy_gateway[*].version)
+}
+
+output "envoy_gateway_chart_source" {
+  description = "Where the Envoy Gateway release fetches its chart (repository and chart as the release sets them), and whether it sends credentials; null without Envoy Gateway."
+  value = one([for r in helm_release.envoy_gateway : {
+    repository    = r.repository
+    chart         = r.chart
+    authenticated = var.envoy_gateway_chart_repository_username != ""
+  }])
 }
 
 output "envoy_gateway_image" {

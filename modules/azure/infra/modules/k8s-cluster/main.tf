@@ -588,6 +588,10 @@ resource "azurerm_kubernetes_cluster" "main" {
   default_node_pool {
     name = "default"
 
+    # Node pools carry their own tags, separate from the cluster's, and AKS
+    # applies them to the pool's scale set and its VMs.
+    tags = merge(var.tags, { module = "aks", pool = "default" })
+
     # Default Standard_D8s_v5: 8 vCPU, 32 GB RAM — Dsv5 family, the production baseline.
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
     vm_size = var.default_node_pool_vm_size
@@ -1272,8 +1276,15 @@ resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0
   name      = "envoy-gateway"
   namespace = "envoy-gateway-system"
-  chart     = "oci://docker.io/envoyproxy/gateway-helm"
-  version   = var.envoy_gateway_version
+  # An OCI repository carries the chart in its reference; an https repository
+  # names it. The default gives the reference this release always used, so an
+  # existing install plans no change.
+  repository = startswith(var.envoy_gateway_chart_repository, "oci://") ? null : var.envoy_gateway_chart_repository
+  chart      = startswith(var.envoy_gateway_chart_repository, "oci://") ? "${var.envoy_gateway_chart_repository}/gateway-helm" : "gateway-helm"
+  version    = var.envoy_gateway_version
+
+  repository_username = var.envoy_gateway_chart_repository_username != "" ? var.envoy_gateway_chart_repository_username : null
+  repository_password = var.envoy_gateway_chart_repository_password != "" ? var.envoy_gateway_chart_repository_password : null
 
   create_namespace = true
 
