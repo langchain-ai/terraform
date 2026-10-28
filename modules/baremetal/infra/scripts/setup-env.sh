@@ -111,7 +111,9 @@ _secrets_file_check
 
 # Prompts use single quotes: the symbol list holds $ and !.
 _ensure_secret LANGSMITH_LICENSE_KEY "LangSmith license key (input hidden)" true _validate_license_key ""
-_ensure_secret INITIAL_ORG_ADMIN_EMAIL "Initial org admin email" false _validate_email ""
+# The email is configuration on every module now (#429): asked only when terraform.tfvars has none.
+[[ -n "$(_parse_tfvar langsmith_admin_email)" ]] \
+  || _ensure_secret INITIAL_ORG_ADMIN_EMAIL "Initial org admin email" false _validate_email ""
 _ensure_secret INITIAL_ORG_ADMIN_PASSWORD 'Initial org admin password (input hidden; >= 12 bytes, lower, upper, one of !#$%()+,-./:?@[]^_{~})' true _validate_admin_password ""
 _ensure_secret API_KEY_SALT "" false "" _secret_gen_b64
 _ensure_secret JWT_SECRET "" false "" _secret_gen_b64

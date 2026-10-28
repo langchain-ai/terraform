@@ -11,7 +11,7 @@
 # Reads:
 #   terraform outputs   langsmith_helm_values, smithdb_helm_values, features
 #   terraform.tfvars    sizing_profile
-#   infra/.secrets.env  INITIAL_ORG_ADMIN_EMAIL (written by make setup-env)
+#   terraform.tfvars    langsmith_admin_email (else infra/.secrets.env INITIAL_ORG_ADMIN_EMAIL)
 #
 # Writes helm/values/ (gitignored, no secrets):
 #   langsmith-values-overrides.yaml        hostname, gateway         (every run)
@@ -157,10 +157,11 @@ done
 pass "langsmith-values-overrides.yaml (hostname $(_tf_output_raw langsmith_url))"
 pass "langsmith-values-smithdb.yaml (SmithDB → RustFS + postgres-smithdb)"
 
-# ── Every run: admin email (from the secrets file, kept out of Terraform) ────
-admin_email="$(_secret_get INITIAL_ORG_ADMIN_EMAIL)"
+# ── Every run: admin email (terraform.tfvars, as on the cloud modules; else the secrets file) ──
+admin_email="$(_parse_tfvar langsmith_admin_email)"
+[[ -n "$admin_email" ]] || admin_email="$(_secret_get INITIAL_ORG_ADMIN_EMAIL)"
 if [[ -z "$admin_email" ]]; then
-  fail "INITIAL_ORG_ADMIN_EMAIL is not in $SECRETS_FILE — run make setup-env first."
+  fail "no admin email: set langsmith_admin_email in terraform.tfvars, or run make setup-env."
   exit 1
 fi
 if ! reason="$(_validate_email "$admin_email")"; then

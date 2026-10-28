@@ -6,6 +6,11 @@
 # where each datastore lives. Outputs carry Secret names, never secret values.
 #------------------------------------------------------------------------------
 
+output "langsmith_admin_email" {
+  description = "Initial LangSmith organization admin email used in Helm values (empty: from infra/.secrets.env)"
+  value       = var.langsmith_admin_email
+}
+
 output "budget" {
   description = "Requested resources for sizing_profile vs the ceiling from cluster_nodes (no secrets)."
   value       = local.budget_summary

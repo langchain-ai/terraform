@@ -11,6 +11,12 @@ variable "langsmith_domain" {
   description = "Hostname for LangSmith (e.g. langsmith.lab.example.com). Empty uses the Envoy Gateway IP, as modules/gcp does without a domain."
 }
 
+variable "langsmith_admin_email" {
+  type        = string
+  default     = ""
+  description = "Initial LangSmith organization admin email, written to initialOrgAdminEmail in Helm values, as on the cloud modules (#429). Configuration, not a secret; empty falls back to INITIAL_ORG_ADMIN_EMAIL in infra/.secrets.env."
+}
+
 variable "langsmith_url_scheme" {
   type        = string
   default     = "http"

@@ -36,6 +36,8 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 
 # Hostname for LangSmith. Empty (default) uses http://<envoy_gateway_lb_ip>.
 # langsmith_domain = "langsmith.example.com"
+# The first org admin's email, as on the cloud modules. Empty: make setup-env asks.
+# langsmith_admin_email = "admin@example.com"
 # https when TLS terminates in front of the gateway (e.g. a Cloudflare Tunnel).
 # langsmith_url_scheme = "https"
 
