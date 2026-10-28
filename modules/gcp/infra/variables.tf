@@ -60,6 +60,12 @@ variable "name_prefix" {
   }
 }
 
+variable "langsmith_admin_email" {
+  description = "Initial LangSmith organization admin email. Stored as configuration and written to initialOrgAdminEmail in Helm values."
+  type        = string
+  default     = ""
+}
+
 variable "unique_suffix" {
   description = "Add a unique random suffix to resource names (recommended for multi-tenant projects)"
   type        = bool
@@ -150,6 +156,12 @@ variable "gke_machine_type" {
   description = "Machine type for GKE nodes (e.g., e2-standard-4, n2-standard-8)"
   type        = string
   default     = "e2-standard-4"
+}
+
+variable "gke_spot" {
+  description = "Create the primary GKE node pool from Spot VMs. False leaves the pool on demand. Sandbox-host and SmithDB pools stay on demand."
+  type        = bool
+  default     = false
 }
 
 variable "gke_disk_size" {

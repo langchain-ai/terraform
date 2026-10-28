@@ -75,7 +75,8 @@
     "Action": [
       "iam:TagRole",
       "iam:UntagRole",
-      "iam:PutRolePolicy"
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy"
     ],
     "Resource": [
       "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
@@ -122,6 +123,7 @@
     "Condition": {
       "ArnEquals": {
         "iam:PolicyARN": [
+          "arn:aws:iam::aws:policy/AmazonBedrockMantleInferenceAccess",
           "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
           "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
           "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",

@@ -53,9 +53,9 @@ LangSmith on AWS is deployed in three passes.
 │  Cache:      ElastiCache Redis (cache.m6g.xlarge, private subnets)          │
 │  Storage:    S3 bucket (VPC Gateway Endpoint — no public internet)          │
 │  Add-ons:    ALB controller + EBS CSI driver + metrics server               │
-│  Bootstrap:  k8s-bootstrap (KEDA, ESO, Envoy Gateway [opt-in]),            │
+│  Bootstrap:  k8s-bootstrap (KEDA, ESO, Envoy Gateway),                      │
 │              cert-manager (standalone, active when tls=letsencrypt)         │
-│  Ingress:    ALB (default) or Envoy Gateway (opt-in, enable_envoy_gateway)  │
+│  Ingress:    ALB → Envoy Gateway (default), or ALB Ingress, Istio, NGINX    │
 │  Opt-in:     Network Firewall (FQDN-based egress filtering)                 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -194,6 +194,8 @@ IRSA is used instead of static credentials for S3 access:
 2. The role is granted `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on the LangSmith bucket.
 3. The Kubernetes Service Account in `langsmith` namespace is annotated with the role ARN.
 4. Pods receive temporary credentials via the EKS token webhook — no static AWS keys required.
+
+With `enable_engine`, Engine's API server and queue run under a dedicated `<name_prefix>-<environment>-engine-irsa` role. Its trust policy allows only those two service accounts. The role holds `AmazonBedrockMantleInferenceAccess`, so Engine calls Amazon Bedrock without stored credentials. Insights runs on the same two service accounts. The role therefore also gets the bucket access of the shared role. When `enable_bedrock_access = true`, it also gets the Bedrock `InvokeModel` access of the shared role. See [ENGINE.md](ENGINE.md).
 
 ---
 

@@ -65,6 +65,15 @@ locals {
   langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
+  # The chart names sandbox-host's service account <fullname>-sandbox-host.
+  sandbox_host_service_account = "${local.langsmith_release_fullname}-sandbox-host"
+  sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+
+  # JuiceFS reads the container from the first label of the bucket host and the
+  # account from access-key, so the bucket is https://<container>.core.windows.net,
+  # not the account's blob URL.
+  sandbox_juicefs_bucket = var.enable_sandboxes ? replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1") : null
+
   # A StorageClass is cluster-scoped, unlike everything else this module creates
   # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
   # the second apply fails on an object the first one owns. Suffix it the same
@@ -260,17 +269,38 @@ locals {
   aks_node_total             = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes]))
   aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
-  effective_node_pools = var.additional_node_pools
+  # enable_sandboxes adds the sandbox-host pool. An additional_node_pools entry
+  # named sandboxhost replaces it whole, for a pool that needs other settings.
+  sandbox_host_vm_size = var.sandbox_host_vm_size != null ? var.sandbox_host_vm_size : (contains(["production", "production-large"], var.sizing_profile) ? "Standard_D32ds_v5" : "Standard_D8ds_v5")
+  sandbox_node_pools = var.enable_sandboxes ? {
+    sandboxhost = {
+      vm_size   = local.sandbox_host_vm_size
+      min_count = var.sandbox_host_min_count
+      max_count = var.sandbox_host_max_count
+      node_labels = {
+        "sandbox.langsmith.com/host"      = "true"
+        "sandbox.langsmith.com/node-pool" = "host"
+      }
+      node_taints       = ["sandbox.langsmith.com/host=true:NoSchedule"]
+      kubelet_disk_type = "OS"
+      zones             = var.availability_zones
+      os_sku            = null
+      os_disk_size_gb   = var.sandbox_host_os_disk_size_gb
+    }
+  } : {}
+
+  effective_node_pools = merge(local.sandbox_node_pools, var.additional_node_pools)
 
   # On a pre-existing cluster whose node pools the customer owns, an empty map, so
   # Terraform doesn't attach pools to a cluster it doesn't manage.
   aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
-  # Additional pools this module creates with zones set. One of these gives
-  # SmithDB zonal nodes for its Premium SSD v2 cache disks on a cluster whose
-  # default pool was built nonzonal.
+  # Additional pools this module creates that resolve to zones: their own, or
+  # availability_zones when they set none. One of these gives SmithDB zonal
+  # nodes for its Premium SSD v2 cache disks on a cluster whose default pool
+  # was built nonzonal.
   zonal_node_pools = [
-    for name, pool in local.aks_managed_node_pools : name if length(pool.zones) > 0
+    for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) > 0
   ]
 
   # One row per pool, so an operator can see which pool dominates the total
@@ -418,17 +448,23 @@ locals {
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
-  # Customize via the environment/owner/cost_center variables.
+  # Customize via the environment/owner/cost_center/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
+  # Azure tag names are case-insensitive and merge() is not, so a built-in key
+  # is dropped when tags has it in any case: Environment replaces environment
+  # instead of sitting beside it.
   common_tags = merge(
-    {
-      environment = coalesce(var.environment, local.deployment_name, "dev")
-      project     = "langsmith"
-      managed_by  = "terraform"
-    },
-    var.owner != "" ? { owner = var.owner } : {},
-    var.cost_center != "" ? { cost_center = var.cost_center } : {}
+    { for k, v in merge(
+      {
+        environment = coalesce(var.environment, local.deployment_name, "dev")
+        project     = "langsmith"
+        managed_by  = "terraform"
+      },
+      var.owner != "" ? { owner = var.owner } : {},
+      var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    ) : k => v if !contains([for t in keys(var.tags) : lower(t)], k) },
+    var.tags
   )
 }
 
@@ -451,6 +487,7 @@ locals {
     !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24) ? "" : "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly.",
     length(local.postgres_name) <= 63 ? "" : "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly.",
     length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
+    !var.enable_sandboxes || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
     !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
   ])
 }
@@ -949,6 +986,14 @@ resource "terraform_data" "validate_network" {
       error_message = "smithdb_cache_disk_throughput_mbps (${var.smithdb_cache_disk_throughput_mbps}) cannot exceed 0.25 MB/s per provisioned IOPS. Azure caps a Premium SSD v2 at 0.25 * smithdb_cache_disk_iops, which is ${var.smithdb_cache_disk_iops * 0.25} MB/s at the configured ${var.smithdb_cache_disk_iops} IOPS. Raise smithdb_cache_disk_iops or lower the throughput."
     }
 
+    # The SmithDB cache StorageClass hands the tags to the disk CSI driver as
+    # key=value,key=value. The driver splits on commas, then each pair on its
+    # first =, and fails every cache PVC on a pair it can't read.
+    precondition {
+      condition     = !var.enable_smithdb || alltrue([for k, v in local.common_tags : !strcontains(k, ",") && !strcontains(k, "=") && !strcontains(v, ",")])
+      error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, or cost_center."
+    }
+
     # SmithDB caches sit on Premium SSD v2, and in most regions that offer
     # availability zones a Premium SSD v2 disk only attaches to a zonal VM. An
     # empty availability_zones asks Azure to place the pool, which can leave the
@@ -977,6 +1022,53 @@ resource "terraform_data" "validate_network" {
         : true
       )
       error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
+    }
+
+    # On a zoned cluster, a pool that sets zones = [] is regional, and SmithDB's
+    # components carry no nodeSelector by default, so they can land on it, where
+    # a Premium SSD v2 cache volume cannot attach. Refuse that. On a nonzonal
+    # cluster (availability_zones empty) the first SmithDB rule above already
+    # requires a zonal additional pool, and SMITHDB.md pins SmithDB to it; the other
+    # pools are regional by construction there, so this rule stands down. This
+    # reads the requested zones, not the live ones: a pool created regional
+    # before availability_zones reached additional pools passes, and
+    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
+    precondition {
+      condition = !var.enable_smithdb || length(var.availability_zones) == 0 || alltrue([
+        for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
+      ])
+      error_message = "enable_smithdb = true with availability_zones set refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_count >= var.sandbox_host_min_count
+      error_message = "sandbox_host_max_count (${var.sandbox_host_max_count}) must be at least sandbox_host_min_count (${var.sandbox_host_min_count})."
+    }
+
+    # An additional_node_pools entry named sandboxhost replaces the generated
+    # pool whole. Without the label the chart's nodeSelector matches no node,
+    # and sandbox-host stays Pending with nothing naming the cause.
+    precondition {
+      condition = var.enable_sandboxes && contains(keys(var.additional_node_pools), "sandboxhost") ? (
+        lookup(var.additional_node_pools["sandboxhost"].node_labels, "sandbox.langsmith.com/host", "") == "true"
+        && contains(var.additional_node_pools["sandboxhost"].node_taints, "sandbox.langsmith.com/host=true:NoSchedule")
+      ) : true
+      error_message = "additional_node_pools.sandboxhost replaces the generated sandbox-host pool, so it needs node_labels \"sandbox.langsmith.com/host\" = \"true\" and node_taints \"sandbox.langsmith.com/host=true:NoSchedule\". Without them sandbox-host never schedules."
+    }
+
+    # JuiceFS metadata lives in Azure Managed Redis, which Azure Government does
+    # not offer; see redis_source.
+    precondition {
+      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment")
+      error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
+    }
+
+    # A flag rather than lifecycle prevent_destroy, which takes only a literal:
+    # selecting between a guarded and an unguarded copy of the Redis would
+    # replace it whenever the flag changed.
+    precondition {
+      condition     = var.enable_sandboxes || !var.sandbox_juicefs_redis_prevent_destroy
+      error_message = "sandbox_juicefs_redis_prevent_destroy = true refuses enable_sandboxes = false, which deletes the JuiceFS metadata Redis and every sandbox filesystem with it. To disable sandboxes, set sandbox_juicefs_redis_prevent_destroy = false as well."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips
@@ -1131,12 +1223,14 @@ resource "terraform_data" "validate_network" {
 
     # Each node takes a /24 from the pod range, so a small range caps the node
     # count the same way a small subnet does in node-subnet mode: the cluster
-    # starts, and the autoscaler stalls once the range is spent.
+    # starts, and the autoscaler stalls once the range is spent. Terraform 1.17
+    # renders error_message even when the condition holds, so the log() gets a
+    # floor of 1: an attached cluster with no managed pools totals 0 nodes.
     precondition {
       condition = !local.aks_overlay || local.aks_node_total <= local.aks_pod_cidr_node_capacity
       error_message = join(" ", [
         "aks_pod_cidr (${var.aks_pod_cidr}) holds ${local.aks_pod_cidr_node_capacity} /24 blocks, one per node, but the configured pools can reach ${local.aks_node_total} nodes (max_count + 1 surge node per pool).",
-        "Widen the range: a /${24 - ceil(log(local.aks_node_total, 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
+        "Widen the range: a /${24 - ceil(log(max(local.aks_node_total, 1), 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
       ])
     }
 
@@ -1266,6 +1360,15 @@ module "aks" {
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
   default_node_pool_os_sku    = var.aks_os_sku
+  # Internal CAs for every node's trust store, such as the one behind an image
+  # mirror. A change to the list replaces every node.
+  aks_custom_ca_trust_certificate_files = var.aks_custom_ca_trust_certificate_files
+
+  # Customer-managed keys for the node OS disks and the CSI data disks: set
+  # only at creation; the Reader grant on the set is the module's only with
+  # the flag, the platform team's otherwise.
+  disk_encryption_set_id           = var.aks_disk_encryption_set_id
+  disk_encryption_set_reader_grant = var.aks_disk_encryption_set_reader_grant
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
@@ -1284,7 +1387,9 @@ module "aks" {
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads). The
+  # map passes through whole; the cluster module gives each pool availability_zones
+  # unless the pool sets its own zones.
   additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
@@ -1322,10 +1427,14 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version                = var.envoy_gateway_version
-  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
-  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
-  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
+  envoy_gateway_version                          = var.envoy_gateway_version
+  envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
+  envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_gateway_chart_repository                 = var.envoy_gateway_chart_repository
+  envoy_gateway_chart_repository_username        = var.envoy_gateway_chart_repository_username
+  envoy_gateway_chart_repository_password        = var.envoy_gateway_chart_repository_password
+  envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -1404,6 +1513,26 @@ locals {
   # The two updates Azure and the provider apply in place.
   aks_dataplane_upgrade = try(local.aks_live.dataplane, null) == "azure" && local.aks_network_dataplane == "cilium"
   aks_policy_upgrade    = try(local.aks_live.policy, null) == "none" || (contains(["azure", "calico"], try(local.aks_live.policy, "")) && local.aks_network_policy == "cilium")
+}
+
+# ── AKS disk encryption set guard ─────────────────────────────────────────────
+# The cluster's disk encryption set is fixed at creation: the provider applies a
+# change, adding one included, by replacing the cluster and everything installed
+# on it. module.aks reads the set Azure reports for the cluster at plan time
+# (null until the cluster exists), and a value that differs stops the plan.
+locals {
+  aks_live_disk_encryption_set_id = var.create_cluster ? module.aks.live_disk_encryption_set_id : null
+}
+
+resource "terraform_data" "aks_disk_encryption_set_guard" {
+  input = lower(var.aks_disk_encryption_set_id)
+
+  lifecycle {
+    precondition {
+      condition     = local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == lower(var.aks_disk_encryption_set_id)
+      error_message = "aks_disk_encryption_set_id is ${var.aks_disk_encryption_set_id == "" ? "empty" : "\"${var.aks_disk_encryption_set_id}\""}, and the cluster already exists with ${local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == "" ? "no disk encryption set" : "disk encryption set \"${local.aks_live_disk_encryption_set_id}\""}. The set is fixed at creation, and the provider would apply this by replacing the cluster and everything installed on it. Revert the value to keep the cluster as it is, or build a new cluster with the set and move the release to it."
+    }
+  }
 }
 
 resource "terraform_data" "aks_network_guard" {
@@ -1700,10 +1829,48 @@ module "postgres" {
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
+  # Customer-managed key, set only at creation; the geo pair with geo-redundant backup.
+  customer_managed_key_id                     = var.postgres_customer_managed_key_id
+  customer_managed_key_identity_id            = var.postgres_customer_managed_key_identity_id
+  geo_backup_customer_managed_key_id          = var.postgres_geo_backup_customer_managed_key_id
+  geo_backup_customer_managed_key_identity_id = var.postgres_geo_backup_customer_managed_key_identity_id
+
   # Create the dedicated langsmith_fleet database when standalone Fleet is enabled.
   enable_fleet = var.enable_fleet
 
   tags = local.common_tags
+}
+
+# The server's encryption mode is fixed at creation, and the provider applies a
+# change to postgres_customer_managed_key_id by replacing the server, which
+# destroys the database. Read the live server and refuse a plan whose key
+# presence differs from it. Presence only, so rotating to another key or
+# version stays allowed. Server names are unique across Azure, so the name
+# alone finds it. An absent server, and a mocked provider's output, read as
+# null, which passes.
+data "azapi_resource_list" "postgres_servers" {
+  count     = var.postgres_source == "external" ? 1 : 0
+  type      = "Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    servers = "value[?name=='${local.postgres_name}'].{id: id, name: name, data_encryption: properties.dataEncryption.type}"
+  }
+}
+
+locals {
+  postgres_live_server  = var.postgres_source == "external" ? try(data.azapi_resource_list.postgres_servers[0].output.servers[0], null) : null
+  postgres_live_has_key = local.postgres_live_server == null ? null : try(local.postgres_live_server.data_encryption, "") == "AzureKeyVault"
+}
+
+resource "terraform_data" "postgres_customer_managed_key_guard" {
+  input = var.postgres_customer_managed_key_id != ""
+
+  lifecycle {
+    precondition {
+      condition     = local.postgres_live_has_key == null ? true : local.postgres_live_has_key == (var.postgres_customer_managed_key_id != "")
+      error_message = "postgres_customer_managed_key_id is ${var.postgres_customer_managed_key_id == "" ? "empty" : "set"}, and the PostgreSQL server ${local.postgres_name} already exists ${local.postgres_live_has_key == true ? "with a customer-managed key" : "with the service-managed key"}. The key is fixed at creation, and the provider would apply this by replacing the server and destroying its data. Revert the value to keep the server as it is, or move to a new server created with the key by the restore path in README \"Customer-managed keys\"."
+    }
+  }
 }
 
 # ── SmithDB sizing ───────────────────────────────────────────────────────────
@@ -1939,6 +2106,9 @@ module "smithdb" {
   replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
+  shared_access_key_enabled = var.smithdb_storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
+
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
   # metastore's PostgreSQL zone.
   blob_private_endpoint_enabled   = var.storage_private_endpoint_enabled
@@ -1968,6 +2138,85 @@ module "redis" {
   cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
+}
+
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# JuiceFS keeps sandbox filesystem metadata in Redis and the data in Blob.
+# Metadata loss loses every sandbox filesystem, so the Redis is dedicated, never
+# evicts, and writes an append-only file whenever HA is on, the only mode Azure
+# persists in. It runs NoCluster: JuiceFS issues multi-key transactions that a
+# sharded database rejects. Its private endpoint goes in the AKS subnet beside
+# the Blob endpoints, so no Redis subnet is needed when redis_source is
+# in-cluster, and it shares the LangSmith Redis's DNS zone when there is one.
+
+# On an attached cluster whose pools the customer owns, Terraform adds no
+# sandboxhost pool, and sandbox-host stays Pending until one exists. A warning
+# rather than a precondition, because bringing that pool is a supported path.
+check "sandbox_pool_on_attached_cluster" {
+  assert {
+    condition     = !var.enable_sandboxes || var.create_cluster || var.existing_cluster_node_pools_managed
+    error_message = "enable_sandboxes = true on an attached cluster with existing_cluster_node_pools_managed = false: Terraform does not create the sandboxhost pool. Add a pool with nested virtualization, the sandbox.langsmith.com/host=true label, and the sandbox.langsmith.com/host=true:NoSchedule taint, and set sandbox_host_min_count and sandbox_host_max_count to its bounds, which init-values.sh writes as the sandbox-host replica bounds. Or set existing_cluster_node_pools_managed = true so Terraform adds the pool."
+  }
+}
+
+module "sandbox_juicefs_redis" {
+  count                   = var.enable_sandboxes ? 1 : 0
+  source                  = "./modules/redis"
+  name                    = local.sandbox_juicefs_redis_name
+  location                = var.location
+  resource_group_name     = local.rg_name
+  resource_group_id       = local.rg_id
+  subnet_id               = local.aks_subnet_id
+  vnet_id                 = local.vnet_id
+  create_private_dns_zone = var.redis_source != "external"
+  private_dns_zone_id     = var.redis_source == "external" ? module.redis[0].private_dns_zone_id : null
+  amr_sku                 = var.sandbox_juicefs_amr_sku
+  clustering_policy       = "NoCluster"
+  eviction_policy         = "NoEviction"
+  high_availability       = var.sandbox_juicefs_redis_high_availability
+  aof_persistence         = var.sandbox_juicefs_redis_high_availability
+  cluster_location        = var.redis_location
+
+  tags = local.common_tags
+}
+
+# JuiceFS data goes in its own container in the LangSmith Blob account, and
+# sandbox-host gets its own identity with access to that container alone. The
+# container is outside the ttl_s/ and ttl_l/ prefixes the lifecycle rules
+# delete from.
+resource "azurerm_storage_container" "sandbox_juicefs" {
+  count                 = var.enable_sandboxes ? 1 : 0
+  name                  = var.sandbox_juicefs_name
+  storage_account_id    = module.blob.storage_account_id
+  container_access_type = "private"
+}
+
+resource "azurerm_user_assigned_identity" "sandbox_host" {
+  count               = var.enable_sandboxes ? 1 : 0
+  name                = "${local.aks_name}-sandbox-host-identity"
+  resource_group_name = local.rg_name
+  location            = var.location
+  tags                = local.common_tags
+}
+
+resource "azurerm_federated_identity_credential" "sandbox_host" {
+  count                     = var.enable_sandboxes ? 1 : 0
+  name                      = "langsmith-federated-${local.sandbox_host_service_account}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.sandbox_host[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = module.aks.oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.langsmith_namespace}:${local.sandbox_host_service_account}"
+}
+
+# principal_type is explicit for the same ABAC reason as the storage module's
+# grant. The scope is the container's ARM ID, built rather than read, because
+# the provider's id attribute for a container is its data-plane URL.
+resource "azurerm_role_assignment" "sandbox_host_blob" {
+  count                = var.enable_sandboxes ? 1 : 0
+  principal_id         = azurerm_user_assigned_identity.sandbox_host[0].principal_id
+  principal_type       = "ServicePrincipal"
+  role_definition_name = "Storage Blob Data Contributor"
+  scope                = "${module.blob.storage_account_id}/blobServices/default/containers/${azurerm_storage_container.sandbox_juicefs[0].name}"
 }
 
 # ── Blob private DNS ──────────────────────────────────────────────────────────
@@ -2029,6 +2278,9 @@ module "blob" {
 
   replication_type = var.storage_replication_type
 
+  shared_access_key_enabled = var.storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
+
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days
   ttl_long_days  = var.blob_ttl_long_days
@@ -2043,6 +2295,10 @@ module "blob" {
   # via var.storage_allowed_ips.
   allowed_subnet_ids = [local.aks_subnet_id]
   allowed_ips        = var.storage_allowed_ips
+
+  # Customer-managed key; Azure accepts it on an existing account too.
+  customer_managed_key_id          = var.storage_customer_managed_key_id
+  customer_managed_key_identity_id = var.storage_customer_managed_key_identity_id
 
   # When enabled, the public endpoint is turned off and the firewall above
   # becomes inert. It stays declared so disabling the endpoint restores a
@@ -2228,11 +2484,29 @@ module "k8s_bootstrap" {
   smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
+  tags                             = local.common_tags
 
   # SmithDB's pods on top of the base namespace quota. Zero when disabled.
   resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
   resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
   resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+
+  # Sandboxes. No account key: the format Job and sandbox-host reach Blob
+  # through workload identity. AMR serves database 0 only.
+  enable_sandboxes            = var.enable_sandboxes
+  platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
+  network_policy_engine       = module.aks.network_policy_engine
+  node_subnet_cidrs           = local.aks_subnet_prefixes
+  sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
+  sandbox_juicefs_config = var.enable_sandboxes ? {
+    name         = var.sandbox_juicefs_name
+    metaurl      = "${module.sandbox_juicefs_redis[0].connection_url}/0"
+    storage      = "wasb"
+    bucket       = local.sandbox_juicefs_bucket
+    "access-key" = module.blob.storage_account_name
+  } : {}
+  sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id        = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].id : null
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.
@@ -2268,6 +2542,10 @@ module "k8s_bootstrap" {
   smithdb_service_account_name       = local.smithdb_service_account
   smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
+  # Pull Secret for the pods the operator creates: agent pods run as
+  # langsmith-ksa, each deployment's Redis and PostgreSQL as the default account.
+  langsmith_image_pull_secret_name = var.langsmith_image_pull_secret_name
+
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
@@ -2277,6 +2555,15 @@ module "k8s_bootstrap" {
   # possible on the attach path. Helm cannot adopt a release it does not own.
   install_cert_manager = var.install_cert_manager
   install_keda         = var.install_keda
+
+  # KEDA's images and chart from a mirror. Composed paths are in the
+  # keda_images output.
+  keda_image_registry                   = var.keda_image_registry
+  keda_image_registry_keeps_source_host = var.keda_image_registry_keeps_source_host
+  keda_image_pull_secret_name           = var.keda_image_pull_secret_name
+  keda_chart_repository                 = var.keda_chart_repository
+  keda_chart_repository_username        = var.keda_chart_repository_username
+  keda_chart_repository_password        = var.keda_chart_repository_password
 
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and

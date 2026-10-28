@@ -35,8 +35,10 @@ migration Job fix that the second one guarded.
 On Azure, `enable_smithdb = true` no longer needs `langsmith_helm_chart_version` set
 explicitly. SmithDB is part of the pinned line.
 
-Chart 0.17 also supports sandboxes on Azure (`storage: wasb`). The Azure module does
-not provision them yet.
+Chart 0.17 also supports sandboxes on Azure (`storage: wasb`), and the Azure module
+provisions them with `enable_sandboxes = true`. Azure had no sandboxes on 0.16, so
+the JuiceFS steps in section 1 do not apply there. To turn them on, refer to
+[Sandboxes](modules/azure/README.md#sandboxes).
 
 ## 1) Sandboxes mount JuiceFS in sandbox-host
 

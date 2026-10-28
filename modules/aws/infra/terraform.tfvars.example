@@ -83,6 +83,9 @@ name_prefix = "myco"
 # SSM parameter lookups, IRSA trust policies, and S3 bucket references.
 environment = "dev"
 
+# Initial organization admin account. This is configuration, not a secret.
+langsmith_admin_email = "admin@example.com"
+
 #------------------------------------------------------------------------------
 # TAGGING — For cost tracking and ownership in AWS
 #------------------------------------------------------------------------------
@@ -346,19 +349,19 @@ redis_instance_type = "cache.m6g.xlarge"
 #
 # Requirements:
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
-#     On AWS, use x86_64 EC2 bare metal instance types. The default is
-#     m5d.metal, which matches the tested live configuration and configures
-#     local NVMe instance store for swap and JuiceFS cache.
-#     Other example families include m6id.metal, m7i.metal-24xl, c6i.metal,
-#     c7i.metal-24xl, r6i.metal, and i4i.metal. If you choose an instance type
-#     without the same local instance-store layout, set
-#     sandbox_host_local_nvme_bootstrap_enabled = false or provide
-#     sandbox_host_node_group_overrides.
+#     The default is m5d.metal. sandbox_host_nested_virtualization and
+#     sandbox_host_local_nvme_bootstrap_enabled derive from
+#     sandbox_host_instance_types when left unset: a bare-metal type
+#     (m5d.metal, m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl,
+#     r6i.metal, i4i.metal) gets local NVMe bootstrap and no nested
+#     virtualization. A virtual type gets nested virtualization and no
+#     local NVMe bootstrap. Set either variable to override that, including
+#     sandbox_host_local_nvme_bootstrap_enabled = true on a virtual d type
+#     that has instance store (m8id, m6id, c6id, r6id, i4i).
 #   - sandbox_host_local_nvme_expected_device_count is the number of local NVMe
 #     instance-store devices the selected instance type already exposes.
 #     Terraform does not attach these devices. Device 0 is used for swap and
-#     devices 1..N are mounted as JuiceFS cache directories. The default is 4,
-#     matching m5d.metal.
+#     devices 1..N are mounted as JuiceFS cache directories. m5d.metal has 4.
 #
 # enable_sandboxes = true
 # sandbox_juicefs_redis_instance_type = "cache.m6g.large"
@@ -370,12 +373,37 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox_juicefs_redis_snapshot_retention_limit = 7
 # sandbox_host_node_count = 1
 # sandbox_host_instance_types = ["m5d.metal"]
-# sandbox_host_local_nvme_bootstrap_enabled = true
-# sandbox_host_local_nvme_expected_device_count = 4
 #
 # Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
 # Requires wildcard DNS and TLS for *.<host>.
 # sandbox_service_url_base_url = "https://sandbox-services.example.com"
+
+#------------------------------------------------------------------------------
+# ENGINE (chart 0.17+) — see ../ENGINE.md
+#------------------------------------------------------------------------------
+# Engine finds recurring failures in your traces, diagnoses them against your
+# code, and proposes fixes. It needs enable_sandboxes = true and a license with
+# the Engine entitlement. It shares a deployment with Insights. Its two keys come
+# from infra/scripts/setup-env.sh (SSM), and apply-eso.sh syncs them into the
+# langsmith-config Secret.
+#
+# enable_engine = true creates the IAM role <name_prefix>-<environment>-engine-irsa
+# for Engine's API server and queue, with the AWS managed policy
+# AmazonBedrockMantleInferenceAccess. Engine then calls Amazon Bedrock with no
+# stored credentials. To use provider API keys (Anthropic, OpenAI, and others)
+# instead, add them in LangSmith under Settings > Engine > Model providers.
+# enable_engine = true
+#
+# Optional: a customer-managed policy that grants less than the managed policy.
+# engine_bedrock_policy_arn = "arn:aws:iam::123456789012:policy/langsmith-engine-bedrock"
+#
+# Required when the shared organization has more than one workspace: the
+# workspace that owns Engine's sandboxes. Use a workspace reserved for Engine.
+# engine_sandbox_tenant_id = "00000000-0000-0000-0000-000000000000"
+#
+# Empty keeps the chart default, which only records usage. To run Engine's models
+# on LangSmith Intelligence instead:
+# engine_intelligence_base_url = "https://beacon.aws.langchain.com/intelligence"
 
 #------------------------------------------------------------------------------
 # CLICKHOUSE
@@ -536,7 +564,7 @@ langsmith_namespace = "langsmith"
 #------------------------------------------------------------------------------
 # Pin the chart to an exact patch for reproducible deploys. Empty deploys the
 # latest patch on the pinned 0.17 line, so a rebuild months apart can land on a
-# different chart. Must be a 0.17.x version — deploy.sh refuses anything else.
+# different chart. Must be a 0.17.x or 0.18.x version — deploy.sh refuses anything else.
 #
 # The CHART_VERSION environment variable still overrides this when set:
 #   CHART_VERSION=0.17.0 make deploy

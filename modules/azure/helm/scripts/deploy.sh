@@ -84,24 +84,19 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   warn "terraform.tfvars not found — values-overrides.yaml not checked against it"
   echo ""
 else
-  _stale=""
-  _stamped="false"
-  for _key in $_VALUES_INPUT_KEYS; do
-    _was=$(_read_values_stamp "$OVERRIDES_FILE" "$_key") || continue
-    _stamped="true"
-    _now=$(_parse_tfvar "$_key") || _now=""
-    [[ "$_was" == "$_now" ]] && continue
-    _stale="${_stale}${_key}: generated with '${_was}', terraform.tfvars now says '${_now}'
-"
-  done
+  # _values_stamp_drift (infra/scripts/_common.sh): a key the stamp lacks is
+  # drift when terraform.tfvars sets it, so a file generated before that key
+  # existed cannot deploy as if the key were unset.
+  _drift_rc=0
+  _stale=$(_values_stamp_drift "$OVERRIDES_FILE") || _drift_rc=$?
 
-  if [[ "$_stamped" != "true" ]]; then
+  if [[ "$_drift_rc" -eq 2 ]]; then
     warn "values-overrides.yaml carries no terraform.tfvars stamp (written by an older init-values.sh)"
     action "make init-values  (adds the stamp, so this check can run)"
     echo ""
-  elif [[ -n "$_stale" ]]; then
+  elif [[ "$_drift_rc" -eq 1 ]]; then
     fail "values-overrides.yaml was generated from different terraform.tfvars values:"
-    printf '%s' "$_stale" | while IFS= read -r _line; do
+    printf '%s\n' "$_stale" | while IFS= read -r _line; do
       [[ -n "$_line" ]] && info "$_line"
     done
     echo ""
@@ -109,6 +104,16 @@ else
     action "make init-values  (regenerate it, then re-run make deploy)"
     exit 1
   fi
+fi
+
+# A values file generated under the previous default of
+# langsmith_image_registry_keeps_source_host (true, host kept) with the key
+# unset in terraform.tfvars: the stamp reads '' on both sides, so the check
+# above passes it, and the next make init-values would write the host-dropped
+# layout under a mirror that serves the other one. Stop until the choice is
+# written down (init-values.sh makes the same stop before it overwrites the file).
+if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  _stop_if_values_layout_from_old_default "$OVERRIDES_FILE" || exit 1
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
@@ -269,11 +274,11 @@ EOF
   else
     # Map ingress controller to the class cert-manager uses for HTTP-01 solvers.
     # For none, an empty class leaves the solver's Ingress to the default class.
+    # istio-addon and agic never get here: Terraform rejects them with letsencrypt.
     case "$_ingress_controller" in
-      istio|istio-addon) _acme_ingress_class="istio" ;;
-      nginx)             _acme_ingress_class="nginx" ;;
-      agic)              _acme_ingress_class="azure-application-gateway" ;;
-      *)                 _acme_ingress_class="$_byo_ingress_class" ;;
+      istio) _acme_ingress_class="istio" ;;
+      nginx) _acme_ingress_class="nginx" ;;
+      *)     _acme_ingress_class="$_byo_ingress_class" ;;
     esac
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
@@ -461,6 +466,20 @@ else
   pass "langsmith-config-secret exists"
 fi
 
+# platform-backend and sandbox-host read sandbox_callback_signing_jwk from that
+# secret, and a secret created before enable_sandboxes lacks it. Re-sync from Key
+# Vault, which fails naming make seed-secrets when the vault lacks it too.
+if _tfvar_is_true "enable_sandboxes"; then
+  # go-template over key names only, so the key never leaves the API server.
+  if ! kubectl get secret langsmith-config-secret -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
+    | grep -qx "sandbox_callback_signing_jwk"; then
+    warn "langsmith-config-secret has no sandbox_callback_signing_jwk — syncing from Key Vault..."
+    bash "$HELM_DIR/../infra/scripts/create-k8s-secrets.sh"
+  fi
+  pass "langsmith-config-secret has sandbox_callback_signing_jwk"
+fi
+
 # ── Ensure langsmith-clickhouse secret exists (external ClickHouse only) ──
 # With clickhouse_source = "external" the chart skips its own ClickHouse
 # StatefulSet and resolves all seven connection fields through secretKeyRef with
@@ -548,6 +567,7 @@ _enable_llm_gateway=false
 _enable_gateway_pii_redaction=false
 _enable_fleet=false
 _enable_smithdb=false
+_enable_sandboxes=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
@@ -556,6 +576,7 @@ _tfvar_is_true "enable_llm_gateway"   && _enable_llm_gateway=true  || true
 _tfvar_is_true "enable_gateway_pii_redaction" && _enable_gateway_pii_redaction=true || true
 _tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
 _tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
+_tfvar_is_true "enable_sandboxes"      && _enable_sandboxes=true     || true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -575,6 +596,13 @@ fi
 # no fleet database, so the deploy would fail later resolving the missing secret.
 if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
+  exit 1
+fi
+# The overlay carries the sandbox-host identity, so a deploy without it would
+# turn sandboxes off rather than fail.
+if [[ "$_enable_sandboxes" == "true" && ! -f "$VALUES_DIR/langsmith-values-sandboxes.yaml" ]]; then
+  fail "enable_sandboxes = true but langsmith-values-sandboxes.yaml is missing"
+  action "Run: make init-values"
   exit 1
 fi
 
@@ -603,6 +631,7 @@ _addon_gate=(
   "polly:polly:$_enable_polly"
   "llm-gateway:llm_gateway:$_enable_llm_gateway"
   "gateway-pii:gateway_pii_redaction:$_enable_gateway_pii_redaction"
+  "sandboxes:sandboxes:$_enable_sandboxes"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -711,12 +740,13 @@ CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 _required_chart_line="0.17"
 
 # These values target chart 0.17, where the SmithDB Azure values first appear.
+# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
 # Refuse any other line rather than deploy a half-configured release.
-_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "$_required_chart_line" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
-  echo "       These values require chart ${_required_chart_line} (SmithDB values, engineInsightsAgent)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
+_chart_line="$(_chart_line_of "$CHART_VERSION")"
+if [[ "$_chart_line" != "$_required_chart_line" && "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} or 0.18 line." >&2
+  echo "       These values require chart ${_required_chart_line} or 0.18 (SmithDB values, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} or 0.18 patch explicitly:" >&2
   echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
   exit 1
 fi
@@ -932,12 +962,132 @@ echo ""
 
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain &>/dev/null
-_resolved_chart=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-  | awk '/^version:/{print $2}') || _resolved_chart=""
+_chart_metadata=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
 echo "Chart: $_chart_source  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
+fi
+
+# Chart 0.17 fails the release when images.sandboxHostImage.tag is empty, and a
+# tag pinned in a file lags every chart upgrade. Set it from the appVersion of
+# the chart resolved above, which helm upgrade installs, as the AWS and GCP
+# modules do. The JuiceFS format Job runs the same image.
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d '"')
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: chart $_resolved_chart does not declare an appVersion for the sandbox-host image." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
+  echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
+fi
+
+# sandbox-host runs on the host network, so it calls platform-backend from a node
+# IP. On other engines Terraform admits the node subnet by ipBlock, which Cilium
+# on AKS never matches against a node IP, so on Cilium this policy admits the
+# nodes by entity instead. It is a CRD object, applied here for the same reason
+# as the ClusterIssuer. Applied before the release so sandbox-host's first call,
+# the default snapshot build, gets through.
+_policy_engine=$(_tf_out network_policy_engine) || _policy_engine=""
+if [[ "$_policy_engine" == "cilium" && "$_enable_sandboxes" == "true" ]]; then
+  if ! kubectl apply -f - >/dev/null <<EOF
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-nodes-to-platform-backend
+  namespace: ${NAMESPACE}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: ${CHART_FULLNAME}-platform-backend
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "1986"
+              protocol: TCP
+EOF
+  then
+    fail "Could not apply the CiliumNetworkPolicy that admits sandbox-host to platform-backend"
+    exit 1
+  fi
+  pass "CiliumNetworkPolicy allow-nodes-to-platform-backend applied (sandbox-host to platform-backend :1986)"
+elif [[ "$_policy_engine" == "cilium" ]]; then
+  if ! kubectl delete ciliumnetworkpolicy allow-nodes-to-platform-backend -n "$NAMESPACE" --ignore-not-found >/dev/null; then
+    warn "Could not delete CiliumNetworkPolicy allow-nodes-to-platform-backend; the nodes can still reach platform-backend :1986"
+  fi
+elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" ]]; then
+  warn "Terraform has no network_policy_engine output yet. On a Cilium cluster, sandbox-host cannot reach platform-backend until it does."
+  action "Run: make apply, then make deploy"
+fi
+
+# With langsmith_image_registry_keeps_source_host = false, init-values.sh wrote
+# a repository for every image the module knows (_LANGSMITH_IMAGE_REPOSITORIES
+# in infra/scripts/_common.sh, the 0.17 and 0.18 chart lines). An image the chart has and
+# the list does not would keep its public repository and fail to pull on a
+# cluster that reaches only the mirror, so compare the two before installing.
+_ls_image_registry=$(_parse_tfvar "langsmith_image_registry") || _ls_image_registry=""
+_ls_image_keeps_host=$(_parse_tfvar "langsmith_image_registry_keeps_source_host") || _ls_image_keeps_host="false"
+_chart_image_keys=""
+if [[ -n "$_ls_image_registry" ]]; then
+  _chart_image_keys=$(helm show values "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+    | _chart_image_keys_from_stdin) || _chart_image_keys=""
+  if [[ -z "$_chart_image_keys" ]]; then
+    fail "langsmith_image_registry is set, but the chart's images could not be read (helm show values $_chart_source --version $CHART_VERSION), so the mirror checks cannot run."
+    exit 1
+  fi
+fi
+if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
+  # A repository passed through EXTRA_HELM_ARGS (--set images.<key>.repository=...)
+  # covers an image the list lacks, so those keys count as known here.
+  _extra_image_keys=$(printf '%s' "${EXTRA_HELM_ARGS:-}" | grep -oE 'images\.[A-Za-z0-9]+\.repository=' | sed -e 's/^images\.//' -e 's/\.repository=$//') || _extra_image_keys=""
+  _unknown_images=""
+  for _k in $_chart_image_keys; do
+    _langsmith_image_keys | grep -qx "$_k" && continue
+    printf '%s\n' "$_extra_image_keys" | grep -qx "$_k" && continue
+    _unknown_images="$_unknown_images $_k"
+  done
+  if [[ -n "$_unknown_images" ]]; then
+    fail "chart ${_resolved_chart} has images the module's mirror list does not know:${_unknown_images}."
+    echo "       With langsmith_image_registry_keeps_source_host = false each image needs its mirror path," >&2
+    echo "       and these would pull from their public registry. Until the module's list carries them" >&2
+    echo "       (_LANGSMITH_IMAGE_REPOSITORIES in infra/scripts/_common.sh), pass each one, which this" >&2
+    echo "       check then accepts:" >&2
+    echo "         EXTRA_HELM_ARGS='--set images.<key>.repository=${_ls_image_registry}/<path without the source host>' make deploy" >&2
+    exit 1
+  fi
+  info "Mirror layout check: every image of chart ${_resolved_chart} has a repository on ${_ls_image_registry}"
+fi
+
+# The per-deployment Redis and PostgreSQL templates: init-values writes them
+# into langsmith-values-agent-deploys.yaml with the mirror when the chart it
+# resolved writes docker.io into them, and leaves them out when the chart
+# reads images.deploymentRedisImage and images.deploymentDbImage. The chart
+# installed here is read again, so a file written for the other kind stops
+# the deploy instead of replacing the chart's templates or pulling docker.io.
+if [[ -n "$_ls_image_registry" && "$_enable_deployments" == "true" && -f "$VALUES_DIR/langsmith-values-agent-deploys.yaml" ]]; then
+  _chart_reads_keys="false"
+  printf '%s\n' "$_chart_image_keys" | grep -qx deploymentRedisImage && _chart_reads_keys="true"
+  _file_writes_templates="false"
+  grep -qF "$_DEPLOYMENT_TEMPLATES_MARKER" "$VALUES_DIR/langsmith-values-agent-deploys.yaml" && _file_writes_templates="true"
+  if [[ "$_chart_reads_keys" == "true" && "$_file_writes_templates" == "true" ]]; then
+    fail "chart ${_resolved_chart} reads images.deploymentRedisImage and images.deploymentDbImage for the per-deployment pods, but langsmith-values-agent-deploys.yaml carries the templates init-values wrote for a chart that did not, which would replace the chart's own."
+    action "make init-values  (with langsmith_helm_chart_version naming the chart to deploy), then re-run make deploy"
+    exit 1
+  elif [[ "$_chart_reads_keys" == "false" && "$_file_writes_templates" == "false" ]]; then
+    fail "chart ${_resolved_chart} writes docker.io into its per-deployment Redis and PostgreSQL templates, and langsmith-values-agent-deploys.yaml carries no mirror templates for them."
+    action "make init-values  (it writes them from langsmith_image_registry), then re-run make deploy"
+    exit 1
+  fi
+  if [[ "$_chart_reads_keys" == "true" ]]; then
+    info "Per-deployment templates: chart ${_resolved_chart} reads their images from the images: block"
+  else
+    info "Per-deployment templates: written for chart ${_resolved_chart} from ${_ls_image_registry}"
+  fi
 fi
 
 # --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
@@ -997,12 +1147,141 @@ for dep in "${_core_deployments[@]}"; do
   fi
 done
 
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  # The format Job name carries a hash, so select it by label. It reaches Blob
+  # through the sandbox-host Workload Identity. Helm does not run a failed Job
+  # again when the manifest is unchanged, so a failed Job must be deleted before
+  # the next deploy.
+  _format_selector="app.kubernetes.io/instance=${RELEASE_NAME},app.kubernetes.io/component=juicefs-format"
+  _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+    -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  _format_waited=true
+  if [[ "$_format_failed" != *True* ]] \
+    && ! kubectl wait --for=condition=complete job -n "$NAMESPACE" -l "$_format_selector" --timeout=5m 2>/dev/null; then
+    _format_waited=false
+    _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  fi
+  if [[ "$_format_failed" == *True* ]]; then
+    _format_reason=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].reason}' 2>/dev/null) || _format_reason=""
+    warn "The JuiceFS format Job failed (${_format_reason:-no reason})"
+    case "$_format_reason" in
+      *DeadlineExceeded*)
+        info "It did not finish in 300 s. Look for FailedScheduling or a slow image pull:"
+        info "kubectl describe job -n $NAMESPACE -l $_format_selector"
+        ;;
+      *)
+        info "A 403 from Blob means the identity label or federated credential is wrong (run: make apply, make init-values):"
+        info "kubectl logs -n $NAMESPACE -l $_format_selector"
+        ;;
+    esac
+    action "kubectl delete job -n $NAMESPACE -l $_format_selector && make deploy"
+    _all_ready=false
+  elif ! kubectl get job -n "$NAMESPACE" -l "$_format_selector" -o name 2>/dev/null | grep -q .; then
+    warn "No JuiceFS format Job found for release ${RELEASE_NAME}"
+    _all_ready=false
+  elif [[ "$_format_waited" == "false" ]]; then
+    warn "The JuiceFS format Job is not complete within 5m"
+    info "kubectl get jobs -n $NAMESPACE -l $_format_selector"
+    _all_ready=false
+  fi
+
+  # rollout status exits 0 when nothing matches, so check first.
+  _sandbox_host_selector="app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host"
+  if ! kubectl get deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" -o name 2>/dev/null | grep -q .; then
+    warn "No sandbox-host Deployment found for release ${RELEASE_NAME}"
+    _all_ready=false
+  elif ! kubectl rollout status deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" --timeout=10m 2>/dev/null; then
+    warn "sandbox-host not ready within 10m (the sandboxhost pool may still be scaling up from 0)"
+    info "kubectl logs -n $NAMESPACE -l $_sandbox_host_selector -c sandbox-host --tail=50"
+    _all_ready=false
+  fi
+fi
+
 if [[ "$_all_ready" == "true" ]]; then
   pass "All core deployments ready"
 else
   warn "Some deployments are still rolling out — check with: kubectl get pods -n $NAMESPACE"
 fi
 echo ""
+
+# ── Long-running streams through Envoy Gateway ───────────────────────────
+# Envoy Gateway applies an effective 15 s response timeout to the chart's
+# catch-all HTTPRoute, which has no timeouts field. Fleet run streams and the
+# Deployments proxy on host-backend run longer than that, and Envoy resets
+# the stream mid-response (response_flags=UT; the browser shows
+# net::ERR_HTTP2_PROTOCOL_ERROR). A second HTTPRoute on the same Gateway and
+# hostname with only those path prefixes and timeouts.request: 0s takes
+# precedence for them, since the longer prefix wins, and every other path
+# keeps the default. The same route as the AWS module's
+# langsmith-fleet-streams. Applied with Fleet or Deployments on, removed when
+# both are off, so a feature turned off takes its route with it.
+# The hostname and base path come from the release's effective values, not
+# from values-overrides.yaml alone: the chart takes config.hostname from every
+# values file it merges, and its own route matches that host and, with
+# config.basePath, that prefix. Reading the same values keeps this route on
+# the host and paths the chart's route uses. The hostname is checked as a DNS
+# name after the scheme is dropped, the chart's own rule; one that does not
+# pass is reported and the route skipped, never applied to fail after helm has
+# already upgraded. A failed apply is reported the same way: the deploy is
+# done by then, and the steps after this one still run.
+if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  if [[ "$_enable_fleet" == "true" || "$_enable_deployments" == "true" ]]; then
+    _streams_values=$(helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all -o json 2>/dev/null) || _streams_values=""
+    _streams_host=""; _streams_base=""
+    if [[ -n "$_streams_values" ]]; then
+      read -r _streams_host _streams_base < <(printf '%s' "$_streams_values" | python3 -c '
+import json, re, sys
+cfg = (json.load(sys.stdin) or {}).get("config") or {}
+host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", str(cfg.get("hostname") or "").strip(), flags=re.I).rstrip("/")
+base = "/" + str(cfg.get("basePath") or "").strip("/ ")
+print(host, base if base != "/" else "")
+' 2>/dev/null) || { _streams_host=""; _streams_base=""; }
+    fi
+    if [[ -z "$_streams_host" ]]; then
+      warn "Fleet or Deployments is on, but the release's values carry no config.hostname, so the long-running-stream HTTPRoute (langsmith-fleet-streams) was not created; streams on /api/v1/fleet and /api-host/v2 keep Envoy Gateway's 15 s timeout"
+    elif ! [[ "$_streams_host" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+      warn "config.hostname resolves to '${_streams_host}', which is not a DNS name, so the long-running-stream HTTPRoute (langsmith-fleet-streams) was not created; fix the hostname in the values and re-run make deploy"
+    else
+      if kubectl apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: langsmith-fleet-streams
+  namespace: ${NAMESPACE}
+spec:
+  parentRefs:
+  - name: langsmith-gateway
+  hostnames:
+  - "${_streams_host}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api/v1/fleet/threads
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api/v1/fleet/lg
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api-host/v2
+    backendRefs:
+    - name: ${CHART_FULLNAME}-frontend
+      port: 80
+    timeouts:
+      request: 0s
+EOF
+      then
+        pass "HTTPRoute langsmith-fleet-streams on ${_streams_host}: no request timeout on ${_streams_base}/api/v1/fleet/threads, ${_streams_base}/api/v1/fleet/lg and ${_streams_base}/api-host/v2"
+      else
+        warn "kubectl could not apply the long-running-stream HTTPRoute (langsmith-fleet-streams, written by this script, not by the operator); streams on ${_streams_base}/api/v1/fleet and ${_streams_base}/api-host/v2 keep Envoy Gateway's 15 s timeout until it applies. Re-run make deploy after fixing the error above."
+      fi
+    fi
+  else
+    kubectl delete httproute langsmith-fleet-streams -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+fi
 
 # ── Post-deploy Envoy Gateway: LoadBalancer IP ────────────────────────────
 # The EnvoyProxy (pre-deploy block above) put the DNS label on the proxy Service;

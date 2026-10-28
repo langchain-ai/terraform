@@ -100,6 +100,33 @@ locals {
     : toset(one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].zones))
   )
 
+  # Each additional pool's zones: its own when it sets them, availability_zones
+  # otherwise, as the default pool takes availability_zones. An empty list here
+  # becomes null on the resource, a regional pool, so a cluster built under the
+  # [] default plans no change.
+  node_pool_zones = {
+    for name, pool in var.additional_node_pools :
+    name => pool.zones != null ? pool.zones : var.availability_zones
+  }
+
+  # Live zones of each additional pool, with null (a regional pool) normalized
+  # to an empty set as live_node_pool_zones does for the default pool. Keyed by
+  # the pool resources that exist, so an attached cluster whose pools this
+  # module does not manage has nothing here.
+  live_additional_node_pool_zones = {
+    for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool :
+    name => pool.zones == null ? toset([]) : toset(pool.zones)
+  }
+
+  # Additional pools whose live zones differ from the zones requested for them.
+  # A pool with no requested zones is exempt, as the default pool is under an
+  # empty availability_zones: [] asks Azure to place it, so whatever zones it
+  # reports are not drift from a request nobody made.
+  additional_node_pool_zone_drift = [
+    for name in sort(keys(local.live_additional_node_pool_zones)) : name
+    if length(local.node_pool_zones[name]) > 0 && local.live_additional_node_pool_zones[name] != toset(local.node_pool_zones[name])
+  ]
+
   service_accounts_for_workload_identity = [
     "${var.langsmith_release_name}-backend",
     "${var.langsmith_release_name}-platform-backend",
@@ -366,7 +393,7 @@ data "azapi_resource_list" "clusters" {
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities, disk_encryption_set: properties.diskEncryptionSetID}"
   }
 }
 
@@ -451,6 +478,22 @@ resource "azurerm_role_assignment" "control_plane_dns_zone_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
+# Reader on the disk encryption set for the cluster identity: the Azure Disk
+# CSI driver reads the set before it creates an encrypted data disk, and AKS
+# refuses the volume without it. The set is usually in the platform team's
+# resource group, where the identity running apply holds nothing, so the grant
+# is the module's only on request; otherwise it is made after the apply that
+# creates the cluster and before the first persistent volume. The principal
+# is the user-assigned identity when the cluster runs as one, else the
+# system-assigned identity the cluster reports once it exists.
+resource "azurerm_role_assignment" "disk_encryption_set_reader" {
+  count                = var.create_cluster && var.disk_encryption_set_reader_grant ? 1 : 0
+  scope                = var.disk_encryption_set_id
+  role_definition_name = "Reader"
+  principal_id         = local.control_plane_user ? local.control_plane_principal_id : azurerm_kubernetes_cluster.main[0].identity[0].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # AKS documents up to 60 minutes for a grant to its identity to take effect,
 # and a cluster created before then fails on the network it cannot yet join.
 # Hold the cluster back once, when the grants are made. 300s covers the common
@@ -517,7 +560,11 @@ resource "azurerm_kubernetes_cluster" "main" {
   resource_group_name = var.resource_group_name
   dns_prefix          = var.cluster_name
   kubernetes_version  = var.kubernetes_version
-  tags                = merge(var.tags, { module = "aks" })
+
+  # Customer-managed keys for the node OS disks and, by default, every managed
+  # disk the Azure Disk CSI driver creates. Creation-time only on AKS.
+  disk_encryption_set_id = var.disk_encryption_set_id != "" ? var.disk_encryption_set_id : null
+  tags                   = merge(var.tags, { module = "aks" })
 
   # Free has no SLA. Standard carries the financially backed uptime SLA (99.95%
   # when the control plane spans availability zones) and is where a production
@@ -540,6 +587,10 @@ resource "azurerm_kubernetes_cluster" "main" {
   # and LangSmith services that don't require extra resources.
   default_node_pool {
     name = "default"
+
+    # Node pools carry their own tags, separate from the cluster's, and AKS
+    # applies them to the pool's scale set and its VMs.
+    tags = merge(var.tags, { module = "aks", pool = "default" })
 
     # Default Standard_D8s_v5: 8 vCPU, 32 GB RAM — Dsv5 family, the production baseline.
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
@@ -574,6 +625,18 @@ resource "azurerm_kubernetes_cluster" "main" {
     # a full extra node of the same VM size).
     zones = var.availability_zones
   }
+
+  # Internal CAs in every Linux node's trust store, so containerd on the node can
+  # pull from an image mirror whose certificate an internal CA signed. A change
+  # replaces every node: AKS creates new nodes, drains and deletes the old ones.
+  # Null when there are none, so a cluster created before this setting plans no
+  # change. The module sets it because the provider reads the live value back:
+  # a CA added by hand with az aks update would be removed by the next apply.
+  # Each entry is the certificate block the root validation checked, with one
+  # trailing newline, not the raw file: whitespace around the block, such as an
+  # editor adding or dropping a final newline, would otherwise change the value
+  # and replace every node for the same certificate.
+  custom_ca_trust_certificates_base64 = length(var.aks_custom_ca_trust_certificate_files) > 0 ? [for f in var.aks_custom_ca_trust_certificate_files : base64encode("${trimspace(file(f))}\n")] : null
 
   # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
   # configured), and interact with the node resource group. System-assigned,
@@ -753,6 +816,42 @@ check "aks_node_pool_zone_drift" {
   }
 }
 
+# The same for the additional pools. ignore_changes on zones in
+# azurerm_kubernetes_cluster_node_pool.node_pool makes an edit to
+# availability_zones, or to a pool's own zones, a silent no-op there too, and a
+# pool created before availability_zones reached additional pools is regional
+# whatever the variable says. One warning names every pool whose live zones
+# differ from the request, with both values. The exemptions are the default
+# pool's: a pool with no requested zones, and a cluster whose pools this module
+# does not manage, where local.live_additional_node_pool_zones is empty.
+check "aks_additional_node_pool_zone_drift" {
+  assert {
+    condition = length(local.additional_node_pool_zone_drift) == 0
+    error_message = join("", [
+      "AKS additional node pool zones differ from the request: ",
+      join("; ", [
+        for name in local.additional_node_pool_zone_drift :
+        "pool ${name} is in [${join(",", sort(tolist(local.live_additional_node_pool_zones[name])))}] but [${join(",", sort(local.node_pool_zones[name]))}] is requested"
+      ]),
+      ". This module ignores zone changes on an existing node pool, so the ",
+      "request was discarded and the live zones above are what you have: a ",
+      "pool's zones cannot change after creation, and letting the plan change ",
+      "them would rotate the pool through its temporary pool and drain every ",
+      "node on it. To make it take effect, either revert the request to the ",
+      "live value, add a new pool with the zones to additional_node_pools and ",
+      "move the workloads to it, or drop zones from the ignore_changes block of ",
+      "azurerm_kubernetes_cluster_node_pool.node_pool in ",
+      "modules/k8s-cluster/main.tf and apply during a maintenance window, ",
+      "which rotates each pool named above and drains every node on it. To ",
+      "keep a regional pool as it is and silence this, set zones = [] on its ",
+      "additional_node_pools entry. For the default large pool, that means ",
+      "copying its default entry from variables.tf into additional_node_pools ",
+      "and adding zones = []. On a zoned cluster with SmithDB on, plan refuses ",
+      "zones = [], and the pool has to be replaced with a zonal one.",
+    ])
+  }
+}
+
 # Additional node pools for workloads that need different compute profiles.
 # Default: one "large" pool (Standard_D16s_v5, 16 vCPU / 64 GB) for ClickHouse
 # and other memory-intensive services. Scales 0→2 (scales to zero when idle).
@@ -769,7 +868,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   node_labels           = each.value.node_labels
   node_taints           = each.value.node_taints
   kubelet_disk_type     = each.value.kubelet_disk_type
-  zones                 = length(each.value.zones) > 0 ? each.value.zones : null
+  os_disk_size_gb       = each.value.os_disk_size_gb
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
 
   # Follows the default pool unless the pool sets its own. In place between any
@@ -784,8 +883,24 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   # a stable hash fragment so truncating long pool names cannot collide.
   temporary_name_for_rotation = "${substr(each.key, 0, 7)}${substr(sha1(each.key), 0, 2)}tmp"
 
+  # availability_zones unless the pool sets its own zones; null, a regional
+  # pool, when neither names a zone, so a cluster built under the [] default
+  # plans no change here. Set once: see ignore_changes below.
+  zones = length(local.node_pool_zones[each.key]) > 0 ? local.node_pool_zones[each.key] : null
+
   lifecycle {
-    ignore_changes = [upgrade_settings]
+    # upgrade_settings change during rolling node upgrades; ignore to prevent
+    # drift between Terraform state and live cluster configuration.
+    #
+    # zones: a pool's zones cannot change after creation. The provider applies
+    # a change by rotating the pool through temporary_name_for_rotation, a
+    # replacement scale set that drains every node of a pool holding workloads
+    # (4.5 to 6 minutes per pool on a test cluster). A tfvars edit should not
+    # do that unannounced, and a pool created regional before availability_zones
+    # reached additional pools should not be rotated by the first plan after the
+    # upgrade. check.aks_additional_node_pool_zone_drift above names the
+    # mismatch instead.
+    ignore_changes = [upgrade_settings, zones]
   }
 }
 
@@ -1146,18 +1261,30 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # With envoy_gateway_image_registry, the controller (and its certgen job) pull
 # from the mirror through the chart's global image value, and the proxy image is
 # exported for deploy.sh, which sets it on the EnvoyProxy.
+# envoy_gateway_image_registry_keeps_source_host decides whether docker.io sits
+# between the registry and the image path: a mirror that keeps the source host
+# serves <registry>/docker.io/<path>, a Docker Hub proxy repository serves
+# <registry>/<path>.
 locals {
   envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
-  envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
-  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
+  envoy_mirror_prefix  = local.envoy_gateway_mirror ? (var.envoy_gateway_image_registry_keeps_source_host ? "${var.envoy_gateway_image_registry}/docker.io/" : "${var.envoy_gateway_image_registry}/") : ""
+  envoy_gateway_image  = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}envoyproxy/gateway:${var.envoy_gateway_version}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${local.envoy_mirror_prefix}${var.envoy_proxy_default_image}" : ""
 }
 
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0
   name      = "envoy-gateway"
   namespace = "envoy-gateway-system"
-  chart     = "oci://docker.io/envoyproxy/gateway-helm"
-  version   = var.envoy_gateway_version
+  # An OCI repository carries the chart in its reference; an https repository
+  # names it. The default gives the reference this release always used, so an
+  # existing install plans no change.
+  repository = startswith(var.envoy_gateway_chart_repository, "oci://") ? null : var.envoy_gateway_chart_repository
+  chart      = startswith(var.envoy_gateway_chart_repository, "oci://") ? "${var.envoy_gateway_chart_repository}/gateway-helm" : "gateway-helm"
+  version    = var.envoy_gateway_version
+
+  repository_username = var.envoy_gateway_chart_repository_username != "" ? var.envoy_gateway_chart_repository_username : null
+  repository_password = var.envoy_gateway_chart_repository_password != "" ? var.envoy_gateway_chart_repository_password : null
 
   create_namespace = true
 

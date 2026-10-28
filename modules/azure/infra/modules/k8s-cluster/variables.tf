@@ -89,6 +89,24 @@ variable "default_node_pool_os_sku" {
   default     = "Ubuntu"
 }
 
+variable "aks_custom_ca_trust_certificate_files" {
+  type        = list(string)
+  description = "PEM files, one CA certificate each, for every Linux node's trust store; the cluster resource reads each, trims the whitespace around its certificate block, and base64-encodes it. Validated in the root module. Empty leaves the attribute unset."
+  default     = []
+}
+
+variable "disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set AKS encrypts the node OS disks and, by default, the CSI data disks with. Set only at creation: a change replaces the cluster. Validated in the root module (aks_disk_encryption_set_id); empty keeps platform-managed keys."
+  default     = ""
+}
+
+variable "disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether to assign Reader on disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs for encrypted data disks. Needs roleAssignments/write on the set's scope; false (default) leaves the grant to whoever owns the set."
+  default     = false
+}
+
 variable "service_cidr" {
   type        = string
   description = "Service CIDR of the cluster"
@@ -110,9 +128,10 @@ variable "additional_node_pools" {
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
-    zones             = optional(list(string), [])
+    zones             = optional(list(string))
+    os_disk_size_gb   = optional(number)
   }))
-  description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
+  description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku and zones to availability_zones; both are validated in the root module."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64GB RAM — Dsv5 family; matches the root module's production default
@@ -183,7 +202,7 @@ variable "workload_identity_name" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones for the default node pool. The default [] creates a non-zonal pool, which is required when the node VM size is not offered in every zone of the region. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
+  description = "Availability zones for the default node pool and for every additional node pool that sets no zones of its own. The default [] creates non-zonal pools, which is required when the node VM size is not offered in every zone of the region. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
   default     = []
 }
 
@@ -360,8 +379,33 @@ variable "envoy_gateway_version" {
 
 variable "envoy_gateway_image_registry" {
   type        = string
-  description = "Registry that mirrors Docker Hub for Envoy Gateway's controller and proxy images, with docker.io as the first path segment under it. Empty pulls from docker.io."
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's controller and proxy images. Empty pulls from docker.io. envoy_gateway_image_registry_keeps_source_host says whether docker.io is the first path segment under it."
   default     = ""
+}
+
+variable "envoy_gateway_image_registry_keeps_source_host" {
+  type        = bool
+  description = "true: images are pulled as <registry>/docker.io/<path>. false: as <registry>/<path>, the layout of a Docker Hub proxy repository. Ignored without envoy_gateway_image_registry."
+  default     = true
+}
+
+variable "envoy_gateway_chart_repository" {
+  type        = string
+  description = "Repository the gateway-helm chart is fetched from: oci://<host>/<path> or https://<host>/<path>."
+  default     = "oci://docker.io/envoyproxy"
+}
+
+variable "envoy_gateway_chart_repository_username" {
+  type        = string
+  description = "Username for envoy_gateway_chart_repository; empty fetches anonymously."
+  default     = ""
+}
+
+variable "envoy_gateway_chart_repository_password" {
+  type        = string
+  description = "Password or token for envoy_gateway_chart_repository_username."
+  default     = ""
+  sensitive   = true
 }
 
 variable "envoy_proxy_default_image" {

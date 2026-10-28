@@ -3,73 +3,145 @@ data "aws_region" "current" {}
 locals {
   custom_networking = length(var.pod_subnet_ids_by_az) > 0
 
-  # Custom networking owns the vpc-cni add-on, so a vpc-cni entry in eks_addons
-  # moves here instead of going to the Blueprints add-on, where it would be a
-  # second aws_eks_addon for the same add-on. Its settings carry over, and its
-  # configuration_values are merged with the custom networking ones, so prefix
-  # delegation or warm-pool tuning keeps working. Blueprints spells the conflict
-  # policy resolve_conflicts; the upstream module splits it in two.
-  user_vpc_cni        = try(var.eks_addons["vpc-cni"], {})
-  user_vpc_cni_config = try(jsondecode(local.user_vpc_cni.configuration_values), {})
-  vpc_cni_addon = merge(
-    { for k, v in local.user_vpc_cni : k => v if !contains(["configuration_values", "resolve_conflicts"], k) },
-    can(local.user_vpc_cni.resolve_conflicts) ? {
-      resolve_conflicts_on_create = local.user_vpc_cni.resolve_conflicts
-      resolve_conflicts_on_update = local.user_vpc_cni.resolve_conflicts
+  # v21 hardcodes bootstrap_self_managed_addons = false (UPGRADE-21.0.md), so EKS
+  # no longer auto-installs vpc-cni/kube-proxy/coredns at cluster creation the way
+  # it did under v20. vpc-cni and kube-proxy additionally have to exist BEFORE the
+  # node groups join (before_compute = true) or nodes never reach Ready and
+  # node-group creation times out. eks_blueprints_addons (below) can't provide
+  # that: its add-ons are created after create_delay_dependencies (the node group
+  # ARNs) resolve via time_sleep.this, so by the time it would run, the node
+  # groups it's implicitly waiting behind have already failed to come up. So
+  # these three go through module.eks's own `addons` input instead, normalized
+  # from the Blueprints eks_addons schema (`resolve_conflicts` single key) to the
+  # one `addons` uses (split create/update). A key in var.eks_addons overrides
+  # the matching default; the custom-networking vpc-cni entry's
+  # configuration_values are layered on separately below. coredns schedules onto
+  # nodes like any other pod, so it keeps the default before_compute = false,
+  # which depends_on the node groups directly — same ordering Blueprints gave it.
+  core_addon_names = toset(["vpc-cni", "kube-proxy", "coredns"])
+
+  core_addons = {
+    for name in local.core_addon_names : name => merge(
+      {
+        # v20 effectively defaulted to resolve_conflicts_on_create = "OVERWRITE"
+        # (bootstrap_self_managed_addons was true, which this module used to
+        # pick the conflict policy) and most_recent = false. v21 changed those
+        # defaults to "NONE" / true (UPGRADE-21.0.md) for every entry in
+        # `addons` — pin the old values here so these don't silently start
+        # auto-upgrading or conflict-failing on apply.
+        resolve_conflicts_on_create = "OVERWRITE"
+        resolve_conflicts_on_update = "OVERWRITE"
+        most_recent                 = false
+      },
+      { for k, v in try(var.eks_addons[name], {}) : k => v if !contains(["configuration_values", "resolve_conflicts"], k) },
+      can(var.eks_addons[name].resolve_conflicts) ? {
+        resolve_conflicts_on_create = var.eks_addons[name].resolve_conflicts
+        resolve_conflicts_on_update = var.eks_addons[name].resolve_conflicts
+      } : {},
+      name == "coredns" ? {} : { before_compute = true },
+    )
+  }
+
+  # Custom networking owns vpc-cni's configuration_values: prefix delegation or
+  # warm-pool tuning in a user-supplied var.eks_addons["vpc-cni"] still carries
+  # over via local.core_addons above, merged with the custom networking settings
+  # here so neither side clobbers the other.
+  user_vpc_cni_config = try(jsondecode(local.core_addons["vpc-cni"].configuration_values), {})
+
+  addons = merge(
+    local.core_addons,
+    local.custom_networking ? {
+      "vpc-cni" = merge(local.core_addons["vpc-cni"], {
+        configuration_values = jsonencode(merge(local.user_vpc_cni_config, {
+          env = merge(try(local.user_vpc_cni_config.env, {}), {
+            AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG = "true"
+            ENI_CONFIG_LABEL_DEF               = "topology.kubernetes.io/zone"
+          })
+          # One ENIConfig per AZ, named after the AZ. securityGroups is omitted,
+          # so pod ENIs carry the node security group and every rule that admits
+          # nodes (the ALB target rules included) admits pods too.
+          eniConfig = {
+            create  = true
+            region  = data.aws_region.current.region
+            subnets = { for az, id in var.pod_subnet_ids_by_az : az => { id = id } }
+          }
+        }))
+      })
     } : {},
-    {
-      # Create the add-on without waiting for compute. Node groups wait only on
-      # dataplane_wait_duration, not on this add-on, so that wait is what gives
-      # the CNI time to be configured before nodes join. Nodes that joined
-      # without it keep pod IPs in the node subnets until they are replaced.
-      before_compute = true
-      configuration_values = jsonencode(merge(local.user_vpc_cni_config, {
-        env = merge(try(local.user_vpc_cni_config.env, {}), {
-          AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG = "true"
-          ENI_CONFIG_LABEL_DEF               = "topology.kubernetes.io/zone"
-        })
-        # One ENIConfig per AZ, named after the AZ. securityGroups is omitted,
-        # so pod ENIs carry the node security group and every rule that admits
-        # nodes (the ALB target rules included) admits pods too.
-        eniConfig = {
-          create  = true
-          region  = data.aws_region.current.name
-          subnets = { for az, id in var.pod_subnet_ids_by_az : az => { id = id } }
-        }
-      }))
-    },
   )
+
+  # v21 changed these (UPGRADE-21.0.md). They are merged under
+  # eks_managed_node_group_defaults because setting that variable replaces its
+  # default entirely. Hop limit 1 blocks pod IMDSv2, which the ALB controller
+  # uses to look up its VPC and region. Monitoring and AMI following are the
+  # v20 values. metadata_options is merged key-wise so a partial override keeps
+  # the keys it does not set.
+  v20_node_group_defaults = {
+    metadata_options = {
+      http_endpoint               = "enabled"
+      http_tokens                 = "required"
+      http_put_response_hop_limit = 2
+    }
+    enable_monitoring              = true
+    use_latest_ami_release_version = false
+  }
+
+  # try() covers extra groups, which are untyped and may omit either attribute.
+  # eks_managed_node_group_defaults is merged in here (pins, then the variable,
+  # then the group) because v21 of the upstream module dropped that top-level
+  # input — see UPGRADE-21.0.md. This is also what lets a group-level
+  # cpu_options (e.g. sandbox_host_node_group_overrides.cpu_options.
+  # nested_virtualization) reach the upstream module: it is typed as `any`
+  # here, and v21's eks_managed_node_groups object type has
+  # cpu_options.nested_virtualization, so it survives the conversion into that
+  # type (v20's cpu_options object type only had core_count/threads_per_core
+  # and silently dropped it).
+  # A null capacity_type is omitted so the upstream module keeps ON_DEMAND
+  # without planning a capacity change on groups that never set it.
+  eks_managed_node_groups = {
+    for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(
+      local.v20_node_group_defaults,
+      var.eks_managed_node_group_defaults,
+      { for attr, value in v : attr => value if !(attr == "capacity_type" && value == null) },
+      {
+        # Drop null maps instead of merging {}. merge() with an empty object
+        # turns the hop limit into a string.
+        metadata_options = merge([
+          for m in [
+            local.v20_node_group_defaults.metadata_options,
+            try(var.eks_managed_node_group_defaults.metadata_options, null),
+            try(v.metadata_options, null),
+          ] : m if m != null
+        ]...)
+        desired_size             = coalesce(try(v.desired_size, null), v.min_size)
+        iam_role_use_name_prefix = coalesce(try(v.iam_role_use_name_prefix, null), true)
+      }
+    )
+  }
 }
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "20.37.2"
+  version = "21.24.0"
 
-  cluster_name    = var.cluster_name
-  cluster_version = var.cluster_version
+  name               = var.cluster_name
+  kubernetes_version = var.cluster_version
 
   vpc_id                                   = var.vpc_id
   subnet_ids                               = var.subnet_ids
-  cluster_endpoint_public_access           = var.public_cluster_enabled
-  cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
+  endpoint_public_access                   = var.public_cluster_enabled
+  endpoint_public_access_cidrs             = var.public_access_cidrs
   enable_cluster_creator_admin_permissions = true
-  cluster_enabled_log_types                = var.cluster_enabled_log_types
-
-  eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
+  enabled_log_types                        = var.cluster_enabled_log_types
 
   # The community module ignores desired_size changes (lifecycle ignore_changes) so
   # the cluster autoscaler can manage it. min_size and max_size DO propagate through
   # terraform apply. If plan shows no changes after modifying min/max, run
   # `terraform refresh` first — the ASG may have been changed out-of-band (e.g. via
   # AWS CLI or console) and the state already reflects the new values.
-  eks_managed_node_groups = {
-    for k, v in var.eks_managed_node_groups : k => merge(v, {
-      desired_size             = coalesce(v.desired_size, v.min_size)
-      iam_role_use_name_prefix = coalesce(v.iam_role_use_name_prefix, true)
-    })
-  }
+  eks_managed_node_groups = local.eks_managed_node_groups
 
-  cluster_addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
+  addons = local.addons
   # 30s is the upstream default. Custom networking waits longer so the vpc-cni
   # add-on is active before the first nodes join.
   dataplane_wait_duration = local.custom_networking ? "2m" : "30s"
@@ -156,11 +228,10 @@ module "eks_blueprints_addons" {
     chart_version = "9.56.0"
   }
 
-  # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
-  # One filter rather than a conditional: the two branches of a conditional are
-  # objects with different attributes, and differently shaped add-ons fail to
-  # unify into one type even when custom networking is off.
-  eks_addons = { for k, v in var.eks_addons : k => v if !(local.custom_networking && k == "vpc-cni") }
+  # EKS managed addons other than vpc-cni/kube-proxy/coredns, which are handled
+  # by module.eks's own `addons` input above (see local.core_addons) so they can
+  # be created before the node groups that need them to come up.
+  eks_addons = { for k, v in var.eks_addons : k => v if !contains(local.core_addon_names, k) }
 
   # Waits for node groups without a module-level depends_on, which defers this module's data sources and replaces (detaches) the Karpenter node role's policy attachments whenever module.eks changes.
   create_delay_dependencies = [for ng in module.eks.eks_managed_node_groups : ng.node_group_arn]

@@ -103,6 +103,11 @@ output "live_network_profile" {
   }
 }
 
+output "live_disk_encryption_set_id" {
+  description = "The disk encryption set Azure reports for the cluster at plan time, lowercased: \"\" when the cluster has none. null until the cluster exists, and when create_cluster = false."
+  value       = local.live_cluster == null ? null : try(lower(local.live_cluster.disk_encryption_set), "")
+}
+
 output "live_access_profile" {
   description = "API server access Azure reports for the cluster at plan time: whether it is private, its private DNS zone (\"system\", \"none\", a zone ID, or null on a public cluster), whether Entra integration is on, and the control-plane identity (\"system\" or \"user\", null when Azure reports none) with its lowercased user-assigned identity IDs. null until the cluster exists, and when create_cluster = false."
   value = local.live_cluster == null ? null : {
@@ -169,6 +174,24 @@ output "node_pool_os_skus" {
   value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.os_sku }
 }
 
+output "node_pool_zones" {
+  description = "Availability zones each additional node pool is planned or created with, keyed by pool name. Empty for a regional pool, and null in the plan that creates one."
+  value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.zones }
+}
+
+output "node_pool_tags" {
+  description = "Tags each node pool is planned or created with, keyed by pool name, the default pool under \"default\". The default pool is absent when create_cluster = false."
+  value = merge(
+    { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.tags },
+    { for cluster in azurerm_kubernetes_cluster.main : "default" => cluster.default_node_pool[0].tags },
+  )
+}
+
+output "cluster_tags" {
+  description = "Tags the cluster is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].tags)
+}
+
 output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
@@ -177,6 +200,15 @@ output "support_plan" {
 output "envoy_gateway_version" {
   description = "Version of the Envoy Gateway release, empty when ingress_controller is not 'envoy-gateway'. k8s-bootstrap reads it to install cert-manager after the Gateway API CRDs this release ships."
   value       = join("", helm_release.envoy_gateway[*].version)
+}
+
+output "envoy_gateway_chart_source" {
+  description = "Where the Envoy Gateway release fetches its chart (repository and chart as the release sets them), and whether it sends credentials; null without Envoy Gateway."
+  value = one([for r in helm_release.envoy_gateway : {
+    repository    = r.repository
+    chart         = r.chart
+    authenticated = var.envoy_gateway_chart_repository_username != ""
+  }])
 }
 
 output "envoy_gateway_image" {
@@ -194,9 +226,19 @@ output "envoy_gateway_image_pull_secret_name" {
   value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.pullSecrets[0].name, "")])
 }
 
+output "custom_ca_trust_certificates_base64" {
+  description = "Base64-encoded CA certificates the cluster resource installs in every node's trust store, in the order of aks_custom_ca_trust_certificate_files. Null without any, and without a created cluster."
+  value       = one(azurerm_kubernetes_cluster.main[*].custom_ca_trust_certificates_base64)
+}
+
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
+}
+
+output "network_policy_engine" {
+  description = "Network policy engine the cluster runs: azure, calico, cilium, or none. A created cluster runs network_policy; an attached one reports its own."
+  value       = var.create_cluster ? var.network_policy : coalesce(try(data.azurerm_kubernetes_cluster.existing[0].network_profile[0].network_policy, null), "none")
 }
 
 output "control_plane_grants" {
@@ -249,4 +291,14 @@ output "istio_addon_gateways" {
     external = local.istio_addon_external_gateway
     internal = local.istio_addon_internal_gateway
   }
+}
+
+output "disk_encryption_set_id" {
+  description = "The disk encryption set the cluster's node OS disks and CSI data disks are encrypted with; null on platform-managed keys or in attach mode."
+  value       = one(azurerm_kubernetes_cluster.main[*].disk_encryption_set_id)
+}
+
+output "disk_encryption_set_reader_scope" {
+  description = "Scope of the Reader assignment the module made on the disk encryption set for the cluster identity; null when the grant is left to the set's owner."
+  value       = one(azurerm_role_assignment.disk_encryption_set_reader[*].scope)
 }
