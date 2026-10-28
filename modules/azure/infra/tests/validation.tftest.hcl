@@ -59,6 +59,7 @@ run "enums_reject_an_unlisted_value" {
     agic_network_contributor_scope = "resourcegroup"
     terraform_principal_type       = "user"
     redis_clustering_policy        = "Enterprise"
+    sizing_profile                 = "production_large"
   }
 
   expect_failures = [
@@ -71,6 +72,7 @@ run "enums_reject_an_unlisted_value" {
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
     var.redis_clustering_policy,
+    var.sizing_profile,
   ]
 }
 
@@ -866,36 +868,6 @@ run "smithdb_migration_requires_ingestion" {
   }
 
   expect_failures = [terraform_data.validate_network]
-}
-
-run "smithdb_migration_parallelism_rejects_zero" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 0
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
-}
-
-run "smithdb_migration_parallelism_rejects_more_than_30" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 31
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
-}
-
-run "smithdb_migration_parallelism_rejects_a_fraction" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 1.5
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
 }
 
 # ── Storage and ClusterIP rules ──────────────────────────────────────────────

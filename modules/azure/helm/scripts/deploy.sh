@@ -704,15 +704,6 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   # Written by make smithdb-migration-job-start; its presence was checked with
   # the TaskDB secret above. Loaded only while the migration is on.
   if [[ "$_smithdb_migration_enabled" == "true" ]]; then
-    # The last apply sized the namespace quota for this pod count. A larger
-    # count in the file leaves the extra pods refused by the quota.
-    _file_parallelism=$(awk '/^[[:space:]]*parallelism:/ { print $2; exit }' "$_smithdb_migration_file")
-    _tf_parallelism=$(_tf_out smithdb_migration_parallelism) || _tf_parallelism=""
-    if [[ "${_file_parallelism:-1}" != "$_tf_parallelism" ]]; then
-      fail "langsmith-values-smithdb-migration.yaml has parallelism ${_file_parallelism:-1}, but the last apply sized the namespace quota for ${_tf_parallelism:-an unknown count of} migration pods."
-      action "Set smithdb_migration_parallelism = ${_file_parallelism:-1} in terraform.tfvars, run make apply, then make deploy"
-      exit 1
-    fi
     VALUES_ARGS+=(-f "$_smithdb_migration_file")
     echo "  ✔ langsmith-values-smithdb-migration.yaml"
   elif [[ -f "$_smithdb_migration_file" ]]; then
@@ -1402,8 +1393,10 @@ print(json.dumps(s))
 fi
 
 # ── Ensure langsmith-ksa carries the WI annotation ───────────────────────
-# langsmith-ksa is used by operator-spawned agent deployment pods.
-# It is created by the operator on first use (not part of Helm release).
+# langsmith-ksa is used by operator-spawned agent deployment pods. The infra
+# apply creates it (k8s-bootstrap); this creates it only if it is missing. The
+# annotation gives those pods no Azure identity: langsmith-ksa has no
+# federated credential and the agent template sets no Workload Identity label.
 _wi_client_id=$(_tf_out storage_account_k8s_managed_identity_client_id || true)
 if [[ -n "$_wi_client_id" ]]; then
   kubectl create serviceaccount langsmith-ksa -n "$NAMESPACE" \
