@@ -29,3 +29,13 @@ listener:
 
 operator:
   enabled: true
+  deployment:
+    # The operator creates one HTTPRoute per agent deployment at runtime
+    # (/lgp/<deployment>/...) and, with this set, writes timeouts.request on
+    # each, so runs/stream is not cut mid-response; 0s turns the timeout off,
+    # as on langsmith-fleet-streams. The same setting as the Azure module
+    # (#478); operator 0.1.38 or later reads it. Helm replaces lists, so this
+    # list replaces any operator.deployment.extraEnv set elsewhere.
+    extraEnv:
+      - name: HTTPROUTE_REQUEST_TIMEOUT
+        value: "0s"

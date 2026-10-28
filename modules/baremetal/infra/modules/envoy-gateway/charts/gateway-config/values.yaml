@@ -6,8 +6,10 @@ gatewayNamespace: ""
 loadBalancerIP: ""
 proxyReplicas: 1
 proxyResources: {}
-# Request timeout for routes on the Gateway (BackendTrafficPolicy); empty = Envoy default (15 s).
+# Request timeout for the chart's route and the LAN route (BackendTrafficPolicy); empty = Envoy default (15 s).
 routeTimeout: "60s"
+# The LangSmith chart's HTTPRoute: the release's full name (deploy.sh installs release "langsmith").
+chartRouteName: langsmith
 # An HTTPS listener for this hostname, from a kubernetes.io/tls Secret in the Gateway's namespace; null for none.
 tls: null
 lanRoute:

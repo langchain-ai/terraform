@@ -264,7 +264,7 @@ variable "envoy_gateway_lb_ip" {
 variable "envoy_gateway_route_timeout" {
   type        = string
   default     = "60s"
-  description = "Request timeout for every route on the LangSmith Gateway (Envoy BackendTrafficPolicy). Envoy Gateway's default is 15 s, which returns 504 on slow trace reads. Empty string keeps the Envoy default."
+  description = "Request timeout on the LangSmith chart's route and the LAN route (Envoy BackendTrafficPolicy); Fleet and Deployments streams and the operator's agent routes have none. Envoy Gateway's default is 15 s, which returns 504 on slow trace reads. Empty string keeps the Envoy default."
 
   validation {
     condition     = var.envoy_gateway_route_timeout == "" || can(regex("^[0-9]+(ms|s|m|h)$", var.envoy_gateway_route_timeout))

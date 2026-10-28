@@ -35,7 +35,7 @@ variable "proxy_replicas" {
 variable "route_timeout" {
   type        = string
   default     = "60s"
-  description = "Request timeout for every route on the Gateway (BackendTrafficPolicy). Envoy Gateway's default is 15 s, which returns 504 on slow trace reads. Empty string keeps the default."
+  description = "Request timeout on the chart's route and the LAN route (BackendTrafficPolicy), never Gateway-wide. Envoy Gateway's default is 15 s, which returns 504 on slow trace reads. Empty string keeps the default."
 
   validation {
     condition     = var.route_timeout == "" || can(regex("^[0-9]+(ms|s|m|h)$", var.route_timeout))

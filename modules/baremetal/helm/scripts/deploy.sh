@@ -289,6 +289,68 @@ if ! _helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
 fi
 pass "helm release applied"
 
+# ── Long-running streams: no request timeout ─────────────────────────────────
+# Fleet run streams and the Deployments proxy (/api-host/v2) stream for longer
+# than any request timeout, and were reset mid-response. A second HTTPRoute
+# with only those path prefixes and timeouts.request: 0s takes them (the longer
+# prefix wins over the chart's "/"), as the AWS and Azure modules' route of the
+# same name (#299, #424). The module's request-timeout policy targets the
+# chart's route and the LAN route, never the Gateway, so it does not reach this
+# one or the operator's agent routes. Hostname and base path come from the
+# release's values, as the chart's route takes them; with no DNS name (the
+# Gateway IP, this module's default) the route has no hostnames, like the
+# chart's. Applied with Fleet or Deployments on, removed when both are off.
+if _feature_on fleet || _feature_on deployments; then
+  read -r _streams_host _streams_base _streams_gw < <(_helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all -o json 2>/dev/null \
+    | python3 -I -c '
+import json, re, sys
+v = json.load(sys.stdin) or {}
+cfg = v.get("config") or {}
+host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", str(cfg.get("hostname") or "").strip(), flags=re.I).rstrip("/")
+dns = re.fullmatch(r"([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z][a-z0-9-]*[a-z0-9]", host, flags=re.I)
+base = "/" + str(cfg.get("basePath") or "").strip("/ ")
+print(host if dns else "-", base if base != "/" else "-", (v.get("gateway") or {}).get("name") or "langsmith-gateway")
+' 2>/dev/null) || true
+  [[ "${_streams_base:--}" == "-" ]] && _streams_base=""
+  _streams_hostnames=""
+  [[ -n "${_streams_host:-}" && "$_streams_host" != "-" ]] && _streams_hostnames="  hostnames:
+  - \"${_streams_host}\""
+  if _kubectl apply -f - >/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: langsmith-fleet-streams
+  namespace: ${NAMESPACE}
+spec:
+  parentRefs:
+  - name: ${_streams_gw:-langsmith-gateway}
+${_streams_hostnames}
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api/v1/fleet/threads
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api/v1/fleet/lg
+    - path:
+        type: PathPrefix
+        value: ${_streams_base}/api-host/v2
+    backendRefs:
+    - name: ${RELEASE_NAME}-frontend
+      port: 80
+    timeouts:
+      request: 0s
+EOF
+  then
+    pass "HTTPRoute langsmith-fleet-streams: no request timeout on ${_streams_base}/api/v1/fleet and ${_streams_base}/api-host/v2"
+  else
+    warn "could not apply HTTPRoute langsmith-fleet-streams; Fleet and Deployments streams keep the Gateway's timeout until it applies: re-run make deploy"
+  fi
+else
+  _kubectl delete httproute langsmith-fleet-streams -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+fi
+
 # ── 4. Rollout ───────────────────────────────────────────────────────────────
 header "Rollout"
 
