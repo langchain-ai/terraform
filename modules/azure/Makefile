@@ -112,7 +112,6 @@ apply: ## terraform apply (infra) — three stages, each prompts for confirmatio
 	terraform -chdir=$(TF_DIR) apply $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
-		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_default_deny \
 		-target=module.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_allow_internal \
 		-target=module.k8s_bootstrap.kubernetes_secret_v1.postgres \

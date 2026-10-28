@@ -132,10 +132,6 @@ run "the_langsmith_cluster_gets_no_sandbox_changes" {
     error_message = "separate_cluster still planned the JuiceFS Secret in the LangSmith namespace"
   }
   assert {
-    condition     = contains(module.k8s_bootstrap.resource_quota_keys, "limits.cpu") && module.k8s_bootstrap.limit_range_default_limits != null
-    error_message = "separate_cluster dropped limits from the LangSmith namespace quota"
-  }
-  assert {
     condition     = module.k8s_bootstrap.platform_backend_node_ingress == null
     error_message = "separate_cluster still admitted the LangSmith node subnet to platform-backend"
   }

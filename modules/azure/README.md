@@ -904,7 +904,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Guards against a stuck Helm release: auto-rolls back `pending-upgrade` state before proceeding
 - Runs `helm upgrade --install langsmith langchain/langsmith --timeout 20m`
 - Waits for core deployments to roll out (`frontend`, `backend`, `platform-backend`, `ingest-queue`, `queue`, and Deployments pods if enabled)
-- Annotates the `langsmith-ksa` service account with the Workload Identity client ID (used by operator-spawned agent pods); a pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
+- Annotates the `langsmith-ksa` service account with the Workload Identity client ID. The operator's agent pods run as that account, but they get no Azure identity from it: the account has no federated credential and the agent template sets no Workload Identity label. A pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
 - Prints the access URL, login email, and the `az keyvault` command to retrieve the admin password
 
 ---
@@ -1080,8 +1080,6 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
     on port 1986. Only overlay mode limits it to the nodes.
   - With Cilium, which never matches a node IP by `ipBlock`, `deploy.sh` applies a CiliumNetworkPolicy of the same
     name that admits the `host` and `remote-node` entities, and deletes it when sandboxes are off.
-- The namespace ResourceQuota caps requests only, and the LimitRange sets no default limits. `sandbox-host` runs the
-  microVMs in child cgroups of its own pod, so a container limit would cap every sandbox on the node.
 - `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy. This replaces any tag set
   in a values file, so the image always follows the chart.
 - `sandbox_service_url_base_url` sets the base URL for HTTP services that run inside sandboxes. It needs wildcard DNS
@@ -1160,8 +1158,8 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
   trusts `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>` (`langsmith-sandbox:sandbox-host`
   by default). `init-values.sh` writes the same name into the runtime chart.
 - **In the sandbox cluster:** the `sandbox_namespace` namespace and the `juicefs-csi-config` Secret.
-- **What the LangSmith cluster loses:** the `sandboxhost` pool, the namespace quota and LimitRange changes, the
-  platform-backend node policy and the JuiceFS Secret. `sandbox-host` reaches LangSmith through the ingress.
+- **What the LangSmith cluster loses:** the `sandboxhost` pool, the platform-backend node policy and the JuiceFS
+  Secret. `sandbox-host` reaches LangSmith through the ingress.
 
 **Requirements**
 
