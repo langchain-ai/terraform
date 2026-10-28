@@ -66,6 +66,13 @@ run "same_cluster_plans_no_sandbox_cluster" {
     condition     = length(kubernetes_secret_v1.sandbox_juicefs_csi_config) == 1
     error_message = "same_cluster did not plan the JuiceFS config Secret in the LangSmith namespace"
   }
+  assert {
+    condition = (
+      jsonencode(local.data_store_ingress_cidrs) == jsonencode(concat([local.vpc_cidr_block], local.pod_cidr_blocks)) &&
+      length(local.data_store_ingress_security_group_ids) == 0
+    )
+    error_message = "same_cluster changed who can reach the LangSmith Postgres and Redis"
+  }
 }
 
 run "separate_cluster_moves_sandbox_host_to_its_own_cluster" {
@@ -227,6 +234,58 @@ run "separate_cluster_iam_and_network_are_scoped" {
   assert {
     condition     = length(local.alb_allowed_security_group_ids) == 0
     error_message = "an internet-facing ALB cannot match the sandbox security group, so none should be added"
+  }
+  # The sandbox nodes share the private subnets, so a VPC CIDR rule would admit
+  # them to the LangSmith Postgres and Redis.
+  assert {
+    condition = (
+      length(local.data_store_ingress_cidrs) == 0 &&
+      jsonencode(local.data_store_ingress_security_group_ids) == jsonencode(["sg-00000000000000001"])
+    )
+    error_message = "the LangSmith Postgres and Redis must admit the LangSmith node security group only, not a CIDR the sandbox nodes are in"
+  }
+}
+
+run "separate_cluster_data_stores_admit_the_bastion" {
+  command = plan
+
+  variables {
+    create_bastion = true
+  }
+
+  override_module {
+    target = module.eks
+    outputs = {
+      cluster_name                       = "plantest-dev-eks"
+      cluster_endpoint                   = "https://0123456789ABCDEF.gr7.us-east-2.eks.amazonaws.com"
+      cluster_certificate_authority_data = "ZmFrZS1jYS1mb3ItcGxhbi10ZXN0cw=="
+      oidc_provider                      = "oidc.eks.us-east-2.amazonaws.com/id/0123456789ABCDEF"
+      oidc_provider_arn                  = "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-2.amazonaws.com/id/0123456789ABCDEF"
+      langsmith_irsa_role_arn            = "arn:aws:iam::123456789012:role/plantest-dev-eks-irsa-role"
+      langsmith_irsa_role_name           = "plantest-dev-eks-irsa-role"
+      node_security_group_id             = "sg-00000000000000001"
+      karpenter_node_iam_role_name       = "plantest-dev-karpenter-node"
+      eks_managed_node_group_inputs      = {}
+    }
+  }
+
+  override_module {
+    target = module.bastion
+    outputs = {
+      instance_id               = "i-00000000000000003"
+      public_ip                 = null
+      security_group_id         = "sg-00000000000000003"
+      iam_role_arn              = "arn:aws:iam::123456789012:role/plantest-dev-bastion"
+      ssm_start_session_command = "aws ssm start-session --target i-00000000000000003 --region us-east-2"
+    }
+  }
+
+  assert {
+    condition = (
+      length(local.data_store_ingress_cidrs) == 0 &&
+      jsonencode(local.data_store_ingress_security_group_ids) == jsonencode(["sg-00000000000000001", "sg-00000000000000003"])
+    )
+    error_message = "with a bastion, the LangSmith Postgres and Redis must admit the LangSmith nodes and the bastion only"
   }
 }
 

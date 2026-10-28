@@ -71,6 +71,17 @@ locals {
   # (see below).
   alb_ingress_cidr_blocks = distinct(concat(var.alb_allowed_cidr_blocks, local.pod_cidr_blocks, local.sandbox_nat_egress_cidrs))
 
+  # Who reaches the LangSmith Postgres and Redis. Separate-cluster sandbox nodes
+  # share the private subnets, so a CIDR rule would admit them: those stores
+  # admit the LangSmith node security group instead, which pod ENIs carry too
+  # (see the ENIConfig in modules/eks), and the bastion's. The sandbox JuiceFS
+  # Redis keeps the CIDR rule, because the sandbox nodes are its clients.
+  data_store_ingress_cidrs = local.separate_cluster_sandboxes ? [] : concat([local.vpc_cidr_block], local.pod_cidr_blocks)
+  data_store_ingress_security_group_ids = !local.separate_cluster_sandboxes ? [] : concat(
+    [module.eks.node_security_group_id],
+    var.create_bastion ? [module.bastion[0].security_group_id] : [],
+  )
+
   # Envoy Gateway is the default ingress mode, but a bare default of `true` would
   # silently add a second gateway controller to every existing Istio/NGINX tfvars
   # that never mentioned Envoy. Deriving it instead means "Envoy unless you already
