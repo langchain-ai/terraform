@@ -1067,7 +1067,7 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate
   # Subshell: the sandbox cluster gets its own kubeconfig file from main's
   # helper (~/.kube/langsmith-<cluster>), and the KUBECONFIG export ends with
   # the subshell. set -e still exits the script on a failure in here.
-  # No images.sandboxHost.tag: the chart runs the image of its own appVersion.
+  # No images.sandboxHostImage.tag: the chart runs the image of its own appVersion.
   # No --wait or --atomic: hosts drain one at a time, so a slow roll is not a
   # failed one; the rollout check below only warns.
   (
@@ -1078,7 +1078,7 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate
       --create-namespace \
       --version "$_sandbox_chart_version" \
       -f "$SANDBOX_VALUES_FILE" \
-      --set-string "platform.endpoint=$_platform_endpoint" \
+      --set-string "config.endpoint=$_platform_endpoint" \
       ${_ssa_flag} \
       --timeout "$_helm_timeout"
 
