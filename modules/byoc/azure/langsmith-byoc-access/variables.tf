@@ -22,6 +22,17 @@ variable "data_planes" {
     # langsmith-byoc-reduced role, which cannot delete the data plane. Set it
     # back to false before you delete or re-create the data plane.
     reduced_access = optional(bool, false)
+    # An existing VNet in this subscription, in any resource group. See
+    # network.tf. outbound_type is NAT_GATEWAY or USER_DEFINED_ROUTING: the
+    # NAT gateway or the route table must already be on the AKS subnet.
+    existing_network = optional(object({
+      vnet_id                = string
+      aks_subnet_id          = string
+      postgres_subnet_id     = string
+      redis_subnet_id        = string
+      private_link_subnet_id = string
+      outbound_type          = optional(string, "NAT_GATEWAY")
+    }))
   }))
   default = {}
 
@@ -34,6 +45,24 @@ variable "data_planes" {
       can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+  }
+
+  validation {
+    condition = alltrue([
+      for data_plane in values(var.data_planes) : data_plane.existing_network == null || (
+        can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/virtualNetworks/[^/]+$", data_plane.existing_network.vnet_id)) &&
+        alltrue([
+          for subnet in [
+            data_plane.existing_network.aks_subnet_id,
+            data_plane.existing_network.postgres_subnet_id,
+            data_plane.existing_network.redis_subnet_id,
+            data_plane.existing_network.private_link_subnet_id,
+          ] : startswith(lower(subnet), "${lower(data_plane.existing_network.vnet_id)}/subnets/")
+        ]) &&
+        contains(["NAT_GATEWAY", "USER_DEFINED_ROUTING"], data_plane.existing_network.outbound_type)
+      )
+    ])
+    error_message = "existing_network.vnet_id must be a VNet resource ID, each subnet ID must be a subnet of that VNet, and outbound_type must be NAT_GATEWAY or USER_DEFINED_ROUTING."
   }
 }
 

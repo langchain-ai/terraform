@@ -11,8 +11,10 @@ This module creates these resources:
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the 2 secrets that LangSmith writes. No public network access. |
 | Custom roles `langsmith-byoc-<key>-<suffix>` and `langsmith-byoc-reduced-<key>-<suffix>` | Two per data plane | The actions that LangSmith needs in that resource group. Each role can only be assigned in that resource group. |
 | Role assignments: one LangSmith custom role and `User Access Administrator` | Two per data plane | Give the LangSmith service principal access to that resource group only. |
+| Custom role `langsmith-byoc-network-<key>-<suffix>` and its assignment on the VNet | One per data plane with `existing_network` | Lets LangSmith read and join the subnets of your VNet. It cannot change the network. |
+| Managed identity `langsmith-byoc-<key>-aks` and `Network Contributor` on the AKS subnet | One per data plane with `existing_network` | The AKS cluster identity. |
 
-> **WARNING:** LangSmith deletes the whole resource group when you delete the data plane. The resource group must contain only the Key Vault from this module when you create the data plane in LangSmith. Do not put other resources in it.
+> **WARNING:** LangSmith deletes the whole resource group when you delete the data plane. The resource group must contain only the Key Vault (and, with `existing_network`, the AKS identity) from this module when you create the data plane in LangSmith. Do not put other resources in it.
 
 ## Prerequisites
 
@@ -137,6 +139,41 @@ terraform output -json langsmith_byoc_access | jq --arg dp prod '{
 }'
 ```
 
+### Use an existing VNet
+
+By default, LangSmith creates the VNet of the data plane. To use your own VNet, set `existing_network`. The VNet must be in the same subscription and region as the data plane. It can be in any resource group.
+
+```hcl
+data_planes = {
+  prod = {
+    location = "eastus"
+    existing_network = {
+      vnet_id                = "/subscriptions/<subscription-id>/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/corp"
+      aks_subnet_id          = "<vnet_id>/subnets/langsmith-aks"
+      postgres_subnet_id     = "<vnet_id>/subnets/langsmith-postgres"
+      redis_subnet_id        = "<vnet_id>/subnets/langsmith-redis"
+      private_link_subnet_id = "<vnet_id>/subnets/langsmith-private-link"
+      outbound_type          = "USER_DEFINED_ROUTING" # or NAT_GATEWAY
+    }
+  }
+}
+```
+
+Prepare the network before you create the data plane:
+
+| Subnet | Minimum size | Requirements |
+|--------|--------------|--------------|
+| AKS | `/22` | The `Microsoft.Storage` service endpoint. A NAT gateway (`NAT_GATEWAY`) or a route table with your default route (`USER_DEFINED_ROUTING`). No delegation. |
+| PostgreSQL | `/28` | No delegation. LangSmith adds private endpoints for the two PostgreSQL servers. |
+| Redis | `/28` | No delegation. LangSmith adds a private endpoint for Redis. |
+| Private link | `/29` | No delegation. LangSmith adds a private endpoint to the LangSmith control plane. |
+
+All four subnets must be in one address prefix of the VNet. Your NSGs must let the AKS subnet reach PostgreSQL (TCP 5432), Redis (TCP 10000 and 8500-8599), and the private link subnet (TCP 443).
+
+The module gives LangSmith a custom role on the VNet with only these actions: read the VNet and the subnets, join the subnets, join the VNet, and read role assignments. It also creates the AKS identity and gives it `Network Contributor` on the AKS subnet. LangSmith checks the network, the role, and the identity before it creates the data plane.
+
+The `byovnet` output of the data plane is the `byovnet` object of the create request. Do not send `vpc_cidr` with it.
+
 ### Reduce access after deployment
 
 When the data plane is active in LangSmith, set `reduced_access = true` for it and run `terraform apply`:
@@ -170,6 +207,7 @@ LangSmith cannot delete or re-create a data plane with the reduced role. Set `re
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes** in LangSmith. Must not be empty. The module writes it as the description of each LangSmith role assignment. |
 | `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false) }))` | no | `{}` | Map of data planes. The key is the data plane name. Each data plane gets the resource group `langsmith-byoc-<key>` with only a Key Vault in it. LangSmith deletes the whole resource group when you delete the data plane. Set `reduced_access = true` after the data plane is active (see [Reduce access after deployment](#reduce-access-after-deployment)). |
+| `data_planes[*].existing_network` | `object({ vnet_id, aks_subnet_id, postgres_subnet_id, redis_subnet_id, private_link_subnet_id = string, outbound_type = optional(string, "NAT_GATEWAY") })` | no | `null` | An existing VNet for the data plane (see [Use an existing VNet](#use-an-existing-vnet)). |
 | `key_vault_purge_protection_enabled` | `bool` | no | `true` | Enables purge protection on each data plane Key Vault. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
@@ -180,7 +218,7 @@ A `data_planes` key must have 1 to 63 characters. Use only lowercase letters, di
 | Output | Description |
 |--------|-------------|
 | `azure_entra_tenant_id` | Entra tenant ID of the subscription. |
-| `data_planes` | Map of data plane key to `resource_group_id`, `region`, and `key_vault_name`. |
+| `data_planes` | Map of data plane key to `resource_group_id`, `region`, `key_vault_name`, and `byovnet` (the create request object, or `null` without `existing_network`). |
 
 ## Security model
 
