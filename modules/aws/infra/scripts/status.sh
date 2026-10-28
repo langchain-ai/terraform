@@ -43,6 +43,11 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _pg_source=$(_read_tfvar postgres_source)
   _redis_source=$(_read_tfvar redis_source)
   _ch_source=$(_read_tfvar clickhouse_source)
+  _sandbox_mode=""
+  if _tfvar_is_true "enable_sandboxes"; then
+    _sandbox_mode=$(_read_tfvar sandbox_deployment_mode) || _sandbox_mode=""
+    _sandbox_mode="${_sandbox_mode:-same_cluster}"
+  fi
 
   if [[ -n "$_name_prefix" && -n "$_environment" && -n "$_region" ]]; then
     pass "Required fields: name_prefix=${_name_prefix}  environment=${_environment}  region=${_region}"
@@ -55,6 +60,7 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   fi
   [[ -n "$_tls" ]] && info "TLS: ${_tls}" || info "TLS: not set (defaults to none)"
   info "Services: postgres=${_pg_source:-external}  redis=${_redis_source:-external}  clickhouse=${_ch_source:-in-cluster}"
+  [[ -n "$_sandbox_mode" ]] && info "Sandboxes: ${_sandbox_mode}"
 else
   fail "terraform.tfvars not found"
   action "cp infra/terraform.tfvars.example infra/terraform.tfvars && edit it"
@@ -232,6 +238,17 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"cluster_name"'; then
   [[ -n "$_alb_dns" ]]      && info "ALB DNS: ${_alb_dns}"             || warn "No alb_dns_name output"
   [[ -n "$_langsmith_url" ]] && info "LangSmith URL: ${_langsmith_url}"
   info "Services: postgres=${_pg_source:-?}  redis=${_redis_source:-?}  tls=${_tls_source:-?}"
+  if [[ "${_sandbox_mode:-}" == "separate_cluster" ]]; then
+    # -raw fails on a null output, which leaves the name empty.
+    _sandbox_cluster_name=$(_terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || _sandbox_cluster_name=""
+    _sandbox_namespace=$(_terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace=""
+    if [[ -n "$_sandbox_cluster_name" ]]; then
+      info "Sandbox EKS cluster: ${_sandbox_cluster_name} (section 10)"
+    else
+      warn "No sandbox_cluster_name output, although sandbox_deployment_mode = separate_cluster"
+      action "make apply"
+    fi
+  fi
 else
   fail "terraform output — empty (no state file or state is elsewhere)"
   info "If infra was applied from another machine, you need to configure the backend"
@@ -445,6 +462,83 @@ else
       action "Wait 2 min, then re-run make deploy to pick up the hostname"
     else
       skip "No ingress found"
+    fi
+  fi
+fi
+
+# ── Sandbox runtime (separate_cluster) ──────────────────────────────────────
+if [[ -n "${_sandbox_cluster_name:-}" ]]; then
+  header "10. Sandbox Runtime (${_sandbox_cluster_name})"
+  _sandbox_namespace="${_sandbox_namespace:-langsmith-sandbox}"
+  _sandbox_release="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
+
+  if [[ "$QUICK" == "true" ]]; then
+    skip "Skipped (--quick mode)"
+  elif [[ -z "${_region:-}" ]]; then
+    skip "Cannot check — no region in terraform.tfvars"
+  else
+    # A kubeconfig of its own, passed to each command, so the sections above keep
+    # the LangSmith cluster's context.
+    _sbx_kubeconfig="$HOME/.kube/langsmith-${_sandbox_cluster_name}"
+    if ! _aws eks update-kubeconfig --name "$_sandbox_cluster_name" --region "$_region" \
+        --alias "$_sandbox_cluster_name" --kubeconfig "$_sbx_kubeconfig" >/dev/null 2>&1; then
+      fail "Cannot write a kubeconfig for ${_sandbox_cluster_name}"
+      action "aws eks describe-cluster --name ${_sandbox_cluster_name} --region ${_region}"
+    elif ! KUBECONFIG="$_sbx_kubeconfig" _kubectl cluster-info --request-timeout=5s &>/dev/null; then
+      fail "kubectl cannot reach the sandbox cluster"
+      info "If its API endpoint is private or narrowed, check eks_public_access_cidrs or your VPC access"
+    else
+      pass "kubectl can reach the sandbox cluster"
+
+      _sbx_json=$(KUBECONFIG="$_sbx_kubeconfig" _helm status "$_sandbox_release" -n "$_sandbox_namespace" -o json 2>/dev/null) || _sbx_json=""
+      if [[ -z "$_sbx_json" ]]; then
+        skip "Helm release: ${_sandbox_release} — not installed"
+        action "make deploy  (installs the runtime chart whose appVersion matches langsmith)"
+        set_next "make deploy"
+      else
+        _sbx_status=$(echo "$_sbx_json" | grep -o '"status":"[^"]*"' | head -1 \
+          | sed 's/"status":"//;s/"//') || _sbx_status=""
+        _sbx_chart=$(echo "$_sbx_json" | grep -o '"chart":"[^"]*"' \
+          | sed 's/"chart":"//;s/"//') || _sbx_chart=""
+        _sbx_app_version=$(echo "$_sbx_json" | grep -o '"app_version":"[^"]*"' \
+          | sed 's/"app_version":"//;s/"//') || _sbx_app_version=""
+        if [[ "$_sbx_status" == "deployed" ]]; then
+          pass "Helm release: ${_sandbox_release} — deployed"
+        else
+          warn "Helm release: ${_sandbox_release} — status: ${_sbx_status:-unknown}"
+          action "make deploy"
+        fi
+        [[ -n "$_sbx_chart" ]] && info "Chart: ${_sbx_chart}"
+        # The two releases must run the same LangSmith release (appVersion).
+        if [[ -n "$_sbx_app_version" && -n "${_helm_app_version:-}" ]]; then
+          if [[ "$_sbx_app_version" == "$_helm_app_version" ]]; then
+            pass "App version ${_sbx_app_version} matches the langsmith release"
+          else
+            fail "App version ${_sbx_app_version} differs from the langsmith release's ${_helm_app_version}"
+            action "make deploy  (upgrades the runtime to the chart with the matching appVersion)"
+            set_next "make deploy"
+          fi
+        fi
+      fi
+
+      _sbx_pods=$(KUBECONFIG="$_sbx_kubeconfig" _kubectl get pods -n "$_sandbox_namespace" --no-headers 2>/dev/null) || _sbx_pods=""
+      if [[ -z "$_sbx_pods" ]]; then
+        skip "No pods in ${_sandbox_namespace} namespace"
+      else
+        _sbx_total=$(printf '%s\n' "$_sbx_pods" | wc -l | tr -d ' ')
+        _sbx_running=$(printf '%s\n' "$_sbx_pods" | awk '{print $3}' | grep -c "Running" || true)
+        _sbx_not_running=$(printf '%s\n' "$_sbx_pods" \
+          | awk '$3 != "Running" && $3 != "Completed" {print $1 " (" $3 ")"}' || true)
+        if [[ -z "$_sbx_not_running" ]]; then
+          pass "Pods: ${_sbx_running}/${_sbx_total} running"
+        else
+          warn "Pods: ${_sbx_running}/${_sbx_total} running"
+          while IFS= read -r line; do
+            [[ -n "$line" ]] && fail "  $line"
+          done <<< "$_sbx_not_running"
+          action "KUBECONFIG=${_sbx_kubeconfig} kubectl describe pod <name> -n ${_sandbox_namespace}  (Pending usually means the sandbox node group cannot add a node)"
+        fi
+      fi
     fi
   fi
 fi
