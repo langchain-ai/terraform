@@ -1,6 +1,6 @@
 #------------------------------------------------------------------------------
 # Sandboxes and Engine, named as modules/aws names them (enable_sandboxes,
-# enable_engine), for clusters this module builds or a customer's own.
+# enable_engine), on any cluster.
 #
 # Sandboxes run Firecracker microVMs in a privileged sandbox-host pod on each
 # node in sandbox_hosts: amd64 with /dev/kvm, /dev/net/tun and /dev/fuse, cgroup
@@ -9,7 +9,7 @@
 # filesystem is JuiceFS: metadata in a Redis of its own (AOF, noeviction:
 # durable, unlike the queue Redis) and data in a bucket on the same RustFS.
 # The module labels and taints the sandbox nodes itself, so the same inputs work
-# on a k3s cluster built here and on one the customer runs.
+# on any cluster, whether or not the module installed its add-ons.
 #
 # Engine runs its analysis in those sandboxes, on the deployment it shares with
 # Insights, and needs a TLS hostname the sandboxes can reach (the chart rejects
@@ -61,7 +61,7 @@ variable "engine_intelligence_base_url" {
 
 locals {
   juicefs_bucket = "sandbox-juicefs"
-  # ponytail: JuiceFS Redis at 256Mi is a lab floor, unmeasured; size it from the first sandbox load test.
+  # The JuiceFS Redis's 256Mi is a floor, unmeasured: size it from the first sandbox load test.
   juicefs_size = { cpu_m = 100, mem_mi = 256, lim_cpu_m = 1000, lim_mem_mi = 1024, storage_gi = 5 }
 
   sandbox_problems = compact([

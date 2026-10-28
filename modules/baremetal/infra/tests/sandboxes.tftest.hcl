@@ -1,7 +1,7 @@
 # Plans Sandboxes and Engine against mocked providers: no cluster, no credentials.
-# Run: bash agents/plan-tests.sh modules/baremetal
+# Run: bash scripts/plan-tests.sh modules/baremetal
 #
-# Off by default, so an existing apply changes nothing. On, the module adds the
+# Off by default. On, the module adds the
 # JuiceFS Redis and bucket, the JuiceFS Secret, the sandbox nodes' label and
 # taint, the chart values and the budget's pods, and refuses the combinations
 # the chart or the product would reject later.

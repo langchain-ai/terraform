@@ -49,8 +49,9 @@ module "metallb" {
   source = "./modules/metallb"
   count  = var.install_metallb ? 1 : 0
 
-  chart_version    = var.metallb_chart_version
-  gateway_ip       = var.envoy_gateway_lb_ip
+  chart_version = var.metallb_chart_version
+  # The gateway's pool only for our Envoy; the IP only for our MetalLB: another load balancer cannot serve an address outside its own pools, and the Service would stay <pending>.
+  gateway_ip       = var.install_envoy_gateway ? var.envoy_gateway_lb_ip : ""
   addresses        = var.metallb_addresses
   l2_node_selector = var.metallb_l2_node_selector
   controller_resources = {
@@ -82,7 +83,7 @@ module "envoy_gateway" {
   count  = var.install_envoy_gateway ? 1 : 0
 
   chart_version     = var.envoy_gateway_chart_version
-  load_balancer_ip  = var.envoy_gateway_lb_ip
+  load_balancer_ip  = var.install_metallb ? var.envoy_gateway_lb_ip : ""
   route_timeout     = var.envoy_gateway_route_timeout
   gateway_namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   controller_resources = {

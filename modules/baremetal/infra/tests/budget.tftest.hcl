@@ -1,5 +1,5 @@
 # Plans the budget gate against mocked providers: no cluster, no credentials.
-# Run: bash agents/plan-tests.sh modules/baremetal
+# Run: bash scripts/plan-tests.sh modules/baremetal
 
 mock_provider "kubernetes" {}
 mock_provider "helm" {}

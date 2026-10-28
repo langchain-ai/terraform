@@ -1,7 +1,7 @@
 # Plans the add-on toggles against mocked providers: no cluster, no credentials.
-# Run: bash agents/plan-tests.sh modules/baremetal
+# Run: bash scripts/plan-tests.sh modules/baremetal
 #
-# Defaults must install all four add-ons as before; a cluster that has its own
+# Defaults must install all four add-ons; a cluster that has its own
 # gets none of ours, its StorageClass and Gateway are used instead, and the
 # budget stops counting what we no longer install.
 
@@ -27,7 +27,7 @@ run "defaults_install_every_add_on" {
 
   assert {
     condition     = length(module.metrics_server) == 1 && length(module.local_path) == 1 && length(module.metallb) == 1 && length(module.envoy_gateway) == 1
-    error_message = "By default all four add-ons are installed, as before."
+    error_message = "By default all four add-ons are installed."
   }
 
   assert {
@@ -47,6 +47,8 @@ run "existing_cluster_gets_none_of_ours" {
     storage_class          = "ocs-storagecluster-ceph-rbd"
     existing_gateway       = { name = "corp-gateway", namespace = "gateways" }
     envoy_gateway_lb_ip    = ""
+    metallb_addresses      = []
+    langsmith_domain       = "langsmith.example.com"
     clickhouse_source      = "in-cluster"
   }
 
@@ -86,6 +88,27 @@ run "envoy_off_needs_a_gateway" {
 
   variables {
     install_envoy_gateway = false
+  }
+
+  expect_failures = [terraform_data.platform]
+}
+
+run "without_our_load_balancer_needs_a_domain" {
+  command = plan
+
+  variables {
+    install_metallb   = false
+    metallb_addresses = []
+  }
+
+  expect_failures = [terraform_data.platform]
+}
+
+run "our_metallb_needs_addresses" {
+  command = plan
+
+  variables {
+    metallb_addresses = []
   }
 
   expect_failures = [terraform_data.platform]

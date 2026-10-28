@@ -3,8 +3,8 @@
 # already has its own: a customer's OpenShift, kubeadm or private cloud ships a
 # metrics API, a StorageClass, a load balancer and often a Gateway. Installing
 # ours beside theirs clashes (two local-path provisioners, two MetalLBs on one
-# LAN). Every default is today's behaviour, so an existing apply changes
-# nothing; the moved blocks keep each add-on's state where count now puts it.
+# LAN). Every default installs the add-on; the moved blocks keep each add-on's
+# state where count puts it.
 #------------------------------------------------------------------------------
 
 variable "install_metrics_server" {
@@ -60,6 +60,9 @@ locals {
   platform_problems = compact([
     !var.install_local_path && var.storage_class == "" ? "install_local_path = false needs storage_class" : "",
     !var.install_envoy_gateway && var.existing_gateway == null ? "install_envoy_gateway = false needs existing_gateway" : "",
+    # The URL falls back to the gateway IP, which only our MetalLB serves; an empty hostname renders an HTTPRoute the API server refuses.
+    !(var.install_metallb && var.install_envoy_gateway) && var.langsmith_domain == "" ? "without this module's MetalLB and Envoy Gateway, set langsmith_domain: the gateway's address is not ours to name" : "",
+    var.install_metallb && length(var.metallb_addresses) == 0 ? "install_metallb needs metallb_addresses" : "",
     var.install_envoy_gateway && var.install_metallb && var.envoy_gateway_lb_ip == "" ? "envoy_gateway_lb_ip is required when this module installs both MetalLB and Envoy Gateway" : "",
     var.gateway_tls_secret != "" && !var.install_envoy_gateway ? "gateway_tls_secret is for this module's Envoy Gateway: on existing_gateway, TLS is that Gateway's" : "",
     var.gateway_tls_secret != "" && (var.langsmith_domain == "" || var.langsmith_url_scheme != "https") ? "gateway_tls_secret needs langsmith_domain and langsmith_url_scheme = https" : "",

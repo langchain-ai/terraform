@@ -10,7 +10,8 @@ with LangSmith chart 0.17.x (SmithDB 0.17.33); later versions may differ.
 
 ## Beside ClickHouse: dual ingest and migration
 
-The same inputs as `modules/aws` and `modules/azure`, in `infra/terraform.tfvars`. The defaults are SmithDB-only, the
+The same inputs the cloud modules use (`smithdb_migration_parallelism` as in `modules/azure` and `modules/gcp`; `off` for
+`clickhouse_source` is this module's own value, for its SmithDB-only default), in `infra/terraform.tfvars`. The defaults are SmithDB-only, the
 install this page describes.
 
 | Input | Default | Does |
@@ -22,16 +23,19 @@ install this page describes.
 | `smithdb_query_enabled` | `true` | reads come from SmithDB |
 | `smithdb_migration_parallelism` | `1` | backfill pods at once; the budget counts each |
 
-A migration is one change per stage, each followed by `make apply` and `make deploy`, in the order of the
+Before starting, contact LangChain through the Support Portal, as the install guide's prerequisites ask. A migration
+is one change per stage, each followed by `make apply` and `make deploy`, in the order of the
 [install guide](https://docs.langchain.com/langsmith/self-host-smithdb-install):
 
 1. Customer state: `clickhouse_source = "in-cluster"`, `enable_smithdb = false` and the three gates `false`.
 2. SmithDB up: `enable_smithdb = true`. Wait for every smithdb pod and the metastore migration Job.
 3. Dual write: `smithdb_ingestion_enabled = true`. `/api/v1/info` shows `sdb_ingestion_enabled` true.
 4. Backfill: `smithdb_migration_enabled = true`. Wait for the migration Job to report `Complete`; turning it off
-   earlier deletes TaskDB and the Job's progress.
+   earlier deletes TaskDB, its volume and the Job's progress.
 5. Switch reads: `smithdb_query_enabled = true`, `smithdb_migration_enabled = false`.
-6. ClickHouse off: `clickhouse_source = "off"`. Its data is deleted with the StatefulSet.
+6. Retiring ClickHouse is a separate procedure: contact LangChain through the Support Portal first
+   ([self-host-smithdb-install](https://docs.langchain.com/langsmith/self-host-smithdb-install)). When it says to,
+   `clickhouse_source = "off"` removes the StatefulSet; its volume stays until you delete it ([TEARDOWN.md](TEARDOWN.md)).
 
 A combination the chart refuses (a backfill without ClickHouse, nothing taking writes or reads, a gate without
 SmithDB) fails `terraform plan` with the reason, before anything changes. At `minimum` and `lab` the backfill Job
@@ -119,5 +123,6 @@ So storage and compaction work on a deleted project continue for at least an hou
 
 Traces expire per their tier's TTL, applied by the compaction scheduler. The chart's long-lived retention (400 days by
 default) and SmithDB's own cap (180 days) differ; confirm the effective retention for your version before relying on it.
-The `langsmith-blobs` bucket has no lifecycle rules in this module. Check whether your LangSmith version expects
-bucket lifecycle rules to expire payload blobs; if it does, add them on RustFS (S3 lifecycle API) to match your trace TTLs.
+The `langsmith-blobs` bucket expires `ttl_s/` and `ttl_l/` payloads as the cloud modules do (`blob_storage_ttl_days`,
+14 and 400 days by default); match them to your trace TTLs. The `smithdb` bucket has no lifecycle rules: SmithDB
+manages its own segments.

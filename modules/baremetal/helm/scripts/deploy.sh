@@ -49,10 +49,6 @@ CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 # gateway HTTPRoute, standalone Insights/Polly wiring). Chart 0.18 keeps that
 # layout and only adds keys, so it is accepted too, as on the other providers
 # (#433). Refuse any other line rather than deploy a half-configured release.
-# With blob storage on (the default) the chart is given this module's RustFS as
-# its bucket (helm_values.tf, config.blobStorage). helm#1182, open, has 0.18
-# bundle a RustFS of its own when no bucket is set: recheck when it merges that
-# the one given keeps it from doing so, and that blob storage off is refused.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
 if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
   echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
@@ -301,7 +297,7 @@ pass "helm release applied"
 # Gateway IP, this module's default) the route has no hostnames, like the
 # chart's. Applied with Fleet or Deployments on, removed when both are off.
 if _feature_on fleet || _feature_on deployments; then
-  read -r _streams_host _streams_base _streams_gw < <(_helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all -o json 2>/dev/null \
+  read -r _streams_host _streams_base _streams_gw _streams_gw_ns < <(_helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all -o json 2>/dev/null \
     | python3 -I -c '
 import json, re, sys
 v = json.load(sys.stdin) or {}
@@ -309,9 +305,12 @@ cfg = v.get("config") or {}
 host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", str(cfg.get("hostname") or "").strip(), flags=re.I).rstrip("/")
 dns = re.fullmatch(r"([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z][a-z0-9-]*[a-z0-9]", host, flags=re.I)
 base = "/" + str(cfg.get("basePath") or "").strip("/ ")
-print(host if dns else "-", base if base != "/" else "-", (v.get("gateway") or {}).get("name") or "langsmith-gateway")
+gw = v.get("gateway") or {}
+print(host if dns else "-", base if base != "/" else "-", gw.get("name") or "langsmith-gateway", gw.get("namespace") or "-")
 ' 2>/dev/null) || true
   [[ "${_streams_base:--}" == "-" ]] && _streams_base=""
+  # An existing_gateway lives in its own namespace; without it the route attaches to nothing and apply still succeeds.
+  [[ "${_streams_gw_ns:--}" == "-" ]] && _streams_gw_ns="$NAMESPACE"
   _streams_hostnames=""
   [[ -n "${_streams_host:-}" && "$_streams_host" != "-" ]] && _streams_hostnames="  hostnames:
   - \"${_streams_host}\""
@@ -324,6 +323,7 @@ metadata:
 spec:
   parentRefs:
   - name: ${_streams_gw:-langsmith-gateway}
+    namespace: ${_streams_gw_ns}
 ${_streams_hostnames}
   rules:
   - matches:
@@ -345,7 +345,7 @@ EOF
   then
     pass "HTTPRoute langsmith-fleet-streams: no request timeout on ${_streams_base}/api/v1/fleet and ${_streams_base}/api-host/v2"
   else
-    warn "could not apply HTTPRoute langsmith-fleet-streams; Fleet and Deployments streams keep the Gateway's timeout until it applies: re-run make deploy"
+    warn "could not apply HTTPRoute langsmith-fleet-streams; Fleet and Deployments streams keep the chart route's request timeout until it applies: re-run make deploy"
   fi
 else
   _kubectl delete httproute langsmith-fleet-streams -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true

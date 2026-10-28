@@ -24,7 +24,8 @@ cluster_nodes = {
 # minimum | lab | dev | production | production-large (lab = dev app sizing + SmithDB minimal)
 sizing_profile = "lab"
 
-# Unused addresses on the nodes' subnet, OUTSIDE your DHCP server's pool.
+# Unused addresses on the nodes' subnet, OUTSIDE your DHCP server's pool. Both are
+# needed while install_metallb is true (the default).
 # Envoy Gateway proxy IP (LangSmith front door). MetalLB serves it from its own
 # pool that never auto-assigns, so it must NOT be in metallb_addresses.
 envoy_gateway_lb_ip = "10.20.0.50"
@@ -40,6 +41,32 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # langsmith_admin_email = "admin@example.com"
 # https when TLS terminates in front of the gateway (e.g. a Cloudflare Tunnel).
 # langsmith_url_scheme = "https"
+# A kubernetes.io/tls Secret in the langsmith namespace for langsmith_domain:
+# adds an HTTPS listener on the module's Gateway.
+# gateway_tls_secret = "langsmith-tls"
+
+# ── Optional: trace store (SMITHDB.md; defaults are SmithDB alone) ──────────
+
+# clickhouse_source             = "in-cluster" # the chart's ClickHouse, for a migration
+# enable_smithdb                = true
+# smithdb_ingestion_enabled     = true         # with ClickHouse on: dual ingest
+# smithdb_migration_enabled     = true         # the backfill Job and its TaskDB
+# smithdb_query_enabled         = true
+# smithdb_migration_parallelism = 1
+# smithdb_tier                  = "small"      # minimal | small | medium; empty: from sizing_profile
+# enable_blob_storage           = true         # large payloads to the blob bucket, not Redis
+# blob_storage_min_size_kb      = 20
+# blob_storage_ttl_days         = { short = 14, long = 400 } # expiry of ttl_s/ and ttl_l/
+
+# ── Optional: Sandboxes and Engine (README, "Sandboxes and Engine") ──────────
+
+# enable_sandboxes             = true
+# sandbox_hosts                = ["worker-c"]           # amd64 with KVM, TUN and FUSE; tainted for sandboxes only
+# sandbox_source_cidrs         = ["10.20.0.13/32", "10.42.0.0/16"] # each sandbox node, and the pod CIDR
+# sandbox_juicefs_cache_gi     = 50
+# enable_engine                = true                   # needs Sandboxes, https and langsmith_domain
+# engine_sandbox_tenant_id     = ""                     # required with more than one shared organization
+# engine_intelligence_base_url = "https://beacon.langchain.com/intelligence"
 
 # ── Optional: features (same flags as the cloud modules; all default false) ──
 
@@ -63,6 +90,14 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 
 # ── Optional: platform ────────────────────────────────────────────────────────
 
+# Each false where the cluster already has one.
+# install_metrics_server = false
+# install_metallb        = false
+# install_local_path     = false
+# storage_class          = "my-storage-class"                       # with install_local_path = false
+# install_envoy_gateway  = false
+# existing_gateway       = { name = "my-gateway", namespace = "gateways" } # with install_envoy_gateway = false
+
 # metrics_server_kubelet_insecure_tls = true # false after enabling kubelet serverTLSBootstrap
 # metallb_l2_node_selector            = { "node-role.kubernetes.io/worker" = "" }
 # local_path_node_path                = "/opt/local-path-provisioner"
@@ -73,9 +108,11 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # metrics_server_chart_version = "3.14.0"
 # metallb_chart_version        = "0.16.1"
 # envoy_gateway_chart_version  = "v1.9.2"
+# keda_chart_version           = "2.21.0"
 # local_path_image             = "docker.io/rancher/local-path-provisioner:v0.0.37"
 # local_path_helper_image      = "docker.io/library/busybox:1.37.0"
 # postgres_image               = "docker.io/library/postgres:18.6"
 # redis_image                  = "docker.io/library/redis:7.4.11"
 # rustfs_image                 = "docker.io/rustfs/rustfs:1.0.1"
 # aws_cli_image                = "docker.io/amazon/aws-cli:2.37.8"
+# cloudflared_image            = "docker.io/cloudflare/cloudflared:2026.10.0"

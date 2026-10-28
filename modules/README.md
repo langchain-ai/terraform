@@ -52,7 +52,7 @@ Worked examples of one way to run LangSmith outside the supported providers. Lan
 
 | Directory | Example | Status |
 |---|---|---|
-| `baremetal/` | LangSmith with SmithDB on an existing self-managed Kubernetes cluster (tested on kubeadm): in-cluster load balancing, ingress, storage, Postgres, Redis and S3-compatible storage | Example |
+| `baremetal/` | LangSmith with SmithDB on an existing self-managed Kubernetes cluster (tested on kubeadm and k3s): in-cluster load balancing, ingress, storage, Postgres, Redis and S3-compatible storage | Example |
 
 ## Capabilities
 

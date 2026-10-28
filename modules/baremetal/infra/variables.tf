@@ -221,14 +221,15 @@ variable "metallb_chart_version" {
 
 variable "metallb_addresses" {
   type        = list(string)
-  description = "LoadBalancer IP pool for MetalLB (ranges a.b.c.d-a.b.c.e or CIDRs), outside the router's DHCP pool."
+  description = "LoadBalancer IP pool for MetalLB (ranges a.b.c.d-a.b.c.e or CIDRs), outside the router's DHCP pool. Required with install_metallb."
+  default     = []
 
   validation {
-    condition = length(var.metallb_addresses) > 0 && alltrue([
+    condition = alltrue([
       for a in var.metallb_addresses :
       can(cidrhost(a, 0)) || can(regex("^\\d{1,3}(\\.\\d{1,3}){3}-\\d{1,3}(\\.\\d{1,3}){3}$", a))
     ])
-    error_message = "metallb_addresses needs at least one entry, each a CIDR (10.20.0.48/29) or a range (10.20.0.50-10.20.0.59)."
+    error_message = "Each metallb_addresses entry must be a CIDR (10.20.0.48/29) or a range (10.20.0.50-10.20.0.59)."
   }
 }
 

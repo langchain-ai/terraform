@@ -12,11 +12,13 @@ spec:
         container:
           resources:
             {{- toYaml .Values.proxyResources | nindent 12 }}
+      {{- with .Values.loadBalancerIP }}
       envoyService:
         annotations:
           # MetalLB hands this exact IP to the proxy Service, so DNS can point
-          # at it permanently.
-          metallb.io/loadBalancerIPs: {{ required "loadBalancerIP is required" .Values.loadBalancerIP | quote }}
+          # at it permanently. Set only with our MetalLB.
+          metallb.io/loadBalancerIPs: {{ . | quote }}
+      {{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass

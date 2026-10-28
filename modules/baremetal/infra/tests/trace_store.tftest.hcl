@@ -1,8 +1,7 @@
 # Plans the trace-store inputs against mocked providers: no cluster, no credentials.
-# Run: bash agents/plan-tests.sh modules/baremetal
+# Run: bash scripts/plan-tests.sh modules/baremetal
 #
-# The defaults must leave this module's install exactly as it was (SmithDB-only),
-# and each stage of a ClickHouse to SmithDB migration must give the chart what it
+# The defaults must be SmithDB-only, and each stage of a ClickHouse to SmithDB migration must give the chart what it
 # needs and the budget what it will schedule.
 
 mock_provider "kubernetes" {}
@@ -28,7 +27,7 @@ run "defaults_are_smithdb_only" {
 
   assert {
     condition     = output.smithdb_helm_values.smithdb.enabled && output.smithdb_helm_values.smithdb.langsmith.ingestion.enabled && output.smithdb_helm_values.smithdb.langsmith.query.enabled && !output.smithdb_helm_values.smithdb.langsmith.migration.enabled
-    error_message = "By default SmithDB takes every write and read, with no migration: the install this module made before these inputs."
+    error_message = "By default SmithDB takes every write and read, with no migration: SmithDB alone."
   }
 
   assert {

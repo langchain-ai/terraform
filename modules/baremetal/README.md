@@ -1,10 +1,10 @@
 # Reference example: LangSmith with SmithDB on self-managed Kubernetes
 
-**Status: Example.** Tested on kubeadm. Not a supported deployment path.
+**Status: Example.** Tested on kubeadm and k3s. Not a supported deployment path.
 
 ## What this example is, and what it is not
 
-- It **is** one tested way to run self-hosted LangSmith with SmithDB (no ClickHouse) on an existing Kubernetes cluster,
+- It **is** one tested way to run self-hosted LangSmith with SmithDB (and, for a migration, ClickHouse beside it) on an existing Kubernetes cluster,
   with no cloud provider. Terraform deploys what a cloud would otherwise provide, then Helm installs LangSmith.
 - It is **not** an installer that LangChain supports, and it is **not** a production blueprint. The sizes, IP addresses
   and settings in it are examples to adapt.
@@ -23,7 +23,7 @@
 | S3-compatible storage | one RustFS pod (SmithDB data and payload blobs) | a replicated object store (Ceph RGW, an enterprise S3, AWS S3) |
 | Pod metrics for autoscaling | metrics-server | your cluster's metrics-server |
 | Autoscaling for agent deployments (only with LangSmith Deployments) | KEDA | your cluster's KEDA |
-| TLS | none at the gateway; optional Cloudflare Tunnel | TLS at your load balancer or Gateway |
+| TLS | none by default; an optional HTTPS listener (`gateway_tls_secret`) or Cloudflare Tunnel | TLS at your load balancer or Gateway |
 | Backups | not covered | metastore and bucket backups taken at the same point in time |
 
 What carries over to any Kubernetes deployment, whatever you swap: the Helm values layering, the SmithDB settings
@@ -35,18 +35,16 @@ What carries over to any Kubernetes deployment, whatever you swap: the Helm valu
 | Distribution | Kubernetes | Runtime | CNI | Nodes | Chart | Tested |
 |---|---|---|---|---|---|---|
 | kubeadm on Ubuntu 22.04 | v1.36.5 | containerd 2.4.1 | Calico v3.33.0 | 4 (1 control plane, 3 workers) | langsmith 0.17.11 (app and SmithDB 0.17.38); earlier load tests on 0.17.6 | install, upgrade, deploy, load test, blob offload, an agent deployment |
-| k3s | v1.34.5+k3s1 | containerd (k3s) | flannel (k3s) | 5 (1 amd64 server holding all state, 4 arm64 agents with 16K pages, so SmithDB is pinned to the server) | langsmith 0.17.20 | SmithDB-only install, load to its knee (about 21 traces/s), an hour at 72% of it with every trace stored |
+| k3s | v1.34.5+k3s1 | containerd (k3s) | flannel (k3s) | 5 (1 amd64 server holding all state, 4 arm64 agents with 16K pages, so SmithDB is pinned to the server) | langsmith 0.17.20 | SmithDB-only install, load tests to saturation, an hour's soak with every trace stored, blob expiry applied |
 
-**Plan tests only, not yet run on a cluster:** ClickHouse in the cluster, dual ingest, the backfill and the read
-switch; Sandboxes and Engine; the HTTPS listener; the add-on toggles for a cluster that has its own; the
-`langsmith-fleet-streams` route and the stream timeouts; chart 0.18.
+[What you get](#what-you-get) says, layer by layer, what is proven on a cluster and what by the plan tests only.
 
 Add-ons as tested: MetalLB 0.16.1, Envoy Gateway v1.9.2, metrics-server chart 3.14.0, KEDA 2.21.0.
 
 **Other distributions need changes.** k3s ships servicelb, local-storage and metrics-server by default
 ([packaged components](https://docs.k3s.io/installation/packaged-components)), which collide with the MetalLB, local-path
 and metrics-server this example installs: start k3s with `--disable servicelb --disable local-storage --disable
-metrics-server`, or set `install_metallb`, `install_local_path` and `install_metrics_server` to `false` and use k3s's own. RKE2
+metrics-server --disable traefik` (Traefik would otherwise take a MetalLB address), or keep `--disable traefik` only and set `install_metallb`, `install_local_path` and `install_metrics_server` to `false` to use k3s's own (covered by plan tests, not yet run live). RKE2
 ships its own metrics-server, so the same collision applies there: disable it, or set `install_metrics_server = false`.
 
 ## Architecture
@@ -113,24 +111,30 @@ SmithDB specifics and tuning: [SMITHDB.md](SMITHDB.md). Sizing formulas: [SIZING
 
 ## What you get
 
-| Layer | Component | Managed by |
-|---|---|---|
-| Cluster add-ons | metrics-server (for HPAs), local-path StorageClasses (`local-path`, `local-path-retain`) | Terraform |
-| Load balancing | MetalLB in L2 mode: the gateway IP in its own pool (never auto-assigned), a pool for other Services | Terraform |
-| Ingress | Envoy Gateway (Gateway API): one Gateway, route timeout policy, optional LAN catch-all route | Terraform |
-| Public access (optional) | Cloudflare Tunnel connector (`cloudflared`, 2 replicas) | Terraform |
-| Datastores | Postgres 18 ×2 (LangSmith, SmithDB metastore), Redis 7, RustFS (S3 API) with buckets | Terraform |
-| Secrets | Datastore credentials as Kubernetes Secrets; app secrets in a local `infra/.secrets.env` (mode 600) | Terraform + scripts |
-| Application | LangSmith chart 0.17.x (line-pinned) with SmithDB (ClickHouse disabled) | Helm (`deploy.sh`) |
-| Agent deployments (optional) | KEDA, plus the chart's host-backend, listener and operator | Terraform + Helm |
-| Guardrails | Budget gate: requested CPU/memory checked against your nodes before anything is applied | Terraform |
+One module installs every layer a cloud would provide, and each optional layer is one input. The last column says
+how far each is proven: on a live cluster, or by the plan tests only.
+
+| Layer | What, and the inputs that change it | Managed by | Proven |
+|---|---|---|---|
+| Cluster add-ons | metrics-server (for HPAs), local-path StorageClasses (`local-path`, `local-path-retain`); each skipped when the cluster has its own (`install_metrics_server`, `install_local_path` with `storage_class`) | Terraform | installed: live; skipped: plan tests |
+| Load balancing | MetalLB in L2 mode: the gateway IP in its own pool (never auto-assigned), a pool for other Services; skipped for the cluster's own load balancer (`install_metallb`) | Terraform | installed: live; skipped: plan tests |
+| Ingress | Envoy Gateway (Gateway API): one Gateway, a 60 s request timeout on the chart's route and the LAN route, none on Fleet, Deployments and agent run streams, an optional HTTPS listener (`gateway_tls_secret`); or the cluster's own Gateway (`install_envoy_gateway`, `existing_gateway`), whose listener must allow routes from the `langsmith` namespace and whose timeouts are its own | Terraform + `deploy.sh` | the Gateway: live; HTTPS, an existing Gateway: plan tests; stream routes: not yet run |
+| Public access (optional) | Cloudflare Tunnel connector (`cloudflared`, 2 replicas) | Terraform | plan tests |
+| Datastores | Postgres 18 ×2 (LangSmith, SmithDB metastore), Redis 7, RustFS (S3 API) with buckets, blob storage on by default with the cloud modules' expiry (`blob_storage_ttl_days`). In the cluster only: external Postgres, Redis or object storage are not inputs yet | Terraform | live |
+| Trace store | SmithDB alone by default. For a migration from ClickHouse: the chart's ClickHouse in the cluster, dual ingest, the backfill and the read switch, one Helm change each (`clickhouse_source`, `enable_smithdb`, `smithdb_*_enabled`, [SMITHDB.md](SMITHDB.md)). SmithDB's tier from the load (`smithdb_tier`) | Terraform + Helm | SmithDB alone: live; ClickHouse and the migration steps: plan tests |
+| Secrets | Datastore credentials as Kubernetes Secrets; app secrets in a local `infra/.secrets.env` (mode 600); the first admin's email in `terraform.tfvars` | Terraform + scripts | credentials and the secrets file: live; the email from `terraform.tfvars`: not yet run |
+| Application | LangSmith chart on the 0.17 or 0.18 line (line-pinned) | Helm (`deploy.sh`) | 0.17: live; 0.18: not yet run (`deploy.sh` accepts the line) |
+| Agent deployments (optional) | KEDA, plus the chart's host-backend, listener and operator (`enable_deployments`) | Terraform + Helm | live |
+| Fleet, Insights, Polly, SSO (optional) | the cloud modules' flags (`enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`) | Terraform + Helm | Fleet, Insights, Polly: plan tests; SSO: not yet tested |
+| Sandboxes and Engine (optional) | Sandboxes on KVM nodes, JuiceFS on its own Redis and bucket; Engine on them ([below](#sandboxes-and-engine-optional)) | Terraform + Helm | plan tests |
+| Guardrails | Budget gate: requested CPU, memory and disk checked against your nodes before anything is applied; the `pods` output lists what it counted | Terraform | budget gate: live; `pods` output: plan tests |
 
 ## Assumptions
 
 This module is opinionated. It assumes:
 
 - **A working Kubernetes cluster** you can reach with `kubectl`, with at least three schedulable worker nodes. It doesn't
-  create the cluster. Tested on kubeadm; other distributions need the changes under [Tested](#tested).
+  create the cluster. Tested on kubeadm and k3s; other distributions need the changes under [Tested](#tested).
 - **One Layer 2 network** for the nodes, with unused IP addresses outside your DHCP pool: one for the gateway, and a
   range for MetalLB that doesn't include it.
 - **Node-local storage.** local-path volumes are directories on one node's disk: fast (NVMe recommended), but each volume
@@ -139,10 +143,11 @@ This module is opinionated. It assumes:
   small production. For high availability, run managed or HA services and point the chart at them instead.
 - **Containers can open enough files:** containerd `LimitNOFILE=1048576` on every node (the default soft limit of 1,024
   silently breaks the SmithDB disk cache).
-- **No ClickHouse.** SmithDB is the only trace store.
+- **SmithDB is the trace store.** By default it is the only one; `clickhouse_source = "in-cluster"` adds the chart's
+  ClickHouse for dual ingest and a backfill ([SMITHDB.md](SMITHDB.md)).
 
-Not covered: building the cluster or its OS, TLS on the gateway itself (terminate TLS in front of it, e.g. with the
-Cloudflare Tunnel), backups, multi-cluster or HA setups.
+Not covered: building the cluster or its OS, issuing the certificate (TLS ends at the gateway from a Secret you
+provide, `gateway_tls_secret`, or in front of it, e.g. with the Cloudflare Tunnel), backups, multi-cluster or HA setups.
 
 ## Prerequisites
 
@@ -170,7 +175,7 @@ make init
 make plan                             # read the budget output: requests vs your nodes
 make apply
 
-# 3. App secrets (license key, admin login, generated keys) → infra/.secrets.env
+# 3. App secrets (license key, admin login, generated keys) → infra/.secrets.env (the admin email from tfvars when set)
 make setup-env
 
 # 4. Helm values from Terraform outputs → helm/values/
@@ -210,9 +215,9 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 |---|---|---|
 | `kubeconfig_path`, `kube_context` | yes | the cluster; the context is required so the module never acts on your current context |
 | `cluster_nodes` | yes | node names, allocatable CPU/memory/disk and roles, for the budget gate and optional SmithDB node pools |
-| `envoy_gateway_lb_ip`, `metallb_addresses` | yes | the gateway's IP (its own pool), and a separate range for other LoadBalancer Services |
+| `envoy_gateway_lb_ip`, `metallb_addresses` | with `install_metallb` | the gateway's IP (its own pool, needed when the module also installs Envoy Gateway), and a separate range for other LoadBalancer Services. Without both add-ons ours, `langsmith_domain` is required instead |
 | `sizing_profile` | no (`minimum`) | see above |
-| `langsmith_domain`, `langsmith_url_scheme` | no | hostname and scheme (default `http://<gateway IP>`) |
+| `langsmith_domain`, `langsmith_url_scheme` | without both add-ons ours | hostname and scheme (default `http://<gateway IP>`) |
 | `langsmith_admin_email` | no | the first org admin's email, written to `initialOrgAdminEmail` as on the cloud modules; empty: `make setup-env` asks |
 | `gateway_tls_secret` | no | a `kubernetes.io/tls` Secret in the `langsmith` namespace: adds an HTTPS listener for `langsmith_domain` beside HTTP (needs `langsmith_url_scheme = "https"`) |
 | `clickhouse_source`, `enable_smithdb`, `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, `smithdb_query_enabled`, `smithdb_migration_parallelism` | no (SmithDB only) | the trace store, as the cloud modules name these inputs: ClickHouse in the cluster, dual ingest, the backfill and the read switch, one Helm change each ([SMITHDB.md](SMITHDB.md)) |
@@ -221,7 +226,7 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 | `enable_sandboxes`, `sandbox_hosts`, `sandbox_source_cidrs`, `sandbox_juicefs_cache_gi` | no | Sandboxes on KVM nodes ([below](#sandboxes-and-engine-optional)) |
 | `enable_engine`, `engine_sandbox_tenant_id`, `engine_intelligence_base_url` | no | Engine, on Sandboxes ([below](#sandboxes-and-engine-optional)) |
 | `blob_storage_ttl_days` | no (`{short = 14, long = 400}`) | days before the blob bucket deletes `ttl_s/` and `ttl_l/` payloads, as the cloud modules expire them |
-| `envoy_gateway_route_timeout` | no (`60s`) | request timeout on the chart's route and the LAN route; Envoy's own default of 15 s cuts off slow trace reads. Fleet and Deployments streams have none: with either on, `deploy.sh` applies the `langsmith-fleet-streams` route, and the operator writes no timeout on its agent routes |
+| `envoy_gateway_route_timeout` | no (`60s`) | with this module's Envoy Gateway, the request timeout on the chart's route and the LAN route; Envoy's own default of 15 s cuts off slow trace reads. Fleet and Deployments streams have none: with either on, `deploy.sh` applies the `langsmith-fleet-streams` route, and the operator writes `0s` on its agent routes (`HTTPROUTE_REQUEST_TIMEOUT` in the agent-deploys example values) |
 | `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules |
 | `enable_cloudflare_tunnel` + `TF_VAR_cloudflare_tunnel_token` | no | public HTTPS through a Cloudflare Tunnel |
 | `node_reserved`, `max_request_ratio` | no | budget gate headroom |
@@ -233,7 +238,7 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 
 | File | Source |
 |---|---|
-| `helm/values/values.yaml` | committed base: external Postgres/Redis, ClickHouse off, gateway on |
+| `helm/values/values.yaml` | committed base: external Postgres/Redis, ClickHouse off (the trace-store inputs turn it on), gateway on |
 | `langsmith-values-overrides.yaml` | Terraform output: hostname, gateway |
 | `langsmith-values-admin.yaml` | initial admin email |
 | `langsmith-values-sizing-<profile>.yaml` | copied once from `helm/values/examples/` |
@@ -313,9 +318,6 @@ curl -s -o /dev/null -w '%{http_code}\n' http://<gateway IP>/api/v1/info   # 200
 
 Then send a test trace with the LangSmith SDK (`LANGSMITH_ENDPOINT=http://<gateway IP>/api/v1`) and open it in the UI.
 
-The `pods` output lists every pod the budget counted (name, pool, replicas, cores, GiB, disk), the datastores
-Terraform creates included, so a tool can check where each fits, or compare the module's view with the rendered chart.
-
 ## Repository layout
 
 ```
@@ -323,12 +325,13 @@ modules/baremetal/
 ├── Makefile                       # make help
 ├── README.md, ARCHITECTURE.md, SMITHDB.md, SIZING.md, TROUBLESHOOTING.md, TEARDOWN.md
 ├── infra/                         # Terraform root
-│   ├── main.tf, locals.tf, variables.tf, outputs.tf, helm_values.tf, budget.tf, smithdb_nodes.tf
+│   ├── main.tf, locals.tf, variables.tf, outputs.tf, helm_values.tf, budget.tf, smithdb_nodes.tf,
+│   │   platform.tf, trace_store.tf, sandboxes.tf
 │   ├── terraform.tfvars.example
 │   ├── modules/                   # metrics-server, local-path, metallb, envoy-gateway, cloudflared,
 │   │                              # postgres, redis, rustfs
 │   ├── scripts/                   # setup-env.sh, _common.sh
-│   └── tests/                     # plan tests (mocked providers): bash agents/plan-tests.sh modules/baremetal
+│   └── tests/                     # plan tests (mocked providers): bash scripts/plan-tests.sh modules/baremetal
 └── helm/
     ├── scripts/                   # init-values.sh, deploy.sh
     └── values/                    # values.yaml, examples/, langsmith-values-local.yaml.example

@@ -1,21 +1,22 @@
 #------------------------------------------------------------------------------
 # Trace store: ClickHouse beside SmithDB, and SmithDB's three LangSmith gates.
 #
-# The inputs carry the names modules/aws and modules/azure use
+# The inputs carry the names the cloud modules use
 # (clickhouse_source, enable_smithdb, smithdb_{ingestion,migration,query}_enabled),
-# so a customer moving between a cloud and bare metal sees one set. Defaults keep
-# this module's install as it was: SmithDB-only, no ClickHouse, no migration.
+# so a customer moving between a cloud and bare metal sees one set. The defaults are
+# SmithDB-only: no ClickHouse, no migration.
 #
 # The staged rollout is the one in SMITHDB.md and the SmithDB docs: SmithDB up,
 # dual-write (ingestion on while ClickHouse takes writes too), backfill
-# (migration), switch reads (query), then ClickHouse off. Each stage is one
-# change to these inputs and one make deploy.
+# (migration), switch reads (query). Each stage is one change to these inputs
+# and one make deploy. Retiring ClickHouse afterwards goes through LangChain
+# Support (SMITHDB.md).
 #------------------------------------------------------------------------------
 
 variable "clickhouse_source" {
   type        = string
   default     = "off"
-  description = "ClickHouse for the trace store. off: SmithDB-only, this module's install so far. in-cluster: the chart's ClickHouse StatefulSet on local-path, where customers on ClickHouse start a SmithDB migration from (dev/POC grade: one pod, no replication). An external ClickHouse is not an input yet."
+  description = "ClickHouse for the trace store. off: SmithDB-only, the default. in-cluster: the chart's ClickHouse StatefulSet on local-path, where customers on ClickHouse start a SmithDB migration from (dev/POC grade: one pod, no replication). An external ClickHouse is not an input yet."
 
   validation {
     condition     = contains(["off", "in-cluster"], var.clickhouse_source)
@@ -38,7 +39,7 @@ variable "smithdb_ingestion_enabled" {
 variable "smithdb_migration_enabled" {
   type        = bool
   default     = false
-  description = "The historical backfill Job (ClickHouse to SmithDB), with its chart-managed TaskDB. Needs ClickHouse and SmithDB ingestion. Turning it off deletes TaskDB and the Job's progress, so only after the Job reports Complete."
+  description = "The historical backfill Job (ClickHouse to SmithDB), with its chart-managed TaskDB. Needs ClickHouse and SmithDB ingestion. Turning it off deletes TaskDB, its volume and the Job's progress, so only after the Job reports Complete."
 }
 
 variable "smithdb_query_enabled" {
@@ -50,7 +51,7 @@ variable "smithdb_query_enabled" {
 variable "smithdb_tier" {
   type        = string
   default     = ""
-  description = "SmithDB's resource tier (minimal, small, medium), when the load and not the sizing profile should set it: the SmithDB scale docs give each tier its ingest and query QPS (read per replica, this is what adding replicas buys), and production's medium tier asks 28 cores a query pod whatever the load. Empty: the profile's tier, as before."
+  description = "SmithDB's resource tier (minimal, small, medium), when the load and not the sizing profile should set it: the SmithDB scale docs give each tier its ingest and query QPS, and production's medium tier asks 28 cores a query pod whatever the load. Empty: the sizing profile's tier."
 
   validation {
     condition     = contains(["", "minimal", "small", "medium"], var.smithdb_tier)
@@ -91,7 +92,7 @@ locals {
 
   # The backfill Job and TaskDB. chart: the chart's defaults (0.17.26 values.yaml).
   # minimal (minimum, lab): small enough for a 6-core node.
-  # ponytail: minimal is unmeasured until the first lab backfill; size it from that run's peak.
+  # The minimal sizes are unmeasured: size them from the first backfill's peak.
   smithdb_migration_sizes = {
     minimal = {
       job    = { requests = { cpu = "1", memory = "2Gi", "ephemeral-storage" = "20Gi" }, limits = { cpu = "2", memory = "4Gi", "ephemeral-storage" = "20Gi" } }
