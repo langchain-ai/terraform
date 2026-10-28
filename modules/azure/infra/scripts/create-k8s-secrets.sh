@@ -28,7 +28,7 @@ set -euo pipefail
 #                             namespace: exactly sandbox_service_auth_secret and
 #                             sandbox_callback_signing_jwk, never a copy of
 #                             langsmith-config-secret. Read by the
-#                             langsmith-sandbox chart (serviceAuth.existingSecretName).
+#                             langsmith-sandbox chart (config.existingSecretName).
 #   smithdb-taskdb          — postgres_password for the SmithDB backfill's taskdb,
 #                             when Key Vault holds smithdb-taskdb-password. Read
 #                             through smithdb.migration.taskdb.postgres.auth.
