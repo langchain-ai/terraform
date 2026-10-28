@@ -110,7 +110,7 @@ queue:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
+        cpu: "500m"
         memory: "768Mi"
       limits:
         cpu: "1"
