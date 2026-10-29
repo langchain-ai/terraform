@@ -52,7 +52,7 @@ run "sandboxes_on" {
   }
 
   assert {
-    condition     = toset(keys(kubernetes_node_taint.sandbox_host)) == toset(["worker-2", "worker-3"]) && toset(keys(kubernetes_labels.sandbox_host)) == toset(["worker-2", "worker-3"])
+    condition     = toset(keys(kubernetes_node_taint.sandbox_host)) == toset(["worker-2", "worker-3"]) && toset(keys(kubernetes_labels.sandbox_host)) == toset(["worker-2", "worker-3"]) && alltrue([for t in values(kubernetes_node_taint.sandbox_host) : t.force])
     error_message = "Each sandbox host is labelled and tainted, and no other node."
   }
 
