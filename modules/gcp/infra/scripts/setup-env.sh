@@ -75,8 +75,8 @@ _enable_sandboxes=false
 if _tfvar_is_true "enable_sandboxes"; then
   _enable_sandboxes=true
 fi
-_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode")
-_sandbox_deployment_mode="${_sandbox_deployment_mode:-same_cluster}"
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source")
+_sandbox_runtime_source="${_sandbox_runtime_source:-in-cluster}"
 _region="${_region:-us-west2}"
 
 if [[ -z "$_project_id" ]]; then
@@ -431,7 +431,7 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   # LangSmith are signed with a dedicated secret, never the API key salt.
   # deploy.sh adds it to langsmith-config; Terraform writes it into the sandbox
   # cluster's runtime Secret.
-  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
     _sm_secret "sandbox-service-auth-secret" "TF_VAR_sandbox_service_auth_secret" \
       "openssl rand -hex 32 | tr -d '\n'" "" "true"
   fi

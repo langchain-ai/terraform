@@ -48,7 +48,7 @@ resource "google_compute_subnetwork" "subnet" {
 }
 
 #------------------------------------------------------------------------------
-# Sandbox Subnet (sandbox_deployment_mode = "separate_cluster")
+# Sandbox Subnet (sandbox_runtime_source = "external")
 #------------------------------------------------------------------------------
 # The dedicated sandbox GKE cluster gets its own subnet so firewall rules can
 # tell its nodes apart from LangSmith's: the allow-internal rule below admits

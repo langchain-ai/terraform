@@ -60,7 +60,7 @@ variable "services_cidr" {
 }
 
 #------------------------------------------------------------------------------
-# Sandbox Cluster Subnet (sandbox_deployment_mode = "separate_cluster")
+# Sandbox Cluster Subnet (sandbox_runtime_source = "external")
 #------------------------------------------------------------------------------
 variable "create_sandbox_subnet" {
   description = "Create a second subnet, with its own pods and services ranges, for the dedicated sandbox GKE cluster."

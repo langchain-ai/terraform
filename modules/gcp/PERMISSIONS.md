@@ -132,8 +132,8 @@ The deployment creates the following service accounts and grants. Project-level 
 | `roles/secretmanager.secretAccessor` | Project | `<name_prefix>-langsmith` service account | `enable_gcp_iam_module = true` |
 | `roles/iam.workloadIdentityUser` | `<name_prefix>-langsmith` service account | Each LangSmith Kubernetes service account in `langsmith_namespace` | `enable_gcp_iam_module = true` |
 | `roles/container.defaultNodeServiceAccount`, `roles/monitoring.metricWriter`, `roles/stackdriver.resourceMetadata.writer` | Project | Sandbox node service account | `enable_sandboxes = true` |
-| `roles/storage.objectAdmin` | JuiceFS bucket (`<project>-<name>-jfs`) | Sandbox node service account | `sandbox_deployment_mode = "separate_cluster"` |
-| `roles/container.defaultNodeServiceAccount`, `roles/monitoring.metricWriter`, `roles/stackdriver.resourceMetadata.writer` | Project | Sandbox cluster system node service account (`<name>-sbox-sys`) | `sandbox_deployment_mode = "separate_cluster"` |
+| `roles/storage.objectAdmin` | JuiceFS bucket (`<project>-<name>-jfs`) | Sandbox node service account | `sandbox_runtime_source = "external"` |
+| `roles/container.defaultNodeServiceAccount`, `roles/monitoring.metricWriter`, `roles/stackdriver.resourceMetadata.writer` | Project | Sandbox cluster system node service account (`<name>-sbox-sys`) | `sandbox_runtime_source = "external"` |
 | `roles/storage.objectAdmin` | SmithDB bucket | SmithDB service account | `enable_smithdb = true` |
 | `roles/iam.workloadIdentityUser` | SmithDB service account | The SmithDB Kubernetes service account | `enable_smithdb = true` |
 | `roles/storage.objectViewer` | LangSmith bucket | SmithDB service account | `smithdb_migration_enabled = true` |
@@ -146,7 +146,7 @@ The deployment creates the following service accounts and grants. Project-level 
 
 Three variables reduce what the deployer has to create:
 
-- `enable_gcp_iam_module = false` skips the LangSmith service account, its bucket and project grants, and every Workload Identity binding. Pods then have no GCS access through Workload Identity, so supply bucket credentials another way. This setting cannot be combined with `enable_sandboxes = true` in the default `same_cluster` topology.
+- `enable_gcp_iam_module = false` skips the LangSmith service account, its bucket and project grants, and every Workload Identity binding. Pods then have no GCS access through Workload Identity, so supply bucket credentials another way. This setting cannot be combined with `enable_sandboxes = true` with the default `in-cluster` sandbox runtime.
 - `smithdb_service_account_email` supplies an existing SmithDB service account. Terraform still creates that account's bucket, Workload Identity, and Cloud SQL grants.
 - `gke_node_service_account_email` runs the nodes as an existing service account. Terraform never creates the main node service account; the deployer still needs `iam.serviceAccounts.actAs` on the one named here.
 

@@ -30,7 +30,7 @@
 #   - values/langsmith-values-smithdb.yaml           (if enable_smithdb)
 #   - values/langsmith-values-smithdb-overrides.yaml (if enable_smithdb)
 #   - values/langsmith-sandbox-values-overrides.yaml (langsmith-sandbox chart, if
-#                                                     sandbox_deployment_mode = separate_cluster)
+#                                                     sandbox_runtime_source = external)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -446,8 +446,8 @@ done
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
-_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode=""
-_sandbox_deployment_mode="${_sandbox_deployment_mode:-same_cluster}"
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source=""
+_sandbox_runtime_source="${_sandbox_runtime_source:-in-cluster}"
 SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 SANDBOX_CLUSTER_NAME=""
 SANDBOX_RUNTIME_SECRET_NAME=""
@@ -457,12 +457,12 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
-  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
     # The sandbox cluster calls ${_protocol}://${HOSTNAME}/api, so the name has
     # to resolve to the Envoy Gateway from inside the VPC. langsmith_domain = ""
     # with an internal gateway uses its private IP.
     if [[ -z "$HOSTNAME" || "$HOSTNAME" == "langsmith.example.com" ]]; then
-      echo "ERROR: separate_cluster sandboxes need a LangSmith hostname the sandbox cluster can resolve (now: '${HOSTNAME}')." >&2
+      echo "ERROR: an external sandbox runtime needs a LangSmith hostname the sandbox cluster can resolve (now: '${HOSTNAME}')." >&2
       echo "       Set langsmith_domain to a name that resolves from the VPC, or set langsmith_domain = \"\"" >&2
       echo "       and run deploy.sh once so the gateway IP is known, then re-run init-values." >&2
       exit 1
@@ -578,7 +578,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   fi
 
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (${_sandbox_deployment_mode}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -642,7 +642,7 @@ fi
 
 if [[ "$_tfvars_drive_addons" != "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (${_sandbox_deployment_mode}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -940,7 +940,7 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
 fi
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   # The control plane stays here; the langsmith-sandbox chart runs sandbox-host
   # in the sandbox cluster. The sandbox cluster runs untrusted code, so sandbox
   # service auth uses a dedicated key in langsmith-config (deploy.sh writes it
@@ -949,7 +949,8 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate
   _sandbox_config_block="
 sandboxes:
   enabled: true
-  deploymentMode: separateCluster${_sandbox_service_url_block}
+  external:
+    enabled: true${_sandbox_service_url_block}
   callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
   serviceAuth:
     secretKey: \"sandbox_service_auth_secret\""
@@ -1193,7 +1194,7 @@ YAML
 
 echo "Written: $OUT_FILE"
 
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   # No secrets in this file: Terraform writes both Secrets it names into the
   # sandbox cluster. Its keys are the chart defaults, spelled out because the
   # Secret depends on them.

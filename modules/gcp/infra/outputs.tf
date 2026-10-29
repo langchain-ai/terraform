@@ -141,9 +141,9 @@ output "sandbox_juicefs_redis_instance_name" {
 }
 
 output "sandbox_juicefs_bucket_url" {
-  description = "GCS bucket URL passed to JuiceFS for sandbox object storage: the trace bucket in same_cluster mode, a JuiceFS-only bucket in separate_cluster mode"
+  description = "GCS bucket URL passed to JuiceFS for sandbox object storage: the trace bucket with the in-cluster runtime, a JuiceFS-only bucket with an external runtime"
   value = (
-    local.separate_cluster_sandboxes ? google_storage_bucket.sandbox_juicefs[0].url
+    local.external_sandbox_runtime ? google_storage_bucket.sandbox_juicefs[0].url
     : var.enable_sandboxes ? module.storage.bucket_url : null
   )
 }
@@ -158,29 +158,29 @@ output "sandbox_host_node_service_account_email" {
   value       = var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
 }
 
-output "sandbox_deployment_mode" {
-  description = "Sandbox topology: same_cluster or separate_cluster (null when sandboxes are disabled)"
-  value       = var.enable_sandboxes ? var.sandbox_deployment_mode : null
+output "sandbox_runtime_source" {
+  description = "Sandbox runtime location: in-cluster or external (null when sandboxes are disabled)"
+  value       = var.enable_sandboxes ? var.sandbox_runtime_source : null
 }
 
 output "sandbox_cluster_name" {
-  description = "Dedicated sandbox GKE cluster name (separate_cluster only)"
-  value       = local.separate_cluster_sandboxes ? module.sandbox_gke[0].cluster_name : null
+  description = "Dedicated sandbox GKE cluster name (external runtime only)"
+  value       = local.external_sandbox_runtime ? module.sandbox_gke[0].cluster_name : null
 }
 
 output "sandbox_cluster_location" {
-  description = "Dedicated sandbox GKE cluster location (separate_cluster only)"
-  value       = local.separate_cluster_sandboxes ? module.sandbox_gke[0].location : null
+  description = "Dedicated sandbox GKE cluster location (external runtime only)"
+  value       = local.external_sandbox_runtime ? module.sandbox_gke[0].location : null
 }
 
 output "sandbox_namespace" {
-  description = "Namespace of the langsmith-sandbox release in the sandbox cluster (separate_cluster only)"
-  value       = local.separate_cluster_sandboxes ? var.sandbox_namespace : null
+  description = "Namespace of the langsmith-sandbox release in the sandbox cluster (external runtime only)"
+  value       = local.external_sandbox_runtime ? var.sandbox_namespace : null
 }
 
 output "sandbox_runtime_secret_name" {
-  description = "Secret in the sandbox namespace holding sandbox_service_auth_secret and sandbox_callback_signing_jwk (separate_cluster only)"
-  value       = local.separate_cluster_sandboxes ? var.sandbox_runtime_secret_name : null
+  description = "Secret in the sandbox namespace holding sandbox_service_auth_secret and sandbox_callback_signing_jwk (external runtime only)"
+  value       = local.external_sandbox_runtime ? var.sandbox_runtime_secret_name : null
 }
 
 #------------------------------------------------------------------------------

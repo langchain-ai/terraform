@@ -34,11 +34,11 @@ locals {
     "roles/stackdriver.resourceMetadata.writer",
   ])
 
-  # sandbox_deployment_mode = "separate_cluster": a dedicated sandbox GKE
+  # sandbox_runtime_source = "external": a dedicated sandbox GKE
   # cluster runs the langsmith-sandbox chart; the LangSmith cluster gets none of
   # the same-cluster sandbox pieces.
-  same_cluster_sandboxes     = var.enable_sandboxes && var.sandbox_deployment_mode == "same_cluster"
-  separate_cluster_sandboxes = var.enable_sandboxes && var.sandbox_deployment_mode == "separate_cluster"
+  in_cluster_sandbox_runtime = var.enable_sandboxes && var.sandbox_runtime_source == "in-cluster"
+  external_sandbox_runtime   = var.enable_sandboxes && var.sandbox_runtime_source == "external"
   sandbox_cluster_name       = "${local.base_name}-sbox-gke"
   # GKE system add-ons (kube-dns and friends) cannot tolerate the sandbox-host
   # taint, so the sandbox cluster keeps a small untainted pool for them.
@@ -50,7 +50,7 @@ locals {
   ])
   # One exact chart version (SemVer, optional prerelease) on 0.18 or later.
   # Keep in step with helm/scripts/deploy.sh and the AWS module.
-  separate_cluster_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+  external_runtime_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
 
   # The sandbox ranges must not overlap each other or the LangSmith ranges. Two
   # CIDRs overlap when either one's network address, masked to the other's
@@ -87,7 +87,7 @@ locals {
 
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"
-  # separate_cluster gives JuiceFS its own bucket, so the sandbox node service
+  # An external runtime gives JuiceFS its own bucket, so the sandbox node service
   # account's grant needs no IAM condition and never reaches trace data.
   sandbox_juicefs_bucket_name = "${var.project_id}-${local.base_name}-jfs${local.suffix}"
 

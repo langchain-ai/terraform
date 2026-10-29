@@ -90,7 +90,7 @@ cd terraform/gcp
 ./helm/scripts/uninstall.sh
 ```
 
-**Separate sandbox cluster:** with `sandbox_deployment_mode = "separate_cluster"`, the script first removes the `langsmith-sandbox` release from the sandbox cluster (`$PREFIX-sbox-gke`) and waits for `sandbox-host` to stop, then removes the LangSmith release. Without Terraform outputs it cannot find that cluster: uninstall the runtime there yourself first (`helm uninstall langsmith-sandbox -n langsmith-sandbox --wait`). `terraform destroy` then removes the sandbox cluster, its firewall rules and the JuiceFS bucket (the bucket only when empty, unless `storage_force_destroy = true`).
+**Separate sandbox cluster:** with `sandbox_runtime_source = "external"`, the script first removes the `langsmith-sandbox` release from the sandbox cluster (`$PREFIX-sbox-gke`) and waits for `sandbox-host` to stop, then removes the LangSmith release. Without Terraform outputs it cannot find that cluster: uninstall the runtime there yourself first (`helm uninstall langsmith-sandbox -n langsmith-sandbox --wait`). `terraform destroy` then removes the sandbox cluster, its firewall rules and the JuiceFS bucket (the bucket only when empty, unless `storage_force_destroy = true`).
 
 **Sandboxes and JuiceFS (chart 0.16 releases):** Chart 0.16 ships the JuiceFS CSI driver in the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods. Chart 0.17 has no CSI driver: sandbox-host mounts JuiceFS itself, so these steps find no claims or mount pods and change nothing.
 
@@ -406,9 +406,9 @@ have no `-<suffix>` (for example Cloud SQL is `$PREFIX-pg`).
 | SmithDB metastore | `$PREFIX-smithdb-pg` or `$PREFIX-smithdb-pg-<suffix>` | if enabled |
 | Workload Identity SA | `<name_prefix>-langsmith` | no — **`name_prefix` only, no `environment`** |
 | Sandbox-host node SA | `$PREFIX-sbox-node` | no — only when `enable_sandboxes=true` |
-| Sandbox GKE cluster | `$PREFIX-sbox-gke` | no — only with `sandbox_deployment_mode = "separate_cluster"` |
-| Sandbox cluster system node SA | `$PREFIX-sbox-sys` | no — only with `separate_cluster` |
-| JuiceFS bucket | `$PROJECT_ID-$PREFIX-jfs` or `...-jfs-<suffix>` | if enabled; only with `separate_cluster` |
+| Sandbox GKE cluster | `$PREFIX-sbox-gke` | no — only with `sandbox_runtime_source = "external"` |
+| Sandbox cluster system node SA | `$PREFIX-sbox-sys` | no — only with an external sandbox runtime |
+| JuiceFS bucket | `$PROJECT_ID-$PREFIX-jfs` or `...-jfs-<suffix>` | if enabled; only with an external sandbox runtime |
 | SmithDB SA | `$PREFIX-smithdb-sa` | no — only when `enable_smithdb=true` |
 | Secret Manager (`setup-env.sh`) | `langsmith-$PREFIX-<key>` | no |
 | Secret Manager (`secrets` module) | `$PREFIX-langsmith` | no |
@@ -768,7 +768,7 @@ gcloud iam service-accounts delete "$NAME_PREFIX-langsmith@$PROJECT_ID.iam.gserv
 gcloud iam service-accounts delete "$PREFIX-sbox-node@$PROJECT_ID.iam.gserviceaccount.com" \
   --project "$PROJECT_ID" --quiet 2>/dev/null || true
 
-# Sandbox cluster system pool (sandbox_deployment_mode = "separate_cluster")
+# Sandbox cluster system pool (sandbox_runtime_source = "external")
 gcloud iam service-accounts delete "$PREFIX-sbox-sys@$PROJECT_ID.iam.gserviceaccount.com" \
   --project "$PROJECT_ID" --quiet 2>/dev/null || true
 

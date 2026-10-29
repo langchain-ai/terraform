@@ -1,4 +1,4 @@
-# sandbox_deployment_mode = "separate_cluster": a dedicated sandbox GKE cluster
+# sandbox_runtime_source = "external": a dedicated sandbox GKE cluster
 # in the same VPC. mock_provider means no cloud credentials, no state, and no
 # API calls.
 #
@@ -23,7 +23,7 @@ variables {
   postgres_password = "fixture-not-a-real-secret-Aa1"
 
   enable_sandboxes             = true
-  sandbox_deployment_mode      = "separate_cluster"
+  sandbox_runtime_source       = "external"
   langsmith_helm_chart_version = "0.18.0"
   gateway_load_balancer_type   = "internal"
 
@@ -85,12 +85,12 @@ override_resource {
 
 # ── Separate cluster: what gets created ──────────────────────────────────────
 
-run "separate_cluster_creates_the_sandbox_cluster" {
+run "external_runtime_creates_the_sandbox_cluster" {
   command = plan
 
   assert {
     condition     = length(module.sandbox_gke) == 1
-    error_message = "separate_cluster did not plan the sandbox GKE cluster"
+    error_message = "the external runtime did not plan the sandbox GKE cluster"
   }
   assert {
     condition     = local.sandbox_cluster_name == "ls-prod-sbox-gke"
@@ -106,24 +106,24 @@ run "separate_cluster_creates_the_sandbox_cluster" {
   }
   assert {
     condition     = length(google_service_account.sandbox_host_node) == 1
-    error_message = "separate_cluster did not plan the sandbox-host node service account"
+    error_message = "the external runtime did not plan the sandbox-host node service account"
   }
   assert {
     condition     = length(module.sandbox_juicefs_redis) == 1
-    error_message = "separate_cluster did not plan the JuiceFS Redis"
+    error_message = "the external runtime did not plan the JuiceFS Redis"
   }
   assert {
     condition     = length(time_sleep.wait_for_sandbox_cluster) == 1
-    error_message = "separate_cluster does not wait for the sandbox cluster's API server"
+    error_message = "the external runtime does not wait for the sandbox cluster's API server"
   }
 }
 
-run "separate_cluster_gives_juicefs_its_own_bucket" {
+run "external_runtime_gives_juicefs_its_own_bucket" {
   command = plan
 
   assert {
     condition     = length(google_storage_bucket.sandbox_juicefs) == 1 && google_storage_bucket.sandbox_juicefs[0].name == "langsmith-plan-tests-ls-prod-jfs-a1b2c3d4"
-    error_message = "separate_cluster did not plan the JuiceFS-only bucket <project>-<base>-jfs<suffix>"
+    error_message = "the external runtime did not plan the JuiceFS-only bucket <project>-<base>-jfs<suffix>"
   }
   assert {
     condition     = google_storage_bucket.sandbox_juicefs[0].uniform_bucket_level_access && google_storage_bucket.sandbox_juicefs[0].public_access_prevention == "enforced"
@@ -148,16 +148,16 @@ run "separate_cluster_gives_juicefs_its_own_bucket" {
   # The same-cluster grant reaches into the trace bucket. It must not exist here.
   assert {
     condition     = length(google_storage_bucket_iam_member.sandbox_host_node_juicefs) == 0
-    error_message = "separate_cluster still grants the sandbox node service account on the trace bucket"
+    error_message = "the external runtime still grants the sandbox node service account on the trace bucket"
   }
 }
 
-run "separate_cluster_writes_the_sandbox_cluster_secrets" {
+run "external_runtime_writes_the_sandbox_cluster_secrets" {
   command = plan
 
   assert {
     condition     = length(kubernetes_namespace_v1.sandbox) == 1 && kubernetes_namespace_v1.sandbox[0].metadata[0].name == "langsmith-sandbox"
-    error_message = "separate_cluster did not plan the sandbox namespace"
+    error_message = "the external runtime did not plan the sandbox namespace"
   }
   assert {
     condition = (
@@ -165,7 +165,7 @@ run "separate_cluster_writes_the_sandbox_cluster_secrets" {
       && kubernetes_secret_v1.sandbox_runtime[0].metadata[0].name == "langsmith-sandbox-runtime"
       && kubernetes_secret_v1.sandbox_runtime[0].metadata[0].namespace == "langsmith-sandbox"
     )
-    error_message = "separate_cluster did not plan the runtime Secret in the sandbox namespace"
+    error_message = "the external runtime did not plan the runtime Secret in the sandbox namespace"
   }
 
   # Exactly the two keys the runtime chart reads, with the control plane's
@@ -187,7 +187,7 @@ run "separate_cluster_writes_the_sandbox_cluster_secrets" {
       length(kubernetes_secret_v1.sandbox_juicefs_config) == 1
       && kubernetes_secret_v1.sandbox_juicefs_config[0].metadata[0].namespace == "langsmith-sandbox"
     )
-    error_message = "separate_cluster did not plan the JuiceFS config Secret in the sandbox namespace"
+    error_message = "the external runtime did not plan the JuiceFS config Secret in the sandbox namespace"
   }
   assert {
     condition     = local.sandbox_juicefs_separate_secret_data.storage == "gs" && local.sandbox_juicefs_separate_secret_data.name == "sandbox-juicefs"
@@ -202,11 +202,11 @@ run "separate_cluster_writes_the_sandbox_cluster_secrets" {
   # The LangSmith namespace gets none of it.
   assert {
     condition     = length(kubernetes_secret_v1.sandbox_juicefs_csi_config) == 0
-    error_message = "separate_cluster still writes the JuiceFS config Secret into the LangSmith namespace"
+    error_message = "the external runtime still writes the JuiceFS config Secret into the LangSmith namespace"
   }
 }
 
-run "separate_cluster_firewall" {
+run "external_runtime_firewall" {
   command = plan
 
   assert {
@@ -269,12 +269,12 @@ run "separate_cluster_firewall" {
   }
 }
 
-run "separate_cluster_outputs" {
+run "external_runtime_outputs" {
   command = plan
 
   assert {
-    condition     = output.sandbox_deployment_mode == "separate_cluster" && output.sandbox_namespace == "langsmith-sandbox" && output.sandbox_runtime_secret_name == "langsmith-sandbox-runtime"
-    error_message = "the separate_cluster outputs init-values.sh reads are wrong"
+    condition     = output.sandbox_runtime_source == "external" && output.sandbox_namespace == "langsmith-sandbox" && output.sandbox_runtime_secret_name == "langsmith-sandbox-runtime"
+    error_message = "the external-runtime outputs init-values.sh reads are wrong"
   }
   assert {
     condition     = output.sandbox_cluster_name == "ls-prod-sbox-gke" && output.sandbox_cluster_location == "us-central1"
@@ -284,11 +284,11 @@ run "separate_cluster_outputs" {
 
 # ── Same cluster: unchanged ─────────────────────────────────────────────────
 
-run "same_cluster_plans_no_sandbox_cluster" {
+run "in_cluster_runtime_plans_no_sandbox_cluster" {
   command = plan
 
   variables {
-    sandbox_deployment_mode    = "same_cluster"
+    sandbox_runtime_source     = "in-cluster"
     gateway_load_balancer_type = "external"
   }
 
@@ -305,18 +305,18 @@ run "same_cluster_plans_no_sandbox_cluster" {
       && length(kubernetes_secret_v1.sandbox_runtime) == 0
       && length(kubernetes_secret_v1.sandbox_juicefs_config) == 0
     )
-    error_message = "same_cluster planned a separate-cluster resource"
+    error_message = "the in-cluster runtime planned a separate-cluster resource"
   }
   assert {
     condition = (
       length(google_storage_bucket_iam_member.sandbox_host_node_juicefs) == 1
       && length(kubernetes_secret_v1.sandbox_juicefs_csi_config) == 1
     )
-    error_message = "same_cluster lost its trace-bucket grant or its JuiceFS config Secret"
+    error_message = "the in-cluster runtime lost its trace-bucket grant or its JuiceFS config Secret"
   }
   assert {
-    condition     = output.sandbox_cluster_name == null && output.sandbox_deployment_mode == "same_cluster"
-    error_message = "same_cluster reports a sandbox cluster"
+    condition     = output.sandbox_cluster_name == null && output.sandbox_runtime_source == "in-cluster"
+    error_message = "the in-cluster runtime reports a sandbox cluster"
   }
 }
 
@@ -330,17 +330,17 @@ run "sandboxes_off_plans_no_sandbox_cluster" {
 
   assert {
     condition     = length(module.sandbox_gke) == 0 && length(google_storage_bucket.sandbox_juicefs) == 0 && length(kubernetes_secret_v1.sandbox_runtime) == 0
-    error_message = "sandbox_deployment_mode = separate_cluster planned a sandbox cluster with enable_sandboxes = false"
+    error_message = "sandbox_runtime_source = external planned a sandbox cluster with enable_sandboxes = false"
   }
   assert {
-    condition     = output.sandbox_deployment_mode == null
+    condition     = output.sandbox_runtime_source == null
     error_message = "sandboxes off still reports a sandbox mode"
   }
 }
 
 # ── Separate cluster: guards ─────────────────────────────────────────────────
 
-run "separate_cluster_rejects_the_langsmith_namespace" {
+run "external_runtime_rejects_the_langsmith_namespace" {
   command = plan
 
   variables {
@@ -350,7 +350,7 @@ run "separate_cluster_rejects_the_langsmith_namespace" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_the_default_chart_line" {
+run "external_runtime_rejects_the_default_chart_line" {
   command = plan
 
   variables {
@@ -360,7 +360,7 @@ run "separate_cluster_rejects_the_default_chart_line" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_a_chart_range" {
+run "external_runtime_rejects_a_chart_range" {
   command = plan
 
   variables {
@@ -370,7 +370,7 @@ run "separate_cluster_rejects_a_chart_range" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_a_0_17_chart" {
+run "external_runtime_rejects_a_0_17_chart" {
   command = plan
 
   variables {
@@ -380,7 +380,7 @@ run "separate_cluster_rejects_a_0_17_chart" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_accepts_a_release_candidate" {
+run "external_runtime_accepts_a_release_candidate" {
   command = plan
 
   variables {
@@ -393,7 +393,7 @@ run "separate_cluster_accepts_a_release_candidate" {
   }
 }
 
-run "separate_cluster_rejects_a_short_service_auth_secret" {
+run "external_runtime_rejects_a_short_service_auth_secret" {
   command = plan
 
   variables {
@@ -403,7 +403,7 @@ run "separate_cluster_rejects_a_short_service_auth_secret" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_the_salt_as_service_auth_secret" {
+run "external_runtime_rejects_the_salt_as_service_auth_secret" {
   command = plan
 
   variables {
@@ -413,7 +413,7 @@ run "separate_cluster_rejects_the_salt_as_service_auth_secret" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_requires_the_callback_jwk" {
+run "external_runtime_requires_the_callback_jwk" {
   command = plan
 
   variables {
@@ -423,7 +423,7 @@ run "separate_cluster_requires_the_callback_jwk" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_overlapping_ranges" {
+run "external_runtime_rejects_overlapping_ranges" {
   command = plan
 
   variables {
@@ -435,7 +435,7 @@ run "separate_cluster_rejects_overlapping_ranges" {
 }
 
 # The same CIDR in two variables is the plainest overlap of all.
-run "separate_cluster_rejects_a_range_equal_to_a_langsmith_range" {
+run "external_runtime_rejects_a_range_equal_to_a_langsmith_range" {
   command = plan
 
   variables {
@@ -445,7 +445,7 @@ run "separate_cluster_rejects_a_range_equal_to_a_langsmith_range" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_two_equal_sandbox_ranges" {
+run "external_runtime_rejects_two_equal_sandbox_ranges" {
   command = plan
 
   variables {
@@ -455,7 +455,7 @@ run "separate_cluster_rejects_two_equal_sandbox_ranges" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_overlapping_sandbox_ranges" {
+run "external_runtime_rejects_overlapping_sandbox_ranges" {
   command = plan
 
   variables {
@@ -465,7 +465,7 @@ run "separate_cluster_rejects_overlapping_sandbox_ranges" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_the_langsmith_control_plane_range" {
+run "external_runtime_rejects_the_langsmith_control_plane_range" {
   command = plan
 
   variables {
@@ -475,7 +475,7 @@ run "separate_cluster_rejects_the_langsmith_control_plane_range" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_rejects_an_external_gateway_without_tls" {
+run "external_runtime_rejects_an_external_gateway_without_tls" {
   command = plan
 
   variables {
@@ -486,7 +486,7 @@ run "separate_cluster_rejects_an_external_gateway_without_tls" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "separate_cluster_accepts_an_external_gateway_with_tls" {
+run "external_runtime_accepts_an_external_gateway_with_tls" {
   command = plan
 
   variables {
@@ -505,8 +505,8 @@ run "internal_gateway_requires_the_module_ingress" {
   command = plan
 
   variables {
-    sandbox_deployment_mode = "same_cluster"
-    install_ingress         = false
+    sandbox_runtime_source = "in-cluster"
+    install_ingress        = false
   }
 
   expect_failures = [terraform_data.validate_inputs]
