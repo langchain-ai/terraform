@@ -234,9 +234,16 @@ for attempt in 1 2 3 4 5; do
 done
 
 # A release stuck in pending-* (an interrupted run) blocks upgrades. Don't
-# guess the fix: print it.
-release_status="$(_helm list -a -n "$NAMESPACE" --filter "^${RELEASE_NAME}\$" -o json \
-  | python3 -I -c 'import json,sys; r=json.load(sys.stdin); print(r[0]["status"] if r else "")')"
+# guess the fix: print it. Only "not found" means a first install; any other
+# failure (an unreachable cluster) stops here instead of reading as one.
+release_status=""
+if status_json="$(_helm status "$RELEASE_NAME" -n "$NAMESPACE" -o json 2>/dev/null)"; then
+  release_status="$(python3 -I -c 'import json,sys; print(json.load(sys.stdin)["info"]["status"])' <<<"$status_json")"
+elif ! status_err="$(_helm status "$RELEASE_NAME" -n "$NAMESPACE" 2>&1 >/dev/null)" \
+     && [[ "$status_err" != *"release: not found"* ]]; then
+  fail "helm status $RELEASE_NAME failed: $status_err"
+  exit 1
+fi
 case "$release_status" in
   pending-*|uninstalling)
     fail "release $RELEASE_NAME is $release_status. Check, roll back, then rerun:"
