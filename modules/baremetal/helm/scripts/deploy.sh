@@ -379,22 +379,27 @@ fi
 # ── 4. Rollout ───────────────────────────────────────────────────────────────
 header "Rollout"
 
-# cluster-manager first: ingestion pods fail to start until it answers.
+# Every Deployment the release made, read from the cluster rather than a list kept here: the list
+# missed sandbox-host, Fleet, Insights and Polly, so a chart upgrade reported ready while sandbox-host
+# was still rolling (reed-lab, chart 0.17.33, 2026-10-29). The cluster-manager first: ingestion pods
+# fail to start until it answers.
+if ! release_deployments="$(_kubectl get deployments -n "$NAMESPACE" \
+  -o jsonpath="{range .items[?(@.metadata.annotations.meta\.helm\.sh/release-name==\"$RELEASE_NAME\")]}{.metadata.name}{\"\\n\"}{end}")" \
+  || [[ -z "$release_deployments" ]]; then
+  fail "could not list the Deployments of release $RELEASE_NAME in $NAMESPACE"
+  exit 1
+fi
 deployments=()
-# enable_smithdb = false (ClickHouse alone) renders no SmithDB Deployment to wait for.
-_feature_on smithdb && deployments+=(
-  smithdb-cluster-manager
-  smithdb-ingestion smithdb-query smithdb-compaction smithdb-compaction-worker
-)
-deployments+=(frontend backend platform-backend ingest-queue queue playground ace-backend)
-_feature_on deployments && deployments+=(host-backend listener operator)
+while IFS= read -r dep; do
+  deployments+=("$dep")
+done < <(grep -- '-smithdb-cluster-manager$' <<<"$release_deployments"; grep -v -- '-smithdb-cluster-manager$' <<<"$release_deployments")
 
 all_ready=true
 for dep in "${deployments[@]}"; do
-  if _kubectl rollout status "deployment/$RELEASE_NAME-$dep" -n "$NAMESPACE" --timeout=5m >/dev/null 2>&1; then
-    pass "$RELEASE_NAME-$dep"
+  if _kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=5m >/dev/null 2>&1; then
+    pass "$dep"
   else
-    warn "$RELEASE_NAME-$dep not ready within 5m"
+    warn "$dep not ready within 5m"
     all_ready=false
   fi
 done
