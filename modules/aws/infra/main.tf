@@ -89,27 +89,27 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition = !local.separate_cluster_sandboxes || (
+      condition = !local.external_sandbox_runtime || (
         length(var.sandbox_service_auth_secret) >= 32 && var.sandbox_callback_signing_jwk != ""
       )
-      error_message = "separate_cluster sandboxes require sandbox_service_auth_secret (at least 32 characters) and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
+      error_message = "sandbox_runtime_source = \"external\" requires sandbox_service_auth_secret (at least 32 characters) and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
     }
 
     # The sandbox cluster runs untrusted code, so its service-auth secret must
     # not be the API key salt, which also backs LangSmith's own service auth.
     # The chart cannot compare the two when they live in an existing Secret.
     precondition {
-      condition     = !local.separate_cluster_sandboxes || var.sandbox_service_auth_secret != var.langsmith_api_key_salt
+      condition     = !local.external_sandbox_runtime || var.sandbox_service_auth_secret != var.langsmith_api_key_salt
       error_message = "sandbox_service_auth_secret must differ from langsmith_api_key_salt: the separate sandbox cluster must not hold the API key salt. Delete the sandbox-service-auth-secret SSM parameter, unset TF_VAR_sandbox_service_auth_secret, and re-run: source ./scripts/setup-env.sh."
     }
 
-    # separateCluster ships with chart 0.18, and deploy.sh picks the runtime
+    # sandboxes.external ships with chart 0.18, and deploy.sh picks the runtime
     # chart by this chart's appVersion, so the pin must be one exact version on
     # 0.18 or later: not empty (the 0.17 line) and not a range. deploy.sh checks
     # the same rule, since a CHART_VERSION environment variable overrides this.
     precondition {
-      condition     = !local.separate_cluster_sandboxes || can(regex(local.separate_cluster_chart_version_pattern, var.langsmith_helm_chart_version))
-      error_message = "sandbox_deployment_mode = \"separate_cluster\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
+      condition     = !local.external_sandbox_runtime || can(regex(local.external_runtime_chart_version_pattern, var.langsmith_helm_chart_version))
+      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
     }
 
     # Separate-cluster sandboxes call the LangSmith API through the ALB. With an
@@ -119,12 +119,12 @@ resource "terraform_data" "validate_inputs" {
     # plan time rather than letting sandboxes come up unable to register.
     precondition {
       condition = (
-        !local.separate_cluster_sandboxes
+        !local.external_sandbox_runtime
         || var.alb_scheme == "internal"
         || local.alb_allowlist_is_open
         || var.sandbox_alb_allow_nat_egress
       )
-      error_message = "separate_cluster sandboxes cannot reach the LangSmith API: alb_scheme is 'internet-facing' and alb_allowed_cidr_blocks is narrowed, so the sandbox cluster's callback (which egresses via the NAT gateway) is blocked. Preferred fix: set alb_scheme = 'internal'. Otherwise add your NAT egress address to alb_allowed_cidr_blocks, or set sandbox_alb_allow_nat_egress = true to add it automatically — note that this grants ALB access to everything sharing the NAT gateway, including untrusted sandbox code."
+      error_message = "with sandbox_runtime_source = \"external\", sandboxes cannot reach the LangSmith API: alb_scheme is 'internet-facing' and alb_allowed_cidr_blocks is narrowed, so the sandbox cluster's callback (which egresses via the NAT gateway) is blocked. Preferred fix: set alb_scheme = 'internal'. Otherwise add your NAT egress address to alb_allowed_cidr_blocks, or set sandbox_alb_allow_nat_egress = true to add it automatically — note that this grants ALB access to everything sharing the NAT gateway, including untrusted sandbox code."
     }
 
     precondition {
@@ -136,8 +136,8 @@ resource "terraform_data" "validate_inputs" {
     # hostname allowed. locals.firewall_allowed_fqdns appends it automatically,
     # which is only possible when the hostname is known.
     precondition {
-      condition     = !local.separate_cluster_sandboxes || !var.create_firewall || var.langsmith_domain != ""
-      error_message = "separate_cluster sandboxes with create_firewall = true require langsmith_domain, so the sandbox cluster's callback to the LangSmith API can be added to the Network Firewall allowlist. Without it the callback is dropped as unmatched egress."
+      condition     = !local.external_sandbox_runtime || !var.create_firewall || var.langsmith_domain != ""
+      error_message = "sandbox_runtime_source = \"external\" with create_firewall = true require langsmith_domain, so the sandbox cluster's callback to the LangSmith API can be added to the Network Firewall allowlist. Without it the callback is dropped as unmatched egress."
     }
 
     precondition {
@@ -347,7 +347,7 @@ module "eks" {
 
 module "sandbox_eks" {
   source = "./modules/sandbox-eks"
-  count  = local.separate_cluster_sandboxes ? 1 : 0
+  count  = local.external_sandbox_runtime ? 1 : 0
 
   cluster_name                = local.sandbox_cluster_name
   cluster_version             = var.eks_cluster_version
@@ -372,7 +372,7 @@ module "sandbox_eks" {
 #     module's node-to-node ephemeral-port rule covers this today; this rule
 #     states the requirement so it does not depend on that default.
 resource "aws_vpc_security_group_ingress_rule" "sandbox_host_from_langsmith" {
-  count = local.separate_cluster_sandboxes ? 1 : 0
+  count = local.external_sandbox_runtime ? 1 : 0
 
   security_group_id            = module.sandbox_eks[0].node_security_group_id
   referenced_security_group_id = module.eks.node_security_group_id
@@ -385,7 +385,7 @@ resource "aws_vpc_security_group_ingress_rule" "sandbox_host_from_langsmith" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "sandbox_host_from_sandbox_nodes" {
-  count = local.separate_cluster_sandboxes ? 1 : 0
+  count = local.external_sandbox_runtime ? 1 : 0
 
   security_group_id            = module.sandbox_eks[0].node_security_group_id
   referenced_security_group_id = module.sandbox_eks[0].node_security_group_id
@@ -591,7 +591,7 @@ resource "aws_iam_role_policy" "langsmith_bedrock" {
 # sandboxHost.serviceAccount.name, so the chart cannot drift away from the
 # trust policy and leave IRSA silently failing at runtime.
 resource "aws_iam_role" "sandbox_host" {
-  count = local.separate_cluster_sandboxes ? 1 : 0
+  count = local.external_sandbox_runtime ? 1 : 0
 
   name = "${local.sandbox_cluster_name}-irsa-role"
 
@@ -621,7 +621,7 @@ resource "aws_iam_role" "sandbox_host" {
 # so naming the role there with whole-bucket access would undo this scoping.
 # Same account, so this identity policy alone grants the access.
 resource "aws_iam_role_policy" "sandbox_host_s3" {
-  count = local.separate_cluster_sandboxes ? 1 : 0
+  count = local.external_sandbox_runtime ? 1 : 0
 
   name = "sandbox-juicefs-s3-access"
   role = aws_iam_role.sandbox_host[0].name
@@ -976,7 +976,7 @@ module "k8s_bootstrap" {
 }
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
-  count = local.same_cluster_sandboxes ? 1 : 0
+  count = local.in_cluster_sandbox_runtime ? 1 : 0
 
   metadata {
     name      = var.sandbox_juicefs_csi_config_secret_name
@@ -999,7 +999,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
 resource "kubernetes_namespace_v1" "sandbox" {
   provider = kubernetes.sandbox
-  count    = local.separate_cluster_sandboxes ? 1 : 0
+  count    = local.external_sandbox_runtime ? 1 : 0
 
   metadata {
     name = var.sandbox_namespace
@@ -1028,7 +1028,7 @@ locals {
 # sandbox_runtime_secret_revision to rewrite it.
 resource "kubernetes_secret_v1" "sandbox_runtime" {
   provider = kubernetes.sandbox
-  count    = local.separate_cluster_sandboxes ? 1 : 0
+  count    = local.external_sandbox_runtime ? 1 : 0
 
   metadata {
     name      = var.sandbox_runtime_secret_name
@@ -1044,7 +1044,7 @@ resource "kubernetes_secret_v1" "sandbox_runtime" {
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_config" {
   provider = kubernetes.sandbox
-  count    = local.separate_cluster_sandboxes ? 1 : 0
+  count    = local.external_sandbox_runtime ? 1 : 0
 
   metadata {
     name      = var.sandbox_juicefs_csi_config_secret_name

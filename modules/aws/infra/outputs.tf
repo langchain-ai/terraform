@@ -53,32 +53,32 @@ output "get_credentials_command" {
 
 output "sandbox_cluster_name" {
   description = "Dedicated sandbox EKS cluster name when separate-cluster mode is enabled"
-  value       = local.separate_cluster_sandboxes ? module.sandbox_eks[0].cluster_name : null
+  value       = local.external_sandbox_runtime ? module.sandbox_eks[0].cluster_name : null
 }
 
 output "sandbox_get_credentials_command" {
   description = "Command to update kubeconfig for the dedicated sandbox cluster"
-  value       = local.separate_cluster_sandboxes ? "aws eks update-kubeconfig --name ${module.sandbox_eks[0].cluster_name} --region ${var.region}" : null
+  value       = local.external_sandbox_runtime ? "aws eks update-kubeconfig --name ${module.sandbox_eks[0].cluster_name} --region ${var.region}" : null
 }
 
 output "sandbox_irsa_role_arn" {
   description = "IRSA role used by sandbox-host in the dedicated sandbox cluster"
-  value       = local.separate_cluster_sandboxes ? aws_iam_role.sandbox_host[0].arn : null
+  value       = local.external_sandbox_runtime ? aws_iam_role.sandbox_host[0].arn : null
 }
 
 output "sandbox_node_security_group_id" {
   description = "Security group on the dedicated sandbox cluster's nodes. With alb_existing_security_group_id, allow it on the ALB's HTTP/HTTPS ports so sandbox-host can reach the LangSmith API."
-  value       = local.separate_cluster_sandboxes ? module.sandbox_eks[0].node_security_group_id : null
+  value       = local.external_sandbox_runtime ? module.sandbox_eks[0].node_security_group_id : null
 }
 
 output "sandbox_namespace" {
   description = "Namespace containing the standalone sandbox runtime"
-  value       = local.separate_cluster_sandboxes ? var.sandbox_namespace : null
+  value       = local.external_sandbox_runtime ? var.sandbox_namespace : null
 }
 
 output "sandbox_service_account_name" {
   description = "ServiceAccount trusted by the sandbox IRSA role. init-values.sh writes this into sandboxHost.serviceAccount.name so the chart matches the role trust policy."
-  value       = local.separate_cluster_sandboxes ? var.sandbox_service_account_name : null
+  value       = local.external_sandbox_runtime ? var.sandbox_service_account_name : null
 }
 
 #------------------------------------------------------------------------------
@@ -131,7 +131,7 @@ output "sandbox_juicefs_csi_config_secret_name" {
 
 output "sandbox_runtime_secret_name" {
   description = "Minimal service-auth Secret used by the standalone sandbox runtime"
-  value       = local.separate_cluster_sandboxes ? var.sandbox_runtime_secret_name : null
+  value       = local.external_sandbox_runtime ? var.sandbox_runtime_secret_name : null
 }
 
 output "sandbox_juicefs_redis_name" {

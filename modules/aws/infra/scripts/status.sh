@@ -45,8 +45,8 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _ch_source=$(_read_tfvar clickhouse_source)
   _sandbox_mode=""
   if _tfvar_is_true "enable_sandboxes"; then
-    _sandbox_mode=$(_read_tfvar sandbox_deployment_mode) || _sandbox_mode=""
-    _sandbox_mode="${_sandbox_mode:-same_cluster}"
+    _sandbox_mode=$(_read_tfvar sandbox_runtime_source) || _sandbox_mode=""
+    _sandbox_mode="${_sandbox_mode:-in-cluster}"
   fi
 
   if [[ -n "$_name_prefix" && -n "$_environment" && -n "$_region" ]]; then
@@ -93,7 +93,7 @@ if _tfvar_is_true "enable_sandboxes"; then
              TF_VAR_sandbox_callback_signing_jwk; do
     _check_var "$var" || _env_ok=false
   done
-  if [[ "$(_parse_tfvar "sandbox_deployment_mode" || true)" == "separate_cluster" ]]; then
+  if [[ "$(_parse_tfvar "sandbox_runtime_source" || true)" == "external" ]]; then
     _check_var TF_VAR_sandbox_service_auth_secret || _env_ok=false
   fi
 fi
@@ -146,7 +146,7 @@ else
       sandbox-juicefs-redis-auth-token
       sandbox-callback-signing-jwk
     )
-    if [[ "$(_parse_tfvar "sandbox_deployment_mode" || true)" == "separate_cluster" ]]; then
+    if [[ "$(_parse_tfvar "sandbox_runtime_source" || true)" == "external" ]]; then
       _required_params+=(sandbox-service-auth-secret)
     fi
   fi
@@ -238,14 +238,14 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"cluster_name"'; then
   [[ -n "$_alb_dns" ]]      && info "ALB DNS: ${_alb_dns}"             || warn "No alb_dns_name output"
   [[ -n "$_langsmith_url" ]] && info "LangSmith URL: ${_langsmith_url}"
   info "Services: postgres=${_pg_source:-?}  redis=${_redis_source:-?}  tls=${_tls_source:-?}"
-  if [[ "${_sandbox_mode:-}" == "separate_cluster" ]]; then
+  if [[ "${_sandbox_mode:-}" == "external" ]]; then
     # -raw fails on a null output, which leaves the name empty.
     _sandbox_cluster_name=$(_terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || _sandbox_cluster_name=""
     _sandbox_namespace=$(_terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace=""
     if [[ -n "$_sandbox_cluster_name" ]]; then
       info "Sandbox EKS cluster: ${_sandbox_cluster_name} (section 10)"
     else
-      warn "No sandbox_cluster_name output, although sandbox_deployment_mode = separate_cluster"
+      warn "No sandbox_cluster_name output, although sandbox_runtime_source = external"
       action "make apply"
     fi
   fi
@@ -466,7 +466,7 @@ else
   fi
 fi
 
-# ── Sandbox runtime (separate_cluster) ──────────────────────────────────────
+# ── Sandbox runtime (external runtime) ──────────────────────────────────────
 if [[ -n "${_sandbox_cluster_name:-}" ]]; then
   header "10. Sandbox Runtime (${_sandbox_cluster_name})"
   _sandbox_namespace="${_sandbox_namespace:-langsmith-sandbox}"

@@ -43,9 +43,9 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
-# separate_cluster sandboxes use a dedicated service-auth secret. setup-env.sh
+# An external sandbox runtime uses a dedicated service-auth secret. setup-env.sh
 # creates its SSM parameter under the same gate, so keep the two identical.
-_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: Could not read name_prefix from $INFRA_DIR/terraform.tfvars" >&2
@@ -161,7 +161,7 @@ $(if [[ "$_enable_sandboxes" == "true" ]]; then cat <<SEOF
         key: ${_ssm_prefix}/sandbox-callback-signing-jwk
 SEOF
 fi)
-$(if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then cat <<SAEOF
+$(if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then cat <<SAEOF
     - secretKey: sandbox_service_auth_secret
       remoteRef:
         key: ${_ssm_prefix}/sandbox-service-auth-secret

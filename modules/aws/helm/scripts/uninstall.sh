@@ -75,12 +75,12 @@ _force_clear_stuck_pods() {
 # strands JuiceFS mount pods on juicefs.com/finalizer. Both inputs are now
 # optional: when they resolve, the script retargets kubeconfig itself; when they
 # do not, it uses the active kubectl context and names it in the confirmation.
-_environment=""; _name_prefix=""; _region="${AWS_REGION:-}"; _sandbox_deployment_mode="same_cluster"
+_environment=""; _name_prefix=""; _region="${AWS_REGION:-}"; _sandbox_runtime_source="in-cluster"
 if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
   _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
   _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
-  _sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
+  _sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
   echo "Resolved from terraform.tfvars:"
   echo "  name_prefix  = ${_name_prefix:-(empty)}"
   echo "  environment  = ${_environment:-(empty)}"
@@ -97,7 +97,7 @@ _sandbox_cluster_name=""
 _sandbox_namespace="langsmith-sandbox"
 if [[ -n "$_region" ]]; then
   _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || _cluster_name=""
-  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
     _sandbox_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || _sandbox_cluster_name=""
     _sandbox_namespace=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace="langsmith-sandbox"
   fi
@@ -125,8 +125,8 @@ if [[ -n "$_sandbox_cluster_name" ]]; then
   echo "This will first remove, from sandbox cluster '$_sandbox_cluster_name':"
   echo "  - Helm release '$SANDBOX_RELEASE_NAME' from namespace '$_sandbox_namespace'"
   echo ""
-elif [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
-  echo "WARNING: sandbox_deployment_mode = separate_cluster, but Terraform output has no sandbox"
+elif [[ "$_sandbox_runtime_source" == "external" ]]; then
+  echo "WARNING: sandbox_runtime_source = external, but Terraform output has no sandbox"
   echo "         cluster name, so this run cannot remove the '$SANDBOX_RELEASE_NAME' release."
   echo "         Uninstall it from the sandbox cluster first (helm uninstall $SANDBOX_RELEASE_NAME"
   echo "         -n <namespace> --wait), or answer N, unless that cluster is already gone."
@@ -151,7 +151,7 @@ if [[ "$_confirm" != "y" && "$_confirm" != "Y" ]]; then
 fi
 echo ""
 
-# ── Sandbox runtime first (separate_cluster) ──────────────────────────────────
+# ── Sandbox runtime first (external runtime) ──────────────────────────────────
 # The runtime goes before the langsmith release that drives it, the reverse of
 # the install order. Subshell: the sandbox cluster's kubeconfig export ends with
 # it, so the steps below still target the LangSmith cluster. The runtime chart

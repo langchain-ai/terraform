@@ -83,7 +83,7 @@ cd aws/helm
 DELETE_DATA_PVCS=true ./scripts/uninstall.sh
 ```
 
-**Separate sandbox cluster:** with `sandbox_deployment_mode = "separate_cluster"`, the script first uninstalls the `langsmith-sandbox` release from the sandbox cluster (the `sandbox_cluster_name` output), then removes the `langsmith` release, the reverse of the install order. If Terraform output cannot name the sandbox cluster, the script says so before it asks to proceed; uninstall the runtime from that cluster yourself first:
+**Separate sandbox cluster:** with `sandbox_runtime_source = "external"`, the script first uninstalls the `langsmith-sandbox` release from the sandbox cluster (the `sandbox_cluster_name` output), then removes the `langsmith` release, the reverse of the install order. If Terraform output cannot name the sandbox cluster, the script says so before it asks to proceed; uninstall the runtime from that cluster yourself first:
 
 ```bash
 aws eks update-kubeconfig --name <name_prefix>-<environment>-sandbox-eks --region <region>
@@ -227,7 +227,7 @@ Terraform will destroy in dependency order:
 - ALB (pre-provisioned)
 - IAM roles (IRSA, ESO, Engine)
 - EKS node groups and cluster
-- With sandboxes: the JuiceFS ElastiCache store; with `separate_cluster`, also the sandbox EKS cluster and its node group, the sandbox IAM role, and the Secrets in the sandbox namespace
+- With sandboxes: the JuiceFS ElastiCache store; with an external sandbox runtime, also the sandbox EKS cluster and its node group, the sandbox IAM role, and the Secrets in the sandbox namespace
 - VPC, subnets, NAT gateway, route tables
 
 ### Customer-supplied security groups in a Terraform-created VPC
@@ -263,7 +263,7 @@ export TF_VAR_redis_auth_token=$(openssl rand -hex 16)
 Replace `<name_prefix>` with your value from `terraform.tfvars`.
 
 ```bash
-# Neither <name_prefix>-<environment>-eks nor, with separate_cluster, <name_prefix>-<environment>-sandbox-eks
+# Neither <name_prefix>-<environment>-eks nor, with an external runtime, <name_prefix>-<environment>-sandbox-eks
 aws eks list-clusters --region <region>
 aws rds describe-db-instances \
   --query "DBInstances[?contains(DBInstanceIdentifier, '<name_prefix>')].[DBInstanceIdentifier,DBInstanceStatus]" \
@@ -345,7 +345,7 @@ Same as Option A, but since there's no Terraform to clean up k8s-bootstrap resou
 1. Delete ingress resources *before* uninstalling the ALB controller
 2. Uninstall KEDA *after* deleting namespaces that contain ScaledObjects, OR delete ScaledObjects first
 
-With a separate sandbox cluster (`sandbox_deployment_mode = "separate_cluster"`), remove the runtime from it first. `uninstall.sh` cannot find that cluster without Terraform output:
+With a separate sandbox cluster (`sandbox_runtime_source = "external"`), remove the runtime from it first. `uninstall.sh` cannot find that cluster without Terraform output:
 
 ```bash
 aws eks update-kubeconfig --name $PREFIX-sandbox-eks --region $REGION

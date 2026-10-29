@@ -355,8 +355,8 @@ table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
 |-----------|-------------------------------|
 | ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
 | Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
-| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR. With `sandbox_deployment_mode = "separate_cluster"`, admit the LangSmith node security group (and the bastion's) instead of the VPC CIDR, which also contains the sandbox nodes |
-| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR. With `separate_cluster`, the same narrowing as Postgres |
+| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR. With `sandbox_runtime_source = "external"`, admit the LangSmith node security group (and the bastion's) instead of the VPC CIDR, which also contains the sandbox nodes |
+| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR. With an external sandbox runtime, the same narrowing as Postgres |
 | SmithDB metastore (RDS) | See below. This one component can have its ingress rule managed by Terraform |
 
 ### The one exception: SmithDB's metastore security group
@@ -432,13 +432,13 @@ kubectl get pods -n kube-system
 
 ```hcl
 enable_sandboxes        = true
-sandbox_deployment_mode = "separate_cluster"
+sandbox_runtime_source = "external"
 sandbox_namespace       = "langsmith-sandbox"
 
 langsmith_helm_chart_version = "0.18.0" # exact, 0.18 or later
 ```
 
-`separate_cluster` needs chart 0.18 or later, pinned to one exact version: the default 0.17 line has no separate-cluster support, and the runtime chart is paired with that exact chart (see [Versions](#versions)). `terraform plan` and `make deploy` both reject anything else.
+An external sandbox runtime needs chart 0.18 or later, pinned to one exact version: the default 0.17 line has no separate-cluster support, and the runtime chart is paired with that exact chart (see [Versions](#versions)). `terraform plan` and `make deploy` both reject anything else.
 
 Terraform then creates a second EKS cluster in the same VPC and private subnets, with only the KVM-capable sandbox node group. Around it, Terraform creates:
 
@@ -451,7 +451,7 @@ The S3 bucket and the dedicated `noeviction` ElastiCache metadata store remain s
 #### Network
 
 - **TCP 19190 into the sandbox nodes** comes from two sources only, both named by security group: the LangSmith cluster's node security group (where `platform-backend` and `ingest-queue` run; pod ENIs carry the same group, with custom networking too) and the sandbox nodes themselves, which forward ingress requests, dial sandbox links and send live-migration streams to each other on that port. Nothing else opens 19190.
-- **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, or the traffic would leave a network you trust, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
+- **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, or the traffic would leave a network you trust, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.external.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
 - **Sandbox nodes reach the LangSmith API** at the runtime chart's `config.endpoint` (`<config.hostname>[/<basePath>]/api`) through the ALB. With `alb_scheme = "internal"` Terraform adds an ALB rule for the sandbox node security group. With an internet-facing ALB the call leaves through the NAT gateway, so a narrowed `alb_allowed_cidr_blocks` must admit the NAT address (see `sandbox_alb_allow_nat_egress` in `terraform.tfvars.example`); `terraform plan` fails otherwise. With `alb_existing_security_group_id`, Terraform writes no rules on your group: allow the `sandbox_node_security_group_id` output on the ALB's ports yourself. With `create_firewall = true`, `langsmith_domain` is added to the allowed FQDNs.
 - **Sandbox nodes reach Redis and S3** inside the VPC: the JuiceFS Redis admits the VPC CIDR, and S3 goes through the VPC gateway endpoint.
 - **Sandbox nodes cannot reach the LangSmith Postgres or Redis.** The sandbox nodes share the private subnets, so in this mode the RDS and ElastiCache security groups admit the LangSmith node security group (which pod ENIs carry, with custom networking too) and the bastion's, not the VPC CIDR. Other clients in the VPC lose access to those databases in this mode. If one needs them, supply your own groups with `postgres_existing_security_group_id` and `redis_existing_security_group_id`; Terraform writes no rules on those, so keep the sandbox nodes out of them.
@@ -465,7 +465,7 @@ The runtime Secret (`sandbox_runtime_secret_name`, default `langsmith-sandbox-ru
 | `sandbox_service_auth_secret` | A dedicated sandbox service-auth secret, identical to `sandbox_service_auth_secret` in `langsmith-config`. It is never the API key salt: `api_key_salt` also signs LangSmith's own service calls, and the sandbox cluster runs untrusted code. |
 | `sandbox_callback_signing_jwk` | The callback-signing JWK, identical to the one in `langsmith-config`. |
 
-With `sandbox_deployment_mode = "separate_cluster"`, `setup-env.sh` generates the service-auth secret (64 hex characters) into the SSM parameter `sandbox-service-auth-secret`, `apply-eso.sh` syncs it into `langsmith-config` as `sandbox_service_auth_secret`, and `init-values.sh` sets `sandboxes.serviceAuth.secretKey: sandbox_service_auth_secret` in the LangSmith values. `same_cluster` creates none of this and keeps the chart default, `api_key_salt`.
+With `sandbox_runtime_source = "external"`, `setup-env.sh` generates the service-auth secret (64 hex characters) into the SSM parameter `sandbox-service-auth-secret`, `apply-eso.sh` syncs it into `langsmith-config` as `sandbox_service_auth_secret`, and `init-values.sh` sets `sandboxes.serviceAuth.secretKey: sandbox_service_auth_secret` in the LangSmith values. The in-cluster runtime creates none of this and keeps the chart default, `api_key_salt`.
 
 Terraform writes both runtime keys from `TF_VAR_sandbox_service_auth_secret` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. `terraform plan` fails if the service-auth secret is missing, shorter than 32 characters, or equal to the API key salt.
 
@@ -492,9 +492,9 @@ helm search repo langchain/langsmith-sandbox --versions --devel -o json \
 
 #### One runtime per install
 
-Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.deploymentMode: separateCluster`. Two runtimes reporting to one install merge into one host pool and stop each other's sandboxes. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
+Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.external.enabled: true`. Two runtimes reporting to one install merge into one host pool and stop each other's sandboxes. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
 
-To move an existing install from `same_cluster`, change `sandbox_deployment_mode`, run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret), then run `make apply`, `make init-values` and `make deploy`. `make deploy` switches the LangSmith release to `separateCluster` (removing the embedded runtime) and to the dedicated service-auth secret before it installs the runtime chart, against the same JuiceFS metadata store and bucket, so both sides start on the new secret together. Running sandboxes stop during the switch.
+To move an existing install from the in-cluster runtime, change `sandbox_runtime_source`, run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret), then run `make apply`, `make init-values` and `make deploy`. `make deploy` switches the LangSmith release to `sandboxes.external.enabled` (removing the embedded runtime) and to the dedicated service-auth secret before it installs the runtime chart, against the same JuiceFS metadata store and bucket, so both sides start on the new secret together. Running sandboxes stop during the switch.
 
 #### Install, upgrade and uninstall order
 
@@ -730,7 +730,7 @@ For each secret it follows this priority order:
 | `polly-encryption-key` | Auto-generated (Fernet key) | For LangSmith Chat (formerly Polly) |
 | `engine-encryption-key` | Auto-generated (Fernet key) | For Engine. Keep it stable. See [ENGINE.md](ENGINE.md) |
 | `engine-usage-signing-secret` | Auto-generated (`openssl rand -hex 32`) | For Engine usage reports. Keep it stable |
-| `sandbox-service-auth-secret` | Auto-generated (`openssl rand -hex 32`), only with `sandbox_deployment_mode = "separate_cluster"` | Signs calls between LangSmith and the separate sandbox cluster in place of the API key salt. Keep it stable; see [Secrets](#secrets) |
+| `sandbox-service-auth-secret` | Auto-generated (`openssl rand -hex 32`), only with `sandbox_runtime_source = "external"` | Signs calls between LangSmith and the separate sandbox cluster in place of the API key salt. Keep it stable; see [Secrets](#secrets) |
 
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
@@ -932,7 +932,7 @@ Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` a
    | `.../langsmith-jwt-secret` | `jwt_secret` |
    | `.../langsmith-admin-password` | `initial_org_admin_password` |
    | `.../sandbox-callback-signing-jwk` | `sandbox_callback_signing_jwk` *(only with `enable_sandboxes = true`)* |
-   | `.../sandbox-service-auth-secret` | `sandbox_service_auth_secret` *(only with `sandbox_deployment_mode = "separate_cluster"`)* |
+   | `.../sandbox-service-auth-secret` | `sandbox_service_auth_secret` *(only with `sandbox_runtime_source = "external"`)* |
    | `.../agent-builder-encryption-key` | `agent_builder_encryption_key` *(only if key exists in SSM)* |
    | `.../insights-encryption-key` | `insights_encryption_key` *(only if key exists in SSM)* |
    | `.../deployments-encryption-key` | `deployments_encryption_key` *(only if key exists in SSM)* |
@@ -1176,14 +1176,14 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
 | `enable_sandboxes` | `false` | no | Provision sandbox-host nodes, dedicated JuiceFS Redis, and sandbox storage access |
-| `sandbox_deployment_mode` | `same_cluster` | no | Run sandbox-host in the main EKS cluster or create a `separate_cluster` |
+| `sandbox_runtime_source` | `in-cluster` | no | `in-cluster` runs sandbox-host in the main EKS cluster; `external` creates a dedicated sandbox EKS cluster |
 | `sandbox_namespace` | `langsmith-sandbox` | separate cluster | Namespace for the standalone sandbox runtime |
 | `sandbox_service_account_name` | `sandbox-host` | no | ServiceAccount trusted by the sandbox IRSA role. `init-values.sh` writes it into `sandboxHost.serviceAccount.name`, so change it here rather than in the values file |
 | `sandbox_runtime_secret_revision` | `1` | no | Increment to rewrite the write-only runtime Secret in the sandbox cluster |
 | `sandbox_alb_allow_nat_egress` | `false` | no | Separate cluster with an internet-facing ALB: append the NAT gateway addresses to the ALB allowlist. Admits everything behind the NAT, sandboxes included; prefer an internal ALB |
 | `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
 | `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
-| `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.17.x or 0.18.x chart version; empty deploys the latest 0.17.x. `separate_cluster` requires an exact version on 0.18 or later |
+| `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.17.x or 0.18.x chart version; empty deploys the latest 0.17.x. An external sandbox runtime requires an exact version on 0.18 or later |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |

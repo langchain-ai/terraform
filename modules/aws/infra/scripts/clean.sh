@@ -16,7 +16,7 @@ set -euo pipefail
 #   infra/terraform.tfstate*.backup     — state backup files
 #   infra/logs/                         — permutation and parallel test run logs
 #   helm/values/langsmith-values*.yaml           — gitignored local copies (canonical versions in examples/)
-#   helm/values/langsmith-sandbox-values*.yaml   — generated runtime chart values (separate_cluster)
+#   helm/values/langsmith-sandbox-values*.yaml   — generated runtime chart values (external runtime)
 #
 # Does NOT remove:
 #   infra/terraform.tfvars.example      — template, keep it
@@ -181,7 +181,7 @@ fi
 
 # ── Helm generated values ──────────────────────────────────────────────────────
 header "Helm values"
-# langsmith-sandbox-values*.yaml: the runtime chart's values (separate_cluster).
+# langsmith-sandbox-values*.yaml: the runtime chart's values (external runtime).
 for f in "$HELM_VALUES_DIR"/langsmith-values*.yaml "$HELM_VALUES_DIR"/langsmith-sandbox-values*.yaml; do
   [[ -f "$f" ]] && _rm "$f"
 done

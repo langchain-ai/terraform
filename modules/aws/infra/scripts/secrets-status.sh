@@ -84,7 +84,7 @@ if _tfvar_is_true "enable_sandboxes"; then
     "sandbox-juicefs-redis-auth-token"
     "sandbox-callback-signing-jwk"
   )
-  if [[ "$(_parse_tfvar "sandbox_deployment_mode" || true)" == "separate_cluster" ]]; then
+  if [[ "$(_parse_tfvar "sandbox_runtime_source" || true)" == "external" ]]; then
     REQUIRED_PARAMS+=("sandbox-service-auth-secret")
   fi
 fi
