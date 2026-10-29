@@ -117,6 +117,8 @@ _ensure_secret LANGSMITH_LICENSE_KEY "LangSmith license key (input hidden)" true
 _ensure_secret INITIAL_ORG_ADMIN_PASSWORD 'Initial org admin password (input hidden; >= 12 bytes, lower, upper, one of !#$%()+,-./:?@[]^_{~})' true _validate_admin_password ""
 _ensure_secret API_KEY_SALT "" false "" _secret_gen_b64
 _ensure_secret JWT_SECRET "" false "" _secret_gen_b64
+# Generated once and kept: the docs say to keep it stable across upgrades, since tokens it signed stop verifying.
+_ensure_secret LANGSMITH_SIGNING_JWKS "" false "" _signing_jwks_gen
 
 # Fernet keys, only for the features that need them. Fleet's key keeps the
 # legacy name: chart 0.17.6 stores fleet.encryptionKey in the Secret key

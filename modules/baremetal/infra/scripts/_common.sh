@@ -123,6 +123,7 @@ _b64url_nopad() {
   base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
 }
 
+# $1: the kid's prefix (default sandbox-callback).
 _ed25519_private_jwk_gen() {
   local _tmpdir _key _d _x _kid
   _tmpdir="$(mktemp -d)" || return 1
@@ -137,8 +138,16 @@ _ed25519_private_jwk_gen() {
   _x="$(tail -c 32 "${_tmpdir}/public.der" | _b64url_nopad)"
   rm -rf "$_tmpdir"
   [[ -n "$_d" && -n "$_x" ]] || return 1
-  _kid="sandbox-callback-$(openssl rand -hex 8)"
+  _kid="${1:-sandbox-callback}-$(openssl rand -hex 8)"
   printf '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"%s","x":"%s","d":"%s"}\n' "$_kid" "$_x" "$_d"
+}
+
+# The signing JWKS (docs kubernetes, "Configure a signing JWKS"): one Ed25519 key with a kid, without
+# which the OAuth server, Remote MCP, the LLM auth proxy and sandbox service URLs stay inert.
+_signing_jwks_gen() {
+  local _jwk
+  _jwk="$(_ed25519_private_jwk_gen langsmith-signing)" || return 1
+  printf '{"keys":[%s]}\n' "$_jwk"
 }
 
 # Engine's usage signing secret: at least 32 random characters (docs engine-self-hosted).

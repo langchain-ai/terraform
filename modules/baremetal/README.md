@@ -186,7 +186,9 @@ make deploy
 ```
 
 `make deploy` prints the URL when every component is ready. Log in with `INITIAL_ORG_ADMIN_EMAIL` and the password from
-`infra/.secrets.env`.
+`infra/.secrets.env`. `make setup-env` also makes the signing JWKS (`langsmith_signing_jwks`), which turns on OAuth login
+(`langsmith auth login`), Remote MCP, the LLM auth proxy and sandbox service URLs; keep it with the secrets file, since
+the docs require it stable across upgrades.
 
 The first `make apply` installs the MetalLB and Envoy Gateway CRDs. If your Terraform version can't plan resources that
 depend on CRDs that don't exist yet, apply the add-ons first:

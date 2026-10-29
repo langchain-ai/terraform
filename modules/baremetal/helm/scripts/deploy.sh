@@ -134,6 +134,7 @@ config_pairs=(
   "api_key_salt:API_KEY_SALT"
   "jwt_secret:JWT_SECRET"
   "initial_org_admin_password:INITIAL_ORG_ADMIN_PASSWORD"
+  "langsmith_signing_jwks:LANGSMITH_SIGNING_JWKS"
 )
 # Fleet keeps the chart's legacy key name (agent_builder_encryption_key).
 _feature_on fleet    && config_pairs+=("agent_builder_encryption_key:AGENT_BUILDER_ENCRYPTION_KEY")
