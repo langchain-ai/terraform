@@ -1245,12 +1245,25 @@ port = (((values.get("frontend") or {}).get("service") or {}).get("httpPort")) o
 print("|".join([host, base if base != "/" else "", section, str(port)]))
 ' 2>/dev/null) || { _streams_host=""; _streams_base=""; _streams_section=""; _streams_port="80"; }
   fi
-  _streams_paths="${_streams_base}/api/v1/playground, ${_streams_base}/api/v1/platform/datasets, ${_streams_base}/api/v1/prompts/canvas, ${_streams_base}/api/v1/fleet and ${_streams_base}/api-host/v2"
+  # One list feeds both the route's matches and every message about it.
+  _streams_prefixes=(
+    /api/v1/fleet/threads /api/v1/fleet/lg /api-host/v2
+    /api/v1/playground /api/v1/platform/datasets /api/v1/platform/public
+    /api/v1/prompts/canvas /api/v1/platform/prompt-canvas
+  )
+  _streams_matches=""; _streams_paths=""
+  for _p in "${_streams_prefixes[@]}"; do
+    _streams_matches+="    - path:
+        type: PathPrefix
+        value: ${_streams_base}${_p}
+"
+    _streams_paths+="${_streams_paths:+, }${_streams_base}${_p}"
+  done
   if [[ -z "$_streams_host" ]]; then
     warn "The release's values carry no config.hostname, so the long-running-request HTTPRoute (langsmith-fleet-streams) was not created; the playground, experiments, prompt canvas, Fleet and Deployments streams keep Envoy Gateway's 15 s timeout"
   elif ! [[ "$_streams_host" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
     warn "config.hostname resolves to '${_streams_host}', which is not a DNS name, so the long-running-request HTTPRoute (langsmith-fleet-streams) was not created; fix the hostname in the values and re-run make deploy"
-  elif ! [[ "$_streams_port" =~ ^[0-9]+$ && -z "${_streams_section//[a-z0-9-]/}" ]]; then
+  elif ! [[ "$_streams_port" =~ ^[0-9]+$ ]] || { [[ -n "$_streams_section" ]] && ! { [[ ${#_streams_section} -le 253 ]] && [[ "$_streams_section" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$ ]]; }; }; then
     warn "frontend.service.httpPort '${_streams_port}' or gateway.sectionName '${_streams_section}' in the release's values is not usable in an HTTPRoute, so the long-running-request HTTPRoute (langsmith-fleet-streams) was not created; ${_streams_paths} keep Envoy Gateway's 15 s timeout"
   else
     if kubectl apply -f - >/dev/null <<EOF
@@ -1267,31 +1280,7 @@ spec:
   - "${_streams_host}"
   rules:
   - matches:
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api/v1/fleet/threads
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api/v1/fleet/lg
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api-host/v2
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api/v1/playground
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api/v1/platform/datasets
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api/v1/platform/public
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api/v1/prompts/canvas
-    - path:
-        type: PathPrefix
-        value: ${_streams_base}/api/v1/platform/prompt-canvas
-    backendRefs:
+${_streams_matches}    backendRefs:
     - name: ${CHART_FULLNAME}-frontend
       port: ${_streams_port}
     timeouts:
