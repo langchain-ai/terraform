@@ -1,0 +1,42 @@
+[
+  {
+    "Sid": "S3BucketDelete",
+    "Effect": "Allow",
+    "Action": ["s3:DeleteBucket"],
+    "Resource": [
+      "arn:aws:s3:::*-smith-blob",
+      "arn:aws:s3:::*-smith-clickhouse-backups",
+      "arn:aws:s3:::*-smith-vpc-flow-logs",
+      "arn:aws:s3:::*-smith-sandbox-snapshots",
+      "arn:aws:s3:::*-smithdb-blob"
+    ]
+  },
+  {
+    "Sid": "S3BucketListVersions",
+    "Effect": "Allow",
+    "Action": ["s3:ListBucketVersions"],
+    "Resource": [
+      "arn:aws:s3:::*-smith-blob",
+      "arn:aws:s3:::*-smith-clickhouse-backups",
+      "arn:aws:s3:::*-smith-vpc-flow-logs",
+      "arn:aws:s3:::*-smith-sandbox-snapshots",
+      "arn:aws:s3:::*-smithdb-blob"
+    ]
+  },
+  {
+    "Sid": "S3ObjectDelete",
+    "Effect": "Allow",
+    "Action": [
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
+      "s3:BypassGovernanceRetention"
+    ],
+    "Resource": [
+      "arn:aws:s3:::*-smith-blob/*",
+      "arn:aws:s3:::*-smith-clickhouse-backups/*",
+      "arn:aws:s3:::*-smith-vpc-flow-logs/*",
+      "arn:aws:s3:::*-smith-sandbox-snapshots/*",
+      "arn:aws:s3:::*-smithdb-blob/*"
+    ]
+  }
+]

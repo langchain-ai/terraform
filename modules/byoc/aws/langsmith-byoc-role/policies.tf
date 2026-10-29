@@ -21,8 +21,12 @@ locals {
   rds_statements                        = jsondecode(templatefile("${path.module}/policies/rds.json", local.policy_template_vars))
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
   # Optional. Only applied if allow_public_ingress is true.
-  route53_public_statements  = [for s in jsondecode(templatefile("${path.module}/policies/route53_public.json", local.policy_template_vars)) : s if var.allow_public_ingress]
-  s3_statements              = jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars))
+  route53_public_statements = [for s in jsondecode(templatefile("${path.module}/policies/route53_public.json", local.policy_template_vars)) : s if var.allow_public_ingress]
+  s3_statements = [
+    for statement in jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars)) : statement
+    if !(var.allow_retained_data_deletion && try(statement.Sid, "") == "S3DenyObjectDataAccess")
+  ]
+  s3_delete_statements       = jsondecode(templatefile("${path.module}/policies/s3_delete.json", local.policy_template_vars))
   secrets_manager_statements = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
   vpc_statements             = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
   byovpc_vpc_statements      = jsondecode(templatefile("${path.module}/policies/vpc_byovpc.json", local.policy_template_vars))
@@ -138,11 +142,15 @@ locals {
       })
     ]
   }
-  role_policies = {
+  base_role_policies = {
     for name, statements in local.filtered_role_policies : name => [
       for statement in statements : statement if length(statement.Action) > 0
     ]
   }
+  role_policies = merge(
+    local.base_role_policies,
+    var.allow_retained_data_deletion ? { storage-delete = local.s3_delete_statements } : {},
+  )
 }
 
 resource "aws_iam_policy" "this" {
