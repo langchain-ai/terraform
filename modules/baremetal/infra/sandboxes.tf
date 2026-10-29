@@ -168,6 +168,9 @@ resource "kubernetes_labels" "sandbox_host" {
 
 resource "kubernetes_node_taint" "sandbox_host" {
   for_each = var.enable_sandboxes ? toset(var.sandbox_hosts) : toset([])
+  # A Node's taints are one atomic list, owned by whoever wrote it last: the kubelet registering the
+  # node (field manager k3s on k3s). Without force the apply stops on that conflict (reed-lab, 2026-10-29).
+  force = true
   metadata {
     name = each.key
   }
