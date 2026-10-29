@@ -142,15 +142,15 @@ locals {
       })
     ]
   }
-  base_role_policies = {
+  # Attached as a separate inline policy (see aws_iam_role_policy.retained_data_delete
+  # below), not merged into role_policies: that map is attached with one managed
+  # policy per key, and IAM caps managed-policy attachments per role at 10 by
+  # default. The 10 keys above already use the full default quota.
+  role_policies = {
     for name, statements in local.filtered_role_policies : name => [
       for statement in statements : statement if length(statement.Action) > 0
     ]
   }
-  role_policies = merge(
-    local.base_role_policies,
-    var.allow_retained_data_deletion ? { storage-delete = local.s3_delete_statements } : {},
-  )
 }
 
 resource "aws_iam_policy" "this" {
@@ -183,5 +183,17 @@ resource "aws_iam_role_policy" "byoiam_custom_names" {
   policy = jsonencode({
     Version   = "2012-10-17"
     Statement = local.byoiam_custom_name_statements
+  })
+}
+
+resource "aws_iam_role_policy" "retained_data_delete" {
+  count = var.allow_retained_data_deletion ? 1 : 0
+
+  name = "${var.role_name}-storage-delete"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.s3_delete_statements
   })
 }
