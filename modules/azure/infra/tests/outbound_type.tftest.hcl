@@ -753,15 +753,15 @@ run "a_live_read_without_an_outbound_type_is_not_a_change" {
   }
 }
 
-# ── separate_cluster: the sandbox cluster takes the same egress path ─────────
+# ── External runtime: the sandbox cluster takes the same egress path ─────────
 
-run "separate_cluster_with_user_defined_routing_needs_a_sandbox_subnet" {
+run "external_runtime_with_user_defined_routing_needs_a_sandbox_subnet" {
   command = plan
 
   variables {
     aks_outbound_type             = "userDefinedRouting"
     enable_sandboxes              = true
-    sandbox_deployment_mode       = "separate_cluster"
+    sandbox_runtime_source        = "external"
     langsmith_helm_chart_version  = "0.18.0"
     sandbox_subnet_address_prefix = ["10.0.40.0/24"]
   }
@@ -785,13 +785,13 @@ run "separate_cluster_with_user_defined_routing_needs_a_sandbox_subnet" {
   expect_failures = [terraform_data.sandbox_cluster_guard]
 }
 
-run "separate_cluster_with_user_defined_routing_needs_a_routed_sandbox_subnet" {
+run "external_runtime_with_user_defined_routing_needs_a_routed_sandbox_subnet" {
   command = plan
 
   variables {
     aks_outbound_type            = "userDefinedRouting"
     enable_sandboxes             = true
-    sandbox_deployment_mode      = "separate_cluster"
+    sandbox_runtime_source       = "external"
     langsmith_helm_chart_version = "0.18.0"
     sandbox_subnet_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/sandbox"
   }
@@ -824,13 +824,13 @@ run "separate_cluster_with_user_defined_routing_needs_a_routed_sandbox_subnet" {
   expect_failures = [terraform_data.sandbox_cluster_guard]
 }
 
-run "separate_cluster_with_user_defined_routing_and_a_routed_sandbox_subnet_plans" {
+run "external_runtime_with_user_defined_routing_and_a_routed_sandbox_subnet_plans" {
   command = plan
 
   variables {
     aks_outbound_type            = "userDefinedRouting"
     enable_sandboxes             = true
-    sandbox_deployment_mode      = "separate_cluster"
+    sandbox_runtime_source       = "external"
     langsmith_helm_chart_version = "0.18.0"
     sandbox_subnet_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/sandbox"
   }

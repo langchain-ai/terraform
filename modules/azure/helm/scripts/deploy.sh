@@ -22,7 +22,7 @@
 #  11. langsmith-values-smithdb-overrides.yaml   — SmithDB storage, identity, metastore, gates (if enable_smithdb = true)
 #  12. langsmith-values-smithdb-migration.yaml   — TaskDB and migration pod count, from make smithdb-migration-job-start (if smithdb_migration_enabled = true)
 #
-# With sandbox_deployment_mode = separate_cluster, a second release follows the
+# With sandbox_runtime_source = external, a second release follows the
 # langsmith one: langsmith-sandbox (SANDBOX_RELEASE_NAME) in the sandbox cluster,
 # with langsmith-sandbox-values-overrides.yaml, from the newest langsmith-sandbox
 # chart whose appVersion equals the langsmith chart's.
@@ -58,12 +58,12 @@ fi
 NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
-# separate_cluster runs sandbox-host from its own langsmith-sandbox release in
+# An external runtime runs sandbox-host from its own langsmith-sandbox release in
 # the sandbox cluster. That chart has no version setting here: it is the newest
 # one whose appVersion equals the langsmith chart's, resolved below.
 SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
 SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
-_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 
 BASE_VALUES_FILE="$HELM_DIR/values/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
@@ -492,10 +492,10 @@ if _tfvar_is_true "enable_sandboxes"; then
   pass "langsmith-config-secret has sandbox_callback_signing_jwk"
 fi
 
-# separate_cluster: the langsmith chart refuses separateCluster without the
+# External runtime: the langsmith chart refuses sandboxes.external.enabled without the
 # dedicated service-auth key, and a secret created before the mode changed lacks
 # it. create-k8s-secrets.sh also writes the sandbox cluster's runtime Secret.
-if _separate_cluster_sandboxes; then
+if _external_sandbox_runtime; then
   if ! kubectl get secret langsmith-config-secret -n "$NAMESPACE" \
     -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
     | grep -qx "sandbox_service_auth_secret"; then
@@ -630,13 +630,19 @@ if [[ "$_enable_sandboxes" == "true" && ! -f "$VALUES_DIR/langsmith-values-sandb
   action "Run: make init-values"
   exit 1
 fi
-# separate_cluster: the overlay must name the mode, or the langsmith release
+# External runtime: the overlay must set sandboxes.external.enabled, or the langsmith release
 # would run its own sandbox-host beside the runtime's, and the runtime needs
 # its own values file. Both come from the same init-values run.
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
-  if ! grep -Eq '^[[:space:]]{2}deploymentMode:[[:space:]]*separateCluster[[:space:]]*$' "$VALUES_DIR/langsmith-values-sandboxes.yaml" \
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  if ! awk '/^sandboxes:[[:space:]]*$/ { s = 1; next }
+            s && /^[^[:space:]#]/ { s = 0 }
+            s && /^  external:[[:space:]]*$/ { e = 1; next }
+            e && /^  [^[:space:]]/ { e = 0 }
+            e && /^    enabled:[[:space:]]*true[[:space:]]*$/ { found = 1 }
+            END { exit !found }' "$VALUES_DIR/langsmith-values-sandboxes.yaml" \
+    || grep -Eq '^[[:space:]]{2}(deploymentMode|hostIngressEndpoint):' "$VALUES_DIR/langsmith-values-sandboxes.yaml" \
     || [[ ! -f "$SANDBOX_VALUES_FILE" ]]; then
-    fail "sandbox_deployment_mode = separate_cluster but the sandbox values are missing or from same_cluster"
+    fail "sandbox_runtime_source = external but the sandbox values are missing or from the in-cluster runtime"
     action "Run: make init-values"
     exit 1
   fi
@@ -778,16 +784,16 @@ if [[ "$_chart_line" != "$_required_chart_line" && "$_chart_line" != "0.18" ]]; 
   exit 1
 fi
 
-# separateCluster ships with chart 0.18, and the runtime chart is picked below by
+# sandboxes.external ships with chart 0.18, and the runtime chart is picked below by
 # this chart's appVersion, so the langsmith chart must be one exact version on
 # 0.18 or later: not the default 0.17 line and not a range. Terraform checks
 # langsmith_helm_chart_version the same way; this also covers CHART_VERSION.
-# Keep the pattern in step with separate_cluster_chart_version_pattern in
+# Keep the pattern in step with external_runtime_chart_version_pattern in
 # infra/main.tf.
-_separate_cluster_chart_re='^(0\.(1[89]|[2-9][0-9])|[1-9][0-9]*\.[0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]] \
-  && ! [[ "$CHART_VERSION" =~ $_separate_cluster_chart_re ]]; then
-  echo "ERROR: sandbox_deployment_mode = separate_cluster needs one exact langsmith chart version" >&2
+_external_runtime_chart_re='^(0\.(1[89]|[2-9][0-9])|[1-9][0-9]*\.[0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]] \
+  && ! [[ "$CHART_VERSION" =~ $_external_runtime_chart_re ]]; then
+  echo "ERROR: sandbox_runtime_source = external needs one exact langsmith chart version" >&2
   echo "       on 0.18 or later; got CHART_VERSION='$CHART_VERSION'." >&2
   echo "       Set langsmith_helm_chart_version in terraform.tfvars, for example \"0.18.0\"." >&2
   echo "       The langsmith-sandbox chart is then picked by that chart's appVersion." >&2
@@ -1016,9 +1022,9 @@ fi
 # Chart 0.17 fails the release when images.sandboxHostImage.tag is empty, and a
 # tag pinned in a file lags every chart upgrade. Set it from the appVersion of
 # the chart resolved above, which helm upgrade installs, as the AWS and GCP
-# modules do. The JuiceFS format Job runs the same image. In separate_cluster
-# mode this release runs no sandbox-host, and the chart default applies.
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
+# modules do. The JuiceFS format Job runs the same image. With an external
+# runtime this release runs no sandbox-host, and the chart default applies.
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d '"')
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: chart $_resolved_chart does not declare an appVersion for the sandbox-host image." >&2
@@ -1035,7 +1041,7 @@ fi
 # as the ClusterIssuer. Applied before the release so sandbox-host's first call,
 # the default snapshot build, gets through.
 _policy_engine=$(_tf_out network_policy_engine) || _policy_engine=""
-if [[ "$_policy_engine" == "cilium" && "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
+if [[ "$_policy_engine" == "cilium" && "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   if ! kubectl apply -f - >/dev/null <<EOF
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -1064,7 +1070,7 @@ elif [[ "$_policy_engine" == "cilium" ]]; then
   if ! kubectl delete ciliumnetworkpolicy allow-nodes-to-platform-backend -n "$NAMESPACE" --ignore-not-found >/dev/null; then
     warn "Could not delete CiliumNetworkPolicy allow-nodes-to-platform-backend; the nodes can still reach platform-backend :1986"
   fi
-elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
+elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   warn "Terraform has no network_policy_engine output yet. On a Cilium cluster, sandbox-host cannot reach platform-backend until it does."
   action "Run: make apply, then make deploy"
 fi
@@ -1141,16 +1147,16 @@ fi
 # does. The chart was written and tested against client-side apply, so ask for it
 # explicitly rather than let the Helm binary decide the apply semantics. Helm 3
 # only ever applies client-side, making the flag redundant as well as unsupported.
-# separate_cluster: the runtime chart pairs with the langsmith chart by
+# External runtime: the runtime chart pairs with the langsmith chart by
 # appVersion, which is the LangSmith release both deploy, never by chart
 # version. Install the newest langsmith-sandbox chart with the same appVersion.
 # Resolved here, before either release changes, so a missing runtime chart stops
 # the deploy instead of leaving the control plane upgraded without a runtime.
 _sandbox_chart_version=""
 _langsmith_app_version=""
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   if ! command -v jq >/dev/null 2>&1; then
-    echo "ERROR: sandbox_deployment_mode = separate_cluster needs jq to pick the langsmith-sandbox chart." >&2
+    echo "ERROR: sandbox_runtime_source = external needs jq to pick the langsmith-sandbox chart." >&2
     exit 1
   fi
   _langsmith_app_version=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d "\"'")
@@ -1224,7 +1230,7 @@ for dep in "${_core_deployments[@]}"; do
   fi
 done
 
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   # The format Job name carries a hash, so select it by label. It reaches Blob
   # through the sandbox-host Workload Identity. Helm does not run a failed Job
   # again when the manifest is unchanged, so a failed Job must be deleted before
@@ -1283,7 +1289,7 @@ else
 fi
 echo ""
 
-# ── Sandbox runtime in the dedicated cluster (separate_cluster) ──────────
+# ── Sandbox runtime in the dedicated cluster (external runtime) ──────────
 # After the langsmith release, so the control plane is on the new release
 # first: the runtime upgrades second and rolls back alone. Through a kubeconfig
 # of its own, so the current context stays on the LangSmith cluster. The
@@ -1291,7 +1297,7 @@ echo ""
 # create-k8s-secrets.sh, which runs here when the Secret is missing. No --wait:
 # hosts drain one at a time, so a slow roll is not a failed one, and the
 # rollout check below only warns.
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   _sandbox_cluster_name=$(_tf_out sandbox_cluster_name) || {
     fail "Could not read sandbox_cluster_name. Is 'make apply' complete?"
     exit 1

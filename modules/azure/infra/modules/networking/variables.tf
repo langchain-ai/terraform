@@ -111,7 +111,7 @@ variable "aks_source_prefixes" {
 
 variable "create_sandbox_subnet" {
   type        = bool
-  description = "Create the subnet for the dedicated sandbox cluster, with its NSG. Set by the root for sandbox_deployment_mode = \"separate_cluster\" when no sandbox_subnet_id is supplied."
+  description = "Create the subnet for the dedicated sandbox cluster, with its NSG. Set by the root for sandbox_runtime_source = \"external\" when no sandbox_subnet_id is supplied."
   default     = false
 }
 

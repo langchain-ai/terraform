@@ -12,7 +12,7 @@
 # Also available as: make uninstall
 #
 # Removes: Helm release, operator-managed LGP resources, and with
-#          sandbox_deployment_mode = separate_cluster the langsmith-sandbox
+#          sandbox_runtime_source = external the langsmith-sandbox
 #          release in the sandbox cluster, first.
 # Leaves: AKS cluster, Key Vault, Blob Storage, Postgres, Redis (infrastructure intact).
 #
@@ -37,14 +37,14 @@ echo "  LangSmith Azure — Uninstall"
 echo "══════════════════════════════════════════════════════"
 echo ""
 
-# ── Sandbox runtime first (separate_cluster) ───────────────────────────────
+# ── Sandbox runtime first (external runtime) ───────────────────────────────
 # The runtime goes before the langsmith release, the reverse of deploy.sh:
 # sandbox-host unmounts JuiceFS and stops its sandbox VMs within a 300 s grace
 # period while platform-backend, Redis and Blob are all still up. A pod still
 # there after that is force-deleted so it cannot hold up teardown; its host
 # mount goes away with the node. Through a kubeconfig of its own, so the current
 # context stays on the LangSmith cluster.
-if _separate_cluster_sandboxes; then
+if _external_sandbox_runtime; then
   _sandbox_cluster_name=$(_tf_out sandbox_cluster_name) || {
     fail "Could not read sandbox_cluster_name. Is 'terraform apply' complete?"
     action "Uninstall the langsmith-sandbox release from the sandbox cluster yourself, then re-run"

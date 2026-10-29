@@ -1118,10 +1118,10 @@ kubectl rollout restart deployment -n langsmith -l app=sandbox-host
 
 #### Sandboxes in a separate cluster
 
-`sandbox_deployment_mode = "separate_cluster"` runs `sandbox-host` in a second AKS cluster, so untrusted sandbox code
+`sandbox_runtime_source = "external"` runs `sandbox-host` in a second AKS cluster, so untrusted sandbox code
 never shares a node or a cluster with LangSmith. The LangSmith cluster runs the `langsmith` chart with
-`sandboxes.deploymentMode: separateCluster`, and the sandbox cluster runs the `langsmith-sandbox` chart. The JuiceFS
-Redis, the Blob container and the `sandbox-host` identity are the same as in `same_cluster` mode. This Terraform is one
+`sandboxes.external.enabled: true`, and the sandbox cluster runs the `langsmith-sandbox` chart. The JuiceFS
+Redis, the Blob container and the `sandbox-host` identity are the same as with the in-cluster runtime. This Terraform is one
 way to meet the requirements in the LangSmith docs for a separate sandbox cluster; the charts work without it.
 
 **What Terraform creates**
@@ -1152,7 +1152,7 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
   should follow the same rules in both directions.
 - **Egress:** the sandbox cluster takes `aks_outbound_type` from the LangSmith cluster, so its internet traffic follows
   the same path. With `userDefinedRouting` or `userAssignedNATGateway`, pass `sandbox_subnet_id`: a subnet you own
-  that carries the same route table or NAT gateway as `aks_subnet_id`. Plan refuses `separate_cluster` without it,
+  that carries the same route table or NAT gateway as `aks_subnet_id`. Plan refuses an external sandbox runtime without it,
   and with `userDefinedRouting` checks that the subnet has a route table.
 - **Workload Identity:** the `sandbox-host` identity's federated credential moves to the sandbox cluster's issuer and
   trusts `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>` (`langsmith-sandbox:sandbox-host`
@@ -1182,7 +1182,7 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
 
    ```hcl
    enable_sandboxes             = true
-   sandbox_deployment_mode      = "separate_cluster"
+   sandbox_runtime_source      = "external"
    langsmith_helm_chart_version = "0.18.0"
    ```
 

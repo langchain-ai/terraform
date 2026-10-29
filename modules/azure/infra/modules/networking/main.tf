@@ -8,7 +8,7 @@
 #   Postgres      10.0.32.0/20  — delegated to PostgreSQL Flexible Server (4 k IPs)
 #   Redis         10.0.48.0/20  — Premium Redis requires a dedicated subnet (4 k IPs)
 #   K8s svc CIDR  10.0.64.0/20  — defined in AKS module, must NOT overlap any subnet
-#   Sandbox       10.0.112.0/24 — dedicated sandbox cluster nodes (separate_cluster only)
+#   Sandbox       10.0.112.0/24 — dedicated sandbox cluster nodes (external runtime only)
 #
 # Why dedicated subnets?
 #   • PostgreSQL Flexible Server requires its own delegated subnet (Azure restriction).
@@ -327,7 +327,7 @@ resource "azurerm_subnet_network_security_group_association" "redis" {
 }
 
 # ── Sandbox cluster subnet ───────────────────────────────────────────────────
-# Created for sandbox_deployment_mode = "separate_cluster" when the operator
+# Created for sandbox_runtime_source = "external" when the operator
 # supplies no sandbox_subnet_id. The sandbox cluster runs Azure CNI overlay, so
 # only its nodes take addresses here. Microsoft.Storage lets the Blob firewall
 # allowlist the subnet for the JuiceFS container; the sandbox cluster never

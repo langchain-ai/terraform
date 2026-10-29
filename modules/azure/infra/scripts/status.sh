@@ -184,7 +184,7 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"aks_cluster_name"'; 
   _sandbox_cluster=$(echo "$_tf_output" | jq -r '.sandbox_cluster_name.value // empty' 2>/dev/null) || _sandbox_cluster=""
 
   [[ -n "$_cluster_name" ]]    && info "AKS cluster: ${_cluster_name}"      || warn "No aks_cluster_name output"
-  [[ -n "$_sandbox_cluster" ]] && info "Sandbox AKS cluster: ${_sandbox_cluster} (separate_cluster; make deploy installs langsmith-sandbox there)"
+  [[ -n "$_sandbox_cluster" ]] && info "Sandbox AKS cluster: ${_sandbox_cluster} (external runtime; make deploy installs langsmith-sandbox there)"
   [[ -n "$_rg_name" ]]         && info "Resource group: ${_rg_name}"
   [[ -n "$_kv_tf_name" ]]      && info "Key Vault: ${_kv_tf_name}"
   [[ -n "$_storage_account" ]] && info "Storage account: ${_storage_account}" || warn "No storage_account_name output"

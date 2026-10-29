@@ -1582,25 +1582,25 @@ variable "sandbox_service_url_base_url" {
 }
 
 # ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
-# separate_cluster runs sandbox-host from its own langsmith-sandbox release in a
+# An external runtime runs sandbox-host from its own langsmith-sandbox release in a
 # second AKS cluster, so untrusted sandbox code never shares nodes or a cluster
 # with LangSmith. Requires an exact langsmith chart of 0.18 or later; see the
 # README, "Sandboxes in a separate cluster".
 
-variable "sandbox_deployment_mode" {
+variable "sandbox_runtime_source" {
   type        = string
-  description = "Sandbox topology. same_cluster deploys sandbox-host in the LangSmith AKS cluster; separate_cluster creates a dedicated AKS cluster in the same VNet and deploys the runtime there with the langsmith-sandbox chart."
-  default     = "same_cluster"
+  description = "Sandbox runtime location: 'in-cluster' (default, sandbox-host in the LangSmith AKS cluster) or 'external' (a dedicated sandbox AKS cluster in the same VNet, running the langsmith-sandbox chart)."
+  default     = "in-cluster"
 
   validation {
-    condition     = contains(["same_cluster", "separate_cluster"], var.sandbox_deployment_mode)
-    error_message = "sandbox_deployment_mode must be 'same_cluster' or 'separate_cluster'."
+    condition     = contains(["in-cluster", "external"], var.sandbox_runtime_source)
+    error_message = "sandbox_runtime_source must be 'in-cluster' or 'external'."
   }
 }
 
 variable "sandbox_namespace" {
   type        = string
-  description = "Kubernetes namespace for the standalone langsmith-sandbox release when sandbox_deployment_mode is separate_cluster."
+  description = "Kubernetes namespace for the standalone langsmith-sandbox release when sandbox_runtime_source is external."
   default     = "langsmith-sandbox"
 
   validation {
@@ -1637,13 +1637,13 @@ variable "sandbox_runtime_secret_name" {
 
 variable "sandbox_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the sandbox cluster subnet, carved when sandbox_deployment_mode = \"separate_cluster\" and sandbox_subnet_id is empty. Only nodes take addresses from it (the sandbox cluster runs Azure CNI overlay), so a /24 holds about 250 nodes. Must sit inside the VNet and clear of every other subnet."
+  description = "Prefix for the sandbox cluster subnet, carved when sandbox_runtime_source = \"external\" and sandbox_subnet_id is empty. Only nodes take addresses from it (the sandbox cluster runs Azure CNI overlay), so a /24 holds about 250 nodes. Must sit inside the VNet and clear of every other subnet."
   default     = ["10.0.112.0/24"]
 }
 
 variable "sandbox_subnet_id" {
   type        = string
-  description = "The id of an existing subnet for the sandbox cluster's nodes, used when create_vnet = false and sandbox_deployment_mode = \"separate_cluster\". Leave empty to have Terraform carve one from sandbox_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage service endpoint for the Blob firewall, and its NSG is yours: admit TCP 19190 from the AKS node subnet and the sandbox subnet only (see the README)."
+  description = "The id of an existing subnet for the sandbox cluster's nodes, used when create_vnet = false and sandbox_runtime_source = \"external\". Leave empty to have Terraform carve one from sandbox_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage service endpoint for the Blob firewall, and its NSG is yours: admit TCP 19190 from the AKS node subnet and the sandbox subnet only (see the README)."
   default     = ""
 
   validation {
@@ -1724,10 +1724,10 @@ variable "langsmith_domain" {
 
 # helm/scripts/deploy.sh parses it out of terraform.tfvars for the --version it
 # passes to helm upgrade. Terraform reads it only to check the
-# sandbox_deployment_mode = "separate_cluster" requirement below.
+# sandbox_runtime_source = "external" requirement below.
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'. sandbox_deployment_mode = \"separate_cluster\" needs one exact version on 0.18 or later, because deploy.sh picks the langsmith-sandbox chart by that chart's appVersion."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'. sandbox_runtime_source = \"external\" needs one exact version on 0.18 or later, because deploy.sh picks the langsmith-sandbox chart by that chart's appVersion."
   default     = ""
 }
 

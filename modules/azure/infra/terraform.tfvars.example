@@ -186,7 +186,7 @@ enable_sandboxes = false
 # Sandboxes in a dedicated AKS cluster in the same VNet, from the langsmith-sandbox
 # chart. Needs one exact langsmith chart version on 0.18 or later, and TLS or an
 # internal ingress load balancer. See README, "Sandboxes in a separate cluster".
-# sandbox_deployment_mode       = "separate_cluster" # default "same_cluster"
+# sandbox_runtime_source       = "external" # default "in-cluster"
 # langsmith_helm_chart_version  = "0.18.0"
 # sandbox_namespace             = "langsmith-sandbox"
 # sandbox_subnet_address_prefix = ["10.0.112.0/24"]

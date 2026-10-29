@@ -65,19 +65,19 @@ locals {
   langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
-  # same_cluster runs sandbox-host from the langsmith chart in the LangSmith
-  # cluster. separate_cluster runs it from the langsmith-sandbox chart in
+  # The in-cluster runtime runs sandbox-host from the langsmith chart in the LangSmith
+  # cluster. An external runtime runs it from the langsmith-sandbox chart in
   # module.sandbox_aks, and the LangSmith cluster gets none of the sandbox pool,
   # namespace changes or JuiceFS Secret.
-  same_cluster_sandboxes     = var.enable_sandboxes && var.sandbox_deployment_mode == "same_cluster"
-  separate_cluster_sandboxes = var.enable_sandboxes && var.sandbox_deployment_mode == "separate_cluster"
+  in_cluster_sandbox_runtime = var.enable_sandboxes && var.sandbox_runtime_source == "in-cluster"
+  external_sandbox_runtime   = var.enable_sandboxes && var.sandbox_runtime_source == "external"
   sandbox_aks_name           = "${local.name_base}-sbox-aks${local.name_suffix}"
 
   # The chart names sandbox-host's service account <fullname>-sandbox-host. The
   # runtime chart in a separate cluster takes sandbox_service_account_name
   # instead, which init-values.sh writes into its values.
-  sandbox_host_namespace       = local.separate_cluster_sandboxes ? var.sandbox_namespace : var.langsmith_namespace
-  sandbox_host_service_account = local.separate_cluster_sandboxes ? var.sandbox_service_account_name : "${local.langsmith_release_fullname}-sandbox-host"
+  sandbox_host_namespace       = local.external_sandbox_runtime ? var.sandbox_namespace : var.langsmith_namespace
+  sandbox_host_service_account = local.external_sandbox_runtime ? var.sandbox_service_account_name : "${local.langsmith_release_fullname}-sandbox-host"
   sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
 
   # JuiceFS reads the container from the first label of the bucket host and the
@@ -134,7 +134,7 @@ locals {
   create_aks_subnet      = !local.byo_aks_subnet
   create_postgres_subnet = (var.postgres_source == "external" || var.enable_smithdb) && !local.byo_postgres_subnet
   create_redis_subnet    = var.redis_source == "external" && !local.byo_redis_subnet
-  create_sandbox_subnet  = local.separate_cluster_sandboxes && !local.byo_sandbox_subnet
+  create_sandbox_subnet  = local.external_sandbox_runtime && !local.byo_sandbox_subnet
 
   vnet_id            = var.create_vnet ? module.vnet.vnet_id : var.vnet_id
   aks_subnet_id      = local.byo_aks_subnet ? var.aks_subnet_id : module.vnet.subnet_main_id
@@ -306,8 +306,8 @@ locals {
   aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
   # enable_sandboxes adds the sandbox-host pool, to the LangSmith cluster in
-  # same_cluster mode and to module.sandbox_aks in separate_cluster mode. In
-  # same_cluster mode an additional_node_pools entry named sandboxhost replaces
+  # the in-cluster runtime and to module.sandbox_aks with an external runtime. With
+  # the in-cluster runtime an additional_node_pools entry named sandboxhost replaces
   # it whole, for a pool that needs other settings.
   sandbox_host_vm_size = var.sandbox_host_vm_size != null ? var.sandbox_host_vm_size : (contains(["production", "production-large"], var.sizing_profile) ? "Standard_D32ds_v5" : "Standard_D8ds_v5")
   sandbox_host_pool = {
@@ -324,13 +324,13 @@ locals {
     os_sku            = null
     os_disk_size_gb   = var.sandbox_host_os_disk_size_gb
   }
-  sandbox_node_pools = local.same_cluster_sandboxes ? { sandboxhost = local.sandbox_host_pool } : {}
+  sandbox_node_pools = local.in_cluster_sandbox_runtime ? { sandboxhost = local.sandbox_host_pool } : {}
 
   # The bounds sandbox-host's autoscaler follows: the LangSmith cluster's pool,
   # override included, or the sandbox cluster's. ?: so the index is skipped
   # when the LangSmith cluster has no sandboxhost pool.
-  sandbox_host_min_count = local.same_cluster_sandboxes ? local.effective_node_pools["sandboxhost"].min_count : var.sandbox_host_min_count
-  sandbox_host_max_count = local.same_cluster_sandboxes ? local.effective_node_pools["sandboxhost"].max_count : var.sandbox_host_max_count
+  sandbox_host_min_count = local.in_cluster_sandbox_runtime ? local.effective_node_pools["sandboxhost"].min_count : var.sandbox_host_min_count
+  sandbox_host_max_count = local.in_cluster_sandbox_runtime ? local.effective_node_pools["sandboxhost"].max_count : var.sandbox_host_max_count
 
   effective_node_pools = merge(local.sandbox_node_pools, var.additional_node_pools)
 
@@ -480,8 +480,8 @@ locals {
   # every node, so it has to stay clear of the VNet, the ClusterIP range and the
   # ranges AKS reserves. Each neighbor is named so the message says which one.
   # The sandbox cluster always runs overlay on the same range, so it is checked
-  # with separate_cluster sandboxes whatever mode the LangSmith cluster runs.
-  aks_pod_cidr_neighbors = local.aks_overlay || local.separate_cluster_sandboxes ? merge(
+  # with an external sandbox runtime whatever mode the LangSmith cluster runs.
+  aks_pod_cidr_neighbors = local.aks_overlay || local.external_sandbox_runtime ? merge(
     { for space in local.vnet_address_space : "the VNet address space ${space}" => space },
     { "aks_service_cidr ${local.aks_service_cidr}" = local.aks_service_cidr },
     { for range in local.aks_reserved_cidrs : "the AKS reserved range ${range}" => range },
@@ -535,7 +535,7 @@ locals {
     length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
     !var.enable_sandboxes || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
     !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
-    !local.separate_cluster_sandboxes || length(local.sandbox_aks_name) <= 63 ? "" : "Sandbox AKS cluster name '${local.sandbox_aks_name}' is ${length(local.sandbox_aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix.",
+    !local.external_sandbox_runtime || length(local.sandbox_aks_name) <= 63 ? "" : "Sandbox AKS cluster name '${local.sandbox_aks_name}' is ${length(local.sandbox_aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix.",
   ])
 }
 
@@ -629,7 +629,7 @@ module "vnet" {
   enable_subnet_nsgs  = var.enable_subnet_nsgs
   aks_source_prefixes = local.aks_subnet_prefixes
 
-  # The dedicated sandbox cluster's subnet and its NSG (separate_cluster only).
+  # The dedicated sandbox cluster's subnet and its NSG (external runtime only).
   # Its NSG admits sandbox-host's port from aks_source_prefixes above.
   create_sandbox_subnet         = local.create_sandbox_subnet
   sandbox_subnet_address_prefix = var.sandbox_subnet_address_prefix
@@ -693,14 +693,14 @@ data "azurerm_subnet" "byo_aks_subnet" {
 # own. The sandbox subnet's NSG lets sandbox nodes reach it there on 80 and 443,
 # so read its prefixes.
 data "azurerm_subnet" "sandbox_ingress_lb_subnet" {
-  count                = local.separate_cluster_sandboxes && var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? 1 : 0
+  count                = local.external_sandbox_runtime && var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? 1 : 0
   name                 = split("/", var.ingress_load_balancer_subnet_id)[10]
   virtual_network_name = split("/", var.ingress_load_balancer_subnet_id)[8]
   resource_group_name  = split("/", var.ingress_load_balancer_subnet_id)[4]
 }
 
 data "azurerm_subnet" "byo_sandbox_subnet" {
-  count                = local.separate_cluster_sandboxes && local.byo_sandbox_subnet ? 1 : 0
+  count                = local.external_sandbox_runtime && local.byo_sandbox_subnet ? 1 : 0
   name                 = split("/", var.sandbox_subnet_id)[10]
   virtual_network_name = split("/", var.sandbox_subnet_id)[8]
   resource_group_name  = split("/", var.sandbox_subnet_id)[4]
@@ -2137,7 +2137,7 @@ module "redis" {
 # rather than a precondition, because bringing that pool is a supported path.
 check "sandbox_pool_on_attached_cluster" {
   assert {
-    condition     = !local.same_cluster_sandboxes || var.create_cluster || var.existing_cluster_node_pools_managed
+    condition     = !local.in_cluster_sandbox_runtime || var.create_cluster || var.existing_cluster_node_pools_managed
     error_message = "enable_sandboxes = true on an attached cluster with existing_cluster_node_pools_managed = false: Terraform does not create the sandboxhost pool. Add a pool with nested virtualization, the sandbox.langsmith.com/host=true label, and the sandbox.langsmith.com/host=true:NoSchedule taint, and set sandbox_host_min_count and sandbox_host_max_count to its bounds, which init-values.sh writes as the sandbox-host replica bounds. Or set existing_cluster_node_pools_managed = true so Terraform adds the pool."
   }
 }
@@ -2190,7 +2190,7 @@ resource "azurerm_federated_identity_credential" "sandbox_host" {
   name                      = "langsmith-federated-${local.sandbox_host_service_account}"
   user_assigned_identity_id = azurerm_user_assigned_identity.sandbox_host[0].id
   audience                  = ["api://AzureADTokenExchange"]
-  issuer                    = local.separate_cluster_sandboxes ? module.sandbox_aks[0].oidc_issuer_url : module.aks.oidc_issuer_url
+  issuer                    = local.external_sandbox_runtime ? module.sandbox_aks[0].oidc_issuer_url : module.aks.oidc_issuer_url
   subject                   = "system:serviceaccount:${local.sandbox_host_namespace}:${local.sandbox_host_service_account}"
 }
 
@@ -2206,7 +2206,7 @@ resource "azurerm_role_assignment" "sandbox_host_blob" {
 }
 
 # ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
-# sandbox_deployment_mode = "separate_cluster": a second AKS cluster in the same
+# sandbox_runtime_source = "external": a second AKS cluster in the same
 # VNet runs sandbox-host from the langsmith-sandbox chart, so untrusted sandbox
 # code never shares a node or a cluster with LangSmith. The JuiceFS Redis,
 # container and identity above stay where they are; the identity's federated
@@ -2223,7 +2223,7 @@ resource "azurerm_role_assignment" "sandbox_host_blob" {
 locals {
   # One exact chart version (SemVer, optional prerelease) on 0.18 or later.
   # Keep in step with helm/scripts/deploy.sh.
-  separate_cluster_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+  external_runtime_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
 
   # Both pools of the sandbox cluster draw from its subnet: each node and one
   # surge node per pool, one address apiece under overlay.
@@ -2234,17 +2234,17 @@ locals {
 }
 
 resource "terraform_data" "sandbox_cluster_guard" {
-  count = local.separate_cluster_sandboxes ? 1 : 0
-  input = var.sandbox_deployment_mode
+  count = local.external_sandbox_runtime ? 1 : 0
+  input = var.sandbox_runtime_source
 
   lifecycle {
     # deploy.sh pairs the langsmith-sandbox chart with the langsmith chart by
     # appVersion, so the langsmith chart has to be one version, and on the
-    # first line with separateCluster. deploy.sh checks CHART_VERSION the same
+    # first line with sandboxes.external. deploy.sh checks CHART_VERSION the same
     # way, since that environment variable overrides this.
     precondition {
-      condition     = can(regex(local.separate_cluster_chart_version_pattern, var.langsmith_helm_chart_version))
-      error_message = "sandbox_deployment_mode = \"separate_cluster\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
+      condition     = can(regex(local.external_runtime_chart_version_pattern, var.langsmith_helm_chart_version))
+      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
     }
 
     # sandbox-host calls the LangSmith API with signed tokens and sandbox data
@@ -2253,21 +2253,21 @@ resource "terraform_data" "sandbox_cluster_guard" {
     # ingress is the operator's own, and so is its TLS.
     precondition {
       condition     = var.tls_certificate_source != "none" || var.ingress_load_balancer == "internal" || var.ingress_controller == "none"
-      error_message = "sandbox_deployment_mode = \"separate_cluster\" with ingress_load_balancer = \"public\" and tls_certificate_source = \"none\" would send sandbox-host's calls to the LangSmith API over the internet in plaintext. Set ingress_load_balancer = \"internal\", which keeps them inside the VNet, or configure TLS with tls_certificate_source."
+      error_message = "sandbox_runtime_source = \"external\" with ingress_load_balancer = \"public\" and tls_certificate_source = \"none\" would send sandbox-host's calls to the LangSmith API over the internet in plaintext. Set ingress_load_balancer = \"internal\", which keeps them inside the VNet, or configure TLS with tls_certificate_source."
     }
 
     # A supplied private DNS zone needs a user-assigned control-plane identity
     # with grants on the zone, which the sandbox cluster does not take.
     precondition {
       condition     = !var.aks_private_cluster_enabled || contains(["", "System", "None"], var.aks_private_dns_zone_id)
-      error_message = "sandbox_deployment_mode = \"separate_cluster\" supports aks_private_dns_zone_id \"\", \"System\" or \"None\" on a private cluster. The sandbox cluster follows the LangSmith cluster's private API server setting with a system-assigned identity, which cannot register in a supplied zone."
+      error_message = "sandbox_runtime_source = \"external\" supports aks_private_dns_zone_id \"\", \"System\" or \"None\" on a private cluster. The sandbox cluster follows the LangSmith cluster's private API server setting with a system-assigned identity, which cannot register in a supplied zone."
     }
 
     # The override only reaches the LangSmith cluster, where it would add a
     # tainted pool nothing schedules on.
     precondition {
       condition     = !contains(keys(var.additional_node_pools), "sandboxhost")
-      error_message = "additional_node_pools.sandboxhost replaces the sandbox-host pool in same_cluster mode only. With sandbox_deployment_mode = \"separate_cluster\" the pool is in the sandbox cluster: remove the entry and size it with sandbox_host_vm_size, sandbox_host_min_count, sandbox_host_max_count and sandbox_host_os_disk_size_gb."
+      error_message = "additional_node_pools.sandboxhost replaces the sandbox-host pool with the in-cluster runtime only. With sandbox_runtime_source = \"external\" the pool is in the sandbox cluster: remove the entry and size it with sandbox_host_vm_size, sandbox_host_min_count, sandbox_host_max_count and sandbox_host_os_disk_size_gb."
     }
 
     # The Blob firewall allowlists the sandbox subnet by ID, and Azure rejects
@@ -2283,7 +2283,7 @@ resource "terraform_data" "sandbox_cluster_guard" {
     # supplied, as aks_subnet_id is.
     precondition {
       condition     = var.aks_outbound_type == "loadBalancer" || local.byo_sandbox_subnet
-      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" with sandbox_deployment_mode = \"separate_cluster\" needs sandbox_subnet_id: a subnet you own that carries the same egress path (a route table to your firewall, or a NAT gateway) as aks_subnet_id. Otherwise the sandbox cluster, which runs untrusted code, would get its own outbound IP and skip that path."
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" with sandbox_runtime_source = \"external\" needs sandbox_subnet_id: a subnet you own that carries the same egress path (a route table to your firewall, or a NAT gateway) as aks_subnet_id. Otherwise the sandbox cluster, which runs untrusted code, would get its own outbound IP and skip that path."
     }
 
     precondition {
@@ -2301,7 +2301,7 @@ resource "terraform_data" "sandbox_cluster_guard" {
 }
 
 module "sandbox_aks" {
-  count               = local.separate_cluster_sandboxes ? 1 : 0
+  count               = local.external_sandbox_runtime ? 1 : 0
   source              = "./modules/sandbox-aks"
   cluster_name        = local.sandbox_aks_name
   location            = var.location
@@ -2370,7 +2370,7 @@ provider "kubernetes" {
 
 resource "kubernetes_namespace_v1" "sandbox" {
   provider = kubernetes.sandbox
-  count    = local.separate_cluster_sandboxes ? 1 : 0
+  count    = local.external_sandbox_runtime ? 1 : 0
 
   metadata {
     name = var.sandbox_namespace
@@ -2381,16 +2381,16 @@ resource "kubernetes_namespace_v1" "sandbox" {
 }
 
 # Same Secret, keys and write-only handling as k8s-bootstrap's copy for
-# same_cluster: the runtime chart reads it as juicefs.existingSecretName, and a
+# In-cluster runtime: the runtime chart reads it as juicefs.existingSecretName, and a
 # replaced Redis rewrites it without a revision bump.
 resource "terraform_data" "sandbox_cluster_juicefs_redis" {
-  count = local.separate_cluster_sandboxes ? 1 : 0
+  count = local.external_sandbox_runtime ? 1 : 0
   input = module.sandbox_juicefs_redis[0].id
 }
 
 resource "kubernetes_secret_v1" "sandbox_cluster_juicefs" {
   provider = kubernetes.sandbox
-  count    = local.separate_cluster_sandboxes ? 1 : 0
+  count    = local.external_sandbox_runtime ? 1 : 0
 
   metadata {
     name      = var.sandbox_juicefs_csi_config_secret_name
@@ -2482,7 +2482,7 @@ module "blob" {
   # Operators with extra clients (CI runners, jumpboxes) add their public IPs
   # via var.storage_allowed_ips. A dedicated sandbox cluster reaches the JuiceFS
   # container from its own subnet, which carries the endpoint too.
-  allowed_subnet_ids = concat([local.aks_subnet_id], local.separate_cluster_sandboxes ? [local.sandbox_subnet_id] : [])
+  allowed_subnet_ids = concat([local.aks_subnet_id], local.external_sandbox_runtime ? [local.sandbox_subnet_id] : [])
   allowed_ips        = var.storage_allowed_ips
 
   # Customer-managed key; Azure accepts it on an existing account too.
@@ -2675,18 +2675,18 @@ module "k8s_bootstrap" {
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
   tags                             = local.common_tags
 
-  # Sandboxes in this cluster (same_cluster only): the NetworkPolicy that lets
+  # Sandboxes in this cluster (in-cluster runtime only): the NetworkPolicy that lets
   # sandbox-host on the node network reach platform-backend, and its JuiceFS
-  # config Secret. In separate_cluster mode the LangSmith namespace gets
+  # config Secret. With an external runtime the LangSmith namespace gets
   # neither, and the Secret goes to the sandbox cluster instead.
-  enable_sandboxes                = local.same_cluster_sandboxes
+  enable_sandboxes                = local.in_cluster_sandbox_runtime
   platform_backend_component      = "${local.langsmith_release_fullname}-platform-backend"
   network_policy_engine           = module.aks.network_policy_engine
   node_subnet_cidrs               = local.aks_subnet_prefixes
   sandbox_juicefs_secret_name     = var.sandbox_juicefs_csi_config_secret_name
-  sandbox_juicefs_config          = local.same_cluster_sandboxes ? local.sandbox_juicefs_config : {}
+  sandbox_juicefs_config          = local.in_cluster_sandbox_runtime ? local.sandbox_juicefs_config : {}
   sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
-  sandbox_juicefs_redis_id        = local.same_cluster_sandboxes ? module.sandbox_juicefs_redis[0].id : null
+  sandbox_juicefs_redis_id        = local.in_cluster_sandbox_runtime ? module.sandbox_juicefs_redis[0].id : null
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.

@@ -22,9 +22,9 @@ set -euo pipefail
 #                             pods via config.existingSecretName in Helm values.
 #                             With enable_sandboxes = true it also carries
 #                             sandbox_callback_signing_jwk, and with
-#                             sandbox_deployment_mode = separate_cluster
+#                             sandbox_runtime_source = external
 #                             sandbox_service_auth_secret.
-#   langsmith-sandbox-runtime — separate_cluster only, in the sandbox cluster's
+#   langsmith-sandbox-runtime — external runtime only, in the sandbox cluster's
 #                             namespace: exactly sandbox_service_auth_secret and
 #                             sandbox_callback_signing_jwk, never a copy of
 #                             langsmith-config-secret. Read by the
@@ -100,7 +100,7 @@ fi
 
 # The sandbox secrets go to kubectl as files in a private directory rather than
 # as --from-literal arguments, which any user on the host can read from ps. The
-# directory also holds the sandbox cluster's kubeconfig in separate_cluster mode.
+# directory also holds the sandbox cluster's kubeconfig with an external runtime.
 _SECRETS_TMP=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/langsmith-secrets.XXXXXX")
 trap 'rm -rf "$_SECRETS_TMP"' EXIT
 
@@ -117,10 +117,10 @@ elif _tfvar_is_true "enable_sandboxes"; then
   exit 1
 fi
 
-# separate_cluster: the dedicated sandbox service-auth secret, under the key the
+# External runtime: the dedicated sandbox service-auth secret, under the key the
 # langsmith chart reads through sandboxes.serviceAuth.secretKey. The sandbox
 # cluster runs untrusted code, so it gets this secret and never api_key_salt;
-# the chart refuses separateCluster on the salt, and so does this script.
+# the chart refuses sandboxes.external.enabled on the salt, and so does this script.
 # Copied whenever the vault holds it, like the JWK.
 if _kv_exists "langsmith-sandbox-service-auth-secret"; then
   printf '%s' "$(_kv "langsmith-sandbox-service-auth-secret")" > "$_SECRETS_TMP/sandbox_service_auth_secret"
@@ -131,8 +131,8 @@ if _kv_exists "langsmith-sandbox-service-auth-secret"; then
     exit 1
   fi
   _SANDBOX_ARGS+=("--from-file=sandbox_service_auth_secret=$_SECRETS_TMP/sandbox_service_auth_secret")
-elif _separate_cluster_sandboxes; then
-  echo "  ERROR: sandbox_deployment_mode = separate_cluster but Key Vault '$KV_NAME' has no langsmith-sandbox-service-auth-secret." >&2
+elif _external_sandbox_runtime; then
+  echo "  ERROR: sandbox_runtime_source = external but Key Vault '$KV_NAME' has no langsmith-sandbox-service-auth-secret." >&2
   echo "         Run: make seed-secrets, then re-run this script." >&2
   exit 1
 fi
@@ -184,7 +184,7 @@ REQUIRED_KEYS=(
 if _tfvar_is_true "enable_sandboxes"; then
   REQUIRED_KEYS+=("sandbox_callback_signing_jwk")
 fi
-if _separate_cluster_sandboxes; then
+if _external_sandbox_runtime; then
   REQUIRED_KEYS+=("sandbox_service_auth_secret")
 fi
 
@@ -228,16 +228,16 @@ if _kv_exists "smithdb-taskdb-password"; then
 else
   echo "  smithdb-taskdb-password not in Key Vault; skipping smithdb-taskdb (run make seed-secrets)"
 fi
-# ── Sandbox runtime secret (separate_cluster) ──────────────────────────────────
+# ── Sandbox runtime secret (external runtime) ──────────────────────────────────
 # The langsmith-sandbox release in the sandbox cluster reads these two values
 # from a Secret of its own: the same service-auth secret and JWK as above, so
 # both clusters agree. Written through a kubeconfig of its own, so the current
 # context stays on the LangSmith cluster. Terraform created the namespace.
-if _separate_cluster_sandboxes; then
+if _external_sandbox_runtime; then
   echo ""
   if ! SANDBOX_NAMESPACE=$(_tf_out sandbox_namespace) \
     || ! SANDBOX_CLUSTER=$(_tf_out sandbox_cluster_name); then
-    echo "  ERROR: the sandbox cluster outputs are missing. Run make apply with sandbox_deployment_mode = separate_cluster first." >&2
+    echo "  ERROR: the sandbox cluster outputs are missing. Run make apply with sandbox_runtime_source = external first." >&2
     exit 1
   fi
   SANDBOX_RUNTIME_SECRET=$(_tf_out sandbox_runtime_secret_name) || SANDBOX_RUNTIME_SECRET="langsmith-sandbox-runtime"

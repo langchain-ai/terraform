@@ -1,7 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # Module: sandbox-aks
 # Purpose: The dedicated AKS cluster that runs the langsmith-sandbox chart when
-#          sandbox_deployment_mode = "separate_cluster".
+#          sandbox_runtime_source = "external".
 #
 # A thin cluster on purpose. k8s-cluster declares a helm provider and installs
 # the ingress controller and LangSmith's identities, and k8s-bootstrap declares

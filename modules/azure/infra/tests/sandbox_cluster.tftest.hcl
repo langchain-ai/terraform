@@ -1,8 +1,8 @@
-# sandbox_deployment_mode = "separate_cluster": a dedicated sandbox AKS cluster
+# sandbox_runtime_source = "external": a dedicated sandbox AKS cluster
 # in the LangSmith VNet, its subnet and NSG, the identity's move to the sandbox
 # cluster's issuer, the Secret written there, the LangSmith cluster without the
-# same_cluster changes, and every refusal on terraform_data.sandbox_cluster_guard.
-# sandboxes.tftest.hcl covers same_cluster. Mocked providers, so no credentials
+# in-cluster changes, and every refusal on terraform_data.sandbox_cluster_guard.
+# sandboxes.tftest.hcl covers the in-cluster runtime. Mocked providers, so no credentials
 # and no state.
 #
 # module.sandbox_aks is overridden in the root runs, so its outputs are known at
@@ -63,25 +63,25 @@ variables {
   postgres_admin_password = "fixture-not-a-real-secret-Aa1"
 
   enable_sandboxes             = true
-  sandbox_deployment_mode      = "separate_cluster"
+  sandbox_runtime_source       = "external"
   langsmith_helm_chart_version = "0.18.0"
 }
 
 # ── The dedicated cluster ─────────────────────────────────────────────────────
 
-run "separate_cluster_creates_the_sandbox_cluster" {
+run "external_runtime_creates_the_sandbox_cluster" {
   command = plan
 
   assert {
     condition     = length(module.sandbox_aks) == 1 && length(terraform_data.sandbox_cluster_guard) == 1
-    error_message = "separate_cluster did not plan the sandbox cluster"
+    error_message = "the external runtime did not plan the sandbox cluster"
   }
   assert {
     condition     = output.sandbox_cluster_name == "langsmith-sbox-aks" && output.sandbox_cluster_resource_group_name == output.resource_group_name
     error_message = "The sandbox cluster outputs do not name the cluster and its resource group"
   }
   assert {
-    condition     = output.sandbox_deployment_mode == "separate_cluster" && output.sandbox_namespace == "langsmith-sandbox" && output.sandbox_service_account_name == "sandbox-host" && output.sandbox_runtime_secret_name == "langsmith-sandbox-runtime"
+    condition     = output.sandbox_runtime_source == "external" && output.sandbox_namespace == "langsmith-sandbox" && output.sandbox_service_account_name == "sandbox-host" && output.sandbox_runtime_secret_name == "langsmith-sandbox-runtime"
     error_message = "The outputs init-values.sh and create-k8s-secrets.sh read are not the defaults"
   }
   assert {
@@ -125,15 +125,15 @@ run "the_langsmith_cluster_gets_no_sandbox_changes" {
 
   assert {
     condition     = !contains(keys(local.effective_node_pools), "sandboxhost")
-    error_message = "separate_cluster still added the sandboxhost pool to the LangSmith cluster"
+    error_message = "the external runtime still added the sandboxhost pool to the LangSmith cluster"
   }
   assert {
     condition     = module.k8s_bootstrap.sandbox_juicefs_secret_name == null
-    error_message = "separate_cluster still planned the JuiceFS Secret in the LangSmith namespace"
+    error_message = "the external runtime still planned the JuiceFS Secret in the LangSmith namespace"
   }
   assert {
     condition     = module.k8s_bootstrap.platform_backend_node_ingress == null
-    error_message = "separate_cluster still admitted the LangSmith node subnet to platform-backend"
+    error_message = "the external runtime still admitted the LangSmith node subnet to platform-backend"
   }
 }
 
@@ -194,7 +194,7 @@ run "the_sandbox_subnet_admits_sandbox_host_from_the_aks_subnet_only" {
 
   assert {
     condition     = local.create_sandbox_subnet && module.vnet.sandbox_nsg_rules != null
-    error_message = "separate_cluster did not carve the sandbox subnet with its NSG"
+    error_message = "the external runtime did not carve the sandbox subnet with its NSG"
   }
   assert {
     condition = length([
@@ -283,28 +283,28 @@ run "an_internal_load_balancer_subnet_is_reachable_from_sandbox_nodes" {
   }
 }
 
-run "same_cluster_plans_no_sandbox_cluster" {
+run "in_cluster_runtime_plans_no_sandbox_cluster" {
   command = plan
 
   variables {
-    sandbox_deployment_mode = "same_cluster"
+    sandbox_runtime_source = "in-cluster"
   }
 
   assert {
     condition     = length(module.sandbox_aks) == 0 && length(kubernetes_namespace_v1.sandbox) == 0 && length(kubernetes_secret_v1.sandbox_cluster_juicefs) == 0 && length(terraform_data.sandbox_cluster_guard) == 0
-    error_message = "same_cluster still planned the sandbox cluster or its objects"
+    error_message = "the in-cluster runtime still planned the sandbox cluster or its objects"
   }
   assert {
     condition     = module.vnet.subnet_sandbox_id == null && module.vnet.sandbox_nsg_rules == null
-    error_message = "same_cluster still carved the sandbox subnet"
+    error_message = "the in-cluster runtime still carved the sandbox subnet"
   }
   assert {
-    condition     = output.sandbox_cluster_name == null && output.sandbox_namespace == null && output.sandbox_deployment_mode == "same_cluster"
-    error_message = "same_cluster still output the sandbox cluster"
+    condition     = output.sandbox_cluster_name == null && output.sandbox_namespace == null && output.sandbox_runtime_source == "in-cluster"
+    error_message = "the in-cluster runtime still output the sandbox cluster"
   }
   assert {
     condition     = contains(keys(local.effective_node_pools), "sandboxhost")
-    error_message = "same_cluster lost the sandboxhost pool"
+    error_message = "the in-cluster runtime lost the sandboxhost pool"
   }
 }
 
