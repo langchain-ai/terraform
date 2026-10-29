@@ -163,12 +163,16 @@ Prepare the network before you create the data plane:
 
 | Subnet | Minimum size | Requirements |
 |--------|--------------|--------------|
-| AKS | `/22` | The `Microsoft.Storage` service endpoint. A NAT gateway (`NAT_GATEWAY`) or a route table with your default route (`USER_DEFINED_ROUTING`). No delegation. |
+| AKS | `/22` | The `Microsoft.Storage` service endpoint. A NAT gateway (`NAT_GATEWAY`), or a route table with a `0.0.0.0/0` route to a `VirtualAppliance` or `VirtualNetworkGateway` next hop (`USER_DEFINED_ROUTING`). AKS does not accept the `Internet` next hop. No delegation. |
 | PostgreSQL | `/28` | No delegation. LangSmith adds private endpoints for the two PostgreSQL servers. |
 | Redis | `/28` | No delegation. LangSmith adds a private endpoint for Redis. |
 | Private link | `/29` | No delegation. LangSmith adds a private endpoint to the LangSmith control plane. |
 
 All four subnets must be in one address prefix of the VNet. Your NSGs must let the AKS subnet reach PostgreSQL (TCP 5432), Redis (TCP 10000 and 8500-8599), and the private link subnet (TCP 443).
+
+With a public load balancer (`public_load_balancer` in the create request), an NSG on the AKS subnet must allow inbound TCP 80 and 443 from the Internet.
+
+With `USER_DEFINED_ROUTING`, the replies of a public load balancer also use your default route, so the connections fail. Use an internal load balancer, or add routes with the `Internet` next hop for the client ranges.
 
 The module gives LangSmith a custom role on the VNet with only these actions: read the VNet and the subnets, join the subnets, join the VNet, and read role assignments. It also creates the AKS identity and gives it `Network Contributor` on the AKS subnet. LangSmith checks the network, the role, and the identity before it creates the data plane.
 

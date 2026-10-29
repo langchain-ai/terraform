@@ -24,7 +24,9 @@ variable "data_planes" {
     reduced_access = optional(bool, false)
     # An existing VNet in this subscription, in any resource group. See
     # network.tf. outbound_type is NAT_GATEWAY or USER_DEFINED_ROUTING: the
-    # NAT gateway or the route table must already be on the AKS subnet.
+    # NAT gateway or the route table must already be on the AKS subnet. With
+    # USER_DEFINED_ROUTING, the 0.0.0.0/0 route must use a VirtualAppliance or
+    # VirtualNetworkGateway next hop.
     existing_network = optional(object({
       vnet_id                = string
       aks_subnet_id          = string
