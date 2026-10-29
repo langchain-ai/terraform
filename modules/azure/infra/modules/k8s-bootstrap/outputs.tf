@@ -61,6 +61,16 @@ output "platform_backend_node_ingress" {
   ])
 }
 
+output "keda_postgres_ingress" {
+  description = "Source namespace and ports of the NetworkPolicy that admits KEDA to the PostgreSQL pods in the LangSmith namespace, or null when this module installs no KEDA."
+  value = one([
+    for p in kubernetes_network_policy_v1.langsmith_allow_keda_postgres : {
+      namespace = p.spec[0].ingress[0].from[0].namespace_selector[0].match_labels["kubernetes.io/metadata.name"]
+      ports     = [for port in p.spec[0].ingress[0].ports : "${port.protocol}/${port.port}"]
+    }
+  ])
+}
+
 output "smithdb_cache_disk_tags" {
   description = "The tags parameter of the SmithDB cache StorageClass, which the disk CSI driver puts on each disk it creates. null when SmithDB is off."
   value       = var.enable_smithdb ? lookup(kubernetes_storage_class_v1.smithdb_cache[0].parameters, "tags", null) : null

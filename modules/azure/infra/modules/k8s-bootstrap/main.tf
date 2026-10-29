@@ -305,6 +305,42 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
   }
 }
 
+# KEDA's operator (the release below, namespace keda) evaluates the ScaledObject
+# of each LangSmith deployment, which polls that deployment's PostgreSQL on 5432.
+# The LangSmith operator runs those databases in this namespace, so the
+# default-deny policy above drops the poll: the ScaledObject reports
+# KEDAScalerFailed and the deployment never scales past one replica. The
+# databases carry only app: <service name>, so the rule selects by port. KEDA
+# still needs the credentials from the deployment's Secret; this grants reach.
+resource "kubernetes_network_policy_v1" "langsmith_allow_keda_postgres" {
+  count = var.install_keda ? 1 : 0
+
+  metadata {
+    name      = "allow-keda-to-postgres"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {}
+
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = helm_release.keda[0].namespace
+          }
+        }
+      }
+      ports {
+        protocol = "TCP"
+        port     = "5432"
+      }
+    }
+
+    policy_types = ["Ingress"]
+  }
+}
+
 # sandbox-host runs on the host network, so its calls to platform-backend come
 # from a node IP, which no namespace rule above matches. Azure NPM matches node
 # IPs by ipBlock, so this admits the node subnet to platform-backend's API port
