@@ -57,6 +57,11 @@ run "sandboxes_on" {
   }
 
   assert {
+    condition     = alltrue([for k, l in kubernetes_labels.sandbox_host : l.field_manager != kubernetes_node_taint.sandbox_host[k].field_manager])
+    error_message = "The label and the taint have their own field managers: one owner drops the other's field on every apply."
+  }
+
+  assert {
     condition     = output.langsmith_helm_values.sandboxes.enabled && output.langsmith_helm_values.sandboxes.sandboxHost.deployment.replicas == 2 && output.langsmith_helm_values.sandboxes.sandboxHost.deployment.nodeSelector["sandbox.langsmith.com/host"] == "true"
     error_message = "One sandbox-host per sandbox node, pinned by the label the chart requires."
   }
@@ -147,6 +152,56 @@ run "engine_needs_https" {
   expect_failures = [terraform_data.sandboxes]
 }
 
+run "engine_gateway_needs_https" {
+  command = plan
+
+  variables {
+    enable_sandboxes               = true
+    sandbox_hosts                  = ["worker-2"]
+    sandbox_source_cidrs           = ["192.0.2.0/24"]
+    enable_engine                  = true
+    langsmith_url_scheme           = "https"
+    langsmith_domain               = "langsmith.example.com"
+    engine_gateway_openai_base_url = "http://gateway.example.com/openai/v1"
+  }
+
+  expect_failures = [terraform_data.sandboxes]
+}
+
+run "engine_through_a_gateway" {
+  command = plan
+
+  variables {
+    enable_sandboxes               = true
+    sandbox_hosts                  = ["worker-2"]
+    sandbox_source_cidrs           = ["192.0.2.0/24"]
+    enable_engine                  = true
+    langsmith_url_scheme           = "https"
+    langsmith_domain               = "langsmith.example.com"
+    enable_usage_telemetry         = true
+    engine_gateway_openai_base_url = "https://gateway.example.com/openai/v1"
+  }
+
+  assert {
+    condition     = output.features.engine_gateway && contains(output.langsmith_helm_values.commonEnv, { name = "ENGINE_GATEWAY_APIS", value = "[\"openai\"]" })
+    error_message = "LangSmith is told which APIs the gateway serves, on every component."
+  }
+
+  assert {
+    condition     = length(output.langsmith_helm_values.commonEnv) == 2
+    error_message = "The gateway's env and the telemetry flag share one commonEnv list; Helm would keep only one of two."
+  }
+
+  assert {
+    condition = alltrue([for w in ["apiServer", "queue"] : (
+      contains([for e in output.langsmith_helm_values.engineInsightsAgent[w].deployment.extraEnv : e.name], "ENGINE_GATEWAY_OPENAI_BASE_URL")
+      && output.langsmith_helm_values.engineInsightsAgent[w].deployment.volumes[0].secret.secretName == "engine-model-gateway"
+      && can(output.langsmith_helm_values.engineInsightsAgent[w].deployment.resources)
+    )])
+    error_message = "Both Engine workloads get the gateway URL and its key, keeping their resources."
+  }
+}
+
 run "engine_on" {
   command = plan
 
@@ -167,6 +222,11 @@ run "engine_on" {
   assert {
     condition     = output.features.engine && contains(keys(output.features.standalone), "insights")
     error_message = "Engine brings the Insights deployment it runs on."
+  }
+
+  assert {
+    condition     = !output.features.engine_gateway && !can(output.langsmith_helm_values.commonEnv) && !can(output.langsmith_helm_values.engineInsightsAgent.apiServer.deployment.extraEnv)
+    error_message = "Without a gateway URL, Engine gets no gateway settings."
   }
 
   assert {

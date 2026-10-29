@@ -88,6 +88,8 @@ output "features" {
     sso_oidc     = var.enable_sso_oidc
     sandboxes    = var.enable_sandboxes
     engine       = var.enable_engine
+    # deploy.sh makes the engine-model-gateway Secret from ENGINE_GATEWAY_API_KEY.
+    engine_gateway = local.engine_gateway
     standalone = {
       for name, db in local.standalone_features : name => {
         database        = db

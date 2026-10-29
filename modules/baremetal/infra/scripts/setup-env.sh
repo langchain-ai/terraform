@@ -140,6 +140,10 @@ fi
 if _tfvar_is_true enable_engine; then
   _ensure_secret ENGINE_ENCRYPTION_KEY "" false "" _secret_gen_fernet
   _ensure_secret ENGINE_USAGE_SIGNING_SECRET "" false "" _secret_gen_hex32
+  # Engine through your LLM gateway: its key, mounted into Engine as a file by deploy.sh.
+  if [[ -n "$(_parse_tfvar engine_gateway_anthropic_base_url)$(_parse_tfvar engine_gateway_openai_base_url)" ]]; then
+    _ensure_secret ENGINE_GATEWAY_API_KEY "Your LLM gateway's key for Engine (input hidden)" true "" ""
+  fi
 fi
 
 # SSO: the identity provider's OIDC client, read by the chart from langsmith-config.

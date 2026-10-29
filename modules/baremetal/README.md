@@ -308,7 +308,8 @@ callback signing key. Needs the Sandboxes entitlement.
 
 `enable_engine = true` adds Engine on the shared Insights deployment, with its two keys in the app Secret. It needs
 Sandboxes, the Engine entitlement, and `https` with a domain, which its callbacks reach it on; `make plan` refuses it
-otherwise. `engine_intelligence_base_url` says where Engine runs its models.
+otherwise. Engine calls its models with provider keys, through your own LLM gateway (`engine_gateway_*_base_url`), or
+through LangSmith Intelligence (`engine_intelligence_base_url`): [ENGINE.md](ENGINE.md).
 
 ## Verify
 
@@ -319,6 +320,33 @@ curl -s -o /dev/null -w '%{http_code}\n' http://<gateway IP>/api/v1/info   # 200
 ```
 
 Then send a test trace with the LangSmith SDK (`LANGSMITH_ENDPOINT=http://<gateway IP>/api/v1`) and open it in the UI.
+
+## First use
+
+What a new install needs before its features work, from the
+[self-hosted usage docs](https://docs.langchain.com/langsmith/self-host-usage):
+
+| Address | What |
+|:--|:--|
+| `https://<domain>/` (or `http://<gateway IP>/`) | the UI |
+| `<host>/api/v1` | the API: `LANGSMITH_ENDPOINT` for the SDKs and the `langsmith` CLI |
+| `<host>/api/v1/otel` | OpenTelemetry ingest (`OTEL_EXPORTER_OTLP_ENDPOINT`) |
+| `<host>/api-host` | the Deployments control plane API, with `enable_deployments` |
+
+1. **An API key for applications.** Create it in this instance's UI under **Settings > API Keys**; a LangSmith Cloud
+   key is not valid here. Over HTTPS with a private CA, an application must trust that CA, and Python's SDK reads its
+   own roots, not the system's (`SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`, set to a bundle with the public roots and
+   your CA).
+2. **Models for the features that call one.** The Playground, evaluators, Insights, Polly, Chat and Fleet call a model
+   provider with the workspace's credentials: add provider keys under **Settings > Workspace > Secrets**, or a model
+   that points at your own OpenAI-compatible endpoint or gateway under **Settings > Model configurations**, enabled
+   for each feature. Fleet reads a `FLEET_`-prefixed key (`FLEET_OPENAI_API_KEY`) before the plain name
+   ([Fleet workspace secrets](https://docs.langchain.com/langsmith/fleet/workspace-admin#workspace-secrets)). Engine
+   has its own settings: [ENGINE.md](ENGINE.md).
+3. **OAuth login and Remote MCP.** On from the first deploy: `make setup-env` made the signing JWKS. Log in with
+   `langsmith auth login --api-url https://<domain>`.
+4. **Agent images for Deployments.** Push them to a registry the nodes can pull from, then create the deployment in the
+   UI ([deploy with the control plane](https://docs.langchain.com/langsmith/deploy-with-control-plane)).
 
 ## Repository layout
 
@@ -343,6 +371,7 @@ modules/baremetal/
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): components, namespaces, request and write paths, storage
 - [SMITHDB.md](SMITHDB.md): SmithDB on bare metal, recommended settings, known issues
+- [ENGINE.md](ENGINE.md): Engine, its keys, and how it reaches its models (provider keys, your gateway, LangSmith Intelligence)
 - [SIZING.md](SIZING.md): assumptions and formulas for Redis, ingest workers, query and storage
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md): symptoms, causes and fixes
 - [TEARDOWN.md](TEARDOWN.md): removing LangSmith and the module, and what data survives

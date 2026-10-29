@@ -59,6 +59,26 @@ variable "engine_intelligence_base_url" {
   description = "Where Engine runs its models: https://beacon.aws.langchain.com/intelligence for LangSmith Intelligence, the default for your own providers, \"\" when air-gapped."
 }
 
+# Engine through the customer's own LLM gateway (docs engine-self-hosted-model-providers, "Use a model
+# gateway"; chart 0.17.31 or later). Set the URL of each API the gateway serves; make setup-env asks its key.
+variable "engine_gateway_anthropic_base_url" {
+  type        = string
+  default     = ""
+  description = "The base URL an Anthropic SDK would use for your gateway; Engine calls <url>/v1/messages. HTTPS, with no redirect. Empty: Engine does not use the gateway's Anthropic API."
+}
+
+variable "engine_gateway_openai_base_url" {
+  type        = string
+  default     = ""
+  description = "The base URL an OpenAI SDK would use for your gateway, usually ending in /v1; Engine calls <url>/responses. HTTPS, with no redirect. Empty: Engine does not use the gateway's OpenAI API."
+}
+
+variable "engine_gateway_auth_header" {
+  type        = string
+  default     = ""
+  description = "The header your gateway reads its key from, such as x-api-key. Empty: Engine sends Authorization: Bearer <key>."
+}
+
 locals {
   juicefs_bucket = "sandbox-juicefs"
   # The JuiceFS Redis's 256Mi is a floor, unmeasured: size it from the first sandbox load test.
@@ -70,7 +90,30 @@ locals {
     var.enable_sandboxes && length(var.sandbox_source_cidrs) == 0 ? "enable_sandboxes needs sandbox_source_cidrs: sandbox-host runs on the host network" : "",
     var.enable_engine && !var.enable_sandboxes ? "enable_engine needs enable_sandboxes: every Engine run executes in a sandbox" : "",
     var.enable_engine && var.langsmith_url_scheme != "https" ? "enable_engine needs langsmith_url_scheme = https with langsmith_domain: the sandboxes call LangSmith at a TLS hostname" : "",
+    length(local.engine_gateway_apis) > 0 && !var.enable_engine ? "engine_gateway_*_base_url needs enable_engine" : "",
+    length([for u in [var.engine_gateway_anthropic_base_url, var.engine_gateway_openai_base_url] : u if u != "" && !startswith(u, "https://")]) > 0 ? "engine_gateway_*_base_url must start with https://: Engine follows no redirect" : "",
   ])
+
+  engine_gateway_apis = compact([
+    var.engine_gateway_anthropic_base_url != "" ? "anthropic" : "",
+    var.engine_gateway_openai_base_url != "" ? "openai" : "",
+  ])
+  engine_gateway = var.enable_engine && length(local.engine_gateway_apis) > 0
+  # Both Engine workloads get the URLs and the key, mounted from the Secret deploy.sh makes. Engine reads
+  # the file at the start of each run, so a rotated key needs no restart. Through JSON: Terraform will
+  # not unify this object with {} in a conditional.
+  engine_gateway_deployment = jsondecode(local.engine_gateway ? jsonencode({
+    extraEnv = concat(
+      var.engine_gateway_anthropic_base_url != "" ? [{ name = "ENGINE_GATEWAY_ANTHROPIC_BASE_URL", value = var.engine_gateway_anthropic_base_url }] : [],
+      var.engine_gateway_openai_base_url != "" ? [{ name = "ENGINE_GATEWAY_OPENAI_BASE_URL", value = var.engine_gateway_openai_base_url }] : [],
+      [{ name = "ENGINE_GATEWAY_API_KEY_FILE", value = "/etc/engine-gateway/api-key" }],
+      var.engine_gateway_auth_header != "" ? [{ name = "ENGINE_GATEWAY_AUTH_HEADER", value = var.engine_gateway_auth_header }] : [],
+    )
+    volumes      = [{ name = "engine-gateway", secret = { secretName = "engine-model-gateway" } }]
+    volumeMounts = [{ name = "engine-gateway", mountPath = "/etc/engine-gateway", readOnly = true }]
+  }) : "{}")
+  # On every component: LangSmith shows Model gateway in Engine's settings only when this is set.
+  engine_gateway_env = local.engine_gateway ? [{ name = "ENGINE_GATEWAY_APIS", value = jsonencode(local.engine_gateway_apis) }] : []
 
   # Pods the budget adds: one sandbox-host per sandbox node at the chart's requests, with its JuiceFS cache on that node's disk.
   sandbox_nodes = var.enable_sandboxes ? var.sandbox_hosts : []
@@ -134,7 +177,7 @@ module "redis_juicefs" {
   allowed_cidrs      = var.sandbox_source_cidrs
   datastore_label    = local.datastore_label
 
-  depends_on = [terraform_data.budget, terraform_data.sandboxes]
+  depends_on = [terraform_data.budget, terraform_data.sandboxes, kubernetes_node_taint.sandbox_host]
 }
 
 # The JuiceFS configuration the chart's format Job and sandbox-host read
@@ -164,13 +207,18 @@ resource "kubernetes_labels" "sandbox_host" {
     name = each.key
   }
   labels = { "sandbox.langsmith.com/host" = "true" }
+  # Its own field manager. Under the provider's default, Terraform, the label and the taint below were one
+  # owner of the Node under server-side apply, and each apply dropped the other's field: every plan
+  # re-added the label and every apply changed both (reed-lab, 2026-10-29).
+  field_manager = "langsmith-sandbox-label"
 }
 
 resource "kubernetes_node_taint" "sandbox_host" {
   for_each = var.enable_sandboxes ? toset(var.sandbox_hosts) : toset([])
   # A Node's taints are one atomic list, owned by whoever wrote it last: the kubelet registering the
   # node (field manager k3s on k3s). Without force the apply stops on that conflict (reed-lab, 2026-10-29).
-  force = true
+  force         = true
+  field_manager = "langsmith-sandbox-taint"
   metadata {
     name = each.key
   }

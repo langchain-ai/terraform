@@ -172,6 +172,21 @@ printf '%s\n' "$config_env" | _kubectl create secret generic langsmith-config \
 unset config_env
 pass "langsmith-config (${#config_pairs[@]} keys; values not printed)"
 
+# Engine's gateway key, the file ENGINE_GATEWAY_API_KEY_FILE names (infra/sandboxes.tf).
+if _feature_on engine_gateway; then
+  gateway_key="$(_secret_get ENGINE_GATEWAY_API_KEY)"
+  if [[ -z "$gateway_key" ]]; then
+    fail "ENGINE_GATEWAY_API_KEY is not set in $SECRETS_FILE — run make setup-env"
+    exit 1
+  fi
+  printf '%s' "$gateway_key" | _kubectl create secret generic engine-model-gateway \
+    --namespace "$NAMESPACE" \
+    --from-file=api-key=/dev/stdin \
+    --dry-run=client -o yaml | _kubectl apply -f - >/dev/null
+  unset gateway_key
+  pass "engine-model-gateway (1 key; value not printed)"
+fi
+
 # ── 2. Values files ──────────────────────────────────────────────────────────
 header "Values (in order, last wins)"
 

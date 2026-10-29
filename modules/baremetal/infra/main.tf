@@ -27,7 +27,9 @@ module "metrics_server" {
     limits   = { cpu = "500m", memory = "${local.addon_pods["metrics-server"].mem_mi * 2}Mi" }
   }
 
-  depends_on = [terraform_data.budget]
+  # Everything that runs a pod waits for the sandbox taint: a sandbox node takes nothing else, and a pod
+  # scheduled there before the taint stays (a datastore binds its volume to that node).
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 module "local_path" {
@@ -42,7 +44,7 @@ module "local_path" {
     limits   = { cpu = "200m", memory = "${local.addon_pods["local-path-provisioner"].mem_mi * 2}Mi" }
   }
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 module "metallb" {
@@ -63,7 +65,7 @@ module "metallb" {
     limits   = { cpu = "200m", memory = "128Mi" }
   }
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 # Terraform owns the langsmith namespace, so the Gateway (and later the
@@ -75,7 +77,7 @@ resource "kubernetes_namespace_v1" "langsmith" {
     labels = var.enable_sandboxes ? { "pod-security.kubernetes.io/enforce" = "privileged" } : {}
   }
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 module "envoy_gateway" {
@@ -133,7 +135,7 @@ module "cloudflared" {
     limits   = { memory = "256Mi" }
   }
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 # KEDA, for LangSmith Deployments only: the operator creates a ScaledObject per
@@ -169,7 +171,7 @@ resource "helm_release" "keda" {
     })
   ]
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 #------------------------------------------------------------------------------
@@ -195,7 +197,7 @@ module "postgres_langsmith" {
   datastore_label    = local.datastore_label
   extra_databases    = values(local.standalone_features)
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 module "postgres_smithdb" {
@@ -212,7 +214,7 @@ module "postgres_smithdb" {
   allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
   datastore_label    = local.datastore_label
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 #------------------------------------------------------------------------------
@@ -263,7 +265,7 @@ module "redis_langsmith" {
   allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
   datastore_label    = local.datastore_label
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 # LangSmith core reads REDIS_DATABASE_URI from connection_url. Unlike the
@@ -299,7 +301,7 @@ module "rustfs_smithdb" {
   allowed_cidrs      = var.enable_sandboxes ? var.sandbox_source_cidrs : []
   datastore_label    = local.datastore_label
 
-  depends_on = [terraform_data.budget]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 #------------------------------------------------------------------------------

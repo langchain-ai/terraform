@@ -75,8 +75,8 @@ locals {
     can(local._has["fleet-tool-server"]) ? { fleetToolServer = { deployment = { resources = local._fr["fleet-tool-server"] } } } : {},
     can(local._has["fleet-trigger-server"]) ? { fleetTriggerServer = { deployment = { resources = local._fr["fleet-trigger-server"] } } } : {},
     can(local._has["insights-api-server"]) ? { engineInsightsAgent = {
-      apiServer = { deployment = { resources = local._fr["insights-api-server"] } }
-      queue     = { deployment = { resources = local._fr["insights-queue"] } }
+      apiServer = { deployment = merge({ resources = local._fr["insights-api-server"] }, local.engine_gateway_deployment) }
+      queue     = { deployment = merge({ resources = local._fr["insights-queue"] }, local.engine_gateway_deployment) }
     } } : {},
     can(local._has["polly-api-server"]) ? { polly = {
       apiServer = { deployment = { resources = local._fr["polly-api-server"] } }
@@ -121,10 +121,14 @@ locals {
     local.clickhouse_values,
     local.sandbox_values,
     local.engine_values,
+    # One commonEnv list: Helm replaces a list whole, so two features each setting it would drop one.
+    length(local.common_env) > 0 ? { commonEnv = local.common_env } : {},
+  )
+
+  common_env = concat(
     # Same env var as modules/aws: extended usage reporting on every component.
-    var.enable_usage_telemetry ? {
-      commonEnv = [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }]
-    } : {},
+    var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
+    local.engine_gateway_env,
   )
 
   #----------------------------------------------------------------------------

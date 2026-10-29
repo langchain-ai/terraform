@@ -67,6 +67,10 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # enable_engine                = true                   # needs Sandboxes, https and langsmith_domain
 # engine_sandbox_tenant_id     = ""                     # required with more than one shared organization
 # engine_intelligence_base_url = "https://beacon.langchain.com/intelligence"
+# Engine through your own LLM gateway (chart 0.17.31+; ENGINE.md): the URL of each API it serves, https only.
+# engine_gateway_anthropic_base_url = ""                 # Engine calls <url>/v1/messages
+# engine_gateway_openai_base_url    = ""                 # Engine calls <url>/responses
+# engine_gateway_auth_header        = ""                 # default: Authorization: Bearer <key>
 
 # ── Optional: features (same flags as the cloud modules; all default false) ──
 
