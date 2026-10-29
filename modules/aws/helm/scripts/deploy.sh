@@ -53,10 +53,10 @@ if [[ -z "${CHART_VERSION:-}" ]]; then
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.17.0}"
-# separate_cluster runs sandbox-host from its own langsmith-sandbox release in
+# An external runtime runs sandbox-host from its own langsmith-sandbox release in
 # the sandbox cluster. That chart has no version setting here: it is the newest
 # one whose appVersion equals the langsmith chart's, resolved below.
-_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -101,19 +101,25 @@ _sandbox_service_auth_secret_key() {
 _validate_sandbox_values_file() {
   local values_file="$1"
 
-  # separate_cluster: the langsmith release runs no sandbox-host, so its values
-  # carry deploymentMode instead of the JuiceFS block; the runtime's values live
+  # External runtime: the langsmith release runs no sandbox-host, so its values
+  # carry sandboxes.external.enabled instead of the JuiceFS block; the runtime's values live
   # in their own generated file. They must also name the dedicated service-auth
-  # key: in separateCluster mode the chart refuses api_key_salt, the default
+  # key: with sandboxes.external.enabled the chart refuses api_key_salt, the default
   # key for an existing Secret.
-  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
     if [[ "$(_sandbox_values_state "$values_file")" == "legacy" ]] \
       || ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
       || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-      || ! grep -Eq '^[[:space:]]{2}deploymentMode:[[:space:]]*separateCluster[[:space:]]*$' "$values_file" \
+      || ! awk '/^sandboxes:[[:space:]]*$/ { s = 1; next }
+                s && /^[^[:space:]#]/ { s = 0 }
+                s && /^  external:[[:space:]]*$/ { e = 1; next }
+                e && /^  [^[:space:]]/ { e = 0 }
+                e && /^    enabled:[[:space:]]*true[[:space:]]*$/ { found = 1 }
+                END { exit !found }' "$values_file" \
+      || grep -Eq '^[[:space:]]{2}(deploymentMode|hostIngressEndpoint):' "$values_file" \
       || [[ "$(_sandbox_service_auth_secret_key "$values_file")" != "sandbox_service_auth_secret" ]] \
       || [[ ! -f "$SANDBOX_VALUES_FILE" ]]; then
-      echo "ERROR: separate_cluster sandbox values are missing or stale. Run: make init-values" >&2
+      echo "ERROR: external sandbox runtime values are missing or stale. Run: make init-values" >&2
       exit 1
     fi
     return 0
@@ -201,16 +207,16 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
 fi
 
-# separateCluster ships with chart 0.18, and the runtime chart is picked below by
+# sandboxes.external ships with chart 0.18, and the runtime chart is picked below by
 # this chart's appVersion, so the langsmith chart must be one exact version on
 # 0.18 or later: not the default 0.17 line and not a range. Terraform checks
 # langsmith_helm_chart_version the same way; this also covers CHART_VERSION.
-# Keep the pattern in step with separate_cluster_chart_version_pattern in
+# Keep the pattern in step with external_runtime_chart_version_pattern in
 # infra/locals.tf.
-_separate_cluster_chart_re='^(0\.(1[89]|[2-9][0-9])|[1-9][0-9]*\.[0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]] \
-  && ! [[ "$CHART_VERSION" =~ $_separate_cluster_chart_re ]]; then
-  echo "ERROR: sandbox_deployment_mode = separate_cluster needs one exact langsmith chart version" >&2
+_external_runtime_chart_re='^(0\.(1[89]|[2-9][0-9])|[1-9][0-9]*\.[0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]] \
+  && ! [[ "$CHART_VERSION" =~ $_external_runtime_chart_re ]]; then
+  echo "ERROR: sandbox_runtime_source = external needs one exact langsmith chart version" >&2
   echo "       on 0.18 or later; got CHART_VERSION='$CHART_VERSION'." >&2
   echo "       Set langsmith_helm_chart_version in terraform.tfvars, for example \"0.18.0\"." >&2
   echo "       The langsmith-sandbox chart is then picked by that chart's appVersion." >&2
@@ -258,7 +264,7 @@ fi
 
 _sandbox_cluster_name=""
 _sandbox_namespace=""
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   _sandbox_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || {
     echo "ERROR: Could not read sandbox_cluster_name. Is terraform apply complete?" >&2
     exit 1
@@ -330,7 +336,7 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
-  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
     _require_env "TF_VAR_sandbox_service_auth_secret"
   fi
   if [[ "$_direct_polly_enabled" == "true" ]]; then
@@ -352,7 +358,7 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
       --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
     )
   fi
-  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
     # The dedicated service-auth secret; Terraform writes the same value into
     # the sandbox cluster's runtime Secret.
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
@@ -841,7 +847,7 @@ if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
 fi
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: chart $_resolved_chart does not declare an appVersion for the Sandbox image." >&2
@@ -851,15 +857,15 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_clu
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag"
 fi
 
-# separate_cluster: the runtime chart pairs with the langsmith chart by
+# External runtime: the runtime chart pairs with the langsmith chart by
 # appVersion, which is the LangSmith release both deploy, never by chart
 # version. Install the newest langsmith-sandbox chart with the same appVersion.
 # Resolved here, before either release changes, so a missing runtime chart stops
 # the deploy instead of leaving the control plane upgraded without a runtime.
 _sandbox_chart_version=""
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   if ! command -v jq >/dev/null 2>&1; then
-    echo "ERROR: sandbox_deployment_mode = separate_cluster needs jq to pick the langsmith-sandbox chart." >&2
+    echo "ERROR: sandbox_runtime_source = external needs jq to pick the langsmith-sandbox chart." >&2
     exit 1
   fi
   _langsmith_app_version=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d "\"'")
@@ -955,7 +961,7 @@ for dep in "${_core_deployments[@]}"; do
   fi
 done
 
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   # Helm's fullname can include the chart name or an override, so select by the release labels.
   if ! kubectl rollout status deployment -n "$NAMESPACE" -l "app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host" --timeout=5m 2>/dev/null; then
     echo "  ⏳ sandbox-host for release ${RELEASE_NAME} not ready within 5m (sandbox-host nodes may still be starting)"
@@ -1022,7 +1028,7 @@ else
   echo "(Load balancer not yet ready — re-run deploy after a few minutes to get the hostname)"
 fi
 
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   # Read hostname and basePath from the *config:* block specifically. A bare
   # `grep '^\s*hostname:'` also matches the hostname keys that gateway and
   # sandbox overlays nest under other top-level maps, so it silently picks up
@@ -1047,7 +1053,7 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate
   _platform_base_path=$(_read_config_key "basePath")
 
   if [[ ! "$_platform_host" =~ ^https?://[^/]+ ]]; then
-    echo "ERROR: separate_cluster sandboxes need an absolute config.hostname in $(basename "$ENV_FILE")." >&2
+    echo "ERROR: an external sandbox runtime needs an absolute config.hostname in $(basename "$ENV_FILE")." >&2
     echo "       Found: '${_platform_host:-<empty>}'. Re-run 'make init-values' after the ALB is up," >&2
     echo "       or set langsmith_domain in terraform.tfvars." >&2
     exit 1

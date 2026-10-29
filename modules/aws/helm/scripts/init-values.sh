@@ -30,7 +30,7 @@
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
 #   - values/langsmith-sandbox-values-overrides.yaml (langsmith-sandbox chart, if
-#                                                     sandbox_deployment_mode = separate_cluster)
+#                                                     sandbox_runtime_source = external)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -61,7 +61,7 @@ _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
-_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
 # Envoy still deploys it. Reading the applied state keeps this script in agreement with
@@ -128,7 +128,7 @@ echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
 echo "  sizing_profile         = $_sizing_profile"
-echo "  sandbox_deployment_mode = $_sandbox_deployment_mode"
+echo "  sandbox_runtime_source = $_sandbox_runtime_source"
 echo ""
 
 # ── Terraform outputs ─────────────────────────────────────────────────────────
@@ -385,9 +385,9 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
       SANDBOX_JUICEFS_CACHE_DIRS+="${SANDBOX_JUICEFS_CACHE_DIRS:+ }${_dir}"
     fi
   done
-  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
     if [[ -z "$HOSTNAME" ]]; then
-      echo "ERROR: separate_cluster sandboxes require a resolvable LangSmith hostname." >&2
+      echo "ERROR: an external sandbox runtime requires a resolvable LangSmith hostname." >&2
       echo "       Set langsmith_domain or deploy the main ingress once, then re-run init-values." >&2
       exit 1
     fi
@@ -582,7 +582,7 @@ else
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  echo "  ✔ Sandboxes (${_sandbox_deployment_mode}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
+  echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
 else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
@@ -892,14 +892,15 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
-  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
     # The sandbox cluster runs untrusted code, so sandbox service auth uses a
     # dedicated key in langsmith-config (synced from SSM by apply-eso.sh), never
     # api_key_salt. Terraform writes the same value into the runtime Secret.
     _sandbox_config_block="
 sandboxes:
   enabled: true
-  deploymentMode: separateCluster${_sandbox_service_url_block}
+  external:
+    enabled: true${_sandbox_service_url_block}
   serviceAuth:
     secretKey: \"sandbox_service_auth_secret\""
 

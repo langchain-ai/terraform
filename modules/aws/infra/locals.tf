@@ -20,11 +20,11 @@ locals {
   redis_name                 = "${local.base_name}-redis"
   sandbox_juicefs_redis_name = "${local.base_name}-jfs-redis"
 
-  same_cluster_sandboxes     = var.enable_sandboxes && var.sandbox_deployment_mode == "same_cluster"
-  separate_cluster_sandboxes = var.enable_sandboxes && var.sandbox_deployment_mode == "separate_cluster"
+  in_cluster_sandbox_runtime = var.enable_sandboxes && var.sandbox_runtime_source == "in-cluster"
+  external_sandbox_runtime   = var.enable_sandboxes && var.sandbox_runtime_source == "external"
   # One exact chart version (SemVer, optional prerelease) on 0.18 or later.
   # Keep in step with helm/scripts/deploy.sh.
-  separate_cluster_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+  external_runtime_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
   bucket_name                            = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
   postgres_name                          = "${local.base_name}-pg"
   alb_name                               = "${local.base_name}-alb"
@@ -76,8 +76,8 @@ locals {
   # admit the LangSmith node security group instead, which pod ENIs carry too
   # (see the ENIConfig in modules/eks), and the bastion's. The sandbox JuiceFS
   # Redis keeps the CIDR rule, because the sandbox nodes are its clients.
-  data_store_ingress_cidrs = local.separate_cluster_sandboxes ? [] : concat([local.vpc_cidr_block], local.pod_cidr_blocks)
-  data_store_ingress_security_group_ids = !local.separate_cluster_sandboxes ? [] : concat(
+  data_store_ingress_cidrs = local.external_sandbox_runtime ? [] : concat([local.vpc_cidr_block], local.pod_cidr_blocks)
+  data_store_ingress_security_group_ids = !local.external_sandbox_runtime ? [] : concat(
     [module.eks.node_security_group_id],
     var.create_bastion ? [module.bastion[0].security_group_id] : [],
   )
@@ -200,14 +200,14 @@ locals {
 
   # Passed outside the typed eks_managed_node_groups input, which would drop
   # metadata_options and any override attribute the object type doesn't declare.
-  # In separate_cluster mode the same group goes to module.sandbox_eks instead.
-  extra_eks_managed_node_groups = local.same_cluster_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {}
+  # With an external runtime the same group goes to module.sandbox_eks instead.
+  extra_eks_managed_node_groups = local.in_cluster_sandbox_runtime ? { sandbox_host = local.sandbox_host_node_group } : {}
 
   sandbox_juicefs_bucket_url = "https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com"
 
   # ── Sandbox cluster reachability to the LangSmith API ───────────────────────
-  # In same_cluster mode the sandbox host talks to the platform backend over
-  # in-cluster Service DNS, so none of this applies. In separate_cluster mode it
+  # With the in-cluster runtime the sandbox host talks to the platform backend over
+  # in-cluster Service DNS, so none of this applies. With an external runtime it
   # calls https://<langsmith_domain>/api, which is fronted by the ALB, and the
   # route in depends on the ALB scheme.
   #
@@ -217,7 +217,7 @@ locals {
   # alb_existing_security_group_id: Terraform writes no rules onto a supplied
   # group, so allow the sandbox_node_security_group_id output there yourself.
   alb_allowed_security_group_ids = (
-    local.separate_cluster_sandboxes && var.alb_scheme == "internal"
+    local.external_sandbox_runtime && var.alb_scheme == "internal"
   ) ? [module.sandbox_eks[0].node_security_group_id] : []
 
   # Internet-facing ALB: the request exits through the NAT gateway and comes back
@@ -228,7 +228,7 @@ locals {
   alb_allowlist_is_open = contains(var.alb_allowed_cidr_blocks, "0.0.0.0/0")
 
   sandbox_nat_egress_cidrs = (
-    local.separate_cluster_sandboxes
+    local.external_sandbox_runtime
     && var.alb_scheme == "internet-facing"
     && var.sandbox_alb_allow_nat_egress
     && var.create_vpc
@@ -239,6 +239,6 @@ locals {
   # allowed explicitly.
   firewall_allowed_fqdns = distinct(concat(
     var.firewall_allowed_fqdns,
-    local.separate_cluster_sandboxes && var.langsmith_domain != "" ? [var.langsmith_domain] : [],
+    local.external_sandbox_runtime && var.langsmith_domain != "" ? [var.langsmith_domain] : [],
   ))
 }

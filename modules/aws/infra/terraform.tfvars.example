@@ -343,8 +343,8 @@ redis_instance_type = "cache.m6g.xlarge"
 # Enables infrastructure prerequisites for LangSmith Sandboxes.
 #
 # By default, Sandboxes use the sandbox-host architecture in the same EKS
-# cluster and namespace as LangSmith. Set sandbox_deployment_mode to
-# "separate_cluster" to create a dedicated EKS cluster in the same VPC and
+# cluster and namespace as LangSmith. Set sandbox_runtime_source to
+# "external" to create a dedicated EKS cluster in the same VPC and
 # install the standalone langsmith-sandbox chart there. Both modes provision
 # nodes with the label and taint expected by the Helm chart:
 #   sandbox.langsmith.com/host=true
@@ -371,7 +371,7 @@ redis_instance_type = "cache.m6g.xlarge"
 #     devices 1..N are mounted as JuiceFS cache directories. m5d.metal has 4.
 #
 # enable_sandboxes = true
-# sandbox_deployment_mode = "same_cluster" # or "separate_cluster"
+# sandbox_runtime_source = "in-cluster" # or "external"
 # sandbox_namespace = "langsmith-sandbox"
 #
 # ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
@@ -381,11 +381,11 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox-host loses access to the trace bucket.
 # sandbox_service_account_name = "sandbox-host"
 #
-# separate_cluster requires an exact langsmith chart version on 0.18 or later
+# An external runtime requires an exact langsmith chart version on 0.18 or later
 # (the default 0.17 line has no separate-cluster support):
 # langsmith_helm_chart_version = "0.18.0"
 #
-# separate_cluster also needs sandbox_service_auth_secret, a dedicated secret
+# An external runtime also needs sandbox_service_auth_secret, a dedicated secret
 # that the sandbox cluster holds instead of the API key salt. Do not put it in
 # this file: setup-env.sh generates it into SSM and exports
 # TF_VAR_sandbox_service_auth_secret.
@@ -633,7 +633,7 @@ langsmith_namespace = "langsmith"
 # alb_existing_security_group_id     = "sg-0123456789abcdef2"
 # bastion_existing_security_group_id = "sg-0123456789abcdef3"
 
-# ── Narrowing the ALB with separate_cluster sandboxes ────────────────────────
+# ── Narrowing the ALB with an external sandbox runtime ────────────────────────
 #
 # Separate-cluster sandboxes call the LangSmith API back through the ALB, so a
 # narrowed alb_allowed_cidr_blocks can cut them off. How that is handled depends
@@ -781,7 +781,7 @@ enable_istio_gateway = false
 # (e.g. LangChain Managed ClickHouse, external model providers, package registries).
 # Default covers the LangSmith beacon/telemetry endpoint only.
 #
-# With sandbox_deployment_mode = "separate_cluster", langsmith_domain is appended
+# With sandbox_runtime_source = "external", langsmith_domain is appended
 # automatically: the sandbox cluster shares these private route tables, so its
 # callback to the LangSmith API is inspected here and would otherwise be dropped.
 # You do not need to list it yourself.

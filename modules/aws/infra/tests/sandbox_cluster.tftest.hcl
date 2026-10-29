@@ -1,4 +1,4 @@
-# sandbox_deployment_mode = "separate_cluster": the dedicated sandbox EKS
+# sandbox_runtime_source = "external": the dedicated sandbox EKS
 # cluster, its IAM role, network rules and Secrets, and the input checks that
 # guard it, each asserted in both directions. mock_provider means no cloud
 # credentials, state, or API calls.
@@ -26,21 +26,21 @@ variables {
 
   enable_sandboxes                 = true
   sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
-  sandbox_deployment_mode          = "separate_cluster"
+  sandbox_runtime_source           = "external"
   langsmith_helm_chart_version     = "0.18.0"
   langsmith_api_key_salt           = "fixture-not-a-real-salt"
   sandbox_callback_signing_jwk     = "fixture-not-a-real-jwk"
   sandbox_service_auth_secret      = "fixture-not-a-real-sandbox-service-auth-secret"
 }
 
-run "same_cluster_plans_no_sandbox_cluster" {
+run "in_cluster_runtime_plans_no_sandbox_cluster" {
   command = plan
 
-  # same_cluster keeps the chart's default service-auth key, api_key_salt, so it
-  # needs no dedicated secret. Both empty would trip the separate_cluster
+  # The in-cluster runtime keeps the chart's default service-auth key, api_key_salt, so it
+  # needs no dedicated secret. Both empty would trip the external-runtime
   # secret checks if they were not gated on the mode.
   variables {
-    sandbox_deployment_mode      = "same_cluster"
+    sandbox_runtime_source       = "in-cluster"
     langsmith_helm_chart_version = ""
     sandbox_service_auth_secret  = ""
     langsmith_api_key_salt       = ""
@@ -56,35 +56,35 @@ run "same_cluster_plans_no_sandbox_cluster" {
       length(kubernetes_secret_v1.sandbox_runtime) == 0 &&
       length(kubernetes_secret_v1.sandbox_juicefs_config) == 0
     )
-    error_message = "same_cluster planned separate-cluster resources"
+    error_message = "the in-cluster runtime planned external-runtime resources"
   }
   assert {
     condition     = contains(keys(module.eks.eks_managed_node_group_inputs), "sandbox_host")
-    error_message = "same_cluster did not put the sandbox-host node group in the LangSmith cluster"
+    error_message = "the in-cluster runtime did not put the sandbox-host node group in the LangSmith cluster"
   }
   assert {
     condition     = length(kubernetes_secret_v1.sandbox_juicefs_csi_config) == 1
-    error_message = "same_cluster did not plan the JuiceFS config Secret in the LangSmith namespace"
+    error_message = "the in-cluster runtime did not plan the JuiceFS config Secret in the LangSmith namespace"
   }
   assert {
     condition = (
       jsonencode(local.data_store_ingress_cidrs) == jsonencode(concat([local.vpc_cidr_block], local.pod_cidr_blocks)) &&
       length(local.data_store_ingress_security_group_ids) == 0
     )
-    error_message = "same_cluster changed who can reach the LangSmith Postgres and Redis"
+    error_message = "the in-cluster runtime changed who can reach the LangSmith Postgres and Redis"
   }
 }
 
-run "separate_cluster_moves_sandbox_host_to_its_own_cluster" {
+run "external_runtime_moves_sandbox_host_to_its_own_cluster" {
   command = plan
 
   assert {
     condition     = length(module.sandbox_eks) == 1
-    error_message = "separate_cluster did not plan the sandbox cluster"
+    error_message = "the external runtime did not plan the sandbox cluster"
   }
   assert {
     condition     = !contains(keys(module.eks.eks_managed_node_group_inputs), "sandbox_host")
-    error_message = "separate_cluster still put the sandbox-host node group in the LangSmith cluster"
+    error_message = "the external runtime still put the sandbox-host node group in the LangSmith cluster"
   }
   assert {
     condition = (
@@ -111,13 +111,13 @@ run "separate_cluster_moves_sandbox_host_to_its_own_cluster" {
       length(kubernetes_secret_v1.sandbox_juicefs_config) == 1 &&
       length(kubernetes_secret_v1.sandbox_juicefs_csi_config) == 0
     )
-    error_message = "separate_cluster should plan its Secrets in the sandbox cluster only"
+    error_message = "the external runtime should plan its Secrets in the sandbox cluster only"
   }
 }
 
 # data_wo is never readable, so the runtime Secret's contents are checked
 # through the local that feeds it.
-run "separate_cluster_runtime_secret_uses_the_dedicated_service_auth_secret" {
+run "external_runtime_runtime_secret_uses_the_dedicated_service_auth_secret" {
   command = plan
 
   assert {
@@ -140,7 +140,7 @@ run "separate_cluster_runtime_secret_uses_the_dedicated_service_auth_secret" {
 
 # Values that a mock provider leaves unknown at plan time are pinned here so
 # the policies and rules below can be read.
-run "separate_cluster_iam_and_network_are_scoped" {
+run "external_runtime_iam_and_network_are_scoped" {
   command = plan
 
   override_module {
@@ -246,7 +246,7 @@ run "separate_cluster_iam_and_network_are_scoped" {
   }
 }
 
-run "separate_cluster_data_stores_admit_the_bastion" {
+run "external_runtime_data_stores_admit_the_bastion" {
   command = plan
 
   variables {
@@ -331,7 +331,7 @@ run "a_prerelease_0_18_chart_is_accepted" {
 
   assert {
     condition     = length(module.sandbox_eks) == 1
-    error_message = "an exact 0.18 prerelease chart should be accepted for separate_cluster"
+    error_message = "an exact 0.18 prerelease chart should be accepted for an external runtime"
   }
 }
 
