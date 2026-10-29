@@ -77,3 +77,13 @@ output "clickhouse_secret_labels" {
   description = "Labels on the external ClickHouse Secret Terraform writes; preflight.sh reads app.kubernetes.io/managed-by to tell it from a Secret init-values.sh created. Null when Terraform writes no Secret."
   value       = var.use_external_clickhouse && var.clickhouse_host != "" ? kubernetes_secret_v1.clickhouse[0].metadata[0].labels : null
 }
+
+output "keda_postgres_ingress" {
+  description = "Source namespace and ports of the NetworkPolicy that admits KEDA to the PostgreSQL pods in the LangSmith namespace, or null when this module installs no KEDA."
+  value = one([
+    for p in kubernetes_network_policy_v1.langsmith_allow_keda_postgres : {
+      namespace = p.spec[0].ingress[0].from[0].namespace_selector[0].match_labels["kubernetes.io/metadata.name"]
+      ports     = [for port in p.spec[0].ingress[0].ports : "${port.protocol}/${port.port}"]
+    }
+  ])
+}
