@@ -259,15 +259,20 @@ terraform -chdir=infra output keda_installed   # true
 ## SmithDB checks
 
 Plan three configurations: `enable_smithdb = false`, a managed Cloud SQL plus GCS
-metastore, and BYO PostgreSQL. For an applied environment, verify:
+metastore, and BYO PostgreSQL. The plan tests (`bash agents/plan-tests.sh
+modules/gcp`) cover each size with each cache mode, so a live test needs only
+the mode that you change. For an applied environment, verify:
 
 ```bash
 terraform -chdir=infra output smithdb_node_pools
+terraform -chdir=infra output smithdb_cache_storage
 kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
 kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
 
 # local-ssd: the cache mount must be Local SSD, not the boot disk.
-# network-disk and minimal: /data is a per-pod PVC (kubectl get pvc -n langsmith).
+# default-disk (and minimal): /data is a per-pod PVC on standard-rwo.
+# network-disk: /data is a per-pod PVC on smithdb-cache<suffix>.
+kubectl get pvc -n langsmith -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName
 kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 ```
 
