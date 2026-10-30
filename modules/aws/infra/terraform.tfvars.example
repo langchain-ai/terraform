@@ -116,6 +116,22 @@ tags = {
 region = "us-west-2"
 
 #------------------------------------------------------------------------------
+# IAM ROLES — Only if your account mandates a boundary, path, or name prefix
+#------------------------------------------------------------------------------
+# Applied to every IAM role and instance profile Terraform creates.
+# Set the path before the first apply: changing it later replaces every role.
+# iam_permissions_boundary_arn = "arn:aws:iam::<account-id>:policy/<boundary-policy>"
+# iam_role_path                = "/langsmith/"
+# Start every role name with <name_prefix>-<environment>- so one role/<base>-* grant covers them.
+# prefix_iam_role_names        = true
+# Use roles your IAM team created instead. See the README for what each needs.
+# existing_iam_role_arns = {
+#   eso = "arn:aws:iam::<account-id>:role/<base>-eso"
+# }
+# Skip the EKS Blueprints telemetry stack, so the deployer needs no CloudFormation access.
+# create_eks_blueprints_telemetry_stack = false
+
+#------------------------------------------------------------------------------
 # NETWORKING — VPC configuration
 #------------------------------------------------------------------------------
 # By default, Terraform creates a new VPC with public and private subnets,
@@ -124,6 +140,34 @@ region = "us-west-2"
 # Set create_vpc = false if your organization requires deploying into an
 # existing VPC (e.g. for VPC peering, Transit Gateway, or compliance).
 create_vpc = true
+
+# Keep every node off the public subnets. Node groups span private and public
+# subnets by default; turning this on for an existing cluster replaces them.
+# eks_node_groups_private_subnets_only = true
+# With create_vpc = true, also stop giving public-subnet instances a public IP.
+# Requires eks_node_groups_private_subnets_only = true.
+# vpc_map_public_ip_on_launch = false
+
+# No internet egress: no NAT or internet gateway in the created VPC. Requires
+# alb_scheme = "internal", create_bastion = false, and create_firewall = false.
+# enable_internet_egress = false
+# Interface endpoints (ecr.api, ecr.dkr, sts, eks, ssm, ...) for a VPC without
+# them. Leave off if the VPC already has endpoints for these services.
+# create_vpc_endpoints    = true
+# vpc_endpoint_subnet_ids = []   # empty uses the private subnets
+# The VPC's own S3 gateway endpoint instead of a new one. The bucket policy
+# admits LangSmith's role only through it.
+# create_s3_gateway_endpoint = false
+# s3_gateway_endpoint_id     = "vpce-0123456789abcdef0"
+
+# Mirrors for a cluster without egress. Keys of helm_chart_overrides are the
+# release names listed in the README; values is YAML passed to the release.
+# helm_chart_overrides = {
+#   keda = { repository = "https://artifactory.example.com/api/helm/kedacore" }
+# }
+# envoy_proxy_image         = "<ecr>/docker.io/envoyproxy/envoy:distroless-v1.33.0"
+# langsmith_helm_repository = "oci://<ecr>/charts"   # read by make deploy
+# langsmith_image_registry  = "<ecr>"                # read by make deploy
 
 # BRING YOUR OWN VPC (BYOV) — only fill these in if create_vpc = false.
 # To find these values:
@@ -159,13 +203,15 @@ eks_cluster_version = "1.34"
 # from outside the VPC.
 # Docs: https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html
 #
-# false (default) — private endpoint only. kubectl must run from inside the
-#   VPC (e.g. via VPN, bastion host, or SSM Session Manager). More secure.
+# true (default) — public endpoint. kubectl works from your laptop, CI/CD
+#   runners, etc. If you keep this, you SHOULD also set eks_public_access_cidrs
+#   below to restrict who can reach it.
 #
-# true — public endpoint. kubectl works from your laptop, CI/CD runners, etc.
-#   If you enable this, you SHOULD also set eks_public_access_cidrs below
-#   to restrict who can reach it.
-enable_public_eks_cluster = false
+# false — private endpoint only. kubectl must run from inside the VPC (e.g. via
+#   VPN, bastion host, or SSM Session Manager). More secure. Also set
+#   eks_private_access_cidrs or eks_private_access_managed_externally below.
+#
+# enable_public_eks_cluster = false
 
 # CIDR allowlist for the public EKS API endpoint (ignored when
 # enable_public_eks_cluster = false).
@@ -181,6 +227,17 @@ enable_public_eks_cluster = false
 #   eks_public_access_cidrs = ["203.0.113.0/24", "10.0.0.0/8"]  # multiple ranges
 #
 # eks_public_access_cidrs = ["0.0.0.0/0"]
+
+# CIDRs that reach the private EKS API endpoint on 443: the CI runner subnet,
+# VPN, or peered VPC that Terraform runs from. With enable_public_eks_cluster =
+# false, set this or create_bastion = true, or the plan fails.
+#
+# eks_private_access_cidrs = ["10.100.0.0/16"]
+
+# Set true instead when Terraform already reaches the private endpoint through a
+# VPN or transit gateway and a cluster security group rule you manage.
+#
+# eks_private_access_managed_externally = true
 
 # Pod networking. Set this at cluster creation; existing nodes keep their pod
 # IPs until they are replaced. See README.md "Pod networking".
@@ -547,6 +604,14 @@ s3_ttl_long_days  = 400    # delete long-lived traces after ~13 months
 # S3 KMS encryption — upgrades from SSE-S3 (AES256) to SSE-KMS with a customer-managed key.
 # Adds ~$1/mo per key plus $0.03/10k requests. Leave empty for default SSE-S3.
 # s3_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/..."
+
+# Customer-managed keys for the rest. Set the RDS, ElastiCache, and EKS keys
+# before the first apply; changing one later replaces that resource.
+# rds_kms_key_arn         = "arn:aws:kms:us-west-2:123456789012:key/..."
+# elasticache_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/..."
+# ebs_kms_key_arn         = "arn:aws:kms:us-west-2:123456789012:key/..."
+# eks_secrets_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/..."
+# ssm_kms_key_arn         = "arn:aws:kms:us-west-2:123456789012:key/..."
 
 # S3 versioning — retains all previous versions of trace objects. Increases storage costs.
 # s3_versioning_enabled = false

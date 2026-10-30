@@ -31,6 +31,9 @@ locals {
     for component in ["api-server", "queue"] : trimsuffix(substr("${local.engine_agent_fullname}-${component}", 0, 63), "-")
   ]
 
+  # A role from existing_iam_role_arns gets no policies here; its owner attaches them.
+  create_engine_role = var.enable_engine && var.existing_iam_role_arns.engine == null
+
   engine_bedrock_policy_arn = var.enable_engine ? (
     var.engine_bedrock_policy_arn != "" ? var.engine_bedrock_policy_arn :
     "arn:${data.aws_partition.current[0].partition}:iam::aws:policy/AmazonBedrockMantleInferenceAccess"
@@ -38,10 +41,12 @@ locals {
 }
 
 resource "aws_iam_role" "engine" {
-  count = var.enable_engine ? 1 : 0
+  count = local.create_engine_role ? 1 : 0
 
-  name = "${local.base_name}-engine-irsa"
-  tags = local.common_tags
+  name                 = "${local.base_name}-engine-irsa"
+  path                 = var.iam_role_path
+  permissions_boundary = var.iam_permissions_boundary_arn
+  tags                 = local.common_tags
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -62,14 +67,14 @@ resource "aws_iam_role" "engine" {
 }
 
 resource "aws_iam_role_policy_attachment" "engine_bedrock_mantle" {
-  count = var.enable_engine ? 1 : 0
+  count = local.create_engine_role ? 1 : 0
 
   role       = aws_iam_role.engine[0].name
   policy_arn = local.engine_bedrock_policy_arn
 }
 
 resource "aws_iam_role_policy" "engine_s3" {
-  count = var.enable_engine ? 1 : 0
+  count = local.create_engine_role ? 1 : 0
 
   name   = "langsmith-s3-access"
   role   = aws_iam_role.engine[0].name
@@ -77,7 +82,7 @@ resource "aws_iam_role_policy" "engine_s3" {
 }
 
 resource "aws_iam_role_policy" "engine_bedrock_invoke" {
-  count = var.enable_engine && var.enable_bedrock_access ? 1 : 0
+  count = local.create_engine_role && var.enable_bedrock_access ? 1 : 0
 
   name   = "langsmith-bedrock-access"
   role   = aws_iam_role.engine[0].name

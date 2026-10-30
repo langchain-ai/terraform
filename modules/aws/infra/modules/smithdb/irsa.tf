@@ -91,9 +91,11 @@ data "aws_iam_policy_document" "s3_access" {
 resource "aws_iam_role" "smithdb" {
   count = var.service_account_role_arn == null ? 1 : 0
 
-  name               = "${var.name}-irsa"
-  assume_role_policy = data.aws_iam_policy_document.trust[0].json
-  tags               = local.tags
+  name                 = "${var.name}-irsa"
+  path                 = var.iam_role_path
+  permissions_boundary = var.iam_permissions_boundary_arn
+  assume_role_policy   = data.aws_iam_policy_document.trust[0].json
+  tags                 = local.tags
 }
 
 resource "aws_iam_role_policy" "smithdb_s3" {

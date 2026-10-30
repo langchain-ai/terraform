@@ -693,7 +693,7 @@ aws logs delete-log-group --log-group-name "/aws/eks/$PREFIX-eks/cluster" --regi
 # Secrets Manager
 aws secretsmanager delete-secret --secret-id $PREFIX-langsmith --force-delete-without-recovery --region $REGION 2>/dev/null
 
-# CloudFormation stacks (EKS VPC CNI addon)
+# CloudFormation stacks (EKS Blueprints telemetry)
 for stack in $(aws cloudformation list-stacks --region $REGION \
   --query "StackSummaries[?contains(StackName, \`$PREFIX\`) && StackStatus!='DELETE_COMPLETE'].StackName" --output text); do
   aws cloudformation delete-stack --stack-name "$stack" --region $REGION

@@ -169,11 +169,61 @@ resource "terraform_data" "validate_inputs" {
       error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
     }
 
+    precondition {
+      condition     = var.existing_iam_role_arns.cert_manager == null || var.create_cert_manager_irsa
+      error_message = "existing_iam_role_arns.cert_manager replaces the DNS-01 role, so it needs create_cert_manager_irsa = true."
+    }
+
+    precondition {
+      condition     = var.enable_public_eks_cluster || var.create_bastion || length(var.eks_private_access_cidrs) > 0 || var.eks_private_access_managed_externally
+      error_message = "A private-only EKS endpoint needs a way in. Set create_bastion = true, or set eks_private_access_cidrs to the CIDR your Terraform runs from. If you already reach the endpoint through a VPN or your own security group rule, set eks_private_access_managed_externally = true."
+    }
+
+    # A node in a public subnet without a public IP has no route out. Without
+    # internet egress no node has one, so the rule does not apply.
+    precondition {
+      condition     = !var.create_vpc || !var.enable_internet_egress || var.vpc_map_public_ip_on_launch || var.eks_node_groups_private_subnets_only
+      error_message = "vpc_map_public_ip_on_launch = false leaves nodes in the public subnets without egress. Set eks_node_groups_private_subnets_only = true with it."
+    }
+
+    # Without internet egress nothing in the VPC is reachable from or can reach
+    # the internet, so every component has to stay private.
+    precondition {
+      condition     = var.enable_internet_egress || var.alb_scheme == "internal"
+      error_message = "enable_internet_egress = false requires alb_scheme = \"internal\". An internet-facing ALB needs an internet gateway."
+    }
+
+    precondition {
+      condition     = var.enable_internet_egress || !var.create_bastion
+      error_message = "enable_internet_egress = false requires create_bastion = false. The bastion downloads kubectl, helm, and terraform from the internet. Set eks_private_access_cidrs to reach the cluster instead."
+    }
+
+    precondition {
+      condition     = var.enable_internet_egress || !var.create_firewall
+      error_message = "enable_internet_egress = false requires create_firewall = false. The Network Firewall filters traffic to the internet, and there is none."
+    }
+
+    precondition {
+      condition     = length(var.vpc_endpoint_subnet_ids) == 0 || var.create_vpc_endpoints
+      error_message = "vpc_endpoint_subnet_ids applies only with create_vpc_endpoints = true."
+    }
+
+    # The bucket policy admits requests through exactly one S3 endpoint.
+    precondition {
+      condition     = var.create_s3_gateway_endpoint != (var.s3_gateway_endpoint_id != "")
+      error_message = "Set exactly one of create_s3_gateway_endpoint = true or s3_gateway_endpoint_id. The bucket policy admits requests only through that endpoint."
+    }
+
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
     # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
     precondition {
       condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
       error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
+    }
+
+    precondition {
+      condition     = var.create_vpc ? length(var.smithdb_karpenter_subnet_selector) == 0 : true
+      error_message = "smithdb_karpenter_subnet_selector applies only with create_vpc = false. A module-created VPC tags its own private subnets."
     }
 
     precondition {
@@ -223,9 +273,12 @@ module "vpc" {
   private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 
+  map_public_ip_on_launch = var.vpc_map_public_ip_on_launch
+  enable_internet_egress  = var.enable_internet_egress
+
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
-  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+  extra_private_subnet_tags = var.enable_smithdb ? local.smithdb_karpenter_discovery : {}
 
   pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
@@ -244,6 +297,18 @@ module "firewall" {
   tags                    = local.common_tags
 
   depends_on = [module.vpc]
+}
+
+module "vpc_endpoints" {
+  source = "./modules/vpc-endpoints"
+  count  = var.create_vpc_endpoints ? 1 : 0
+
+  name          = "${local.base_name}-vpce"
+  region        = var.region
+  vpc_id        = local.vpc_id
+  subnet_ids    = length(var.vpc_endpoint_subnet_ids) > 0 ? var.vpc_endpoint_subnet_ids : local.private_subnets
+  ingress_cidrs = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
+  services      = var.vpc_endpoint_services
 }
 
 # BYO VPC with custom networking: the pod subnets' AZs and CIDRs, and the AZs of
@@ -265,6 +330,7 @@ module "eks" {
   cluster_version                 = var.eks_cluster_version
   vpc_id                          = local.vpc_id
   subnet_ids                      = concat(local.private_subnets, local.public_subnets)
+  node_group_subnet_ids           = var.eks_node_groups_private_subnets_only ? local.private_subnets : []
   tags                            = local.common_tags
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
@@ -274,12 +340,21 @@ module "eks" {
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
+  private_access_cidrs            = var.eks_private_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
   langsmith_namespace             = var.langsmith_namespace
   eks_addons                      = var.eks_addons
   pod_subnet_ids_by_az            = local.pod_subnet_ids_by_az
   cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
   enable_istio_gateway            = var.enable_istio_gateway
+  iam_permissions_boundary_arn    = var.iam_permissions_boundary_arn
+  iam_role_path                   = var.iam_role_path
+  iam_role_name_prefix            = var.prefix_iam_role_names ? local.base_name : null
+  existing_iam_role_arns          = var.existing_iam_role_arns
+  create_blueprints_telemetry     = var.create_eks_blueprints_telemetry_stack
+  ebs_kms_key_arn                 = var.ebs_kms_key_arn
+  secrets_kms_key_arn             = var.eks_secrets_kms_key_arn
+  chart_overrides                 = var.helm_chart_overrides
 }
 
 # State migration: adding count changes the module address.
@@ -306,6 +381,7 @@ module "redis" {
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
   parameter_group_name = "default.redis7"
+  kms_key_arn          = var.elasticache_kms_key_arn
 
   existing_security_group_id = var.redis_existing_security_group_id
 }
@@ -336,6 +412,7 @@ module "sandbox_juicefs_redis" {
   auth_token               = var.sandbox_juicefs_redis_auth_token
   parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
   snapshot_retention_limit = var.sandbox_juicefs_redis_snapshot_retention_limit
+  kms_key_arn              = var.elasticache_kms_key_arn
 }
 
 module "storage" {
@@ -345,12 +422,15 @@ module "storage" {
   region                  = var.region
   vpc_id                  = local.vpc_id
   langsmith_irsa_role_arn = module.eks.langsmith_irsa_role_arn
-  create_bucket_policy    = true
+  create_bucket_policy    = var.create_langsmith_irsa_role || var.existing_iam_role_arns.langsmith != null
   s3_ttl_enabled          = var.s3_ttl_enabled
   s3_ttl_short_days       = var.s3_ttl_short_days
   s3_ttl_long_days        = var.s3_ttl_long_days
   kms_key_arn             = var.s3_kms_key_arn
   versioning_enabled      = var.s3_versioning_enabled
+
+  create_vpc_endpoint      = var.create_s3_gateway_endpoint
+  existing_vpc_endpoint_id = var.s3_gateway_endpoint_id
 }
 
 module "postgres" {
@@ -368,10 +448,11 @@ module "postgres" {
   max_storage_gb = var.postgres_max_storage_gb
   username       = var.postgres_username
   password       = var.postgres_password
+  kms_key_arn    = var.rds_kms_key_arn
 
   iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
   iam_database_user                   = var.postgres_iam_database_user
-  iam_auth_role_name                  = module.eks.langsmith_irsa_role_name
+  iam_auth_role_name                  = local.create_langsmith_irsa_role ? module.eks.langsmith_irsa_role_name : null
   deletion_protection                 = var.postgres_deletion_protection
   skip_final_snapshot                 = var.postgres_skip_final_snapshot
   backup_retention_period             = var.postgres_backup_retention_period
@@ -379,12 +460,30 @@ module "postgres" {
   existing_security_group_id = var.postgres_existing_security_group_id
 }
 
+# A role from existing_iam_role_arns gets no policies here; its owner attaches them.
+locals {
+  create_langsmith_irsa_role = var.create_langsmith_irsa_role && var.existing_iam_role_arns.langsmith == null
+
+  # Service account each IRSA role serves, for the iam_role_trust_policies output.
+  irsa_subjects = {
+    ebs_csi            = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+    alb_controller     = "system:serviceaccount:kube-system:aws-load-balancer-controller-sa"
+    cluster_autoscaler = "system:serviceaccount:kube-system:cluster-autoscaler-sa"
+    karpenter          = "system:serviceaccount:karpenter:karpenter"
+    langsmith          = "system:serviceaccount:${var.langsmith_namespace}:*"
+    eso                = "system:serviceaccount:external-secrets:external-secrets"
+    cert_manager       = "system:serviceaccount:cert-manager:cert-manager"
+    smithdb            = var.enable_smithdb ? module.smithdb[0].service_account_subject : null
+    engine             = var.enable_engine ? [for sa in local.engine_service_accounts : "system:serviceaccount:${var.langsmith_namespace}:${sa}"] : null
+  }
+}
+
 # engine.tf also attaches this policy to the Engine role, because Engine and
 # Insights run under that role when enable_engine = true.
 locals {
   langsmith_s3_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid    = "S3Access"
         Effect = "Allow"
@@ -399,12 +498,17 @@ locals {
           "${module.storage.bucket_arn}/*",
         ]
       }
-    ]
+      ], var.s3_kms_key_arn != "" ? [{
+        Sid      = "S3Kms"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = var.s3_kms_key_arn
+    }] : [])
   })
 }
 
 resource "aws_iam_role_policy" "langsmith_s3" {
-  count = var.create_langsmith_irsa_role ? 1 : 0
+  count = local.create_langsmith_irsa_role ? 1 : 0
 
   name = "langsmith-s3-access"
   role = module.eks.langsmith_irsa_role_name
@@ -458,7 +562,7 @@ locals {
 }
 
 resource "aws_iam_role_policy" "langsmith_bedrock" {
-  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+  count = local.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
 
   name = "langsmith-bedrock-access"
   role = module.eks.langsmith_irsa_role_name
@@ -471,9 +575,23 @@ resource "aws_iam_role_policy" "langsmith_bedrock" {
 # IRSA: https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
 # ESO:  https://external-secrets.io/latest/provider/aws-parameter-store/
 
+moved {
+  from = aws_iam_role.eso
+  to   = aws_iam_role.eso[0]
+}
+
+moved {
+  from = aws_iam_role_policy.eso_ssm
+  to   = aws_iam_role_policy.eso_ssm[0]
+}
+
 resource "aws_iam_role" "eso" {
-  name = "${local.base_name}-eso"
-  tags = local.common_tags
+  count = var.existing_iam_role_arns.eso == null ? 1 : 0
+
+  name                 = "${local.base_name}-eso"
+  path                 = var.iam_role_path
+  permissions_boundary = var.iam_permissions_boundary_arn
+  tags                 = local.common_tags
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -494,12 +612,14 @@ resource "aws_iam_role" "eso" {
 }
 
 resource "aws_iam_role_policy" "eso_ssm" {
+  count = var.existing_iam_role_arns.eso == null ? 1 : 0
+
   name = "eso-ssm-read"
-  role = aws_iam_role.eso.name
+  role = aws_iam_role.eso[0].name
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Effect = "Allow"
       Action = [
         "ssm:GetParameter",
@@ -507,7 +627,13 @@ resource "aws_iam_role_policy" "eso_ssm" {
         "ssm:GetParametersByPath",
       ]
       Resource = "arn:aws:ssm:${var.region}:*:parameter/langsmith/${local.base_name}/*"
-    }]
+      }], var.ssm_kms_key_arn != "" ? [{
+      Sid       = "SsmKmsDecrypt"
+      Effect    = "Allow"
+      Action    = "kms:Decrypt"
+      Resource  = var.ssm_kms_key_arn
+      Condition = { StringEquals = { "kms:ViaService" = "ssm.${var.region}.amazonaws.com" } }
+    }] : [])
   })
 }
 
@@ -519,13 +645,16 @@ resource "aws_iam_role_policy" "eso_ssm" {
 
 module "cert_manager" {
   source = "./modules/cert-manager"
-  count  = var.create_cert_manager_irsa ? 1 : 0
+  count  = var.create_cert_manager_irsa && var.existing_iam_role_arns.cert_manager == null ? 1 : 0
 
   cluster_name      = local.cluster_name
   oidc_provider     = module.eks.oidc_provider
   oidc_provider_arn = module.eks.oidc_provider_arn
   hosted_zone_id    = var.cert_manager_hosted_zone_id
   tags              = local.common_tags
+
+  iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
+  iam_role_path                = var.iam_role_path
 }
 
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
@@ -755,7 +884,7 @@ module "k8s_bootstrap" {
   tls_certificate_source = var.tls_certificate_source
   letsencrypt_email      = var.letsencrypt_email
 
-  eso_irsa_role_arn = aws_iam_role.eso.arn
+  eso_irsa_role_arn = var.existing_iam_role_arns.eso != null ? var.existing_iam_role_arns.eso : aws_iam_role.eso[0].arn
 
   enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
@@ -768,11 +897,14 @@ module "k8s_bootstrap" {
   # module outputs (which are "known after apply" and cause plan-time errors).
   # The actual role ARN is still passed for runtime use (ClusterIssuer, SA annotation).
   create_cert_manager_irsa    = var.create_cert_manager_irsa
-  cert_manager_irsa_role_arn  = length(module.cert_manager) > 0 ? module.cert_manager[0].cert_manager_irsa_role_arn : ""
+  cert_manager_irsa_role_arn  = var.existing_iam_role_arns.cert_manager != null ? var.existing_iam_role_arns.cert_manager : (length(module.cert_manager) > 0 ? module.cert_manager[0].cert_manager_irsa_role_arn : "")
   langsmith_domain            = var.langsmith_domain
   region                      = var.region
   cert_manager_hosted_zone_id = var.cert_manager_hosted_zone_id
   cluster_name                = local.cluster_name
+
+  chart_overrides   = var.helm_chart_overrides
+  envoy_proxy_image = var.envoy_proxy_image
 
   depends_on = [time_sleep.wait_for_alb_webhook, module.cert_manager]
 }
@@ -1078,6 +1210,7 @@ module "smithdb" {
   # Object store
   bucket_name           = local.smithdb_bucket_name
   s3_kms_key_arn        = var.s3_kms_key_arn
+  metastore_kms_key_arn = var.rds_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
 
@@ -1085,6 +1218,10 @@ module "smithdb" {
 
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
+
+  service_account_role_arn     = var.existing_iam_role_arns.smithdb
+  iam_permissions_boundary_arn = var.iam_permissions_boundary_arn
+  iam_role_path                = var.iam_role_path
 }
 
 # Metastore connection secret consumed by smithdb.config.existingSecretName.
@@ -1124,12 +1261,18 @@ locals {
   # private subnets at creation via the vpc module's extra_private_subnet_tags).
   smithdb_karpenter_discovery = { "karpenter.sh/discovery" = local.cluster_name }
 
+  # A bring-your-own VPC can supply subnets it tagged itself, so Terraform
+  # makes no tag calls on them.
+  smithdb_karpenter_subnet_tags = length(var.smithdb_karpenter_subnet_selector) > 0 ? var.smithdb_karpenter_subnet_selector : local.smithdb_karpenter_discovery
+
   # Security groups are discovered by the EKS-managed cluster tag
   # (kubernetes.io/cluster/<cluster> = owned), which is stable and always present
   # on the cluster security group. We deliberately do NOT put karpenter.sh/discovery
   # on the node SG ourselves: the EKS module reconciles node-SG tags and can drop
   # an out-of-band tag, leaving the EC2NodeClass with SecurityGroupsReady=False.
   smithdb_karpenter_sg_selector = { "kubernetes.io/cluster/${local.cluster_name}" = "owned" }
+
+  smithdb_ebs_kms = var.ebs_kms_key_arn != "" ? { kmsKeyID = var.ebs_kms_key_arn } : {}
 }
 
 # EC2NodeClass subnet discovery for a bring-your-own VPC: tag the existing private
@@ -1137,7 +1280,7 @@ locals {
 # Terraform-created VPC the tag is applied at creation via the vpc module's
 # extra_private_subnet_tags (above).
 resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
-  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
+  for_each = var.enable_smithdb && !var.create_vpc && length(var.smithdb_karpenter_subnet_selector) == 0 ? toset(var.private_subnets) : toset([])
 
   resource_id = each.value
   key         = "karpenter.sh/discovery"
@@ -1154,7 +1297,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
     spec = {
       amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
       role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_subnet_tags }]
       securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
       associatePublicIPAddress   = false
       # Karpenter RAID0s the local NVMe and points kubelet at it — no userdata.
@@ -1167,11 +1310,11 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
       }
       blockDeviceMappings = [{
         deviceName = "/dev/xvda"
-        ebs = {
+        ebs = merge({
           volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
           volumeType = "gp3"
           encrypted  = true
-        }
+        }, local.smithdb_ebs_kms)
       }]
     }
   })
@@ -1189,7 +1332,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
     spec = {
       amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
       role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_subnet_tags }]
       securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
       associatePublicIPAddress   = false
       metadataOptions = {
@@ -1200,11 +1343,11 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
       }
       blockDeviceMappings = [{
         deviceName = "/dev/xvda"
-        ebs = {
+        ebs = merge({
           volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
           volumeType = "gp3"
           encrypted  = true
-        }
+        }, local.smithdb_ebs_kms)
       }]
     }
   })

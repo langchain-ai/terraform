@@ -53,3 +53,9 @@ variable "existing_security_group_id" {
   type        = string
   default     = null
 }
+
+variable "kms_key_arn" {
+  type        = string
+  description = "KMS key for encryption at rest. Empty uses the AWS-managed key."
+  default     = ""
+}

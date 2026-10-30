@@ -106,6 +106,134 @@ run "cert_manager_irsa_without_an_email_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+run "existing_cert_manager_role_without_cert_manager_irsa_is_rejected" {
+  command = plan
+
+  variables {
+    existing_iam_role_arns = {
+      cert_manager = "arn:aws:iam::123456789012:role/plantest-cert-manager"
+    }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "private_endpoint_without_a_way_in_is_rejected" {
+  command = plan
+
+  variables {
+    enable_public_eks_cluster = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "private_endpoint_with_access_managed_externally_plans" {
+  command = plan
+
+  variables {
+    enable_public_eks_cluster             = false
+    eks_private_access_managed_externally = true
+  }
+}
+
+run "private_access_from_anywhere_is_rejected" {
+  command = plan
+
+  variables {
+    enable_public_eks_cluster = false
+    eks_private_access_cidrs  = ["0.0.0.0/0"]
+  }
+
+  expect_failures = [var.eks_private_access_cidrs]
+}
+
+run "no_public_ips_with_nodes_in_public_subnets_is_rejected" {
+  command = plan
+
+  variables {
+    vpc_map_public_ip_on_launch = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+# ── No internet egress ───────────────────────────────────────────────────────
+
+run "no_egress_with_an_internet_facing_alb_is_rejected" {
+  command = plan
+
+  variables {
+    enable_internet_egress = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "no_egress_with_a_bastion_is_rejected" {
+  command = plan
+
+  variables {
+    enable_internet_egress = false
+    alb_scheme             = "internal"
+    create_bastion         = true
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+# Terraform keeps planning past the expected failure, into a firewall module
+# with no NAT gateway to route through, so the module is overridden.
+run "no_egress_with_the_network_firewall_is_rejected" {
+  command = plan
+
+  variables {
+    enable_internet_egress = false
+    alb_scheme             = "internal"
+    create_firewall        = true
+  }
+
+  override_module {
+    target = module.firewall
+    outputs = {
+      firewall_arn         = "arn:aws:network-firewall:us-east-2:123456789012:firewall/plan-tests"
+      firewall_endpoint_id = "vpce-00000000000000001"
+    }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "no_s3_endpoint_at_all_is_rejected" {
+  command = plan
+
+  variables {
+    create_s3_gateway_endpoint = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "two_s3_endpoints_are_rejected" {
+  command = plan
+
+  variables {
+    s3_gateway_endpoint_id = "vpce-0123456789abcdef0"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "endpoint_subnets_without_endpoints_are_rejected" {
+  command = plan
+
+  variables {
+    vpc_endpoint_subnet_ids = ["subnet-00000000000000001"]
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 # Two bring-your-own-VPC rules have no run here: create_vpc = false with none of
@@ -331,6 +459,17 @@ run "external_smithdb_metastore_without_connection_details_is_rejected" {
   variables {
     enable_smithdb           = true
     smithdb_metastore_source = "external"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "smithdb_subnet_selector_with_a_created_vpc_is_rejected" {
+  command = plan
+
+  variables {
+    enable_smithdb                    = true
+    smithdb_karpenter_subnet_selector = { "smithdb" = "true" }
   }
 
   expect_failures = [terraform_data.validate_inputs]

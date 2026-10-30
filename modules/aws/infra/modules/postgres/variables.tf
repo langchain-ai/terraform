@@ -110,3 +110,9 @@ variable "existing_security_group_id" {
   description = "ID of an existing security group to attach to the RDS instance instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/5432 from ingress_cidrs and outbound within the VPC CIDR."
   default     = null
 }
+
+variable "kms_key_arn" {
+  type        = string
+  description = "KMS key for encryption at rest. Empty uses the AWS-managed key."
+  default     = ""
+}

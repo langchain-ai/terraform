@@ -19,6 +19,12 @@ variable "subnet_ids" {
   description = "The IDs of the subnets"
 }
 
+variable "node_group_subnet_ids" {
+  type        = list(string)
+  description = "Subnets for the managed node groups. Empty uses subnet_ids."
+  default     = []
+}
+
 variable "public_cluster_enabled" {
   type        = bool
   description = "Whether to enable public cluster access"
@@ -29,6 +35,12 @@ variable "public_access_cidrs" {
   type        = list(string)
   description = "CIDRs allowed to reach the public EKS API endpoint"
   default     = ["0.0.0.0/0"]
+}
+
+variable "private_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs allowed to reach the private EKS API endpoint on 443"
+  default     = []
 }
 
 variable "cluster_enabled_log_types" {
@@ -146,4 +158,64 @@ variable "pod_subnet_ids_by_az" {
   type        = map(string)
   description = "VPC CNI custom networking: pod subnet ID keyed by availability zone name. Empty leaves pods in the node subnets."
   default     = {}
+}
+
+variable "iam_permissions_boundary_arn" {
+  type        = string
+  description = "Permissions boundary policy ARN for the IAM roles this module creates. Null sets no boundary."
+  default     = null
+}
+
+variable "iam_role_path" {
+  type        = string
+  description = "IAM path for the IAM roles and instance profiles this module creates."
+  default     = "/"
+}
+
+variable "iam_role_name_prefix" {
+  type        = string
+  description = "Prefix for the role names that upstream modules otherwise choose (node groups, add-ons, Karpenter node, EBS CSI). Null keeps the upstream names."
+  default     = null
+}
+
+variable "existing_iam_role_arns" {
+  type = object({
+    cluster            = optional(string)
+    node_group         = optional(string)
+    karpenter_node     = optional(string)
+    karpenter          = optional(string)
+    alb_controller     = optional(string)
+    cluster_autoscaler = optional(string)
+    ebs_csi            = optional(string)
+    langsmith          = optional(string)
+  })
+  description = "ARNs of roles to use instead of creating them. Each one set skips creating that role, and no policies are attached to it."
+  default     = {}
+}
+
+variable "create_blueprints_telemetry" {
+  type        = bool
+  description = "Create the EKS Blueprints usage-telemetry CloudFormation stack."
+  default     = true
+}
+
+variable "chart_overrides" {
+  type = map(object({
+    repository = optional(string)
+    values     = optional(string, "")
+  }))
+  description = "Chart repository and extra values for the EKS Blueprints add-ons, keyed by aws_load_balancer_controller, metrics_server, cluster_autoscaler, or karpenter. An add-on with no entry uses its upstream repository."
+  default     = {}
+}
+
+variable "ebs_kms_key_arn" {
+  type        = string
+  description = "KMS key for node group volumes and the gp3 storage class. Empty uses the account's default EBS encryption."
+  default     = ""
+}
+
+variable "secrets_kms_key_arn" {
+  type        = string
+  description = "KMS key for Kubernetes secrets. Empty has the EKS module create one."
+  default     = ""
 }

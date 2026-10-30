@@ -17,11 +17,11 @@ A custom policy needs these services. The **Required when** column is the config
 | Service | Actions | Needed for | Required when |
 |---------|---------|-----------|---------------|
 | EKS | `eks:*` | Cluster, managed node groups, add-ons, access entries | Always |
-| EC2 | `ec2:*` | VPC, subnets, NAT gateway, route tables, security groups, S3 gateway endpoint, launch templates | Always |
+| EC2 | `ec2:*` | VPC, subnets, NAT gateway, route tables, security groups, S3 gateway endpoint, interface endpoints, launch templates | Always |
 | IAM | See [IAM actions](#iam-actions) | Service roles, IRSA roles, the cluster's OIDC provider | Always |
-| KMS | `kms:CreateKey`, `kms:CreateAlias`, `kms:PutKeyPolicy`, `kms:TagResource`, `kms:DescribeKey`, `kms:GetKeyPolicy`, `kms:ScheduleKeyDeletion` | The EKS secrets encryption key | Always |
+| KMS | `kms:CreateKey`, `kms:CreateAlias`, `kms:DeleteAlias`, `kms:ListAliases`, `kms:PutKeyPolicy`, `kms:GetKeyPolicy`, `kms:DescribeKey`, `kms:EnableKeyRotation`, `kms:GetKeyRotationStatus`, `kms:TagResource`, `kms:UntagResource`, `kms:ListResourceTags`, `kms:ScheduleKeyDeletion` | The EKS secrets encryption key | `eks_secrets_kms_key_arn` is empty (the default) |
 | CloudWatch Logs | `logs:CreateLogGroup`, `logs:PutRetentionPolicy`, `logs:TagResource`, `logs:DescribeLogGroups`, `logs:DeleteLogGroup` | The EKS control plane log group | Always |
-| S3 | `s3:*` on the deployment's buckets | LangSmith bucket, bucket policy, encryption, lifecycle | Always |
+| S3 | `s3:*` on the deployment's buckets | The LangSmith bucket, plus the SmithDB bucket and the `<name>-access-logs` ALB log bucket when those are enabled; their policies, encryption, and lifecycle | Always |
 | Elastic Load Balancing | `elasticloadbalancing:*` | ALB, listeners, target group | Always |
 | RDS | `rds:*` | PostgreSQL instance and subnet group | `postgres_source = "external"` (the default), or `enable_smithdb = true` |
 | ElastiCache | `elasticache:*` | Redis replication group | `redis_source = "external"` (the default), or `enable_sandboxes = true` |
@@ -31,9 +31,13 @@ A custom policy needs these services. The **Required when** column is the config
 | WAF | `wafv2:*` | Web ACL and its ALB association | `create_waf = true` |
 | Network Firewall | `network-firewall:*` | Egress firewall, policy, rule group | `create_firewall = true` |
 | CloudTrail | `cloudtrail:*` | Trail | `create_cloudtrail = true` |
+| CloudFormation | `cloudformation:CreateStack`, `cloudformation:DeleteStack`, `cloudformation:DescribeStacks`, `cloudformation:DescribeStackEvents`, `cloudformation:GetTemplate` | The EKS Blueprints usage-telemetry stack, which holds no resources | `create_eks_blueprints_telemetry_stack = true` (the default) |
 | KMS | `kms:Decrypt`, `kms:GenerateDataKey` on the key | Bucket encryption with a customer-managed key | `s3_kms_key_arn` is set |
+| KMS | `kms:DescribeKey`, `kms:CreateGrant` on each key | Postgres, Redis, EBS volumes, and Kubernetes secrets encrypted with a customer-managed key | `rds_kms_key_arn`, `elasticache_kms_key_arn`, `ebs_kms_key_arn`, or `eks_secrets_kms_key_arn` is set |
 
-The existing S3 key already has to allow the deploying identity; Terraform does not edit its key policy.
+Terraform does not edit the policy of a key you supply, so each key policy already has to allow the deploying identity and the services that use the key. The [README](README.md#encrypt-with-customer-managed-kms-keys) lists what each key policy needs.
+
+On an existing VPC, `enable_smithdb = true` tags each subnet in `private_subnets` with `karpenter.sh/discovery`, which needs `ec2:CreateTags` and `ec2:DeleteTags` on those subnets. Set `smithdb_karpenter_subnet_selector` to skip the tags.
 
 ### IAM actions
 
@@ -77,7 +81,7 @@ iam:CreateServiceLinkedRole
 
 ## Permissions boundaries and SCPs
 
-The module sets no permissions boundary on the roles it creates, and it has no variable for one. An account whose SCP or IAM policy requires a boundary on `iam:CreateRole` rejects the first role the apply creates. Ask for an exception for the deploying identity, or deploy into an account without that requirement.
+An account whose SCP or IAM policy requires a permissions boundary on `iam:CreateRole` rejects every role created without one. Set `iam_permissions_boundary_arn` to the required boundary, and the module sets it on every role it creates. `iam_role_path` and `prefix_iam_role_names` meet a policy that limits role paths or names. See [IAM permissions boundary, path, and role names](README.md#iam-permissions-boundary-path-and-role-names).
 
 SCPs override every grant in the tables above. A common case is an SCP that allows only certain regions, which denies every action in any other region even to `AdministratorAccess`. `make preflight` warns when the account alias contains `sandbox`, `test`, or `dev`, because those accounts are the ones most often under restrictive SCPs.
 
@@ -98,11 +102,20 @@ aws eks associate-access-policy --cluster-name <cluster-name> --principal-arn <r
   --access-scope type=cluster
 ```
 
-The operator who runs `make setup-env` also needs `ssm:PutParameter` and `ssm:GetParameter` on `/langsmith/<base_name>/*`, where `<base_name>` is `<name_prefix>-<environment>`. That script writes the application secrets to Parameter Store, where External Secrets reads them.
+The operator who runs the Make targets needs these permissions as well, where `<base_name>` is `<name_prefix>-<environment>`:
+
+| Target | Actions |
+|--------|---------|
+| `make kubeconfig`, `make deploy` | `eks:DescribeCluster` |
+| `make setup-env` | `ssm:PutParameter` and `ssm:GetParameter` on `/langsmith/<base_name>/*`. The script writes the application secrets to Parameter Store, where External Secrets reads them |
+| `make purge-secrets`, and `manage-ssm.sh` | `ssm:GetParametersByPath`, `ssm:DeleteParameter`, and `ssm:DeleteParameters` on `/langsmith/<base_name>/*`, in addition to the `make setup-env` actions |
+| `make tls` | `acm:RequestCertificate`, `acm:DescribeCertificate`, `route53:ListHostedZones`, `route53:ChangeResourceRecordSets`, and `elasticloadbalancing:DescribeLoadBalancers` |
+
+With `ssm_kms_key_arn` set, the SSM targets also need `kms:Encrypt` and `kms:Decrypt` on that key.
 
 ## Verify access before the first apply
 
-Run `make preflight`. It confirms credentials with `aws sts get-caller-identity`, prints the account, identity, and region, and then makes one read-only call per service. A denial on any required service stops the script with exit 1 and names the actions that service needs.
+Run `make preflight`. It stops with exit 1 when Terraform is older than 1.11, the version `versions.tf` requires. It confirms credentials with `aws sts get-caller-identity`, prints the account, identity, and region, and then makes one read-only call per service. A denial on any required service stops the script with exit 1 and names the actions that service needs.
 
 | Service | Call the script makes | Required |
 |---------|----------------------|----------|
@@ -120,6 +133,8 @@ Run `make preflight`. It confirms credentials with `aws sts get-caller-identity`
 | IAM | `iam:GetPolicy` on the Engine policy | Only when `enable_engine = true`. A missing policy stops the script. A denial warns only |
 
 A read-only call that succeeds does not prove the create action behind it is allowed. The read-only pass never tests `iam:PassRole`, KMS, CloudWatch Logs, SQS, or EventBridge, and never checks service quotas.
+
+After the read-only pass, the script asks the IAM policy simulator whether the identity can call `iam:CreateRole`, `iam:PassRole`, `iam:CreateInstanceProfile`, `ec2:CreateVpcEndpoint`, `ec2:CreateTags`, `kms:CreateKey`, and `sqs:CreateQueue`. A denial there warns rather than exits. The simulator tests each action against any resource, so a policy scoped to the deployment's ARNs can show a denial that the apply would not hit. The step needs `iam:SimulatePrincipalPolicy`, plus `iam:GetRole` for an assumed role, and warns that it was skipped without them.
 
 To test creation, pass `--create-test-resources`:
 
@@ -159,8 +174,8 @@ The deployment creates the following roles. IRSA roles trust the cluster's OIDC 
 | `AmazonEKSTFEBSCSIRole-<cluster-name>` | `kube-system/ebs-csi-controller-sa` | `AmazonEBSCSIDriverPolicy` | Always |
 | AWS Load Balancer Controller role | Its controller service account | A policy the module creates for ALB and target group management | Always |
 | Cluster Autoscaler role | Its controller service account | A policy the module creates for Auto Scaling group scaling | Always |
-| `<base_name>-eso` | `external-secrets/external-secrets` | `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` on `/langsmith/<base_name>/*` | Always |
-| `<cluster-name>-irsa-role` | Every service account in `langsmith_namespace` | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on the LangSmith bucket | `create_langsmith_irsa_role = true` (the default) |
+| `<base_name>-eso` | `external-secrets/external-secrets` | `ssm:GetParameter`, `ssm:GetParameters`, `ssm:GetParametersByPath` on `/langsmith/<base_name>/*`, plus `kms:Decrypt` on `ssm_kms_key_arn` when it is set | Always |
+| `<cluster-name>-irsa-role` | Every service account in `langsmith_namespace` | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on the LangSmith bucket, plus `kms:Decrypt` and `kms:GenerateDataKey` when `s3_kms_key_arn` is set. With `enable_bedrock_access = true`, `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on foundation models and inference profiles, and `bedrock:ListFoundationModels` and `bedrock:GetFoundationModel` | `create_langsmith_irsa_role = true` (the default) |
 | `<cluster-name>-cert-manager` | `cert-manager/cert-manager` | `route53:ChangeResourceRecordSets` and `route53:ListResourceRecordSets` on the hosted zone, `route53:GetChange`, `route53:ListHostedZonesByName` | `create_cert_manager_irsa = true` |
 | `<base_name>-engine-irsa` | Engine's API server and queue service accounts | `AmazonBedrockMantleInferenceAccess` (AWS managed), or the policy in `engine_bedrock_policy_arn`. Also the `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` access of the LangSmith role, and its Bedrock `InvokeModel` access when `enable_bedrock_access = true` | `enable_engine = true` |
 | `<base_name>-smithdb-irsa` | The SmithDB service account | Object access on the SmithDB bucket, plus `kms:Decrypt` and `kms:GenerateDataKey` when `s3_kms_key_arn` is set | `enable_smithdb = true` |
@@ -168,9 +183,9 @@ The deployment creates the following roles. IRSA roles trust the cluster's OIDC 
 | `<base_name>-sandbox-host` | `ec2.amazonaws.com` | The node group policies above | `enable_sandboxes = true` |
 | `<name>-bastion`, with an instance profile | `ec2.amazonaws.com` | `AmazonSSMManagedInstanceCore`, plus `eks:DescribeCluster` and `eks:ListClusters` | `create_bastion = true` |
 
-The LangSmith role also gets `rds-db:connect` for one database user when `postgres_iam_database_user` is set.
+The LangSmith role also gets `rds-db:connect` for one database user when `postgres_iam_database_authentication_enabled = true` and `postgres_iam_database_user` is set.
 
-`create_langsmith_irsa_role = false` is not a way to deploy without creating IAM. No variable accepts an existing role in its place, and `make init-values` annotates the LangSmith service accounts with this role's ARN. The module has no bring-your-own path for any of the roles above.
+`create_langsmith_irsa_role = false` is not a way to deploy without creating IAM, because `make init-values` annotates the LangSmith service accounts with this role's ARN. To use roles your IAM team created, set `existing_iam_role_arns`. It covers every role above except the bastion role, with `node_group` covering the sandbox host too, and the module attaches no policies to a role you supply. The `iam_role_trust_policies` output gives the trust policy each supplied IRSA role needs. See [use existing IAM roles](README.md#iam-permissions-boundary-path-and-role-names).
 
 ## Resolve AccessDenied during apply
 

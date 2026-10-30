@@ -14,12 +14,12 @@ output "oidc_provider_arn" {
 
 output "langsmith_irsa_role_arn" {
   description = "ARN of the IRSA role for LangSmith pods"
-  value       = var.create_langsmith_irsa_role ? aws_iam_role.langsmith[0].arn : null
+  value       = local.existing_roles.langsmith != null ? local.existing_roles.langsmith : one(aws_iam_role.langsmith[*].arn)
 }
 
 output "langsmith_irsa_role_name" {
   description = "Name of the IRSA role for LangSmith pods"
-  value       = var.create_langsmith_irsa_role ? aws_iam_role.langsmith[0].name : null
+  value       = local.existing_roles.langsmith != null ? reverse(split("/", local.existing_roles.langsmith))[0] : one(aws_iam_role.langsmith[*].name)
 }
 
 output "cluster_endpoint" {
@@ -44,12 +44,12 @@ output "node_security_group_id" {
 
 output "karpenter_node_iam_role_name" {
   description = "Name of the Karpenter node IAM role (null when Karpenter is disabled). Referenced by the SmithDB EC2NodeClass role."
-  value       = var.enable_karpenter ? try(module.eks_blueprints_addons.karpenter.node_iam_role_name, null) : null
+  value       = !var.enable_karpenter ? null : local.existing_roles.karpenter_node != null ? local.karpenter_node_role_name : try(module.eks_blueprints_addons.karpenter.node_iam_role_name, null)
 }
 
 output "karpenter_node_iam_role_arn" {
   description = "ARN of the Karpenter node IAM role (null when Karpenter is disabled)."
-  value       = var.enable_karpenter ? try(module.eks_blueprints_addons.karpenter.node_iam_role_arn, null) : null
+  value       = var.enable_karpenter ? local.karpenter_node_role_arn : null
 }
 
 output "eks_managed_node_group_inputs" {

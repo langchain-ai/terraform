@@ -11,6 +11,6 @@ output "bucket_name" {
 }
 
 output "s3_vpc_endpoint_id" {
-  description = "ID of the S3 Gateway VPC endpoint used by private subnets"
-  value       = aws_vpc_endpoint.s3.id
+  description = "ID of the S3 VPC endpoint the bucket policy admits"
+  value       = local.vpc_endpoint_id
 }

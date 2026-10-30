@@ -113,3 +113,18 @@ variable "enable_nginx_ingress" {
   description = "Install NGINX ingress controller (ingress-nginx). When enabled, the ALB forwards to NGINX controller pods via a TargetGroupBinding, and LangSmith uses ingressClassName: nginx."
   default     = false
 }
+
+variable "chart_overrides" {
+  type = map(object({
+    repository = optional(string)
+    values     = optional(string, "")
+  }))
+  description = "Chart repository and extra values per release, keyed by release name. A release with no entry uses its upstream repository."
+  default     = {}
+}
+
+variable "envoy_proxy_image" {
+  type        = string
+  description = "Image for the Envoy proxy pods, set on the EnvoyProxy resource. Empty keeps the controller's default."
+  default     = ""
+}

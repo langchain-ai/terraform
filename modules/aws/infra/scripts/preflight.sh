@@ -317,6 +317,16 @@ fi
 
 # Verify minimum versions
 TF_VERSION=$(terraform version -json 2>/dev/null | grep -o '"terraform_version":"[^"]*"' | cut -d'"' -f4 || terraform version | head -1 | grep -oE '[0-9]+\.[0-9]+')
+# versions.tf requires Terraform 1.11.
+TF_MAJOR=${TF_VERSION%%.*}
+TF_MINOR=$(echo "$TF_VERSION" | cut -s -d. -f2)
+if ! echo "${TF_MAJOR}|${TF_MINOR}" | grep -qE '^[0-9]+\|[0-9]+$'; then
+  info "terraform: could not parse a version from '${TF_VERSION:-no output}', so the 1.11 minimum is unverified"
+elif [[ "$TF_MAJOR" -lt 1 ]] || { [[ "$TF_MAJOR" -eq 1 ]] && [[ "$TF_MINOR" -lt 11 ]]; }; then
+  error "Terraform 1.11+ required (found ${TF_VERSION}). Upgrade: https://developer.hashicorp.com/terraform/install"
+  exit 1
+fi
+
 AWS_VERSION=$(aws --version 2>&1 | grep -oE 'aws-cli/[0-9]+' | cut -d/ -f2)
 if [[ -n "$AWS_VERSION" && "$AWS_VERSION" -lt 2 ]]; then
   error "AWS CLI v2 required (found v${AWS_VERSION}). Upgrade: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
@@ -353,6 +363,7 @@ if [[ ! -f "$TFVARS" ]]; then
   info "  cp terraform.tfvars.minimum terraform.tfvars     # minimum profile (cost parking, CI)"
   info "  cp terraform.tfvars.dev terraform.tfvars         # dev profile"
   info "  cp terraform.tfvars.production terraform.tfvars  # production profile"
+  info "  cp terraform.tfvars.private terraform.tfvars     # private API, no internet egress"
   info "  cp terraform.tfvars.example terraform.tfvars     # full reference"
   exit 1
 fi
@@ -599,6 +610,40 @@ if check_denied "$WAF_OUT"; then
   warning "WAFv2 permission denied (optional — not required for basic deployment)"
 else
   success "WAFv2 permissions OK (optional)"
+fi
+
+# IAM policy simulation — the create calls the read-only checks above cannot
+# reach. The simulator evaluates the identity's policies, permissions boundary,
+# and SCPs without creating anything.
+info "IAM policy simulation — create permissions..."
+SIM_ACTIONS=(
+  iam:CreateRole iam:PassRole iam:CreateInstanceProfile
+  ec2:CreateVpcEndpoint ec2:CreateTags
+  kms:CreateKey sqs:CreateQueue
+)
+# An assumed-role ARN drops the role's path, so look the role up for its IAM ARN.
+SIM_ARN="$USER_ARN"
+case "$USER_ARN" in
+  arn:aws*:sts::*:assumed-role/*)
+    SIM_ROLE=$(echo "$USER_ARN" | cut -d/ -f2)
+    SIM_ARN=$(aws iam get-role --role-name "$SIM_ROLE" --query Role.Arn --output text 2>/dev/null) || SIM_ARN=""
+    ;;
+esac
+SIM_RC=0
+if [[ -n "$SIM_ARN" ]]; then
+  SIM_OUT=$(aws iam simulate-principal-policy --policy-source-arn "$SIM_ARN" \
+    --action-names "${SIM_ACTIONS[@]}" \
+    --query 'EvaluationResults[?EvalDecision!=`allowed`].EvalActionName' \
+    --output text 2>&1) || SIM_RC=$?
+fi
+if [[ -z "$SIM_ARN" || "$SIM_RC" -ne 0 ]]; then
+  warning "Could not simulate the policies of ${USER_ARN} (needs iam:GetRole and iam:SimulatePrincipalPolicy), so these are unverified: ${SIM_ACTIONS[*]}"
+elif [[ -n "$SIM_OUT" && "$SIM_OUT" != "None" ]]; then
+  warning "The policy simulator denies: ${SIM_OUT}"
+  warning "It evaluates each action against any resource, so a policy scoped to specific ARNs can show a denial that the apply would not hit."
+  warning "Not every deployment makes every call. See PERMISSIONS.md for which variables need each action."
+else
+  success "IAM policy simulation allows: ${SIM_ACTIONS[*]}"
 fi
 
 # ── Resource creation tests ───────────────────────────────────────────────────

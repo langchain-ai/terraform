@@ -216,8 +216,20 @@ _use_cluster_kubeconfig "$_cluster_name" "$_region"
 echo "  Active context: $(kubectl config current-context)"
 echo ""
 
+# ── Chart and image sources ───────────────────────────────────────────────────
+# A mirror of the LangSmith chart, as an HTTPS Helm repository or an oci://
+# registry path, and a registry to prefix every LangSmith image with.
+_helm_repo=$(_parse_tfvar "langsmith_helm_repository") || _helm_repo=""
+_helm_repo="${_helm_repo:-https://langchain-ai.github.io/helm}"
+_image_registry=$(_parse_tfvar "langsmith_image_registry") || _image_registry=""
+if [[ "$_helm_repo" == oci://* ]]; then
+  _chart_ref="${_helm_repo%/}/langsmith"
+else
+  _chart_ref="langchain/langsmith"
+fi
+
 # ── Preflight checks ──────────────────────────────────────────────────────────
-"$SCRIPT_DIR/preflight-check.sh"
+LANGSMITH_HELM_REPOSITORY="$_helm_repo" "$SCRIPT_DIR/preflight-check.sh"
 echo ""
 
 # Chart 0.16 mounted sandbox volumes through a bundled JuiceFS CSI driver, which
@@ -678,8 +690,10 @@ echo "Deploying LangSmith (environment: $_environment, sizing: $_sizing_profile)
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
-helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
-helm repo update langchain
+if [[ "$_helm_repo" != oci://* ]]; then
+  helm repo add langchain "$_helm_repo" --force-update >/dev/null
+  helm repo update langchain
+fi
 
 # Guard: recover from broken release states before proceeding.
 #   - pending-upgrade: left by a Ctrl+C'd helm upgrade --wait. Roll back to clear.
@@ -763,12 +777,16 @@ fi
 # Instead, we do our own readiness check below.
 # Resolve the pin to a concrete version and print it. Without this the only place
 # the installed version shows up is `helm list`, after the release is already out.
-_chart_metadata=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_chart_metadata=$(helm show chart "$_chart_ref" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
 _resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
-echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+echo "Chart: $_chart_ref  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
-  echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
+  echo "ERROR: no chart matches '$CHART_VERSION' in $_helm_repo." >&2
   exit 1
+fi
+if [[ -n "$_image_registry" ]]; then
+  VALUES_ARGS+=(--set-string "images.registry=$_image_registry")
+  echo "Images: registry=$_image_registry"
 fi
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
@@ -801,7 +819,7 @@ _report_failed_hook_jobs() {
     2>/dev/null || true)
 }
 
-if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+if ! helm upgrade --install "$RELEASE_NAME" "$_chart_ref" \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
@@ -902,7 +920,7 @@ if [[ -n "$_active_host" ]]; then
     echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → ${_protocol}://${_active_host}"
     echo "Re-running deploy for hostname to take effect..."
     echo ""
-    if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+    if ! helm upgrade --install "$RELEASE_NAME" "$_chart_ref" \
       --namespace "$NAMESPACE" \
       ${CHART_VERSION:+--version "$CHART_VERSION"} \
       ${_devel_flag} \
