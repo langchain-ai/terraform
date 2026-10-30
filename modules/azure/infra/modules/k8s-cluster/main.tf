@@ -51,6 +51,21 @@ locals {
   # balancer with private networks"). The root decides from known inputs, so
   # the grant's count is known at plan even when the node subnet is carved.
   ingress_lb_other_subnet = var.ingress_load_balancer_needs_subnet_grant
+
+  # The node subnet needs the same two actions. A system-assigned identity this
+  # module creates holds nothing there: AKS gives it Contributor on the node
+  # resource group alone. The az CLI adds the subnet grant when it creates a
+  # cluster in the caller's VNet; an ARM or Terraform create leaves it to the
+  # caller, after the cluster exists (Microsoft, "Managed identities in AKS",
+  # updated 2026-10-20; "AKS service permissions reference", updated
+  # 2026-04-19). Without it the frontend's subnets/read is refused and the
+  # Service stays <pending>. A user-assigned identity holds Network Contributor
+  # on the node subnet already, from control_plane_network_contributor or the
+  # network owner, and an attached cluster's identity was granted by whoever
+  # created it.
+  ingress_lb_node_subnet  = local.ingress_internal && !local.ingress_lb_other_subnet && var.create_cluster && var.control_plane_identity == "system"
+  ingress_lb_subnet_grant = local.ingress_lb_other_subnet || local.ingress_lb_node_subnet
+  ingress_lb_grant_scope  = local.ingress_lb_other_subnet ? var.ingress_load_balancer_subnet_id : var.subnet_id
   nginx_service_annotations = merge(
     {
       # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
@@ -993,6 +1008,10 @@ resource "helm_release" "nginx_ingress" {
       }
     })
   ]
+
+  # Helm waits for the Service's address, which an internal load balancer gets
+  # only once the cluster identity holds its subnet grant.
+  depends_on = [azurerm_role_assignment.ingress_lb_subnet]
 }
 
 # ── Istio (self-managed Helm) ──────────────────────────────────────────────────
@@ -1056,7 +1075,8 @@ resource "helm_release" "istio_gateway" {
     service = { annotations = local.ingress_internal_annotations }
   })] : []
 
-  depends_on = [helm_release.istiod]
+  # As for NGINX: Helm waits for the address the subnet grant makes possible.
+  depends_on = [helm_release.istiod, azurerm_role_assignment.ingress_lb_subnet]
 }
 
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
@@ -1317,16 +1337,18 @@ resource "helm_release" "envoy_gateway" {
 }
 
 # ── Internal ingress load balancer: the subnet grant ─────────────────────────
-# Only when the load balancer takes its IP from a subnet other than the node
-# subnet. The cluster identity creates the frontend there, which takes
-# subnets/join/action and subnets/read (Microsoft, "Create an internal load
-# balancer in AKS", updated 2026-07-31); Network Contributor carries both.
-# Gated so a network owner who keeps role assignments to itself can make it
-# instead: the ingress_load_balancer_subnet_grant output names what to grant.
+# The cluster identity creates the frontend in the load balancer's subnet, which
+# takes subnets/join/action and subnets/read (Microsoft, "Create an internal
+# load balancer in AKS", updated 2026-07-31); Network Contributor carries both.
+# Made on a subnet other than the node subnet, and on the node subnet for a
+# cluster this module creates with a system-assigned identity, which exists
+# only once the cluster does. Gated so a network owner who keeps role
+# assignments to itself can make it instead: the
+# ingress_load_balancer_subnet_grant output names what to grant.
 resource "azurerm_role_assignment" "ingress_lb_subnet" {
-  count = local.ingress_lb_other_subnet && var.ingress_load_balancer_manage_subnet_assignment ? 1 : 0
+  count = local.ingress_lb_subnet_grant && var.ingress_load_balancer_manage_subnet_assignment ? 1 : 0
 
-  scope                = var.ingress_load_balancer_subnet_id
+  scope                = local.ingress_lb_grant_scope
   role_definition_name = "Network Contributor"
   principal_id         = local.cluster_identity_principal_id
   principal_type       = "ServicePrincipal"
