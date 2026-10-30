@@ -21,8 +21,12 @@ locals {
   rds_statements                        = jsondecode(templatefile("${path.module}/policies/rds.json", local.policy_template_vars))
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
   # Optional. Only applied if allow_public_ingress is true.
-  route53_public_statements  = [for s in jsondecode(templatefile("${path.module}/policies/route53_public.json", local.policy_template_vars)) : s if var.allow_public_ingress]
-  s3_statements              = jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars))
+  route53_public_statements = [for s in jsondecode(templatefile("${path.module}/policies/route53_public.json", local.policy_template_vars)) : s if var.allow_public_ingress]
+  s3_statements = [
+    for statement in jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars)) : statement
+    if !(var.allow_retained_data_deletion && try(statement.Sid, "") == "S3DenyObjectDataAccess")
+  ]
+  s3_delete_statements       = jsondecode(templatefile("${path.module}/policies/s3_delete.json", local.policy_template_vars))
   secrets_manager_statements = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
   vpc_statements             = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
   byovpc_vpc_statements      = jsondecode(templatefile("${path.module}/policies/vpc_byovpc.json", local.policy_template_vars))
@@ -138,6 +142,10 @@ locals {
       })
     ]
   }
+  # Attached as a separate inline policy (see aws_iam_role_policy.retained_data_delete
+  # below), not merged into role_policies: that map is attached with one managed
+  # policy per key, and IAM caps managed-policy attachments per role at 10 by
+  # default. The 10 keys above already use the full default quota.
   role_policies = {
     for name, statements in local.filtered_role_policies : name => [
       for statement in statements : statement if length(statement.Action) > 0
@@ -175,5 +183,17 @@ resource "aws_iam_role_policy" "byoiam_custom_names" {
   policy = jsonencode({
     Version   = "2012-10-17"
     Statement = local.byoiam_custom_name_statements
+  })
+}
+
+resource "aws_iam_role_policy" "retained_data_delete" {
+  count = var.allow_retained_data_deletion ? 1 : 0
+
+  name = "${var.role_name}-storage-delete"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.s3_delete_statements
   })
 }
