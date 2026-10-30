@@ -33,15 +33,8 @@ fleet:
   # Shared with the legacy config.agentBuilder path — do not change once data exists.
   # encryptionKey: ""
 
-  # Explicit resources — the chart defaults these two standalone blocks to {},
-  # and k8s-bootstrap applies a namespace ResourceQuota that rejects any pod
-  # not declaring cpu/memory requests AND limits. There is no LimitRange to
-  # default them from: the only one this module creates supplies requests
-  # alone, and only when sandboxes are enabled. Without these blocks both
-  # Deployments sit at 0/1 forever with
-  #   failed quota: langsmith-quota: must specify limits.cpu for: api-server
-  # on the ReplicaSet rather than on any pod, so nothing appears in
-  # kubectl get pods to explain the absence.
+  # Explicit resources: the chart defaults these two standalone blocks to {},
+  # which leaves the scheduler no requests to place the pods by.
   apiServer:
     deployment:
       resources:

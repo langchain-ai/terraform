@@ -97,8 +97,8 @@ locals {
   smithdb_bucket_name             = var.smithdb_bucket_name != "" ? var.smithdb_bucket_name : "${var.project_id}-${local.base_name}-smithdb${local.suffix}"
 
   #----------------------------------------------------------------------------
-  # SmithDB sizing. One size and one cache mode set the node pool shapes, the
-  # namespace quota headroom, and the smithdb_helm_values output.
+  # SmithDB sizing. One size and one cache mode set the node pool shapes and
+  # the smithdb_helm_values output.
   #----------------------------------------------------------------------------
   smithdb_sizing_by_profile = {
     minimum            = "minimal"
@@ -224,76 +224,6 @@ locals {
   # effect and the preconditions in main.tf do not reject them.
   smithdb_metastore_use_auth_proxy = var.enable_smithdb && coalesce(var.smithdb_metastore_use_auth_proxy, var.smithdb_metastore_source == "create")
   smithdb_metastore_use_ssl        = coalesce(var.smithdb_metastore_use_ssl, !local.smithdb_metastore_use_auth_proxy)
-
-  #----------------------------------------------------------------------------
-  # SmithDB namespace quota headroom, from the resolved resources. It covers:
-  # - the tier replicas of each component (smithdb_replicas);
-  # - one surge copy of the largest pod (a rolling update starts the new pod first);
-  # - an Auth Proxy sidecar per pod when the proxy is on;
-  # - with the backfill, each migration pod (smithdb_migration_parallelism) and the taskdb.
-  # HPA scale-out above the tier replicas has only the surge room.
-  # CPU is in millicores and memory in MiB, so the sums are exact.
-  #----------------------------------------------------------------------------
-  smithdb_quota_inputs = merge(
-    {
-      for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
-        requests = { cpu = t.cpu, memory = t.memory }
-        limits   = { cpu = t.cpu, memory = t.memory }
-      }
-    },
-    {
-      # Chart values.yaml defaults for smithdb.migration.job.resources and
-      # smithdb.migration.taskdb.postgres.statefulSet.resources.
-      migration_job = local.smithdb_minimal ? local.smithdb_minimal_resources.migration_job : {
-        requests = { cpu = "8", memory = "32Gi", "ephemeral-storage" = "100Gi" }
-        limits   = { cpu = "8", memory = "32Gi", "ephemeral-storage" = "100Gi" }
-      }
-      taskdb = {
-        requests = { cpu = "2", memory = "4Gi" }
-        limits   = { cpu = "4", memory = "8Gi" }
-      }
-      # The sidecar that helm/scripts/init-values.sh adds. Keep the two copies the same.
-      auth_proxy = { requests = { cpu = "100m", memory = "128Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
-    },
-  )
-
-  # "250m" and "4" to millicores, "256Mi" and "8Gi" to MiB.
-  smithdb_quota_numbers = {
-    for name, r in local.smithdb_quota_inputs : name => merge([
-      for side in ["requests", "limits"] : {
-        "${side}_cpu_m"     = tonumber(trimsuffix(r[side].cpu, "m")) * (endswith(r[side].cpu, "m") ? 1 : 1000)
-        "${side}_memory_mi" = tonumber(trimsuffix(trimsuffix(r[side].memory, "Gi"), "Mi")) * (endswith(r[side].memory, "Gi") ? 1024 : 1)
-      }
-    ]...)
-  }
-  smithdb_quota_keys = ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"]
-  smithdb_quota_sidecar = {
-    for k in local.smithdb_quota_keys : k => local.smithdb_metastore_use_auth_proxy ? local.smithdb_quota_numbers.auth_proxy[k] : 0
-  }
-  smithdb_quota_total = {
-    for k in local.smithdb_quota_keys : k => (
-      sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * (local.smithdb_quota_numbers[c][k] + local.smithdb_quota_sidecar[k])]) +
-      max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) + local.smithdb_quota_sidecar[k] +
-      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * (local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_sidecar[k]) + local.smithdb_quota_numbers.taskdb[k] : 0)
-    )
-  }
-
-  # k8s-bootstrap adds the extra once to requests and twice to limits, so it
-  # must cover the requests total and half of the limits total.
-  smithdb_quota_extra_cpu = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_cpu_m / 1000), ceil(local.smithdb_quota_total.limits_cpu_m / 2000)
-  ) : 0
-  smithdb_quota_extra_memory_gi = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_memory_mi / 1024), ceil(local.smithdb_quota_total.limits_memory_mi / 2048)
-  ) : 0
-
-  # The SmithDB pods at the tier replicas plus the metastore migration hook,
-  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
-  # and its taskdb StatefulSet, plus 1 for each further migration pod. With one
-  # replica each and one migration pod, this gives 12, or 20 with the backfill.
-  smithdb_quota_extra_pods = var.enable_smithdb ? (
-    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
-  ) : 0
 
   #----------------------------------------------------------------------------
   # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them

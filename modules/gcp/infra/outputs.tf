@@ -427,11 +427,6 @@ output "smithdb_migration_enabled" {
   value       = var.smithdb_migration_enabled
 }
 
-output "smithdb_migration_parallelism" {
-  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
-  value       = var.smithdb_migration_parallelism
-}
-
 output "smithdb_query_enabled" {
   description = "Whether LangSmith reads are served from SmithDB"
   value       = var.smithdb_query_enabled
@@ -468,15 +463,6 @@ output "smithdb_sizing" {
 output "smithdb_cache_storage" {
   description = "Resolved SmithDB cache storage, or null when SmithDB is disabled"
   value       = var.enable_smithdb ? local.smithdb_cache_storage : null
-}
-
-output "smithdb_quota_extra" {
-  description = "SmithDB headroom that k8s-bootstrap adds to the LangSmith namespace ResourceQuota"
-  value = {
-    cpu       = local.smithdb_quota_extra_cpu
-    memory_gi = local.smithdb_quota_extra_memory_gi
-    pods      = local.smithdb_quota_extra_pods
-  }
 }
 
 # helm/scripts/init-values.sh writes this to langsmith-values-smithdb-sizing.yaml.
