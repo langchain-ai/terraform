@@ -106,6 +106,10 @@ run "external_runtime_moves_sandbox_host_to_its_own_cluster" {
     error_message = "CoreDNS does not tolerate the sandbox-host taint, so it cannot schedule in the sandbox cluster"
   }
   assert {
+    condition     = module.sandbox_eks[0].managed_node_group_input.iam_role_name == "plantest-dev-sandbox-eks-host"
+    error_message = "the sandbox cluster's node role must not reuse the in-cluster group's name (plantest-dev-sandbox-host), or moving an install to an external runtime fails with EntityAlreadyExists"
+  }
+  assert {
     condition = (
       length(kubernetes_secret_v1.sandbox_runtime) == 1 &&
       length(kubernetes_secret_v1.sandbox_juicefs_config) == 1 &&
