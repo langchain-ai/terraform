@@ -43,6 +43,7 @@ _param_note() {
     redis-auth-token)                  echo " (auto-generated)" ;;
     sandbox-juicefs-redis-auth-token)  echo " (auto-generated)" ;;
     sandbox-callback-signing-jwk)      echo " (auto-generated)" ;;
+    sandbox-service-auth-secret)       echo " (auto-generated)" ;;
     engine-encryption-key)             echo " (auto-generated)" ;;
     engine-usage-signing-secret)       echo " (auto-generated)" ;;
     *)                                 echo "" ;;
@@ -83,6 +84,9 @@ if _tfvar_is_true "enable_sandboxes"; then
     "sandbox-juicefs-redis-auth-token"
     "sandbox-callback-signing-jwk"
   )
+  if [[ "$(_parse_tfvar "sandbox_runtime_source" || true)" == "external" ]]; then
+    REQUIRED_PARAMS+=("sandbox-service-auth-secret")
+  fi
 fi
 
 if _tfvar_is_true "enable_engine"; then

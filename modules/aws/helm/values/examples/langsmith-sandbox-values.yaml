@@ -1,0 +1,41 @@
+# Reference values for the standalone langsmith-sandbox chart.
+# init-values.sh generates helm/values/langsmith-sandbox-values-overrides.yaml
+# with deployment-specific values from Terraform outputs.
+
+# config.existingSecretName is a minimal Secret in the sandbox namespace, never
+# a copy of the LangSmith application Secret. Terraform creates it with
+# exactly these two keys:
+#   sandbox_service_auth_secret   same value as sandbox_service_auth_secret in
+#                                 langsmith-config, a dedicated secret that is
+#                                 never the API key salt
+#   sandbox_callback_signing_jwk  same JWK as the control plane
+config:
+  endpoint: "https://langsmith.example.com/api"
+  existingSecretName: "langsmith-sandbox-runtime"
+  callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+serviceAuth:
+  secretKey: "sandbox_service_auth_secret"
+
+workloadIdentity:
+  provider: aws
+  aws:
+    roleArn: "arn:aws:iam::<account-id>:role/<sandbox-irsa-role>"
+
+juicefs:
+  existingSecretName: "juicefs-csi-config"
+  hostMount:
+    cacheDirs:
+      - "/var/cache/juicefs"
+
+sandboxHost:
+  enabled: true
+  deployment:
+    nodeSelector:
+      sandbox.langsmith.com/host: "true"
+  # serviceAccount.name must match the sandbox IAM role's OIDC 'sub' condition
+  # (Terraform: sandbox_service_account_name). The chart would otherwise default
+  # it to the sandbox-host fullname (langsmith-sandbox-sandbox-host for a release
+  # named langsmith-sandbox), which the role does not trust, and sandbox-host
+  # would fail to reach the trace bucket.
+  serviceAccount:
+    name: "sandbox-host"

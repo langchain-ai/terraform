@@ -362,6 +362,60 @@ variable "enable_sandboxes" {
   default     = false
 }
 
+variable "sandbox_runtime_source" {
+  type        = string
+  description = "Sandbox runtime location: 'in-cluster' (default, sandbox-host in the LangSmith EKS cluster) or 'external' (a dedicated sandbox EKS cluster in the same VPC, running the langsmith-sandbox chart)."
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.sandbox_runtime_source)
+    error_message = "sandbox_runtime_source must be 'in-cluster' or 'external'."
+  }
+}
+
+variable "sandbox_namespace" {
+  type        = string
+  description = "Kubernetes namespace for the standalone langsmith-sandbox release when sandbox_runtime_source is external."
+  default     = "langsmith-sandbox"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,62}$", var.sandbox_namespace))
+    error_message = "sandbox_namespace must be a valid Kubernetes namespace name."
+  }
+}
+
+variable "sandbox_runtime_secret_name" {
+  type        = string
+  description = "Name of the minimal Secret shared with the standalone sandbox runtime."
+  default     = "langsmith-sandbox-runtime"
+}
+
+variable "sandbox_runtime_secret_revision" {
+  type        = number
+  description = "Revision for the write-only standalone sandbox runtime Secret (keys sandbox_service_auth_secret and sandbox_callback_signing_jwk). Increment to rewrite it, for example after rotating either value."
+  default     = 1
+}
+
+variable "sandbox_service_account_name" {
+  type        = string
+  description = <<-EOT
+    ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+    This name is the IRSA contract: it is written into the OIDC `sub` condition
+    on the sandbox IAM role AND into sandboxHost.serviceAccount.name in the
+    generated langsmith-sandbox values, so both sides always agree. The
+    langsmith-sandbox chart otherwise defaults this to
+    <release>-langsmith-sandbox-sandbox-host, which would not match the role
+    trust policy. Only change it if you also install the chart with the same
+    sandboxHost.serviceAccount.name.
+  EOT
+  default     = "sandbox-host"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.sandbox_service_account_name)) && length(var.sandbox_service_account_name) <= 63
+    error_message = "sandbox_service_account_name must be a valid DNS-1123 label: up to 63 lowercase alphanumeric characters or '-', starting and ending with an alphanumeric character."
+  }
+}
+
 variable "sandbox_host_node_count" {
   type        = number
   description = "Fixed number of sandbox-host nodes to provision when enable_sandboxes = true."
@@ -485,6 +539,30 @@ variable "alb_existing_security_group_id" {
   type        = string
   description = "ID of an existing security group to attach to the ALB instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow inbound HTTP/HTTPS per alb_allowed_cidr_blocks."
   default     = null
+}
+
+# Escape hatch for separate-cluster sandboxes behind an internet-facing ALB.
+#
+# The sandbox cluster reaches the LangSmith API at https://<langsmith_domain>/api.
+# With an internal ALB that path is covered automatically by a security group
+# rule naming the sandbox node group. With an internet-facing ALB the request
+# leaves via the NAT gateway and returns as public traffic, so it is matched by
+# alb_allowed_cidr_blocks instead — and is therefore blocked whenever that list
+# has been narrowed away from the default.
+#
+# Setting this to true appends the NAT gateway Elastic IPs to the ALB allowlist.
+# Understand what that grants before enabling it: with single_nat_gateway = true
+# every workload in the private subnets shares one Elastic IP, including the
+# sandboxes themselves, which run untrusted user code. Allowing that address
+# re-exposes the LangSmith API to anything running in the VPC, which is usually
+# the opposite of why alb_allowed_cidr_blocks was narrowed.
+#
+# Prefer alb_scheme = "internal", or terminate the sandbox callback on a
+# separate internal load balancer, and leave this false.
+variable "sandbox_alb_allow_nat_egress" {
+  type        = bool
+  description = "Append the NAT gateway Elastic IPs to alb_allowed_cidr_blocks so separate-cluster sandboxes can reach the LangSmith API through an internet-facing ALB. Grants ALB access to every workload sharing the NAT gateway, including untrusted sandbox code. Prefer alb_scheme = 'internal'."
+  default     = false
 }
 
 #------------------------------------------------------------------------------
@@ -779,8 +857,12 @@ variable "clickhouse_source" {
 }
 
 #------------------------------------------------------------------------------
-# ESO-managed secrets. Terraform doesn't use these values: setup-env.sh exports
-# them as TF_VAR_* and writes them to SSM, and ESO syncs SSM into the namespace.
+# ESO-managed secrets. setup-env.sh exports them as TF_VAR_* and writes them to
+# SSM, and ESO syncs SSM into the namespace. Terraform uses none of them, except
+# that sandbox_runtime_source = "external" writes
+# sandbox_service_auth_secret and sandbox_callback_signing_jwk into the sandbox
+# cluster's runtime Secret (write-only, kept out of state) and checks that the
+# service-auth secret is not langsmith_api_key_salt.
 # They stay declared so the module states the full set of inputs an operator has
 # to supply, and so setting one in terraform.tfvars is legal rather than a
 # "value for undeclared variable" warning on every plan. (A TF_VAR_* export for
@@ -797,7 +879,14 @@ variable "langsmith_api_key_salt" {
 # tflint-ignore: terraform_unused_declarations
 variable "sandbox_callback_signing_jwk" {
   type        = string
-  description = "Sandbox callback signing private JWK. Declared so setup-env.sh can export TF_VAR_sandbox_callback_signing_jwk without Terraform warnings; app secret sync reads it from SSM."
+  description = "Sandbox callback signing private JWK. Exported by setup-env.sh as TF_VAR_sandbox_callback_signing_jwk; app secret sync reads it from SSM. With sandbox_runtime_source = \"external\", Terraform also writes it into the sandbox cluster's runtime Secret."
+  sensitive   = true
+  default     = ""
+}
+
+variable "sandbox_service_auth_secret" {
+  type        = string
+  description = "Dedicated sandbox service-auth secret for sandbox_runtime_source = \"external\": it signs calls between LangSmith and the sandbox hosts, so the sandbox cluster never holds langsmith_api_key_salt. At least 32 characters and different from the salt. Auto-generated by setup-env.sh and stored in SSM: /langsmith/{base_name}/sandbox-service-auth-secret. apply-eso.sh syncs it into langsmith-config as sandbox_service_auth_secret, and Terraform writes the same value into the sandbox cluster's runtime Secret. Unused with the in-cluster runtime."
   sensitive   = true
   default     = ""
 }

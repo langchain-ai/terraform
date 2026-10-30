@@ -355,8 +355,8 @@ table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
 |-----------|-------------------------------|
 | ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
 | Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
-| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
-| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |
+| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR. With `sandbox_runtime_source = "external"`, admit the LangSmith node security group (and the bastion's) instead of the VPC CIDR, which also contains the sandbox nodes |
+| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR. With an external sandbox runtime, the same narrowing as Postgres |
 | SmithDB metastore (RDS) | See below. This one component can have its ingress rule managed by Terraform |
 
 ### The one exception: SmithDB's metastore security group
@@ -425,6 +425,87 @@ kubectl get nodes
 kubectl get ns
 kubectl get pods -n kube-system
 ```
+
+### Optional dedicated sandbox cluster
+
+`enable_sandboxes = true` uses the main EKS cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
+
+```hcl
+enable_sandboxes        = true
+sandbox_runtime_source = "external"
+sandbox_namespace       = "langsmith-sandbox"
+
+langsmith_helm_chart_version = "0.18.0" # exact, 0.18 or later
+```
+
+An external sandbox runtime needs chart 0.18 or later, pinned to one exact version: the default 0.17 line has no separate-cluster support, and the runtime chart is paired with that exact chart (see [Versions](#versions)). `terraform plan` and `make deploy` both reject anything else.
+
+Terraform then creates a second EKS cluster in the same VPC and private subnets, with only the KVM-capable sandbox node group. Around it, Terraform creates:
+
+- an IRSA role that trusts exactly one ServiceAccount, `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>`, with S3 access to the JuiceFS prefix of the trace bucket and nothing else: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:AbortMultipartUpload` on `<bucket>/<sandbox_juicefs_name>/*`, and `s3:ListBucket` for that prefix only;
+- the network rules below;
+- two write-only Secrets in the sandbox namespace: the runtime Secret and the JuiceFS config (volume name, metadata URL, bucket).
+
+The S3 bucket and the dedicated `noeviction` ElastiCache metadata store remain shared infrastructure in the VPC.
+
+#### Network
+
+- **TCP 19190 into the sandbox nodes** comes from two sources only, both named by security group: the LangSmith cluster's node security group (where `platform-backend` and `ingest-queue` run; pod ENIs carry the same group, with custom networking too) and the sandbox nodes themselves, which forward ingress requests, dial sandbox links and send live-migration streams to each other on that port. Nothing else opens 19190.
+- **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, or the traffic would leave a network you trust, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.external.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
+- **Sandbox nodes reach the LangSmith API** at the runtime chart's `config.endpoint` (`<config.hostname>[/<basePath>]/api`) through the ALB. With `alb_scheme = "internal"` Terraform adds an ALB rule for the sandbox node security group. With an internet-facing ALB the call leaves through the NAT gateway, so a narrowed `alb_allowed_cidr_blocks` must admit the NAT address (see `sandbox_alb_allow_nat_egress` in `terraform.tfvars.example`); `terraform plan` fails otherwise. With `alb_existing_security_group_id`, Terraform writes no rules on your group: allow the `sandbox_node_security_group_id` output on the ALB's ports yourself. With `create_firewall = true`, `langsmith_domain` is added to the allowed FQDNs.
+- **Sandbox nodes reach Redis and S3** inside the VPC: the JuiceFS Redis admits the VPC CIDR, and S3 goes through the VPC gateway endpoint.
+- **Sandbox nodes cannot reach the LangSmith Postgres or Redis.** The sandbox nodes share the private subnets, so in this mode the RDS and ElastiCache security groups admit the LangSmith node security group (which pod ENIs carry, with custom networking too) and the bastion's, not the VPC CIDR. Other clients in the VPC lose access to those databases in this mode. If one needs them, supply your own groups with `postgres_existing_security_group_id` and `redis_existing_security_group_id`; Terraform writes no rules on those, so keep the sandbox nodes out of them.
+
+#### Secrets
+
+The runtime Secret (`sandbox_runtime_secret_name`, default `langsmith-sandbox-runtime`) holds exactly two keys, the `langsmith-sandbox` chart's defaults. Never copy the whole `langsmith-config` Secret into the sandbox cluster.
+
+| Key | Value |
+|-----|-------|
+| `sandbox_service_auth_secret` | A dedicated sandbox service-auth secret, identical to `sandbox_service_auth_secret` in `langsmith-config`. It is never the API key salt: `api_key_salt` also signs LangSmith's own service calls, and the sandbox cluster runs untrusted code. |
+| `sandbox_callback_signing_jwk` | The callback-signing JWK, identical to the one in `langsmith-config`. |
+
+With `sandbox_runtime_source = "external"`, `setup-env.sh` generates the service-auth secret (64 hex characters) into the SSM parameter `sandbox-service-auth-secret`, `apply-eso.sh` syncs it into `langsmith-config` as `sandbox_service_auth_secret`, and `init-values.sh` sets `sandboxes.serviceAuth.secretKey: sandbox_service_auth_secret` in the LangSmith values. The in-cluster runtime creates none of this and keeps the chart default, `api_key_salt`.
+
+Terraform writes both runtime keys from `TF_VAR_sandbox_service_auth_secret` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. `terraform plan` fails if the service-auth secret is missing, shorter than 32 characters, or equal to the API key salt.
+
+Write-only values reach the cluster only when `sandbox_runtime_secret_revision` changes, so after changing either value, increment it and re-apply. Both releases read these values only at startup, so a new value takes effect when the LangSmith pods and `sandbox-host` restart on it together; sandboxes fail while the two sides disagree.
+
+A sandbox cluster applied with an earlier version of this module holds the API key salt under `sandbox_service_auth_secret`. To move it to the dedicated secret: run `source infra/scripts/setup-env.sh` (it creates the SSM parameter), increment `sandbox_runtime_secret_revision`, run `make apply`, `make init-values` and `make deploy`, then restart `sandbox-host` in the sandbox cluster:
+
+```bash
+kubectl --kubeconfig ~/.kube/langsmith-<sandbox cluster name> -n <sandbox_namespace> \
+  rollout restart deployment -l app=sandbox-host
+```
+
+`make deploy` restarts the LangSmith pods because their service-auth key changes, but `sandbox-host` picks up the rewritten Secret only when it restarts.
+
+#### Versions
+
+Each LangSmith install runs the `langsmith-sandbox` chart whose appVersion equals the `langsmith` chart's. `make deploy` reads the appVersion of the pinned `langsmith` chart, installs the newest `langsmith-sandbox` chart with the same appVersion, and leaves `images.sandboxHostImage.tag` empty so the image follows that appVersion. If no runtime chart matches, it stops before changing either release. To check by hand:
+
+```bash
+APP=$(helm show chart langchain/langsmith --version 0.18.0 | awk '/^appVersion:/{print $2}' | tr -d '"')
+helm search repo langchain/langsmith-sandbox --versions --devel -o json \
+  | jq -r --arg a "$APP" '[.[] | select(.app_version == $a)][0].version // error("no langsmith-sandbox chart for appVersion \($a)")'
+```
+
+#### One runtime per install
+
+Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.external.enabled: true`. LangSmith accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its elected `sandbox-host` pod turns not ready. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
+
+To move an existing install from the in-cluster runtime, change `sandbox_runtime_source`, run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret), then run `make apply`, `make init-values` and `make deploy`. `make apply` creates the sandbox cluster and removes the in-cluster sandbox node group. `make deploy` copies the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into the sandbox namespace, so Sandboxes that resume from saved memory keep their auth proxy credential injection; then it switches the LangSmith release to `sandboxes.external.enabled` (removing the embedded runtime) and to the dedicated service-auth secret, and installs the runtime chart against the same JuiceFS metadata store and bucket, so both sides start on the new secret together. LangSmith accepts the new runtime about 6 minutes after the embedded hosts stop reporting, so its host can stay not ready until then. Running sandboxes stop during the move and start again on the new hosts when used.
+
+#### Install, upgrade and uninstall order
+
+- **Install:** `make apply`, then `make init-values`, then `make deploy`. `make init-values` writes both the LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`; `make deploy` installs `langsmith` first, then `langsmith-sandbox` in the sandbox cluster, and waits for `sandbox-host`.
+- **Upgrade:** change `langsmith_helm_chart_version` and run `make deploy`. It upgrades `langsmith` first and the runtime right after, to the matching chart. If you upgrade with other tools, keep that order and upgrade the runtime within days.
+- **Uninstall:** `make uninstall` removes the `langsmith-sandbox` release from the sandbox cluster first, then the LangSmith release; then empty the trace bucket, which also holds the JuiceFS data, and run `make destroy` ([TEARDOWN.md](TEARDOWN.md), A5). Without Terraform outputs, uninstall the runtime release from the sandbox cluster yourself before running `make uninstall`.
+- **Status:** `make status` also checks the sandbox cluster: the `langsmith-sandbox` release, that its appVersion matches the `langsmith` release, and the runtime pods.
+
+`make deploy`, `make uninstall` and `make status` reach the sandbox cluster through their own kubeconfig file, `~/.kube/langsmith-<sandbox cluster name>`, so your current context is unchanged.
+
+The sandbox IRSA role trusts exactly one ServiceAccount, named by `sandbox_service_account_name` (default `sandbox-host`). `init-values.sh` writes the same name into `sandboxHost.serviceAccount.name` and the role into `workloadIdentity.aws.roleArn` in the generated values, so the two always agree. Renaming the ServiceAccount only in the values file breaks IRSA and leaves `sandbox-host` unable to reach the bucket — change the tfvar and re-run `make init-values` instead.
 
 ---
 
@@ -649,6 +730,7 @@ For each secret it follows this priority order:
 | `polly-encryption-key` | Auto-generated (Fernet key) | For LangSmith Chat (formerly Polly) |
 | `engine-encryption-key` | Auto-generated (Fernet key) | For Engine. Keep it stable. See [ENGINE.md](ENGINE.md) |
 | `engine-usage-signing-secret` | Auto-generated (`openssl rand -hex 32`) | For Engine usage reports. Keep it stable |
+| `sandbox-service-auth-secret` | Auto-generated (`openssl rand -hex 32`), only with `sandbox_runtime_source = "external"` | Signs calls between LangSmith and the separate sandbox cluster in place of the API key salt. Keep it stable; see [Secrets](#secrets) |
 
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
@@ -849,6 +931,8 @@ Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` a
    | `.../langsmith-api-key-salt` | `api_key_salt` |
    | `.../langsmith-jwt-secret` | `jwt_secret` |
    | `.../langsmith-admin-password` | `initial_org_admin_password` |
+   | `.../sandbox-callback-signing-jwk` | `sandbox_callback_signing_jwk` *(only with `enable_sandboxes = true`)* |
+   | `.../sandbox-service-auth-secret` | `sandbox_service_auth_secret` *(only with `sandbox_runtime_source = "external"`)* |
    | `.../agent-builder-encryption-key` | `agent_builder_encryption_key` *(only if key exists in SSM)* |
    | `.../insights-encryption-key` | `insights_encryption_key` *(only if key exists in SSM)* |
    | `.../deployments-encryption-key` | `deployments_encryption_key` *(only if key exists in SSM)* |
@@ -1091,6 +1175,15 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
+| `enable_sandboxes` | `false` | no | Provision sandbox-host nodes, dedicated JuiceFS Redis, and sandbox storage access |
+| `sandbox_runtime_source` | `in-cluster` | no | `in-cluster` runs sandbox-host in the main EKS cluster; `external` creates a dedicated sandbox EKS cluster |
+| `sandbox_namespace` | `langsmith-sandbox` | separate cluster | Namespace for the standalone sandbox runtime |
+| `sandbox_service_account_name` | `sandbox-host` | no | ServiceAccount trusted by the sandbox IRSA role. `init-values.sh` writes it into `sandboxHost.serviceAccount.name`, so change it here rather than in the values file |
+| `sandbox_runtime_secret_revision` | `1` | no | Increment to rewrite the write-only runtime Secret in the sandbox cluster |
+| `sandbox_alb_allow_nat_egress` | `false` | no | Separate cluster with an internet-facing ALB: append the NAT gateway addresses to the ALB allowlist. Admits everything behind the NAT, sandboxes included; prefer an internal ALB |
+| `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
+| `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
+| `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.17.x or 0.18.x chart version; empty deploys the latest 0.17.x. An external sandbox runtime requires an exact version on 0.18 or later |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |

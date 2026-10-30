@@ -29,6 +29,11 @@ output "nat_gateway_az" {
   value       = module.vpc.azs[0]
 }
 
+output "nat_public_ips" {
+  description = "Elastic IPs of the NAT gateway. This is the apparent source address of any private-subnet egress that leaves the VPC, so it is shared by every workload in the private subnets."
+  value       = module.vpc.nat_public_ips
+}
+
 output "azs" {
   description = "List of availability zones used by this VPC."
   value       = module.vpc.azs

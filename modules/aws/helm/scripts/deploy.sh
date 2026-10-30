@@ -33,6 +33,8 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
+SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
+SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 # Pin the chart *line*: deploy the latest 0.17.x, never auto-jump to 0.18.
 # Override with the CHART_VERSION env var for an exact patch if needed.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
@@ -51,6 +53,10 @@ if [[ -z "${CHART_VERSION:-}" ]]; then
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.17.0}"
+# An external runtime runs sandbox-host from its own langsmith-sandbox release in
+# the sandbox cluster. That chart has no version setting here: it is the newest
+# one whose appVersion equals the langsmith chart's, resolved below.
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -82,8 +88,42 @@ _sandbox_values_state() {
   ' "$1"
 }
 
+# Prints sandboxes.serviceAuth.secretKey from a values file, or nothing.
+_sandbox_service_auth_secret_key() {
+  awk '
+    /^[^ \t#]/ { top = $1; child = "" }
+    top != "sandboxes:" { next }
+    /^  [^ \t#]/ { child = $1 }
+    child == "serviceAuth:" && /^    secretKey:/ { v = $2; gsub(/"/, "", v); print v; exit }
+  ' "$1"
+}
+
 _validate_sandbox_values_file() {
   local values_file="$1"
+
+  # External runtime: the langsmith release runs no sandbox-host, so its values
+  # carry sandboxes.external.enabled instead of the JuiceFS block; the runtime's values live
+  # in their own generated file. They must also name the dedicated service-auth
+  # key: with sandboxes.external.enabled the chart refuses api_key_salt, the default
+  # key for an existing Secret.
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
+    if [[ "$(_sandbox_values_state "$values_file")" == "legacy" ]] \
+      || ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
+      || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
+      || ! awk '/^sandboxes:[[:space:]]*$/ { s = 1; next }
+                s && /^[^[:space:]#]/ { s = 0 }
+                s && /^  external:[[:space:]]*$/ { e = 1; next }
+                e && /^  [^[:space:]]/ { e = 0 }
+                e && /^    enabled:[[:space:]]*true[[:space:]]*$/ { found = 1 }
+                END { exit !found }' "$values_file" \
+      || grep -Eq '^[[:space:]]{2}(deploymentMode|hostIngressEndpoint):' "$values_file" \
+      || [[ "$(_sandbox_service_auth_secret_key "$values_file")" != "sandbox_service_auth_secret" ]] \
+      || [[ ! -f "$SANDBOX_VALUES_FILE" ]]; then
+      echo "ERROR: external sandbox runtime values are missing or stale. Run: make init-values" >&2
+      exit 1
+    fi
+    return 0
+  fi
 
   case "$(_sandbox_values_state "$values_file")" in
     ok) ;;
@@ -167,6 +207,22 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
 fi
 
+# sandboxes.external ships with chart 0.18, and the runtime chart is picked below by
+# this chart's appVersion, so the langsmith chart must be one exact version on
+# 0.18 or later: not the default 0.17 line and not a range. Terraform checks
+# langsmith_helm_chart_version the same way; this also covers CHART_VERSION.
+# Keep the pattern in step with external_runtime_chart_version_pattern in
+# infra/locals.tf.
+_external_runtime_chart_re='^(0\.(1[89]|[2-9][0-9])|[1-9][0-9]*\.[0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]] \
+  && ! [[ "$CHART_VERSION" =~ $_external_runtime_chart_re ]]; then
+  echo "ERROR: sandbox_runtime_source = external needs one exact langsmith chart version" >&2
+  echo "       on 0.18 or later; got CHART_VERSION='$CHART_VERSION'." >&2
+  echo "       Set langsmith_helm_chart_version in terraform.tfvars, for example \"0.18.0\"." >&2
+  echo "       The langsmith-sandbox chart is then picked by that chart's appVersion." >&2
+  exit 1
+fi
+
 # Engine needs chart 0.17, which the chart-line check above already enforces.
 if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
   echo "ERROR: enable_engine = true requires enable_sandboxes = true. Every Engine run executes in a sandbox." >&2
@@ -204,6 +260,16 @@ fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _validate_sandbox_values_file "$ENV_FILE"
+fi
+
+_sandbox_cluster_name=""
+_sandbox_namespace=""
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  _sandbox_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || {
+    echo "ERROR: Could not read sandbox_cluster_name. Is terraform apply complete?" >&2
+    exit 1
+  }
+  _sandbox_namespace=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace="langsmith-sandbox"
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────────
@@ -270,6 +336,9 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
+  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+    _require_env "TF_VAR_sandbox_service_auth_secret"
+  fi
   if [[ "$_direct_polly_enabled" == "true" ]]; then
     _require_env "TF_VAR_langsmith_polly_encryption_key"
   fi
@@ -287,6 +356,14 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _sandbox_secret_literals=(
       --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+    )
+  fi
+  if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+    # The dedicated service-auth secret; Terraform writes the same value into
+    # the sandbox cluster's runtime Secret.
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _sandbox_secret_literals+=(
+      --from-literal=sandbox_service_auth_secret="${TF_VAR_sandbox_service_auth_secret}"
     )
   fi
   _polly_secret_literals=()
@@ -770,7 +847,7 @@ if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
 fi
-if [[ "$_enable_sandboxes" == "true" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: chart $_resolved_chart does not declare an appVersion for the Sandbox image." >&2
@@ -778,6 +855,38 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
   VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag"
+fi
+
+# External runtime: the runtime chart pairs with the langsmith chart by
+# appVersion, which is the LangSmith release both deploy, never by chart
+# version. Install the newest langsmith-sandbox chart with the same appVersion.
+# Resolved here, before either release changes, so a missing runtime chart stops
+# the deploy instead of leaving the control plane upgraded without a runtime.
+_sandbox_chart_version=""
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: sandbox_runtime_source = external needs jq to pick the langsmith-sandbox chart." >&2
+    exit 1
+  fi
+  _langsmith_app_version=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata" | tr -d "\"'")
+  if [[ -z "$_langsmith_app_version" ]]; then
+    echo "ERROR: chart langchain/langsmith $_resolved_chart declares no appVersion to pair the sandbox runtime with." >&2
+    exit 1
+  fi
+  # --devel: release candidates pair with prerelease runtime charts.
+  _sandbox_chart_version=$(helm search repo langchain/langsmith-sandbox --versions --devel -o json 2>/dev/null \
+    | jq -r --arg app "$_langsmith_app_version" \
+      '[.[] | select(.name == "langchain/langsmith-sandbox" and .app_version == $app)][0].version // empty') \
+    || _sandbox_chart_version=""
+  if [[ -z "$_sandbox_chart_version" ]]; then
+    echo "ERROR: no langchain/langsmith-sandbox chart has appVersion $_langsmith_app_version," >&2
+    echo "       the appVersion of langchain/langsmith $_resolved_chart. The sandbox runtime must run" >&2
+    echo "       the same LangSmith release as the control plane. Neither Helm release was changed." >&2
+    echo "       List the published runtime charts with:" >&2
+    echo "         helm search repo langchain/langsmith-sandbox --versions --devel" >&2
+    exit 1
+  fi
+  echo "Chart: langchain/langsmith-sandbox  appVersion=${_langsmith_app_version}  resolved=${_sandbox_chart_version}"
 fi
 
 # A failed hook leaves Helm reporting only "hooks failed: job failed:
@@ -800,6 +909,33 @@ _report_failed_hook_jobs() {
     -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.failed}{"\n"}{end}' \
     2>/dev/null || true)
 }
+
+# Moving from the in-cluster runtime: Sandboxes that resume from saved memory
+# keep trusting the egress proxy CA they started with, so the external runtime
+# must keep the CA the langsmith chart generated. Copy it into the sandbox
+# namespace before the upgrade below removes it. The Secret goes straight from
+# one cluster to the other and is never printed.
+_proxy_ca_secret="smithbox-proxy-ca"
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]] \
+  && kubectl get secret "$_proxy_ca_secret" -n "$NAMESPACE" >/dev/null 2>&1; then
+  (
+    _main_kubeconfig="$KUBECONFIG"
+    _use_cluster_kubeconfig "$_sandbox_cluster_name" "$_region" >/dev/null
+    if kubectl get secret "$_proxy_ca_secret" -n "$_sandbox_namespace" >/dev/null 2>&1; then
+      exit 0
+    fi
+    if ! kubectl get namespace "$_sandbox_namespace" >/dev/null 2>&1; then
+      echo "ERROR: namespace $_sandbox_namespace is missing in $_sandbox_cluster_name. Run 'make apply' first." >&2
+      exit 1
+    fi
+    KUBECONFIG="$_main_kubeconfig" kubectl get secret "$_proxy_ca_secret" -n "$NAMESPACE" -o json \
+      | jq --arg ns "$_sandbox_namespace" '{apiVersion, kind, type,
+          metadata: {name: .metadata.name, namespace: $ns},
+          data: {"tls.crt": .data["tls.crt"], "tls.key": .data["tls.key"]}}' \
+      | kubectl apply -f - >/dev/null
+    echo "Copied the in-cluster runtime's proxy CA ($_proxy_ca_secret) into $_sandbox_namespace."
+  )
+fi
 
 if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
@@ -852,7 +988,7 @@ for dep in "${_core_deployments[@]}"; do
   fi
 done
 
-if [[ "$_enable_sandboxes" == "true" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluster" ]]; then
   # Helm's fullname can include the chart name or an override, so select by the release labels.
   if ! kubectl rollout status deployment -n "$NAMESPACE" -l "app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host" --timeout=5m 2>/dev/null; then
     echo "  ⏳ sandbox-host for release ${RELEASE_NAME} not ready within 5m (sandbox-host nodes may still be starting)"
@@ -917,6 +1053,87 @@ if [[ -n "$_active_host" ]]; then
   fi
 else
   echo "(Load balancer not yet ready — re-run deploy after a few minutes to get the hostname)"
+fi
+
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  # Read hostname and basePath from the *config:* block specifically. A bare
+  # `grep '^\s*hostname:'` also matches the hostname keys that gateway and
+  # sandbox overlays nest under other top-level maps, so it silently picks up
+  # whichever happens to sort first. basePath matters because the sandbox
+  # reaches LangSmith at <hostname>/<basePath>/api; dropping it yields a URL
+  # that passes the chart's /api check and then 404s at runtime.
+  _read_config_key() {
+    awk -v key="$1" '
+      /^[^[:space:]#]/ { in_config = ($0 ~ /^config:[[:space:]]*$/) ; next }
+      !in_config { next }
+      $1 == key":" {
+        sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "")
+        sub(/[[:space:]]*(#.*)?$/, "")
+        gsub(/^"|"$/, "")
+        print
+        exit
+      }
+    ' "$ENV_FILE" 2>/dev/null || true
+  }
+
+  _platform_host=$(_read_config_key "hostname")
+  _platform_base_path=$(_read_config_key "basePath")
+
+  if [[ ! "$_platform_host" =~ ^https?://[^/]+ ]]; then
+    echo "ERROR: an external sandbox runtime needs an absolute config.hostname in $(basename "$ENV_FILE")." >&2
+    echo "       Found: '${_platform_host:-<empty>}'. Re-run 'make init-values' after the ALB is up," >&2
+    echo "       or set langsmith_domain in terraform.tfvars." >&2
+    exit 1
+  fi
+
+  _platform_endpoint="${_platform_host%/}"
+  _platform_base_path="${_platform_base_path#/}"
+  _platform_base_path="${_platform_base_path%/}"
+  [[ -n "$_platform_base_path" ]] && _platform_endpoint+="/${_platform_base_path}"
+  _platform_endpoint+="/api"
+
+  echo ""
+  echo "Deploying sandbox runtime to cluster: $_sandbox_cluster_name"
+  echo "Chart: langchain/langsmith-sandbox ${_sandbox_chart_version} (appVersion ${_langsmith_app_version})"
+  echo "Platform endpoint: $_platform_endpoint"
+
+  # Subshell: the sandbox cluster gets its own kubeconfig file from main's
+  # helper (~/.kube/langsmith-<cluster>), and the KUBECONFIG export ends with
+  # the subshell. set -e still exits the script on a failure in here.
+  # No images.sandboxHostImage.tag: the chart runs the image of its own appVersion.
+  # No --wait or --atomic: hosts drain one at a time, so a slow roll is not a
+  # failed one; the rollout check below only warns.
+  (
+    _use_cluster_kubeconfig "$_sandbox_cluster_name" "$_region"
+
+    # A proxy CA Secret that this release does not own was copied in from the
+    # in-cluster runtime (above, or by hand as the docs describe). Run on it:
+    # the default generatedSecret mode would try to adopt it, and Helm refuses
+    # a Secret it does not own.
+    _proxy_ca_args=()
+    if _proxy_ca_owner=$(kubectl get secret "$_proxy_ca_secret" -n "$_sandbox_namespace" \
+      -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null) \
+      && [[ "$_proxy_ca_owner" != "$SANDBOX_RELEASE_NAME" ]]; then
+      _proxy_ca_args=(--set proxyCa.mode=existingSecret --set-string "proxyCa.existingSecretName=$_proxy_ca_secret")
+      echo "Proxy CA: using the copied Secret $_proxy_ca_secret"
+    fi
+
+    helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
+      --namespace "$_sandbox_namespace" \
+      --create-namespace \
+      --version "$_sandbox_chart_version" \
+      -f "$SANDBOX_VALUES_FILE" \
+      --set-string "config.endpoint=$_platform_endpoint" \
+      ${_proxy_ca_args[@]+"${_proxy_ca_args[@]}"} \
+      ${_ssa_flag} \
+      --timeout "$_helm_timeout"
+
+    if ! kubectl rollout status deployment -n "$_sandbox_namespace" \
+      -l "app.kubernetes.io/instance=${SANDBOX_RELEASE_NAME},app=sandbox-host" --timeout=15m; then
+      echo "WARNING: sandbox-host is not ready; sandbox nodes may still be starting." >&2
+    fi
+  )
+  echo "  Sandbox cluster kubeconfig: $HOME/.kube/langsmith-${_sandbox_cluster_name}"
 fi
 
 echo ""
