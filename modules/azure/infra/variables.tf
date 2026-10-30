@@ -1581,6 +1581,94 @@ variable "sandbox_service_url_base_url" {
   default     = ""
 }
 
+# ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
+# An external runtime runs sandbox-host from its own langsmith-sandbox release in a
+# second AKS cluster, so untrusted sandbox code never shares nodes or a cluster
+# with LangSmith. Requires an exact langsmith chart of 0.18 or later; see the
+# README, "Sandboxes in a separate cluster".
+
+variable "sandbox_runtime_source" {
+  type        = string
+  description = "Sandbox runtime location: 'in-cluster' (default, sandbox-host in the LangSmith AKS cluster) or 'external' (a dedicated sandbox AKS cluster in the same VNet, running the langsmith-sandbox chart)."
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.sandbox_runtime_source)
+    error_message = "sandbox_runtime_source must be 'in-cluster' or 'external'."
+  }
+}
+
+variable "sandbox_namespace" {
+  type        = string
+  description = "Kubernetes namespace for the standalone langsmith-sandbox release when sandbox_runtime_source is external."
+  default     = "langsmith-sandbox"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,62}$", var.sandbox_namespace))
+    error_message = "sandbox_namespace must be a valid Kubernetes namespace name."
+  }
+}
+
+variable "sandbox_service_account_name" {
+  type        = string
+  description = <<-EOT
+    ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+    This name is the Workload Identity contract: it is written into the
+    federated credential's subject AND into sandboxHost.serviceAccount.name in
+    the generated langsmith-sandbox values, so both sides always agree. The
+    langsmith-sandbox chart otherwise defaults this to
+    <release>-langsmith-sandbox-sandbox-host, which the credential would not
+    trust. Only change it if you also install the chart with the same
+    sandboxHost.serviceAccount.name.
+  EOT
+  default     = "sandbox-host"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.sandbox_service_account_name)) && length(var.sandbox_service_account_name) <= 63
+    error_message = "sandbox_service_account_name must be a valid DNS-1123 label: up to 63 lowercase alphanumeric characters or '-', starting and ending with an alphanumeric character."
+  }
+}
+
+variable "sandbox_runtime_secret_name" {
+  type        = string
+  description = "Name of the minimal Secret shared with the standalone sandbox runtime: keys sandbox_service_auth_secret and sandbox_callback_signing_jwk, never a copy of langsmith-config-secret. create-k8s-secrets.sh writes it into sandbox_namespace from Key Vault, so neither value enters Terraform state."
+  default     = "langsmith-sandbox-runtime"
+}
+
+variable "sandbox_subnet_address_prefix" {
+  type        = list(string)
+  description = "Prefix for the sandbox cluster subnet, carved when sandbox_runtime_source = \"external\" and sandbox_subnet_id is empty. Only nodes take addresses from it (the sandbox cluster runs Azure CNI overlay), so a /24 holds about 250 nodes. Must sit inside the VNet and clear of every other subnet."
+  default     = ["10.0.112.0/24"]
+}
+
+variable "sandbox_subnet_id" {
+  type        = string
+  description = "The id of an existing subnet for the sandbox cluster's nodes, used when create_vnet = false and sandbox_runtime_source = \"external\". Leave empty to have Terraform carve one from sandbox_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage service endpoint for the Blob firewall, and its NSG is yours: admit TCP 19190 from the AKS node subnet and the sandbox subnet only (see the README)."
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.sandbox_subnet_id))
+    error_message = "sandbox_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "sandbox_system_node_vm_size" {
+  type        = string
+  description = "VM size of the sandbox cluster's system pool, which runs only the add-ons AKS marks critical (CoreDNS, konnectivity, the Workload Identity webhook). AKS needs at least 2 vCPU and 4 GiB there."
+  default     = "Standard_D4s_v5"
+}
+
+variable "sandbox_system_node_count" {
+  type        = number
+  description = "Node count of the sandbox cluster's system pool. 1 keeps a test install cheap; Microsoft recommends at least 2 for production so CoreDNS survives a node upgrade."
+  default     = 1
+
+  validation {
+    condition     = var.sandbox_system_node_count >= 1
+    error_message = "sandbox_system_node_count must be 1 or greater."
+  }
+}
+
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
@@ -1634,12 +1722,12 @@ variable "langsmith_domain" {
   }
 }
 
-# No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
-# terraform.tfvars for the --version it passes to helm upgrade.
-# tflint-ignore: terraform_unused_declarations
+# helm/scripts/deploy.sh parses it out of terraform.tfvars for the --version it
+# passes to helm upgrade. Terraform reads it only to check the
+# sandbox_runtime_source = "external" requirement below.
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'. sandbox_runtime_source = \"external\" needs one exact version on 0.18 or later, because deploy.sh picks the langsmith-sandbox chart by that chart's appVersion."
   default     = ""
 }
 

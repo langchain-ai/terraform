@@ -103,6 +103,7 @@ apply: ## terraform apply (infra) — three stages, each prompts for confirmatio
 		-target=azurerm_resource_group.resource_group \
 		-target=module.vnet \
 		-target=module.aks \
+		-target=module.sandbox_aks \
 		-target=module.postgres \
 		-target=module.redis \
 		-target=module.blob \

@@ -1116,6 +1116,117 @@ kubectl rollout restart deployment -n langsmith -l app=sandbox-host
 2. Run `make apply`. Terraform deletes the node pool, the JuiceFS Redis, the Blob container and its data, and the
    identity.
 
+#### Sandboxes in a separate cluster
+
+`sandbox_runtime_source = "external"` runs `sandbox-host` in a second AKS cluster, so untrusted sandbox code
+never shares a node or a cluster with LangSmith. The LangSmith cluster runs the `langsmith` chart with
+`sandboxes.external.enabled: true`, and the sandbox cluster runs the `langsmith-sandbox` chart. The JuiceFS
+Redis, the Blob container and the `sandbox-host` identity are the same as with the in-cluster runtime. This Terraform is one
+way to meet the requirements in the LangSmith docs for a separate sandbox cluster; the charts work without it.
+
+**What Terraform creates**
+
+- **Cluster:** `<base>-sbox-aks<suffix>` in the same resource group and VNet. It has a `system` pool for the add-ons AKS
+  marks critical, and a `sandboxhost` pool sized by the same `sandbox_host_*` variables. AKS's own add-ons cannot
+  tolerate the sandbox taint, so the system pool is required (`sandbox_system_node_vm_size`, default
+  `Standard_D4s_v5`, and `sandbox_system_node_count`, default 1; use 2 or more in production).
+- **Networking:** the cluster runs Azure CNI overlay on `aks_pod_cidr`, so only its nodes take addresses from its subnet.
+- **Settings shared with the LangSmith cluster:** the Kubernetes version, tier, OS image, zones, ClusterIP range and API
+  server access (private cluster, authorized ranges, Entra-only) follow it. The pod and ClusterIP ranges are private to
+  each cluster.
+- **Subnet:** `<vnet>-subnet-sandbox` from `sandbox_subnet_address_prefix` (default `10.0.112.0/24`), with the
+  `Microsoft.Storage` endpoint. The Blob firewall allowlists it for the JuiceFS container.
+- **NSG on that subnet, inbound:**
+  - It admits TCP 19190 (`sandbox-host`) from the AKS node subnet only.
+  - It admits all traffic from the sandbox subnet and its pod range.
+  - It denies the rest of the VNet.
+  - Port 19190 carries plain HTTP with sandbox secrets, commands and files, so it stays inside the VNet.
+- **NSG on that subnet, outbound,** so code that escapes a sandbox onto its node cannot reach LangSmith's nodes, pods
+  or private endpoints:
+  - It allows the sandbox subnet and its pod range, and the platform address `168.63.129.16` (DNS and the node agent).
+  - It allows TCP 80 and 443 to the LangSmith ingress: the AKS node subnet, plus `ingress_load_balancer_subnet_id`
+    when an internal load balancer has a subnet of its own.
+  - It allows TCP 10000 to the AKS node subnet, where the JuiceFS Redis private endpoint sits.
+  - It denies the rest of the VNet. Internet egress stays open: sandboxes need it.
+- **Bringing your own subnet:** with `create_vnet = false`, pass `sandbox_subnet_id`. The NSG on it is then yours, and
+  should follow the same rules in both directions.
+- **Egress:** the sandbox cluster takes `aks_outbound_type` from the LangSmith cluster, so its internet traffic follows
+  the same path. With `userDefinedRouting` or `userAssignedNATGateway`, pass `sandbox_subnet_id`: a subnet you own
+  that carries the same route table or NAT gateway as `aks_subnet_id`. Plan refuses an external sandbox runtime without it,
+  and with `userDefinedRouting` checks that the subnet has a route table.
+- **Workload Identity:** the `sandbox-host` identity's federated credential moves to the sandbox cluster's issuer and
+  trusts `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>` (`langsmith-sandbox:sandbox-host`
+  by default). `init-values.sh` writes the same name into the runtime chart.
+- **In the sandbox cluster:** the `sandbox_namespace` namespace and the `juicefs-csi-config` Secret.
+- **What the LangSmith cluster loses:** the `sandboxhost` pool, the platform-backend node policy and the JuiceFS
+  Secret. `sandbox-host` reaches LangSmith through the ingress.
+
+**Requirements**
+
+- Everything under **Sandboxes** above, except the attached-cluster pool note.
+- `langsmith_helm_chart_version` set to one exact version on 0.18 or later, for example `"0.18.0"`.
+  - `deploy.sh` installs the newest `langsmith-sandbox` chart with the same appVersion, and stops before either release
+    changes if none exists.
+  - `deploy.sh` needs `jq` for this.
+- An encrypted callback path. `sandbox-host` calls `<scheme>://<hostname>/api` with signed tokens, so the plan refuses
+  `ingress_load_balancer = "public"` together with `tls_certificate_source = "none"`. Use either:
+  - `ingress_load_balancer = "internal"`, with `langsmith_domain` resolving to the load balancer inside the VNet, or
+  - TLS.
+- `aks_private_dns_zone_id` empty, `"System"` or `"None"` on a private cluster. A supplied zone needs a user-assigned
+  control-plane identity, which the sandbox cluster does not take.
+- No `additional_node_pools` entry named `sandboxhost`. In this mode it would land in the LangSmith cluster.
+
+**Enable**
+
+1. In `infra/terraform.tfvars`, set:
+
+   ```hcl
+   enable_sandboxes             = true
+   sandbox_runtime_source      = "external"
+   langsmith_helm_chart_version = "0.18.0"
+   ```
+
+2. Run `make apply`. Stage 1 creates both clusters.
+3. Run `make seed-secrets`. The script writes `langsmith-sandbox-service-auth-secret` to Key Vault, a dedicated secret
+   for the calls between LangSmith and the sandbox hosts. The sandbox cluster never holds the API key salt.
+4. Run `make k8s-secrets`. The script adds `sandbox_service_auth_secret` to `langsmith-config-secret`. It also writes
+   `langsmith-sandbox-runtime` into the sandbox namespace, holding exactly the service-auth secret and the callback
+   signing key.
+5. Run `make init-values && make deploy`.
+   - `init-values.sh` writes `langsmith-values-sandboxes.yaml` (the separate-cluster block) and
+     `langsmith-sandbox-values-overrides.yaml`, the runtime chart's values.
+   - `deploy.sh` upgrades `langsmith` first, then installs `langsmith-sandbox` in the sandbox cluster.
+   - The scripts reach the sandbox cluster through a temporary kubeconfig, so your current context stays on the
+     LangSmith cluster.
+
+**Upgrade and uninstall**
+
+- **Upgrades:** bump `langsmith_helm_chart_version`, then run `make init-values && make deploy`. The control plane
+  upgrades first and the runtime follows in the same run.
+- **Rollback:** roll back the runtime release only.
+- **Uninstall:** `make uninstall` removes `langsmith-sandbox` from the sandbox cluster first, then the `langsmith`
+  release.
+- **One runtime per install:** run exactly one `langsmith-sandbox` release against a LangSmith install. LangSmith
+  accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its
+  elected `sandbox-host` pod turns not ready.
+- **Move from the in-cluster runtime:** set `sandbox_runtime_source = "external"`, then run steps 2 to 5 above. The
+  JuiceFS Redis, the Blob container and the identity stay the same, so Sandboxes and snapshots carry over. Before it
+  switches the `langsmith` release, `make deploy` copies the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into
+  the sandbox namespace, so Sandboxes that resume from saved memory keep their auth proxy credential injection; a CA
+  Secret you copied there yourself, as the LangSmith docs' move steps describe, is used as is. Running Sandboxes stop
+  during the switch, and LangSmith accepts the new runtime about 6 minutes after the in-cluster hosts stop reporting.
+
+**Verify**
+
+```bash
+az aks get-credentials -n "$(terraform -chdir=infra output -raw sandbox_cluster_name)" \
+  -g "$(terraform -chdir=infra output -raw sandbox_cluster_resource_group_name)" --file sandbox.kubeconfig
+KUBECONFIG=sandbox.kubeconfig kubectl get jobs -n langsmith-sandbox -l app.kubernetes.io/component=juicefs-format
+KUBECONFIG=sandbox.kubeconfig kubectl rollout status deployment -n langsmith-sandbox -l app=sandbox-host --timeout=10m
+```
+
+The kubeconfig file holds cluster credentials, so delete it when you are done.
+
 ---
 
 ## Helm Values Files

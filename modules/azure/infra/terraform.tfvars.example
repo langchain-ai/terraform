@@ -182,6 +182,16 @@ enable_sandboxes = false
 # sandbox_juicefs_redis_high_availability = true
 # sandbox_juicefs_redis_name              = "" # empty derives from the naming scheme
 # sandbox_service_url_base_url            = "" # needs wildcard DNS and TLS
+
+# Sandboxes in a dedicated AKS cluster in the same VNet, from the langsmith-sandbox
+# chart. Needs one exact langsmith chart version on 0.18 or later, and TLS or an
+# internal ingress load balancer. See README, "Sandboxes in a separate cluster".
+# sandbox_runtime_source       = "external" # default "in-cluster"
+# langsmith_helm_chart_version  = "0.18.0"
+# sandbox_namespace             = "langsmith-sandbox"
+# sandbox_subnet_address_prefix = ["10.0.112.0/24"]
+# sandbox_system_node_vm_size   = "Standard_D4s_v5"
+# sandbox_system_node_count     = 1 # 2 or more in production
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API, uses Gateway/HTTPRoute; start here)
 # "nginx"         — NGINX ingress via Helm (legacy Ingress compatibility)

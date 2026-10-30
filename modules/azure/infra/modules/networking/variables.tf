@@ -108,3 +108,27 @@ variable "aks_source_prefixes" {
   description = "Address prefixes of the AKS node subnet, whether created here or supplied. The Postgres and Redis NSGs admit these and nothing else from the VNet."
   default     = []
 }
+
+variable "create_sandbox_subnet" {
+  type        = bool
+  description = "Create the subnet for the dedicated sandbox cluster, with its NSG. Set by the root for sandbox_runtime_source = \"external\" when no sandbox_subnet_id is supplied."
+  default     = false
+}
+
+variable "sandbox_subnet_address_prefix" {
+  type        = list(string)
+  description = "Prefix for the sandbox cluster subnet. Only nodes draw from it: the sandbox cluster runs Azure CNI overlay."
+  default     = ["10.0.112.0/24"]
+}
+
+variable "sandbox_ingress_prefixes" {
+  type        = list(string)
+  description = "Prefixes where the LangSmith ingress load balancer frontend can sit: the AKS node subnet, plus the internal load balancer's own subnet when it has one. The sandbox NSG lets sandbox nodes reach them on 80 and 443 for the runtime chart's config.endpoint."
+  default     = []
+}
+
+variable "sandbox_pod_cidr" {
+  type        = string
+  description = "Overlay pod range of the sandbox cluster. Its NSG admits the range alongside the subnet, because overlay pod traffic between nodes is not encapsulated and the subnet NSG sees pod addresses."
+  default     = ""
+}
