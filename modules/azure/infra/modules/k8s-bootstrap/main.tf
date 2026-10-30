@@ -181,35 +181,12 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
   }
 }
 
-# ── Resource Quota ────────────────────────────────────────────────────────────
-# Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
-# deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
-# Defaults: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods.
-
-resource "kubernetes_resource_quota_v1" "langsmith" {
-  metadata {
-    name      = "langsmith-quota"
-    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
-  }
-
-  spec {
-    hard = {
-      "requests.cpu"    = "40"
-      "requests.memory" = "80Gi"
-      "limits.cpu"      = "80"
-      "limits.memory"   = "160Gi"
-      pods              = "200"
-    }
-  }
-}
-
 # ── Limit Range ───────────────────────────────────────────────────────────────
-# Required companion to the ResourceQuota above: because the quota's `hard` includes
-# requests/limits, Kubernetes forces EVERY pod to declare them. Some chart components
-# (e.g. the bundled Postgres/Redis StatefulSets for the standalone insights/polly/fleet
-# agent features) ship without resource stanzas, so without defaults they're rejected
-# with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
-# This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
+# Gives a container that declares no requests 100m CPU and 256Mi, so the
+# scheduler has a figure to place it on. Some chart components, such as the
+# bundled Postgres and Redis StatefulSets for the insights, polly, and fleet
+# agent features, ship without resource stanzas. No default limits: a limit
+# would cap a pod that sets none.
 resource "kubernetes_limit_range_v1" "langsmith" {
   metadata {
     name      = "langsmith-defaults"
@@ -219,10 +196,6 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
-      default = {
-        cpu    = "1"
-        memory = "1Gi"
-      }
       default_request = {
         cpu    = "100m"
         memory = "256Mi"
