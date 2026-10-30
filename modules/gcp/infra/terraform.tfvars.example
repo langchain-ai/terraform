@@ -565,11 +565,17 @@ sizing_profile = "production"
 #------------------------------------------------------------------------------
 # Optional: Labels/Tags (Applied to all resources)
 #------------------------------------------------------------------------------
+# Label values: lowercase letters, digits, '_' and '-', starting and ending with
+# a letter or digit, max 63 characters. Write an email as name_example_com.
+# An empty owner or cost_center omits that label.
 owner       = "platform-team"  # Team or individual responsible
 cost_center = "engineering"    # For billing attribution
 
-# Additional custom labels
+# Any labels your org policy requires. A key here overrides the standard label
+# of the same name (app, environment, managed-by, project, name-prefix, owner,
+# cost-center), for example an environment value outside dev/staging/prod/test/uat.
 labels = {
-  # "department" = "engineering"
-  # "project"    = "langsmith"
+  # "team"        = "ml-platform"
+  # "product"     = "langsmith"
+  # "environment" = "production"
 }

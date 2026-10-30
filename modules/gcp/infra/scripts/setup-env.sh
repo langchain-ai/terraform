@@ -40,28 +40,12 @@ if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
 fi
 
 # Resolve infra directory so this script works regardless of where it's sourced from.
-_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # ── Read project/env from terraform.tfvars ────────────────────────────────────
-# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
-# deploy.sh and init-values.sh decide whether the sandbox secret is expected by
-# calling the _common.sh copy, so a gate that disagrees omits a secret they
-# require. _common.sh is not sourced here because it also defines
-# pass/info/fail, which this script must not leak into the caller's shell.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null || true
-}
-
-_tfvar_is_true() {
-  [[ "$(_parse_tfvar "$1")" == "true" ]]
-}
+# _tfvars.sh, not _common.sh: _common.sh also defines pass/info/fail, which this
+# script must not leak into the caller's shell.
+source "$INFRA_DIR/scripts/_tfvars.sh"
 
 _project_id=$(_parse_tfvar "project_id")
 # Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
@@ -86,8 +70,11 @@ export TF_VAR_project_id="$_project_id"
 export TF_VAR_name_prefix="$_name_prefix"
 export TF_VAR_environment="$_environment"
 export TF_VAR_region="$_region"
-export TF_VAR_owner="${LANGSMITH_OWNER:-}"
-export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
+# Only when set, and unset otherwise: an empty TF_VAR_owner, or one left from an
+# earlier source, would replace the variables.tf default.
+# terraform.tfvars wins over both, and is where the labels map lives.
+if [[ -n "${LANGSMITH_OWNER:-}" ]]; then export TF_VAR_owner="$LANGSMITH_OWNER"; else unset TF_VAR_owner; fi
+if [[ -n "${LANGSMITH_COST_CENTER:-}" ]]; then export TF_VAR_cost_center="$LANGSMITH_COST_CENTER"; else unset TF_VAR_cost_center; fi
 
 # ── Secret Manager path prefix ────────────────────────────────────────────────
 # All secrets are stored under:
@@ -143,7 +130,7 @@ _sm_put() {
     _gcloud_bounded secrets create "$_secret_id" \
       --project="$_project_id" \
       --replication-policy="automatic" \
-      --labels="managed-by=setup-env,langsmith-env=${_environment}" \
+      --labels="$(_secret_labels "managed-by=setup-env,langsmith-env=${_environment}")" \
       --quiet &>/dev/null || return 1
   fi
 
