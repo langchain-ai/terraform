@@ -83,6 +83,12 @@ variable "maxmemory_policy" {
   }
 }
 
+variable "auth_enabled" {
+  description = "Require Redis AUTH. Memorystore generates the AUTH string, exposed as the sensitive auth_string output."
+  type        = bool
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------

@@ -75,6 +75,8 @@ _enable_sandboxes=false
 if _tfvar_is_true "enable_sandboxes"; then
   _enable_sandboxes=true
 fi
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source")
+_sandbox_runtime_source="${_sandbox_runtime_source:-in-cluster}"
 _region="${_region:-us-west2}"
 
 if [[ -z "$_project_id" ]]; then
@@ -424,6 +426,15 @@ _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
     "_ed25519_private_jwk_gen" "" "true"
+
+  # A separate sandbox cluster runs untrusted code, so calls between it and
+  # LangSmith are signed with a dedicated secret, never the API key salt.
+  # deploy.sh adds it to langsmith-config; Terraform writes it into the sandbox
+  # cluster's runtime Secret.
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
+    _sm_secret "sandbox-service-auth-secret" "TF_VAR_sandbox_service_auth_secret" \
+      "openssl rand -hex 32 | tr -d '\n'" "" "true"
+  fi
 fi
 
 # ── Admin password rule ───────────────────────────────────────────────────────

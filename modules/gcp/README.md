@@ -423,7 +423,7 @@ metadata goes to a dedicated Memorystore Redis.
 ### Requirements
 
 - Standard GKE. Autopilot cannot run the nested-virtualization pool.
-- `enable_gcp_iam_module = true`.
+- `enable_gcp_iam_module = true` (the default, with the `in-cluster` sandbox runtime).
 - A machine type with nested virtualization, such as N2.
 
 ### Enable
@@ -485,6 +485,92 @@ kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -
 ```
 
 To upgrade from chart 0.16, see [MIGRATION-0.16-to-0.17.md](../../MIGRATION-0.16-to-0.17.md).
+
+### Optional dedicated sandbox cluster
+
+`enable_sandboxes = true` uses the LangSmith GKE cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
+
+```hcl
+enable_sandboxes        = true
+sandbox_runtime_source = "external"
+sandbox_namespace       = "langsmith-sandbox" # must differ from langsmith_namespace
+
+langsmith_helm_chart_version = "0.18.0"   # exact, 0.18 or later
+gateway_load_balancer_type   = "internal" # or configure TLS; see Network
+```
+
+An external sandbox runtime needs chart 0.18 or later, pinned to one exact version: the default 0.17 line has no separate-cluster support, and the runtime chart is paired with that exact chart (see [Versions](#versions)). `terraform plan` and `make deploy` both reject anything else.
+
+Terraform then creates, in the same VPC:
+
+- a second Standard GKE cluster, `<name>-sbox-gke`, on its own subnet (`sandbox_subnet_cidr`, `sandbox_pods_cidr`, `sandbox_services_cidr`) and control-plane range (`sandbox_gke_master_ipv4_cidr`, default `172.17.0.16/28`; the LangSmith cluster keeps `172.17.0.0/28`). It has a small untainted system pool for GKE's own add-ons, which cannot tolerate the sandbox taint, and the nested-virtualization `sandbox-host` pool;
+- a JuiceFS-only bucket, `<project>-<name>-jfs<suffix>`, with uniform bucket-level access and public access prevention, and an unconditioned `roles/storage.objectAdmin` grant for the `<name>-sbox-node` service account. Cloud Storage checks a list call against the bucket, so a grant on a shared bucket would need a condition; this one needs none, and sandbox nodes never reach trace data;
+- AUTH on the JuiceFS Memorystore instance, which another cluster now reaches over the VPC;
+- the firewall rules below;
+- in the sandbox namespace, two write-only Secrets: the runtime Secret and the JuiceFS config (volume name, metadata URL with AUTH, bucket).
+
+The LangSmith cluster gets none of the same-cluster pieces: no sandbox pool, no JuiceFS Secret, no quota or NetworkPolicy exceptions.
+
+#### Identity
+
+`sandbox-host` runs on the host network, where GKE Workload Identity does not apply, so it uses the sandbox node service account. `init-values.sh` sets `workloadIdentity.provider: gcp` in the runtime values, which moves the JuiceFS formatter onto the host network too, so the one bucket grant covers both pods and no Workload Identity binding is needed. Workload Identity stays enabled on the sandbox cluster, which hides the node service account from pod-network pods. It trusts a namespace and ServiceAccount name in every cluster of the project, so `sandbox_namespace` must differ from `langsmith_namespace`; `terraform plan` checks it.
+
+#### Network
+
+- **TCP 19190 into the sandbox nodes** comes from the LangSmith cluster's node and pod ranges (`platform-backend` and `ingest-queue` call `sandbox-host`; GKE does not masquerade RFC 1918 destinations, so the source is the pod IP) and from the sandbox subnet itself (hosts forward ingress requests, dial sandbox links and send live-migration streams to each other). A rule at priority 950 denies everything else from the LangSmith ranges to both sandbox pools; the VPC's `allow-internal` rule (priority 1000, no targets) would otherwise admit them on every port.
+- **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.external.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
+- **Sandbox nodes reach the LangSmith API** at the runtime chart's `config.endpoint` (`<protocol>://<hostname>/api`) through the Envoy Gateway. With `gateway_load_balancer_type = "internal"` the gateway gets a private VPC address and the call stays in the VPC. An external gateway without TLS would carry the call across the internet in plaintext, so `terraform plan` refuses it: set the internal type or configure TLS. The hostname must resolve from the VPC: set `langsmith_domain = ""` (the default is `langsmith.example.com`) to use the gateway IP, or use a name in DNS the VPC sees. Choose the gateway type before the first deploy; GKE does not move an existing load balancer between external and internal.
+- **Sandbox nodes reach Memorystore only for JuiceFS.** Cloud SQL and the LangSmith Redis sit in the private services range, which every subnet in the VPC reaches. An egress rule allows the JuiceFS Redis address and denies the rest of that range to the sandbox nodes, which run untrusted code. Cloud NAT and Cloud Storage access are unchanged.
+- **Ranges.** The sandbox ranges must not overlap each other or the LangSmith ranges; `terraform plan` checks. On a VPC applied before, Google already picked the private services range: if creating the sandbox subnet fails with an overlap, look up that range (`gcloud compute addresses list --global --filter=purpose=VPC_PEERING`) and move the sandbox ranges.
+
+#### Secrets
+
+The runtime Secret (`sandbox_runtime_secret_name`, default `langsmith-sandbox-runtime`) holds exactly two keys, the `langsmith-sandbox` chart's defaults. Never copy the whole `langsmith-config` Secret into the sandbox cluster.
+
+| Key | Value |
+|-----|-------|
+| `sandbox_service_auth_secret` | A dedicated sandbox service-auth secret, identical to `sandbox_service_auth_secret` in `langsmith-config`. It is never the API key salt: `api_key_salt` also signs LangSmith's own service calls, and the sandbox cluster runs untrusted code. |
+| `sandbox_callback_signing_jwk` | The callback-signing JWK, identical to the one in `langsmith-config`. |
+
+With `sandbox_runtime_source = "external"`, `setup-env.sh` generates the service-auth secret (64 hex characters) into the Secret Manager secret `langsmith-<name_prefix>-<environment>-sandbox-service-auth-secret`, `deploy.sh` adds it to `langsmith-config` as `sandbox_service_auth_secret`, and `init-values.sh` sets `sandboxes.serviceAuth.secretKey: sandbox_service_auth_secret` in the LangSmith values. The in-cluster runtime creates none of this and keeps the chart default, `api_key_salt`.
+
+Terraform writes both runtime keys from `TF_VAR_sandbox_service_auth_secret` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. `terraform plan` fails if the service-auth secret is missing, shorter than 32 characters, or equal to the API key salt. After changing either value, increment `sandbox_runtime_secret_revision` and re-apply, then restart `sandbox-host`; both sides read these values only at startup, and sandboxes fail while they disagree.
+
+#### Versions
+
+Each LangSmith install runs the `langsmith-sandbox` chart whose appVersion equals the `langsmith` chart's. `make deploy` reads the appVersion of the pinned `langsmith` chart and installs the newest `langsmith-sandbox` chart with the same appVersion. If no runtime chart matches, it stops before changing either release. To check by hand:
+
+```bash
+APP=$(helm show chart langchain/langsmith --version 0.18.0 | awk '/^appVersion:/{print $2}' | tr -d '"')
+helm search repo langchain/langsmith-sandbox --versions --devel -o json \
+  | jq -r --arg a "$APP" '[.[] | select(.app_version == $a)][0].version // error("no langsmith-sandbox chart for appVersion \($a)")'
+```
+
+#### One runtime per install
+
+Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.external.enabled: true`. LangSmith accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its elected `sandbox-host` pod turns not ready. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
+
+#### Install, upgrade and uninstall order
+
+- **Install:** `source infra/scripts/setup-env.sh`, `make apply`, `make init-values`, then `make deploy`. `make init-values` writes both the LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`; `make deploy` installs `langsmith` first, then `langsmith-sandbox` in the sandbox cluster, and waits for the JuiceFS format Job and `sandbox-host`.
+- **Upgrade:** change `langsmith_helm_chart_version` and run `make deploy`. It upgrades `langsmith` first and the runtime right after, to the matching chart. If you upgrade with other tools, keep that order and upgrade the runtime within 72 hours.
+- **Uninstall:** `make uninstall` removes the `langsmith-sandbox` release from the sandbox cluster first, then the LangSmith release; then run `make destroy`. Without Terraform outputs, uninstall the runtime release from the sandbox cluster yourself before running `make uninstall`.
+
+`make deploy` and `make uninstall` reach the sandbox cluster through a temporary kubeconfig, so your current context is unchanged. To inspect it:
+
+```bash
+gcloud container clusters get-credentials <name>-sbox-gke --region <region> --project <project>
+kubectl get pods -n langsmith-sandbox
+```
+
+To move an existing install from the in-cluster runtime: this topology starts a new sandbox file system in the JuiceFS-only bucket, and existing snapshots and sandboxes do not carry over. The JuiceFS Redis still holds metadata that points at chunks in the trace bucket, so replace it rather than reuse it:
+
+1. Delete the existing sandboxes and snapshots.
+2. Change `sandbox_runtime_source` and run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret).
+3. Apply with the Redis replaced: `make apply ARGS="-replace=module.sandbox_juicefs_redis[0].google_redis_instance.langsmith[0]"` (with `sandbox_juicefs_redis_prevent_destroy = true`, turn it off first).
+4. Run `make init-values` and `make deploy`. `make deploy` carries the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into the sandbox namespace, and uses a CA Secret you copied there yourself, as the LangSmith docs' move steps describe, instead of minting a new one.
+
+The JuiceFS objects left under `<sandbox_juicefs_name>/` in the trace bucket can then be deleted.
 
 ---
 

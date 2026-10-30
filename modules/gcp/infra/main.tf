@@ -43,6 +43,17 @@ provider "helm" {
   }
 }
 
+# The dedicated sandbox cluster (sandbox_runtime_source = "external").
+# Only its namespace and two Secrets are managed here; deploy.sh installs the
+# langsmith-sandbox chart. try() keeps the provider configurable when the
+# cluster does not exist.
+provider "kubernetes" {
+  alias                  = "sandbox"
+  host                   = try("https://${module.sandbox_gke[0].endpoint}", null)
+  token                  = data.google_client_config.default.access_token
+  cluster_ca_certificate = try(base64decode(module.sandbox_gke[0].ca_certificate), null)
+}
+
 #------------------------------------------------------------------------------
 # Data Sources
 #------------------------------------------------------------------------------
@@ -56,6 +67,14 @@ resource "time_sleep" "wait_for_cluster" {
   create_duration = "90s"
 
   depends_on = [module.gke_cluster]
+}
+
+resource "time_sleep" "wait_for_sandbox_cluster" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  create_duration = "90s"
+
+  depends_on = [module.sandbox_gke]
 }
 
 #------------------------------------------------------------------------------
@@ -222,13 +241,75 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = !var.enable_sandboxes || var.enable_gcp_iam_module
+      condition     = !local.in_cluster_sandbox_runtime || var.enable_gcp_iam_module
       error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the juicefs-format Job can reach the shared GCS bucket through the langsmith-sandbox-host Workload Identity binding."
     }
 
     precondition {
       condition     = !var.enable_sandboxes || var.sandbox_host_max_node_count >= var.sandbox_host_min_node_count
       error_message = "sandbox_host_max_node_count must be greater than or equal to sandbox_host_min_node_count."
+    }
+
+    # Workload Identity trusts a namespace and ServiceAccount name in every
+    # cluster of the project, so a sandbox-cluster pod in the LangSmith
+    # namespace could take on the LangSmith service account.
+    precondition {
+      condition     = !local.external_sandbox_runtime || var.sandbox_namespace != var.langsmith_namespace
+      error_message = "sandbox_runtime_source = \"external\" requires sandbox_namespace to differ from langsmith_namespace. GKE Workload Identity trusts a namespace and ServiceAccount name across every cluster in the project."
+    }
+
+    precondition {
+      condition     = !local.external_sandbox_runtime || can(regex(local.external_runtime_chart_version_pattern, var.langsmith_helm_chart_version))
+      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
+    }
+
+    precondition {
+      condition     = !local.external_sandbox_runtime || length(var.sandbox_service_auth_secret) >= 32
+      error_message = "sandbox_runtime_source = \"external\" requires sandbox_service_auth_secret (at least 32 characters). Run: source ./scripts/setup-env.sh, which generates it and stores it in Secret Manager."
+    }
+
+    precondition {
+      condition     = !local.external_sandbox_runtime || var.sandbox_service_auth_secret != var.langsmith_api_key_salt
+      error_message = "sandbox_service_auth_secret must differ from langsmith_api_key_salt: the separate sandbox cluster must not hold the API key salt. Delete the sandbox-service-auth-secret secret in Secret Manager, unset TF_VAR_sandbox_service_auth_secret, and re-run: source ./scripts/setup-env.sh."
+    }
+
+    precondition {
+      condition     = !local.external_sandbox_runtime || var.sandbox_callback_signing_jwk != ""
+      error_message = "sandbox_runtime_source = \"external\" requires sandbox_callback_signing_jwk, which Terraform writes into the sandbox cluster. Run: source ./scripts/setup-env.sh."
+    }
+
+    precondition {
+      condition     = !local.external_sandbox_runtime || length(local.sandbox_cidr_overlaps) == 0
+      error_message = "sandbox_subnet_cidr, sandbox_pods_cidr and sandbox_services_cidr must not overlap each other or subnet_cidr, pods_cidr and services_cidr. Overlapping: ${join(", ", local.sandbox_cidr_overlaps)}."
+    }
+
+    # The LangSmith cluster's control plane uses 172.17.0.0/28.
+    precondition {
+      condition     = !local.external_sandbox_runtime || cidrhost(var.sandbox_gke_master_ipv4_cidr, 0) != "172.17.0.0"
+      error_message = "sandbox_gke_master_ipv4_cidr must differ from 172.17.0.0/28, the LangSmith cluster's control-plane range."
+    }
+
+    precondition {
+      condition     = !local.external_sandbox_runtime || length(local.sandbox_juicefs_bucket_name) <= 63
+      error_message = "The sandbox JuiceFS bucket name ${local.sandbox_juicefs_bucket_name} is longer than 63 characters. Shorten name_prefix or environment."
+    }
+
+    # Sandbox hosts call https://<langsmith_domain>/api (or http:// without
+    # TLS) through the Envoy Gateway. An external load balancer without TLS
+    # would carry their service-auth tokens across the internet in plaintext.
+    precondition {
+      condition = (
+        !local.external_sandbox_runtime
+        || !var.install_ingress
+        || var.gateway_load_balancer_type == "internal"
+        || var.tls_certificate_source != "none"
+      )
+      error_message = "sandbox_runtime_source = \"external\" with an external gateway and tls_certificate_source = \"none\" would send the sandbox cluster's calls to the LangSmith API across the internet without TLS. Set gateway_load_balancer_type = \"internal\" or configure TLS (tls_certificate_source = \"letsencrypt\" or \"existing\")."
+    }
+
+    precondition {
+      condition     = var.gateway_load_balancer_type == "external" || (var.install_ingress && var.ingress_type == "envoy")
+      error_message = "gateway_load_balancer_type = \"internal\" applies to the Envoy Gateway this module installs (install_ingress = true, ingress_type = \"envoy\")."
     }
   }
 }
@@ -284,6 +365,27 @@ resource "google_project_iam_member" "sandbox_host_node" {
   member  = google_service_account.sandbox_host_node[0].member
 }
 
+# The sandbox cluster's system pool (external runtime only) gets its own node
+# identity with the default node roles and nothing else: no bucket access.
+resource "google_service_account" "sandbox_system_node" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  project      = var.project_id
+  account_id   = local.sandbox_system_node_sa_account_id
+  display_name = "LangSmith sandbox cluster system node service account"
+  description  = "GKE node identity for the system pool of the dedicated LangSmith sandbox cluster."
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "sandbox_system_node" {
+  for_each = local.external_sandbox_runtime ? local.sandbox_system_node_sa_project_roles : toset([])
+
+  project = var.project_id
+  role    = each.value
+  member  = google_service_account.sandbox_system_node[0].member
+}
+
 # sandbox-host runs with hostNetwork: true, and GKE does not give Workload
 # Identity to host-network pods. Their metadata requests reach the Compute
 # Engine metadata server and get this node service account. The JuiceFS mount
@@ -296,7 +398,7 @@ resource "google_project_iam_member" "sandbox_host_node" {
 # <sandbox_juicefs_name>/ and list calls with that prefix. The expression uses
 # local.bucket_name, the name module.storage creates, so the plan can show it.
 resource "google_storage_bucket_iam_member" "sandbox_host_node_juicefs" {
-  count = var.enable_sandboxes ? 1 : 0
+  count = local.in_cluster_sandbox_runtime ? 1 : 0
 
   bucket = module.storage.bucket_name
   role   = "roles/storage.objectAdmin"
@@ -310,6 +412,49 @@ resource "google_storage_bucket_iam_member" "sandbox_host_node_juicefs" {
       "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"${var.sandbox_juicefs_name}/\")",
     ])
   }
+}
+
+# An external runtime gives JuiceFS a bucket of its own. Cloud Storage checks a
+# list call against the bucket, so a prefix-only grant would block JuiceFS's
+# format check and backup cleanup; on a JuiceFS-only bucket the grant needs no
+# condition and sandbox nodes never reach trace data. With
+# workloadIdentity.provider = gcp the chart runs the JuiceFS formatter on the
+# host network as well, so this one grant covers both runtime pods.
+resource "google_storage_bucket" "sandbox_juicefs" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  name     = local.sandbox_juicefs_bucket_name
+  project  = var.project_id
+  location = var.region
+
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+
+  lifecycle_rule {
+    condition {
+      age = 7
+    }
+    action {
+      type = "AbortIncompleteMultipartUpload"
+    }
+  }
+
+  labels = merge(local.common_labels, {
+    "component" = "sandbox-juicefs"
+  })
+
+  force_destroy = var.storage_force_destroy
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_storage_bucket_iam_member" "sandbox_host_node_juicefs_bucket" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  bucket = google_storage_bucket.sandbox_juicefs[0].name
+  role   = "roles/storage.objectAdmin"
+  member = google_service_account.sandbox_host_node[0].member
 }
 
 #------------------------------------------------------------------------------
@@ -332,6 +477,12 @@ module "networking" {
   subnet_cidr   = var.subnet_cidr
   pods_cidr     = var.pods_cidr
   services_cidr = var.services_cidr
+
+  # The dedicated sandbox cluster's subnet (external runtime only)
+  create_sandbox_subnet = local.external_sandbox_runtime
+  sandbox_subnet_cidr   = var.sandbox_subnet_cidr
+  sandbox_pods_cidr     = var.sandbox_pods_cidr
+  sandbox_services_cidr = var.sandbox_services_cidr
 
   # Private service connection (requires servicenetworking.networksAdmin role).
   # Needed by external PostgreSQL and Redis, by the SmithDB metastore, which is
@@ -381,7 +532,8 @@ module "gke_cluster" {
 
   # Dedicated sandbox-host nodes. Sandboxes run Firecracker through nested
   # virtualization and are isolated from the default LangSmith workload pool.
-  enable_sandbox_host_node_pool          = var.enable_sandboxes
+  # With an external runtime they live in module.sandbox_gke instead.
+  enable_sandbox_host_node_pool          = local.in_cluster_sandbox_runtime
   sandbox_host_node_count                = var.sandbox_host_node_count
   sandbox_host_min_node_count            = var.sandbox_host_min_node_count
   sandbox_host_max_node_count            = var.sandbox_host_max_node_count
@@ -389,7 +541,7 @@ module "gke_cluster" {
   sandbox_host_disk_size_gb              = var.sandbox_host_disk_size_gb
   sandbox_host_ephemeral_local_ssd_count = var.sandbox_host_ephemeral_local_ssd_count
   sandbox_host_node_service_account_email = (
-    var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+    local.in_cluster_sandbox_runtime ? google_service_account.sandbox_host_node[0].email : null
   )
 
   # Master authorized networks — empty list keeps the master publicly reachable
@@ -403,6 +555,163 @@ module "gke_cluster" {
   depends_on = [
     module.networking,
     google_project_iam_member.sandbox_host_node,
+  ]
+}
+
+#------------------------------------------------------------------------------
+# Sandbox GKE Cluster (sandbox_runtime_source = "external")
+#------------------------------------------------------------------------------
+# A second Standard cluster in the same VPC, on its own subnet and control-plane
+# range. Its primary pool is a small untainted system pool for GKE's add-ons;
+# sandbox-host runs on the tainted nested-virtualization pool. Workload
+# Identity stays on (the module always enables it) so pod-network pods cannot
+# read the node service account from the metadata server. No binding is made
+# for the runtime: sandbox-host and its JuiceFS formatter use the host network
+# and the sandbox node service account.
+module "sandbox_gke" {
+  source = "./modules/k8s-cluster"
+  count  = local.external_sandbox_runtime ? 1 : 0
+
+  project_id  = var.project_id
+  region      = var.region
+  zone        = var.zone
+  environment = var.environment
+
+  cluster_name   = local.sandbox_cluster_name
+  node_pool_name = "${local.sandbox_cluster_name}-system"
+
+  network_id             = module.networking.vpc_id
+  subnet_id              = module.networking.sandbox_subnet_id
+  pods_range_name        = module.networking.sandbox_pods_range_name
+  services_range_name    = module.networking.sandbox_services_range_name
+  master_ipv4_cidr_block = var.sandbox_gke_master_ipv4_cidr
+
+  # System pool: one node per zone, scaling up for add-ons only.
+  node_count                 = 1
+  min_node_count             = 1
+  max_node_count             = var.sandbox_system_node_max_count
+  machine_type               = var.sandbox_system_node_machine_type
+  node_service_account_email = google_service_account.sandbox_system_node[0].email
+  release_channel            = var.gke_release_channel
+  deletion_protection        = var.gke_deletion_protection
+  network_policy_provider    = var.gke_network_policy_provider
+
+  enable_sandbox_host_node_pool           = true
+  sandbox_host_node_count                 = var.sandbox_host_node_count
+  sandbox_host_min_node_count             = var.sandbox_host_min_node_count
+  sandbox_host_max_node_count             = var.sandbox_host_max_node_count
+  sandbox_host_machine_type               = local.sandbox_host_machine_type
+  sandbox_host_disk_size_gb               = var.sandbox_host_disk_size_gb
+  sandbox_host_ephemeral_local_ssd_count  = var.sandbox_host_ephemeral_local_ssd_count
+  sandbox_host_node_service_account_email = google_service_account.sandbox_host_node[0].email
+
+  master_authorized_cidrs = var.gke_master_authorized_cidrs
+
+  labels = merge(local.common_labels, {
+    "component" = "sandbox-cluster"
+  })
+
+  depends_on = [
+    module.networking,
+    google_project_iam_member.sandbox_host_node,
+    google_project_iam_member.sandbox_system_node,
+  ]
+}
+
+# What reaches the sandbox nodes. The VPC's allow-internal rule (priority 1000,
+# no targets) admits the LangSmith ranges to every VM on every port. For the
+# sandbox cluster's nodes these rules override it: platform-backend and the
+# ingest queue may reach sandbox-host on TCP 19190 (plain HTTP with signed
+# service keys), other sandbox nodes may too (hosts forward requests, dial
+# sandbox links and stream live migrations to each other), and nothing else from
+# the LangSmith ranges gets through. GKE's own rules for the sandbox cluster
+# admit only its subnet, pod range and control plane.
+resource "google_compute_firewall" "sandbox_host_from_langsmith" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  name        = "${local.vpc_name}-sbox-allow-host"
+  project     = var.project_id
+  network     = module.networking.vpc_name
+  description = "LangSmith pods and other sandbox nodes to sandbox-host on TCP 19190"
+  direction   = "INGRESS"
+  priority    = 900
+
+  allow {
+    protocol = "tcp"
+    ports    = ["19190"]
+  }
+
+  # LangSmith pods reach other VPC addresses with their pod IPs (GKE does not
+  # masquerade RFC 1918 destinations); the node range covers a cluster where
+  # masquerading was turned on.
+  source_ranges           = [var.subnet_cidr, var.pods_cidr, var.sandbox_subnet_cidr]
+  target_service_accounts = [google_service_account.sandbox_host_node[0].email]
+}
+
+resource "google_compute_firewall" "sandbox_deny_from_langsmith" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  name        = "${local.vpc_name}-sbox-deny-langsmith"
+  project     = var.project_id
+  network     = module.networking.vpc_name
+  description = "Nothing else from the LangSmith ranges reaches the sandbox cluster's nodes"
+  direction   = "INGRESS"
+  priority    = 950
+
+  deny {
+    protocol = "all"
+  }
+
+  source_ranges = [var.subnet_cidr, var.pods_cidr, var.services_cidr]
+  target_service_accounts = [
+    google_service_account.sandbox_host_node[0].email,
+    google_service_account.sandbox_system_node[0].email,
+  ]
+}
+
+# What the sandbox cluster's nodes reach. They run untrusted code, and Cloud
+# SQL and the LangSmith Redis sit in the private services range, which every
+# subnet in the VPC can reach. Sandbox-host nodes need only the JuiceFS Redis
+# there, and the system pool nothing.
+resource "google_compute_firewall" "sandbox_host_to_juicefs_redis" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  name        = "${local.vpc_name}-sbox-allow-jfs-redis"
+  project     = var.project_id
+  network     = module.networking.vpc_name
+  description = "Sandbox nodes to the JuiceFS metadata Redis"
+  direction   = "EGRESS"
+  priority    = 900
+
+  allow {
+    protocol = "tcp"
+    ports    = [tostring(module.sandbox_juicefs_redis[0].port)]
+  }
+
+  destination_ranges      = ["${module.sandbox_juicefs_redis[0].host}/32"]
+  target_service_accounts = [google_service_account.sandbox_host_node[0].email]
+}
+
+resource "google_compute_firewall" "sandbox_host_deny_private_services" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  name        = "${local.vpc_name}-sbox-deny-private-services"
+  project     = var.project_id
+  network     = module.networking.vpc_name
+  description = "The sandbox cluster's nodes reach nothing else in the private services range (Cloud SQL, LangSmith Redis)"
+  direction   = "EGRESS"
+  priority    = 950
+
+  deny {
+    protocol = "all"
+  }
+
+  # Both pools: the system pool needs nothing in that range either, and pod
+  # traffic on it follows the node's targeting.
+  destination_ranges = [module.networking.private_service_range_cidr]
+  target_service_accounts = [
+    google_service_account.sandbox_host_node[0].email,
+    google_service_account.sandbox_system_node[0].email,
   ]
 }
 
@@ -490,6 +799,8 @@ module "sandbox_juicefs_redis" {
   prevent_destroy     = var.sandbox_juicefs_redis_prevent_destroy
   maxmemory_policy    = "noeviction"
   rdb_snapshot_period = var.sandbox_juicefs_redis_rdb_snapshot_period
+  # A second cluster reaches this Redis over the VPC, so require AUTH there.
+  auth_enabled = local.external_sandbox_runtime
 
   # Network
   network_id = module.networking.vpc_id
@@ -727,7 +1038,7 @@ module "k8s_bootstrap" {
   # a namespace-injected parent limit, so inject requests only, and only for
   # third-party containers that omit them.
   default_container_requests = (
-    var.enable_sandboxes ? var.sandbox_default_container_requests : {}
+    local.in_cluster_sandbox_runtime ? var.sandbox_default_container_requests : {}
   )
 
   create_smithdb_cache_storage_class = local.smithdb_create_cache_storage_class
@@ -737,7 +1048,7 @@ module "k8s_bootstrap" {
   # system-cluster-critical, which GKE admits only into a namespace holding a
   # PriorityClass-scoped quota. Chart 0.17 has no driver. Keep the quota through the
   # upgrade so a driver pod rescheduled before helm upgrade removes it is admitted.
-  allow_critical_priority_pods = var.enable_sandboxes
+  allow_critical_priority_pods = local.in_cluster_sandbox_runtime
 
   # Host-networked sandbox-host must reach platform-backend, and the CNI dictates how:
   #  - CALICO: an ipBlock for the node subnet matches node-sourced traffic, so keep
@@ -746,10 +1057,10 @@ module "k8s_bootstrap" {
   #    NetworkPolicy (ipBlock doesn't match it; the CiliumNetworkPolicy CRD isn't
   #    exposed), so keep the default-deny but exclude platform-backend from it.
   sandbox_host_ingress_cidrs = (
-    var.enable_sandboxes && var.gke_network_policy_provider == "CALICO" ? [var.subnet_cidr] : []
+    local.in_cluster_sandbox_runtime && var.gke_network_policy_provider == "CALICO" ? [var.subnet_cidr] : []
   )
   default_deny_excluded_component = (
-    var.enable_sandboxes && var.gke_network_policy_provider == "DATA_PLANE_V2" ? var.platform_backend_component_label : ""
+    local.in_cluster_sandbox_runtime && var.gke_network_policy_provider == "DATA_PLANE_V2" ? var.platform_backend_component_label : ""
   )
 
   # PostgreSQL connection - only when using external PostgreSQL
@@ -798,7 +1109,7 @@ module "k8s_bootstrap" {
 }
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
-  count = var.enable_sandboxes ? 1 : 0
+  count = local.in_cluster_sandbox_runtime ? 1 : 0
 
   metadata {
     name      = var.sandbox_juicefs_csi_config_secret_name
@@ -817,6 +1128,78 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
   data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 
   depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
+# Sandbox Cluster Objects (sandbox_runtime_source = "external")
+#------------------------------------------------------------------------------
+resource "kubernetes_namespace_v1" "sandbox" {
+  provider = kubernetes.sandbox
+  count    = local.external_sandbox_runtime ? 1 : 0
+
+  metadata {
+    name = var.sandbox_namespace
+  }
+
+  depends_on = [time_sleep.wait_for_sandbox_cluster]
+}
+
+# The runtime chart's minimal Secret: never a copy of langsmith-config. Its two
+# keys are the langsmith-sandbox chart's defaults (serviceAuth.secretKey and
+# config.callbackSigningJwkSecretKey), and each value must equal the
+# control plane's. The control plane reads its service-auth secret from the
+# dedicated sandbox_service_auth_secret key in langsmith-config
+# (init-values.sh sets sandboxes.serviceAuth.secretKey to it), never from
+# api_key_salt, so the salt stays out of the sandbox cluster.
+locals {
+  # A local so the plan tests can check the wiring: data_wo is not readable,
+  # not even in a plan.
+  sandbox_runtime_secret_data = {
+    sandbox_service_auth_secret  = var.sandbox_service_auth_secret
+    sandbox_callback_signing_jwk = var.sandbox_callback_signing_jwk
+  }
+
+  # The AUTH string is URL-encoded because it sits in the URL's userinfo.
+  sandbox_juicefs_separate_secret_data = local.external_sandbox_runtime ? {
+    name    = var.sandbox_juicefs_name
+    metaurl = "redis://:${urlencode(module.sandbox_juicefs_redis[0].auth_string)}@${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
+    storage = "gs"
+    bucket  = google_storage_bucket.sandbox_juicefs[0].url
+  } : {}
+}
+
+# Write-only: neither value is stored in Terraform state. Bump
+# sandbox_runtime_secret_revision to rewrite it.
+resource "kubernetes_secret_v1" "sandbox_runtime" {
+  provider = kubernetes.sandbox
+  count    = local.external_sandbox_runtime ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_runtime_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = local.sandbox_runtime_secret_data
+
+  data_wo_revision = var.sandbox_runtime_secret_revision
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs_config" {
+  provider = kubernetes.sandbox
+  count    = local.external_sandbox_runtime ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = local.sandbox_juicefs_separate_secret_data
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 }
 
 #------------------------------------------------------------------------------
@@ -983,6 +1366,7 @@ module "ingress" {
   cluster_name = module.gke_cluster.cluster_name
 
   ingress_type        = var.ingress_type
+  load_balancer_type  = var.gateway_load_balancer_type
   langsmith_domain    = var.langsmith_domain
   langsmith_namespace = var.langsmith_namespace
 

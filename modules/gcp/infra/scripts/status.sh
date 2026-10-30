@@ -214,6 +214,10 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"cluster_name"'; then
   [[ -n "$_bucket_name" ]]  && info "GCS bucket: ${_bucket_name}"           || warn "No bucket_name output"
   [[ -n "$_wi_annotation" ]] && info "Workload Identity GSA: ${_wi_annotation}"
   [[ -n "$_langsmith_url" ]] && info "LangSmith URL: ${_langsmith_url}"
+  # null (sandboxes off or in-cluster) prints as a bare null, not a string.
+  _sandbox_cluster_name=$(echo "$_tf_output" | grep -A2 '"sandbox_cluster_name"' | grep '"value"' \
+    | sed -n 's/.*"value":[[:space:]]*"\(.*\)".*/\1/p') || _sandbox_cluster_name=""
+  [[ -n "$_sandbox_cluster_name" ]] && info "Sandbox GKE cluster: ${_sandbox_cluster_name} (external runtime; kubectl checks below cover the LangSmith cluster only)"
   info "Services: postgres=${_pg_source:-?}  redis=${_redis_source:-?}  tls=${_tls:-?}"
 else
   fail "terraform output — empty (no state file or infra not yet applied)"
