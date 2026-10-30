@@ -85,17 +85,6 @@ variable "vpc_cidr_block" {
   }
 }
 
-variable "enable_public_eks_cluster" {
-  type        = bool
-  description = <<-EOT
-    Whether to enable public access to the EKS cluster API endpoint.
-    Defaults to true for ease of initial setup. For production, set to false
-    and enable create_bastion to run all Terraform and Helm operations from
-    the bastion via SSM Session Manager.
-  EOT
-  default     = true
-}
-
 variable "eks_public_access_cidrs" {
   type        = list(string)
   description = "CIDRs allowed to reach the public EKS API endpoint. Defaults to unrestricted (0.0.0.0/0). Set to your corporate VPN egress CIDRs to lock down access while keeping the endpoint public."
@@ -458,134 +447,16 @@ variable "sandbox_juicefs_csi_config_secret_revision" {
 #------------------------------------------------------------------------------
 # ALB Configuration
 #------------------------------------------------------------------------------
-variable "alb_scheme" {
-  type        = string
-  description = "ALB scheme: 'internet-facing' (public subnets, default) or 'internal' (private subnets, reachable only via VPN/peering/PrivateLink)."
-  default     = "internet-facing"
-
-  validation {
-    condition     = contains(["internet-facing", "internal"], var.alb_scheme)
-    error_message = "alb_scheme must be 'internet-facing' or 'internal'."
-  }
-}
-
 variable "alb_allowed_cidr_blocks" {
   type        = list(string)
-  description = "CIDR blocks allowed to reach the ALB on HTTP/HTTPS. Defaults to open. Restrict to VPN/office CIDRs for internal or limited-access deployments."
+  description = "CIDR blocks allowed to reach the ALB on HTTP/HTTPS. Defaults to open. With Engine enabled, a managed VPC's NAT public IPs are also allowed on a Terraform-managed ALB security group. For an existing VPC, include the sandbox nodes' public egress IPs as /32 entries."
   default     = ["0.0.0.0/0"]
-}
-
-variable "alb_access_logs_enabled" {
-  type        = bool
-  description = "Enable ALB access logging to a dedicated S3 bucket. Useful for traffic analysis and compliance."
-  default     = false
 }
 
 variable "alb_existing_security_group_id" {
   type        = string
   description = "ID of an existing security group to attach to the ALB instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow inbound HTTP/HTTPS per alb_allowed_cidr_blocks."
   default     = null
-}
-
-#------------------------------------------------------------------------------
-# CloudTrail
-#------------------------------------------------------------------------------
-variable "create_cloudtrail" {
-  type        = bool
-  description = "Create a CloudTrail trail logging all AWS API calls to S3. Skip if your organization already has an account-level or org-level trail."
-  default     = false
-}
-
-variable "cloudtrail_multi_region" {
-  type        = bool
-  description = "Record API calls across all regions. Recommended — single-region trails miss global service events."
-  default     = true
-}
-
-variable "cloudtrail_log_retention_days" {
-  type        = number
-  description = "Days to retain CloudTrail logs in S3. Set 0 to keep indefinitely."
-  default     = 365
-}
-
-#------------------------------------------------------------------------------
-# Network Firewall — egress filtering
-#------------------------------------------------------------------------------
-variable "create_firewall" {
-  type        = bool
-  description = "Deploy AWS Network Firewall with FQDN-based egress filtering. Intercepts all outbound internet traffic from private subnets and drops everything not in firewall_allowed_fqdns. Requires create_vpc = true. Cost: ~$0.395/hr per endpoint + $0.065/GB processed."
-  default     = false
-}
-
-variable "firewall_allowed_fqdns" {
-  type        = list(string)
-  description = "Domains allowed for outbound internet traffic when create_firewall = true. Matched against TLS SNI (HTTPS) and HTTP Host headers. All other destinations are dropped."
-  default     = ["beacon.langchain.com"]
-}
-
-variable "firewall_subnet_cidr" {
-  type        = string
-  description = "CIDR block for the firewall subnet. Must be within the VPC CIDR (default 10.0.0.0/16) and must not overlap with the default VPC subnets: private 10.0.0.0/21, 10.0.8.0/21, 10.0.16.0/21 and public 10.0.40.0/21, 10.0.48.0/21, 10.0.56.0/21."
-  default     = "10.0.64.0/21"
-
-  validation {
-    condition     = can(cidrhost(var.firewall_subnet_cidr, 0))
-    error_message = "firewall_subnet_cidr must be a valid CIDR block (e.g. 10.0.64.0/21)."
-  }
-}
-
-#------------------------------------------------------------------------------
-# WAF
-#------------------------------------------------------------------------------
-#------------------------------------------------------------------------------
-# Bastion Host
-#------------------------------------------------------------------------------
-variable "create_bastion" {
-  type        = bool
-  description = "Create an EC2 bastion host in a public subnet for private EKS cluster access. Access via SSM Session Manager (default) or optional SSH."
-  default     = false
-}
-
-variable "bastion_instance_type" {
-  type        = string
-  description = "EC2 instance type for the bastion host."
-  default     = "t3.micro"
-}
-
-variable "bastion_key_name" {
-  type        = string
-  description = "EC2 key pair name for SSH access to the bastion. Leave empty to use SSM Session Manager only."
-  default     = null
-}
-
-variable "bastion_enable_ssh" {
-  type        = bool
-  description = "Open port 22 on the bastion security group. Only needed when using an SSH key pair."
-  default     = false
-}
-
-variable "bastion_ssh_allowed_cidrs" {
-  type        = list(string)
-  description = "CIDRs allowed to SSH into the bastion. Only used when bastion_enable_ssh = true."
-  default     = []
-}
-
-variable "bastion_root_volume_size_gb" {
-  type        = number
-  description = "Root EBS volume size in GB for the bastion host."
-  default     = 20
-}
-
-variable "bastion_existing_security_group_id" {
-  type        = string
-  description = "ID of an existing security group to attach to the bastion instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow the access this bastion needs. bastion_enable_ssh still controls subnet placement and public IP assignment, but no longer causes Terraform to add an SSH ingress rule to the supplied group."
-  default     = null
-}
-
-variable "create_waf" {
-  type        = bool
-  description = "Attach a WAFv2 Web ACL to the ALB. Includes AWS managed rules for OWASP Top 10, IP reputation, and known bad inputs. Cost: ~$8-10/mo base."
-  default     = false
 }
 
 #------------------------------------------------------------------------------

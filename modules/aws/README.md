@@ -137,11 +137,7 @@ aws/
 │       ├── redis/          ← ElastiCache Redis, subnet group, security group, auth token
 │       ├── storage/        ← S3 bucket, VPC Gateway Endpoint, bucket policy, TTL lifecycle
 │       ├── alb/            ← Application Load Balancer, security group, ACM integration
-│       ├── k8s-bootstrap/  ← Namespace, KEDA, cert-manager, ESO Helm release
-│       ├── bastion/        ← EC2 bastion host for private cluster access (optional)
-│       ├── cloudtrail/     ← CloudTrail trail to S3 (optional)
-│       ├── waf/            ← WAFv2 Web ACL attached to ALB (optional)
-│       └── firewall/       ← AWS Network Firewall, FQDN-based egress filtering (optional)
+│       └── k8s-bootstrap/  ← Namespace, KEDA, cert-manager, ESO Helm release
 └── helm/                   ← Pass 2: script-driven Helm deploy
     ├── scripts/
     │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
@@ -294,8 +290,8 @@ pod subnet.
 
 Pod IPs stay routable VPC addresses, so the ALB still targets pods directly.
 Terraform adds the pod CIDRs to the ingress rules on the RDS and ElastiCache
-security groups and to the ALB's ingress and egress rules, so in-cluster
-callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configures the `vpc-cni`
+security groups and to the ALB's ingress and egress rules. Calls to the public
+LangSmith hostname use NAT egress IPs instead of pod IPs. It configures the `vpc-cni`
 add-on with one ENIConfig per AZ and holds node group creation for two minutes
 after the cluster is active, so the add-on is configured before the first
 nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
@@ -324,8 +320,18 @@ networking settings. Treat the mode as fixed for the life of the cluster.
 
 ## Bring your own security groups
 
+When Engine is enabled and `alb_allowed_cidr_blocks` restricts access, Terraform
+also allows the managed VPC's NAT public IPs on the ALB. This lets Engine
+sandboxes call the public LangSmith hostname. Other workloads sharing that NAT
+also pass the network allowlist; keep LangSmith authentication enabled.
+
+For an existing VPC, include the sandbox nodes' public egress IPs as `/32`
+entries in `alb_allowed_cidr_blocks`. For a supplied ALB security group, add
+those entries to its inbound HTTP/HTTPS rules yourself; Terraform does not
+manage its rules. Include every egress IP the sandbox nodes can use.
+
 By default, every module that needs one creates a dedicated security group: ALB,
-bastion, RDS PostgreSQL, ElastiCache Redis, and (when `enable_smithdb = true`) the
+RDS PostgreSQL, ElastiCache Redis, and (when `enable_smithdb = true`) the
 SmithDB metastore RDS instance. If your network team requires a pre-approved
 security group instead, for example one that already carries a compliance tag
 set or a mandated egress policy, supply its ID and Terraform skips creating its
@@ -333,7 +339,6 @@ own:
 
 ```hcl
 alb_existing_security_group_id               = "sg-0123456789abcdef0"
-bastion_existing_security_group_id           = "sg-0123456789abcdef1"
 postgres_existing_security_group_id          = "sg-0123456789abcdef2"
 redis_existing_security_group_id             = "sg-0123456789abcdef3"
 smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
@@ -353,8 +358,7 @@ table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
 
 | Component | Your security group must allow |
 |-----------|-------------------------------|
-| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
-| Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
+| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. With Engine, also allow the sandbox nodes' NAT egress IPs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
 | Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
 | Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |
 | SmithDB metastore (RDS) | See below. This one component can have its ingress rule managed by Terraform |
@@ -522,66 +526,6 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 ```
 
 The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmith` namespace) read access to pods, pod logs, deployments, and ReplicaSets in the `langsmith-agents` namespace. Without this, agent run logs will not stream in the LangSmith UI.
-
----
-
-## Private Cluster with Bastion Host
-
-For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. A bastion host provides the access point.
-
-### How it works
-
-1. **First run from your workstation** — Deploy infrastructure with `create_bastion = true` and `enable_public_eks_cluster = true` (temporarily). This creates the bastion alongside everything else.
-2. **Switch to private** — Set `enable_public_eks_cluster = false` and re-apply. The EKS API endpoint becomes private-only.
-3. **All future work happens on the bastion** — SSM into the bastion, clone the repo, copy your `terraform.tfvars` and secrets, and run Pass 1/2 from there.
-
-### Setup
-
-```hcl
-# terraform.tfvars
-enable_public_eks_cluster = false   # private API endpoint
-create_bastion            = true    # bastion for access
-
-# Optional SSH (SSM is the default — no key needed):
-# bastion_key_name          = "my-keypair"
-# bastion_enable_ssh        = true
-# bastion_ssh_allowed_cidrs = ["203.0.113.0/24"]
-```
-
-### Connect via SSM Session Manager
-
-```bash
-# After terraform apply, the SSM command is in the outputs:
-terraform output bastion_ssm_command
-
-# Or connect directly:
-aws ssm start-session --target <instance-id> --region us-west-2
-```
-
-> **Prerequisite:** Install the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) for the AWS CLI.
-
-### Working from the bastion
-
-The bastion comes pre-installed with kubectl, helm, terraform, git, and jq. Kubeconfig is pre-configured for the EKS cluster.
-
-```bash
-# After SSM-ing in:
-kubectl get nodes                        # verify cluster access
-git clone <your-repo-url>                # get the deployment code
-cd ps-control-plane/terraform/aws
-
-# Copy your terraform.tfvars and secrets, then run normally:
-source infra/scripts/setup-env.sh
-make plan
-make apply
-make deploy
-```
-
-### Important notes
-
-- The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
-- The bastion lives in a **public subnet** (for SSM agent connectivity). It does not need a public IP if your VPC has VPC endpoints for SSM (`ssm`, `ssmmessages`, `ec2messages`).
-- When the EKS API is private, `terraform plan/apply` targeting EKS resources **must** be run from within the VPC (i.e., the bastion). Running from your laptop will timeout.
 
 ---
 
@@ -1079,7 +1023,6 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `private_subnets` | `[]` | when !create_vpc | Existing private subnet IDs |
 | `public_subnets` | `[]` | when !create_vpc | Existing public subnet IDs |
 | `vpc_cidr_block` | `null` | when !create_vpc | Existing VPC CIDR block |
-| `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
 | `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
@@ -1121,23 +1064,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `dns_include_wildcard_san` | `false` | no | Add `*.langsmith_domain` to the managed ACM certificate |
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `clickhouse_source` | `in-cluster` | no | `in-cluster` or `external` |
-| `alb_scheme` | `internet-facing` | no | ALB scheme: `internet-facing` or `internal` |
-| `alb_access_logs_enabled` | `false` | no | Enable ALB access logging to S3 |
 | `alb_existing_security_group_id` | `null` | no | Attach an existing SG to the ALB instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `create_bastion` | `false` | no | Create EC2 bastion host for private cluster access (SSM or SSH) |
-| `bastion_instance_type` | `t3.micro` | no | EC2 instance type for bastion |
-| `bastion_key_name` | `null` | no | EC2 key pair for SSH (empty = SSM only) |
-| `bastion_enable_ssh` | `false` | no | Open port 22 on bastion security group |
-| `bastion_ssh_allowed_cidrs` | `[]` | no | CIDRs allowed to SSH to bastion |
-| `bastion_root_volume_size_gb` | `20` | no | Root EBS volume size for bastion |
-| `bastion_existing_security_group_id` | `null` | no | Attach an existing SG to the bastion instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `create_cloudtrail` | `false` | no | Create CloudTrail trail for AWS API audit |
-| `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |
-| `cloudtrail_log_retention_days` | `365` | no | Days to retain CloudTrail logs |
-| `create_waf` | `false` | no | Attach WAFv2 Web ACL to ALB |
-| `create_firewall` | `false` | no | Deploy AWS Network Firewall for FQDN-based egress filtering. Requires `create_vpc = true`. Cost: ~$0.395/hr/endpoint + $0.065/GB. |
-| `firewall_allowed_fqdns` | `["beacon.langchain.com"]` | no | Domains allowed for outbound internet traffic when `create_firewall = true`. Matched against TLS SNI (HTTPS) and HTTP Host header. All other destinations are dropped. |
-| `firewall_subnet_cidr` | `"10.0.64.0/21"` | no | CIDR for the firewall subnet. Must not overlap with private (10.0.0.0/21–10.0.32.0/21) or public (10.0.40.0/21–10.0.56.0/21) subnets. |
 | `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
 | `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
 | `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |

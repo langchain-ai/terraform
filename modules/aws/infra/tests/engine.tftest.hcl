@@ -40,6 +40,75 @@ override_module {
   }
 }
 
+# A fixed public IP makes the managed NAT allowlist known during the plan.
+override_resource {
+  target          = module.vpc[0].module.vpc.aws_eip.nat[0]
+  override_during = plan
+  values          = { public_ip = "198.51.100.10" }
+}
+
+run "restricted_alb_admits_engine_nat_egress" {
+  command = plan
+
+  variables {
+    enable_engine           = true
+    enable_sandboxes        = true
+    alb_allowed_cidr_blocks = ["203.0.113.0/24"]
+  }
+
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["203.0.113.0/24", "198.51.100.10/32"])
+    error_message = "Engine's NAT egress must be admitted alongside the caller's restricted ALB ranges."
+  }
+}
+
+run "restricted_alb_without_engine_keeps_caller_ranges" {
+  command = plan
+
+  variables {
+    alb_allowed_cidr_blocks = ["203.0.113.0/24"]
+  }
+
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["203.0.113.0/24"])
+    error_message = "A restricted ALB must not admit NAT egress automatically when Engine is disabled."
+  }
+}
+
+run "open_alb_needs_no_engine_nat_exception" {
+  command = plan
+
+  variables {
+    enable_engine    = true
+    enable_sandboxes = true
+  }
+
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["0.0.0.0/0"])
+    error_message = "An unrestricted ALB already admits Engine's NAT egress."
+  }
+}
+
+run "byo_vpc_engine_uses_caller_egress_ranges" {
+  command = plan
+
+  variables {
+    enable_engine           = true
+    enable_sandboxes        = true
+    create_vpc              = false
+    vpc_id                  = "vpc-00000000000000001"
+    vpc_cidr_block          = "10.0.0.0/16"
+    private_subnets         = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets          = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    alb_allowed_cidr_blocks = ["203.0.113.0/24", "198.51.100.20/32"]
+  }
+
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["203.0.113.0/24", "198.51.100.20/32"])
+    error_message = "An existing VPC must use its supplied egress ranges without referencing a managed NAT."
+  }
+}
+
 run "engine_off_by_default" {
   command = plan
 

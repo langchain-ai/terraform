@@ -260,8 +260,8 @@ else
     pass "kubectl can reach the cluster"
   else
     fail "kubectl cannot reach the cluster"
-    info "If the cluster is private, you may need a bastion or VPN"
-    action "Check network access — bastion, VPN, or enable public endpoint"
+    info "The EKS API must allow your current egress IP"
+    action "Check network connectivity and eks_public_access_cidrs"
   fi
 fi
 

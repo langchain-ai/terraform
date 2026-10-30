@@ -56,7 +56,7 @@ before the PR does, not a separate standard.
   - No argument → both, across every root.
   - Conditional wiring, a `validation` block, or a precondition →
     `bash scripts/plan-tests.sh modules/<provider>`: `terraform test` plans the
-    root against mocked providers, so `length(module.waf) == 0` is assertable
+    root against mocked providers, so `length(module.cert_manager) == 0` is assertable
     with no credentials and no state. `validate` resolves no conditionals and
     passes a module gated on a variable nothing sets, which is the gap this
     closes. Suites are `modules/<provider>/infra/tests/*.tftest.hcl`; a new flag
