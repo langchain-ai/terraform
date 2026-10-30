@@ -910,6 +910,33 @@ _report_failed_hook_jobs() {
     2>/dev/null || true)
 }
 
+# Moving from the in-cluster runtime: Sandboxes that resume from saved memory
+# keep trusting the egress proxy CA they started with, so the external runtime
+# must keep the CA the langsmith chart generated. Copy it into the sandbox
+# namespace before the upgrade below removes it. The Secret goes straight from
+# one cluster to the other and is never printed.
+_proxy_ca_secret="smithbox-proxy-ca"
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]] \
+  && kubectl get secret "$_proxy_ca_secret" -n "$NAMESPACE" >/dev/null 2>&1; then
+  (
+    _main_kubeconfig="$KUBECONFIG"
+    _use_cluster_kubeconfig "$_sandbox_cluster_name" "$_region" >/dev/null
+    if kubectl get secret "$_proxy_ca_secret" -n "$_sandbox_namespace" >/dev/null 2>&1; then
+      exit 0
+    fi
+    if ! kubectl get namespace "$_sandbox_namespace" >/dev/null 2>&1; then
+      echo "ERROR: namespace $_sandbox_namespace is missing in $_sandbox_cluster_name. Run 'make apply' first." >&2
+      exit 1
+    fi
+    KUBECONFIG="$_main_kubeconfig" kubectl get secret "$_proxy_ca_secret" -n "$NAMESPACE" -o json \
+      | jq --arg ns "$_sandbox_namespace" '{apiVersion, kind, type,
+          metadata: {name: .metadata.name, namespace: $ns},
+          data: {"tls.crt": .data["tls.crt"], "tls.key": .data["tls.key"]}}' \
+      | kubectl apply -f - >/dev/null
+    echo "Copied the in-cluster runtime's proxy CA ($_proxy_ca_secret) into $_sandbox_namespace."
+  )
+fi
+
 if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -1079,12 +1106,25 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external"
   (
     _use_cluster_kubeconfig "$_sandbox_cluster_name" "$_region"
 
+    # A proxy CA Secret that this release does not own was copied in from the
+    # in-cluster runtime (above, or by hand as the docs describe). Run on it:
+    # the default generatedSecret mode would try to adopt it, and Helm refuses
+    # a Secret it does not own.
+    _proxy_ca_args=()
+    if _proxy_ca_owner=$(kubectl get secret "$_proxy_ca_secret" -n "$_sandbox_namespace" \
+      -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null) \
+      && [[ "$_proxy_ca_owner" != "$SANDBOX_RELEASE_NAME" ]]; then
+      _proxy_ca_args=(--set proxyCa.mode=existingSecret --set-string "proxyCa.existingSecretName=$_proxy_ca_secret")
+      echo "Proxy CA: using the copied Secret $_proxy_ca_secret"
+    fi
+
     helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
       --namespace "$_sandbox_namespace" \
       --create-namespace \
       --version "$_sandbox_chart_version" \
       -f "$SANDBOX_VALUES_FILE" \
       --set-string "config.endpoint=$_platform_endpoint" \
+      ${_proxy_ca_args[@]+"${_proxy_ca_args[@]}"} \
       ${_ssa_flag} \
       --timeout "$_helm_timeout"
 
