@@ -119,9 +119,6 @@ when:
 
 - `langsmith-values-smithdb-migration.yaml` is missing. Run
   `make smithdb-migration-job-start`.
-- The `parallelism` in that file is not equal to the
-  `smithdb_migration_parallelism` of the last `make apply`. Terraform sizes the
-  namespace quota from that value.
 - The TaskDB Secret is missing a key: `smithdb-taskdb` for a chart-managed
   TaskDB, or `smithdb-taskdb-external` for an external one.
 
@@ -148,8 +145,8 @@ release `prod` uses `prod-langsmith-smithdb`.
 ## Sizing
 
 `smithdb_sizing` sets the chart `resourceTier`, the replicas, the `minimal`
-resources, the default metastore SKU, and the namespace quota headroom. Set it
-in `infra/terraform.tfvars`, then run `make deploy-all`:
+resources, and the default metastore SKU. Set it in `infra/terraform.tfvars`,
+then run `make deploy-all`:
 
 ```hcl
 smithdb_sizing = "small"   # minimal, small, medium, or large
@@ -176,8 +173,6 @@ The component rows are per replica, as CPU / memory / cache volume:
 | Cache HPA `maxReplicas` | 1 | 10 (chart default) | 10 (chart default) | 10 (chart default) |
 | VM for the largest pod, for example | general pool | 16 vCPU, `Standard_D16s_v5` | 32 vCPU, `Standard_D32s_v5` | 64 vCPU and over 150 GiB, `Standard_D64s_v5` |
 | Default metastore SKU (vCPU / memory) | `GP_Standard_D2ds_v5` (2 / 8Gi) | `MO_Standard_E2ds_v5` (2 / 16Gi) | `MO_Standard_E4ds_v5` (4 / 32Gi) | `MO_Standard_E8ds_v5` (8 / 64Gi) |
-| Quota headroom: CPU / memory / pods | 5 / 10Gi / 12 | 27 / 53Gi / 12 | 93 / 169Gi / 12 | 402 / 868Gi / 26 |
-| Quota headroom with the backfill | 8 / 18Gi / 20 | 37 / 89Gi / 20 | 103 / 205Gi / 20 | 412 / 904Gi / 34 |
 
 - The throughput and replica rows come from the SmithDB sizing table in the
   [LangSmith self-hosted docs](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
@@ -193,25 +188,14 @@ The component rows are per replica, as CPU / memory / cache volume:
 - The VM row is the smallest shape that holds the largest pod. Set the pool
   `max_count` to cover the sum row at that shape, plus one node for the surge
   copy of the largest pod, plus room for the backfill Job while it runs.
-- The quota rows are what Terraform adds to the namespace ResourceQuota: once
-  to requests and twice to limits. They cover the replicas above, one surge copy
-  of the largest pod, and, in the backfill stage, the Job and the taskdb. HPA
-  scale-out above `minReplicas` gets only the surge room, and the quota refuses
-  the next pod with a `FailedCreate` event on the ReplicaSet. Read the resolved
-  values with `terraform -chdir=infra output smithdb_quota_extra`.
-- The backfill quota row is for one migration pod. Each further migration pod
-  (`smithdb_migration_parallelism`) adds the backfill Job row and 1 pod. For
-  `small`, 3 migration pods give 53 CPU / 153Gi / 22 pods.
 
-A wrapper root that calls this module must declare `smithdb_sizing` and
-`smithdb_migration_parallelism` and pass them through. It must also re-export
-these outputs, which the scripts read through `LANGSMITH_INFRA_DIR`:
+A wrapper root that calls this module must declare `smithdb_sizing` and pass
+it through. It must also re-export these outputs, which the scripts read
+through `LANGSMITH_INFRA_DIR`:
 
 - `smithdb_helm_values`. Without it, `init-values.sh` stops when SmithDB is on.
 - `smithdb_sizing`, which `make smithdb-migration-job-start` reads to suggest a
   migration pod count.
-- `smithdb_migration_parallelism`, which `deploy.sh` compares with the
-  migration values file.
 
 ### Metastore SKU on an existing install
 
@@ -291,14 +275,12 @@ migration:
 - For the size, the script asks for the number of historical runs and the
   target days. It suggests a migration pod count from the docs formula (runs /
   5,000,000 / days / 8 vCPU per pod), plus 50%, with a maximum of 20. For
-  `minimal`, it suggests 1. It does not accept more than 30 pods.
+  `minimal`, it suggests 1.
 
 The script writes `helm/values/langsmith-values-smithdb-migration.yaml`. It
-sets `smithdb_migration_enabled = true` and `smithdb_migration_parallelism` in
-`infra/terraform.tfvars`. The apply then grants the trace-blob read role, waits
-300 seconds (see [Infrastructure](#infrastructure)), and adds the migration
-pods and the taskdb to the namespace quota. The deploy starts the migration
-Job.
+sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`. The
+apply then grants the trace-blob read role and waits 300 seconds (see
+[Infrastructure](#infrastructure)). The deploy starts the migration Job.
 
 A backfill that an earlier module version started has no
 `langsmith-values-smithdb-migration.yaml`, so `deploy.sh` stops. Run
@@ -310,9 +292,8 @@ Job continues.
   4 GiB for `minimal`. Raise the node pool `max_count` if it cannot add the
   nodes for them. Above about 20 pods, raise the TaskDB resources instead of
   adding pods.
-- Resources. The SmithDB size sets the migration pod and TaskDB resources,
-  and Terraform sizes the namespace quota for them. The migration values file
-  does not set resources. See
+- Resources. The SmithDB size sets the migration pod and TaskDB resources.
+  The migration values file does not set resources. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Safety hold. The Job holds the tasks for the last two hours before its start
   time until two hours after it, so it cannot miss late updates to runs that
@@ -346,7 +327,7 @@ make deploy-all
 is not `Complete`, or is not found, it asks before it continues. The chart
 deletes a finished Job after 7 days. The script sets
 `smithdb_migration_enabled = false` and deletes the `smithdb-taskdb-external`
-Secret. The apply removes the trace-blob read role and the migration quota. The
+Secret. The apply removes the trace-blob read role. The
 deploy removes the migration Job and the chart-managed TaskDB, with its PVC and
 task state. An external TaskDB Postgres is not deleted. The `smithdb-taskdb`
 Secret and its Key Vault password stay for a later backfill.

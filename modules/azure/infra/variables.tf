@@ -1370,18 +1370,6 @@ variable "smithdb_migration_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_parallelism" {
-  type        = number
-  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
-  default     = 1
-  nullable    = false
-
-  validation {
-    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
-    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
-  }
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
@@ -1390,7 +1378,7 @@ variable "smithdb_query_enabled" {
 
 variable "smithdb_sizing" {
   type        = string
-  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
   default     = null
   nullable    = true
 
@@ -2101,6 +2089,12 @@ variable "sizing_profile" {
   type        = string
   description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing and the default sandbox_host_vm_size."
   default     = "production"
+
+  # "default" is the scripts' value for the chart's base values with no overlay.
+  validation {
+    condition     = contains(["default", "minimum", "dev", "production", "production-large"], var.sizing_profile)
+    error_message = "sizing_profile must be 'default', 'minimum', 'dev', 'production', or 'production-large'."
+  }
 }
 
 # tflint-ignore: terraform_unused_declarations
@@ -2317,6 +2311,35 @@ variable "envoy_gateway_image_registry_keeps_source_host" {
   type        = bool
   description = "Whether envoy_gateway_image_registry keeps docker.io as the first path segment under the registry. true (default): the controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version>, the layout LangSmith's images.registry expects. false: the mirror serves Docker Hub's paths directly, as a Docker Hub proxy repository in Nexus or Artifactory does, and the controller is pulled as <registry>/envoyproxy/gateway:<envoy_gateway_version>. The proxy image follows the same rule. Ignored without envoy_gateway_image_registry."
   default     = true
+}
+
+variable "envoy_gateway_chart_repository" {
+  type        = string
+  description = "Repository the Envoy Gateway chart (gateway-helm) is fetched from, by the machine running Terraform. The default is Envoy's own OCI registry on Docker Hub. A mirror keeps that machine off docker.io: an OCI registry as oci://<host>/<path> serves the chart as <path>/gateway-helm (a Docker Hub proxy in Nexus or Artifactory that serves OCI artifacts is this form). Envoy publishes the chart only as an OCI artifact, with no index.yaml, so a Helm proxy repository cannot serve it; https://<host>/<path> is for a hosted Helm repository holding an uploaded copy (helm pull oci://docker.io/envoyproxy/gateway-helm --version <envoy_gateway_version>, then upload). The chart name and version (envoy_gateway_version) do not change. envoy_gateway_image_registry is the separate setting for the images the cluster pulls."
+  default     = "oci://docker.io/envoyproxy"
+
+  validation {
+    condition     = can(regex("^(https|oci)://[^/]+(/[^/]+)*$", var.envoy_gateway_chart_repository))
+    error_message = "envoy_gateway_chart_repository must be an https:// or oci:// URL with no trailing slash (e.g. 'oci://docker.io/envoyproxy' or 'oci://nexus.example.com/docker-hub/envoyproxy')."
+  }
+}
+
+variable "envoy_gateway_chart_repository_username" {
+  type        = string
+  description = "Username for envoy_gateway_chart_repository when the mirror requires a login to read charts; the machine running Terraform sends it with the chart fetch. Empty (default) fetches anonymously, which Docker Hub and an open mirror allow. Set with envoy_gateway_chart_repository_password."
+  default     = ""
+
+  validation {
+    condition     = (var.envoy_gateway_chart_repository_username == "") == (var.envoy_gateway_chart_repository_password == "")
+    error_message = "envoy_gateway_chart_repository_username and envoy_gateway_chart_repository_password go together: set both for a chart mirror that requires a login, or neither."
+  }
+}
+
+variable "envoy_gateway_chart_repository_password" {
+  type        = string
+  description = "Password or token for envoy_gateway_chart_repository_username. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars."
+  default     = ""
+  sensitive   = true
 }
 
 variable "envoy_gateway_image_pull_secret_name" {

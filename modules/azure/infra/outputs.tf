@@ -166,20 +166,6 @@ output "smithdb_helm_values" {
   value       = local.smithdb_helm_values
 }
 
-output "smithdb_migration_parallelism" {
-  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
-  value       = var.smithdb_migration_parallelism
-}
-
-output "smithdb_quota_extra" {
-  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
-  value = {
-    cpu       = local.smithdb_quota_extra_cpu
-    memory_gi = local.smithdb_quota_extra_memory_gi
-    pods      = local.smithdb_quota_extra_pods
-  }
-}
-
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true

@@ -55,9 +55,12 @@ resource "kubernetes_namespace_v1" "langsmith" {
 }
 
 # ── Service Accounts (Workload Identity, pull Secret) ─────────────────────────
-# langsmith-ksa is used by LangSmith pods and LGP operator deployments.
-# The azure.workload.identity/client-id annotation binds it to the managed
-# identity that has Storage Blob Data Contributor on the blob account.
+# langsmith-ksa is the account the operator's agent pods run as. It carries
+# the blob identity's client-ID annotation, but that grants nothing: there is
+# no federated credential for it (k8s-cluster's
+# service_accounts_for_workload_identity) and the agent template sets no
+# azure.workload.identity/use label. Keep it that way: federating it would give
+# every agent's code Storage Blob Data Contributor on the blob account.
 #
 # With langsmith_image_pull_secret_name set, every account here carries the
 # Secret as imagePullSecrets. The chart's own pods pull with
@@ -185,44 +188,13 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
   )
 }
 
-# ── Resource Quota ────────────────────────────────────────────────────────────
-# Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
-# deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
-# Base: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods. The
-# resource_quota_extra_* inputs add SmithDB's pods on top, once to requests and
-# twice to limits, so a plain install keeps the base figures.
-#
-# With sandboxes on, the quota caps requests only. sandbox-host runs Firecracker
-# VMs in child cgroups beneath its own pod cgroup, so a container limit would cap
-# every sandbox on the node, and a limits.* quota would force one onto it.
-
-resource "kubernetes_resource_quota_v1" "langsmith" {
-  metadata {
-    name      = "langsmith-quota"
-    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
-  }
-
-  spec {
-    hard = merge({
-      "requests.cpu"    = tostring(40 + var.resource_quota_extra_cpu)
-      "requests.memory" = "${80 + var.resource_quota_extra_memory_gi}Gi"
-      pods              = tostring(200 + var.resource_quota_extra_pods)
-      }, var.enable_sandboxes ? {} : {
-      "limits.cpu"    = tostring(80 + var.resource_quota_extra_cpu * 2)
-      "limits.memory" = "${160 + var.resource_quota_extra_memory_gi * 2}Gi"
-    })
-  }
-}
-
 # ── Limit Range ───────────────────────────────────────────────────────────────
-# Required companion to the ResourceQuota above: because the quota's `hard` includes
-# requests/limits, Kubernetes forces EVERY pod to declare them. Some chart components
-# (e.g. the bundled Postgres/Redis StatefulSets for the standalone insights/polly/fleet
-# agent features) ship without resource stanzas, so without defaults they're rejected
-# with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
-# This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
-# With sandboxes on it supplies requests only: a default 1 CPU limit lands below
-# sandbox-host's 2 CPU request, and the API server rejects the pod.
+# Gives a container that declares no requests 250m CPU and 256Mi, so the
+# scheduler has a figure to place it on. Some chart components, such as the
+# bundled Postgres and Redis StatefulSets for the insights, polly, and fleet
+# agent features, ship without resource stanzas. No default limits: a limit
+# would cap a pod that sets none, and sandbox-host runs Firecracker VMs inside
+# its own pod cgroup.
 resource "kubernetes_limit_range_v1" "langsmith" {
   metadata {
     name      = "langsmith-defaults"
@@ -232,10 +204,6 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
-      default = var.enable_sandboxes ? null : {
-        cpu    = "1"
-        memory = "1Gi"
-      }
       # 250m covers an unsized container's startup CPU, so the scheduler stops
       # packing more of them onto a node than it can feed. A LimitRange applies
       # at admission: running pods keep their old request until they restart.
