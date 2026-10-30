@@ -136,12 +136,19 @@ ENABLE_SECRET_MANAGER=$(_tfvar "enable_secret_manager_module")
 ENABLE_DNS=$(_tfvar "enable_dns_module")
 DNS_CREATE_CERT=$(_tfvar "dns_create_certificate")
 ENABLE_SANDBOXES=$(_tfvar "enable_sandboxes")
+ENABLE_ENGINE=$(_tfvar "enable_engine")
+ENGINE_VERTEX=$(_tfvar "engine_vertex_workload_identity")
 ENABLE_SMITHDB=$(_tfvar "enable_smithdb")
 SMITHDB_METASTORE_SOURCE=$(_tfvar "smithdb_metastore_source")
 SMITHDB_METASTORE_SOURCE="${SMITHDB_METASTORE_SOURCE:-create}"
 
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "your-gcp-project-id" ]]; then
   error "project_id not set in terraform.tfvars — edit it before running preflight."
+  exit 1
+fi
+
+if [[ "$ENABLE_ENGINE" == "true" && "$ENABLE_SANDBOXES" != "true" ]]; then
+  error "enable_engine = true requires enable_sandboxes = true in terraform.tfvars — every Engine run executes in a sandbox."
   exit 1
 fi
 
@@ -201,6 +208,10 @@ APIS=(
   "cloudresourcemanager.googleapis.com:Resource Manager"
   "certificatemanager.googleapis.com:Certificate Manager"
 )
+
+if [[ "$ENABLE_ENGINE" == "true" && "$ENGINE_VERTEX" == "true" ]]; then
+  APIS+=("aiplatform.googleapis.com:Vertex AI (Engine)")
+fi
 
 APIS_MISSING=0
 for entry in "${APIS[@]}"; do

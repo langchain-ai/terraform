@@ -117,6 +117,8 @@ GKE pod
                     └── roles/storage.objectAdmin on the GCS bucket
 ```
 
+With `enable_engine` and `engine_vertex_workload_identity`, Engine's API server and queue run as a dedicated `<name_prefix>-<environment>-engine` service account that holds `roles/aiplatform.user`, so Engine calls Vertex AI without stored credentials. See [ENGINE.md](ENGINE.md).
+
 For GCS access using HMAC keys (S3-compatible API), create a service account key in GCP Console under Storage > Settings > Interoperability and pass the access key and secret to the Helm command via `config.blobStorage.accessKey` and `config.blobStorage.accessKeySecret`.
 
 ---

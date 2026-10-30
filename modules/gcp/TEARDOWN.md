@@ -234,7 +234,7 @@ Terraform destroys in dependency order:
 - SmithDB metastore Cloud SQL instance and its GCS bucket (only when `enable_smithdb = true`)
 - Memorystore Redis instance
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
-- Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
+- Workload Identity service accounts + IAM bindings (LangSmith, SmithDB, and Engine)
 - GKE cluster and node pools, including the SmithDB cache and compute pools
 - Private service connection (only when `postgres_source` or `redis_source` is `"external"`, when `enable_sandboxes = true`, or when the module creates the SmithDB metastore): removed from state only (`deletion_policy = "ABANDON"`). The VPC delete removes its peering.
 - VPC, subnet, Cloud Router, Cloud NAT
@@ -404,6 +404,7 @@ have no `-<suffix>` (for example Cloud SQL is `$PREFIX-pg`).
 | Workload Identity SA | `<name_prefix>-langsmith` | no — **`name_prefix` only, no `environment`** |
 | Sandbox-host node SA | `$PREFIX-sbox-node` | no — only when `enable_sandboxes=true` |
 | SmithDB SA | `$PREFIX-smithdb-sa` | no — only when `enable_smithdb=true` |
+| Engine SA | `$PREFIX-engine` | no — only when `enable_engine=true` and `engine_vertex_workload_identity=true` |
 | Secret Manager (`setup-env.sh`) | `langsmith-$PREFIX-<key>` | no |
 | Secret Manager (`secrets` module) | `$PREFIX-langsmith` | no |
 
@@ -760,6 +761,10 @@ gcloud iam service-accounts delete "$NAME_PREFIX-langsmith@$PROJECT_ID.iam.gserv
 
 # Sandbox-host node (enable_sandboxes=true)
 gcloud iam service-accounts delete "$PREFIX-sbox-node@$PROJECT_ID.iam.gserviceaccount.com" \
+  --project "$PROJECT_ID" --quiet 2>/dev/null || true
+
+# Engine (enable_engine=true and engine_vertex_workload_identity=true)
+gcloud iam service-accounts delete "$PREFIX-engine@$PROJECT_ID.iam.gserviceaccount.com" \
   --project "$PROJECT_ID" --quiet 2>/dev/null || true
 
 # SmithDB (enable_smithdb=true)
