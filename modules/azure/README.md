@@ -1206,7 +1206,15 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
 - **Rollback:** roll back the runtime release only.
 - **Uninstall:** `make uninstall` removes `langsmith-sandbox` from the sandbox cluster first, then the `langsmith`
   release.
-- **One runtime per install:** run exactly one `langsmith-sandbox` release against a LangSmith install.
+- **One runtime per install:** run exactly one `langsmith-sandbox` release against a LangSmith install. LangSmith
+  accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its
+  elected `sandbox-host` pod turns not ready.
+- **Move from the in-cluster runtime:** set `sandbox_runtime_source = "external"`, then run steps 2 to 5 above. The
+  JuiceFS Redis, the Blob container and the identity stay the same, so Sandboxes and snapshots carry over. Before it
+  switches the `langsmith` release, `make deploy` copies the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into
+  the sandbox namespace, so Sandboxes that resume from saved memory keep their auth proxy credential injection; a CA
+  Secret you copied there yourself, as the LangSmith docs' move steps describe, is used as is. Running Sandboxes stop
+  during the switch, and LangSmith accepts the new runtime about 6 minutes after the in-cluster hosts stop reporting.
 
 **Verify**
 

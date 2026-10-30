@@ -1190,6 +1190,40 @@ elif [[ "$_helm_major" -ge 4 ]]; then
   _ssa_flag="--server-side=false"
 fi
 
+# Moving from the in-cluster runtime: Sandboxes that resume from saved memory
+# keep trusting the egress proxy CA they started with, so the external runtime
+# keeps the CA the langsmith chart generated. Copy it into the sandbox
+# namespace before the upgrade below removes it. The Secret goes straight from
+# one cluster to the other and is never printed.
+_proxy_ca_secret="smithbox-proxy-ca"
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]] \
+  && kubectl get secret "$_proxy_ca_secret" -n "$NAMESPACE" >/dev/null 2>&1; then
+  if ! (
+    _ca_namespace=$(_tf_out sandbox_namespace) || _ca_namespace="langsmith-sandbox"
+    _ca_kubeconfig_dir=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/langsmith-sandbox-kube.XXXXXX")
+    # shellcheck disable=SC2064 # expand the path now, not at trap time
+    trap "rm -rf '$_ca_kubeconfig_dir'" EXIT
+    _ca_kc="$_ca_kubeconfig_dir/config"
+    _sandbox_kubeconfig "$_ca_kc" || exit 1
+    if KUBECONFIG="$_ca_kc" kubectl get secret "$_proxy_ca_secret" -n "$_ca_namespace" >/dev/null 2>&1; then
+      exit 0
+    fi
+    if ! KUBECONFIG="$_ca_kc" kubectl get namespace "$_ca_namespace" >/dev/null 2>&1; then
+      fail "Namespace ${_ca_namespace} is missing in the sandbox cluster. Run 'make apply' first."
+      exit 1
+    fi
+    kubectl get secret "$_proxy_ca_secret" -n "$NAMESPACE" -o json \
+      | jq --arg ns "$_ca_namespace" '{apiVersion, kind, type,
+          metadata: {name: .metadata.name, namespace: $ns},
+          data: {"tls.crt": .data["tls.crt"], "tls.key": .data["tls.key"]}}' \
+      | KUBECONFIG="$_ca_kc" kubectl apply -f - >/dev/null || exit 1
+    info "Copied the in-cluster runtime's proxy CA (${_proxy_ca_secret}) into ${_ca_namespace}."
+  ); then
+    fail "Could not copy the proxy CA into the sandbox cluster. Nothing was changed; fix the error above and run make deploy again."
+    exit 1
+  fi
+fi
+
 helm upgrade --install "$RELEASE_NAME" "$_chart_source" \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -1322,10 +1356,23 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external"
     bash "$HELM_DIR/../infra/scripts/create-k8s-secrets.sh"
   fi
 
+  # A proxy CA Secret that this release does not own was copied in from the
+  # in-cluster runtime (above, or by hand as the docs describe). Run on it: the
+  # default generatedSecret mode would try to adopt it, and Helm refuses a
+  # Secret it does not own.
+  _proxy_ca_args=()
+  if _proxy_ca_owner=$(KUBECONFIG="$_sandbox_kc" kubectl get secret "$_proxy_ca_secret" -n "$_sandbox_namespace" \
+    -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null) \
+    && [[ "$_proxy_ca_owner" != "$SANDBOX_RELEASE_NAME" ]]; then
+    _proxy_ca_args=(--set proxyCa.mode=existingSecret --set-string "proxyCa.existingSecretName=$_proxy_ca_secret")
+    info "Proxy CA: using the copied Secret ${_proxy_ca_secret}"
+  fi
+
   KUBECONFIG="$_sandbox_kc" helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
     --namespace "$_sandbox_namespace" \
     --version "$_sandbox_chart_version" \
     -f "$SANDBOX_VALUES_FILE" \
+    ${_proxy_ca_args[@]+"${_proxy_ca_args[@]}"} \
     ${_ssa_flag} \
     --timeout 20m
 
