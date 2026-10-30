@@ -16,8 +16,8 @@
 #
 # Do not set SmithDB sizing or placement here. Set smithdb_sizing and
 # smithdb_cache_storage in infra/terraform.tfvars, so Terraform sizes the node
-# pools and the namespace quota for the same values. The one exception is more
-# memory for OOMKilled migration pods (SMITHDB.md#oomkilled-migration-pods).
+# pools for the same values. The one exception is more memory for OOMKilled
+# migration pods (SMITHDB.md#oomkilled-migration-pods).
 # Helm merges maps but replaces lists, so a volumes or tolerations list here
 # replaces the generated list.
 
@@ -38,5 +38,4 @@ smithdb:
   # smithdb.metastoreMigration is a transient Helm pre-install hook. It is not
   # pinned to a SmithDB pool, because it runs before any SmithDB pod exists. The
   # autoscaler then has no pending pod to scale a pool up from zero. The general
-  # pool always has running nodes. Chart 0.17 sets its requests and limits,
-  # which the namespace ResourceQuota requires.
+  # pool always has running nodes. Chart 0.17 sets its requests and limits.

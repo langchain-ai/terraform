@@ -7,7 +7,7 @@
 # smithdb-migration-job-end.sh — Remove what make smithdb-migration-job-start set up, once the migration Job is Complete.
 #
 # Sets smithdb_migration_enabled = false in terraform.tfvars (that line only) and deletes the smithdb-taskdb-external Secret.
-# make apply then removes SmithDB's read access to the traces bucket and the migration quota, and make deploy removes
+# make apply then removes SmithDB's read access to the traces bucket, and make deploy removes
 # the Job and the chart-managed TaskDB with its volume.
 # An external TaskDB Postgres is not deleted; only its connection settings are.
 #
@@ -66,6 +66,6 @@ fi
 pass "No $EXTERNAL_SECRET Secret remains"
 
 header "Next"
-action "make apply          # removes SmithDB's read access to the traces bucket and the migration quota"
+action "make apply          # removes SmithDB's read access to the traces bucket"
 action "make init-values    # turns the migration off in the SmithDB values"
 action "make deploy         # removes the Job and the chart-managed TaskDB with its volume"

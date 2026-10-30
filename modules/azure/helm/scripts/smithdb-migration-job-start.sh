@@ -7,11 +7,10 @@
 # smithdb-migration-job-start.sh — Prepare the SmithDB migration Job, which backfills historical traces into SmithDB.
 #
 # Asks where TaskDB runs and how large the migration is, writes helm/values/langsmith-values-smithdb-migration.yaml,
-# and sets smithdb_migration_enabled and smithdb_migration_parallelism in terraform.tfvars (those lines only).
+# and sets smithdb_migration_enabled in terraform.tfvars (that line only).
 # A chart-managed TaskDB uses the smithdb-taskdb Secret, which make k8s-secrets copies from Key Vault.
 # An external TaskDB's connection settings go into the smithdb-taskdb-external Secret.
-# make apply then grants SmithDB read access to the trace-blob account and sizes the namespace quota,
-# and make deploy starts the Job.
+# make apply then grants SmithDB read access to the trace-blob account, and make deploy starts the Job.
 #
 # Honors LANGSMITH_INFRA_DIR and LANGSMITH_VALUES_DIR, as deploy.sh does.
 #
@@ -129,10 +128,6 @@ else
 fi
 _ask_int "Parallelism: migration pods running at once ($_pod_shape)" "$_suggested"
 _parallelism="$_REPLY"
-if (( _parallelism > 30 )); then
-  fail "Use 30 pods or fewer: above 30, the namespace quota for large goes over its limit. Nothing was changed."
-  exit 1
-fi
 if (( _parallelism > 20 )); then
   warn "Above about 20 pods, raise TaskDB CPU and memory instead of adding pods (chart guidance)"
 fi
@@ -196,12 +191,11 @@ else
 fi
 
 # Migration pod and TaskDB resources are not in this file: the SmithDB size
-# sets them, and Terraform sizes the namespace quota for the same values.
+# sets them.
 mkdir -p "$VALUES_DIR"
 {
   echo "# Written by make smithdb-migration-job-start; rerun it to change these answers."
   echo "# Migration pod and TaskDB resources come from the SmithDB size (langsmith-values-smithdb-sizing.yaml) and the chart defaults."
-  echo "# Keep parallelism equal to smithdb_migration_parallelism in terraform.tfvars; Terraform sizes the namespace quota from it."
   echo "smithdb:"
   echo "  migration:"
   echo "    job:"
@@ -231,14 +225,12 @@ info "If a migration pod fails, keep TaskDB and its PVC, delete only the failed 
 header "5. terraform.tfvars"
 _set_tfvar "smithdb_migration_enabled" "true"
 pass "smithdb_migration_enabled = true"
-_set_tfvar "smithdb_migration_parallelism" "$_parallelism"
-pass "smithdb_migration_parallelism = $_parallelism"
 
 header "Next"
 if [[ -n "${LANGSMITH_INFRA_DIR:-}" ]]; then
-  action "terraform apply in $LANGSMITH_INFRA_DIR   # grants SmithDB read access to the trace-blob account and sizes the namespace quota"
+  action "terraform apply in $LANGSMITH_INFRA_DIR   # grants SmithDB read access to the trace-blob account"
 else
-  action "make apply          # grants SmithDB read access to the trace-blob account (waits 300s) and sizes the namespace quota"
+  action "make apply          # grants SmithDB read access to the trace-blob account (waits 300s)"
 fi
 action "make init-values    # turns the migration on in the SmithDB values"
 action "make deploy         # starts the migration Job"

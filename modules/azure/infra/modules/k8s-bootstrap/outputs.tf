@@ -43,14 +43,12 @@ output "sandbox_juicefs_secret_name" {
   value       = one(kubernetes_secret_v1.sandbox_juicefs[*].metadata[0].name)
 }
 
-output "resource_quota_keys" {
-  description = "Resources the namespace ResourceQuota caps. No limits.* with sandboxes on."
-  value       = sort(keys(kubernetes_resource_quota_v1.langsmith.spec[0].hard))
-}
-
-output "limit_range_default_limits" {
-  description = "Default container limits the namespace LimitRange injects, or null with sandboxes on."
-  value       = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
+output "limit_range_defaults" {
+  description = "Default container requests and limits the namespace LimitRange injects. Limits are always null."
+  value = {
+    default_request = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default_request
+    default         = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
+  }
 }
 
 output "platform_backend_node_ingress" {
