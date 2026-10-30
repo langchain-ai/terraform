@@ -354,12 +354,20 @@ module "sandbox_eks" {
   vpc_id                      = local.vpc_id
   subnet_ids                  = local.private_subnets
   managed_node_group_defaults = var.eks_managed_node_group_defaults
-  managed_node_group          = local.sandbox_host_node_group
   cluster_addons              = var.eks_addons
   public_cluster_enabled      = var.enable_public_eks_cluster
   public_access_cidrs         = var.eks_public_access_cidrs
   cluster_enabled_log_types   = var.eks_cluster_enabled_log_types
   tags                        = merge(local.common_tags, { component = "sandbox" })
+
+  # The in-cluster sandbox-host node group's role is <base_name>-sandbox-host.
+  # Moving an install from sandbox_runtime_source = "in-cluster" to "external"
+  # creates this group while that one still exists, so this role needs its own
+  # name, or IAM refuses it (EntityAlreadyExists). An iam_role_name in
+  # sandbox_host_node_group_overrides still wins.
+  managed_node_group = merge(local.sandbox_host_node_group, {
+    iam_role_name = lookup(var.sandbox_host_node_group_overrides, "iam_role_name", "${local.sandbox_cluster_name}-host")
+  })
 }
 
 # sandbox-host listens on TCP 19190 on each sandbox node (host network). That
