@@ -1,0 +1,29 @@
+# Secret-bearing files — never commit.
+# (*.tfvars and *.tfstate are already covered repo-wide by the root .gitignore;
+#  these close the remaining gaps for this module. *.tfvars.example is tracked
+#  and is not matched by the *.tfvars rule.)
+
+# Environment / credential files
+.env
+.env.*
+credentials.json
+token.json
+
+# TLS material / private keys (e.g. certs supplied to create-tls-secret.sh --cert/--key)
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Local secret seed files written by infra/scripts/setup-env.sh before Key Vault exists
+.api_key_salt
+.jwt_secret
+.deployments_key
+.agent_builder_key
+.insights_key
+.polly_key
+
+# Kubeconfig that may be dumped locally
+kubeconfig
+*.kubeconfig
