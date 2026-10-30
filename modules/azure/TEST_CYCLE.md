@@ -110,7 +110,7 @@ Review the plan. Expected resource categories with `terraform.tfvars.minimum`:
 - Azure Blob storage account + container
 - Azure Key Vault, its RBAC role assignments, and two secrets (`postgres-admin-password`, `langsmith-license-key`)
 - cert-manager, KEDA, and Envoy Gateway Helm releases
-- Kubernetes namespace `langsmith` with its ServiceAccounts, ResourceQuota, LimitRange, NetworkPolicies and the `langsmith-license` secret
+- Kubernetes namespace `langsmith` with its ServiceAccounts, LimitRange, NetworkPolicies and the `langsmith-license` secret
 
 With external Postgres and Redis the plan also has the Postgres and Redis subnets, a
 PostgreSQL Flexible Server and an Azure Managed Redis with their private DNS zones and

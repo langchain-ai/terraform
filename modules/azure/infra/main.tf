@@ -2069,7 +2069,7 @@ module "keyvault" {
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
 # Connects to the AKS cluster and:
-#   1. Creates the langsmith namespace, service account, resource quota, network policies
+#   1. Creates the langsmith namespace, service account, network policies
 #   2. Installs cert-manager (TLS automation) and KEDA (autoscaling)
 #   3. Creates K8s secrets for PostgreSQL and Redis connection URLs
 #
