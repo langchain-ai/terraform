@@ -7,7 +7,8 @@
 # version, which KEDA keeps equal to its appVersion). Each refusal run breaks
 # one input. The map outputs are compared with tomap() literals, because a
 # bare { } is an object and == never treats the two as equal; empties use
-# length().
+# length(). The last two runs cover the NetworkPolicy that admits KEDA to the
+# PostgreSQL pods in the LangSmith namespace (each agent deployment's database).
 
 mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
@@ -228,4 +229,26 @@ run "refuses_a_dotless_host" {
   }
 
   expect_failures = [var.keda_image_registry]
+}
+
+run "keda_reaches_agent_postgres" {
+  command = plan
+
+  assert {
+    condition     = module.k8s_bootstrap.keda_postgres_ingress != null && module.k8s_bootstrap.keda_postgres_ingress.namespace == "keda" && tolist(module.k8s_bootstrap.keda_postgres_ingress.ports) == tolist(["TCP/5432"])
+    error_message = "With KEDA installed, a policy should admit namespace keda on TCP 5432 only, got ${jsonencode(module.k8s_bootstrap.keda_postgres_ingress)}"
+  }
+}
+
+run "no_keda_no_postgres_rule" {
+  command = plan
+
+  variables {
+    install_keda = false
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.keda_postgres_ingress == null
+    error_message = "With install_keda = false the module should create no KEDA policy"
+  }
 }
