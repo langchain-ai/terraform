@@ -10,7 +10,7 @@
 # SmithDB migration:       make smithdb-migration-job-start / smithdb-migration-job-end, then apply, init-values, deploy
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart test-license-key setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-chart-image-keys setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -55,6 +55,15 @@ test-quickstart: ## Unit-test the quickstart wizard's resume layer, --yes, and q
 
 test-license-key: ## Unit-test the license key check shared by setup-env, k8s-secrets and keyvault set (no Azure)
 	$(INFRA_DIR)/scripts/test-license-key.sh
+
+test-images-block: ## Unit-test the images: block init-values writes for a mirror (no Azure)
+	$(INFRA_DIR)/scripts/test-langsmith-images-block.sh
+
+test-values-stamp: ## Unit-test the stamp check that stops make deploy on a values file generated from other tfvars (no Azure)
+	$(INFRA_DIR)/scripts/test-values-stamp.sh
+
+test-chart-image-keys: ## Unit-test the parser deploy.sh reads the chart's images block with, under pipefail (no Azure)
+	$(INFRA_DIR)/scripts/test-chart-image-keys.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh
@@ -102,7 +111,6 @@ apply: ## terraform apply (infra) — three stages, each prompts for confirmatio
 	terraform -chdir=$(TF_DIR) apply $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
-		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_default_deny \
 		-target=module.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_allow_internal \
 		-target=module.k8s_bootstrap.kubernetes_secret_v1.postgres \

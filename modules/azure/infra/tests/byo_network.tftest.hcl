@@ -394,8 +394,9 @@ run "a_delegated_agic_subnet_plans_clean" {
   command = plan
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 }
 
@@ -412,8 +413,9 @@ run "an_undelegated_agic_subnet_warns" {
   }
 
   variables {
-    ingress_controller = "agic"
-    agic_subnet_id     = "${var.vnet_id}/subnets/agw"
+    ingress_controller     = "agic"
+    tls_certificate_source = "none"
+    agic_subnet_id         = "${var.vnet_id}/subnets/agw"
   }
 
   expect_failures = [check.agic_subnet_delegation]
@@ -992,5 +994,45 @@ run "an_attached_cluster_gets_the_sandbox_pool_when_pools_are_managed" {
   assert {
     condition     = tolist(local.aks_managed_node_pools["sandboxhost"].node_taints) == tolist(["sandbox.langsmith.com/host=true:NoSchedule"])
     error_message = "An attached cluster with existing_cluster_node_pools_managed = true did not get the tainted sandboxhost pool"
+  }
+}
+
+# The custom CA file checks apply to a cluster this module creates. An attached
+# cluster ignores aks_custom_ca_trust_certificate_files, so a file that is not
+# there must not block its plan.
+run "an_attached_cluster_skips_the_custom_ca_file_checks" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+        { name = "user", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/AKS" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                        = false
+    existing_cluster_name                 = "platform-aks"
+    existing_cluster_resource_group_name  = "platform-aks-rg"
+    aks_subnet_id                         = "${var.vnet_id}/subnets/aks"
+    aks_custom_ca_trust_certificate_files = ["tests/fixtures/does-not-exist.pem"]
+  }
+
+  assert {
+    condition     = module.aks.custom_ca_trust_certificates_base64 == null
+    error_message = "An attached cluster should set no custom CA trust certificates and run no file check, whatever the list names"
   }
 }

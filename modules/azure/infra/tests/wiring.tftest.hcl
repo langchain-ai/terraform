@@ -378,8 +378,9 @@ run "agic_with_overlay_warns" {
   command = plan
 
   variables {
-    ingress_controller = "agic"
-    aks_network_mode   = "overlay"
+    ingress_controller     = "agic"
+    aks_network_mode       = "overlay"
+    tls_certificate_source = "none"
   }
 
   expect_failures = [check.agic_with_overlay_unverified]
@@ -437,9 +438,6 @@ run "a_supplied_blob_zone_is_not_created_again" {
 }
 
 # ── SmithDB sizing ───────────────────────────────────────────────────────────
-# Quota figures are the extras k8s-bootstrap adds: once to requests, twice to
-# limits. Worked from the tier table in main.tf, so a table edit that changes
-# the sums shows up here.
 
 run "smithdb_sizing_follows_sizing_profile_minimum" {
   command = plan
@@ -470,10 +468,6 @@ run "smithdb_sizing_follows_sizing_profile_minimum" {
   assert {
     condition     = yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources.requests.cpu == "1"
     error_message = "minimal did not set explicit query resources"
-  }
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 5, memory_gi = 10, pods = 12 }
-    error_message = "minimal quota extra is not 5 CPU, 10 GiB, 12 pods"
   }
 }
 
@@ -515,13 +509,9 @@ run "smithdb_small_sets_the_tier_without_resources" {
     condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources)
     error_message = "small set explicit resources, which replace the chart tier"
   }
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
-    error_message = "small quota extra is not 27 CPU, 53 GiB, 12 pods"
-  }
 }
 
-run "smithdb_large_with_backfill_sets_replicas_and_quota" {
+run "smithdb_large_with_backfill_sets_replicas" {
   command = plan
 
   variables {
@@ -545,73 +535,6 @@ run "smithdb_large_with_backfill_sets_replicas_and_quota" {
     )
     error_message = "large did not set the query 4, ingestion 2, compactionWorker 4 HPA minimums"
   }
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 412, memory_gi = 904, pods = 34 }
-    error_message = "large with the backfill quota extra is not 412 CPU, 904 GiB, 34 pods"
-  }
-}
-
-# Each further migration pod adds its 8 / 32Gi and one pod. Requests decide
-# both: two more pods than the single-pod backfill.
-run "smithdb_backfill_quota_follows_the_migration_parallelism" {
-  command = plan
-
-  variables {
-    enable_smithdb                = true
-    availability_zones            = ["1", "2", "3"]
-    smithdb_sizing                = "small"
-    smithdb_ingestion_enabled     = true
-    smithdb_migration_enabled     = true
-    smithdb_migration_parallelism = 3
-  }
-
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 53, memory_gi = 153, pods = 22 }
-    error_message = "small with 3 migration pods did not give quota 53 CPU / 153 GiB / 22 pods"
-  }
-}
-
-# The largest pod count on the largest size stays inside the k8s-bootstrap
-# limits (1024 CPU, 2048 GiB, 400 pods), so the plan does not fail there.
-run "smithdb_large_backfill_at_the_parallelism_cap_fits_the_quota_limits" {
-  command = plan
-
-  variables {
-    enable_smithdb                = true
-    availability_zones            = ["1", "2", "3"]
-    smithdb_sizing                = "large"
-    smithdb_ingestion_enabled     = true
-    smithdb_migration_enabled     = true
-    smithdb_migration_parallelism = 30
-  }
-
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 644, memory_gi = 1832, pods = 63 }
-    error_message = "large with 30 migration pods did not give quota 644 CPU / 1832 GiB / 63 pods"
-  }
-  assert {
-    condition     = output.smithdb_quota_extra.cpu <= 1024 && output.smithdb_quota_extra.memory_gi <= 2048 && output.smithdb_quota_extra.pods <= 400
-    error_message = "large with 30 migration pods goes over a k8s-bootstrap quota limit"
-  }
-}
-
-# Without the backfill, the migration pod count does not change the quota.
-run "smithdb_migration_parallelism_needs_the_backfill" {
-  command = plan
-
-  variables {
-    enable_smithdb                = true
-    availability_zones            = ["1", "2", "3"]
-    smithdb_sizing                = "small"
-    smithdb_ingestion_enabled     = true
-    smithdb_migration_enabled     = false
-    smithdb_migration_parallelism = 3
-  }
-
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
-    error_message = "smithdb_migration_parallelism changed the quota while smithdb_migration_enabled = false"
-  }
 }
 
 run "smithdb_explicit_metastore_sku_wins" {
@@ -630,7 +553,7 @@ run "smithdb_explicit_metastore_sku_wins" {
   }
 }
 
-run "smithdb_off_adds_no_quota_or_values" {
+run "smithdb_off_adds_no_values" {
   command = plan
 
   variables {
@@ -641,10 +564,6 @@ run "smithdb_off_adds_no_quota_or_values" {
   assert {
     condition     = output.smithdb_helm_values == null && output.smithdb_sizing == null
     error_message = "enable_smithdb = false still produced SmithDB sizing or Helm values"
-  }
-  assert {
-    condition     = output.smithdb_quota_extra == { cpu = 0, memory_gi = 0, pods = 0 }
-    error_message = "enable_smithdb = false still added namespace quota headroom"
   }
 }
 

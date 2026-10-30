@@ -279,36 +279,6 @@ run "smithdb_migration_start_time_rejects_an_impossible_date" {
   expect_failures = [var.smithdb_migration_start_time]
 }
 
-run "smithdb_migration_parallelism_rejects_zero" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 0
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
-}
-
-run "smithdb_migration_parallelism_rejects_more_than_30" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 31
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
-}
-
-run "smithdb_migration_parallelism_rejects_a_fraction" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 1.5
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
-}
-
 # smithdb_migration_start_time has nullable = false, so null takes the default "".
 run "smithdb_null_start_time_keeps_the_chart_window" {
   command = plan
@@ -337,8 +307,8 @@ run "smithdb_disabled_ignores_the_metastore_tls_variables" {
   assert {
     condition = (
       output.smithdb_metastore_use_auth_proxy == null && output.smithdb_metastore_use_ssl == null &&
-      output.smithdb_metastore_tier == null && output.smithdb_helm_values == null && output.smithdb_quota_extra.cpu == 0
+      output.smithdb_metastore_tier == null && output.smithdb_helm_values == null
     )
-    error_message = "With SmithDB disabled, the metastore TLS outputs, the metastore tier, the Helm values, or the quota headroom are not empty"
+    error_message = "With SmithDB disabled, the metastore TLS outputs, the metastore tier, or the Helm values are not empty"
   }
 }

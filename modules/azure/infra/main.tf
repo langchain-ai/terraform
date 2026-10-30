@@ -448,17 +448,23 @@ locals {
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
-  # Customize via the environment/owner/cost_center variables.
+  # Customize via the environment/owner/cost_center/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
+  # Azure tag names are case-insensitive and merge() is not, so a built-in key
+  # is dropped when tags has it in any case: Environment replaces environment
+  # instead of sitting beside it.
   common_tags = merge(
-    {
-      environment = coalesce(var.environment, local.deployment_name, "dev")
-      project     = "langsmith"
-      managed_by  = "terraform"
-    },
-    var.owner != "" ? { owner = var.owner } : {},
-    var.cost_center != "" ? { cost_center = var.cost_center } : {}
+    { for k, v in merge(
+      {
+        environment = coalesce(var.environment, local.deployment_name, "dev")
+        project     = "langsmith"
+        managed_by  = "terraform"
+      },
+      var.owner != "" ? { owner = var.owner } : {},
+      var.cost_center != "" ? { cost_center = var.cost_center } : {},
+    ) : k => v if !contains([for t in keys(var.tags) : lower(t)], k) },
+    var.tags
   )
 }
 
@@ -980,6 +986,14 @@ resource "terraform_data" "validate_network" {
       error_message = "smithdb_cache_disk_throughput_mbps (${var.smithdb_cache_disk_throughput_mbps}) cannot exceed 0.25 MB/s per provisioned IOPS. Azure caps a Premium SSD v2 at 0.25 * smithdb_cache_disk_iops, which is ${var.smithdb_cache_disk_iops * 0.25} MB/s at the configured ${var.smithdb_cache_disk_iops} IOPS. Raise smithdb_cache_disk_iops or lower the throughput."
     }
 
+    # The SmithDB cache StorageClass hands the tags to the disk CSI driver as
+    # key=value,key=value. The driver splits on commas, then each pair on its
+    # first =, and fails every cache PVC on a pair it can't read.
+    precondition {
+      condition     = !var.enable_smithdb || alltrue([for k, v in local.common_tags : !strcontains(k, ",") && !strcontains(k, "=") && !strcontains(v, ",")])
+      error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, or cost_center."
+    }
+
     # SmithDB caches sit on Premium SSD v2, and in most regions that offer
     # availability zones a Premium SSD v2 disk only attaches to a zonal VM. An
     # empty availability_zones asks Azure to place the pool, which can leave the
@@ -1209,12 +1223,14 @@ resource "terraform_data" "validate_network" {
 
     # Each node takes a /24 from the pod range, so a small range caps the node
     # count the same way a small subnet does in node-subnet mode: the cluster
-    # starts, and the autoscaler stalls once the range is spent.
+    # starts, and the autoscaler stalls once the range is spent. Terraform 1.17
+    # renders error_message even when the condition holds, so the log() gets a
+    # floor of 1: an attached cluster with no managed pools totals 0 nodes.
     precondition {
       condition = !local.aks_overlay || local.aks_node_total <= local.aks_pod_cidr_node_capacity
       error_message = join(" ", [
         "aks_pod_cidr (${var.aks_pod_cidr}) holds ${local.aks_pod_cidr_node_capacity} /24 blocks, one per node, but the configured pools can reach ${local.aks_node_total} nodes (max_count + 1 surge node per pool).",
-        "Widen the range: a /${24 - ceil(log(local.aks_node_total, 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
+        "Widen the range: a /${24 - ceil(log(max(local.aks_node_total, 1), 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
       ])
     }
 
@@ -1344,6 +1360,15 @@ module "aks" {
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
   default_node_pool_os_sku    = var.aks_os_sku
+  # Internal CAs for every node's trust store, such as the one behind an image
+  # mirror. A change to the list replaces every node.
+  aks_custom_ca_trust_certificate_files = var.aks_custom_ca_trust_certificate_files
+
+  # Customer-managed keys for the node OS disks and the CSI data disks: set
+  # only at creation; the Reader grant on the set is the module's only with
+  # the flag, the platform team's otherwise.
+  disk_encryption_set_id           = var.aks_disk_encryption_set_id
+  disk_encryption_set_reader_grant = var.aks_disk_encryption_set_reader_grant
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
@@ -1402,10 +1427,14 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version                = var.envoy_gateway_version
-  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
-  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
-  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
+  envoy_gateway_version                          = var.envoy_gateway_version
+  envoy_gateway_image_registry                   = var.envoy_gateway_image_registry
+  envoy_gateway_image_registry_keeps_source_host = var.envoy_gateway_image_registry_keeps_source_host
+  envoy_gateway_chart_repository                 = var.envoy_gateway_chart_repository
+  envoy_gateway_chart_repository_username        = var.envoy_gateway_chart_repository_username
+  envoy_gateway_chart_repository_password        = var.envoy_gateway_chart_repository_password
+  envoy_proxy_default_image                      = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name           = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
@@ -1484,6 +1513,26 @@ locals {
   # The two updates Azure and the provider apply in place.
   aks_dataplane_upgrade = try(local.aks_live.dataplane, null) == "azure" && local.aks_network_dataplane == "cilium"
   aks_policy_upgrade    = try(local.aks_live.policy, null) == "none" || (contains(["azure", "calico"], try(local.aks_live.policy, "")) && local.aks_network_policy == "cilium")
+}
+
+# ── AKS disk encryption set guard ─────────────────────────────────────────────
+# The cluster's disk encryption set is fixed at creation: the provider applies a
+# change, adding one included, by replacing the cluster and everything installed
+# on it. module.aks reads the set Azure reports for the cluster at plan time
+# (null until the cluster exists), and a value that differs stops the plan.
+locals {
+  aks_live_disk_encryption_set_id = var.create_cluster ? module.aks.live_disk_encryption_set_id : null
+}
+
+resource "terraform_data" "aks_disk_encryption_set_guard" {
+  input = lower(var.aks_disk_encryption_set_id)
+
+  lifecycle {
+    precondition {
+      condition     = local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == lower(var.aks_disk_encryption_set_id)
+      error_message = "aks_disk_encryption_set_id is ${var.aks_disk_encryption_set_id == "" ? "empty" : "\"${var.aks_disk_encryption_set_id}\""}, and the cluster already exists with ${local.aks_live_disk_encryption_set_id == null || local.aks_live_disk_encryption_set_id == "" ? "no disk encryption set" : "disk encryption set \"${local.aks_live_disk_encryption_set_id}\""}. The set is fixed at creation, and the provider would apply this by replacing the cluster and everything installed on it. Revert the value to keep the cluster as it is, or build a new cluster with the set and move the release to it."
+    }
+  }
 }
 
 resource "terraform_data" "aks_network_guard" {
@@ -1780,15 +1829,53 @@ module "postgres" {
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
+  # Customer-managed key, set only at creation; the geo pair with geo-redundant backup.
+  customer_managed_key_id                     = var.postgres_customer_managed_key_id
+  customer_managed_key_identity_id            = var.postgres_customer_managed_key_identity_id
+  geo_backup_customer_managed_key_id          = var.postgres_geo_backup_customer_managed_key_id
+  geo_backup_customer_managed_key_identity_id = var.postgres_geo_backup_customer_managed_key_identity_id
+
   # Create the dedicated langsmith_fleet database when standalone Fleet is enabled.
   enable_fleet = var.enable_fleet
 
   tags = local.common_tags
 }
 
+# The server's encryption mode is fixed at creation, and the provider applies a
+# change to postgres_customer_managed_key_id by replacing the server, which
+# destroys the database. Read the live server and refuse a plan whose key
+# presence differs from it. Presence only, so rotating to another key or
+# version stays allowed. Server names are unique across Azure, so the name
+# alone finds it. An absent server, and a mocked provider's output, read as
+# null, which passes.
+data "azapi_resource_list" "postgres_servers" {
+  count     = var.postgres_source == "external" ? 1 : 0
+  type      = "Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    servers = "value[?name=='${local.postgres_name}'].{id: id, name: name, data_encryption: properties.dataEncryption.type}"
+  }
+}
+
+locals {
+  postgres_live_server  = var.postgres_source == "external" ? try(data.azapi_resource_list.postgres_servers[0].output.servers[0], null) : null
+  postgres_live_has_key = local.postgres_live_server == null ? null : try(local.postgres_live_server.data_encryption, "") == "AzureKeyVault"
+}
+
+resource "terraform_data" "postgres_customer_managed_key_guard" {
+  input = var.postgres_customer_managed_key_id != ""
+
+  lifecycle {
+    precondition {
+      condition     = local.postgres_live_has_key == null ? true : local.postgres_live_has_key == (var.postgres_customer_managed_key_id != "")
+      error_message = "postgres_customer_managed_key_id is ${var.postgres_customer_managed_key_id == "" ? "empty" : "set"}, and the PostgreSQL server ${local.postgres_name} already exists ${local.postgres_live_has_key == true ? "with a customer-managed key" : "with the service-managed key"}. The key is fixed at creation, and the provider would apply this by replacing the server and destroying its data. Revert the value to keep the server as it is, or move to a new server created with the key by the restore path in README \"Customer-managed keys\"."
+    }
+  }
+}
+
 # ── SmithDB sizing ───────────────────────────────────────────────────────────
 # One size sets the chart resource tier, the replicas, the default metastore
-# SKU, the namespace quota headroom, and the smithdb_helm_values output.
+# SKU, and the smithdb_helm_values output.
 
 locals {
   smithdb_sizing_by_profile = {
@@ -1799,42 +1886,12 @@ locals {
     "production-large" = "large"
   }
 
-  # sizing_profile has no validation of its own, so an unlisted profile falls
-  # back to small, the same tier the chart picks when nothing is set.
   smithdb_sizing  = coalesce(var.smithdb_sizing, lookup(local.smithdb_sizing_by_profile, var.sizing_profile, "small"))
   smithdb_minimal = local.smithdb_sizing == "minimal"
 
   # The chart has the small, medium, and large tiers. minimal uses small with
   # explicit resources.
   smithdb_resource_tier = local.smithdb_minimal ? "small" : local.smithdb_sizing
-
-  # Per-replica resources for each chart tier. Copied from chart 0.17.0-rc.42,
-  # templates/_helpers.tpl, "langsmith.smithdb.tierResources". The chart sets
-  # requests equal to limits. Update this table with the chart.
-  smithdb_tiers = {
-    small = {
-      query            = { cpu = "4", memory = "8Gi" }
-      ingestion        = { cpu = "4", memory = "8Gi" }
-      compactionWorker = { cpu = "8", memory = "16Gi" }
-      compaction       = { cpu = "2", memory = "4Gi" }
-      clusterManager   = { cpu = "250m", memory = "256Mi" }
-    }
-    medium = {
-      query            = { cpu = "28", memory = "48Gi" }
-      ingestion        = { cpu = "16", memory = "32Gi" }
-      compactionWorker = { cpu = "16", memory = "32Gi" }
-      compaction       = { cpu = "4", memory = "8Gi" }
-      clusterManager   = { cpu = "250m", memory = "256Mi" }
-    }
-    large = {
-      query            = { cpu = "28", memory = "50Gi" }
-      ingestion        = { cpu = "56", memory = "150Gi" }
-      compactionWorker = { cpu = "28", memory = "50Gi" }
-      compaction       = { cpu = "8", memory = "16Gi" }
-      clusterManager   = { cpu = "2", memory = "2Gi" }
-    }
-  }
-  smithdb_tier = local.smithdb_tiers[local.smithdb_resource_tier]
 
   # Replicas for each tier, from the SmithDB sizing table in the LangSmith
   # self-hosted docs. The chart tier sets only the per-replica resources, so the
@@ -1878,66 +1935,6 @@ locals {
     large   = "MO_Standard_E8ds_v5"
   }
   smithdb_metastore_sku_name = coalesce(var.smithdb_metastore_sku_name, local.smithdb_metastore_sku_defaults[local.smithdb_sizing])
-
-  # SmithDB namespace quota headroom, from the resolved resources. It covers the
-  # tier replicas of each component, one surge copy of the largest pod (a
-  # rolling update starts the new pod first), and, with the backfill, each
-  # migration pod (smithdb_migration_parallelism) and the taskdb. HPA scale-out
-  # above the tier replicas has only the surge room. CPU is in millicores and
-  # memory in MiB, so the sums are exact.
-  smithdb_quota_inputs = merge(
-    {
-      for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
-        requests = { cpu = t.cpu, memory = t.memory }
-        limits   = { cpu = t.cpu, memory = t.memory }
-      }
-    },
-    {
-      # Chart values.yaml defaults for smithdb.migration.job.resources and
-      # smithdb.migration.taskdb.postgres.statefulSet.resources.
-      migration_job = local.smithdb_minimal ? local.smithdb_minimal_resources.migration_job : {
-        requests = { cpu = "8", memory = "32Gi" }
-        limits   = { cpu = "8", memory = "32Gi" }
-      }
-      taskdb = {
-        requests = { cpu = "2", memory = "4Gi" }
-        limits   = { cpu = "4", memory = "8Gi" }
-      }
-    },
-  )
-
-  # "250m" and "4" to millicores, "256Mi" and "8Gi" to MiB.
-  smithdb_quota_numbers = {
-    for name, r in local.smithdb_quota_inputs : name => merge([
-      for side in ["requests", "limits"] : {
-        "${side}_cpu_m"     = tonumber(trimsuffix(r[side].cpu, "m")) * (endswith(r[side].cpu, "m") ? 1 : 1000)
-        "${side}_memory_mi" = tonumber(trimsuffix(trimsuffix(r[side].memory, "Gi"), "Mi")) * (endswith(r[side].memory, "Gi") ? 1024 : 1)
-      }
-    ]...)
-  }
-  smithdb_quota_total = {
-    for k in ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"] : k => (
-      sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * local.smithdb_quota_numbers[c][k]]) +
-      max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) +
-      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
-    )
-  }
-
-  # k8s-bootstrap adds the extra once to requests and twice to limits, so it
-  # must cover the requests total and half of the limits total.
-  smithdb_quota_extra_cpu = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_cpu_m / 1000), ceil(local.smithdb_quota_total.limits_cpu_m / 2000)
-  ) : 0
-  smithdb_quota_extra_memory_gi = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_memory_mi / 1024), ceil(local.smithdb_quota_total.limits_memory_mi / 2048)
-  ) : 0
-
-  # The SmithDB pods at the tier replicas plus the metastore migration hook,
-  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
-  # and its taskdb StatefulSet, plus 1 for each further migration pod.
-  smithdb_quota_extra_pods = var.enable_smithdb ? (
-    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
-  ) : 0
 
   # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
   # to helm/values/langsmith-values-smithdb-sizing.yaml. The cache StorageClass,
@@ -2018,6 +2015,9 @@ module "smithdb" {
   storage_account_name = local.smithdb_storage_name
   replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
+
+  shared_access_key_enabled = var.smithdb_storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
 
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
   # metastore's PostgreSQL zone.
@@ -2188,6 +2188,9 @@ module "blob" {
 
   replication_type = var.storage_replication_type
 
+  shared_access_key_enabled = var.storage_shared_access_key_enabled
+  allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
+
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days
   ttl_long_days  = var.blob_ttl_long_days
@@ -2202,6 +2205,10 @@ module "blob" {
   # via var.storage_allowed_ips.
   allowed_subnet_ids = [local.aks_subnet_id]
   allowed_ips        = var.storage_allowed_ips
+
+  # Customer-managed key; Azure accepts it on an existing account too.
+  customer_managed_key_id          = var.storage_customer_managed_key_id
+  customer_managed_key_identity_id = var.storage_customer_managed_key_identity_id
 
   # When enabled, the public endpoint is turned off and the firewall above
   # becomes inert. It stays declared so disabling the endpoint restores a
@@ -2347,7 +2354,7 @@ module "keyvault" {
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
 # Connects to the AKS cluster and:
-#   1. Creates the langsmith namespace, service account, resource quota, network policies
+#   1. Creates the langsmith namespace, service account, network policies
 #   2. Installs cert-manager (TLS automation) and KEDA (autoscaling)
 #   3. Creates K8s secrets for PostgreSQL and Redis connection URLs
 #
@@ -2387,11 +2394,7 @@ module "k8s_bootstrap" {
   smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
-
-  # SmithDB's pods on top of the base namespace quota. Zero when disabled.
-  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
-  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
-  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+  tags                             = local.common_tags
 
   # Sandboxes. No account key: the format Job and sandbox-host reach Blob
   # through workload identity. AMR serves database 0 only.
@@ -2444,6 +2447,10 @@ module "k8s_bootstrap" {
   smithdb_service_account_name       = local.smithdb_service_account
   smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
+  # Pull Secret for the pods the operator creates: agent pods run as
+  # langsmith-ksa, each deployment's Redis and PostgreSQL as the default account.
+  langsmith_image_pull_secret_name = var.langsmith_image_pull_secret_name
+
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # infra/scripts/create-k8s-secrets.sh from Azure Key Vault.
@@ -2453,6 +2460,15 @@ module "k8s_bootstrap" {
   # possible on the attach path. Helm cannot adopt a release it does not own.
   install_cert_manager = var.install_cert_manager
   install_keda         = var.install_keda
+
+  # KEDA's images and chart from a mirror. Composed paths are in the
+  # keda_images output.
+  keda_image_registry                   = var.keda_image_registry
+  keda_image_registry_keeps_source_host = var.keda_image_registry_keeps_source_host
+  keda_image_pull_secret_name           = var.keda_image_pull_secret_name
+  keda_chart_repository                 = var.keda_chart_repository
+  keda_chart_repository_username        = var.keda_chart_repository_username
+  keda_chart_repository_password        = var.keda_chart_repository_password
 
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and

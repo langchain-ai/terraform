@@ -36,6 +36,33 @@ locals {
       object_prefix  = ""
     }
   }
+  migration_source_blob_statements = length(var.workload_migration_source_blob_bucket_arns) == 0 ? [] : concat([
+    {
+      Sid      = "ReadMigrationSourceBlobObjects"
+      Effect   = "Allow"
+      Action   = ["s3:GetObject"]
+      Resource = [for arn in var.workload_migration_source_blob_bucket_arns : "${arn}/*"]
+    },
+    {
+      Sid      = "ListMigrationSourceBlobBuckets"
+      Effect   = "Allow"
+      Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
+      Resource = var.workload_migration_source_blob_bucket_arns
+    }
+    ], length(var.workload_migration_source_blob_kms_key_arns) == 0 ? [] : [{
+      Sid      = "DecryptMigrationSourceBlobObjects"
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt"]
+      Resource = var.workload_migration_source_blob_kms_key_arns
+      Condition = {
+        StringLike = {
+          "kms:EncryptionContext:aws:s3:arn" = concat(
+            var.workload_migration_source_blob_bucket_arns,
+            [for arn in var.workload_migration_source_blob_bucket_arns : "${arn}/*"]
+          )
+        }
+      }
+  }])
   s3_statements = { for key, permission in local.s3_permissions : key => [
     {
       Sid       = "BucketAccess"
@@ -99,6 +126,22 @@ locals {
         Action    = ["cloudwatch:GetMetricData"]
         Resource  = ["*"]
         Condition = local.regional_condition
+      },
+      {
+        Sid       = "ReadMigrationInventory"
+        Effect    = "Allow"
+        Action    = ["s3:GetObject"]
+        Resource  = ["arn:${local.partition}:s3:::*-smithdb-blob/byoc-migration/*"]
+        Condition = local.s3_condition
+      },
+      {
+        Sid      = "ListMigrationInventory"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = ["arn:${local.partition}:s3:::*-smithdb-blob"]
+        Condition = merge(local.s3_condition, {
+          StringLike = { "s3:prefix" = "byoc-migration/*" }
+        })
       }
       ], [
       {
@@ -115,8 +158,34 @@ locals {
         Resource = [for region in sort(tolist(var.regions)) :
           "arn:${local.partition}:ecr:${region}:${local.artifact_account_id}:repository/byoc-smithbox-*"
         ]
+      },
+      {
+        Sid      = "AssumeSandboxECRRoles"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = {
+          StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" }
+          Null         = { "sts:ExternalId" = "false" }
+        }
+      },
+      {
+        Sid       = "TagSandboxECRRoleSessions"
+        Effect    = "Allow"
+        Action    = ["sts:TagSession"]
+        Resource  = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = { StringEquals = { "iam:ResourceTag/LangSmithSandboxECR" = "true" } }
       }
-    ])
+      ], [{
+        Sid    = "EngineBedrockInference"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
+        Resource = [
+          "arn:${local.partition}:bedrock:*::foundation-model/*",
+          "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/*",
+          "arn:${local.partition}:bedrock:*:${local.account_id}:application-inference-profile/*"
+        ]
+    }], local.migration_source_blob_statements)
     postgres-setup-iam-role = local.setup_statements["postgres-setup-iam-role"]
     smithdb-setup-iam-role  = local.setup_statements["smithdb-setup-iam-role"]
     smithdb-iam-role = concat(local.s3_statements["smithdb-iam-role"], [
@@ -213,14 +282,39 @@ locals {
     ]
   }
   template_vars = {
-    account_id    = local.account_id
-    partition     = local.partition
-    regions_json  = jsonencode(sort(tolist(var.regions)))
-    node_role_arn = local.role_arns["karpenter-node-role"]
+    account_id            = local.account_id
+    partition             = local.partition
+    regions_json          = jsonencode(sort(tolist(var.regions)))
+    node_role_arn         = local.role_arns["karpenter-node-role"]
+    instance_profile_name = var.karpenter_instance_profile_name
   }
+  karpenter_policy_base = jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars))
+  ebs_kms_condition = {
+    StringEquals = { "kms:ViaService" = [for region in sort(tolist(var.regions)) : "ec2.${region}.amazonaws.com"] }
+  }
+  ebs_kms_statements = [for statement in [
+    {
+      Sid       = "AllowVolumeKMS"
+      Effect    = "Allow"
+      Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext"]
+      Resource  = var.ebs_kms_key_arns
+      Condition = local.ebs_kms_condition
+    },
+    {
+      Sid       = "AllowVolumeKMSGrants"
+      Effect    = "Allow"
+      Action    = ["kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant"]
+      Resource  = var.ebs_kms_key_arns
+      Condition = merge(local.ebs_kms_condition, { Bool = { "kms:GrantIsForAWSResource" = "true" } })
+    }
+  ] : statement if length(var.ebs_kms_key_arns) > 0]
+  karpenter_policy = jsonencode(merge(local.karpenter_policy_base, {
+    Statement = concat(local.karpenter_policy_base.Statement, local.ebs_kms_statements)
+  }))
   inline_policies = merge(
     { for key, statements in local.inline_statements : key => jsonencode({ Version = "2012-10-17", Statement = statements }) },
-    { lbc-role = jsonencode(jsondecode(templatefile("${path.module}/policies/load_balancer_controller.json.tftpl", local.template_vars))) }
+    { lbc-role = jsonencode(jsondecode(templatefile("${path.module}/policies/load_balancer_controller.json.tftpl", local.template_vars))) },
+    { for key, statements in { ebs-csi-role = local.ebs_kms_statements } : key => jsonencode({ Version = "2012-10-17", Statement = statements }) if length(statements) > 0 }
   )
 }
 
@@ -239,16 +333,16 @@ resource "aws_iam_role_policy" "this" {
 }
 
 resource "aws_iam_policy" "karpenter" {
-  name        = "byoc-smith-karpenter-controller-policy"
+  name        = var.karpenter_controller_policy_name
   path        = "/"
   description = "Customer-owned shared LangSmith Karpenter policy for a pre-created instance profile"
-  policy      = jsonencode(jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars)))
+  policy      = local.karpenter_policy
   tags        = local.tags
 
   lifecycle {
     precondition {
-      condition     = length(jsonencode(jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars)))) <= 6144
-      error_message = "Karpenter policy exceeds IAM's 6,144-character managed-policy limit. Reduce configured regions."
+      condition     = length(local.karpenter_policy) <= 6144
+      error_message = "Karpenter policy exceeds IAM's 6,144-character managed-policy limit. Reduce configured regions or KMS keys."
     }
   }
 }

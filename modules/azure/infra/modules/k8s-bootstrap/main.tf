@@ -54,10 +54,25 @@ resource "kubernetes_namespace_v1" "langsmith" {
   }
 }
 
-# ── Service Account (Workload Identity) ───────────────────────────────────────
-# langsmith-ksa is used by LangSmith pods and LGP operator deployments.
-# The azure.workload.identity/client-id annotation binds it to the managed
-# identity that has Storage Blob Data Contributor on the blob account.
+# ── Service Accounts (Workload Identity, pull Secret) ─────────────────────────
+# langsmith-ksa is the account the operator's agent pods run as. It carries
+# the blob identity's client-ID annotation, but that grants nothing: there is
+# no federated credential for it (k8s-cluster's
+# service_accounts_for_workload_identity) and the agent template sets no
+# azure.workload.identity/use label. Keep it that way: federating it would give
+# every agent's code Storage Blob Data Contributor on the blob account.
+#
+# With langsmith_image_pull_secret_name set, every account here carries the
+# Secret as imagePullSecrets. The chart's own pods pull with
+# images.imagePullSecrets from the values file; the pods the operator creates
+# for each deployment do not, and run as langsmith-ksa (the agent pod) or as
+# the namespace's default account (its Redis and PostgreSQL). The provider
+# reads imagePullSecrets back, so a Secret attached by hand is removed at the
+# next apply; declared here, it stays.
+
+locals {
+  langsmith_image_pull_secrets = var.langsmith_image_pull_secret_name == "" ? [] : [var.langsmith_image_pull_secret_name]
+}
 
 resource "kubernetes_service_account_v1" "langsmith" {
   metadata {
@@ -65,6 +80,13 @@ resource "kubernetes_service_account_v1" "langsmith" {
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
     annotations = {
       "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
+    }
+  }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
     }
   }
 }
@@ -79,6 +101,13 @@ resource "kubernetes_service_account_v1" "backend" {
       "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
     }
   }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
 }
 
 resource "kubernetes_service_account_v1" "smithdb" {
@@ -91,6 +120,41 @@ resource "kubernetes_service_account_v1" "smithdb" {
       "azure.workload.identity/client-id" = var.smithdb_managed_identity_client_id
     }
   }
+
+  dynamic "image_pull_secret" {
+    for_each = local.langsmith_image_pull_secrets
+    content {
+      name = image_pull_secret.value
+    }
+  }
+}
+
+# Kubernetes creates the default service account in the namespace. With a pull
+# Secret set, the module adopts it (the provider's resource for exactly that)
+# and attaches the Secret, because the operator's Redis and PostgreSQL pods run
+# as it. Clearing the setting destroys the resource, which deletes the account;
+# Kubernetes recreates it, without the Secret, within seconds.
+resource "kubernetes_default_service_account_v1" "langsmith" {
+  count = var.langsmith_image_pull_secret_name == "" ? 0 : 1
+
+  metadata {
+    name      = "default"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  image_pull_secret {
+    name = var.langsmith_image_pull_secret_name
+  }
+}
+
+locals {
+  # The accounts that carry the pull Secret, for the output and the tests.
+  langsmith_image_pull_secret_service_accounts = var.langsmith_image_pull_secret_name == "" ? [] : compact([
+    "langsmith-ksa",
+    var.backend_service_account_name,
+    var.enable_smithdb ? var.smithdb_service_account_name : "",
+    "default",
+  ])
 }
 
 # SmithDB's disk-backed caches use per-pod generic ephemeral PVCs. Premium SSD
@@ -109,52 +173,28 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
   volume_binding_mode    = "WaitForFirstConsumer"
   allow_volume_expansion = true
 
-  parameters = {
-    skuName           = "PremiumV2_LRS"
-    cachingMode       = "None"
-    DiskIOPSReadWrite = tostring(var.smithdb_cache_disk_iops)
-    DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
-  }
-}
-
-# ── Resource Quota ────────────────────────────────────────────────────────────
-# Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
-# deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
-# Base: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods. The
-# resource_quota_extra_* inputs add SmithDB's pods on top, once to requests and
-# twice to limits, so a plain install keeps the base figures.
-#
-# With sandboxes on, the quota caps requests only. sandbox-host runs Firecracker
-# VMs in child cgroups beneath its own pod cgroup, so a container limit would cap
-# every sandbox on the node, and a limits.* quota would force one onto it.
-
-resource "kubernetes_resource_quota_v1" "langsmith" {
-  metadata {
-    name      = "langsmith-quota"
-    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
-  }
-
-  spec {
-    hard = merge({
-      "requests.cpu"    = tostring(40 + var.resource_quota_extra_cpu)
-      "requests.memory" = "${80 + var.resource_quota_extra_memory_gi}Gi"
-      pods              = tostring(200 + var.resource_quota_extra_pods)
-      }, var.enable_sandboxes ? {} : {
-      "limits.cpu"    = tostring(80 + var.resource_quota_extra_cpu * 2)
-      "limits.memory" = "${160 + var.resource_quota_extra_memory_gi * 2}Gi"
-    })
-  }
+  # The disk CSI driver creates these disks in the node resource group, outside
+  # Terraform, and tags them only from the tags parameter (key1=val1,key2=val2),
+  # not from the cluster. Kubernetes refuses parameter updates, so a tag change
+  # replaces the StorageClass; disks already provisioned keep their old tags.
+  parameters = merge(
+    {
+      skuName           = "PremiumV2_LRS"
+      cachingMode       = "None"
+      DiskIOPSReadWrite = tostring(var.smithdb_cache_disk_iops)
+      DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
+    },
+    length(var.tags) > 0 ? { tags = join(",", [for k, v in var.tags : "${k}=${v}"]) } : {},
+  )
 }
 
 # ── Limit Range ───────────────────────────────────────────────────────────────
-# Required companion to the ResourceQuota above: because the quota's `hard` includes
-# requests/limits, Kubernetes forces EVERY pod to declare them. Some chart components
-# (e.g. the bundled Postgres/Redis StatefulSets for the standalone insights/polly/fleet
-# agent features) ship without resource stanzas, so without defaults they're rejected
-# with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
-# This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
-# With sandboxes on it supplies requests only: a default 1 CPU limit lands below
-# sandbox-host's 2 CPU request, and the API server rejects the pod.
+# Gives a container that declares no requests 250m CPU and 256Mi, so the
+# scheduler has a figure to place it on. Some chart components, such as the
+# bundled Postgres and Redis StatefulSets for the insights, polly, and fleet
+# agent features, ship without resource stanzas. No default limits: a limit
+# would cap a pod that sets none, and sandbox-host runs Firecracker VMs inside
+# its own pod cgroup.
 resource "kubernetes_limit_range_v1" "langsmith" {
   metadata {
     name      = "langsmith-defaults"
@@ -164,12 +204,11 @@ resource "kubernetes_limit_range_v1" "langsmith" {
   spec {
     limit {
       type = "Container"
-      default = var.enable_sandboxes ? null : {
-        cpu    = "1"
-        memory = "1Gi"
-      }
+      # 250m covers an unsized container's startup CPU, so the scheduler stops
+      # packing more of them onto a node than it can feed. A LimitRange applies
+      # at admission: running pods keep their old request until they restart.
       default_request = {
-        cpu    = "100m"
+        cpu    = "250m"
         memory = "256Mi"
       }
     }
@@ -538,6 +577,30 @@ resource "helm_release" "cert_manager" {
 # ── KEDA ──────────────────────────────────────────────────────────────────────
 # Kubernetes Event-Driven Autoscaling. Scales LangSmith queue workers
 # based on Redis queue depth.
+#
+# With keda_image_registry, the chart's global.image.registry puts the mirror
+# in front of each image's repository, whose default carries the ghcr.io host
+# (ghcr.io/kedacore/<name>), so the pull is <registry>/ghcr.io/kedacore/<name>.
+# keda_image_registry_keeps_source_host = false drops that segment by setting
+# the three repositories to kedacore/<name>. The tag is the chart's appVersion,
+# which KEDA keeps equal to the chart version. local.keda_images composes the
+# same paths for the keda_images output, so a plan shows what the nodes pull.
+locals {
+  keda_mirror       = var.install_keda && var.keda_image_registry != ""
+  keda_image_prefix = local.keda_mirror ? (var.keda_image_registry_keeps_source_host ? "${var.keda_image_registry}/ghcr.io/kedacore/" : "${var.keda_image_registry}/kedacore/") : "ghcr.io/kedacore/"
+  keda_images = var.install_keda ? {
+    for name in ["keda", "keda-metrics-apiserver", "keda-admission-webhooks"] : name => "${local.keda_image_prefix}${name}:${var.keda_version}"
+  } : {}
+  keda_mirror_sets = merge(
+    local.keda_mirror ? { "global.image.registry" = var.keda_image_registry } : {},
+    local.keda_mirror && !var.keda_image_registry_keeps_source_host ? {
+      "image.keda.repository"             = "kedacore/keda"
+      "image.metricsApiServer.repository" = "kedacore/keda-metrics-apiserver"
+      "image.webhooks.repository"         = "kedacore/keda-admission-webhooks"
+    } : {},
+    var.install_keda && var.keda_image_pull_secret_name != "" ? { "imagePullSecrets[0].name" = var.keda_image_pull_secret_name } : {},
+  )
+}
 
 resource "helm_release" "keda" {
   count = var.install_keda ? 1 : 0
@@ -545,11 +608,14 @@ resource "helm_release" "keda" {
   name             = "keda"
   namespace        = "keda"
   create_namespace = true
-  repository       = "https://kedacore.github.io/charts"
-  chart            = "keda"
-  version          = var.keda_version
-  wait             = true
-  wait_for_jobs    = true
+  repository       = var.keda_chart_repository
+  # A mirror behind a login takes the two; null keeps the fetch anonymous.
+  repository_username = var.keda_chart_repository_username != "" ? var.keda_chart_repository_username : null
+  repository_password = var.keda_chart_repository_password != "" ? var.keda_chart_repository_password : null
+  chart               = "keda"
+  version             = var.keda_version
+  wait                = true
+  wait_for_jobs       = true
 
   set {
     name  = "resources.operator.requests.cpu"
@@ -582,5 +648,14 @@ resource "helm_release" "keda" {
   set {
     name  = "resources.metricServer.limits.memory"
     value = "512Mi"
+  }
+
+  # The mirror, the repository layout and the pull Secret, only when set.
+  dynamic "set" {
+    for_each = local.keda_mirror_sets
+    content {
+      name  = set.key
+      value = set.value
+    }
   }
 }

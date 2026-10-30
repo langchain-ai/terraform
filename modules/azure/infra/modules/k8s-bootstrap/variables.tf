@@ -161,10 +161,22 @@ variable "smithdb_managed_identity_client_id" {
   default     = ""
 }
 
+variable "langsmith_image_pull_secret_name" {
+  type        = string
+  description = "Name of an existing kubernetes.io/dockerconfigjson Secret in the LangSmith namespace, attached as imagePullSecrets to the service accounts this module creates and to the namespace's default account. Empty attaches nothing."
+  default     = ""
+}
+
 variable "smithdb_cache_storage_class_name" {
   type        = string
   description = "Name of the StorageClass created for SmithDB cache volumes."
   default     = "smithdb-cache-premium-v2"
+}
+
+variable "tags" {
+  type        = map(string)
+  description = "Azure tags for the managed disks the SmithDB cache StorageClass provisions."
+  default     = {}
 }
 
 variable "smithdb_cache_disk_iops" {
@@ -177,41 +189,6 @@ variable "smithdb_cache_disk_throughput" {
   type        = number
   description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume."
   default     = 1000
-}
-
-variable "resource_quota_extra_cpu" {
-  type        = number
-  description = "Additional CPU added to the LangSmith namespace ResourceQuota, once on the requests side and twice on the limits side. The root sizes it for SmithDB. Zero keeps the base quota."
-  default     = 0
-
-  # SmithDB large with the backfill needs 414.
-  validation {
-    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 1024
-    error_message = "resource_quota_extra_cpu must be between 0 and 1024. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
-  }
-}
-
-variable "resource_quota_extra_memory_gi" {
-  type        = number
-  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
-  default     = 0
-
-  # SmithDB large with the backfill needs 906.
-  validation {
-    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 2048
-    error_message = "resource_quota_extra_memory_gi must be between 0 and 2048."
-  }
-}
-
-variable "resource_quota_extra_pods" {
-  type        = number
-  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
-  default     = 0
-
-  validation {
-    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
-    error_message = "resource_quota_extra_pods must be between 0 and 400."
-  }
 }
 
 # ── Application secrets ───────────────────────────────────────────────────────
@@ -289,7 +266,7 @@ variable "install_keda" {
 
 variable "keda_version" {
   type        = string
-  description = "KEDA Helm chart version"
+  description = "KEDA Helm chart version. KEDA's chart and application versions coincide, so this is also the image tag."
   default     = "2.14.0"
 }
 
@@ -297,7 +274,7 @@ variable "keda_version" {
 
 variable "enable_sandboxes" {
   type        = bool
-  description = "Shape the namespace for sandbox-host: the quota and LimitRange drop CPU and memory limits, the node subnet reaches platform-backend's API port where the policy engine is not Cilium, and the JuiceFS config Secret is created."
+  description = "Shape the namespace for sandbox-host: the node subnet reaches platform-backend's API port where the policy engine is not Cilium, and the JuiceFS config Secret is created."
   default     = false
 }
 
@@ -342,4 +319,41 @@ variable "node_subnet_cidrs" {
   type        = list(string)
   description = "Address prefixes of the AKS node subnet, admitted to platform-backend's API port when sandboxes are on and the engine is not cilium."
   default     = []
+}
+
+variable "keda_image_registry" {
+  type        = string
+  description = "Mirror of ghcr.io for KEDA's images, host with optional port and path. Validated in the root module. Empty pulls from ghcr.io."
+  default     = ""
+}
+
+variable "keda_image_registry_keeps_source_host" {
+  type        = bool
+  description = "Whether the mirror keeps ghcr.io as the first path segment (<registry>/ghcr.io/kedacore/...) or serves ghcr.io's paths directly (<registry>/kedacore/...)."
+  default     = true
+}
+
+variable "keda_image_pull_secret_name" {
+  type        = string
+  description = "Name of an existing kubernetes.io/dockerconfigjson Secret in the keda namespace for KEDA's pods. Empty pulls without credentials."
+  default     = ""
+}
+
+variable "keda_chart_repository" {
+  type        = string
+  description = "Helm repository the KEDA chart is fetched from."
+  default     = "https://kedacore.github.io/charts"
+}
+
+variable "keda_chart_repository_username" {
+  type        = string
+  description = "Username for a chart repository that requires a login. Empty fetches anonymously."
+  default     = ""
+}
+
+variable "keda_chart_repository_password" {
+  type        = string
+  description = "Password or token for keda_chart_repository_username."
+  default     = ""
+  sensitive   = true
 }

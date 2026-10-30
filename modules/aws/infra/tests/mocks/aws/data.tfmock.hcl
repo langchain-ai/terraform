@@ -55,6 +55,6 @@ mock_data "aws_partition" {
 
 mock_data "aws_region" {
   defaults = {
-    name = "us-east-2"
+    region = "us-east-2"
   }
 }

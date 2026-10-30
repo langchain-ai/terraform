@@ -1,0 +1,48 @@
+[
+  {
+    "Sid": "EC2AcceptMigrationPeeringOnCustomerVpcs",
+    "Effect": "Allow",
+    "Action": ["ec2:AcceptVpcPeeringConnection"],
+    "Resource": ${customer_vpc_arns}
+  },
+  {
+    "Sid": "EC2AcceptMigrationPeeringConnection",
+    "Effect": "Allow",
+    "Action": ["ec2:AcceptVpcPeeringConnection"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:vpc-peering-connection/*"],
+    "Condition": {
+      "ArnLike": {
+        "ec2:AccepterVpc": ${customer_vpc_arns}
+      }
+    }
+  },
+  {
+    "Sid": "EC2TagMigrationPeeringConnection",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags", "ec2:DeleteTags"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:vpc-peering-connection/*"],
+    "Condition": {
+      "ArnLike": {
+        "ec2:AccepterVpc": ${customer_vpc_arns}
+      },
+      "ForAllValues:StringEquals": {
+        "aws:TagKeys": [
+          "crossplane-kind",
+          "crossplane-name",
+          "crossplane-providerconfig"
+        ]
+      }
+    }
+  },
+  {
+    "Sid": "IAMUpdateSmithDBRoleTrust",
+    "Effect": "Allow",
+    "Action": ["iam:UpdateAssumeRolePolicy"],
+    "Resource": ["arn:aws:iam::${account_id}:role/*-smith-smithdb-iam-role"],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  }
+]
