@@ -548,7 +548,7 @@ helm search repo langchain/langsmith-sandbox --versions --devel -o json \
 
 #### One runtime per install
 
-Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.external.enabled: true`. Two runtimes reporting to one install merge into one host pool and stop each other's sandboxes; the platform refuses the second one's reports. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
+Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.external.enabled: true`. LangSmith accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its elected `sandbox-host` pod turns not ready. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
 
 #### Install, upgrade and uninstall order
 
@@ -568,7 +568,7 @@ To move an existing install from the in-cluster runtime: this topology starts a 
 1. Delete the existing sandboxes and snapshots.
 2. Change `sandbox_runtime_source` and run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret).
 3. Apply with the Redis replaced: `make apply ARGS="-replace=module.sandbox_juicefs_redis[0].google_redis_instance.langsmith[0]"` (with `sandbox_juicefs_redis_prevent_destroy = true`, turn it off first).
-4. Run `make init-values` and `make deploy`.
+4. Run `make init-values` and `make deploy`. `make deploy` carries the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into the sandbox namespace, and uses a CA Secret you copied there yourself, as the LangSmith docs' move steps describe, instead of minting a new one.
 
 The JuiceFS objects left under `<sandbox_juicefs_name>/` in the trace bucket can then be deleted.
 
