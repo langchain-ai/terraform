@@ -10,7 +10,7 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 
 ### `langsmith-frontend`
 - **What**: React SPA — the LangSmith web UI
-- **Exposes**: Port 3000, served behind Envoy Gateway
+- **Exposes**: Port 3000, served behind the Gateway (GKE Gateway by default)
 - **Depends on**: `backend`, `platform-backend`
 - **HPA**: 1–10 replicas (CPU ≥ 50%, Mem ≥ 80%)
 
@@ -125,11 +125,12 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 
 ## Cluster Infrastructure (Pass 1 — Terraform-provisioned)
 
-### Envoy Gateway
+### Gateway (GKE Gateway or Envoy Gateway)
 - **What**: Gateway API implementation — routes HTTP/HTTPS traffic to LangSmith services
-- **Namespace**: `envoy-gateway-system`
+- **GKE Gateway** (`ingress_type = "gke"`, default): GKE's built-in controller and a global external Application Load Balancer. The `Gateway` is in the LangSmith namespace, with a reserved static IP.
+- **Envoy Gateway** (`ingress_type = "envoy"`): a Helm release in `envoy-gateway-system`, behind a passthrough Network Load Balancer. Its IP is not reserved.
 - **Installed by**: Terraform `ingress` module (`install_ingress = true`, default)
-- **Note**: The `Gateway` resource is managed by Terraform; the `HTTPRoute` is managed by Helm. Do not delete the Gateway resource manually — it takes the external IP with it.
+- **Note**: The `Gateway` resource is managed by Terraform; the `HTTPRoute` is managed by Helm. Do not delete the Gateway resource manually. On Envoy Gateway, it takes the external IP with it.
 
 ### KEDA
 - **What**: Kubernetes Event-driven Autoscaling — scales `queue` and `ingest-queue` based on Redis queue depth
@@ -138,8 +139,9 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 
 ### cert-manager
 - **What**: Automates TLS certificate issuance and renewal
-- **Deployed by**: Terraform `k8s-bootstrap` module when `tls_certificate_source = "letsencrypt"` or `install_cert_manager = true`
-- **ClusterIssuers**: `letsencrypt-staging`, `letsencrypt-prod` (only active when `tls_certificate_source = "letsencrypt"`)
+- **Deployed by**: Terraform `k8s-bootstrap` module when `tls_certificate_source = "cert-manager"`, or `install_cert_manager = true`. Not used by `"google-managed"`.
+- **Version**: `cert_manager_version`, default `v1.21.2`, from `oci://quay.io/jetstack/charts/cert-manager`. Upgrade an existing install with `make cert-manager-upgrade`; see [TLS.md](TLS.md#cert-manager-version).
+- **Issuers**: none. With `"cert-manager"`, the issuer is yours (`cert_manager_issuer_name`).
 
 ### External Secrets Operator (ESO)
 - **What**: Can sync Secret Manager secrets into Kubernetes secrets
