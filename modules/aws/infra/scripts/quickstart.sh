@@ -225,6 +225,74 @@ _existing() {
   echo "$val"
 }
 
+# Read the top-level tags map from the existing terraform.tfvars as
+# key=value,key=value. Comments are dropped. Commas are safe as the separator
+# because AWS does not allow them in tag keys or values.
+_existing_tags() {
+  [[ "${UPDATE_MODE:-false}" == "true" ]] || return 0
+  awk '
+    /^tags[[:space:]]*=[[:space:]]*\{/ { inblock = 1; sub(/^[^{]*\{/, "") }
+    inblock {
+      line = $0
+      sub(/#.*/, "", line)
+      closed = (line ~ /\}/)
+      sub(/\}.*/, "", line)
+      n = split(line, parts, ",")
+      for (i = 1; i <= n; i++) {
+        if (parts[i] !~ /=/) continue
+        k = parts[i]; sub(/=.*/, "", k)
+        v = parts[i]; sub(/^[^=]*=/, "", v)
+        gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", k)
+        gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", v)
+        out = out (out == "" ? "" : ",") k "=" v
+      }
+      if (closed) exit
+    }
+    END { print out }
+  ' "$OUTPUT" 2>/dev/null
+}
+
+# Ask for additional tags as key=value pairs and split them into TAG_KEYS and
+# TAG_VALUES. Rejects what AWS or the tags map would reject at plan time.
+_ask_tags() {
+  local pair key value i seen
+  while true; do
+    _ask "$@"
+    TAG_KEYS=(); TAG_VALUES=()
+    local ok=true
+    local IFS=','
+    for pair in $_REPLY; do
+      IFS=$' \t\n'
+      key="${pair%%=*}"; value="${pair#*=}"
+      key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      [[ -z "$key" && "$pair" != *=* ]] && continue
+      if [[ "$pair" != *=* || -z "$key" ]]; then
+        _red "  ERROR: '$pair' is not key=value."; ok=false; break
+      fi
+      # Lengths are checked apart from the charset: BSD regex caps {m,n} at 255.
+      if [[ ! "$key" =~ ^[[:alnum:][:space:]_.:/+@-]+$ || ! "$value" =~ ^[[:alnum:][:space:]_.:/=+@-]*$ ||
+            ${#key} -gt 128 || ${#value} -gt 256 ]]; then
+        _red "  ERROR: '$key' — keys (max 128) allow letters, digits, spaces, and _ . : / + @ -, and values (max 256) also allow =."; ok=false; break
+      fi
+      if [[ "$key" == aws:* ]]; then
+        _red "  ERROR: '$key' — the aws: prefix is reserved."; ok=false; break
+      fi
+      seen=false
+      for ((i = 0; i < ${#TAG_KEYS[@]}; i++)); do
+        [[ "${TAG_KEYS[$i]}" == "$key" ]] && seen=true
+      done
+      if [[ "$seen" == "true" ]]; then
+        _red "  ERROR: '$key' is listed twice."; ok=false; break
+      fi
+      TAG_KEYS+=("$key"); TAG_VALUES+=("$value")
+      IFS=','
+    done
+    IFS=$' \t\n'
+    [[ "$ok" == "true" ]] && return
+  done
+}
+
 # Return the gateway menu choice for QuickStart.
 # Fresh configurations recommend Envoy (1). Updates preserve the existing
 # controller; ALB is represented by all three controller flags being false (3).
@@ -442,7 +510,9 @@ OWNER="$_REPLY"
 _ask "$(_choice_arg "cost_center")" "$(_numbered_prompt "2.5" "Cost center" " — billing label, leave blank to skip")" "$(_existing "cost_center" "")"
 COST_CENTER="$_REPLY"
 
-_ask_required "$(_choice_arg "langsmith_admin_email")" "$(_numbered_prompt "2.6" "Initial org admin email")" "$(_existing "langsmith_admin_email" "")"
+_ask_tags "$(_choice_arg "tags")" "$(_numbered_prompt "2.6" "Additional tags" " — key=value pairs separated by commas, e.g. team=data,environment=prod")" "$(_existing_tags)"
+
+_ask_required "$(_choice_arg "langsmith_admin_email")" "$(_numbered_prompt "2.7""Initial org admin email")" "$(_existing "langsmith_admin_email" "")"
 ADMIN_EMAIL="$_REPLY"
 
 echo ""
@@ -1228,6 +1298,11 @@ _show_summary() {
   _summary_row "Initial org admin email:" "$ADMIN_EMAIL"
   _summary_row "Owner:" "$OWNER"
   [[ -n "$COST_CENTER" ]] && _summary_row "Cost center:" "$COST_CENTER"
+  local i tags_display=""
+  for ((i = 0; i < ${#TAG_KEYS[@]}; i++)); do
+    tags_display+="${tags_display:+, }${TAG_KEYS[$i]}=${TAG_VALUES[$i]}"
+  done
+  [[ -n "$tags_display" ]] && _summary_row "Additional tags:" "$tags_display"
 
   _summary_section "3. Networking"
   _summary_row "VPC:" "$([[ "$CREATE_VPC" == "true" ]] && echo "Terraform-managed" || echo "existing ($VPC_ID)")"
@@ -1360,6 +1435,16 @@ langsmith_admin_email = "${ADMIN_EMAIL}"
 TFVARS
 
 [[ -n "$COST_CENTER" ]] && echo "cost_center = \"${COST_CENTER}\"" >> "$OUTPUT"
+
+if (( ${#TAG_KEYS[@]} > 0 )); then
+  {
+    echo "tags = {"
+    for ((i = 0; i < ${#TAG_KEYS[@]}; i++)); do
+      printf '  "%s" = "%s"\n' "${TAG_KEYS[$i]}" "${TAG_VALUES[$i]}"
+    done
+    echo "}"
+  } >> "$OUTPUT"
+fi
 
 cat >> "$OUTPUT" << TFVARS
 

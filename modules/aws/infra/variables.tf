@@ -753,8 +753,21 @@ variable "cost_center" {
 
 variable "tags" {
   type        = map(string)
-  description = "Additional tags to apply to all resources."
+  description = "Additional tags to apply to every AWS resource the install creates, including the EC2 instances, EBS volumes, ENIs, and load balancers that Karpenter and the EKS controllers create. For example team, an owner email, or product."
   default     = {}
+
+  # AWS rejects anything outside this charset. The EBS CSI driver passes tags as
+  # a key=value flag, so = is allowed in values only. The reserved prefixes and
+  # keys are ones AWS, Karpenter, or the EBS CSI driver refuse in user tags.
+  validation {
+    condition = alltrue([
+      for k, v in var.tags :
+      can(regex("^[\\p{L}\\p{Z}\\p{N}_.:/+@-]{1,128}$", k)) &&
+      can(regex("^[\\p{L}\\p{Z}\\p{N}_.:/=+@-]{0,256}$", v)) &&
+      !can(regex("^(?i:aws:)|^kubernetes\\.io|^ebs\\.csi\\.aws\\.com/|^karpenter\\.(sh/nodepool|sh/nodeclaim|k8s\\.aws/ec2nodeclass)$|^eks:eks-cluster-name$|^CSIVolume(Snapshot)?Name$", k))
+    ])
+    error_message = "Each tag key must be 1-128 characters and each value 0-256, using letters, digits, spaces, and _ . : / + @ - (values may also use =). Keys may not start with aws:, kubernetes.io, or ebs.csi.aws.com/, or be a key Karpenter sets itself."
+  }
 }
 
 #------------------------------------------------------------------------------

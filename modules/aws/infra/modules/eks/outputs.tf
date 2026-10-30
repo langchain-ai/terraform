@@ -56,3 +56,12 @@ output "eks_managed_node_group_inputs" {
   description = "Managed node groups as passed to the upstream EKS module. Plan tests assert on this because test assertions cannot reach resources inside nested modules."
   value       = local.eks_managed_node_groups
 }
+
+output "controller_tag_inputs" {
+  description = "Tag settings handed to the controllers that create AWS resources outside default_tags. Plan tests assert on this because test assertions cannot reach resources inside nested modules."
+  value = {
+    ebs_csi_configuration_values    = aws_eks_addon.ebs-csi.configuration_values
+    load_balancer_controller_values = local.load_balancer_controller_values
+    vpc_cni_configuration_values    = local.addons["vpc-cni"].configuration_values
+  }
+}
