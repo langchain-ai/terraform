@@ -16,8 +16,8 @@
 #   Secrets are stored in AWS SSM Parameter Store under:
 #     /langsmith/{name_prefix}-{environment}/
 #   On subsequent runs, this script reads secrets FROM SSM — no re-prompting
-#   needed. SSM read errors stop setup. If a confirmed-missing parameter cannot
-#   be created, secrets with a local file fallback migrate on the next run.
+#   needed. Each secret is also saved locally with owner-only permissions.
+#   SSM errors or conflicting shell values stop setup.
 
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced.
 export AWS_PAGER=""
@@ -103,20 +103,6 @@ _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 _missing_vars=""
 _ssm_failed=""
 
-# ── Warn on pre-exported secrets ──────────────────────────────────────────────
-# _ssm_secret short-circuits (step 0) when a variable is already exported.
-# If LANGSMITH_LICENSE_KEY or LANGSMITH_ADMIN_PASSWORD are set from a prior
-# session, the script will NOT re-prompt and NOT write to SSM.
-# Unset them first if you need to rotate or re-store those secrets.
-for _precheck_var in LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD; do
-  if [[ -n "$(printenv "$_precheck_var")" ]]; then
-    echo "WARNING: $_precheck_var is already set in the environment."
-    echo "         setup-env.sh will skip re-prompting and will NOT write to SSM for this key."
-    echo "         To rotate or re-store: unset $_precheck_var && source infra/scripts/setup-env.sh"
-    echo ""
-  fi
-done
-
 # ── Bounded AWS CLI calls ─────────────────────────────────────────────────────
 # Bounded by timeout(1) when available so a sandbox with blocked egress fails
 # fast instead of stalling on a full TCP timeout. timeout is not in the macOS
@@ -144,7 +130,7 @@ _aws_bounded() {
 _ssm_put_safe() {
   local _path="$1" _val="$2"
   local _tmpjson
-  _tmpjson="$(mktemp)" || return 1
+  _tmpjson="$(mktemp)" || { _ssm_failed=1; return 1; }
   chmod 600 "$_tmpjson"
   # shellcheck disable=SC2064
   trap "rm -f '$_tmpjson'" RETURN
@@ -166,27 +152,29 @@ _ssm_put_safe() {
     --cli-input-json "file://${_tmpjson}" \
     --output text 2>&1 >/dev/null) || _rc=$?
   rm -f "$_tmpjson"
-  if [[ $_rc -ne 0 && "$_error" == *"(ParameterAlreadyExists)"* ]]; then
-    echo "ERROR: $_path was created concurrently; the new value was not written."
+  if [[ $_rc -ne 0 ]]; then
+    if [[ "$_error" == *"(ParameterAlreadyExists)"* ]]; then
+      echo "ERROR: $_path was created concurrently; rerun setup to read it from SSM."
+    else
+      echo "ERROR: Could not save $_path to SSM. Fix AWS access and rerun setup."
+    fi
     _ssm_failed=1
   fi
   return $_rc
 }
 
 # ── SSM-backed secret helper ──────────────────────────────────────────────────
-# _ssm_secret: reads a secret from SSM if available; falls back to a local
-# .secret file (migration path from first Pass 1). Prompts or generates a new
-# value if neither source exists, and stores it in SSM (if reachable) or a
-# local file (first Pass 1 only, migrates on next run).
+# Source priority: SSM, locally saved value, shell, then generate or prompt.
 #
 # Args:
 #   $1  ssm_name     — SSM parameter leaf name (e.g. "postgres-password")
-#   $2  file_name    — Legacy local .secret file (empty = no file fallback)
+#   $2  file_name    — Local secret file
 #   $3  varname      — TF_VAR_* variable name to export
 #   $4  generator    — Shell command that outputs a new value (empty = prompt)
 #   $5  prompt_text  — Prompt string for interactive input
 #   $6  silent       — "true" to hide input (passwords); "false" for plaintext
 _ssm_secret() {
+  [[ -z "$_ssm_failed" ]] || return 1
   local ssm_name="$1"
   local file_name="$2"
   local varname="$3"
@@ -194,18 +182,14 @@ _ssm_secret() {
   local prompt_text="$5"
   local silent="${6:-true}"
 
-  local val=""
+  local val="" shell_val missing=false source="SSM"
+  shell_val=$(printenv "$varname") || shell_val=""
   local _path="${_ssm_prefix}/${ssm_name}"
 
-  # Exported overrides only need an existence check, without KMS decryption.
-  local _get_args=(--with-decryption --query Parameter.Value)
-  if [[ -n "$(printenv "$varname")" ]]; then
-    _get_args=(--query Parameter.Name)
-  fi
   local _errfile
   _errfile=$(mktemp) || { _ssm_failed=1; return 1; }
   if ! val=$(_aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
-      "${_get_args[@]}" --output text 2>"$_errfile"); then
+      --with-decryption --query Parameter.Value --output text 2>"$_errfile"); then
     # Only ParameterNotFound permits generating or migrating a value.
     if ! grep -Fq "(ParameterNotFound)" "$_errfile"; then
       echo "ERROR: SSM read failed for $_path (region: $AWS_REGION)."
@@ -215,42 +199,40 @@ _ssm_secret() {
       return 1
     fi
     val=""
+    missing=true
   fi
   rm -f "$_errfile"
 
-  if [[ -n "$(printenv "$varname")" ]]; then
-    if [[ -z "$val" ]]; then
-      echo "  $varname is set in env but missing from SSM — backfilling → $_path"
-      if ! _ssm_put_safe "$_path" "$(printenv "$varname")"; then
-        [[ -z "$_ssm_failed" ]] || return 1
-        echo "  WARNING: SSM backfill failed for $_path"
-        echo "           Try manually: ./infra/scripts/manage-ssm.sh set $(basename "$_path") '<value>'"
-      fi
+  if [[ "$missing" == true ]]; then
+    source="the locally saved value in $file_name"
+    if [[ -f "$file_name" ]]; then
+      val=$(cat "$file_name") || {
+        echo "ERROR: Could not read $file_name." >&2
+        _ssm_failed=1
+        return 1
+      }
     fi
-    return
+    val="${val:-$shell_val}"
   fi
 
-  # 2. Fall back to local file (migration from pre-SSM runs)
-  if [[ -z "$val" && -n "$file_name" && -f "$file_name" ]]; then
-    val=$(cat "$file_name")
-    echo "  Migrating $varname from $file_name → SSM"
-    if _ssm_put_safe "$_path" "$val"; then
-      echo "  Migration complete. You may delete: $file_name"
-    fi
-    [[ -z "$_ssm_failed" ]] || return 1
+  if [[ -n "$shell_val" && "$shell_val" != "$val" ]]; then
+    echo "ERROR: $varname in the shell differs from $source. Investigate before rerunning setup." >&2
+    _ssm_failed=1
+    return 1
   fi
 
-  # 3. Prompt or generate if still empty
   if [[ -z "$val" ]]; then
     if [[ -n "$generator" ]]; then
       val=$(eval "$generator") || {
         echo "ERROR: Secret generator failed for $varname." >&2
         echo "       Command: $generator" >&2
         echo "       Ensure required tools are installed (e.g. python3, openssl, cryptography)." >&2
+        _ssm_failed=1
         return 1
       }
       if [[ -z "$val" ]]; then
         echo "ERROR: Secret generator for $varname produced empty output." >&2
+        _ssm_failed=1
         return 1
       fi
     elif [[ -t 0 ]]; then
@@ -265,6 +247,7 @@ _ssm_secret() {
       fi
       if [[ -z "$val" ]]; then
         echo "  ERROR: No value provided for $varname." >&2
+        _ssm_failed=1
         return 1
       fi
     else
@@ -280,22 +263,16 @@ _ssm_secret() {
       _missing_vars="$_missing_vars $varname"
       return 1
     fi
-
-    # Store in SSM; fall back to local file if SSM is not yet reachable
-    if _ssm_put_safe "$_path" "$val"; then
-      echo "  Stored $varname → SSM: $_path"
-    elif [[ -n "$_ssm_failed" ]]; then
-      return 1
-    elif [[ -n "$file_name" ]]; then
-      printf '%s' "$val" > "$file_name"
-      chmod 600 "$file_name"
-      echo "  SSM unavailable — stored in $file_name (will migrate after Pass 1)"
-    else
-      echo "  WARNING: SSM unavailable and no local file fallback for $varname"
-      echo "           Value is exported for this session only and will be lost on shell exit."
-    fi
   fi
 
+  if [[ "$missing" == true ]]; then
+    _ssm_put_safe "$_path" "$val" || return 1
+  fi
+  (umask 077; touch "$file_name" && chmod 600 "$file_name" && printf '%s' "$val" > "$file_name") || {
+    echo "ERROR: Could not save $varname locally in $file_name." >&2
+    _ssm_failed=1
+    return 1
+  }
   export "$varname"="$val"
 }
 
@@ -372,13 +349,13 @@ fi
 
 # ── Redis auth token (auto-generated, stable after first deployment) ──────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
-_ssm_secret "redis-auth-token" "" "TF_VAR_redis_auth_token" \
+_ssm_secret "redis-auth-token" "$_SETUP_DIR/.redis_auth_token" "TF_VAR_redis_auth_token" \
   "openssl rand -hex 32" "" "true"
 
 # ── Sandbox JuiceFS Redis auth token ──────────────────────────────────────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _ssm_secret "sandbox-juicefs-redis-auth-token" "" "TF_VAR_sandbox_juicefs_redis_auth_token" \
+  _ssm_secret "sandbox-juicefs-redis-auth-token" "$_SETUP_DIR/.sandbox_juicefs_redis_auth_token" "TF_VAR_sandbox_juicefs_redis_auth_token" \
     "openssl rand -hex 32" "" "true"
 fi
 
@@ -392,7 +369,7 @@ _ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_j
   "openssl rand -base64 32" "" "true"
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
+  _ssm_secret "sandbox-callback-signing-jwk" "$_SETUP_DIR/.sandbox_callback_signing_jwk" "TF_VAR_sandbox_callback_signing_jwk" \
     "_ed25519_private_jwk_gen" "" "true"
 fi
 
@@ -403,7 +380,7 @@ _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENS
 _ssm_secret "langsmith-admin-password" "$_SETUP_DIR/.admin_password" "LANGSMITH_ADMIN_PASSWORD" \
   "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true"
 
-_ssm_secret "langsmith-admin-email" "" "LANGSMITH_ADMIN_EMAIL" \
+_ssm_secret "langsmith-admin-email" "$_SETUP_DIR/.admin_email" "LANGSMITH_ADMIN_EMAIL" \
   "" "Admin email" "false"
 
 # Validate admin password meets Helm chart requirements. Catching it here prevents
@@ -436,16 +413,16 @@ fi
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
 _fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
 
-_ssm_secret "deployments-encryption-key" "" "TF_VAR_langsmith_deployments_encryption_key" \
+_ssm_secret "deployments-encryption-key" "$_SETUP_DIR/.deployments_encryption_key" "TF_VAR_langsmith_deployments_encryption_key" \
   "$_fernet_gen" "" "true"
 
-_ssm_secret "agent-builder-encryption-key" "" "TF_VAR_langsmith_agent_builder_encryption_key" \
+_ssm_secret "agent-builder-encryption-key" "$_SETUP_DIR/.agent_builder_encryption_key" "TF_VAR_langsmith_agent_builder_encryption_key" \
   "$_fernet_gen" "" "true"
 
-_ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_key" \
+_ssm_secret "insights-encryption-key" "$_SETUP_DIR/.insights_encryption_key" "TF_VAR_langsmith_insights_encryption_key" \
   "$_fernet_gen" "" "true"
 
-_ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
+_ssm_secret "polly-encryption-key" "$_SETUP_DIR/.polly_encryption_key" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
 
 # ── Non-interactive failure ───────────────────────────────────────────────────
@@ -470,7 +447,7 @@ if [[ -n "$_missing_vars" ]]; then
 fi
 
 if [[ -n "$_ssm_failed" ]]; then
-  echo "ERROR: SSM setup failed. Resolve the errors above before applying."
+  echo "ERROR: Secret setup failed. Resolve the errors above before applying."
   return 1
 fi
 
