@@ -53,7 +53,7 @@ helm version
 
 ### Required GCP APIs
 
-Terraform enables these automatically on first apply. To enable manually:
+Enable `secretmanager.googleapis.com` **before** sourcing `infra/scripts/setup-env.sh`, including on a new project: `gcloud services enable secretmanager.googleapis.com --project <your-project-id>`. Setup must persist credentials in Secret Manager before Terraform creates dependent resources. Terraform enables the remaining APIs on first apply; you can also enable them together:
 
 ```bash
 gcloud services enable \
@@ -191,6 +191,14 @@ letsencrypt_email      = "<ops@your-domain>"
 # LangSmith Deployments (Pass 3)
 enable_langsmith_deployment = true
 ```
+
+### Setup credentials
+
+From `modules/gcp`, run `source infra/scripts/setup-env.sh` before planning or applying. Setup reads GCP Secret Manager first, then exports credentials to the shell. If Secret Manager confirms a secret resource is missing, setup uses an exported shell credential, prompts, or generates it as before, and persists it before continuing. It creates no separate local password backup files.
+
+A shell credential that differs from Secret Manager stops setup for investigation without displaying either credential. Read errors, disabled APIs, write errors, and concurrent creation also stop setup. An existing secret with an empty, disabled, destroyed, or missing latest version requires recovery; setup never adds a replacement version. Use `infra/scripts/manage-secrets.sh` for intentional changes.
+
+**Changed setup requirements:** Enable Secret Manager and provide read access even when credentials are already exported in the shell. Setup no longer continues with credentials held only in the shell after a persistence failure. Existing Secret Manager names, shell variables, validation rules, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials.
 
 ### Terraform state backend (recommended for production)
 

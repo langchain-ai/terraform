@@ -72,8 +72,9 @@ source ./infra/scripts/setup-env.sh
 This script:
 - Reads `name_prefix` and `environment` from `terraform.tfvars` to build the SSM path prefix
 - Reads existing secrets from SSM Parameter Store (no prompts on re-runs)
-- Prompts for new values on first run: `postgres_password`, `license_key`, `admin_password`
-- Auto-generates stable secrets on first run: `redis_auth_token`, `api_key_salt`, `jwt_secret`
+- Prompts for new values on first run: `license_key`, `admin_password`
+- Auto-generates stable secrets on first run, including `postgres_password`, `redis_auth_token`, `api_key_salt`, and `jwt_secret`
+- Persists credentials in SSM before exporting; creates no separate local password backups
 - Exports `TF_VAR_*` environment variables for Terraform
 
 **Critical invariants — never violate on a live deployment:**
