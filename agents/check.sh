@@ -3,11 +3,11 @@
 # .github/workflows/checks.yaml, and run locally before handing back:
 #   bash agents/check.sh                    # every root, plus every script
 #   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
-#   bash agents/check.sh --scripts          # shellcheck and AWS secret tests
+#   bash agents/check.sh --scripts          # shellcheck and AWS/GCP secret tests
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
 # state) and tflint with the provider's pinned ruleset. Script checks run
-# repo-wide, including the isolated AWS secret tests; a directory checks HCL only.
+# repo-wide, including the isolated AWS/GCP secret tests; a directory checks HCL only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
@@ -52,7 +52,8 @@ lint_scripts() {
 
 check_scripts() {
   lint_scripts || return $?
-  bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh"
+  bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
+  bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
 }
 
 # Print the terraform roots at or beneath one repo-relative directory. Roots are

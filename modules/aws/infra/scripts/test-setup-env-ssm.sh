@@ -62,6 +62,7 @@ if [[ "$parameter" == */"$MOCK_TARGET" ]]; then
     missing|race|write-denied)
       echo 'An error occurred (ParameterNotFound) when calling GetParameter' >&2
       exit 254 ;;
+    empty) exit 0 ;;
     denied)
       echo 'An error occurred (AccessDeniedException) when calling GetParameter' >&2
       exit 254 ;;
@@ -122,8 +123,6 @@ else
     *) expected='TestOnlyPassword123!' ;;
   esac
   [[ "$actual" == "$expected" ]] || exit 13
-  [[ "$(cat "$MOCK_FILE")" == "$expected" ]] || exit 14
-  [[ "$(ls -l "$MOCK_FILE" | cut -c 1-10)" == -rw------- ]] || exit 15
 fi
 EOF
 chmod +x "$TEST_TMP/bin/aws" "$TEST_TMP/bin/openssl"
@@ -163,8 +162,12 @@ run_case() {
     echo "FAIL: $mode wrote $actual_writes and generated $actual_generates values"
     exit 1
   fi
-  if [[ "$expect" == failure && "$legacy" == true && "$(cat "$file")" != LocalTestPassword123! ]]; then
+  if [[ "$legacy" == true && "$(cat "$file")" != LocalTestPassword123! ]]; then
     echo "FAIL: $mode changed the local backup"
+    exit 1
+  fi
+  if [[ "$legacy" == false && "$mode" != local-failed && -e "$file" ]]; then
+    echo "FAIL: $mode created a local password backup"
     exit 1
   fi
   if grep -qE '(TestOnly|ExportedTest|LocalTest|GeneratedTest)Password123!' "$TEST_TMP/output"; then
@@ -184,7 +187,7 @@ run_case missing false false success 1 1
 run_case missing true false success 1 0
 run_case missing false true success 1 0
 run_case missing true true failure 0 0
-for mode in denied expired credentials timeout misleading; do
+for mode in denied expired credentials timeout misleading empty; do
   run_case "$mode" false false failure 0 0
   run_case "$mode" true true failure 0 0
 done
@@ -194,15 +197,13 @@ for mode in race write-denied; do
   run_case "$mode" true false failure 1 0
   run_case "$mode" false true failure 1 0
 done
-run_case local-failed false false failure 0 0
+# An unusable legacy path must not block a readable SSM credential.
+run_case local-failed false false success 0 0
 
-# Exercise every enabled secret through creation, SSM reads, and local import.
+# Every enabled secret must survive a fresh shell without any local backup.
 rm -rf "$TEST_TMP/infra/".[!.]* "$TEST_TMP/store"
 mkdir "$TEST_TMP/store"
-for stage in create read import; do
-  if [[ "$stage" == import ]]; then
-    rm -f "$TEST_TMP/store/"*
-  fi
+for stage in create read; do
   : > "$TEST_TMP/calls"
   if ! env -i PATH="$TEST_TMP/bin:$PATH" HOME="$TEST_TMP" \
     MOCK_MODE=roundtrip MOCK_STAGE="$stage" \
@@ -219,10 +220,10 @@ for stage in create read import; do
   else
     diff -r "$TEST_TMP/snapshot" "$TEST_TMP/infra" >/dev/null
     ! grep -q '^generate$' "$TEST_TMP/calls"
-    [[ "$stage" != read ]] || ! grep -q '^write$' "$TEST_TMP/calls"
+    ! grep -q '^write$' "$TEST_TMP/calls"
   fi
   local_count=$(find "$TEST_TMP/infra" -maxdepth 1 -type f -name '.*' | wc -l | tr -d ' ')
   ssm_count=$(find "$TEST_TMP/store" -type f | wc -l | tr -d ' ')
-  [[ "$local_count" == "$ssm_count" ]] || { echo "FAIL: not every SSM secret has a local copy"; exit 1; }
+  [[ "$local_count" == 0 ]] || { echo "FAIL: setup created local secret backups"; exit 1; }
   echo "PASS: all-secret $stage ($ssm_count parameters)"
 done

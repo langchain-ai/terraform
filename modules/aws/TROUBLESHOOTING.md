@@ -515,7 +515,7 @@ source ./infra/scripts/setup-env.sh  # reuse SSM; import local or shell values o
 make secrets                         # all SET
 ```
 
-When SSM confirms a parameter is missing, setup imports its locally saved value, then its shell value, before prompting or generating. A conflicting shell value stops setup for investigation. Successful resolutions refresh the local file and export to the shell.
+When SSM confirms a parameter is missing, setup imports its locally saved value, then its shell value, before prompting or generating. A conflicting shell value stops setup for investigation. Successful resolutions export to the shell without creating or refreshing local password backups. Legacy locally saved values are left untouched.
 
 **Prevention:** Confirm AWS authentication and SSM read/decryption permissions before sourcing setup. Creating missing parameters also requires SSM write permission.
 
@@ -540,7 +540,7 @@ If setup reports a shell conflict, investigate which credential is correct. Once
 unset LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD
 ```
 
-SSM credentials refresh the local files and shell. Only when SSM confirms a parameter is missing does setup import a locally saved value or shell value, then generate or prompt if neither exists.
+SSM credentials are loaded into the shell; local password backups are no longer created or refreshed. Only when SSM confirms a parameter is missing does setup import a locally saved value or shell value, then generate or prompt if neither exists.
 
 ---
 

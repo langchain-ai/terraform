@@ -632,9 +632,9 @@ For each secret it follows this priority order:
 4. No value in any source — generate it where supported, otherwise prompt
 5. No terminal (CI) and an input is still required — stop with instructions to supply it
 
-Each resolved secret is copied to its Git-ignored file under `infra/` with owner-only permissions, then exported to the shell. Existing local filenames and SSM parameter names are retained. A different value already exported in the shell stops setup for investigation; neither value is displayed. Setup never overwrites an existing SSM parameter. Use `infra/scripts/manage-ssm.sh` for intentional SSM changes.
+SSM is the persistent credential store. Setup exports each resolved credential to the shell without creating or refreshing local password backup files. Legacy locally saved values remain import-only; setup does not delete them. After a successful setup, you can remove those legacy files once you have verified the credentials in SSM. A different credential already exported in the shell stops setup for investigation; neither credential is displayed. Setup never overwrites an existing SSM parameter. Use `infra/scripts/manage-ssm.sh` for intentional SSM changes.
 
-**Changed setup requirements:** SSM read/decryption access and writable local secret files are required even when the shell already contains the secrets. SSM write failures and concurrent parameter creation also stop setup. These checks do not change running infrastructure.
+**Changed setup requirements:** SSM read/decryption access is required even when the shell already contains credentials. SSM write failures, empty credentials, and concurrent parameter creation stop setup. Existing SSM names, shell variables, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials; this change removes separate setup password backups, not every local copy.
 
 **SSM parameters it manages (`/langsmith/{name_prefix}-{environment}/`):**
 
