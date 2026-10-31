@@ -16,9 +16,9 @@
 #   Secrets are stored in AWS SSM Parameter Store under:
 #     /langsmith/{name_prefix}-{environment}/
 #   SSM is authoritative. Only a confirmed-missing parameter permits importing
-#   a locally saved value, then an exported shell value, or creating a new one.
-#   No local secret files are created or refreshed; legacy files are import-only.
-#   SSM errors, legacy file read errors, or conflicting shell values stop setup.
+#   an exported shell value or creating a new one.
+#   Local secret backups are never read, created, or refreshed.
+#   SSM read or write errors stop setup.
 
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced.
 export AWS_PAGER=""
@@ -157,24 +157,22 @@ _ssm_put_safe() {
 }
 
 # ── SSM-backed secret helper ──────────────────────────────────────────────────
-# Source priority: SSM, locally saved value, shell, then generate or prompt.
+# Source priority: SSM, shell, then generate or prompt.
 #
 # Args:
 #   $1  ssm_name     — SSM parameter leaf name (e.g. "postgres-password")
-#   $2  file_name    — Legacy local file to import only if SSM is missing
-#   $3  varname      — Shell variable to export (TF_VAR_* or LANGSMITH_*)
-#   $4  generator    — Shell command that outputs a new value (empty = prompt)
-#   $5  prompt_text  — Prompt string for interactive input
-#   $6  silent       — "true" to hide input (passwords); "false" for plaintext
+#   $2  varname      — Shell variable to export (TF_VAR_* or LANGSMITH_*)
+#   $3  generator    — Shell command that outputs a new value (empty = prompt)
+#   $4  prompt_text  — Prompt string for interactive input
+#   $5  silent       — "true" to hide input (passwords); "false" for plaintext
 _ssm_secret() {
   local ssm_name="$1"
-  local file_name="$2"
-  local varname="$3"
-  local generator="$4"
-  local prompt_text="$5"
-  local silent="${6:-true}"
+  local varname="$2"
+  local generator="$3"
+  local prompt_text="$4"
+  local silent="${5:-true}"
 
-  local val="" shell_val missing=false source="SSM"
+  local val="" shell_val missing=false
   shell_val=$(printenv "$varname") || shell_val=""
   local _path="${_ssm_prefix}/${ssm_name}"
 
@@ -200,20 +198,7 @@ _ssm_secret() {
   fi
 
   if [[ "$missing" == true ]]; then
-    source="the locally saved value in $file_name"
-    if [[ -f "$file_name" ]]; then
-      val=$(cat "$file_name") || {
-        echo "ERROR: Could not read $file_name." >&2
-        return 1
-      }
-    fi
-    val="${val:-$shell_val}"
-  fi
-
-  # A shell override must not silently change what Terraform will apply.
-  if [[ -n "$shell_val" && "$shell_val" != "$val" ]]; then
-    echo "ERROR: $varname in the shell differs from $source. Investigate before rerunning setup." >&2
-    return 1
+    val="$shell_val"
   fi
 
   if [[ -z "$val" ]]; then
@@ -312,7 +297,7 @@ export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 
 # Hex is RDS-safe (no / @ " ' space) and URI-safe. Terraform still urlencodes
 # the password in connection URLs for env/SSM overrides that use other symbols.
-_ssm_secret "postgres-password" "$_SETUP_DIR/.pg_password" "TF_VAR_postgres_password" \
+_ssm_secret "postgres-password" "TF_VAR_postgres_password" \
   "openssl rand -hex 32" "" "true" || return 1
 
 # Reject passwords RDS cannot accept before Terraform validates them.
@@ -334,38 +319,38 @@ fi
 
 # ── Redis auth token (auto-generated, stable after first deployment) ──────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
-_ssm_secret "redis-auth-token" "" "TF_VAR_redis_auth_token" \
+_ssm_secret "redis-auth-token" "TF_VAR_redis_auth_token" \
   "openssl rand -hex 32" "" "true" || return 1
 
 # ── Sandbox JuiceFS Redis auth token ──────────────────────────────────────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _ssm_secret "sandbox-juicefs-redis-auth-token" "" "TF_VAR_sandbox_juicefs_redis_auth_token" \
+  _ssm_secret "sandbox-juicefs-redis-auth-token" "TF_VAR_sandbox_juicefs_redis_auth_token" \
     "openssl rand -hex 32" "" "true" || return 1
 fi
 
 # ── Stable auto-generated secrets (must never change after first deployment) ──
 # Changing api_key_salt invalidates ALL existing API keys.
 # Changing jwt_secret invalidates ALL active user sessions.
-_ssm_secret "langsmith-api-key-salt" "$_SETUP_DIR/.api_key_salt" "TF_VAR_langsmith_api_key_salt" \
+_ssm_secret "langsmith-api-key-salt" "TF_VAR_langsmith_api_key_salt" \
   "openssl rand -base64 32" "" "true" || return 1
 
-_ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_jwt_secret" \
+_ssm_secret "langsmith-jwt-secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32" "" "true" || return 1
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
+  _ssm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
     "_ed25519_private_jwk_gen" "" "true" || return 1
 fi
 
 # ── LangSmith app secrets (consumed by ESO → K8s Secret → Helm chart) ────────
-_ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENSE_KEY" \
+_ssm_secret "langsmith-license-key" "LANGSMITH_LICENSE_KEY" \
   "" "LangSmith license key" "true" || return 1
 
-_ssm_secret "langsmith-admin-password" "$_SETUP_DIR/.admin_password" "LANGSMITH_ADMIN_PASSWORD" \
+_ssm_secret "langsmith-admin-password" "LANGSMITH_ADMIN_PASSWORD" \
   "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true" || return 1
 
-_ssm_secret "langsmith-admin-email" "" "LANGSMITH_ADMIN_EMAIL" \
+_ssm_secret "langsmith-admin-email" "LANGSMITH_ADMIN_EMAIL" \
   "" "Admin email" "false" || return 1
 
 # Check chart password requirements before the later Helm deployment.
@@ -396,16 +381,16 @@ fi
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
 _fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
 
-_ssm_secret "deployments-encryption-key" "" "TF_VAR_langsmith_deployments_encryption_key" \
+_ssm_secret "deployments-encryption-key" "TF_VAR_langsmith_deployments_encryption_key" \
   "$_fernet_gen" "" "true" || return 1
 
-_ssm_secret "agent-builder-encryption-key" "" "TF_VAR_langsmith_agent_builder_encryption_key" \
+_ssm_secret "agent-builder-encryption-key" "TF_VAR_langsmith_agent_builder_encryption_key" \
   "$_fernet_gen" "" "true" || return 1
 
-_ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_key" \
+_ssm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" \
   "$_fernet_gen" "" "true" || return 1
 
-_ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
+_ssm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true" || return 1
 
 # ── Summary ───────────────────────────────────────────────────────────────────

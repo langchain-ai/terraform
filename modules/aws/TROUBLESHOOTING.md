@@ -502,7 +502,7 @@ aws sts get-caller-identity
 # Unable to locate credentials
 ```
 
-**Cause:** AWS credentials may be missing or expired, SSM permissions may be insufficient, or AWS may be unreachable. Setup stops on SSM errors even if locally saved values or shell values exist.
+**Cause:** AWS credentials may be missing or expired, SSM permissions may be insufficient, or AWS may be unreachable. Setup stops on SSM errors even if shell values exist.
 
 **Fix:**
 
@@ -515,7 +515,7 @@ source ./infra/scripts/setup-env.sh  # reuse SSM; import local or shell values o
 make secrets                         # all SET
 ```
 
-When SSM confirms a parameter is missing, setup imports its locally saved value, then its shell value, before prompting or generating. A conflicting shell value stops setup for investigation. Successful resolutions export to the shell without creating or refreshing local password backups. Legacy locally saved values are left untouched.
+When SSM confirms a parameter is missing, setup uses its shell value before prompting or generating, and saves it to SSM before continuing. Existing SSM values replace shell values. Local password files are never read or updated; existing files are left untouched. Verify their credentials are in SSM before deleting them.
 
 **Prevention:** Confirm AWS authentication and SSM read/decryption permissions before sourcing setup. Creating missing parameters also requires SSM write permission.
 
@@ -525,7 +525,7 @@ When SSM confirms a parameter is missing, setup imports its locally saved value,
 
 **Symptom:** The script was interrupted partway through, commonly at the `LANGSMITH_LICENSE_KEY` prompt. It is unclear whether re-sourcing in the same shell is safe.
 
-**Cause:** Setup may have resolved some secrets before the interruption. Rerunning reuses those SSM parameters; matching shell values are accepted without prompting or rewriting SSM.
+**Cause:** Setup may have resolved some secrets before the interruption. Rerunning reuses those SSM parameters; stored values replace shell values without prompting or rewriting SSM.
 
 **Fix:** Refresh expired SSO credentials, then rerun in the same shell:
 
@@ -534,13 +534,7 @@ aws sso login --profile <your-profile>
 source ./infra/scripts/setup-env.sh
 ```
 
-If setup reports a shell conflict, investigate which credential is correct. Once you confirm SSM contains the correct credential, clear the conflicting shell variable (or open a new shell) and rerun setup to reload it. For the license and admin password:
-
-```bash
-unset LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD
-```
-
-SSM credentials are loaded into the shell; local password backups are no longer created or refreshed. Only when SSM confirms a parameter is missing does setup import a locally saved value or shell value, then generate or prompt if neither exists.
+SSM credentials are loaded into the shell, replacing any previous shell values. Only when SSM confirms a parameter is missing does setup use a shell value, then generate or prompt if none exists. Local password files are never read, created, or refreshed.
 
 ---
 
