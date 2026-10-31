@@ -7,7 +7,7 @@ This module creates two roles:
 | Role | Purpose | Trust |
 |------|---------|-------|
 | `var.role_name` (you choose) | Assumed by the LangSmith control-plane Crossplane controller to provision and manage resources. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
-| `LangSmithBYOCBreakGlass` | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
+| `var.break_glass_role_name` (default `LangSmithBYOCBreakGlass`) | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
 
 ## Prerequisites
 
@@ -114,6 +114,25 @@ role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
 
 When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
 
+When you use the BYOIAM module, always pass its outputs to this module. With
+default names the grants are redundant; with custom names they are required, so
+this role can still read and pass them:
+
+```hcl
+byoiam_role_arns                       = values(module.byoiam.role_arns)
+byoiam_instance_profile_name           = module.byoiam.karpenter_instance_profile_name
+byoiam_karpenter_controller_policy_arn = module.byoiam.karpenter_controller_policy_arn
+```
+
+### Naming and permissions boundaries
+
+Set `break_glass_role_name` when your naming convention does not allow
+`LangSmithBYOCBreakGlass`, and share the resulting `break_glass_role_arn` output
+with LangChain. Set `permissions_boundary_arn` to attach your permissions
+boundary to both roles when Terraform creates them. The boundary limits what the
+provisioning role can do, so confirm it allows the actions in this module's
+policies.
+
 ### Self-hosted to BYOC migration
 
 When migrating a self-hosted LangSmith installation into a BYOC data plane, set
@@ -203,7 +222,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-lambda` | Lambda + EventBridge for periodic jobs |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
-The exact statements are in `policies/*.json`.
+The exact statements are in `policies/*.json`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs.
 
 ### Break-glass role
 

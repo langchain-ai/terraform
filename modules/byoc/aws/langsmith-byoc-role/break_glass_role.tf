@@ -16,7 +16,8 @@ locals {
 }
 
 resource "aws_iam_role" "break_glass" {
-  name = "LangSmithBYOCBreakGlass"
+  name                 = var.break_glass_role_name
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -41,7 +42,7 @@ resource "aws_iam_role" "break_glass" {
     }]
   })
 
-  tags = merge(var.tags, { managed_by = "langsmith" })
+  tags = merge(var.tags, { managed_by = "langsmith", "langsmith-byoc-break-glass" = "true" })
 }
 
 resource "aws_iam_role_policy" "break_glass_eks_describe" {

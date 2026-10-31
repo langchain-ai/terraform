@@ -22,3 +22,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/loadtest"]
+
+[tool.uv]
+# Older uv versions trust the compromised eMudhra CA chain during package downloads.
+required-version = ">=0.13.4"

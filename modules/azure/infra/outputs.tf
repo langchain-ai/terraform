@@ -166,20 +166,6 @@ output "smithdb_helm_values" {
   value       = local.smithdb_helm_values
 }
 
-output "smithdb_migration_parallelism" {
-  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
-  value       = var.smithdb_migration_parallelism
-}
-
-output "smithdb_quota_extra" {
-  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
-  value = {
-    cpu       = local.smithdb_quota_extra_cpu
-    memory_gi = local.smithdb_quota_extra_memory_gi
-    pods      = local.smithdb_quota_extra_pods
-  }
-}
-
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true
@@ -226,6 +212,26 @@ output "envoy_gateway_proxy_image" {
 output "envoy_gateway_image_pull_secret_name" {
   description = "Pull Secret for the Envoy proxy pods, empty without one. helm/scripts/deploy.sh sets it on the EnvoyProxy."
   value       = module.aks.envoy_gateway_image_pull_secret_name
+}
+
+output "keda_images" {
+  description = "The three images KEDA's pods pull, keyed by name, from keda_image_registry when set and ghcr.io otherwise. Empty when install_keda is false."
+  value       = module.k8s_bootstrap.keda_images
+}
+
+output "keda_image_pull_secret_name" {
+  description = "Pull Secret KEDA's pods use, empty without one."
+  value       = module.k8s_bootstrap.keda_image_pull_secret_name
+}
+
+output "langsmith_image_pull_secret_name" {
+  description = "Pull Secret the service accounts in the LangSmith namespace carry for the pods the operator creates, empty without one."
+  value       = module.k8s_bootstrap.langsmith_image_pull_secret_name
+}
+
+output "langsmith_image_pull_secret_service_accounts" {
+  description = "The service accounts in the LangSmith namespace that carry langsmith_image_pull_secret_name. Empty without one."
+  value       = module.k8s_bootstrap.langsmith_image_pull_secret_service_accounts
 }
 
 output "get_credentials_command" {

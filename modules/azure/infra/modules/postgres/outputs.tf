@@ -43,3 +43,13 @@ output "server_private_dns_zone_id" {
   description = "The private DNS zone ID the Flexible Server is configured with."
   value       = azurerm_postgresql_flexible_server.db.private_dns_zone_id
 }
+
+output "customer_managed_key" {
+  description = "The server's customer_managed_key block as configured (key_vault_key_id, primary_user_assigned_identity_id, geo_backup_key_vault_key_id, geo_backup_user_assigned_identity_id); null under the service-managed key."
+  value       = one(azurerm_postgresql_flexible_server.db.customer_managed_key[*])
+}
+
+output "identity_ids" {
+  description = "User-assigned identities assigned to the server for its customer-managed keys; empty under the service-managed key."
+  value       = try(azurerm_postgresql_flexible_server.db.identity[0].identity_ids, toset([]))
+}

@@ -1,5 +1,5 @@
 output "role_names" {
-  description = "Static role names, keyed by role purpose, for the Crossplane customer-managed IAM contract."
+  description = "Role names, keyed by role purpose, for the Crossplane customer-managed IAM contract."
   value       = { for key, role in aws_iam_role.this : key => role.name }
 }
 
@@ -9,7 +9,7 @@ output "role_arns" {
 }
 
 output "karpenter_instance_profile_name" {
-  description = "Static instance profile to observe and use in every Karpenter EC2NodeClass."
+  description = "Instance profile to observe and use in every Karpenter EC2NodeClass."
   value       = aws_iam_instance_profile.karpenter.name
 }
 

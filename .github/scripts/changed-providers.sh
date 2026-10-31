@@ -8,7 +8,7 @@
 #
 # Reads NUL-separated paths on stdin, so git never quotes an unusual filename
 # out of the match. A path under modules/<provider>/ selects that provider. A
-# change to the gate itself (agents/, this script, or the workflow) selects
+# change to the gate itself (scripts/, this script, or the workflow) selects
 # every provider. Anything else, modules/ocp and docs included, selects none.
 set -euo pipefail
 
@@ -22,7 +22,7 @@ if [[ "${1:-}" == "--all" ]]; then
 else
   while IFS= read -r -d '' path; do
     case "$path" in
-      agents/* | .github/workflows/checks.yaml | .github/scripts/changed-providers.sh)
+      scripts/* | .github/workflows/checks.yaml | .github/scripts/changed-providers.sh)
         all=1 ;;
       modules/*/*)
         p=${path#modules/}

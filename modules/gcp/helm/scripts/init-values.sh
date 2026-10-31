@@ -746,8 +746,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   # to connect through. restartPolicy: Always makes it a native sidecar, so the
   # kubelet stops it once the Job's main container exits and the hook can
   # actually complete - a plain init container would never return, and a plain
-  # sidecar in a Job would hold it Running forever. Keep its resources in step
-  # with local.smithdb_quota_inputs.auth_proxy in infra/locals.tf.
+  # sidecar in a Job would hold it Running forever.
   _smithdb_proxy_block=""
   if [[ "$SMITHDB_USE_AUTH_PROXY" == "true" ]]; then
     _smithdb_proxy_block=$(cat << PROXYYAML
@@ -796,9 +795,8 @@ if [[ "$_enable_smithdb" == "true" ]]; then
         periodSeconds: 10
         timeoutSeconds: 1
       # A native sidecar's requests are added to the Pod total rather than
-      # merged into the init-container maximum, so this lands against the
-      # namespace ResourceQuota once per SmithDB Pod. Both are set because the
-      # quota rejects any container that omits limits.
+      # merged into the init-container maximum, so the scheduler counts them
+      # once per SmithDB Pod.
       resources:
         requests:
           cpu: "100m"

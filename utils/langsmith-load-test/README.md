@@ -4,7 +4,7 @@ Run a local agent that replies with dummy data and sends its traces to your Lang
 
 ## Set up
 
-You need Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/), and access to your instance. From this folder, create `.env`:
+You need Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13.4 or later, and access to your instance. From this folder, create `.env`:
 
 ```bash
 cp .env.example .env

@@ -99,3 +99,15 @@ variable "allowed_copy_scope" {
   description = "Which accounts copy operations may source from: \"AAD\" or \"PrivateLink\", or null for any. Validated in the root module (storage_allowed_copy_scope)."
   default     = "AAD"
 }
+
+variable "customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the account encrypts with; with customer_managed_key_identity_id it becomes the customer_managed_key block, which Azure accepts on an existing account. Validated in the root module (storage_customer_managed_key_id); empty keeps the service-managed key."
+  default     = ""
+}
+
+variable "customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity that reads customer_managed_key_id; assigned to the account. Validated in the root module."
+  default     = ""
+}
