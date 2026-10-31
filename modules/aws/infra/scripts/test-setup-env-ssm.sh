@@ -59,9 +59,10 @@ if [[ "$MOCK_MODE" == roundtrip ]]; then
 fi
 if [[ "$parameter" == */"$MOCK_TARGET" ]]; then
   case "$MOCK_MODE" in
-    missing|race|write-denied)
+    missing|race|write-denied|invalid-generated)
       echo 'An error occurred (ParameterNotFound) when calling GetParameter' >&2
       exit 254 ;;
+    invalid) printf '%s' 'short'; exit 0 ;;
     empty) exit 0 ;;
     denied)
       echo 'An error occurred (AccessDeniedException) when calling GetParameter' >&2
@@ -93,11 +94,13 @@ if [[ "$1" != rand ]]; then
   exit 0
 fi
 echo generate >> "$MOCK_LOG"
+if [[ "$MOCK_MODE" == invalid-generated ]]; then printf '%s' 'short'; exit 0; fi
 printf '%s\n' 'GeneratedTestPassword123!'
 EOF
 
 cat > "$TEST_TMP/run.sh" <<'EOF'
 case "$MOCK_PRESET" in
+  invalid) export "$MOCK_VAR=short" ;;
   true) export "$MOCK_VAR=ExportedTestPassword123!" ;;
   same) export "$MOCK_VAR=TestOnlyPassword123!" ;;
 esac
@@ -133,7 +136,9 @@ run_case() {
   local mode="$1" preset="$2" legacy="$3" expect="$4" writes="$5" generates="$6"
   local target="${7:-postgres-password}" varname="TF_VAR_postgres_password"
   [[ "$target" != langsmith-api-key-salt ]] || varname=TF_VAR_langsmith_api_key_salt
+  [[ "$target" != langsmith-admin-password ]] || varname=LANGSMITH_ADMIN_PASSWORD
   local file="$TEST_TMP/infra/.pg_password"
+  [[ "$target" != langsmith-admin-password ]] || file="$TEST_TMP/infra/.admin_password"
   [[ "$target" != langsmith-api-key-salt ]] || file="$TEST_TMP/infra/.api_key_salt"
   rm -rf "$TEST_TMP/infra/".[!.]* "$TEST_TMP/store"
   mkdir "$TEST_TMP/store"
@@ -176,6 +181,13 @@ run_case() {
   fi
   echo "PASS: $mode (preset=$preset, local=$legacy, target=$target)"
 }
+
+# Invalid credentials must never be persisted or newly exported.
+for target in postgres-password langsmith-admin-password; do
+  run_case missing invalid false failure 0 0 "$target"
+  run_case invalid false false failure 0 0 "$target"
+done
+run_case invalid-generated false false failure 0 1
 
 run_case found false false success 0 0
 run_case found same false success 0 0

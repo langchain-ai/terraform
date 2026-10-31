@@ -156,6 +156,36 @@ _ssm_put_safe() {
   return $_rc
 }
 
+_validate_postgres_password() {
+  local value="$1" reason=""
+  if [[ ${#value} -lt 8 || ${#value} -gt 128 ]]; then
+    reason="must be 8-128 characters (RDS master password limit)"
+  elif ! printf '%s' "$value" | grep -qE "^[^/@\"' ]+$"; then
+    reason="must not contain '/', '@', double quote, single quote, or space"
+  fi
+  if [[ -n "$reason" ]]; then
+    printf '%s\n' "$reason"
+    return 1
+  fi
+}
+
+_validate_admin_password() {
+  local value="$1" reason=""
+  if [[ ${#value} -lt 12 ]]; then
+    reason="must be at least 12 characters long"
+  elif ! printf '%s' "$value" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
+    reason="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
+  elif ! printf '%s' "$value" | grep -q '[a-z]'; then
+    reason="must contain at least one lowercase letter"
+  elif ! printf '%s' "$value" | grep -q '[A-Z]'; then
+    reason="must contain at least one uppercase letter"
+  fi
+  if [[ -n "$reason" ]]; then
+    printf '%s\n' "$reason"
+    return 1
+  fi
+}
+
 # ── SSM-backed secret helper ──────────────────────────────────────────────────
 # Source priority: SSM, shell, then generate or prompt.
 #
@@ -165,12 +195,14 @@ _ssm_put_safe() {
 #   $3  generator    — Shell command that outputs a new value (empty = prompt)
 #   $4  prompt_text  — Prompt string for interactive input
 #   $5  silent       — "true" to hide input (passwords); "false" for plaintext
+#   $6  validator    — optional validation function; runs before persistence/export
 _ssm_secret() {
   local ssm_name="$1"
   local varname="$2"
   local generator="$3"
   local prompt_text="$4"
   local silent="${5:-true}"
+  local validator="${6:-}" reason=""
 
   local val="" shell_val missing=false
   shell_val=$(printenv "$varname") || shell_val=""
@@ -229,19 +261,29 @@ _ssm_secret() {
         return 1
       fi
     elif [[ -t 0 ]]; then
-      # Interactive terminal — prompt the user
-      if [[ "$silent" == "true" ]]; then
+      local attempt=0
+      while true; do
+        attempt=$((attempt + 1))
         printf "%s: " "$prompt_text"
-        read -rs val
-        echo
-      else
-        printf "%s: " "$prompt_text"
-        read -r val
-      fi
-      if [[ -z "$val" ]]; then
-        echo "  ERROR: No value provided for $varname." >&2
-        return 1
-      fi
+        if [[ "$silent" == "true" ]]; then
+          read -rs val
+          echo
+        else
+          read -r val
+        fi
+        if [[ -z "$val" ]]; then
+          echo "  ERROR: No value provided for $varname."
+          return 1
+        fi
+        if [[ -z "$validator" ]] || reason=$("$validator" "$val"); then
+          break
+        fi
+        echo "  Rejected: $reason" >&2
+        if (( attempt >= 3 )); then
+          echo "ERROR: $varname is still invalid after $attempt attempts. Nothing was saved." >&2
+          return 1
+        fi
+      done
     else
       # Non-interactive (CI, piped stdin, redirected) — cannot prompt.
       # Reported on stdout, not stderr: a sandboxed shell that surfaces only
@@ -254,6 +296,16 @@ _ssm_secret() {
       echo "           ./infra/scripts/manage-ssm.sh set $ssm_name '<value>'"
       return 1
     fi
+  fi
+
+  if [[ -n "$validator" ]] && ! reason=$("$validator" "$val"); then
+    echo "ERROR: $varname is invalid — $reason. Nothing was saved or exported." >&2
+    if [[ "$missing" == true ]]; then
+      echo "       Correct the shell value and rerun setup." >&2
+    else
+      echo "       Recover the existing SSM credential with manage-ssm.sh before rerunning setup." >&2
+    fi
+    return 1
   fi
 
   if [[ "$missing" == true ]]; then
@@ -313,24 +365,7 @@ export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 # Hex is RDS-safe (no / @ " ' space) and URI-safe. Terraform still urlencodes
 # the password in connection URLs for env/SSM overrides that use other symbols.
 _ssm_secret "postgres-password" "TF_VAR_postgres_password" \
-  "openssl rand -hex 32" "" "true" || return 1
-
-# Reject passwords RDS cannot accept before Terraform validates them.
-if [[ -n "${TF_VAR_postgres_password:-}" ]]; then
-  _pg_error=""
-  if [[ ${#TF_VAR_postgres_password} -lt 8 || ${#TF_VAR_postgres_password} -gt 128 ]]; then
-    _pg_error="must be 8-128 characters (RDS master password limit)"
-  elif ! printf '%s' "$TF_VAR_postgres_password" | grep -qE "^[^/@\"' ]+$"; then
-    _pg_error="must not contain '/', '@', double quote, single quote, or space"
-  fi
-  if [[ -n "$_pg_error" ]]; then
-    echo "ERROR: PostgreSQL admin password is invalid — ${_pg_error}." >&2
-    echo "       Unset TF_VAR_postgres_password," >&2
-    echo "       delete the SSM parameter at ${_ssm_prefix}/postgres-password," >&2
-    echo "       and re-source this script." >&2
-    return 1
-  fi
-fi
+  "openssl rand -hex 32" "" "true" _validate_postgres_password || return 1
 
 # ── Redis auth token (auto-generated, stable after first deployment) ──────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
@@ -363,28 +398,7 @@ _ssm_secret "langsmith-license-key" "LANGSMITH_LICENSE_KEY" \
   "" "LangSmith license key" "true" || return 1
 
 _ssm_secret "langsmith-admin-password" "LANGSMITH_ADMIN_PASSWORD" \
-  "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true" || return 1
-
-# Check chart password requirements before the later Helm deployment.
-if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
-  _pw_error=""
-  if [[ ${#LANGSMITH_ADMIN_PASSWORD} -lt 12 ]]; then
-    _pw_error="must be at least 12 characters long"
-  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
-    _pw_error="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
-  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -q '[a-z]'; then
-    _pw_error="must contain at least one lowercase letter"
-  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -q '[A-Z]'; then
-    _pw_error="must contain at least one uppercase letter"
-  fi
-  if [[ -n "$_pw_error" ]]; then
-    echo "ERROR: Admin password is invalid — ${_pw_error}." >&2
-    echo "       Unset LANGSMITH_ADMIN_PASSWORD," >&2
-    echo "       delete the SSM parameter at ${_ssm_prefix}/langsmith-admin-password," >&2
-    echo "       and re-source this script with a valid password." >&2
-    return 1
-  fi
-fi
+  "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true" _validate_admin_password || return 1
 
 # ── Feature encryption keys ──────────────────────────────────────────────────
 # Fernet keys for Deployments, Fleet, Insights, and LangSmith Chat (formerly Polly).
