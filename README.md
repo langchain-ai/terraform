@@ -23,6 +23,16 @@ The AWS, Azure, and GCP directories are self-contained deployments with a `Makef
 
 For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byoc/README.md) for the customer-side IAM role and AWS VPC reference modules.
 
+## Reference examples
+
+Worked examples of one way to run LangSmith outside the supported providers.
+LangChain supports the LangSmith application under your agreement, not the
+infrastructure these examples add.
+
+| Example | Guide | Cluster | Status |
+|---|---|---|---|
+| Self-managed Kubernetes | [`modules/baremetal/`](modules/baremetal/README.md) | an existing cluster (tested on kubeadm and k3s) | Example |
+
 ## What you get
 
 - **Two-pass deploy.** `infra/` provisions the cloud foundation; the Helm scripts install the LangSmith chart.

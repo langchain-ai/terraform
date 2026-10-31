@@ -1,0 +1,218 @@
+# Copied from modules/gcp/helm/values/examples (cloud-neutral); keep in step with it.
+# On bare metal, clickhouse/postgres/redis blocks below are inert: the baremetal
+# module runs SmithDB-only with external Postgres/Redis built by Terraform.
+
+# ============================================================================
+# ABSOLUTE MINIMUM — NOT FOR ANY REAL WORKLOAD
+#
+# This profile exists to keep LangSmith alive at the lowest possible cost.
+# Single replica, rock-bottom resource requests sized from actual kubectl-top
+# measurements on an idle cluster. The goal is to fit everything on a single
+# small node (e.g. 4 vCPU, 16 Gi).
+#
+# WILL break under any meaningful traffic. OOM kills, timeouts, and degraded
+# UX are expected and acceptable. Do not file bugs against this profile.
+#
+# Use cases: cost parking, weekend standby, CI smoke tests, demos with a
+# single user clicking around.
+#
+# For actual dev work: use langsmith-values-sizing-dev.yaml
+# For production:      use langsmith-values-sizing-production.yaml
+# ============================================================================
+
+# -- Application components ----------------------------------------------------
+#
+# The core HPAs are pinned to 1 replica. The base values.yaml turns on 7 of
+# these HPAs with higher bounds (queue: min 3, max 10, 50% CPU target). This
+# file pins ingestQueue too. The CPU requests in this file are small, so the
+# HPA reads normal load as several hundred percent and scales out until the
+# nodes have no free CPU.
+#
+# backend, hostBackend, and playground import many Python modules at startup.
+# Their CPU limits are higher than the other limits here, so that each one
+# starts inside its startup probe. playground also gets a longer probe
+# (30 x 10 s, not 6 x 10 s).
+
+backend:
+  e2eTest:
+    enabled: false
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "576Mi"
+      limits:
+        cpu: "2"
+        memory: "1Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+frontend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "10m"
+        memory: "32Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+platformBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+playground:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "384Mi"
+      limits:
+        cpu: "1"
+        memory: "512Mi"
+    startupProbe:
+      httpGet:
+        path: "/ok"
+        port: 1988
+      failureThreshold: 30
+      periodSeconds: 10
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+queue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "768Mi"
+      limits:
+        cpu: "1"
+        memory: "1536Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+ingestQueue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+aceBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+# -- Deployments feature components --------------------------------------------
+
+hostBackend:
+  deployment:
+    replicas: 1
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
+
+listener:
+  deployment:
+    replicas: 1
+operator:
+  deployment:
+    replicas: 1
+# -- Agent Builder infrastructure ----------------------------------------------
+
+fleetToolServer:
+  deployment:
+    replicas: 1
+fleetTriggerServer:
+  deployment:
+    replicas: 1
+# -- In-cluster data services (Tier 1 only) -----------------------------------
+# These apply when using in-cluster postgres, redis, and clickhouse.
+# If pointing at managed services (Cloud SQL, Memorystore, ClickHouse Cloud),
+# these blocks are ignored — the StatefulSets won't be created.
+#
+# Bare metal: StatefulSets use the default StorageClass (local-path on node NVMe).
+# ClickHouse is the one component that actually uses its resources.
+# Don't go below this or queries will time out.
+
+postgres:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+redis:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"

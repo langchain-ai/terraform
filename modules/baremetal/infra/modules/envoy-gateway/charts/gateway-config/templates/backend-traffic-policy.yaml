@@ -1,0 +1,26 @@
+{{- if .Values.routeTimeout }}
+# Request timeout for the LangSmith chart's HTTPRoute and the LAN catch-all.
+# Envoy Gateway's default is 15 s, which turns slow SmithDB reads into HTTP 504;
+# nginx in the chart allows 300 s. Those two routes only, never the Gateway: a
+# Gateway-wide timeout reached the operator's agent routes and the stream route
+# deploy.sh applies, whose run streams must have none (the cloud modules' #424
+# and #478, where a Gateway-wide policy was turned down in review).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ .Values.gatewayName }}-timeouts
+  namespace: {{ required "gatewayNamespace is required" .Values.gatewayNamespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ .Values.chartRouteName }}
+    {{- if .Values.lanRoute.enabled }}
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: langsmith-lan
+    {{- end }}
+  timeout:
+    http:
+      requestTimeout: {{ .Values.routeTimeout | quote }}
+{{- end }}

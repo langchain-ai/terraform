@@ -100,6 +100,7 @@ fi
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/plan-tests-$provider.XXXXXX") || {
   echo "plan-tests: could not create a temp directory." >&2; exit 2; }
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
+mkdir -p "$WORK/infra"
 
 # Gitignored Terraform inputs are excluded so the suite reads only what its
 # test files declare. terraform test auto-loads *.tfvars, *.tfvars.json, and
@@ -126,20 +127,32 @@ if ! tar -C "$INFRA" \
      --exclude='.DS_Store' \
      --exclude='plan.out' \
      -cf - . \
-   | tar -C "$WORK" -xf -; then
+   | tar -C "$WORK/infra" -xf -; then
   echo "plan-tests: could not copy $arg/infra to a temp directory." >&2
   exit 2
+fi
+
+# A root may read its provider's example Helm values (baremetal's budget gate
+# sizes the app from helm/values/examples). Copy only that directory, beside
+# infra/ as in the repo, so ${path.module}/../helm/... resolves.
+EXAMPLES="$PROVIDER_DIR/helm/values/examples"
+if [ -d "$EXAMPLES" ]; then
+  mkdir -p "$WORK/helm/values/examples"
+  if ! tar -C "$EXAMPLES" -cf - . | tar -C "$WORK/helm/values/examples" -xf -; then
+    echo "plan-tests: could not copy $arg/helm/values/examples to a temp directory." >&2
+    exit 2
+  fi
 fi
 
 mkdir -p "$TF_PLUGIN_CACHE_DIR"
 
 echo "plan-tests: $arg"
-if ! (cd "$WORK" && terraform init -backend=false -input=false -no-color >/dev/null); then
+if ! (cd "$WORK/infra" && terraform init -backend=false -input=false -no-color >/dev/null); then
   echo "plan-tests: terraform init failed in $arg/infra." >&2
   exit 2
 fi
 
-if ! (cd "$WORK" && terraform test -no-color); then
+if ! (cd "$WORK/infra" && terraform test -no-color); then
   echo "" >&2
   echo "plan-tests: failing tests in $TESTS_REL" >&2
   exit 1

@@ -1,0 +1,41 @@
+# LangSmith Deployments (agent deployments): turns on host-backend, listener and
+# the operator. init-values.sh copies this file to ../langsmith-values-agent-deploys.yaml
+# when enable_deployments = true; deploy.sh loads it after the generated values.
+#
+# Prerequisites:
+#   - The Deployments entitlement in your LangSmith license.
+#   - enable_deployments = true in terraform.tfvars, then make apply. That installs
+#     KEDA (the operator scales each agent deployment with a ScaledObject) and adds
+#     config.deployment (enabled, tlsEnabled from langsmith_url_scheme) and the
+#     component sizing to langsmith-values-overrides.yaml.
+#
+# What's NOT here, on purpose:
+#   - resources: Terraform writes them from the same table the budget gate counts.
+#   - operator.templates: the chart's default agent Deployment template is used
+#     as is (no cloud ServiceAccount or node pool).
+#
+# Agent deployments are exposed through the module's Gateway: the operator creates
+# an HTTPRoute per deployment on gateway.name (set by Terraform), at
+# <LangSmith URL>/lgp/<deployment>. Each deployment also gets a queue worker, a
+# Redis Deployment and a Postgres StatefulSet with a 20 GiB PVC on the default
+# StorageClass: about 3.2 CPU and 8.25 GiB requested per deployment with the
+# operator's defaults (expected_agent_deployments reserves that in the budget).
+
+hostBackend:
+  enabled: true
+
+listener:
+  enabled: true
+
+operator:
+  enabled: true
+  deployment:
+    # The operator creates one HTTPRoute per agent deployment at runtime
+    # (/lgp/<deployment>/...) and, with this set, writes timeouts.request on
+    # each, so runs/stream is not cut mid-response; 0s turns the timeout off,
+    # as on langsmith-fleet-streams. The same setting as the Azure module
+    # (#478); operator 0.1.38 or later reads it. Helm replaces lists, so this
+    # list replaces any operator.deployment.extraEnv set elsewhere.
+    extraEnv:
+      - name: HTTPROUTE_REQUEST_TIMEOUT
+        value: "0s"

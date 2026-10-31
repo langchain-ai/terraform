@@ -1,0 +1,47 @@
+# Recommended settings for real workloads on bare metal. Copy, adjust, redeploy:
+#
+#   cp helm/values/langsmith-values-local.yaml.example helm/values/langsmith-values-local.yaml
+#   make deploy
+#
+# deploy.sh passes langsmith-values-local.yaml to Helm last, so it overrides every
+# generated file. It's gitignored. Each setting below says what it does, why, and
+# the assumption behind the value; size the numbers for your load with SIZING.md.
+# Blob storage is not here: Terraform turns it on by default (enable_blob_storage).
+
+config:
+  settings:
+    # How long each run stays in Redis after it is ingested (chart default 21600 = 6 h).
+    # Redis memory grows linearly with it: runs/s × retained KB per run × seconds.
+    # Rule: at least 3 × your worst ingest backlog age (runs still queued when their
+    # Redis entry expires are dropped without an error), and at least as long as
+    # your longest-running run. 30 minutes assumes backlogs drain within ~10 minutes.
+    redisRunsExpirySeconds: "1800"
+
+# ingest-queue workers per pod = GO_INGESTION_CONCURRENCY_PER_CPU × the NODE's CPU
+# count (not the pod's limit). The drain is latency-bound, not CPU-bound, so the
+# default (1 per core) underuses small nodes. 4 assumes 6–8 core nodes and gives
+# ~24–32 workers per pod; aim for total workers ≈ runs/s ÷ 10 with blob storage on.
+ingestQueue:
+  deployment:
+    extraEnv:
+      - name: GO_INGESTION_CONCURRENCY_PER_CPU
+        value: "4"
+
+# SmithDB-only installs: without this, feedback on recent runs looks them up in
+# ClickHouse (which isn't there) and the ingest batch fails with HTTP 500 under
+# load. Trade-off: feedback on runs already expired from Redis isn't processed.
+# Remove when your LangSmith version fixes the lookup.
+platformBackend:
+  deployment:
+    extraEnv:
+      - name: ENABLE_EVALUATE_EXPIRED_EXPERIMENTS
+        value: "false"
+
+smithdb:
+  ingestion:
+    # Two ingestion pods spread writes (a project's traces are split across them)
+    # and remove a single point of failure. Needs the CPU/memory in your budget.
+    autoscaling:
+      hpa:
+        minReplicas: 2
+        maxReplicas: 2

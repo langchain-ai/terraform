@@ -1,0 +1,10 @@
+# SSO (OIDC), added by deploy.sh when enable_sso_oidc = true, as on the cloud modules.
+# The client ID, client secret and issuer URL come from the langsmith-config Secret
+# (oauth_client_id, oauth_client_secret, oauth_issuer_url), which make setup-env asks for.
+# basicAuth must be off: the chart rejects basicAuth and oauth both enabled.
+# One way: LangSmith does not support moving a self-hosted install from SSO back to basic auth.
+config:
+  basicAuth:
+    enabled: false
+  oauth:
+    enabled: true
