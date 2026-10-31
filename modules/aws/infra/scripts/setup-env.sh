@@ -218,7 +218,6 @@ _ssm_secret() {
   fi
   rm -f "$_errfile"
 
-  # 0. Use exported values as-is; backfill only a confirmed-missing parameter.
   if [[ -n "$(printenv "$varname")" ]]; then
     if [[ -z "$val" ]]; then
       echo "  $varname is set in env but missing from SSM — backfilling → $_path"

@@ -30,7 +30,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ "$operation" == "put-parameter" ]]; then
-  # A racing writer must not be overwritten, regardless of the earlier read.
   jq -e '.Overwrite == false' "$json" >/dev/null || exit 99
   echo write >> "$MOCK_LOG"
   case "$MOCK_MODE" in
