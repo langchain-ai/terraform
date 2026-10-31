@@ -15,14 +15,14 @@
 # Secret storage:
 #   Secrets are stored in GCP Secret Manager under:
 #     projects/{project_id}/secrets/langsmith-{name_prefix}-{environment}-{key}
-#   On subsequent runs, this script reads secrets FROM Secret Manager — no
-#   re-prompting needed. If Secret Manager is not yet enabled (first run),
-#   secrets are exported for this session only and stored once the API is up.
+#   Secret Manager is authoritative; no local password backups are written.
+#   Shell credentials can seed only a confirmed-missing secret. Read failures,
+#   conflicting shell credentials, and write failures stop setup.
 #
 # Prerequisites:
 #   gcloud auth login   (the script uses gcloud CLI credentials, not ADC), with
 #   roles/secretmanager.admin, or roles/secretmanager.secretAccessor with roles/editor
-#   Secret Manager API must be enabled (enabled automatically by terraform apply)
+#   Enable secretmanager.googleapis.com before setup (including the first run).
 #
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced. Those
 # options would leak into the caller's shell and leave it armed to exit on the
@@ -31,7 +31,7 @@
 # The inverse of the guard the executable scripts carry: this one has to be
 # sourced, because running it as a subprocess would export TF_VAR_* into a shell
 # that exits immediately afterwards, silently discarding every value.
-if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
+if [[ "${ZSH_EVAL_CONTEXT:-}" != *:file && "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
   echo "ERROR: source this script, do not run it:" >&2
   echo "         source ${0}" >&2
   echo "       Running it exports the TF_VAR_* values into a subshell that then exits," >&2
@@ -95,24 +95,6 @@ export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
 #   projects/{project_id}/secrets/langsmith-{name_prefix}-{environment}-{key}
 _sm_prefix="langsmith-${_name_prefix}-${_environment}"
 
-# Variables that could not be resolved from the environment or Secret Manager,
-# collected by _sm_secret and reported together at the end. _sm_secret runs in
-# this shell (its values come back via export, not command substitution), so the
-# append inside it is visible here.
-_missing_vars=""
-# Variables whose Secret Manager read failed for a reason other than "absent"
-# (NOT_FOUND, or the API not enabled).
-_unreadable_vars=""
-
-# ── Warn on pre-exported secrets ──────────────────────────────────────────────
-_precheck_var="TF_VAR_langsmith_license_key"
-if [[ -n "$(printenv "$_precheck_var")" ]]; then
-  echo "WARNING: $_precheck_var is already set in the environment."
-  echo "         setup-env.sh will skip re-prompting and will NOT write to Secret Manager for this key."
-  echo "         To rotate or re-store: unset $_precheck_var && source infra/scripts/setup-env.sh"
-  echo ""
-fi
-
 # ── Bounded gcloud calls ──────────────────────────────────────────────────────
 # Bounded by timeout(1) when available so a sandbox with blocked egress fails
 # fast instead of stalling on a full TCP timeout. timeout is not in the macOS
@@ -132,52 +114,43 @@ _gcloud_bounded() {
   fi
 }
 
-# ── Safe Secret Manager write ─────────────────────────────────────────────────
-# Creates a new secret version (or the secret itself if it doesn't exist yet).
-# Accepts value via stdin to avoid exposing it in the process list.
+# ── Create-only Secret Manager write ──────────────────────────────────────────
+# Creating with data rejects concurrent creation instead of adding a new version
+# to someone else's credential. A partial creation requires explicit recovery.
 _sm_put() {
   local _name="$1" _val="$2"
   local _secret_id="${_sm_prefix}-${_name}"
-
-  # Create the secret resource if it doesn't exist
-  if ! _gcloud_bounded secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
-    _gcloud_bounded secrets create "$_secret_id" \
-      --project="$_project_id" \
-      --replication-policy="automatic" \
-      --labels="managed-by=setup-env,langsmith-env=${_environment}" \
-      --quiet &>/dev/null || return 1
+  if ! printf '%s' "$_val" | _gcloud_bounded secrets create "$_secret_id" \
+    --project="$_project_id" --data-file=- --replication-policy="automatic" \
+    --labels="managed-by=setup-env,langsmith-env=${_environment}" --quiet >/dev/null 2>&1; then
+    echo "ERROR: Could not create ${_secret_id} in Secret Manager." >&2
+    echo "       Check access and whether another setup created it; recover any missing version, then rerun." >&2
+    return 1
   fi
-
-  # Add a new version with the value
-  printf '%s' "$_val" | _gcloud_bounded secrets versions add "$_secret_id" \
-    --project="$_project_id" \
-    --data-file=- \
-    --quiet &>/dev/null
 }
 
 # ── Secret Manager read ───────────────────────────────────────────────────────
-# Prints the value and returns 0. Returns 3 when the secret is absent: NOT_FOUND,
-# or the API not yet enabled on a first run before terraform apply. Returns 1 for
-# any other failure. An expired login, a missing secretmanager.versions.access
-# permission, or the 30 s timeout must not look absent, because the caller then
-# generates a new value and replaces a stable key.
+# Return 3 only for an absent secret resource. An existing resource without an
+# accessible latest version requires recovery, not a replacement credential.
 _sm_get() {
-  local _name="$1"
+  local _name="$1" _err _rc=0
   local _secret_id="${_sm_prefix}-${_name}"
-  local _err _rc=0
   _err="$(mktemp)" || return 1
   _gcloud_bounded secrets versions access latest \
-    --secret="$_secret_id" \
-    --project="$_project_id" \
-    --quiet 2>|"$_err" || _rc=$?
+    --secret="$_secret_id" --project="$_project_id" --quiet 2>|"$_err" || _rc=$?
   if (( _rc != 0 )); then
-    if grep -qE 'NOT_FOUND|SERVICE_DISABLED|has not been used in project' "$_err"; then
-      _rc=3
-    else
-      echo "ERROR: cannot read ${_secret_id} from Secret Manager (gcloud exit ${_rc}):" >&2
-      sed 's/^/       /' "$_err" >&2
-      _rc=1
+    if grep -qF ') NOT_FOUND:' "$_err"; then
+      if _gcloud_bounded secrets describe "$_secret_id" \
+        --project="$_project_id" --quiet >/dev/null 2>|"$_err"; then
+        echo "ERROR: ${_secret_id} exists but its latest version is unavailable. Recover it before rerunning setup." >&2
+      elif grep -qF ') NOT_FOUND:' "$_err"; then
+        rm -f "$_err"
+        return 3
+      fi
     fi
+    echo "ERROR: cannot read ${_secret_id} from Secret Manager. Fix access or recover its latest version." >&2
+    sed 's/^/       /' "$_err" >&2
+    _rc=1
   fi
   rm -f "$_err"
   return "$_rc"
@@ -194,8 +167,8 @@ _sm_report_invalid() {
   echo "ERROR: $varname is invalid — ${reason}." >&2
   case "$origin" in
     env)
-      echo "       The value comes from the $varname environment variable, not from" >&2
-      echo "       Secret Manager. Nothing was written. Clear it and re-source this" >&2
+      echo "       The credential comes from $varname in the shell." >&2
+      echo "       Nothing was written. Clear it and re-source this" >&2
       echo "       script to fall back to the stored secret:" >&2
       echo "         unset $varname" >&2
       ;;
@@ -213,8 +186,8 @@ _sm_report_invalid() {
 }
 
 # ── sm_secret helper ──────────────────────────────────────────────────────────
-# Reads a secret from Secret Manager; prompts or auto-generates if missing;
-# exports as a TF_VAR_* environment variable.
+# Read Secret Manager first; use the shell, prompt, or generate only if absent.
+# Persist new credentials before exporting them. Setup never rotates a secret.
 #
 # Args:
 #   $1  sm_name      — Secret Manager leaf name (e.g. "postgres-password")
@@ -239,47 +212,25 @@ _sm_secret() {
   local _sm_rc=0
   local _secret_id="${_sm_prefix}-${sm_name}"
 
-  # 0. Already exported in the environment — use as-is, backfill SM if missing.
-  if [[ -n "$(printenv "$varname")" ]]; then
-    val="$(printenv "$varname")"
-    # Check before the backfill, not after. A backfill writes this value to
-    # Secret Manager, so validating later leaves the invalid value stored and
-    # forces the operator to delete the secret to recover.
-    if [[ -n "$validator" ]] && ! _reason=$("$validator" "$val"); then
-      _sm_report_invalid "$varname" "$_secret_id" "env" "$_reason"
-      return 1
-    fi
-    if ! _gcloud_bounded secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
-      echo "  $varname is set in env but missing from Secret Manager — backfilling → ${_secret_id}"
-      if ! _sm_put "$sm_name" "$val"; then
-        echo "  WARNING: Secret Manager write failed for ${_secret_id}"
-        echo "           Ensure secretmanager.googleapis.com is enabled and you have secretmanager.admin."
-      fi
-    fi
-    return
-  fi
-
-  # 1. Try Secret Manager. A read failure other than "absent" stops here: the
-  # secret can exist, so a prompt or a generator would replace the stored value.
+  local shell_val origin="secret-manager"
+  shell_val=$(printenv "$varname") || shell_val=""
   val=$(_sm_get "$sm_name") || _sm_rc=$?
   if [[ "$_sm_rc" != 0 && "$_sm_rc" != 3 ]]; then
-    # On stdout, like the non-interactive failure below: _sm_get can only use stderr.
-    echo "  ERROR: cannot read ${_secret_id}. Nothing was generated, stored, or exported for $varname."
-    if [[ -z "$_unreadable_vars" ]]; then
-      echo "         Check: 'gcloud auth login', network access, and that the latest"
-      echo "         version is enabled. The identity needs roles/secretmanager.admin, or"
-      echo "         roles/secretmanager.secretAccessor with roles/editor. roles/editor"
-      echo "         alone cannot read secrets. Then re-source this script."
-    fi
-    _unreadable_vars="$_unreadable_vars $varname"
     return 1
   fi
-
-  # A stored value can predate this rule, so it gets the same gate. Exporting it
-  # unchecked only moves the failure to helm upgrade, after Pass 1 has built the
-  # whole stack.
+  if [[ "$_sm_rc" == 0 && -z "$val" ]]; then
+    echo "ERROR: ${_secret_id} has an empty credential. Recover it before rerunning setup." >&2
+    return 1
+  fi
+  if [[ "$_sm_rc" == 3 ]]; then
+    val="$shell_val"
+    origin="env"
+  elif [[ -n "$shell_val" && "$shell_val" != "$val" ]]; then
+    echo "ERROR: $varname in the shell differs from Secret Manager. Investigate before rerunning setup." >&2
+    return 1
+  fi
   if [[ -n "$val" && -n "$validator" ]] && ! _reason=$("$validator" "$val"); then
-    _sm_report_invalid "$varname" "$_secret_id" "secret-manager" "$_reason"
+    _sm_report_invalid "$varname" "$_secret_id" "$origin" "$_reason"
     return 1
   fi
 
@@ -333,9 +284,8 @@ _sm_secret() {
       echo "         Pre-export it before sourcing this script:"
       echo "           export $varname='<value>'"
       echo "         Or populate Secret Manager directly:"
-      echo "           printf '%s' '<value>' | gcloud secrets versions add ${_secret_id} \\"
-      echo "             --project=${_project_id} --data-file=-"
-      _missing_vars="$_missing_vars $varname"
+      echo "           printf '%s' '<value>' | gcloud secrets create ${_secret_id} \\"
+      echo "             --project=${_project_id} --data-file=- --replication-policy=automatic"
       return 1
     fi
 
@@ -345,14 +295,11 @@ _sm_secret() {
       _sm_report_invalid "$varname" "$_secret_id" "generated" "$_reason"
       return 1
     fi
+  fi
 
-    # Store in Secret Manager
-    if _sm_put "$sm_name" "$val"; then
-      echo "  Stored $varname → Secret Manager: ${_secret_id}"
-    else
-      echo "  WARNING: Secret Manager unavailable — value exported for this session only."
-      echo "           Re-run setup-env.sh after 'terraform apply' to persist to Secret Manager."
-    fi
+  if [[ "$_sm_rc" == 3 ]]; then
+    _sm_put "$sm_name" "$val" || return 1
+    echo "  Stored $varname → Secret Manager: ${_secret_id}"
   fi
 
   export "$varname"="$val"
@@ -409,22 +356,22 @@ _fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 _sm_secret "postgres-password" "TF_VAR_postgres_password" \
-  "" "PostgreSQL admin password" "true"
+  "" "PostgreSQL admin password" "true" || return 1
 
 # ── LangSmith license key ─────────────────────────────────────────────────────
 _sm_secret "langsmith-license-key" "TF_VAR_langsmith_license_key" \
-  "" "LangSmith license key" "true"
+  "" "LangSmith license key" "true" || return 1
 
 # ── Core LangSmith secrets (must stay stable after first deploy) ─────────────
 _sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
-  "openssl rand -base64 32 | tr -d '\n'" "" "true"
+  "openssl rand -base64 32 | tr -d '\n'" "" "true" || return 1
 
 _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
-  "openssl rand -base64 32 | tr -d '\n'" "" "true"
+  "openssl rand -base64 32 | tr -d '\n'" "" "true" || return 1
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
-    "_ed25519_private_jwk_gen" "" "true"
+    "_ed25519_private_jwk_gen" "" "true" || return 1
 fi
 
 # ── Admin password rule ───────────────────────────────────────────────────────
@@ -480,48 +427,16 @@ _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
 # WARNING: Never change these after the first deployment — existing data will
 # become unreadable. Rotation requires a coordinated migration procedure.
 _sm_secret "deployments-encryption-key" "TF_VAR_langsmith_deployments_encryption_key" \
-  "$_fernet_gen" "" "true"
+  "$_fernet_gen" "" "true" || return 1
 
 _sm_secret "agent-builder-encryption-key" "TF_VAR_langsmith_agent_builder_encryption_key" \
-  "$_fernet_gen" "" "true"
+  "$_fernet_gen" "" "true" || return 1
 
 _sm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" \
-  "$_fernet_gen" "" "true"
+  "$_fernet_gen" "" "true" || return 1
 
 _sm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
-  "$_fernet_gen" "" "true"
-
-# ── Unreadable secrets ────────────────────────────────────────────────────────
-# A stored value may exist for these, so stop before the summary. With the
-# variable unset, init-values.sh can generate a new apiKeySalt or jwtSecret.
-if [[ -n "$_unreadable_vars" ]]; then
-  echo ""
-  echo "ERROR: Secret Manager read failed for:$_unreadable_vars"
-  echo "       Nothing was generated or stored for them. Fix the cause shown above,"
-  echo "       then re-run: source infra/scripts/setup-env.sh"
-  return 1
-fi
-
-# ── Non-interactive failure ───────────────────────────────────────────────────
-# Only populated when stdin is not a tty and a secret was in neither the
-# environment nor Secret Manager. Reported here, once, on stdout — and before the
-# summary, which would otherwise claim the environment was set up successfully.
-if [[ -n "$_missing_vars" ]]; then
-  echo ""
-  echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
-  echo "       Missing:$_missing_vars"
-  echo ""
-  echo "       Run it from a real terminal, or pre-set the values:"
-  # Split on spaces with tr rather than an unquoted expansion: this script is
-  # sourced, and zsh does not word-split, so `for _v in $_missing_vars` would
-  # print every name on a single bogus export line.
-  echo "$_missing_vars" | tr ' ' '\n' | while read -r _v; do
-    if [[ -n "$_v" ]]; then echo "         export $_v='<value>'"; fi
-  done
-  echo ""
-  echo "       Then re-run: source infra/scripts/setup-env.sh"
-  return 1
-fi
+  "$_fernet_gen" "" "true" || return 1
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

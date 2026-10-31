@@ -72,8 +72,9 @@ source ./infra/scripts/setup-env.sh
 This script:
 - Reads `name_prefix` and `environment` from `terraform.tfvars` to build the SSM path prefix
 - Reads existing secrets from SSM Parameter Store (no prompts on re-runs)
-- Prompts for new values on first run: `postgres_password`, `license_key`, `admin_password`
-- Auto-generates stable secrets on first run: `redis_auth_token`, `api_key_salt`, `jwt_secret`
+- Prompts for new values on first run: `license_key`, `admin_password`
+- Auto-generates stable secrets on first run, including `postgres_password`, `redis_auth_token`, `api_key_salt`, and `jwt_secret`
+- Persists credentials in SSM before exporting; creates no separate local password backups
 - Exports `TF_VAR_*` environment variables for Terraform
 
 **Critical invariants — never violate on a live deployment:**
@@ -296,7 +297,7 @@ Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tf
 |-------|---------|-----|
 | Precondition failed: postgres_password / redis_auth_token is required | `terraform plan` fails with "Resource precondition failed" | Re-source setup-env.sh in the SAME shell before running terraform: `source ./infra/scripts/setup-env.sh` — TF_VAR_* do not persist across shell sessions |
 | Secrets Manager "secret scheduled for deletion" | `apply` fails with `InvalidRequestException: You can't create this secret because a secret with this name is already scheduled for deletion` | **No longer applicable** — `modules/secrets/` has been removed. Secrets are managed exclusively via SSM Parameter Store + ESO. If you still have a lingering Secrets Manager secret from a prior deploy, force-delete it: `aws secretsmanager delete-secret --region <region> --secret-id <name_prefix>-<environment>-langsmith --force-delete-without-recovery` |
-| `setup-env.sh` keeps showing "Migrating postgres-password → SSM" on every run | Migration message on each source | The IAM user may lack `ssm:PutParameter` — the value loads from the local `.pg_password` file as a fallback; safe for testing but fix permissions for production |
+| `setup-env.sh` cannot save a missing parameter to SSM | Setup reports an SSM write error and stops | Check `ssm:PutParameter` permission and AWS access, then rerun setup. A locally saved value does not bypass an SSM write failure. |
 | EBS CSI addon not ready when StorageClass is created | `Error: Failed to create StorageClass` | Re-run `terraform apply` — EKS addon becomes active asynchronously |
 | ESO or KEDA Helm release times out | `context deadline exceeded` on k8s_bootstrap module | Uninstall the stuck release, then re-apply: `helm uninstall external-secrets -n external-secrets` |
 | Node group not yet scheduled | StorageClass or pods stuck Pending | Wait 2–3 min for cluster autoscaler to provision the first node, then re-apply |

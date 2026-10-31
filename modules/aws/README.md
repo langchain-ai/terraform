@@ -625,18 +625,25 @@ source infra/scripts/setup-env.sh
 Builds the SSM path prefix from `terraform.tfvars`: `/langsmith/{name_prefix}-{environment}/`
 
 For each secret it follows this priority order:
-1. Already exported in the shell (`TF_VAR_*` or `LANGSMITH_*`) — use it, backfill SSM if missing
-2. Exists in SSM Parameter Store — read it (no prompt)
-3. Has an auto-generator — generate it (`openssl rand`), store in SSM
-4. Interactive terminal — prompt you, store in SSM
-5. No terminal (CI) — error with instructions to pre-export
+
+1. SSM Parameter Store — read and decrypt it; a read error stops setup
+2. Locally saved value — import it only if SSM confirms the parameter is missing
+3. Exported shell value (`TF_VAR_*` or `LANGSMITH_*`) — import it if both SSM and the local file are missing
+4. No value in any source — generate it where supported, otherwise prompt
+5. No terminal (CI) and an input is still required — stop with instructions to supply it
+
+SSM is the persistent credential store. Setup exports each resolved credential to the shell without creating or refreshing local password backup files. Legacy locally saved values remain import-only; setup does not delete them. After a successful setup, you can remove those legacy files once you have verified the credentials in SSM. A different credential already exported in the shell stops setup for investigation; neither credential is displayed. Setup never overwrites an existing SSM parameter. Use `infra/scripts/manage-ssm.sh` for intentional SSM changes.
+
+**Changed setup requirements:** SSM read/decryption access is required even when the shell already contains credentials. SSM write failures, empty credentials, and concurrent parameter creation stop setup. Existing SSM names, shell variables, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials; this change removes separate setup password backups, not every local copy.
 
 **SSM parameters it manages (`/langsmith/{name_prefix}-{environment}/`):**
 
 | SSM key | How it's set | Notes |
 |---|---|---|
-| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. Override with `TF_VAR_postgres_password`; setup-env.sh rejects a value RDS will not accept. |
+| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. An initial value can come from `TF_VAR_postgres_password` when SSM and the local file are missing. |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
+| `sandbox-juicefs-redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | Created only when Sandboxes are enabled |
+| `sandbox-callback-signing-jwk` | Auto-generated (Ed25519 private JWK) | Created only when Sandboxes are enabled |
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
 | `langsmith-license-key` | You enter it | From your LangChain account |
