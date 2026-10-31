@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Regression checks for secret precedence, persistence, and failures. Runs the
 # complete setup script in an isolated shell with a fake AWS CLI and no credentials.
+# Requires jq; the fake OpenSSL also handles sandbox key-generation calls.
 # Usage: bash modules/aws/infra/scripts/test-setup-env-ssm.sh [bash|zsh]
 set -euo pipefail
 
@@ -84,7 +85,11 @@ EOF
 cat > "$TEST_TMP/bin/openssl" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" != rand ]]; then
-  exec "$REAL_OPENSSL" "$@"
+  # Synthetic key bytes let persistence checks run without Ed25519 tooling.
+  while [[ $# -gt 1 && "$1" != -out ]]; do shift; done
+  [[ $# -gt 1 ]] || exit 99
+  printf '%032d' 0 > "$2"
+  exit 0
 fi
 echo generate >> "$MOCK_LOG"
 printf '%s\n' 'GeneratedTestPassword123!'
@@ -200,7 +205,7 @@ for stage in create read import; do
   fi
   : > "$TEST_TMP/calls"
   if ! env -i PATH="$TEST_TMP/bin:$PATH" HOME="$TEST_TMP" \
-    REAL_OPENSSL="$(command -v openssl)" MOCK_MODE=roundtrip MOCK_STAGE="$stage" \
+    MOCK_MODE=roundtrip MOCK_STAGE="$stage" \
     MOCK_ROOT="$TEST_TMP" MOCK_STORE="$TEST_TMP/store" MOCK_LOG="$TEST_TMP/calls" \
     MOCK_PRESET=false MOCK_LOCAL=false MOCK_EXPECT=success \
     MOCK_VAR=TF_VAR_postgres_password MOCK_FILE="$TEST_TMP/infra/.pg_password" \
