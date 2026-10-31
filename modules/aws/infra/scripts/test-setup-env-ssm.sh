@@ -117,8 +117,8 @@ else
   [[ $result -eq 0 ]] || exit 12
   actual=$(printenv "$MOCK_VAR")
   case "$MOCK_PRESET:$MOCK_LOCAL:$MOCK_MODE" in
-    false:true:missing) expected='LocalTestPassword123!' ;;
-    true:false:missing) expected='ExportedTestPassword123!' ;;
+    false:true:missing) expected='GeneratedTestPassword123!' ;;
+    true:*:missing) expected='ExportedTestPassword123!' ;;
     false:false:missing|false:false:roundtrip) expected='GeneratedTestPassword123!' ;;
     *) expected='TestOnlyPassword123!' ;;
   esac
@@ -181,12 +181,12 @@ run_case found false false success 0 0
 run_case found same false success 0 0
 run_case found false true success 0 0
 run_case found same true success 0 0
-run_case found true false failure 0 0
-run_case found true true failure 0 0
+run_case found true false success 0 0
+run_case found true true success 0 0
 run_case missing false false success 1 1
 run_case missing true false success 1 0
-run_case missing false true success 1 0
-run_case missing true true failure 0 0
+run_case missing false true success 1 1
+run_case missing true true success 1 0
 for mode in denied expired credentials timeout misleading empty; do
   run_case "$mode" false false failure 0 0
   run_case "$mode" true true failure 0 0
@@ -195,7 +195,7 @@ run_case denied false false failure 0 0 langsmith-api-key-salt
 for mode in race write-denied; do
   run_case "$mode" false false failure 1 1
   run_case "$mode" true false failure 1 0
-  run_case "$mode" false true failure 1 0
+  run_case "$mode" false true failure 1 1
 done
 # An unusable legacy path must not block a readable SSM credential.
 run_case local-failed false false success 0 0

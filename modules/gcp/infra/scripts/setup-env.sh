@@ -16,8 +16,8 @@
 #   Secrets are stored in GCP Secret Manager under:
 #     projects/{project_id}/secrets/langsmith-{name_prefix}-{environment}-{key}
 #   Secret Manager is authoritative; no local password backups are written.
-#   Shell credentials can seed only a confirmed-missing secret. Read failures,
-#   conflicting shell credentials, and write failures stop setup.
+#   Existing cloud values replace shell values. Shell credentials can seed only
+#   a confirmed-missing secret. Read and write failures stop setup.
 #
 # Prerequisites:
 #   gcloud auth login   (the script uses gcloud CLI credentials, not ADC), with
@@ -224,9 +224,7 @@ _sm_secret() {
   if [[ "$_sm_rc" == 3 ]]; then
     val="$shell_val"
     origin="env"
-  elif [[ -n "$shell_val" && "$shell_val" != "$val" ]]; then
-    echo "ERROR: $varname in the shell differs from Secret Manager. Investigate before rerunning setup." >&2
-    return 1
+
   fi
   if [[ -n "$val" && -n "$validator" ]] && ! _reason=$("$validator" "$val"); then
     _sm_report_invalid "$varname" "$_secret_id" "$origin" "$_reason"

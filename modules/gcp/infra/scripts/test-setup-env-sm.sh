@@ -149,7 +149,7 @@ run_case() {
 }
 run_case found unset success 0 0
 run_case found same success 0 0
-run_case found different failure 0 0
+run_case found different success 0 0
 run_case missing unset success 1 1
 run_case missing different success 1 0
 for mode in denied expired disabled timeout misleading version-missing version-disabled describe-denied empty; do

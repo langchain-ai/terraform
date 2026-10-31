@@ -629,12 +629,11 @@ Builds the SSM path prefix from `terraform.tfvars`: `/langsmith/{name_prefix}-{e
 For each secret it follows this priority order:
 
 1. SSM Parameter Store — read and decrypt it; a read error stops setup
-2. Locally saved value — import it only if SSM confirms the parameter is missing
-3. Exported shell value (`TF_VAR_*` or `LANGSMITH_*`) — import it if both SSM and the local file are missing
-4. No value in any source — generate it where supported, otherwise prompt
-5. No terminal (CI) and an input is still required — stop with instructions to supply it
+2. Exported shell value (`TF_VAR_*` or `LANGSMITH_*`) — import it only if SSM confirms the parameter is missing
+3. No value in any source — generate it where supported, otherwise prompt
+4. No terminal (CI) and an input is still required — stop with instructions to supply it
 
-SSM is the persistent credential store. Setup exports each resolved credential to the shell without creating or refreshing local password backup files. Legacy locally saved values remain import-only; setup does not delete them. After a successful setup, you can remove those legacy files once you have verified the credentials in SSM. A different credential already exported in the shell stops setup for investigation; neither credential is displayed. Setup never overwrites an existing SSM parameter. Use `infra/scripts/manage-ssm.sh` for intentional SSM changes.
+SSM is the persistent credential store. Setup exports each resolved credential to the shell without creating or refreshing local password backup files. Existing SSM values replace shell values. Legacy local password files are never read or updated and are left untouched. Before upgrading an existing deployment, verify its credentials are in SSM; explicitly import any missing values through the shell before rerunning setup. Once verified, legacy files can be deleted. Setup never overwrites an existing SSM parameter. Use `infra/scripts/manage-ssm.sh` for intentional SSM changes.
 
 **Changed setup requirements:** SSM read/decryption access is required even when the shell already contains credentials. SSM write failures, empty credentials, and concurrent parameter creation stop setup. Existing SSM names, shell variables, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials; this change removes separate setup password backups, not every local copy.
 
@@ -642,7 +641,7 @@ SSM is the persistent credential store. Setup exports each resolved credential t
 
 | SSM key | How it's set | Notes |
 |---|---|---|
-| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. An initial value can come from `TF_VAR_postgres_password` when SSM and the local file are missing. |
+| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. An initial value can come from `TF_VAR_postgres_password` when SSM is missing. |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
 | `sandbox-juicefs-redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | Created only when Sandboxes are enabled |
 | `sandbox-callback-signing-jwk` | Auto-generated (Ed25519 private JWK) | Created only when Sandboxes are enabled |
