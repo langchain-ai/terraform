@@ -22,6 +22,11 @@ locals {
     "production-large" = "${path.module}/../helm/values/examples/langsmith-values-sizing-production-large.yaml"
   }
   app_values = yamldecode(file(local.app_sizing_files[var.sizing_profile]))
+  # The overlay deploy.sh applies last: requests and replica floors set there are what Helm deploys, so
+  # the budget counts them over the sizing file's. Without it, requests sized from measurement read as
+  # the profile's and the budget refused a cluster they fit.
+  values_local_file = var.values_local_file != "" ? var.values_local_file : "${path.module}/../helm/values/langsmith-values-local.yaml"
+  values_local      = try(yamldecode(file(local.values_local_file)), {})
 
   # Components the chart runs for a SmithDB-only install with insights/polly off.
   app_components = ["frontend", "backend", "platformBackend", "ingestQueue", "queue", "playground", "aceBackend"]
@@ -30,9 +35,9 @@ locals {
   # otherwise the Deployment's replica count.
   app_pods = {
     for c in local.app_components : c => {
-      replicas = try(local.app_values[c].autoscaling.hpa.enabled, false) ? try(local.app_values[c].autoscaling.hpa.minReplicas, 1) : try(local.app_values[c].deployment.replicas, 1)
-      cpu      = tostring(try(local.app_values[c].deployment.resources.requests.cpu, "0"))
-      memory   = tostring(try(local.app_values[c].deployment.resources.requests.memory, "0"))
+      replicas = try(local.values_local[c].autoscaling.hpa.enabled, local.app_values[c].autoscaling.hpa.enabled, false) ? try(local.values_local[c].autoscaling.hpa.minReplicas, local.app_values[c].autoscaling.hpa.minReplicas, 1) : try(local.values_local[c].deployment.replicas, local.app_values[c].deployment.replicas, 1)
+      cpu      = tostring(try(local.values_local[c].deployment.resources.requests.cpu, local.app_values[c].deployment.resources.requests.cpu, "0"))
+      memory   = tostring(try(local.values_local[c].deployment.resources.requests.memory, local.app_values[c].deployment.resources.requests.memory, "0"))
     }
   }
   # A component without requests in the sizing file would fall back to the
@@ -130,7 +135,9 @@ locals {
       postgres_langsmith = { cpu_m = 2000, mem_mi = 8192, lim_cpu_m = 4000, lim_mem_mi = 16384, storage_gi = 50 }
       postgres_smithdb   = { cpu_m = 1000, mem_mi = 4096, lim_cpu_m = 2000, lim_mem_mi = 8192, storage_gi = 20 }
       redis_langsmith    = { cpu_m = 2000, mem_mi = 4096, lim_cpu_m = 4000, lim_mem_mi = 8192, storage_gi = 8 }
-      rustfs_smithdb     = { cpu_m = 1000, mem_mi = 2048, lim_cpu_m = 2000, lim_mem_mi = 4096, storage_gi = 200 }
+      # Memory limit 6Gi, as lab's (measured under load): at 4Gi RustFS reached 4094 MiB at 60
+      # traces/s, stopped answering its probes and restarted, and SmithDB's flushes failed.
+      rustfs_smithdb = { cpu_m = 1000, mem_mi = 2048, lim_cpu_m = 2000, lim_mem_mi = 6144, storage_gi = 200 }
     }
     "production-large" = {
       postgres_langsmith = { cpu_m = 4000, mem_mi = 16384, lim_cpu_m = 8000, lim_mem_mi = 32768, storage_gi = 100 }
@@ -167,8 +174,21 @@ locals {
   }[local.feature_class]
   n_shared = length(local.shared_products)
 
+  # The two sizes the load sets rather than the profile (redis_memory_gi, object_store_gi), before
+  # the shared products' increments. Without them, the profile's fixed Redis limit capped every
+  # install's rate, and the object store's fixed volume told the budget nothing of the retained data.
+  datastore_profile = local.datastore_base[var.sizing_profile]
+  datastore_sized = merge(local.datastore_profile, {
+    redis_langsmith = var.redis_memory_gi == null ? local.datastore_profile.redis_langsmith : merge(local.datastore_profile.redis_langsmith, {
+      mem_mi     = ceil(var.redis_memory_gi * 1024)
+      lim_mem_mi = ceil(var.redis_memory_gi * 1024)
+    })
+    rustfs_smithdb = var.object_store_gi == null ? local.datastore_profile.rustfs_smithdb : merge(local.datastore_profile.rustfs_smithdb, {
+      storage_gi = ceil(var.object_store_gi)
+    })
+  })
   datastores_core = {
-    for k, d in local.datastore_base[var.sizing_profile] : k => (
+    for k, d in local.datastore_sized : k => (
       k == "postgres_langsmith" ? merge(d, {
         cpu_m      = d.cpu_m + local.n_shared * local.shared_increment.postgres.cpu_m
         mem_mi     = d.mem_mi + local.n_shared * local.shared_increment.postgres.mem_mi
@@ -181,8 +201,37 @@ locals {
       }) : d
     )
   }
+  # Requests measured under load (datastore_requests) replace the whole request, products' increments
+  # included, since the measurement saw them; a limit never falls below its request.
+  datastores_measured = {
+    for k, d in local.datastores_core : k => !contains(keys(var.datastore_requests), k) ? d : merge(d, {
+      cpu_m      = var.datastore_requests[k].cpu_m
+      mem_mi     = var.datastore_requests[k].mem_mi
+      lim_cpu_m  = max(d.lim_cpu_m, var.datastore_requests[k].cpu_m)
+      lim_mem_mi = max(d.lim_mem_mi, var.datastore_requests[k].mem_mi)
+    })
+  }
+  # The stores the customer runs (each <store>_source = external): not built, so not counted.
+  external_stores = toset(compact([
+    var.postgres_source == "external" ? "postgres_langsmith" : "",
+    var.redis_source == "external" ? "redis_langsmith" : "",
+    var.smithdb_metastore_source == "external" ? "postgres_smithdb" : "",
+    var.object_store_source == "external" ? "rustfs_smithdb" : "",
+  ]))
   # The JuiceFS metadata Redis is a datastore like the others, so the budget and its StatefulSet read one size.
-  datastores = merge(local.datastores_core, var.enable_sandboxes ? { redis_juicefs = local.juicefs_size } : {})
+  datastores = merge(
+    { for k, d in local.datastores_measured : k => d if !contains(local.external_stores, k) },
+    var.enable_sandboxes ? { redis_juicefs = local.juicefs_size } : {},
+  )
+  # The Secrets LangSmith's namespace must hold before Helm runs: ours, or the customer's for a store
+  # they run (deploy.sh checks each; the chart fails late without them).
+  datastore_secrets = concat(
+    [var.postgres_source == "external" ? var.postgres_secret : "langsmith-postgres", var.redis_source == "external" ? var.redis_secret : "langsmith-redis", "smithdb-config"],
+    var.postgres_source == "external" ? [for p in keys(local.standalone_features) : "langsmith-${p}-postgres"] : [],
+    var.redis_source == "external" ? [for p in keys(local.standalone_features) : "langsmith-${p}-redis"] : [],
+    var.smithdb_metastore_source == "external" ? [var.smithdb_metastore_secret] : [],
+    var.object_store_source == "external" ? [var.object_store_secret] : [],
+  )
 
   # Kubernetes strings for the resources that will consume these sizes.
   datastores_k8s = {
@@ -306,9 +355,9 @@ locals {
       for c, s in(var.enable_smithdb ? local.smithdb_tier : {}) : {
         name     = "smithdb/${c}"
         pool     = contains(local.smithdb_cache_components, c) ? local.smithdb_pool.cache : local.smithdb_pool.compute
-        replicas = 1
-        cpu      = s.requests.cpu
-        memory   = s.requests.memory
+        replicas = try(local.values_local.smithdb[c].autoscaling.hpa.minReplicas, local.values_local.smithdb[c].deployment.replicas, 1)
+        cpu      = tostring(try(local.values_local.smithdb[c].deployment.resources.requests.cpu, s.requests.cpu))
+        memory   = tostring(try(local.values_local.smithdb[c].deployment.resources.requests.memory, s.requests.memory))
         disk     = s.cache
       }
     ],

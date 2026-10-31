@@ -54,6 +54,14 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # smithdb_query_enabled         = true
 # smithdb_migration_parallelism = 1
 # smithdb_tier                  = "small"      # minimal | small | medium; empty: from sizing_profile
+# redis_memory_gi               = 6            # the run buffer's memory, from the load (SIZING.md, Redis); null: the profile's
+# datastore_requests            = { postgres_langsmith = { cpu_m = 100, mem_mi = 4096 } }  # measured under load; {}: the profile's
+# postgres_source               = "external"   # theirs, through postgres_secret (and langsmith-<product>-postgres)
+# redis_source                  = "external"   # theirs, through redis_secret
+# smithdb_metastore_source      = "external"   # theirs, through smithdb_metastore_secret
+# object_store_source           = "external"   # theirs: object_store_endpoint, object_store_buckets, object_store_secret
+# values_local_file             = ""           # the overlay the budget counts over the sizing file; "": helm/values/langsmith-values-local.yaml
+# object_store_gi               = 1800         # the object store's volume, from the retained volume (SIZING.md, Object storage)
 # enable_blob_storage           = true         # large payloads to the blob bucket, not Redis
 # blob_storage_min_size_kb      = 20
 # blob_storage_ttl_days         = { short = 14, long = 400 } # expiry of ttl_s/ and ttl_l/
@@ -104,6 +112,7 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 
 # metrics_server_kubelet_insecure_tls = true # false after enabling kubelet serverTLSBootstrap
 # metallb_l2_node_selector            = { "node-role.kubernetes.io/worker" = "" }
+# envoy_proxy_node_selector           = { "kubernetes.io/hostname" = "node1" }  # beside the node answering for the IP
 # local_path_node_path                = "/opt/local-path-provisioner"
 # envoy_gateway_route_timeout         = "60s"
 

@@ -192,9 +192,9 @@ resource "kubernetes_secret_v1" "sandbox_juicefs" {
     name         = local.juicefs_bucket
     metaurl      = "redis://:${module.redis_juicefs[0].password}@${module.redis_juicefs[0].host}:6379/0"
     storage      = "s3"
-    bucket       = "${module.rustfs_smithdb.endpoint}/${local.juicefs_bucket}"
-    "access-key" = module.rustfs_smithdb.access_key
-    "secret-key" = module.rustfs_smithdb.secret_key
+    bucket       = "${module.rustfs_smithdb[0].endpoint}/${local.juicefs_bucket}"
+    "access-key" = module.rustfs_smithdb[0].access_key
+    "secret-key" = module.rustfs_smithdb[0].secret_key
   }
   type = "Opaque"
 }

@@ -245,7 +245,7 @@ run "standalone_features_get_gcp_style_secrets_and_db_job" {
   }
 
   assert {
-    condition     = length(module.postgres_langsmith.extra_databases) == 2
+    condition     = length(module.postgres_langsmith[0].extra_databases) == 2
     error_message = "postgres-langsmith should ensure 2 extra databases."
   }
 }
@@ -258,7 +258,7 @@ run "lab_default_creates_no_feature_resources" {
   }
 
   assert {
-    condition     = length(kubernetes_secret_v1.standalone_postgres) == 0 && length(module.postgres_langsmith.extra_databases) == 0
+    condition     = length(kubernetes_secret_v1.standalone_postgres) == 0 && length(module.postgres_langsmith[0].extra_databases) == 0
     error_message = "No features enabled, so no feature secrets or extra databases."
   }
 }
@@ -296,7 +296,7 @@ run "blob_storage_off" {
   }
 
   assert {
-    condition     = output.object_store.buckets == ["smithdb"]
+    condition     = toset(output.object_store.buckets) == toset(["smithdb"])
     error_message = "With blob storage off, only the smithdb bucket is created."
   }
 }
@@ -505,5 +505,246 @@ run "lan_route_follows_domain" {
   assert {
     condition     = output.cloudflare_tunnel.lan_route
     error_message = "With a domain, the LAN catch-all route should be on so the gateway IP keeps serving LangSmith."
+  }
+}
+
+run "load_sets_redis_and_the_object_store" {
+  command = plan
+
+  variables {
+    sizing_profile  = "lab"
+    redis_memory_gi = 6
+    object_store_gi = 150
+  }
+
+  assert {
+    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/redis_langsmith"]) >= 6
+    error_message = "redis_memory_gi should set redis-langsmith's request, which the budget counts."
+  }
+
+  assert {
+    condition     = one([for p in output.pods : p.disk_gi if p.name == "datastore/rustfs_smithdb"]) == 150
+    error_message = "object_store_gi should set the object store's volume, which the budget counts."
+  }
+
+  assert {
+    condition     = output.redis.langsmith.maxmemory_mb >= floor(6 * 1024 * 3 / 4)
+    error_message = "redis_memory_gi should raise maxmemory with the limit."
+  }
+}
+
+run "measured_datastore_requests_replace_the_profiles" {
+  command = plan
+
+  variables {
+    sizing_profile             = "lab"
+    enable_standalone_insights = true
+    datastore_requests         = { postgres_langsmith = { cpu_m = 100, mem_mi = 600 } }
+  }
+
+  assert {
+    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/postgres_langsmith"]) == 600 / 1024
+    error_message = "datastore_requests should replace postgres-langsmith's request, products' increments included, in what the budget counts."
+  }
+
+  assert {
+    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/postgres_smithdb"]) == local.datastore_base.lab.postgres_smithdb.mem_mi / 1024
+    error_message = "A store datastore_requests does not name should keep the profile's request."
+  }
+}
+
+run "their_postgres_is_neither_built_nor_counted" {
+  command = plan
+
+  variables {
+    sizing_profile             = "lab"
+    enable_standalone_insights = true
+    postgres_source            = "external"
+    postgres_secret            = "acme-postgres"
+  }
+
+  assert {
+    condition     = length(module.postgres_langsmith) == 0 && length(kubernetes_secret_v1.langsmith_postgres) == 0 && length(kubernetes_secret_v1.standalone_postgres) == 0
+    error_message = "With postgres_source = external the module builds no Postgres, and no Secret for it or its products."
+  }
+
+  assert {
+    condition     = length([for p in output.pods : p if p.name == "datastore/postgres_langsmith"]) == 0
+    error_message = "The budget should not count a Postgres the customer runs."
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.postgres.external.existingSecretName == "acme-postgres"
+    error_message = "The chart should read the customer's Secret."
+  }
+
+  assert {
+    condition     = output.datastore_secrets == "acme-postgres langsmith-redis smithdb-config langsmith-insights-postgres"
+    error_message = "deploy.sh should check the customer's Secret and each product's own."
+  }
+}
+
+run "their_redis_is_neither_built_nor_counted" {
+  command = plan
+
+  variables {
+    sizing_profile             = "lab"
+    enable_standalone_insights = true
+    redis_source               = "external"
+    redis_secret               = "acme-redis"
+  }
+
+  assert {
+    condition     = length(module.redis_langsmith) == 0 && length(kubernetes_secret_v1.langsmith_redis) == 0 && length(kubernetes_secret_v1.standalone_redis) == 0
+    error_message = "With redis_source = external the module builds no Redis, and no Secret for it or its products."
+  }
+
+  assert {
+    condition     = length([for p in output.pods : p if p.name == "datastore/redis_langsmith"]) == 0
+    error_message = "The budget should not count a Redis the customer runs."
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.redis.external.existingSecretName == "acme-redis"
+    error_message = "The chart should read the customer's Secret."
+  }
+
+  assert {
+    condition     = output.datastore_secrets == "langsmith-postgres acme-redis smithdb-config langsmith-insights-redis"
+    error_message = "deploy.sh should check the customer's Secret and each product's own."
+  }
+}
+
+run "their_metastore_is_neither_built_nor_counted" {
+  command = plan
+
+  variables {
+    sizing_profile           = "lab"
+    smithdb_metastore_source = "external"
+    smithdb_metastore_tls    = true
+  }
+
+  assert {
+    condition     = length(module.postgres_smithdb) == 0 && length(data.kubernetes_secret_v1.smithdb_metastore) == 1
+    error_message = "With smithdb_metastore_source = external the module builds no metastore and reads the customer's Secret."
+  }
+
+  assert {
+    condition     = length([for p in output.pods : p if p.name == "datastore/postgres_smithdb"]) == 0
+    error_message = "The budget should not count a metastore the customer runs."
+  }
+
+  assert {
+    condition     = output.smithdb_helm_values.smithdb.config.metastore.useSsl == true
+    error_message = "An external metastore should be reached over TLS when asked."
+  }
+
+  assert {
+    condition     = strcontains(output.datastore_secrets, "smithdb-metastore")
+    error_message = "deploy.sh should check the customer's metastore Secret."
+  }
+}
+
+run "their_object_store_is_neither_built_nor_counted" {
+  command = plan
+
+  variables {
+    sizing_profile        = "lab"
+    object_store_source   = "external"
+    object_store_endpoint = "https://objectscale.example:9021"
+  }
+
+  assert {
+    condition     = length(module.rustfs_smithdb) == 0 && length(data.kubernetes_secret_v1.object_store) == 1
+    error_message = "With object_store_source = external the module builds no RustFS and reads the customer's keys."
+  }
+
+  assert {
+    condition     = length([for p in output.pods : p if p.name == "datastore/rustfs_smithdb"]) == 0
+    error_message = "The budget should not count an object store the customer runs, nor its volume."
+  }
+
+  assert {
+    condition     = output.smithdb_helm_values.smithdb.config.objectStore.s3.endpoint == "https://objectscale.example:9021" && output.smithdb_helm_values.smithdb.config.objectStore.s3.allowHttp == false
+    error_message = "SmithDB should reach the customer's store over HTTPS."
+  }
+
+  assert {
+    condition     = output.langsmith_helm_values.config.blobStorage.apiURL == "https://objectscale.example:9021"
+    error_message = "Blob storage should use the customer's store too."
+  }
+}
+
+run "their_object_store_cannot_carry_sandboxes" {
+  command = plan
+
+  variables {
+    sizing_profile        = "lab"
+    object_store_source   = "external"
+    object_store_endpoint = "https://objectscale.example:9021"
+    enable_sandboxes      = true
+    sandbox_hosts         = ["worker-1"]
+    sandbox_source_cidrs  = ["10.42.0.0/16"]
+  }
+
+  expect_failures = [terraform_data.budget]
+}
+
+run "an_object_store_past_the_disks_does_not_fit" {
+  command = plan
+
+  variables {
+    sizing_profile  = "lab"
+    object_store_gi = 5000
+  }
+
+  expect_failures = [terraform_data.budget]
+}
+
+run "on_their_storage_class_a_node_disk_holds_no_volume" {
+  command = plan
+
+  variables {
+    sizing_profile     = "lab"
+    object_store_gi    = 5000
+    install_local_path = false
+    storage_class      = "ocs-storagecluster-ceph-rbd"
+  }
+}
+
+run "measured_requests_in_the_overlay_fit_where_the_profile_does_not" {
+  command = plan
+
+  # dev alone fails here on CPU (its 8-CPU compaction worker, above); disks roomy enough for the
+  # small tier's caches, so only the requests decide.
+  variables {
+    sizing_profile    = "dev"
+    values_local_file = "tests/fixtures/values-local-measured.yaml"
+    cluster_nodes = {
+      control-plane = { cpu = 6, memory_gi = 23.2, disk_gi = 600, role = "control-plane" }
+      worker-1      = { cpu = 6, memory_gi = 15.4, disk_gi = 600 }
+      worker-2      = { cpu = 6, memory_gi = 15.3, disk_gi = 600 }
+      worker-3      = { cpu = 6, memory_gi = 23.2, disk_gi = 600 }
+    }
+  }
+
+  assert {
+    condition     = output.budget.requested.memory_gi <= output.budget.ceiling.memory_gi
+    error_message = "The overlay's measured requests should fit the small cluster that dev's own do not."
+  }
+}
+
+run "replica_floors_in_the_overlay_are_counted" {
+  command = plan
+
+  variables {
+    sizing_profile    = "dev"
+    smithdb_tier      = "minimal"
+    values_local_file = "tests/fixtures/values-local-replicas.yaml"
+  }
+
+  assert {
+    condition     = length([for p in output.pods : p if p.name == "smithdb/ingestion" && p.replicas == 4]) == 1
+    error_message = "Four ingestion replicas set in the overlay should be counted as four."
   }
 }

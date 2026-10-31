@@ -162,3 +162,16 @@ run "gateway_tls_is_only_for_our_gateway" {
 
   expect_failures = [terraform_data.platform]
 }
+
+run "the_proxy_runs_where_the_selector_names" {
+  command = plan
+
+  variables {
+    envoy_proxy_node_selector = { "kubernetes.io/hostname" = "hub" }
+  }
+
+  assert {
+    condition     = module.envoy_gateway[0].proxy_node_selector["kubernetes.io/hostname"] == "hub"
+    error_message = "envoy_proxy_node_selector should reach the EnvoyProxy's pod nodeSelector, so the proxy runs on the node the VIP is answered from."
+  }
+}

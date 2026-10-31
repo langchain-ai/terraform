@@ -48,15 +48,16 @@ resource "helm_release" "gateway_config" {
 
   values = [
     yamlencode({
-      envoyProxyName   = var.envoy_proxy_name
-      gatewayClassName = var.gateway_class_name
-      gatewayName      = var.gateway_name
-      gatewayNamespace = var.gateway_namespace
-      loadBalancerIP   = var.load_balancer_ip
-      proxyReplicas    = var.proxy_replicas
-      proxyResources   = var.proxy_resources
-      routeTimeout     = var.route_timeout
-      tls              = var.tls == null ? null : { hostname = var.tls.hostname, secretName = var.tls.secret_name }
+      envoyProxyName    = var.envoy_proxy_name
+      gatewayClassName  = var.gateway_class_name
+      gatewayName       = var.gateway_name
+      gatewayNamespace  = var.gateway_namespace
+      loadBalancerIP    = var.load_balancer_ip
+      proxyReplicas     = var.proxy_replicas
+      proxyResources    = var.proxy_resources
+      proxyNodeSelector = var.proxy_node_selector
+      routeTimeout      = var.route_timeout
+      tls               = var.tls == null ? null : { hostname = var.tls.hostname, secretName = var.tls.secret_name }
       lanRoute = {
         enabled        = var.lan_route.enabled
         backendService = var.lan_route.backend_service

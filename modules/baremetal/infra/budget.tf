@@ -6,7 +6,8 @@
 # oversized profile shows up much later as pods stuck in Pending.
 #
 # Each node pool (workers, and the optional smithdb-cache / smithdb-compute)
-# is checked on its own: its pods against its nodes. Every datastore, add-on,
+# is checked on its own: its pods against its nodes. Disk only with local-path:
+# on the cluster's own StorageClass, volumes live on its storage, not a node's. Every datastore, add-on,
 # and Helm-dependent step depends on this resource, so nothing is built on a
 # cluster that can't hold it.
 #------------------------------------------------------------------------------
@@ -14,6 +15,11 @@ resource "terraform_data" "budget" {
   input = local.budget_summary
 
   lifecycle {
+    precondition {
+      condition     = var.object_store_source == "in-cluster" || (!var.enable_sandboxes && var.object_store_endpoint != "" && var.object_store_buckets.smithdb != var.object_store_buckets.blobs)
+      error_message = "object_store_source = external needs object_store_endpoint and two different buckets, and cannot run with enable_sandboxes: the sandboxes' JuiceFS bucket stays on the in-cluster RustFS."
+    }
+
     precondition {
       condition     = length(local.app_requests_missing) == 0
       error_message = "The ${var.sizing_profile} app sizing file sets no requests for: ${join(", ", local.app_requests_missing)}. The budget can't account for them."
@@ -30,7 +36,7 @@ resource "terraform_data" "budget" {
     }
 
     precondition {
-      condition     = alltrue([for st in values(local.pool_stats) : st.largest_pod_disk <= st.largest_node_dsk])
+      condition     = !var.install_local_path || alltrue([for st in values(local.pool_stats) : st.largest_pod_disk <= st.largest_node_dsk])
       error_message = "${join("; ", [for pool, st in local.pool_stats : "${st.largest_disk_pod} needs a ${st.largest_pod_disk} Gi volume, but the largest ${pool} node has ${st.largest_node_dsk} Gi of disk" if st.largest_pod_disk > st.largest_node_dsk])}. local-path volumes live on one node."
     }
 
@@ -45,7 +51,7 @@ resource "terraform_data" "budget" {
     }
 
     precondition {
-      condition     = alltrue([for st in values(local.pool_stats) : st.requested_disk <= st.ceiling_disk])
+      condition     = !var.install_local_path || alltrue([for st in values(local.pool_stats) : st.requested_disk <= st.ceiling_disk])
       error_message = "${join("; ", [for pool, st in local.pool_stats : "${pool} pool needs ${format("%.0f", st.requested_disk)} Gi of volumes and cache; ceiling ${format("%.0f", st.ceiling_disk)} Gi" if st.requested_disk > st.ceiling_disk])}."
     }
   }

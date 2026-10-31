@@ -14,6 +14,11 @@ output "gateway" {
   }
 }
 
+output "proxy_node_selector" {
+  description = "The nodes the proxy pods may run on; {} for anywhere."
+  value       = var.proxy_node_selector
+}
+
 # Envoy Gateway names the proxy Service envoy-<ns>-<gateway>-<hash>, where hash
 # is the first 8 hex digits of sha256("<ns>/<gateway>"). In-cluster clients
 # (the Cloudflare Tunnel connector) use it instead of the MetalLB IP.

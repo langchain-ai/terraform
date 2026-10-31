@@ -103,13 +103,16 @@ locals {
           blobStorage = {
             enabled              = true
             engine               = "S3"
-            bucketName           = local.blob_bucket
-            apiURL               = module.rustfs_smithdb.endpoint
-            s3UsePathStyle       = true
+            bucketName           = local.object_store.blobs
+            apiURL               = local.object_store.endpoint
+            s3UsePathStyle       = local.object_store.path_style
             minBlobStorageSizeKb = tostring(var.blob_storage_min_size_kb)
           }
         } : {},
       )
+      # The customer's Postgres under its own Secret's name (values.yaml names langsmith-postgres).
+      postgres = { external = { existingSecretName = var.postgres_source == "external" ? var.postgres_secret : "langsmith-postgres" } }
+      redis    = { external = { existingSecretName = var.redis_source == "external" ? var.redis_secret : "langsmith-redis" } }
       gateway = {
         enabled = true
         # try(): without a Gateway the precondition in platform.tf says why; a null read here said less.
@@ -187,16 +190,16 @@ locals {
             databaseSecretKey = "smithdb_metastore_db"
             usernameSecretKey = "smithdb_metastore_user"
             passwordSecretKey = "smithdb_metastore_password"
-            port              = "5432"
-            useSsl            = false
+            port              = tostring(var.smithdb_metastore_port)
+            useSsl            = var.smithdb_metastore_tls
           }
           objectStore = {
             type   = "s3"
-            bucket = module.rustfs_smithdb.bucket
+            bucket = local.object_store.smithdb
             s3 = {
-              region                   = "us-east-1" # any value; RustFS ignores it, the SDK needs one
-              endpoint                 = module.rustfs_smithdb.endpoint
-              allowHttp                = true # in-cluster RustFS speaks plain HTTP
+              region                   = local.object_store.region
+              endpoint                 = local.object_store.endpoint
+              allowHttp                = startswith(local.object_store.endpoint, "http://") # in-cluster RustFS speaks plain HTTP
               accessKeyIdSecretKey     = "smithdb_s3_access_key"
               secretAccessKeySecretKey = "smithdb_s3_secret_key"
             }

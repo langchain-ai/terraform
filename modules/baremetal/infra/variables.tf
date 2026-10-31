@@ -96,6 +96,152 @@ variable "sizing_profile" {
   }
 }
 
+variable "redis_memory_gi" {
+  type        = number
+  default     = null
+  description = "Memory request and limit of redis-langsmith, where every run waits until ingest-queue moves it, when the load and not the sizing profile should set it (SIZING.md, Redis; maxmemory is 75% of the limit). Each product sharing it still adds its own. Null: the profile's."
+
+  validation {
+    condition     = var.redis_memory_gi == null || try(var.redis_memory_gi >= 0.5, false)
+    error_message = "redis_memory_gi must be at least 0.5, or null for the profile's."
+  }
+}
+
+variable "postgres_source" {
+  type        = string
+  default     = "in-cluster"
+  description = "in-cluster: the module runs LangSmith's Postgres. external: the customer's own, reached through postgres_secret, which saves the cluster its memory and CPU at a little latency (the same name as the cloud modules' input)."
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.postgres_source)
+    error_message = "postgres_source must be in-cluster or external."
+  }
+}
+
+variable "postgres_secret" {
+  type        = string
+  default     = "langsmith-postgres"
+  description = "With postgres_source = external: the Secret in LangSmith's namespace the customer creates, key connection_url as user:password@host:port/database (no scheme, the chart's format). Each standalone product (Insights, Polly, Fleet) then needs its own: langsmith-<product>-postgres, key postgres_connection_url, with a scheme."
+}
+
+variable "redis_source" {
+  type        = string
+  default     = "in-cluster"
+  description = "in-cluster: the module runs LangSmith's Redis. external: the customer's own, reached through redis_secret, with maxmemory-policy noeviction (the same name as the cloud modules' input)."
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.redis_source)
+    error_message = "redis_source must be in-cluster or external."
+  }
+}
+
+variable "redis_secret" {
+  type        = string
+  default     = "langsmith-redis"
+  description = "With redis_source = external: the Secret in LangSmith's namespace the customer creates, key connection_url as redis://:password@host:port/0 (with its scheme, the chart's format). Each standalone product then needs its own: langsmith-<product>-redis, key redis_connection_url."
+}
+
+variable "smithdb_metastore_source" {
+  type        = string
+  default     = "in-cluster"
+  description = "in-cluster: the module runs SmithDB's metastore Postgres. external: the customer's dedicated, empty PostgreSQL 18 database, reached through smithdb_metastore_secret."
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.smithdb_metastore_source)
+    error_message = "smithdb_metastore_source must be in-cluster or external."
+  }
+}
+
+variable "smithdb_metastore_secret" {
+  type        = string
+  default     = "smithdb-metastore"
+  description = "With smithdb_metastore_source = external: the Secret in LangSmith's namespace the customer creates, keys smithdb_metastore_host, smithdb_metastore_db, smithdb_metastore_user and smithdb_metastore_password. The module copies them into smithdb-config, the one Secret SmithDB reads (its object store's keys are there too)."
+}
+
+variable "smithdb_metastore_port" {
+  type        = number
+  default     = 5432
+  description = "The metastore's port; an external one's may differ."
+}
+
+variable "smithdb_metastore_tls" {
+  type        = bool
+  default     = false
+  description = "Reach the metastore over TLS, as most managed Postgres services require. The module's own speaks plain inside the cluster."
+}
+
+variable "object_store_source" {
+  type        = string
+  default     = "in-cluster"
+  description = "in-cluster: the module runs RustFS for SmithDB's bucket and the blob bucket. external: the customer's S3-compatible store, at object_store_endpoint, its keys in object_store_secret. Its buckets and the blob bucket's lifecycle rules are theirs to create. Sandboxes keep their JuiceFS bucket on RustFS, so they need the in-cluster store."
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.object_store_source)
+    error_message = "object_store_source must be in-cluster or external."
+  }
+}
+
+variable "object_store_endpoint" {
+  type        = string
+  default     = ""
+  description = "With object_store_source = external: the S3 API URL."
+}
+
+variable "object_store_region" {
+  type        = string
+  default     = "us-east-1"
+  description = "With object_store_source = external: the region the S3 API expects; most S3-compatible stores take any."
+}
+
+variable "object_store_path_style" {
+  type        = bool
+  default     = true
+  description = "With object_store_source = external: path-style addressing, which most S3-compatible stores need."
+}
+
+variable "object_store_buckets" {
+  type        = object({ smithdb = string, blobs = string })
+  default     = { smithdb = "smithdb", blobs = "langsmith-blobs" }
+  description = "With object_store_source = external: SmithDB's bucket and the blob bucket, which must differ (the SmithDB bucket takes no lifecycle rules)."
+}
+
+variable "object_store_secret" {
+  type        = string
+  default     = "object-store"
+  description = "With object_store_source = external: the Secret in LangSmith's namespace the customer creates, keys access_key_id and secret_access_key. The module copies them into smithdb-config, the one Secret SmithDB reads; blob storage reads the same keys."
+}
+
+variable "datastore_requests" {
+  type = map(object({
+    cpu_m  = number
+    mem_mi = number
+  }))
+  default     = {}
+  description = "CPU (millicores) and memory (MiB) requests of postgres_langsmith, postgres_smithdb or rustfs_smithdb, measured under load, replacing the profile's and the shared products' increments; limits stay the profile's (and Postgres tunes itself from its limit). The profile's requests are sized for nodes that can be added; on a fixed set of machines they reserve what the stores never use. Empty: the profile's."
+
+  validation {
+    condition     = alltrue([for k, r in var.datastore_requests : contains(["postgres_langsmith", "postgres_smithdb", "rustfs_smithdb"], k) && r.cpu_m > 0 && r.mem_mi > 0])
+    error_message = "datastore_requests takes postgres_langsmith, postgres_smithdb and rustfs_smithdb, each with cpu_m and mem_mi above 0."
+  }
+}
+
+variable "values_local_file" {
+  type        = string
+  default     = ""
+  description = "The values overlay helm/scripts/deploy.sh applies last (langsmith-values-local.yaml). The budget counts the requests and replica floors set there over the sizing file's, since they are what Helm deploys. Empty: helm/values/langsmith-values-local.yaml when it exists, else the sizing file alone."
+}
+
+variable "object_store_gi" {
+  type        = number
+  default     = null
+  description = "Volume of the in-cluster object store (rustfs-smithdb: SmithDB's bucket and the blob bucket), when the retained volume and not the sizing profile should set it (SIZING.md, Object storage). The budget counts it against the node's disk; local-path does not enforce it, and a running store keeps its claim. Null: the profile's."
+
+  validation {
+    condition     = var.object_store_gi == null || try(var.object_store_gi >= 1, false)
+    error_message = "object_store_gi must be at least 1, or null for the profile's."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Features (same flags as the cloud modules)
 #------------------------------------------------------------------------------
@@ -237,6 +383,12 @@ variable "metallb_l2_node_selector" {
   type        = map(string)
   default     = {}
   description = "Nodes allowed to answer ARP for LoadBalancer IPs. Default {}: every node except those labeled node.kubernetes.io/exclude-from-external-load-balancers, which kubeadm puts on control-plane nodes. Set a label here only if your workers carry it (stock kubeadm, k3s and RKE2 don't label workers)."
+}
+
+variable "envoy_proxy_node_selector" {
+  type        = map(string)
+  default     = {}
+  description = "Nodes the Envoy proxy pods may run on. With metallb_l2_node_selector naming the same node, a client's bytes come in on that node and reach the proxy there; elsewhere, every request crosses a second node's link to the proxy and back. Default {}: wherever the scheduler puts them."
 }
 
 variable "keda_chart_version" {

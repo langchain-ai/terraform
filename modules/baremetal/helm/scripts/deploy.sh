@@ -80,14 +80,16 @@ if ! _kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
 fi
 pass "cluster: $kube_context, namespace $NAMESPACE"
 
-# The datastore Secrets come from Terraform; the chart fails late without them.
-for secret in langsmith-postgres langsmith-redis smithdb-config; do
+# The datastore Secrets come from Terraform, or from the customer for a store they run; the chart
+# fails late without them.
+datastore_secrets="$(terraform -chdir="$INFRA_DIR" output -raw datastore_secrets)"
+for secret in $datastore_secrets; do
   if ! _kubectl get secret "$secret" -n "$NAMESPACE" >/dev/null 2>&1; then
-    fail "Secret $NAMESPACE/$secret is missing — run make apply"
+    fail "Secret $NAMESPACE/$secret is missing — run make apply, or create it for a store you run (*_source = external)"
     exit 1
   fi
 done
-pass "datastore Secrets: langsmith-postgres, langsmith-redis, smithdb-config"
+pass "datastore Secrets: $datastore_secrets"
 
 _secrets_file_check
 if [[ ! -f "$SECRETS_FILE" ]]; then

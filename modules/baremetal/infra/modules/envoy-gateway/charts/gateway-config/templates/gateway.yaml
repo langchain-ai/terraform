@@ -12,6 +12,11 @@ spec:
         container:
           resources:
             {{- toYaml .Values.proxyResources | nindent 12 }}
+        {{- with .Values.proxyNodeSelector }}
+        pod:
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
       envoyService:
         # Local (Envoy Gateway's default) lets MetalLB L2 announce the IP only from a node
         # running a proxy pod and a speaker; Cluster answers from any speaker node.

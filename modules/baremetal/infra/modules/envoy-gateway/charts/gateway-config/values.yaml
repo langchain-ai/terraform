@@ -6,6 +6,8 @@ gatewayNamespace: ""
 loadBalancerIP: ""
 proxyReplicas: 1
 proxyResources: {}
+# Nodes the proxy pods may run on (the root's envoy_proxy_node_selector); {} for anywhere.
+proxyNodeSelector: {}
 # Request timeout for the chart's route and the LAN route (BackendTrafficPolicy); empty = Envoy default (15 s).
 routeTimeout: "60s"
 # The LangSmith chart's HTTPRoute: the release's full name (deploy.sh installs release "langsmith").

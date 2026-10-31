@@ -18,6 +18,12 @@ variable "controller_resources" {
   description = "Envoy Gateway controller requests and limits (from the root budget)."
 }
 
+variable "proxy_node_selector" {
+  type        = map(string)
+  default     = {}
+  description = "Nodes the Envoy proxy pods may run on; {} for anywhere."
+}
+
 variable "proxy_resources" {
   type = object({
     requests = object({ cpu = string, memory = string })

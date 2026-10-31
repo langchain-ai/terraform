@@ -92,6 +92,7 @@ module "envoy_gateway" {
     requests = { cpu = "${local.addon_pods["envoy-gateway"].cpu_m}m", memory = "${local.addon_pods["envoy-gateway"].mem_mi}Mi" }
     limits   = { cpu = "500m", memory = "512Mi" }
   }
+  proxy_node_selector = var.envoy_proxy_node_selector
   proxy_resources = {
     requests = { cpu = "${local.addon_pods["envoy-proxy"].cpu_m}m", memory = "${local.addon_pods["envoy-proxy"].mem_mi}Mi" }
     limits   = { cpu = "1", memory = "512Mi" }
@@ -184,6 +185,7 @@ locals {
 
 module "postgres_langsmith" {
   source = "./modules/postgres"
+  count  = var.postgres_source == "in-cluster" ? 1 : 0
 
   namespace          = "postgres-langsmith"
   image              = var.postgres_image
@@ -202,6 +204,7 @@ module "postgres_langsmith" {
 
 module "postgres_smithdb" {
   source = "./modules/postgres"
+  count  = var.smithdb_metastore_source == "in-cluster" ? 1 : 0
 
   namespace          = "postgres-smithdb"
   image              = var.postgres_image
@@ -226,14 +229,69 @@ module "postgres_smithdb" {
 #                       metastore keys now, MinIO S3 keys added with the MinIO module
 #------------------------------------------------------------------------------
 resource "kubernetes_secret_v1" "langsmith_postgres" {
+  count = var.postgres_source == "in-cluster" ? 1 : 0
+
   metadata {
     name      = "langsmith-postgres"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    connection_url = "${module.postgres_langsmith.username}:${module.postgres_langsmith.password}@${module.postgres_langsmith.host}:${module.postgres_langsmith.port}/${module.postgres_langsmith.database}"
+    connection_url = "${module.postgres_langsmith[0].username}:${module.postgres_langsmith[0].password}@${module.postgres_langsmith[0].host}:${module.postgres_langsmith[0].port}/${module.postgres_langsmith[0].database}"
   }
   type = "Opaque"
+}
+
+# The customer's metastore, read from their Secret: SmithDB takes one Secret for its metastore and its
+# object store together (smithdb.config.existingSecretName), so the keys are copied into smithdb-config.
+data "kubernetes_secret_v1" "smithdb_metastore" {
+  count = var.smithdb_metastore_source == "external" ? 1 : 0
+  metadata {
+    name      = var.smithdb_metastore_secret
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+}
+
+locals {
+  metastore = var.smithdb_metastore_source == "external" ? {
+    host     = data.kubernetes_secret_v1.smithdb_metastore[0].data["smithdb_metastore_host"]
+    db       = data.kubernetes_secret_v1.smithdb_metastore[0].data["smithdb_metastore_db"]
+    user     = data.kubernetes_secret_v1.smithdb_metastore[0].data["smithdb_metastore_user"]
+    password = data.kubernetes_secret_v1.smithdb_metastore[0].data["smithdb_metastore_password"]
+    } : {
+    host     = module.postgres_smithdb[0].host
+    db       = module.postgres_smithdb[0].database
+    user     = module.postgres_smithdb[0].username
+    password = module.postgres_smithdb[0].password
+  }
+}
+
+# The customer's object store, its keys read from their Secret into smithdb-config, as the metastore's.
+data "kubernetes_secret_v1" "object_store" {
+  count = var.object_store_source == "external" ? 1 : 0
+  metadata {
+    name      = var.object_store_secret
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+}
+
+locals {
+  object_store = var.object_store_source == "external" ? {
+    endpoint   = var.object_store_endpoint
+    region     = var.object_store_region
+    path_style = var.object_store_path_style
+    smithdb    = var.object_store_buckets.smithdb
+    blobs      = var.object_store_buckets.blobs
+    access_key = data.kubernetes_secret_v1.object_store[0].data["access_key_id"]
+    secret_key = data.kubernetes_secret_v1.object_store[0].data["secret_access_key"]
+    } : {
+    endpoint   = module.rustfs_smithdb[0].endpoint
+    region     = "us-east-1" # any value; RustFS ignores it, the SDK needs one
+    path_style = true
+    smithdb    = module.rustfs_smithdb[0].bucket
+    blobs      = local.blob_bucket
+    access_key = module.rustfs_smithdb[0].access_key
+    secret_key = module.rustfs_smithdb[0].secret_key
+  }
 }
 
 resource "kubernetes_secret_v1" "smithdb_config" {
@@ -242,18 +300,19 @@ resource "kubernetes_secret_v1" "smithdb_config" {
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    smithdb_metastore_host     = module.postgres_smithdb.host
-    smithdb_metastore_db       = module.postgres_smithdb.database
-    smithdb_metastore_user     = module.postgres_smithdb.username
-    smithdb_metastore_password = module.postgres_smithdb.password
-    smithdb_s3_access_key      = module.rustfs_smithdb.access_key
-    smithdb_s3_secret_key      = module.rustfs_smithdb.secret_key
+    smithdb_metastore_host     = local.metastore.host
+    smithdb_metastore_db       = local.metastore.db
+    smithdb_metastore_user     = local.metastore.user
+    smithdb_metastore_password = local.metastore.password
+    smithdb_s3_access_key      = local.object_store.access_key
+    smithdb_s3_secret_key      = local.object_store.secret_key
   }
   type = "Opaque"
 }
 
 module "redis_langsmith" {
   source = "./modules/redis"
+  count  = var.redis_source == "in-cluster" ? 1 : 0
 
   namespace          = "redis-langsmith"
   image              = var.redis_image
@@ -272,12 +331,14 @@ module "redis_langsmith" {
 # Postgres core URL, the chart's Redis URL INCLUDES the scheme. /0 selects
 # logical DB 0 (1 Fleet, 2 Polly, 3 Insights: local.redis_db_index, as in modules/gcp).
 resource "kubernetes_secret_v1" "langsmith_redis" {
+  count = var.redis_source == "in-cluster" ? 1 : 0
+
   metadata {
     name      = "langsmith-redis"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    connection_url = "redis://:${module.redis_langsmith.password}@${module.redis_langsmith.host}:${module.redis_langsmith.port}/${local.redis_db_index.langsmith}"
+    connection_url = "redis://:${module.redis_langsmith[0].password}@${module.redis_langsmith[0].host}:${module.redis_langsmith[0].port}/${local.redis_db_index.langsmith}"
   }
   type = "Opaque"
 }
@@ -286,6 +347,7 @@ resource "kubernetes_secret_v1" "langsmith_redis" {
 # maintained). Bucket "smithdb"; SmithDB writes under its smithdb/ prefix.
 module "rustfs_smithdb" {
   source = "./modules/rustfs"
+  count  = var.object_store_source == "in-cluster" ? 1 : 0
 
   namespace          = "rustfs-smithdb"
   image              = var.rustfs_image
@@ -310,30 +372,32 @@ module "rustfs_smithdb" {
 # database on postgres-langsmith and its own Redis DB on redis-langsmith.
 # The chart reads postgres_connection_url WITH a scheme (unlike the core URL).
 #------------------------------------------------------------------------------
+# With an external Postgres each product's database and Secret are the customer's (postgres_secret).
 resource "kubernetes_secret_v1" "standalone_postgres" {
-  for_each = local.standalone_features
+  for_each = var.postgres_source == "in-cluster" ? local.standalone_features : {}
 
   metadata {
     name      = "langsmith-${each.key}-postgres"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    postgres_connection_url = "postgresql://${urlencode(module.postgres_langsmith.username)}:${urlencode(module.postgres_langsmith.password)}@${module.postgres_langsmith.host}:${module.postgres_langsmith.port}/${each.value}?sslmode=disable"
+    postgres_connection_url = "postgresql://${urlencode(module.postgres_langsmith[0].username)}:${urlencode(module.postgres_langsmith[0].password)}@${module.postgres_langsmith[0].host}:${module.postgres_langsmith[0].port}/${each.value}?sslmode=disable"
   }
   type = "Opaque"
 
   depends_on = [module.postgres_langsmith]
 }
 
+# With an external Redis each product's Redis and Secret are the customer's (redis_secret).
 resource "kubernetes_secret_v1" "standalone_redis" {
-  for_each = local.standalone_features
+  for_each = var.redis_source == "in-cluster" ? local.standalone_features : {}
 
   metadata {
     name      = "langsmith-${each.key}-redis"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    redis_connection_url = "redis://:${module.redis_langsmith.password}@${module.redis_langsmith.host}:${module.redis_langsmith.port}/${local.redis_db_index[each.key]}"
+    redis_connection_url = "redis://:${module.redis_langsmith[0].password}@${module.redis_langsmith[0].host}:${module.redis_langsmith[0].port}/${local.redis_db_index[each.key]}"
   }
   type = "Opaque"
 }

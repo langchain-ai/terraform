@@ -56,24 +56,24 @@ output "cloudflare_tunnel" {
 output "postgres" {
   description = "Postgres instances (no passwords; read them from the Secrets)."
   value = {
-    langsmith = { host = module.postgres_langsmith.host, database = module.postgres_langsmith.database, secret = "langsmith/${kubernetes_secret_v1.langsmith_postgres.metadata[0].name}" }
-    smithdb   = { host = module.postgres_smithdb.host, database = module.postgres_smithdb.database, secret = "langsmith/${kubernetes_secret_v1.smithdb_config.metadata[0].name}" }
+    langsmith = var.postgres_source == "external" ? { host = null, database = null, secret = "langsmith/${var.postgres_secret}" } : { host = module.postgres_langsmith[0].host, database = module.postgres_langsmith[0].database, secret = "langsmith/${kubernetes_secret_v1.langsmith_postgres[0].metadata[0].name}" }
+    smithdb   = { host = var.smithdb_metastore_source == "external" ? null : module.postgres_smithdb[0].host, database = var.smithdb_metastore_source == "external" ? null : module.postgres_smithdb[0].database, secret = "langsmith/${kubernetes_secret_v1.smithdb_config.metadata[0].name}" }
   }
 }
 
 output "redis" {
   description = "Redis instance (no password; read it from the Secret)."
   value = {
-    langsmith = { host = module.redis_langsmith.host, maxmemory_mb = module.redis_langsmith.maxmemory_mb, secret = "langsmith/${kubernetes_secret_v1.langsmith_redis.metadata[0].name}" }
+    langsmith = var.redis_source == "external" ? { host = null, maxmemory_mb = null, secret = "langsmith/${var.redis_secret}" } : { host = module.redis_langsmith[0].host, maxmemory_mb = module.redis_langsmith[0].maxmemory_mb, secret = "langsmith/${kubernetes_secret_v1.langsmith_redis[0].metadata[0].name}" }
   }
 }
 
 output "object_store" {
   description = "SmithDB object store (no keys; they're in the smithdb-config Secret)."
   value = {
-    endpoint = module.rustfs_smithdb.endpoint
-    bucket   = module.rustfs_smithdb.bucket
-    buckets  = module.rustfs_smithdb.buckets
+    endpoint = local.object_store.endpoint
+    bucket   = local.object_store.smithdb
+    buckets  = var.object_store_source == "external" ? [local.object_store.smithdb, local.object_store.blobs] : module.rustfs_smithdb[0].buckets
     secret   = "langsmith/${kubernetes_secret_v1.smithdb_config.metadata[0].name}"
   }
 }
@@ -104,4 +104,9 @@ output "features" {
 output "pods" {
   description = "Every pod the budget counts, as numbers: name, pool, replicas, cpu_n (cores), mem_gi, disk_gi. The datastores Terraform creates are here and nowhere in the chart, so a tool checking where each pod fits reads them from this. No secrets."
   value       = local.pods_parsed
+}
+
+output "datastore_secrets" {
+  description = "The Secrets LangSmith's namespace must hold before Helm runs, space-separated: the module's, or the customer's for each store they run. deploy.sh checks each."
+  value       = join(" ", local.datastore_secrets)
 }
