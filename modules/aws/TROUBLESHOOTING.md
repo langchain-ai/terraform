@@ -494,15 +494,15 @@ This is a one-time setup. Each session afterwards needs only `aws sso login --pr
 
 ---
 
-### Issue #18 — setup-env.sh completes but every SSM parameter is MISSING
+### Issue #18 — setup-env.sh stops because SSM cannot be read or written
 
-**Symptom:** `source infra/scripts/setup-env.sh` prints its usual summary and `TF_VAR_*` are exported, but `make secrets` reports all required SSM parameters as `MISSING`, and:
+**Symptom:** `source infra/scripts/setup-env.sh` reports an SSM read or write error. For example, missing AWS credentials also cause:
 ```
 aws sts get-caller-identity
 # Unable to locate credentials
 ```
 
-**Cause:** No AWS credentials were active in the shell when the script was sourced. `setup-env.sh` suppresses AWS CLI errors so it can fall back to local `.secret` files, and it exports each value into the shell whether or not the SSM write succeeded. The result is a shell that looks correctly configured while SSM is empty.
+**Cause:** AWS credentials may be missing or expired, SSM permissions may be insufficient, or AWS may be unreachable. Setup stops on SSM errors even if locally saved values or shell values exist.
 
 **Fix:**
 
@@ -511,13 +511,13 @@ export AWS_PROFILE=<your-profile>
 aws sso login                        # or aws configure, for key-based accounts
 aws sts get-caller-identity          # must succeed before continuing
 
-source ./infra/scripts/setup-env.sh  # backfills TF_VAR_* already in the shell into SSM
+source ./infra/scripts/setup-env.sh  # reuse SSM; import local or shell values only if SSM confirms missing
 make secrets                         # all SET
 ```
 
-The backfill path detects "set in the environment, missing in SSM" and writes without re-prompting, so the license key and admin password do not have to be entered again.
+When SSM confirms a parameter is missing, setup imports its locally saved value, then its shell value, before prompting or generating. A conflicting shell value stops setup for investigation. Successful resolutions export to the shell without creating or refreshing local password backups. Legacy locally saved values are left untouched.
 
-**Prevention:** Run `make preflight` before `make setup-env` — it fails fast when `aws sts get-caller-identity` returns nothing.
+**Prevention:** Confirm AWS authentication and SSM read/decryption permissions before sourcing setup. Creating missing parameters also requires SSM write permission.
 
 ---
 
@@ -525,22 +525,22 @@ The backfill path detects "set in the environment, missing in SSM" and writes wi
 
 **Symptom:** The script was interrupted partway through, commonly at the `LANGSMITH_LICENSE_KEY` prompt. It is unclear whether re-sourcing in the same shell is safe.
 
-**Cause:** Not a defect — the script is idempotent and reads existing values back from SSM. The ambiguity is that when `LANGSMITH_LICENSE_KEY` or `LANGSMITH_ADMIN_PASSWORD` are already exported, the script skips both the prompt and the SSM write for them.
+**Cause:** Setup may have resolved some secrets before the interruption. Rerunning reuses those SSM parameters; matching shell values are accepted without prompting or rewriting SSM.
 
-**Fix:** SSO credentials are short-lived, so refresh first. If neither secret was entered before the abort, the same shell is fine:
+**Fix:** Refresh expired SSO credentials, then rerun in the same shell:
 
 ```bash
 aws sso login --profile <your-profile>
 source ./infra/scripts/setup-env.sh
 ```
 
-If either was entered and the script failed afterwards, clear them first (or open a new shell) so they are re-prompted and written to SSM:
+If setup reports a shell conflict, investigate which credential is correct. Once you confirm SSM contains the correct credential, clear the conflicting shell variable (or open a new shell) and rerun setup to reload it. For the license and admin password:
 
 ```bash
 unset LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD
 ```
 
-Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently. Missing generated secrets (including postgres-password) are created; remaining gaps are prompted.
+SSM credentials are loaded into the shell; local password backups are no longer created or refreshed. Only when SSM confirms a parameter is missing does setup import a locally saved value or shell value, then generate or prompt if neither exists.
 
 ---
 
