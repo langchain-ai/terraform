@@ -15,9 +15,10 @@
 # Secret storage:
 #   Secrets are stored in AWS SSM Parameter Store under:
 #     /langsmith/{name_prefix}-{environment}/
-#   On subsequent runs, this script reads secrets FROM SSM — no re-prompting
-#   needed. Each secret is also saved locally with owner-only permissions.
-#   SSM errors or conflicting shell values stop setup.
+#   SSM is authoritative. Only a confirmed-missing parameter permits importing
+#   a locally saved value, then an exported shell value, or creating a new one.
+#   Each resolved secret refreshes its local file (mode 600) before shell export.
+#   SSM errors, local file errors, or conflicting shell values stop setup.
 
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced.
 export AWS_PAGER=""
@@ -96,10 +97,8 @@ export TF_VAR_name_prefix="${_name_prefix}"
 
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 
-# Variables that could not be resolved from the environment or SSM, collected by
-# _ssm_secret and reported together at the end. _ssm_secret runs in this shell
-# (its values come back via export, not command substitution), so the append
-# inside it is visible here.
+# Collect secrets that still need interactive input so non-interactive runs
+# report all missing inputs together, before printing a success summary.
 _missing_vars=""
 _ssm_failed=""
 
@@ -169,11 +168,12 @@ _ssm_put_safe() {
 # Args:
 #   $1  ssm_name     — SSM parameter leaf name (e.g. "postgres-password")
 #   $2  file_name    — Local secret file
-#   $3  varname      — TF_VAR_* variable name to export
+#   $3  varname      — Shell variable to export (TF_VAR_* or LANGSMITH_*)
 #   $4  generator    — Shell command that outputs a new value (empty = prompt)
 #   $5  prompt_text  — Prompt string for interactive input
 #   $6  silent       — "true" to hide input (passwords); "false" for plaintext
 _ssm_secret() {
+  # A failed secret must not cause later secrets to be created.
   [[ -z "$_ssm_failed" ]] || return 1
   local ssm_name="$1"
   local file_name="$2"
@@ -215,6 +215,7 @@ _ssm_secret() {
     val="${val:-$shell_val}"
   fi
 
+  # A shell override must not silently change what Terraform will apply.
   if [[ -n "$shell_val" && "$shell_val" != "$val" ]]; then
     echo "ERROR: $varname in the shell differs from $source. Investigate before rerunning setup." >&2
     _ssm_failed=1
@@ -268,6 +269,7 @@ _ssm_secret() {
   if [[ "$missing" == true ]]; then
     _ssm_put_safe "$_path" "$val" || return 1
   fi
+  # Retain legacy filenames and refresh stale local copies from SSM.
   (umask 077; touch "$file_name" && chmod 600 "$file_name" && printf '%s' "$val" > "$file_name") || {
     echo "ERROR: Could not save $varname locally in $file_name." >&2
     _ssm_failed=1
@@ -329,8 +331,7 @@ export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 _ssm_secret "postgres-password" "$_SETUP_DIR/.pg_password" "TF_VAR_postgres_password" \
   "openssl rand -hex 32" "" "true"
 
-# Reject env/SSM/file overrides that RDS will not accept. The generator above
-# always passes. Catching it here avoids a plan-time validation error later.
+# Reject passwords RDS cannot accept before Terraform validates them.
 if [[ -n "${TF_VAR_postgres_password:-}" ]]; then
   _pg_error=""
   if [[ ${#TF_VAR_postgres_password} -lt 8 || ${#TF_VAR_postgres_password} -gt 128 ]]; then
@@ -383,9 +384,7 @@ _ssm_secret "langsmith-admin-password" "$_SETUP_DIR/.admin_password" "LANGSMITH_
 _ssm_secret "langsmith-admin-email" "$_SETUP_DIR/.admin_email" "LANGSMITH_ADMIN_EMAIL" \
   "" "Admin email" "false"
 
-# Validate admin password meets Helm chart requirements. Catching it here prevents
-# storing an invalid password in SSM and discovering the error 10 minutes later
-# when the Helm release times out.
+# Check chart password requirements before the later Helm deployment.
 if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
   _pw_error=""
   if [[ ${#LANGSMITH_ADMIN_PASSWORD} -lt 12 ]]; then
@@ -406,10 +405,10 @@ if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
   fi
 fi
 
-# ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
+# ── Feature encryption keys ──────────────────────────────────────────────────
 # Fernet keys for Deployments, Fleet, Insights, and LangSmith Chat (formerly Polly).
-# Auto-generated and stored in SSM on first run. Only created when the user
-# opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
+# Created on first setup even for disabled features. apply-eso.sh dynamically
+# includes whichever keys exist in SSM.
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
 _fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
 
@@ -426,9 +425,8 @@ _ssm_secret "polly-encryption-key" "$_SETUP_DIR/.polly_encryption_key" "TF_VAR_l
   "$_fernet_gen" "" "true"
 
 # ── Non-interactive failure ───────────────────────────────────────────────────
-# Only populated when stdin is not a tty and a secret was in neither the
-# environment nor SSM. Reported here, once, on stdout — and before the summary,
-# which would otherwise claim the environment was set up successfully.
+# Report values that were absent from SSM, local files, and the shell and
+# require interactive input; no success summary is printed for a failed setup.
 if [[ -n "$_missing_vars" ]]; then
   echo ""
   echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
