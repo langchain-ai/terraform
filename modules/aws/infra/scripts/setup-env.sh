@@ -101,9 +101,6 @@ _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 # (its values come back via export, not command substitution), so the append
 # inside it is visible here.
 _missing_vars=""
-
-# Secrets whose SSM read could not be confirmed, or whose create-only write found
-# the parameter already there. Reported once at the end, before the summary.
 _ssm_failed=""
 
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
@@ -142,11 +139,8 @@ _aws_bounded() {
 # ── Safe SSM write ────────────────────────────────────────────────────────────
 # Writes a value to SSM via a JSON file to avoid shell expansion issues with
 # special characters in passwords ($, !, backticks, etc.) that break --value.
-#
-# Create-only (Overwrite false). This script only generates or prompts for a value
-# after SSM reported the parameter does not exist, so a write must never replace
-# one that does. To rotate a stored value, use manage-ssm.sh.
-# Returns 0 on success, 3 if the parameter already exists, 1 on any other failure.
+# Create only: a concurrent setup must not replace a stored secret.
+# Use manage-ssm.sh for explicit rotation.
 _ssm_put_safe() {
   local _path="$1" _val="$2"
   local _tmpjson
@@ -166,52 +160,17 @@ _ssm_put_safe() {
       "$_path" "$_escaped_val" > "$_tmpjson"
   fi
 
-  local _rc=0
-  _ssm_put_error=$(_aws_bounded ssm put-parameter \
+  local _rc=0 _error
+  _error=$(_aws_bounded ssm put-parameter \
     --region "$AWS_REGION" \
     --cli-input-json "file://${_tmpjson}" \
     --output text 2>&1 >/dev/null) || _rc=$?
   rm -f "$_tmpjson"
-  [[ $_rc -eq 0 ]] && return 0
-  [[ "$_ssm_put_error" == *"(ParameterAlreadyExists)"* ]] && return 3
-  return 1
-}
-
-# ── SSM read ──────────────────────────────────────────────────────────────────
-# Reads one parameter. Only ParameterNotFound means "no value is stored". Any
-# other failure (expired login, wrong profile, missing permission, no credentials,
-# timeout) says nothing about whether a value exists, so it is not "not found".
-#   $1  path     — full SSM parameter name
-#   $2  decrypt  — "true" to return the value; "false" only checks it exists
-# Sets _ssm_val and _ssm_err. Returns 0 found, 1 not found, 2 any other failure.
-_ssm_get() {
-  local _path="$1" _decrypt="${2:-true}" _errfile _rc=0
-  _ssm_val=""
-  _errfile="$(mktemp)" || { _ssm_err="could not create a temporary file"; return 2; }
-  if [[ "$_decrypt" == "true" ]]; then
-    _ssm_val=$(_aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
-      --with-decryption --query Parameter.Value --output text 2>"$_errfile") || _rc=$?
-  else
-    _ssm_val=$(_aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
-      --query Parameter.Name --output text 2>"$_errfile") || _rc=$?
+  if [[ $_rc -ne 0 && "$_error" == *"(ParameterAlreadyExists)"* ]]; then
+    echo "ERROR: $_path was created concurrently; the new value was not written."
+    _ssm_failed=1
   fi
-  _ssm_err=$(grep -m1 . "$_errfile" | cut -c1-200)
-  if [[ $_rc -ne 0 ]]; then
-    _ssm_val=""
-    if grep -Fq "(ParameterNotFound)" "$_errfile"; then rm -f "$_errfile"; return 1; fi
-    rm -f "$_errfile"
-    return 2
-  fi
-  rm -f "$_errfile"
-  return 0
-}
-
-# A create-only write found the parameter already there, so it appeared after the
-# read said "not found". The value held in memory would not match SSM, so the
-# caller must not use it.
-_ssm_exists_stop() {
-  echo "  ERROR: $1 already exists in SSM, so the new value was not written."
-  _ssm_failed="$_ssm_failed $2"
+  return $_rc
 }
 
 # ── SSM-backed secret helper ──────────────────────────────────────────────────
@@ -237,55 +196,49 @@ _ssm_secret() {
 
   local val=""
   local _path="${_ssm_prefix}/${ssm_name}"
-  local _rc=0
 
-  # 0. Already exported in the environment — use as-is, but backfill SSM if missing.
-  #    Without this backfill, pre-exported vars silently skip the SSM write, leaving
-  #    ESO unable to sync the secret into the K8s langsmith-config secret.
+  # Exported overrides only need an existence check, without KMS decryption.
+  local _get_args=(--with-decryption --query Parameter.Value)
   if [[ -n "$(printenv "$varname")" ]]; then
-    _ssm_get "$_path" false || _rc=$?
-    if [[ $_rc -eq 1 ]]; then
+    _get_args=(--query Parameter.Name)
+  fi
+  local _errfile
+  _errfile=$(mktemp) || { _ssm_failed=1; return 1; }
+  if ! val=$(_aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
+      "${_get_args[@]}" --output text 2>"$_errfile"); then
+    # Only ParameterNotFound permits generating or migrating a value.
+    if ! grep -Fq "(ParameterNotFound)" "$_errfile"; then
+      echo "ERROR: SSM read failed for $_path (region: $AWS_REGION)."
+      cat "$_errfile" >&2
+      rm -f "$_errfile"
+      _ssm_failed=1
+      return 1
+    fi
+    val=""
+  fi
+  rm -f "$_errfile"
+
+  # 0. Use exported values as-is; backfill only a confirmed-missing parameter.
+  if [[ -n "$(printenv "$varname")" ]]; then
+    if [[ -z "$val" ]]; then
       echo "  $varname is set in env but missing from SSM — backfilling → $_path"
-      _rc=0
-      _ssm_put_safe "$_path" "$(printenv "$varname")" || _rc=$?
-      if [[ $_rc -eq 3 ]]; then
-        _ssm_exists_stop "$_path" "$varname"
-        return 1
-      elif [[ $_rc -ne 0 ]]; then
+      if ! _ssm_put_safe "$_path" "$(printenv "$varname")"; then
+        [[ -z "$_ssm_failed" ]] || return 1
         echo "  WARNING: SSM backfill failed for $_path"
         echo "           Try manually: ./infra/scripts/manage-ssm.sh set $(basename "$_path") '<value>'"
       fi
-    elif [[ $_rc -eq 2 ]]; then
-      echo "  ERROR: could not check $_path in SSM: $_ssm_err"
-      _ssm_failed="$_ssm_failed $varname"
-      return 1
     fi
     return
   fi
-
-  # 1. Try SSM Parameter Store. Only "not found" may continue to the local file and
-  #    the generator. Any other failure leaves the stored value unknown, so stop:
-  #    a generated replacement would no longer match what is already deployed.
-  _ssm_get "$_path" true || _rc=$?
-  if [[ $_rc -eq 2 ]]; then
-    echo "  ERROR: could not read $_path from SSM: $_ssm_err"
-    _ssm_failed="$_ssm_failed $varname"
-    return 1
-  fi
-  val="$_ssm_val"
 
   # 2. Fall back to local file (migration from pre-SSM runs)
   if [[ -z "$val" && -n "$file_name" && -f "$file_name" ]]; then
     val=$(cat "$file_name")
     echo "  Migrating $varname from $file_name → SSM"
-    _rc=0
-    _ssm_put_safe "$_path" "$val" || _rc=$?
-    if [[ $_rc -eq 0 ]]; then
+    if _ssm_put_safe "$_path" "$val"; then
       echo "  Migration complete. You may delete: $file_name"
-    elif [[ $_rc -eq 3 ]]; then
-      _ssm_exists_stop "$_path" "$varname"
-      return 1
     fi
+    [[ -z "$_ssm_failed" ]] || return 1
   fi
 
   # 3. Prompt or generate if still empty
@@ -330,12 +283,9 @@ _ssm_secret() {
     fi
 
     # Store in SSM; fall back to local file if SSM is not yet reachable
-    _rc=0
-    _ssm_put_safe "$_path" "$val" || _rc=$?
-    if [[ $_rc -eq 0 ]]; then
+    if _ssm_put_safe "$_path" "$val"; then
       echo "  Stored $varname → SSM: $_path"
-    elif [[ $_rc -eq 3 ]]; then
-      _ssm_exists_stop "$_path" "$varname"
+    elif [[ -n "$_ssm_failed" ]]; then
       return 1
     elif [[ -n "$file_name" ]]; then
       printf '%s' "$val" > "$file_name"
@@ -520,15 +470,8 @@ if [[ -n "$_missing_vars" ]]; then
   return 1
 fi
 
-# ── SSM read or write failure ─────────────────────────────────────────────────
-# For these secrets SSM could not be read, or a create-only write found a value
-# already stored. No stored value was changed.
 if [[ -n "$_ssm_failed" ]]; then
-  echo ""
-  echo "ERROR: SSM could not be read or safely written for:$_ssm_failed"
-  echo "       No stored value was changed. Resolve the error before applying."
-  echo "       Check the AWS profile and region (region: $AWS_REGION, path: ${_ssm_prefix}/),"
-  echo "       then re-run: source infra/scripts/setup-env.sh"
+  echo "ERROR: SSM setup failed. Resolve the errors above before applying."
   return 1
 fi
 
