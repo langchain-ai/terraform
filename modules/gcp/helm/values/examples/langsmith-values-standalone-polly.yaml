@@ -33,9 +33,8 @@ polly:
   # encryptionKey lives in helm/values/values-overrides.yaml — do NOT add it here.
   # Shared with the legacy enable_polly path — do not change once data exists.
 
-  # Resources required — the langsmith-quota ResourceQuota in this namespace
-  # rejects any pod that doesn't specify cpu/memory limits and requests.
-  # Sizing mirrors the legacy `config.polly.agent.resources` defaults
+  # Explicit resources: the chart sets none for these blocks. Sizing mirrors
+  # the legacy `config.polly.agent.resources` defaults
   # (cpu: 2/4, memoryMb: 4096/8192) split between api-server and queue.
   apiServer:
     deployment:
