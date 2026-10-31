@@ -198,6 +198,21 @@ _ssm_secret() {
   fi
 
   if [[ "$missing" == true ]]; then
+    # Do not replace a credential that may still be used by an older deployment.
+    local legacy_file=""
+    case "$ssm_name" in
+      postgres-password) legacy_file="$_SETUP_DIR/.pg_password" ;;
+      langsmith-api-key-salt) legacy_file="$_SETUP_DIR/.api_key_salt" ;;
+      langsmith-jwt-secret) legacy_file="$_SETUP_DIR/.jwt_secret" ;;
+      langsmith-license-key) legacy_file="$_SETUP_DIR/.license_key" ;;
+      langsmith-admin-password) legacy_file="$_SETUP_DIR/.admin_password" ;;
+    esac
+    if [[ -n "$legacy_file" && ( -e "$legacy_file" || -L "$legacy_file" ) ]]; then
+      echo "ERROR: $_path is missing from SSM but a legacy backup exists at $legacy_file." >&2
+      echo "       Import the existing credential into SSM with manage-ssm.sh, then rerun setup." >&2
+      echo "       The local backup was not read or changed." >&2
+      return 1
+    fi
     val="$shell_val"
   fi
 

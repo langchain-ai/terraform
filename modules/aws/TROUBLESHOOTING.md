@@ -515,7 +515,7 @@ source ./infra/scripts/setup-env.sh  # reuse SSM; import local or shell values o
 make secrets                         # all SET
 ```
 
-When SSM confirms a parameter is missing, setup uses its shell value before prompting or generating, and saves it to SSM before continuing. Existing SSM values replace shell values. Local password files are never read or updated; existing files are left untouched. Verify their credentials are in SSM before deleting them.
+When SSM confirms a parameter is missing, setup uses its shell value before prompting or generating, and saves it to SSM before continuing. Existing SSM values replace shell values. Local password files are never read or updated; existing files are left untouched. If SSM is missing a credential whose legacy backup path exists, setup stops before generating or saving a replacement. Import the existing credential into SSM with `infra/scripts/manage-ssm.sh`, then rerun setup. Verify credentials are in SSM before deleting old files.
 
 **Prevention:** Confirm AWS authentication and SSM read/decryption permissions before sourcing setup. Creating missing parameters also requires SSM write permission.
 
