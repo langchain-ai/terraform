@@ -185,8 +185,9 @@ run_case found true false success 0 0
 run_case found true true success 0 0
 run_case missing false false success 1 1
 run_case missing true false success 1 0
-run_case missing false true success 1 1
-run_case missing true true success 1 0
+run_case missing false true failure 0 0
+run_case missing true true failure 0 0
+run_case missing false true failure 0 0 langsmith-api-key-salt
 for mode in denied expired credentials timeout misleading empty; do
   run_case "$mode" false false failure 0 0
   run_case "$mode" true true failure 0 0
@@ -195,7 +196,7 @@ run_case denied false false failure 0 0 langsmith-api-key-salt
 for mode in race write-denied; do
   run_case "$mode" false false failure 1 1
   run_case "$mode" true false failure 1 0
-  run_case "$mode" false true failure 1 1
+  run_case "$mode" false true failure 0 0
 done
 # An unusable legacy path must not block a readable SSM credential.
 run_case local-failed false false success 0 0
