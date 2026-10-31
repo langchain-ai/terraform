@@ -123,6 +123,8 @@ fi
 EOF
 chmod +x "$TEST_TMP/bin/aws" "$TEST_TMP/bin/openssl"
 
+# Args: SSM mode, shell (false=unset, same=matches SSM, true=different), local
+# copy present, expected result, write count, generation count, optional SSM key.
 run_case() {
   local mode="$1" preset="$2" legacy="$3" expect="$4" writes="$5" generates="$6"
   local target="${7:-postgres-password}" varname="TF_VAR_postgres_password"

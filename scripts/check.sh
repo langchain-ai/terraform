@@ -6,8 +6,8 @@
 #   bash scripts/check.sh --scripts         # shellcheck and AWS secret tests
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
-# state) and tflint with the provider's pinned ruleset. Scripts are linted
-# repo-wide rather than per root, so naming a directory checks terraform only.
+# state) and tflint with the provider's pinned ruleset. Script checks run
+# repo-wide, including the isolated AWS secret tests; a directory checks HCL only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
