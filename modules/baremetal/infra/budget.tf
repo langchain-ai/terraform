@@ -16,8 +16,8 @@ resource "terraform_data" "budget" {
 
   lifecycle {
     precondition {
-      condition     = var.object_store_source == "in-cluster" || (!var.enable_sandboxes && var.object_store_endpoint != "" && var.object_store_buckets.smithdb != var.object_store_buckets.blobs)
-      error_message = "object_store_source = external needs object_store_endpoint and two different buckets, and cannot run with enable_sandboxes: the sandboxes' JuiceFS bucket stays on the in-cluster RustFS."
+      condition     = var.object_store_source == "in-cluster" || (var.object_store_endpoint != "" && var.object_store_buckets.smithdb != var.object_store_buckets.blobs)
+      error_message = "object_store_source = external needs object_store_endpoint and two different buckets."
     }
 
     precondition {

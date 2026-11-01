@@ -146,6 +146,17 @@ if _tfvar_is_true enable_engine; then
   fi
 fi
 
+# Their object store's keys, kept only when the operator has them: passed to Terraform as
+# TF_VAR_object_store_*, the module writes the Secret itself. Never asked for: without them the
+# customer's own Secret is read, as before.
+if [[ "$(_parse_tfvar object_store_source)" == "external" ]]; then
+  for key in OBJECT_STORE_ACCESS_KEY_ID OBJECT_STORE_SECRET_ACCESS_KEY; do
+    if [[ -n "${!key:-}$(_secret_get "$key")" ]]; then
+      _ensure_secret "$key" "" true "" ""
+    fi
+  done
+fi
+
 # SSO: the identity provider's OIDC client, read by the chart from langsmith-config.
 if _tfvar_is_true enable_sso_oidc; then
   _ensure_secret OAUTH_CLIENT_ID "OIDC client ID" false "" ""

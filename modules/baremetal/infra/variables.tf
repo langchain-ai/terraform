@@ -173,7 +173,7 @@ variable "smithdb_metastore_tls" {
 variable "object_store_source" {
   type        = string
   default     = "in-cluster"
-  description = "in-cluster: the module runs RustFS for SmithDB's bucket and the blob bucket. external: the customer's S3-compatible store, at object_store_endpoint, its keys in object_store_secret. Its buckets and the blob bucket's lifecycle rules are theirs to create. Sandboxes keep their JuiceFS bucket on RustFS, so they need the in-cluster store."
+  description = "in-cluster: the module runs RustFS for SmithDB's bucket and the blob bucket. external: the customer's S3-compatible store, at object_store_endpoint, its keys in object_store_secret. A bucket missing there is created, the blob bucket with its expiry; one that exists is left as it is. With enable_sandboxes, RustFS still runs in the cluster for the sandboxes' JuiceFS bucket alone."
 
   validation {
     condition     = contains(["in-cluster", "external"], var.object_store_source)
@@ -208,7 +208,26 @@ variable "object_store_buckets" {
 variable "object_store_secret" {
   type        = string
   default     = "object-store"
-  description = "With object_store_source = external: the Secret in LangSmith's namespace the customer creates, keys access_key_id and secret_access_key. The module copies them into smithdb-config, the one Secret SmithDB reads; blob storage reads the same keys."
+  description = "With object_store_source = external: the Secret in LangSmith's namespace holding the store's keys, access_key_id and secret_access_key, which the customer creates unless object_store_access_key_id is given. The module copies them into smithdb-config, the one Secret SmithDB reads; blob storage reads the same keys."
+}
+
+variable "object_store_access_key_id" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "With object_store_source = external: the store's access key. Given, the module writes object_store_secret itself, so a first install needs no Secret made by hand between applies. Prefer TF_VAR_object_store_access_key_id over terraform.tfvars; it is kept in Terraform state."
+}
+
+variable "object_store_secret_access_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "With object_store_access_key_id: its secret key. Prefer TF_VAR_object_store_secret_access_key."
+
+  validation {
+    condition     = (var.object_store_access_key_id == "") == (var.object_store_secret_access_key == "")
+    error_message = "object_store_access_key_id and object_store_secret_access_key are given together or not at all."
+  }
 }
 
 variable "datastore_requests" {
@@ -389,6 +408,12 @@ variable "envoy_proxy_node_selector" {
   type        = map(string)
   default     = {}
   description = "Nodes the Envoy proxy pods may run on. With metallb_l2_node_selector naming the same node, a client's bytes come in on that node and reach the proxy there; elsewhere, every request crosses a second node's link to the proxy and back. Default {}: wherever the scheduler puts them."
+}
+
+variable "pinned_priority_class" {
+  type        = string
+  default     = ""
+  description = "A PriorityClass the module creates for pods pinned to one node (by kubernetes.io/hostname), above every pod with none. The scheduler places pods as they arrive: pods that may run on several nodes can take the room a pinned pod has nowhere else to find, and it sits Pending; with this class the pinned pod preempts them and they reschedule on another node they may use. Name it in each pinned pod's priorityClassName. Default \"\": none."
 }
 
 variable "keda_chart_version" {

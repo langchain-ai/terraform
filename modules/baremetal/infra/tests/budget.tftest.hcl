@@ -675,7 +675,61 @@ run "their_object_store_is_neither_built_nor_counted" {
   }
 }
 
-run "their_object_store_cannot_carry_sandboxes" {
+run "their_object_store_from_keys_given_needs_no_secret_made_by_hand" {
+  command = plan
+
+  variables {
+    sizing_profile                 = "lab"
+    object_store_source            = "external"
+    object_store_endpoint          = "http://nas.example:30292"
+    object_store_access_key_id     = "langsmith"
+    object_store_secret_access_key = "not-a-real-key"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret_v1.object_store) == 1 && length(data.kubernetes_secret_v1.object_store) == 0
+    error_message = "With the keys given the module should write the store's Secret, not read one from the namespace it is creating."
+  }
+
+  assert {
+    condition     = toset(keys(kubernetes_job_v1.object_store_bucket)) == toset(["smithdb", "langsmith-blobs"])
+    error_message = "A Job should make each of their buckets that is missing."
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_job_v1.object_store_bucket["langsmith-blobs"].spec[0].template[0].spec[0].container[0].env[2].value, "ttl_s/") && kubernetes_job_v1.object_store_bucket["smithdb"].spec[0].template[0].spec[0].container[0].env[2].value == ""
+    error_message = "Only the blob bucket takes the expiry; SmithDB manages its own."
+  }
+}
+
+run "a_pinned_priority_class_is_made_only_when_named" {
+  command = plan
+
+  variables {
+    sizing_profile        = "lab"
+    pinned_priority_class = "lsb-pinned-state"
+  }
+
+  assert {
+    condition     = length(kubernetes_priority_class_v1.pinned) == 1 && kubernetes_priority_class_v1.pinned[0].value > 0 && kubernetes_priority_class_v1.pinned[0].global_default == false
+    error_message = "A named pinned class should be created, above the default and never the default itself."
+  }
+}
+
+run "half_a_key_pair_is_refused" {
+  command = plan
+
+  variables {
+    sizing_profile             = "lab"
+    object_store_source        = "external"
+    object_store_endpoint      = "http://nas.example:30292"
+    object_store_access_key_id = "langsmith"
+  }
+
+  expect_failures = [var.object_store_secret_access_key]
+}
+
+run "beside_their_object_store_rustfs_holds_the_sandboxes_bucket_alone" {
   command = plan
 
   variables {
@@ -687,7 +741,15 @@ run "their_object_store_cannot_carry_sandboxes" {
     sandbox_source_cidrs  = ["10.42.0.0/16"]
   }
 
-  expect_failures = [terraform_data.budget]
+  assert {
+    condition     = length(module.rustfs_smithdb) == 1 && length([for p in output.pods : p if p.name == "datastore/rustfs_smithdb"]) == 1
+    error_message = "With Sandboxes, RustFS should still run and be counted, for their JuiceFS bucket."
+  }
+
+  assert {
+    condition     = output.smithdb_helm_values.smithdb.config.objectStore.s3.endpoint == "https://objectscale.example:9021" && output.langsmith_helm_values.config.blobStorage.apiURL == "https://objectscale.example:9021"
+    error_message = "SmithDB's segments and the blobs should go to the customer's store, not RustFS."
+  }
 }
 
 run "an_object_store_past_the_disks_does_not_fit" {

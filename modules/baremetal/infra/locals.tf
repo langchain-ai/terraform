@@ -211,12 +211,15 @@ locals {
       lim_mem_mi = max(d.lim_mem_mi, var.datastore_requests[k].mem_mi)
     })
   }
+  # RustFS runs for the in-cluster object store, or, beside the customer's, for the sandboxes' JuiceFS
+  # bucket alone: theirs takes SmithDB's segments and the blobs, which grow with every trace.
+  rustfs_in_cluster = var.object_store_source == "in-cluster" || var.enable_sandboxes
   # The stores the customer runs (each <store>_source = external): not built, so not counted.
   external_stores = toset(compact([
     var.postgres_source == "external" ? "postgres_langsmith" : "",
     var.redis_source == "external" ? "redis_langsmith" : "",
     var.smithdb_metastore_source == "external" ? "postgres_smithdb" : "",
-    var.object_store_source == "external" ? "rustfs_smithdb" : "",
+    local.rustfs_in_cluster ? "" : "rustfs_smithdb",
   ]))
   # The JuiceFS metadata Redis is a datastore like the others, so the budget and its StatefulSet read one size.
   datastores = merge(

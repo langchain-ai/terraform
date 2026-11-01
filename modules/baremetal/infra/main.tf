@@ -70,6 +70,20 @@ module "metallb" {
 
 # Terraform owns the langsmith namespace, so the Gateway (and later the
 # datastore Secrets) exist before Helm installs LangSmith into it.
+# Pinned pods first, as a placement that fits them assumes: arrival order once let pods free to run on
+# several nodes fill the one node a SmithDB ingestion pod could use, and two of three sat Pending.
+resource "kubernetes_priority_class_v1" "pinned" {
+  count = var.pinned_priority_class != "" ? 1 : 0
+
+  metadata {
+    name = var.pinned_priority_class
+  }
+  value             = 1000000
+  global_default    = false
+  preemption_policy = "PreemptLowerPriority"
+  description       = "Pods pinned to one node: they preempt pods that can run elsewhere."
+}
+
 resource "kubernetes_namespace_v1" "langsmith" {
   metadata {
     name = "langsmith"
@@ -266,23 +280,42 @@ locals {
 }
 
 # The customer's object store, its keys read from their Secret into smithdb-config, as the metastore's.
+# Given as inputs instead, the module writes that Secret itself: read from a namespace this same apply
+# creates, a first install stopped until someone made the Secret by hand and applied again.
+locals {
+  object_store_keys_given = var.object_store_access_key_id != ""
+}
+
 data "kubernetes_secret_v1" "object_store" {
-  count = var.object_store_source == "external" ? 1 : 0
+  count = var.object_store_source == "external" && !local.object_store_keys_given ? 1 : 0
   metadata {
     name      = var.object_store_secret
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
 }
 
+resource "kubernetes_secret_v1" "object_store" {
+  count = var.object_store_source == "external" && local.object_store_keys_given ? 1 : 0
+  metadata {
+    name      = var.object_store_secret
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+  data = {
+    access_key_id     = var.object_store_access_key_id
+    secret_access_key = var.object_store_secret_access_key
+  }
+}
+
 locals {
+  object_store_keys = var.object_store_source != "external" ? {} : local.object_store_keys_given ? kubernetes_secret_v1.object_store[0].data : data.kubernetes_secret_v1.object_store[0].data
   object_store = var.object_store_source == "external" ? {
     endpoint   = var.object_store_endpoint
     region     = var.object_store_region
     path_style = var.object_store_path_style
     smithdb    = var.object_store_buckets.smithdb
     blobs      = var.object_store_buckets.blobs
-    access_key = data.kubernetes_secret_v1.object_store[0].data["access_key_id"]
-    secret_key = data.kubernetes_secret_v1.object_store[0].data["secret_access_key"]
+    access_key = local.object_store_keys["access_key_id"]
+    secret_key = local.object_store_keys["secret_access_key"]
     } : {
     endpoint   = module.rustfs_smithdb[0].endpoint
     region     = "us-east-1" # any value; RustFS ignores it, the SDK needs one
@@ -292,6 +325,127 @@ locals {
     access_key = module.rustfs_smithdb[0].access_key
     secret_key = module.rustfs_smithdb[0].secret_key
   }
+}
+
+# Their buckets, as modules/rustfs makes ours: head-bucket first, so a bucket they made is left as it
+# is, rules and all, and the keys need no right to create one that exists. Only a bucket this Job
+# creates gets the blob expiry: without it the blob bucket grows without bound (57 GB in two lab days).
+resource "kubernetes_job_v1" "object_store_bucket" {
+  for_each = var.object_store_source == "external" ? toset(concat([var.object_store_buckets.smithdb], var.enable_blob_storage ? [var.object_store_buckets.blobs] : [])) : toset([])
+
+  metadata {
+    name      = "create-bucket-${each.key}"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  spec {
+    backoff_limit = 6
+
+    template {
+      metadata {
+        labels = { "app.kubernetes.io/name" = "object-store-bucket-init" }
+      }
+
+      spec {
+        restart_policy = "OnFailure"
+
+        security_context {
+          run_as_user     = 10001
+          run_as_group    = 10001
+          run_as_non_root = true
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
+        container {
+          name    = "create-bucket"
+          image   = var.aws_cli_image
+          command = ["sh", "-c"]
+          args = [<<-EOT
+            set -eu
+            if aws --endpoint-url "$S3_ENDPOINT" s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+              echo "bucket $BUCKET exists: left as it is"
+              exit 0
+            fi
+            aws --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$BUCKET"
+            echo "bucket $BUCKET created"
+            if [ -n "$LIFECYCLE" ]; then
+              aws --endpoint-url "$S3_ENDPOINT" s3api put-bucket-lifecycle-configuration \
+                --bucket "$BUCKET" --lifecycle-configuration "$LIFECYCLE"
+              echo "bucket $BUCKET expires ttl_s/ and ttl_l/ objects"
+            fi
+          EOT
+          ]
+
+          env {
+            name  = "S3_ENDPOINT"
+            value = var.object_store_endpoint
+          }
+          env {
+            name  = "BUCKET"
+            value = each.key
+          }
+          env {
+            name = "LIFECYCLE"
+            value = each.key == var.object_store_buckets.blobs ? jsonencode({
+              Rules = [
+                { ID = "ttl-short", Status = "Enabled", Filter = { Prefix = "ttl_s/" }, Expiration = { Days = var.blob_storage_ttl_days.short } },
+                { ID = "ttl-long", Status = "Enabled", Filter = { Prefix = "ttl_l/" }, Expiration = { Days = var.blob_storage_ttl_days.long } },
+              ]
+            }) : ""
+          }
+          env {
+            name  = "AWS_DEFAULT_REGION"
+            value = var.object_store_region
+          }
+          env {
+            name = "AWS_ACCESS_KEY_ID"
+            value_from {
+              secret_key_ref {
+                name = var.object_store_secret
+                key  = "access_key_id"
+              }
+            }
+          }
+          env {
+            name = "AWS_SECRET_ACCESS_KEY"
+            value_from {
+              secret_key_ref {
+                name = var.object_store_secret
+                key  = "secret_access_key"
+              }
+            }
+          }
+          # aws-cli writes a cache under $HOME; the non-root user has none.
+          env {
+            name  = "HOME"
+            value = "/tmp"
+          }
+
+          resources {
+            requests = { cpu = "50m", memory = "64Mi" }
+            limits   = { cpu = "500m", memory = "256Mi" }
+          }
+
+          security_context {
+            allow_privilege_escalation = false
+            run_as_non_root            = true
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+  timeouts {
+    create = "5m"
+  }
+
+  depends_on = [kubernetes_secret_v1.object_store]
 }
 
 resource "kubernetes_secret_v1" "smithdb_config" {
@@ -344,16 +498,18 @@ resource "kubernetes_secret_v1" "langsmith_redis" {
 }
 
 # SmithDB's object store. RustFS instead of MinIO (community edition no longer
-# maintained). Bucket "smithdb"; SmithDB writes under its smithdb/ prefix.
+# maintained). Bucket "smithdb"; SmithDB writes under its smithdb/ prefix. With
+# the customer's object store it runs for the sandboxes' JuiceFS bucket alone:
+# SmithDB's segments and the blobs, which grow with every trace, go to theirs.
 module "rustfs_smithdb" {
   source = "./modules/rustfs"
-  count  = var.object_store_source == "in-cluster" ? 1 : 0
+  count  = local.rustfs_in_cluster ? 1 : 0
 
   namespace          = "rustfs-smithdb"
   image              = var.rustfs_image
   bucket             = "smithdb"
-  extra_buckets      = concat(var.enable_blob_storage ? [local.blob_bucket] : [], var.enable_sandboxes ? [local.juicefs_bucket] : [])
-  ttl_buckets        = var.enable_blob_storage ? [local.blob_bucket] : []
+  extra_buckets      = concat(var.enable_blob_storage && var.object_store_source == "in-cluster" ? [local.blob_bucket] : [], var.enable_sandboxes ? [local.juicefs_bucket] : [])
+  ttl_buckets        = var.enable_blob_storage && var.object_store_source == "in-cluster" ? [local.blob_bucket] : []
   ttl_days           = var.blob_storage_ttl_days
   aws_cli_image      = var.aws_cli_image
   storage_size       = local.datastores_k8s.rustfs_smithdb.storage
