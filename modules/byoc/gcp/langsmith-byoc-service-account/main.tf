@@ -100,6 +100,7 @@ locals {
     "secretmanager.secrets.delete",
     "secretmanager.secrets.get",
     "secretmanager.versions.add",
+    "servicedirectory.namespaces.create",
     "servicedirectory.services.create",
     "servicedirectory.services.delete",
     "servicenetworking.operations.get",
