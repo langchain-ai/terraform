@@ -24,9 +24,15 @@ provider "kubernetes" {
   }
 }
 
+# The dedicated sandbox cluster (sandbox_runtime_source = "external"). Its
+# fallback host never resolves: with null, the provider would take
+# KUBE_CONFIG_PATH or KUBE_HOST from the environment, and a back-out to the
+# in-cluster runtime would refresh and destroy the sandbox namespace in whatever
+# cluster those name, the LangSmith cluster included, where the in-cluster
+# runtime uses the same namespace.
 provider "kubernetes" {
   alias                  = "sandbox"
-  host                   = try(module.sandbox_eks[0].cluster_endpoint, null)
+  host                   = try(module.sandbox_eks[0].cluster_endpoint, "https://no-sandbox-cluster.invalid")
   cluster_ca_certificate = try(base64decode(module.sandbox_eks[0].cluster_certificate_authority_data), null)
   exec {
     api_version = "client.authentication.k8s.io/v1beta1"

@@ -496,6 +496,14 @@ Run exactly one `langsmith-sandbox` release per LangSmith install, and only whil
 
 To move an existing install from the in-cluster runtime, change `sandbox_runtime_source`, run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret), then run `make apply`, `make init-values` and `make deploy`. `make apply` creates the sandbox cluster and removes the in-cluster sandbox node group. `make deploy` copies the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into the sandbox namespace, so Sandboxes that resume from saved memory keep their auth proxy credential injection; then it switches the LangSmith release to `sandboxes.external.enabled` (removing the embedded runtime) and to the dedicated service-auth secret, and installs the runtime chart against the same JuiceFS metadata store and bucket, so both sides start on the new secret together. LangSmith accepts the new runtime about 6 minutes after the embedded hosts stop reporting, so its host can stay not ready until then. Running sandboxes stop during the move and start again on the new hosts when used.
 
+To move back to the in-cluster runtime, or turn Sandboxes off: this direction is not tested end to end yet. Before you change `sandbox_runtime_source` or `enable_sandboxes`, remove the three objects Terraform keeps in the sandbox cluster from state. They go when the cluster is deleted:
+
+```bash
+terraform -chdir=infra state rm 'kubernetes_secret_v1.sandbox_runtime[0]' 'kubernetes_secret_v1.sandbox_juicefs_config[0]' 'kubernetes_namespace_v1.sandbox[0]'
+```
+
+Without this, plan fails reaching `no-sandbox-cluster.invalid`. Once the sandbox cluster leaves the configuration, its Kubernetes provider points there, so it never falls back to your kubeconfig, where the in-cluster runtime's namespace has the same name.
+
 #### Install, upgrade and uninstall order
 
 - **Install:** `make apply`, then `make init-values`, then `make deploy`. `make init-values` writes both the LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`; `make deploy` installs `langsmith` first, then `langsmith-sandbox` in the sandbox cluster, and waits for `sandbox-host`.
