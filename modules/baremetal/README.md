@@ -314,6 +314,15 @@ bucket on the same RustFS. The runtime uses the host network, which no NetworkPo
 Sandboxes on, the `langsmith` namespace runs at the privileged Pod Security level, and `make setup-env` makes the
 callback signing key. Needs the Sandboxes entitlement.
 
+Two things on the sandbox hosts the module does not set up, since it does not build the hosts:
+
+- **TCP 19190 from every cluster node.** platform-backend calls the sandbox runtime on its node's own address at
+  port 19190, and the CNI sends that from the calling node's address, not a pod's, so a firewall rule for the pod
+  network does not admit it. Blocked, every sandbox request times out while the runtime reports ready.
+- **A CPU with at least 40 physical address bits** (`grep -m1 "address sizes" /proc/cpuinfo`). Firecracker 1.16
+  places the tools image's pmem region at 512 GiB (2^39); on a 39-bit CPU, common on Intel desktop parts, the
+  microVM cannot map it and never boots.
+
 `enable_engine = true` adds Engine on the shared Insights deployment, with its two keys in the app Secret. It needs
 Sandboxes, the Engine entitlement, and `https` with a domain, which its callbacks reach it on; `make plan` refuses it
 otherwise. Engine calls its models with provider keys, through your own LLM gateway (`engine_gateway_*_base_url`), or
