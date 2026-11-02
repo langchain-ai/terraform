@@ -116,6 +116,9 @@ locals {
     "Microsoft.Storage/storageAccounts/blobServices/write",
     "Microsoft.Storage/storageAccounts/blobServices/containers/write",
     "Microsoft.Storage/storageAccounts/managementPolicies/write",
+    "Microsoft.Storage/storageAccounts/PrivateEndpointConnectionsApproval/action",
+    "Microsoft.Storage/storageAccounts/privateEndpointConnections/write",
+    "Microsoft.Storage/storageAccounts/privateEndpointConnections/delete",
 
     # Managed identities
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
