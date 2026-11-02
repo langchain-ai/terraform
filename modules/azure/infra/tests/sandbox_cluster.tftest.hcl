@@ -474,8 +474,9 @@ run "a_supplied_sandbox_subnet_is_used_as_is" {
   override_data {
     target = data.azurerm_subnet.byo_sandbox_subnet
     values = {
-      address_prefixes  = ["10.0.200.0/24"]
-      service_endpoints = ["Microsoft.Storage"]
+      address_prefixes          = ["10.0.200.0/24"]
+      service_endpoints         = ["Microsoft.Storage"]
+      network_security_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/networkSecurityGroups/sandbox-nsg"
     }
   }
 
@@ -506,9 +507,54 @@ run "a_supplied_sandbox_subnet_without_the_storage_endpoint_is_refused" {
   override_data {
     target = data.azurerm_subnet.byo_sandbox_subnet
     values = {
-      address_prefixes  = ["10.0.200.0/24"]
-      service_endpoints = []
+      address_prefixes          = ["10.0.200.0/24"]
+      service_endpoints         = []
+      network_security_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/networkSecurityGroups/sandbox-nsg"
     }
+  }
+
+  expect_failures = [terraform_data.sandbox_cluster_guard]
+}
+
+# Terraform attaches no NSG to a supplied subnet, so one without its own would
+# leave the sandbox nodes open to LangSmith's.
+run "a_supplied_sandbox_subnet_without_an_nsg_is_refused" {
+  command = plan
+
+  variables {
+    create_vnet       = false
+    vnet_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+    aks_service_cidr  = "10.100.0.0/16"
+    sandbox_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/sandbox"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = {
+      address_space = ["10.0.0.0/16"]
+      location      = "eastus"
+      subnets       = []
+    }
+  }
+  override_data {
+    target = data.azurerm_subnet.byo_sandbox_subnet
+    values = {
+      address_prefixes          = ["10.0.200.0/24"]
+      service_endpoints         = ["Microsoft.Storage"]
+      network_security_group_id = ""
+    }
+  }
+
+  expect_failures = [terraform_data.sandbox_cluster_guard]
+}
+
+# The sandbox cluster takes no disk encryption set, so its node disks would get
+# platform-managed keys.
+run "a_disk_encryption_set_is_refused" {
+  command = plan
+
+  variables {
+    aks_disk_encryption_set_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-langsmith"
   }
 
   expect_failures = [terraform_data.sandbox_cluster_guard]

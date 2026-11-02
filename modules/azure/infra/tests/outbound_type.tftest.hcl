@@ -799,9 +799,10 @@ run "external_runtime_with_user_defined_routing_needs_a_routed_sandbox_subnet" {
   override_data {
     target = data.azurerm_subnet.byo_sandbox_subnet
     values = {
-      address_prefixes  = ["10.0.40.0/24"]
-      service_endpoints = ["Microsoft.Storage"]
-      route_table_id    = ""
+      address_prefixes          = ["10.0.40.0/24"]
+      service_endpoints         = ["Microsoft.Storage"]
+      network_security_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/networkSecurityGroups/sandbox-nsg"
+      route_table_id            = ""
     }
   }
 
@@ -838,9 +839,10 @@ run "external_runtime_with_user_defined_routing_and_a_routed_sandbox_subnet_plan
   override_data {
     target = data.azurerm_subnet.byo_sandbox_subnet
     values = {
-      address_prefixes  = ["10.0.40.0/24"]
-      service_endpoints = ["Microsoft.Storage"]
-      route_table_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/routeTables/platform-egress"
+      address_prefixes          = ["10.0.40.0/24"]
+      service_endpoints         = ["Microsoft.Storage"]
+      network_security_group_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/networkSecurityGroups/sandbox-nsg"
+      route_table_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/routeTables/platform-egress"
     }
   }
 

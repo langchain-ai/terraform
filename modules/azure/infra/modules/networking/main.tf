@@ -351,14 +351,19 @@ resource "azurerm_subnet" "subnet_sandbox" {
 # else from the VNet is denied, which leaves the LangSmith cluster no other way
 # onto a sandbox node.
 #
-# Outbound is closed the same way, so code that escapes a sandbox onto its node
-# cannot reach LangSmith's nodes, pods or private endpoints. Sandbox nodes reach
+# Outbound is closed the same way, apart from three ports. Sandbox nodes reach
 # their own subnet and pod range, the platform address 168.63.129.16 (DNS and
-# the node agent), the LangSmith ingress on 80 and 443 (sandbox_ingress_prefixes:
-# where its load balancer frontend can sit), and the JuiceFS Redis private
-# endpoint on 10000 in the AKS subnet; the rest of the VNet is denied. Internet
-# egress, Blob through its service endpoint among it, stays open: sandboxes
-# need it, and aks_outbound_type routes it through the operator's firewall.
+# the node agent), TCP 80 and 443 for the LangSmith ingress
+# (sandbox_ingress_prefixes: where its load balancer frontend can sit), and TCP
+# 10000 for the JuiceFS Redis private endpoint in the AKS subnet; the rest of
+# the VNet is denied. The 80, 443 and 10000 allows cover whole subnets, so
+# whatever else listens there on those ports (node-subnet pods, and private
+# endpoints such as Key Vault, Blob or LangSmith's own Redis) is reachable from
+# a sandbox node, though it still needs its credentials. Internet egress, Blob
+# through its service endpoint among it, stays open: sandboxes need it. The
+# deny names the VirtualNetwork tag, which also covers the prefixes of routes on
+# the subnet's route table; this subnet has none (a routed egress path needs a
+# supplied sandbox_subnet_id), so the deny cannot catch internet traffic.
 resource "azurerm_network_security_group" "sandbox" {
   count               = var.create_sandbox_subnet ? 1 : 0
   name                = "${var.network_name}-subnet-sandbox-nsg"

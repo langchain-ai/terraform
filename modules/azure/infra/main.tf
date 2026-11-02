@@ -2277,6 +2277,21 @@ resource "terraform_data" "sandbox_cluster_guard" {
       error_message = "The subnet given as sandbox_subnet_id must carry the Microsoft.Storage service endpoint. The Blob firewall allowlists it for the JuiceFS container, and Azure rejects the rule without the endpoint."
     }
 
+    # A supplied subnet keeps the operator's NSG, and Terraform attaches none.
+    # Without one, nothing separates the sandbox nodes from LangSmith's.
+    precondition {
+      condition     = length(data.azurerm_subnet.byo_sandbox_subnet) == 0 ? true : try(data.azurerm_subnet.byo_sandbox_subnet[0].network_security_group_id, "") != ""
+      error_message = "The subnet given as sandbox_subnet_id has no network security group. The sandbox cluster runs untrusted code, and Terraform attaches no NSG to a subnet you supply. Attach one with the rules under \"Sandboxes in a separate cluster\" in the README, then plan again."
+    }
+
+    # module.sandbox_aks takes no disk encryption set yet, so the sandbox
+    # cluster's node disks, which hold the JuiceFS cache and sandbox images,
+    # would get platform-managed keys without a word.
+    precondition {
+      condition     = var.aks_disk_encryption_set_id == ""
+      error_message = "sandbox_runtime_source = \"external\" does not support aks_disk_encryption_set_id yet. The sandbox cluster would encrypt its node disks, which hold the JuiceFS cache and sandbox images, with platform-managed keys instead of your set. Use the in-cluster runtime with a customer-managed key."
+    }
+
     # With egress through a route table or NAT gateway, the sandbox subnet has
     # to carry one too, or the sandbox cluster would leave the network some
     # other way. Both belong to whoever owns the network, so the subnet is
@@ -2350,10 +2365,14 @@ module "sandbox_aks" {
 }
 
 # The sandbox cluster's own provider, from module.sandbox_aks. try() keeps it
-# configurable with no sandbox cluster; nothing uses it then.
+# configurable with no sandbox cluster. Its fallback host never resolves: with
+# null, the provider would take KUBE_CONFIG_PATH or KUBE_HOST from the
+# environment, and a back-out to the in-cluster runtime would refresh and
+# destroy the sandbox namespace in whatever cluster those name, the LangSmith
+# cluster included, where the in-cluster runtime uses the same namespace.
 provider "kubernetes" {
   alias                  = "sandbox"
-  host                   = try(module.sandbox_aks[0].host, null)
+  host                   = try(module.sandbox_aks[0].host, "https://no-sandbox-cluster.invalid")
   client_certificate     = try(module.sandbox_aks[0].kube_auth, "") == "entra" ? null : try(base64decode(module.sandbox_aks[0].client_certificate), null)
   client_key             = try(module.sandbox_aks[0].kube_auth, "") == "entra" ? null : try(base64decode(module.sandbox_aks[0].client_key), null)
   cluster_ca_certificate = try(base64decode(module.sandbox_aks[0].cluster_ca_certificate), null)

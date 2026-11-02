@@ -1141,15 +1141,21 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
   - It admits all traffic from the sandbox subnet and its pod range.
   - It denies the rest of the VNet.
   - Port 19190 carries plain HTTP with sandbox secrets, commands and files, so it stays inside the VNet.
-- **NSG on that subnet, outbound,** so code that escapes a sandbox onto its node cannot reach LangSmith's nodes, pods
-  or private endpoints:
+- **NSG on that subnet, outbound,** closed to the rest of the VNet apart from the LangSmith ingress and the JuiceFS
+  Redis:
   - It allows the sandbox subnet and its pod range, and the platform address `168.63.129.16` (DNS and the node agent).
   - It allows TCP 80 and 443 to the LangSmith ingress: the AKS node subnet, plus `ingress_load_balancer_subnet_id`
     when an internal load balancer has a subnet of its own.
   - It allows TCP 10000 to the AKS node subnet, where the JuiceFS Redis private endpoint sits.
   - It denies the rest of the VNet. Internet egress stays open: sandboxes need it.
-- **Bringing your own subnet:** with `create_vnet = false`, pass `sandbox_subnet_id`. The NSG on it is then yours, and
-  should follow the same rules in both directions.
+  - The 80, 443 and 10000 allows cover whole subnets. Whatever else listens there on those ports (node-subnet pods,
+    and private endpoints such as Key Vault, Blob or LangSmith's own Redis) is reachable from a sandbox node, though it
+    still needs its credentials.
+- **Bringing your own subnet:** with `create_vnet = false`, pass `sandbox_subnet_id`. Terraform attaches no NSG to it,
+  so plan refuses a subnet without one. Give that NSG the same rules in both directions, with one change on a subnet
+  whose route table sends `0.0.0.0/0` to a firewall: deny the VNet's address ranges by prefix, not with the
+  `VirtualNetwork` service tag. The tag also covers the prefixes of the subnet's user-defined routes, `0.0.0.0/0`
+  among them, so a deny to it would block internet egress, and with it image pulls and JuiceFS Blob traffic.
 - **Egress:** the sandbox cluster takes `aks_outbound_type` from the LangSmith cluster, so its internet traffic follows
   the same path. With `userDefinedRouting` or `userAssignedNATGateway`, pass `sandbox_subnet_id`: a subnet you own
   that carries the same route table or NAT gateway as `aks_subnet_id`. Plan refuses an external sandbox runtime without it,
@@ -1175,6 +1181,20 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
 - `aks_private_dns_zone_id` empty, `"System"` or `"None"` on a private cluster. A supplied zone needs a user-assigned
   control-plane identity, which the sandbox cluster does not take.
 - No `additional_node_pools` entry named `sandboxhost`. In this mode it would land in the LangSmith cluster.
+- No `aks_disk_encryption_set_id`. The sandbox cluster takes no disk encryption set yet, so plan refuses it rather than
+  encrypt the sandbox nodes' disks, which hold the JuiceFS cache and sandbox images, with platform-managed keys.
+
+**Not supported yet**
+
+- A private image mirror. `langsmith_image_registry` and `langsmith_image_pull_secret_name` reach the `langsmith`
+  release only; the runtime chart pulls its images from their default registries.
+- Custom CA trust. `aks_custom_ca_trust_certificate_files` reaches the LangSmith cluster only, so `sandbox-host` fails
+  TLS on its calls to `https://<hostname>/api` when a private CA signs the LangSmith certificate.
+- A user-assigned control-plane identity. The sandbox cluster's identity is system-assigned and exists only once the
+  cluster does, so it cannot be granted beforehand on a subnet, route table or private DNS zone in another resource
+  group.
+- Outbound allows narrowed to the ingress load balancer's address and the JuiceFS Redis endpoint's.
+- Azure Government. Plan refuses Sandboxes there in either mode: JuiceFS needs Azure Managed Redis.
 
 **Enable**
 
@@ -1215,6 +1235,17 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
   the sandbox namespace, so Sandboxes that resume from saved memory keep their auth proxy credential injection; a CA
   Secret you copied there yourself, as the LangSmith docs' move steps describe, is used as is. Running Sandboxes stop
   during the switch, and LangSmith accepts the new runtime about 6 minutes after the in-cluster hosts stop reporting.
+- **Move back to the in-cluster runtime, or turn Sandboxes off:** this direction is not tested end to end yet. Before
+  you change `sandbox_runtime_source` or `enable_sandboxes`, remove the two objects Terraform keeps in the sandbox
+  cluster from state. Both go when the cluster is deleted:
+
+  ```bash
+  terraform -chdir=infra state rm 'kubernetes_secret_v1.sandbox_cluster_juicefs[0]' 'kubernetes_namespace_v1.sandbox[0]'
+  ```
+
+  Without this, plan fails reaching `no-sandbox-cluster.invalid`. Once the sandbox cluster leaves the configuration,
+  its Kubernetes provider points there, so it never falls back to your kubeconfig, where the in-cluster runtime's
+  namespace has the same name.
 
 **Verify**
 
