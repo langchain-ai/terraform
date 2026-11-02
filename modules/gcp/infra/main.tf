@@ -46,10 +46,15 @@ provider "helm" {
 # The dedicated sandbox cluster (sandbox_runtime_source = "external").
 # Only its namespace and two Secrets are managed here; deploy.sh installs the
 # langsmith-sandbox chart. try() keeps the provider configurable when the
-# cluster does not exist.
+# cluster does not exist. Its fallback host never resolves: with null, the
+# provider would take KUBE_CONFIG_PATH or KUBE_HOST from the environment, and a
+# back-out to the in-cluster runtime would refresh and destroy the sandbox
+# namespace, with this access token, in whatever cluster those name, the
+# LangSmith cluster included, where the in-cluster runtime uses the same
+# namespace.
 provider "kubernetes" {
   alias                  = "sandbox"
-  host                   = try("https://${module.sandbox_gke[0].endpoint}", null)
+  host                   = try("https://${module.sandbox_gke[0].endpoint}", "https://no-sandbox-cluster.invalid")
   token                  = data.google_client_config.default.access_token
   cluster_ca_certificate = try(base64decode(module.sandbox_gke[0].ca_certificate), null)
 }

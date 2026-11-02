@@ -580,6 +580,14 @@ To move an existing install from the in-cluster runtime: this topology starts a 
 
 The JuiceFS objects left under `<sandbox_juicefs_name>/` in the trace bucket can then be deleted.
 
+To move back to the in-cluster runtime, or turn Sandboxes off: this direction is not tested end to end yet. Before you change `sandbox_runtime_source` or `enable_sandboxes`, remove the three objects Terraform keeps in the sandbox cluster from state. They go when the cluster is deleted:
+
+```bash
+terraform -chdir=infra state rm 'kubernetes_secret_v1.sandbox_runtime[0]' 'kubernetes_secret_v1.sandbox_juicefs_config[0]' 'kubernetes_namespace_v1.sandbox[0]'
+```
+
+Without this, plan fails reaching `no-sandbox-cluster.invalid`. Once the sandbox cluster leaves the configuration, its Kubernetes provider points there, so it never falls back to your kubeconfig, where the in-cluster runtime's namespace has the same name.
+
 ---
 
 ## SmithDB (chart 0.17)
