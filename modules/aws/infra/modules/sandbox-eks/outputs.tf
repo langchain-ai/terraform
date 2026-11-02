@@ -28,6 +28,11 @@ output "node_security_group_id" {
   value       = module.eks.node_security_group_id
 }
 
+output "addons_input" {
+  description = "The add-ons as passed to the upstream EKS module, for plan tests."
+  value       = local.addons
+}
+
 output "managed_node_group_input" {
   description = "The sandbox-host node group as passed to the upstream EKS module. Plan tests assert on this because test assertions cannot reach resources inside nested modules."
   value       = local.sandbox_host_node_group
