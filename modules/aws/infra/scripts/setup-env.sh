@@ -15,9 +15,10 @@
 # Secret storage:
 #   Secrets are stored in AWS SSM Parameter Store under:
 #     /langsmith/{name_prefix}-{environment}/
-#   On subsequent runs, this script reads secrets FROM SSM — no re-prompting
-#   needed. If SSM is not yet reachable (first run), secrets fall back to
-#   local .secret files for that run only, then migrate on the next run.
+#   SSM is authoritative. Only a confirmed-missing parameter permits importing
+#   an exported shell value or creating a new one.
+#   Local secret backups are never read, created, or refreshed.
+#   SSM read or write errors stop setup.
 
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced.
 export AWS_PAGER=""
@@ -96,26 +97,6 @@ export TF_VAR_name_prefix="${_name_prefix}"
 
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 
-# Variables that could not be resolved from the environment or SSM, collected by
-# _ssm_secret and reported together at the end. _ssm_secret runs in this shell
-# (its values come back via export, not command substitution), so the append
-# inside it is visible here.
-_missing_vars=""
-
-# ── Warn on pre-exported secrets ──────────────────────────────────────────────
-# _ssm_secret short-circuits (step 0) when a variable is already exported.
-# If LANGSMITH_LICENSE_KEY or LANGSMITH_ADMIN_PASSWORD are set from a prior
-# session, the script will NOT re-prompt and NOT write to SSM.
-# Unset them first if you need to rotate or re-store those secrets.
-for _precheck_var in LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD; do
-  if [[ -n "$(printenv "$_precheck_var")" ]]; then
-    echo "WARNING: $_precheck_var is already set in the environment."
-    echo "         setup-env.sh will skip re-prompting and will NOT write to SSM for this key."
-    echo "         To rotate or re-store: unset $_precheck_var && source infra/scripts/setup-env.sh"
-    echo ""
-  fi
-done
-
 # ── Bounded AWS CLI calls ─────────────────────────────────────────────────────
 # Bounded by timeout(1) when available so a sandbox with blocked egress fails
 # fast instead of stalling on a full TCP timeout. timeout is not in the macOS
@@ -138,6 +119,8 @@ _aws_bounded() {
 # ── Safe SSM write ────────────────────────────────────────────────────────────
 # Writes a value to SSM via a JSON file to avoid shell expansion issues with
 # special characters in passwords ($, !, backticks, etc.) that break --value.
+# Create only: a concurrent setup must not replace a stored secret.
+# Use manage-ssm.sh for explicit rotation.
 _ssm_put_safe() {
   local _path="$1" _val="$2"
   local _tmpjson
@@ -148,81 +131,123 @@ _ssm_put_safe() {
 
   if command -v jq &>/dev/null; then
     jq -n --arg name "$_path" --arg val "$_val" \
-      '{Name: $name, Value: $val, Type: "SecureString", Overwrite: true}' > "$_tmpjson"
+      '{Name: $name, Value: $val, Type: "SecureString", Overwrite: false}' > "$_tmpjson"
   else
     # Pure bash fallback — escape JSON special characters in the value.
     local _escaped_val
     _escaped_val=$(printf '%s' "$_val" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g')
-    printf '{"Name":"%s","Value":"%s","Type":"SecureString","Overwrite":true}\n' \
+    printf '{"Name":"%s","Value":"%s","Type":"SecureString","Overwrite":false}\n' \
       "$_path" "$_escaped_val" > "$_tmpjson"
   fi
 
-  local _rc=0
-  _aws_bounded ssm put-parameter \
+  local _rc=0 _error
+  _error=$(_aws_bounded ssm put-parameter \
     --region "$AWS_REGION" \
     --cli-input-json "file://${_tmpjson}" \
-    --output text >/dev/null 2>&1 || _rc=$?
+    --output text 2>&1 >/dev/null) || _rc=$?
   rm -f "$_tmpjson"
+  if [[ $_rc -ne 0 ]]; then
+    if [[ "$_error" == *"(ParameterAlreadyExists)"* ]]; then
+      echo "ERROR: $_path was created concurrently; rerun setup to read it from SSM."
+    else
+      echo "ERROR: Could not save $_path to SSM. Fix AWS access and rerun setup."
+    fi
+  fi
   return $_rc
 }
 
+_validate_postgres_password() {
+  local value="$1" reason=""
+  if [[ ${#value} -lt 8 || ${#value} -gt 128 ]]; then
+    reason="must be 8-128 characters (RDS master password limit)"
+  elif ! printf '%s' "$value" | grep -qE "^[^/@\"' ]+$"; then
+    reason="must not contain '/', '@', double quote, single quote, or space"
+  fi
+  if [[ -n "$reason" ]]; then
+    printf '%s\n' "$reason"
+    return 1
+  fi
+}
+
+_validate_admin_password() {
+  local value="$1" reason=""
+  if [[ ${#value} -lt 12 ]]; then
+    reason="must be at least 12 characters long"
+  elif ! printf '%s' "$value" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
+    reason="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
+  elif ! printf '%s' "$value" | grep -q '[a-z]'; then
+    reason="must contain at least one lowercase letter"
+  elif ! printf '%s' "$value" | grep -q '[A-Z]'; then
+    reason="must contain at least one uppercase letter"
+  fi
+  if [[ -n "$reason" ]]; then
+    printf '%s\n' "$reason"
+    return 1
+  fi
+}
+
 # ── SSM-backed secret helper ──────────────────────────────────────────────────
-# _ssm_secret: reads a secret from SSM if available; falls back to a local
-# .secret file (migration path from first Pass 1). Prompts or generates a new
-# value if neither source exists, and stores it in SSM (if reachable) or a
-# local file (first Pass 1 only, migrates on next run).
+# Source priority: SSM, shell, then generate or prompt.
 #
 # Args:
 #   $1  ssm_name     — SSM parameter leaf name (e.g. "postgres-password")
-#   $2  file_name    — Legacy local .secret file (empty = no file fallback)
-#   $3  varname      — TF_VAR_* variable name to export
-#   $4  generator    — Shell command that outputs a new value (empty = prompt)
-#   $5  prompt_text  — Prompt string for interactive input
-#   $6  silent       — "true" to hide input (passwords); "false" for plaintext
+#   $2  varname      — Shell variable to export (TF_VAR_* or LANGSMITH_*)
+#   $3  generator    — Shell command that outputs a new value (empty = prompt)
+#   $4  prompt_text  — Prompt string for interactive input
+#   $5  silent       — "true" to hide input (passwords); "false" for plaintext
+#   $6  validator    — optional validation function; runs before persistence/export
 _ssm_secret() {
   local ssm_name="$1"
-  local file_name="$2"
-  local varname="$3"
-  local generator="$4"
-  local prompt_text="$5"
-  local silent="${6:-true}"
+  local varname="$2"
+  local generator="$3"
+  local prompt_text="$4"
+  local silent="${5:-true}"
+  local validator="${6:-}" reason=""
 
-  local val=""
+  local val="" shell_val missing=false
+  shell_val=$(printenv "$varname") || shell_val=""
   local _path="${_ssm_prefix}/${ssm_name}"
 
-  # 0. Already exported in the environment — use as-is, but backfill SSM if missing.
-  #    Without this backfill, pre-exported vars silently skip the SSM write, leaving
-  #    ESO unable to sync the secret into the K8s langsmith-config secret.
-  if [[ -n "$(printenv "$varname")" ]]; then
-    if ! _aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
-        --query Parameter.Name --output text &>/dev/null; then
-      echo "  $varname is set in env but missing from SSM — backfilling → $_path"
-      if ! _ssm_put_safe "$_path" "$(printenv "$varname")"; then
-        echo "  WARNING: SSM backfill failed for $_path"
-        echo "           Try manually: ./infra/scripts/manage-ssm.sh set $(basename "$_path") '<value>'"
-      fi
+  local _errfile
+  _errfile=$(mktemp) || return 1
+  if ! val=$(_aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
+      --with-decryption --query Parameter.Value --output text 2>"$_errfile"); then
+    # Only ParameterNotFound permits generating or migrating a value.
+    if ! grep -Fq "(ParameterNotFound)" "$_errfile"; then
+      echo "ERROR: SSM read failed for $_path (region: $AWS_REGION)."
+      cat "$_errfile" >&2
+      rm -f "$_errfile"
+      return 1
     fi
-    return
+    val=""
+    missing=true
+  fi
+  rm -f "$_errfile"
+
+  if [[ "$missing" == false && -z "$val" ]]; then
+    echo "ERROR: SSM returned an empty credential for $_path. Recover it before rerunning setup." >&2
+    return 1
   fi
 
-  # 1. Try SSM Parameter Store
-  val=$(_aws_bounded ssm get-parameter \
-    --region "$AWS_REGION" \
-    --name "$_path" \
-    --with-decryption \
-    --query Parameter.Value \
-    --output text 2>/dev/null) || val=""
-
-  # 2. Fall back to local file (migration from pre-SSM runs)
-  if [[ -z "$val" && -n "$file_name" && -f "$file_name" ]]; then
-    val=$(cat "$file_name")
-    echo "  Migrating $varname from $file_name → SSM"
-    if _ssm_put_safe "$_path" "$val"; then
-      echo "  Migration complete. You may delete: $file_name"
+  if [[ "$missing" == true ]]; then
+    # Do not replace a credential that may still be used by an older deployment.
+    local legacy_file=""
+    case "$ssm_name" in
+      postgres-password) legacy_file="$_SETUP_DIR/.pg_password" ;;
+      langsmith-api-key-salt) legacy_file="$_SETUP_DIR/.api_key_salt" ;;
+      langsmith-jwt-secret) legacy_file="$_SETUP_DIR/.jwt_secret" ;;
+      langsmith-license-key) legacy_file="$_SETUP_DIR/.license_key" ;;
+      langsmith-admin-password) legacy_file="$_SETUP_DIR/.admin_password" ;;
+    esac
+    if [[ -n "$legacy_file" && ( -e "$legacy_file" || -L "$legacy_file" ) ]]; then
+      echo "ERROR: $_path is missing from SSM but a legacy backup exists at $legacy_file." >&2
+      echo "       Import the existing credential into SSM with manage-ssm.sh, then rerun setup." >&2
+      echo "       The local backup was not read or changed." >&2
+      return 1
     fi
+    val="$shell_val"
   fi
 
-  # 3. Prompt or generate if still empty
   if [[ -z "$val" ]]; then
     if [[ -n "$generator" ]]; then
       val=$(eval "$generator") || {
@@ -236,19 +261,29 @@ _ssm_secret() {
         return 1
       fi
     elif [[ -t 0 ]]; then
-      # Interactive terminal — prompt the user
-      if [[ "$silent" == "true" ]]; then
+      local attempt=0
+      while true; do
+        attempt=$((attempt + 1))
         printf "%s: " "$prompt_text"
-        read -rs val
-        echo
-      else
-        printf "%s: " "$prompt_text"
-        read -r val
-      fi
-      if [[ -z "$val" ]]; then
-        echo "  ERROR: No value provided for $varname." >&2
-        return 1
-      fi
+        if [[ "$silent" == "true" ]]; then
+          read -rs val
+          echo
+        else
+          read -r val
+        fi
+        if [[ -z "$val" ]]; then
+          echo "  ERROR: No value provided for $varname."
+          return 1
+        fi
+        if [[ -z "$validator" ]] || reason=$("$validator" "$val"); then
+          break
+        fi
+        echo "  Rejected: $reason" >&2
+        if (( attempt >= 3 )); then
+          echo "ERROR: $varname is still invalid after $attempt attempts. Nothing was saved." >&2
+          return 1
+        fi
+      done
     else
       # Non-interactive (CI, piped stdin, redirected) — cannot prompt.
       # Reported on stdout, not stderr: a sandboxed shell that surfaces only
@@ -259,23 +294,23 @@ _ssm_secret() {
       echo "           export $varname='<value>'"
       echo "         Or populate SSM directly:"
       echo "           ./infra/scripts/manage-ssm.sh set $ssm_name '<value>'"
-      _missing_vars="$_missing_vars $varname"
       return 1
-    fi
-
-    # Store in SSM; fall back to local file if SSM is not yet reachable
-    if _ssm_put_safe "$_path" "$val"; then
-      echo "  Stored $varname → SSM: $_path"
-    elif [[ -n "$file_name" ]]; then
-      printf '%s' "$val" > "$file_name"
-      chmod 600 "$file_name"
-      echo "  SSM unavailable — stored in $file_name (will migrate after Pass 1)"
-    else
-      echo "  WARNING: SSM unavailable and no local file fallback for $varname"
-      echo "           Value is exported for this session only and will be lost on shell exit."
     fi
   fi
 
+  if [[ -n "$validator" ]] && ! reason=$("$validator" "$val"); then
+    echo "ERROR: $varname is invalid — $reason. Nothing was saved or exported." >&2
+    if [[ "$missing" == true ]]; then
+      echo "       Correct the shell value and rerun setup." >&2
+    else
+      echo "       Recover the existing SSM credential with manage-ssm.sh before rerunning setup." >&2
+    fi
+    return 1
+  fi
+
+  if [[ "$missing" == true ]]; then
+    _ssm_put_safe "$_path" "$val" || return 1
+  fi
   export "$varname"="$val"
 }
 
@@ -329,101 +364,60 @@ export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 
 # Hex is RDS-safe (no / @ " ' space) and URI-safe. Terraform still urlencodes
 # the password in connection URLs for env/SSM overrides that use other symbols.
-_ssm_secret "postgres-password" "$_SETUP_DIR/.pg_password" "TF_VAR_postgres_password" \
-  "openssl rand -hex 32" "" "true"
-
-# Reject env/SSM/file overrides that RDS will not accept. The generator above
-# always passes. Catching it here avoids a plan-time validation error later.
-if [[ -n "${TF_VAR_postgres_password:-}" ]]; then
-  _pg_error=""
-  if [[ ${#TF_VAR_postgres_password} -lt 8 || ${#TF_VAR_postgres_password} -gt 128 ]]; then
-    _pg_error="must be 8-128 characters (RDS master password limit)"
-  elif ! printf '%s' "$TF_VAR_postgres_password" | grep -qE "^[^/@\"' ]+$"; then
-    _pg_error="must not contain '/', '@', double quote, single quote, or space"
-  fi
-  if [[ -n "$_pg_error" ]]; then
-    echo "ERROR: PostgreSQL admin password is invalid — ${_pg_error}." >&2
-    echo "       Unset TF_VAR_postgres_password," >&2
-    echo "       delete the SSM parameter at ${_ssm_prefix}/postgres-password," >&2
-    echo "       and re-source this script." >&2
-    return 1
-  fi
-fi
+_ssm_secret "postgres-password" "TF_VAR_postgres_password" \
+  "openssl rand -hex 32" "" "true" _validate_postgres_password || return 1
 
 # ── Redis auth token (auto-generated, stable after first deployment) ──────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
-_ssm_secret "redis-auth-token" "" "TF_VAR_redis_auth_token" \
-  "openssl rand -hex 32" "" "true"
+_ssm_secret "redis-auth-token" "TF_VAR_redis_auth_token" \
+  "openssl rand -hex 32" "" "true" || return 1
 
 # ── Sandbox JuiceFS Redis auth token ──────────────────────────────────────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _ssm_secret "sandbox-juicefs-redis-auth-token" "" "TF_VAR_sandbox_juicefs_redis_auth_token" \
-    "openssl rand -hex 32" "" "true"
+  _ssm_secret "sandbox-juicefs-redis-auth-token" "TF_VAR_sandbox_juicefs_redis_auth_token" \
+    "openssl rand -hex 32" "" "true" || return 1
 fi
 
 # ── Stable auto-generated secrets (must never change after first deployment) ──
 # Changing api_key_salt invalidates ALL existing API keys.
 # Changing jwt_secret invalidates ALL active user sessions.
-_ssm_secret "langsmith-api-key-salt" "$_SETUP_DIR/.api_key_salt" "TF_VAR_langsmith_api_key_salt" \
-  "openssl rand -base64 32" "" "true"
+_ssm_secret "langsmith-api-key-salt" "TF_VAR_langsmith_api_key_salt" \
+  "openssl rand -base64 32" "" "true" || return 1
 
-_ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_jwt_secret" \
-  "openssl rand -base64 32" "" "true"
+_ssm_secret "langsmith-jwt-secret" "TF_VAR_langsmith_jwt_secret" \
+  "openssl rand -base64 32" "" "true" || return 1
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
-    "_ed25519_private_jwk_gen" "" "true"
+  _ssm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
+    "_ed25519_private_jwk_gen" "" "true" || return 1
 fi
 
 # ── LangSmith app secrets (consumed by ESO → K8s Secret → Helm chart) ────────
-_ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENSE_KEY" \
-  "" "LangSmith license key" "true"
+_ssm_secret "langsmith-license-key" "LANGSMITH_LICENSE_KEY" \
+  "" "LangSmith license key" "true" || return 1
 
-_ssm_secret "langsmith-admin-password" "$_SETUP_DIR/.admin_password" "LANGSMITH_ADMIN_PASSWORD" \
-  "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true"
+_ssm_secret "langsmith-admin-password" "LANGSMITH_ADMIN_PASSWORD" \
+  "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true" _validate_admin_password || return 1
 
-# Validate admin password meets Helm chart requirements. Catching it here prevents
-# storing an invalid password in SSM and discovering the error 10 minutes later
-# when the Helm release times out.
-if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
-  _pw_error=""
-  if [[ ${#LANGSMITH_ADMIN_PASSWORD} -lt 12 ]]; then
-    _pw_error="must be at least 12 characters long"
-  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
-    _pw_error="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
-  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -q '[a-z]'; then
-    _pw_error="must contain at least one lowercase letter"
-  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -q '[A-Z]'; then
-    _pw_error="must contain at least one uppercase letter"
-  fi
-  if [[ -n "$_pw_error" ]]; then
-    echo "ERROR: Admin password is invalid — ${_pw_error}." >&2
-    echo "       Unset LANGSMITH_ADMIN_PASSWORD," >&2
-    echo "       delete the SSM parameter at ${_ssm_prefix}/langsmith-admin-password," >&2
-    echo "       and re-source this script with a valid password." >&2
-    return 1
-  fi
-fi
-
-# ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
+# ── Feature encryption keys ──────────────────────────────────────────────────
 # Fernet keys for Deployments, Fleet, Insights, and LangSmith Chat (formerly Polly).
-# Auto-generated and stored in SSM on first run. Only created when the user
-# opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
+# Created on first setup even for disabled features. apply-eso.sh dynamically
+# includes whichever keys exist in SSM.
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
 _fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
 
-_ssm_secret "deployments-encryption-key" "" "TF_VAR_langsmith_deployments_encryption_key" \
-  "$_fernet_gen" "" "true"
+_ssm_secret "deployments-encryption-key" "TF_VAR_langsmith_deployments_encryption_key" \
+  "$_fernet_gen" "" "true" || return 1
 
-_ssm_secret "agent-builder-encryption-key" "" "TF_VAR_langsmith_agent_builder_encryption_key" \
-  "$_fernet_gen" "" "true"
+_ssm_secret "agent-builder-encryption-key" "TF_VAR_langsmith_agent_builder_encryption_key" \
+  "$_fernet_gen" "" "true" || return 1
 
-_ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_key" \
-  "$_fernet_gen" "" "true"
+_ssm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" \
+  "$_fernet_gen" "" "true" || return 1
 
-_ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
-  "$_fernet_gen" "" "true"
+_ssm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
+  "$_fernet_gen" "" "true" || return 1
 
 # ── Engine keys ───────────────────────────────────────────────────────────────
 # engine-encryption-key is a Fernet key for the payloads LangSmith passes to
@@ -431,32 +425,11 @@ _ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
 # usage reports (the chart needs 32 or more). The script creates both like the
 # add-on keys above, also while enable_engine = false. apply-eso.sh syncs both
 # into the langsmith-config Secret. Keep both stable; see ENGINE.md for rotation.
-_ssm_secret "engine-encryption-key" "" "TF_VAR_langsmith_engine_encryption_key" \
-  "$_fernet_gen" "" "true"
+_ssm_secret "engine-encryption-key" "TF_VAR_langsmith_engine_encryption_key" \
+  "$_fernet_gen" "" "true" || return 1
 
-_ssm_secret "engine-usage-signing-secret" "" "TF_VAR_langsmith_engine_usage_signing_secret" \
-  "openssl rand -hex 32" "" "true"
-
-# ── Non-interactive failure ───────────────────────────────────────────────────
-# Only populated when stdin is not a tty and a secret was in neither the
-# environment nor SSM. Reported here, once, on stdout — and before the summary,
-# which would otherwise claim the environment was set up successfully.
-if [[ -n "$_missing_vars" ]]; then
-  echo ""
-  echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
-  echo "       Missing:$_missing_vars"
-  echo ""
-  echo "       Run it from a real terminal, or pre-set the values:"
-  # Split on spaces with tr rather than an unquoted expansion: this script is
-  # sourced, and zsh does not word-split, so `for _v in $_missing_vars` would
-  # print every name on a single bogus export line.
-  echo "$_missing_vars" | tr ' ' '\n' | while read -r _v; do
-    if [[ -n "$_v" ]]; then echo "         export $_v='<value>'"; fi
-  done
-  echo ""
-  echo "       Then re-run: source infra/scripts/setup-env.sh"
-  return 1
-fi
+_ssm_secret "engine-usage-signing-secret" "TF_VAR_langsmith_engine_usage_signing_secret" \
+  "openssl rand -hex 32" "" "true" || return 1
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
