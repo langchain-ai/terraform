@@ -1,0 +1,16 @@
+[
+  {
+    "Sid": "ECRDeploymentBuildsRepositoryManage",
+    "Effect": "Allow",
+    "Action": [
+      "ecr:CreateRepository",
+      "ecr:DescribeRepositories",
+      "ecr:TagResource",
+      "ecr:UntagResource",
+      "ecr:ListTagsForResource",
+      "ecr:PutLifecyclePolicy",
+      "ecr:GetLifecyclePolicy"
+    ],
+    "Resource": "arn:aws:ecr:*:${account_id}:repository/*-smith-deployment-builds"
+  }
+]
