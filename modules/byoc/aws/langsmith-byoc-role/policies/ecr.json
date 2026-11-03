@@ -2,7 +2,7 @@
   {
     "Sid": "ECRDeploymentBuildsRepositoryCreate",
     "Effect": "Allow",
-    "Action": ["ecr:CreateRepository", "ecr:TagResource"],
+    "Action": ["ecr:CreateRepository"],
     "Resource": "arn:aws:ecr:*:${account_id}:repository/*-smith-deployment-builds",
     "Condition": {
       "StringEquals": {
