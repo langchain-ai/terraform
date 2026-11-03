@@ -37,17 +37,17 @@ setup-env: ## Create or complete the app secrets in infra/.secrets.env (prompts 
 init: ## terraform init (infra)
 	terraform -chdir=$(INFRA_DIR) init $(ARGS)
 
-plan: ## terraform plan (infra)
-	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
+plan: ## terraform plan (infra), with the object store keys setup-env saved
+	$(INFRA_DIR)/scripts/terraform.sh plan $(ARGS)
 
-apply: ## terraform apply (infra)
-	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
+apply: ## terraform apply (infra), with the object store keys setup-env saved
+	$(INFRA_DIR)/scripts/terraform.sh apply $(ARGS)
 
-destroy: ## terraform destroy (infra)
-	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+destroy: ## terraform destroy (infra), with the object store keys setup-env saved
+	$(INFRA_DIR)/scripts/terraform.sh destroy $(ARGS)
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
-	terraform -chdir=$(INFRA_DIR) $(ARGS)
+	$(INFRA_DIR)/scripts/terraform.sh $(ARGS)
 
 # ── Pass 2: Helm ──────────────────────────────────────────────────────────────
 
