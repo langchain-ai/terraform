@@ -49,56 +49,33 @@ resource "azurerm_key_vault" "data_plane" {
   tags = merge(var.tags, each.value.tags)
 }
 
-# The two LangSmith custom roles of each data plane. Their scope is the data
-# plane resource group, so they cannot apply anywhere else. See roles.tf.
+# The LangSmith custom role of each data plane. Its scope is the data plane
+# resource group, so it cannot apply anywhere else. reduced_access changes the
+# actions in place; the role and its assignment stay. See roles.tf.
 resource "azurerm_role_definition" "langsmith_byoc" {
   for_each = var.data_planes
 
   name              = "langsmith-byoc-${each.key}-${random_string.key_vault_suffix[each.key].result}"
   scope             = azurerm_resource_group.data_plane[each.key].id
-  description       = "LangSmith BYOC: create, update, and delete the data plane in this resource group."
+  description       = "LangSmith BYOC: manage the data plane in this resource group."
   assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
 
   permissions {
-    actions = local.langsmith_byoc_actions
-  }
-}
-
-resource "azurerm_role_definition" "langsmith_byoc_reduced" {
-  for_each = var.data_planes
-
-  name              = "langsmith-byoc-reduced-${each.key}-${random_string.key_vault_suffix[each.key].result}"
-  scope             = azurerm_resource_group.data_plane[each.key].id
-  description       = "LangSmith BYOC: keep the running data plane in this resource group up to date."
-  assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
-
-  permissions {
-    actions = local.langsmith_byoc_reduced_actions
+    actions = each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions
   }
 }
 
 # Scoped to the data plane resource group only, never to the subscription.
 # LangSmith reads the description to verify that the owner of this
 # subscription is the LangSmith organization with this external ID.
-#
-# reduced_access switches the assignment between the two custom roles. The new
-# assignment comes before the old one goes, so LangSmith keeps access.
 resource "azurerm_role_assignment" "langsmith_byoc" {
   for_each = var.data_planes
 
-  scope = azurerm_resource_group.data_plane[each.key].id
-  role_definition_id = (
-    each.value.reduced_access
-    ? azurerm_role_definition.langsmith_byoc_reduced[each.key].role_definition_resource_id
-    : azurerm_role_definition.langsmith_byoc[each.key].role_definition_resource_id
-  )
-  principal_id   = azuread_service_principal.langsmith.object_id
-  principal_type = "ServicePrincipal"
-  description    = var.external_id
-
-  lifecycle {
-    create_before_destroy = true
-  }
+  scope              = azurerm_resource_group.data_plane[each.key].id
+  role_definition_id = azurerm_role_definition.langsmith_byoc[each.key].role_definition_resource_id
+  principal_id       = azuread_service_principal.langsmith.object_id
+  principal_type     = "ServicePrincipal"
+  description        = var.external_id
 }
 
 # The data plane creates role assignments for its workload identities, the

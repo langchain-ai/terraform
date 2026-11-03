@@ -7,7 +7,7 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 | Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. The app gets no Microsoft Graph permissions. |
 | Resource group `langsmith-byoc-<key>` | One per data plane | LangSmith deploys the data plane into this resource group. |
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the secret that LangSmith writes. No public network access. |
-| Custom roles `langsmith-byoc-<key>-<suffix>` and `langsmith-byoc-reduced-<key>-<suffix>` | Two per data plane | The actions that LangSmith needs in that resource group. Each role can only be assigned in that resource group. |
+| Custom role `langsmith-byoc-<key>-<suffix>` | One per data plane | The actions that LangSmith needs in that resource group. `reduced_access` selects full or reduced actions. The role can only be assigned in that resource group. |
 | Role assignments: one LangSmith custom role and `User Access Administrator` | Two per data plane | Give the LangSmith service principal access to that resource group only. |
 
 > **WARNING:** LangSmith deletes the whole resource group when you delete the data plane. Do not put other resources in it.
@@ -95,7 +95,7 @@ data_planes = {
 }
 ```
 
-LangSmith then gets `langsmith-byoc-reduced` instead of `langsmith-byoc`. Terraform creates the new role assignment before it removes the old one, so LangSmith keeps access. The reduced role keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network, and it cannot write Key Vault secrets.
+Terraform then updates the actions of the LangSmith custom role in place. The role assignment stays, so LangSmith keeps access. With reduced access, LangSmith keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network, and it cannot write Key Vault secrets. Azure applies the change in up to 5 minutes.
 
 ### Remove a data plane
 
@@ -126,7 +126,7 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 ## Security model
 
 - **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
-- **Role assignments:** two per data plane resource group, and nothing else. One LangSmith custom role ([`roles.tf`](roles.tf) lists every action), and `User Access Administrator`, because the data plane creates role assignments for its workload identities, one custom blob role, and delete locks for PostgreSQL and Redis. The description of each assignment is the `external_id`.
+- **Role assignments:** two per data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions), and `User Access Administrator`, because the data plane creates role assignments for its workload identities, one custom blob role, and delete locks for PostgreSQL and Redis. The description of each assignment is the `external_id`.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes

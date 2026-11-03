@@ -1,5 +1,6 @@
-# Actions of the two LangSmith custom roles. Both roles apply only within one
-# data plane resource group. Role assignments, the custom blob role of the
+# Actions of the LangSmith custom role. reduced_access picks one of the two
+# lists. The role applies only within one data plane resource group. Role
+# assignments, the custom blob role of the
 # data plane, and delete locks are Microsoft.Authorization actions; they come
 # from the User Access Administrator assignment in data_planes.tf.
 #
@@ -7,7 +8,8 @@
 # when LangSmith creates a resource that uses it. The activity log does not
 # show these checks, but a create fails without them.
 locals {
-  # langsmith-byoc: create, update, and delete a data plane.
+  # Full access (reduced_access = false): create, update, and delete a data
+  # plane.
   langsmith_byoc_actions = concat(local.langsmith_byoc_reduced_actions, [
     # The control plane deletes the resource group when you delete the data
     # plane. Remove this action when teardown keeps the resource group.
@@ -45,7 +47,8 @@ locals {
     "Microsoft.KeyVault/vaults/secrets/write",
   ])
 
-  # langsmith-byoc-reduced: keep a running data plane up to date. It cannot
+  # Reduced access (reduced_access = true): keep a running data plane up to
+  # date. It cannot
   # delete a data plane, its data stores, or its network, and it cannot write
   # Key Vault secrets.
   langsmith_byoc_reduced_actions = [

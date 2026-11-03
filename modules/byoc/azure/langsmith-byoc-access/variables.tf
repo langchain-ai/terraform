@@ -18,9 +18,9 @@ variable "data_planes" {
   type = map(object({
     location = string
     tags     = optional(map(string), {})
-    # Set to true after the data plane is active. LangSmith then gets the
-    # langsmith-byoc-reduced role, which cannot delete the data plane. Set it
-    # back to false before you delete or re-create the data plane.
+    # Set to true after the data plane is active. The LangSmith role then
+    # loses the actions that delete the data plane. Set it back to false
+    # before you delete or re-create the data plane.
     reduced_access = optional(bool, false)
   }))
   default = {}
