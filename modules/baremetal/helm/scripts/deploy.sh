@@ -13,7 +13,7 @@
 #
 # 1. Builds the langsmith-config Secret from infra/.secrets.env. Values go to
 #    kubectl on stdin: never on argv, never echoed, never written to disk.
-# 2. Layers the values files (in order, last wins):
+# 2. Layers the values files in the order of terraform output values_files (last wins):
 #      values.yaml                             base bare-metal config (committed)
 #      langsmith-values-overrides.yaml         hostname, gateway (Terraform output)
 #      langsmith-values-admin.yaml             initial org admin email
@@ -201,20 +201,16 @@ _require_values() {
   pass "$1"
 }
 
-profile="$(_parse_tfvar sizing_profile)"
-profile="${profile:-minimum}"
+# The order is Terraform's (output values_files): a tool that layers the same files reads the same list.
+values_files="$(terraform -chdir="$INFRA_DIR" output -json values_files | python3 -I -c 'import json, sys; print(" ".join(json.load(sys.stdin)))')" || {
+  fail "terraform output values_files is missing — run make apply"
+  exit 1
+}
 
 values_args=()
-_require_values values.yaml
-_require_values langsmith-values-overrides.yaml
-_require_values langsmith-values-admin.yaml
-_require_values "langsmith-values-sizing-$profile.yaml"
-_feature_on deployments && _require_values langsmith-values-agent-deploys.yaml
-_feature_on fleet       && _require_values langsmith-values-fleet.yaml
-_feature_on polly       && _require_values langsmith-values-standalone-polly.yaml
-_feature_on insights    && _require_values langsmith-values-standalone-insights.yaml
-_feature_on sso_oidc    && _require_values langsmith-values-sso.yaml
-_require_values langsmith-values-smithdb.yaml
+for file in $values_files; do
+  _require_values "$file"
+done
 # Optional, last: your local experiments (e.g. a short trace TTL for a load
 # test). Gitignored; delete the file to go back to the generated values.
 if [[ -f "$VALUES_DIR/langsmith-values-local.yaml" ]]; then

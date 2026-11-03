@@ -53,20 +53,8 @@ variable "gateway_tls_secret" {
 }
 
 locals {
-  storage_class_retain = var.install_local_path ? module.local_path[0].storage_class_retain : var.storage_class
-  storage_class_delete = var.install_local_path ? module.local_path[0].storage_class_delete : var.storage_class
-  gateway              = var.install_envoy_gateway ? module.envoy_gateway[0].gateway : var.existing_gateway
-
-  platform_problems = compact([
-    !var.install_local_path && var.storage_class == "" ? "install_local_path = false needs storage_class" : "",
-    !var.install_envoy_gateway && var.existing_gateway == null ? "install_envoy_gateway = false needs existing_gateway" : "",
-    # The URL falls back to the gateway IP, which only our MetalLB serves; an empty hostname renders an HTTPRoute the API server refuses.
-    !(var.install_metallb && var.install_envoy_gateway) && var.langsmith_domain == "" ? "without this module's MetalLB and Envoy Gateway, set langsmith_domain: the gateway's address is not ours to name" : "",
-    var.install_metallb && length(var.metallb_addresses) == 0 ? "install_metallb needs metallb_addresses" : "",
-    var.install_envoy_gateway && var.install_metallb && var.envoy_gateway_lb_ip == "" ? "envoy_gateway_lb_ip is required when this module installs both MetalLB and Envoy Gateway" : "",
-    var.gateway_tls_secret != "" && !var.install_envoy_gateway ? "gateway_tls_secret is for this module's Envoy Gateway: on existing_gateway, TLS is that Gateway's" : "",
-    var.gateway_tls_secret != "" && (var.langsmith_domain == "" || var.langsmith_url_scheme != "https") ? "gateway_tls_secret needs langsmith_domain and langsmith_url_scheme = https" : "",
-  ])
+  # The output's Gateway: ours with its class and LAN IP, or the one given.
+  gateway = var.install_envoy_gateway ? module.envoy_gateway[0].gateway : var.existing_gateway
 }
 
 resource "terraform_data" "platform" {
@@ -79,8 +67,8 @@ resource "terraform_data" "platform" {
 
   lifecycle {
     precondition {
-      condition     = length(local.platform_problems) == 0
-      error_message = "Platform: ${join("; ", local.platform_problems)}."
+      condition     = length(module.values.problems.platform) == 0
+      error_message = "Platform: ${join("; ", module.values.problems.platform)}."
     }
   }
 }
@@ -103,4 +91,22 @@ moved {
 moved {
   from = module.envoy_gateway
   to   = module.envoy_gateway[0]
+}
+
+#------------------------------------------------------------------------------
+# Is envoy_gateway_lb_ip inside the MetalLB pool? IPs become numbers so ranges
+# (a.b.c.d-a.b.c.e) and CIDRs can be compared.
+#------------------------------------------------------------------------------
+locals {
+  # Empty when the module installs no MetalLB or Envoy: nothing to compare against the pool then.
+  lb_ip_octets = var.envoy_gateway_lb_ip == "" ? [0, 0, 0, 0] : [for o in split(".", var.envoy_gateway_lb_ip) : tonumber(o)]
+  lb_ip_num    = local.lb_ip_octets[0] * 16777216 + local.lb_ip_octets[1] * 65536 + local.lb_ip_octets[2] * 256 + local.lb_ip_octets[3]
+
+  metallb_bounds = [
+    for a in var.metallb_addresses : [
+      for ip in(can(cidrhost(a, 0)) ? [cidrhost(a, 0), cidrhost(a, -1)] : split("-", a)) :
+      sum([for i, o in split(".", ip) : tonumber(o) * pow(256, 3 - i)])
+    ]
+  ]
+  lb_ip_in_pool = anytrue([for b in local.metallb_bounds : local.lb_ip_num >= b[0] && local.lb_ip_num <= b[1]])
 }

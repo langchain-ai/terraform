@@ -6,14 +6,13 @@
 #   namespace langsmith    where the Helm chart installs LangSmith and SmithDB
 #   Envoy Gateway          the Gateway LangSmith's HTTPRoute attaches to
 #   cloudflared            optional Cloudflare Tunnel connector
-#   Postgres x2            LangSmith database and SmithDB metastore
-#   Redis                  run buffer and task queues
-#   RustFS                 S3 buckets for SmithDB data and payload blobs
+#   datastores             Postgres x2, Redis, RustFS: one release of
+#                          charts/datastores (datastores.tf)
 #   Secrets in langsmith   connection details the chart reads by name
 #
 # Everything waits for the budget gate (budget.tf), so nothing is created on a
-# cluster that can't hold the chosen sizing profile. Sizes come from locals.tf;
-# Helm values for the chart are built in helm_values.tf.
+# cluster that can't hold the chosen sizing profile. Sizes, names and Helm
+# values come from modules/values (values.tf).
 #------------------------------------------------------------------------------
 
 module "metrics_server" {
@@ -23,8 +22,8 @@ module "metrics_server" {
   chart_version        = var.metrics_server_chart_version
   kubelet_insecure_tls = var.metrics_server_kubelet_insecure_tls
   resources = {
-    requests = { cpu = "${local.addon_pods["metrics-server"].cpu_m}m", memory = "${local.addon_pods["metrics-server"].mem_mi}Mi" }
-    limits   = { cpu = "500m", memory = "${local.addon_pods["metrics-server"].mem_mi * 2}Mi" }
+    requests = { cpu = "${module.values.addon_pods["metrics-server"].cpu_m}m", memory = "${module.values.addon_pods["metrics-server"].mem_mi}Mi" }
+    limits   = { cpu = "500m", memory = "${module.values.addon_pods["metrics-server"].mem_mi * 2}Mi" }
   }
 
   # Everything that runs a pod waits for the sandbox taint: a sandbox node takes nothing else, and a pod
@@ -36,12 +35,14 @@ module "local_path" {
   source = "./modules/local-path"
   count  = var.install_local_path ? 1 : 0
 
-  image        = var.local_path_image
-  helper_image = var.local_path_helper_image
-  node_path    = var.local_path_node_path
+  storage_class_delete = module.values.storage_classes.delete
+  storage_class_retain = module.values.storage_classes.retain
+  image                = var.local_path_image
+  helper_image         = var.local_path_helper_image
+  node_path            = var.local_path_node_path
   resources = {
-    requests = { cpu = "${local.addon_pods["local-path-provisioner"].cpu_m}m", memory = "${local.addon_pods["local-path-provisioner"].mem_mi}Mi" }
-    limits   = { cpu = "200m", memory = "${local.addon_pods["local-path-provisioner"].mem_mi * 2}Mi" }
+    requests = { cpu = "${module.values.addon_pods["local-path-provisioner"].cpu_m}m", memory = "${module.values.addon_pods["local-path-provisioner"].mem_mi}Mi" }
+    limits   = { cpu = "200m", memory = "${module.values.addon_pods["local-path-provisioner"].mem_mi * 2}Mi" }
   }
 
   depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
@@ -57,11 +58,11 @@ module "metallb" {
   addresses        = var.metallb_addresses
   l2_node_selector = var.metallb_l2_node_selector
   controller_resources = {
-    requests = { cpu = "${local.addon_pods["metallb-controller"].cpu_m}m", memory = "${local.addon_pods["metallb-controller"].mem_mi}Mi" }
+    requests = { cpu = "${module.values.addon_pods["metallb-controller"].cpu_m}m", memory = "${module.values.addon_pods["metallb-controller"].mem_mi}Mi" }
     limits   = { cpu = "500m", memory = "256Mi" }
   }
   speaker_resources = {
-    requests = { cpu = "${local.addon_pods["metallb-speaker"].cpu_m}m", memory = "${local.addon_pods["metallb-speaker"].mem_mi}Mi" }
+    requests = { cpu = "${module.values.addon_pods["metallb-speaker"].cpu_m}m", memory = "${module.values.addon_pods["metallb-speaker"].mem_mi}Mi" }
     limits   = { cpu = "200m", memory = "128Mi" }
   }
 
@@ -86,7 +87,7 @@ resource "kubernetes_priority_class_v1" "pinned" {
 
 resource "kubernetes_namespace_v1" "langsmith" {
   metadata {
-    name = "langsmith"
+    name = module.values.namespace
     # sandbox-host runs privileged with host networking: Pod Security Admission must allow it here.
     labels = var.enable_sandboxes ? { "pod-security.kubernetes.io/enforce" = "privileged" } : {}
   }
@@ -102,13 +103,14 @@ module "envoy_gateway" {
   load_balancer_ip  = var.install_metallb ? var.envoy_gateway_lb_ip : ""
   route_timeout     = var.envoy_gateway_route_timeout
   gateway_namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  gateway_name      = module.values.gateway.name
   controller_resources = {
-    requests = { cpu = "${local.addon_pods["envoy-gateway"].cpu_m}m", memory = "${local.addon_pods["envoy-gateway"].mem_mi}Mi" }
+    requests = { cpu = "${module.values.addon_pods["envoy-gateway"].cpu_m}m", memory = "${module.values.addon_pods["envoy-gateway"].mem_mi}Mi" }
     limits   = { cpu = "500m", memory = "512Mi" }
   }
   proxy_node_selector = var.envoy_proxy_node_selector
   proxy_resources = {
-    requests = { cpu = "${local.addon_pods["envoy-proxy"].cpu_m}m", memory = "${local.addon_pods["envoy-proxy"].mem_mi}Mi" }
+    requests = { cpu = "${module.values.addon_pods["envoy-proxy"].cpu_m}m", memory = "${module.values.addon_pods["envoy-proxy"].mem_mi}Mi" }
     limits   = { cpu = "1", memory = "512Mi" }
   }
   tls = var.gateway_tls_secret == "" ? null : { hostname = var.langsmith_domain, secret_name = var.gateway_tls_secret }
@@ -144,9 +146,9 @@ module "cloudflared" {
 
   image        = var.cloudflared_image
   tunnel_token = var.cloudflare_tunnel_token
-  replicas     = local.addon_pods["cloudflared"].replicas
+  replicas     = module.values.addon_pods["cloudflared"].replicas
   resources = {
-    requests = { cpu = "${local.addon_pods["cloudflared"].cpu_m}m", memory = "${local.addon_pods["cloudflared"].mem_mi}Mi" }
+    requests = { cpu = "${module.values.addon_pods["cloudflared"].cpu_m}m", memory = "${module.values.addon_pods["cloudflared"].mem_mi}Mi" }
     limits   = { memory = "256Mi" }
   }
 
@@ -157,7 +159,7 @@ module "cloudflared" {
 # agent deployment (chart default operator.kedaEnabled: true). Sized from the
 # same addon_pods entries the budget counts.
 resource "helm_release" "keda" {
-  count = local.install_keda ? 1 : 0
+  count = module.values.install_keda ? 1 : 0
 
   name             = "keda"
   repository       = "https://kedacore.github.io/charts"
@@ -171,65 +173,20 @@ resource "helm_release" "keda" {
     yamlencode({
       resources = {
         operator = {
-          requests = { cpu = "${local.addon_pods["keda-operator"].cpu_m}m", memory = "${local.addon_pods["keda-operator"].mem_mi}Mi" }
+          requests = { cpu = "${module.values.addon_pods["keda-operator"].cpu_m}m", memory = "${module.values.addon_pods["keda-operator"].mem_mi}Mi" }
           limits   = { cpu = "500m", memory = "512Mi" }
         }
         metricServer = {
-          requests = { cpu = "${local.addon_pods["keda-metrics-server"].cpu_m}m", memory = "${local.addon_pods["keda-metrics-server"].mem_mi}Mi" }
+          requests = { cpu = "${module.values.addon_pods["keda-metrics-server"].cpu_m}m", memory = "${module.values.addon_pods["keda-metrics-server"].mem_mi}Mi" }
           limits   = { cpu = "500m", memory = "512Mi" }
         }
         webhooks = {
-          requests = { cpu = "${local.addon_pods["keda-webhooks"].cpu_m}m", memory = "${local.addon_pods["keda-webhooks"].mem_mi}Mi" }
+          requests = { cpu = "${module.values.addon_pods["keda-webhooks"].cpu_m}m", memory = "${module.values.addon_pods["keda-webhooks"].mem_mi}Mi" }
           limits   = { cpu = "200m", memory = "256Mi" }
         }
       }
     })
   ]
-
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
-}
-
-#------------------------------------------------------------------------------
-# Datastores. Shared label + preferred anti-affinity spreads them across
-# workers; sizes come from local.datastores (the budget).
-#------------------------------------------------------------------------------
-locals {
-  datastore_label = { "langsmith.lab/datastore" = "true" }
-}
-
-module "postgres_langsmith" {
-  source = "./modules/postgres"
-  count  = var.postgres_source == "in-cluster" ? 1 : 0
-
-  namespace          = "postgres-langsmith"
-  image              = var.postgres_image
-  database           = "langsmith"
-  username           = "langsmith"
-  storage_size       = local.datastores_k8s.postgres_langsmith.storage
-  storage_class      = local.storage_class_retain
-  resources          = { requests = local.datastores_k8s.postgres_langsmith.requests, limits = local.datastores_k8s.postgres_langsmith.limits }
-  memory_limit_mi    = local.datastores.postgres_langsmith.lim_mem_mi
-  allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
-  datastore_label    = local.datastore_label
-  extra_databases    = values(local.standalone_features)
-
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
-}
-
-module "postgres_smithdb" {
-  source = "./modules/postgres"
-  count  = var.smithdb_metastore_source == "in-cluster" ? 1 : 0
-
-  namespace          = "postgres-smithdb"
-  image              = var.postgres_image
-  database           = "smithdb_metastore"
-  username           = "smithdb"
-  storage_size       = local.datastores_k8s.postgres_smithdb.storage
-  storage_class      = local.storage_class_retain
-  resources          = { requests = local.datastores_k8s.postgres_smithdb.requests, limits = local.datastores_k8s.postgres_smithdb.limits }
-  memory_limit_mi    = local.datastores.postgres_smithdb.lim_mem_mi
-  allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
-  datastore_label    = local.datastore_label
 
   depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
@@ -246,11 +203,11 @@ resource "kubernetes_secret_v1" "langsmith_postgres" {
   count = var.postgres_source == "in-cluster" ? 1 : 0
 
   metadata {
-    name      = "langsmith-postgres"
+    name      = module.values.secret_names.postgres
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    connection_url = "${module.postgres_langsmith[0].username}:${module.postgres_langsmith[0].password}@${module.postgres_langsmith[0].host}:${module.postgres_langsmith[0].port}/${module.postgres_langsmith[0].database}"
+    connection_url = "${local.postgres.langsmith.username}:${local.postgres.langsmith.password}@${local.postgres.langsmith.host}:${local.postgres.langsmith.port}/${local.postgres.langsmith.database}"
   }
   type = "Opaque"
 }
@@ -272,10 +229,10 @@ locals {
     user     = data.kubernetes_secret_v1.smithdb_metastore[0].data["smithdb_metastore_user"]
     password = data.kubernetes_secret_v1.smithdb_metastore[0].data["smithdb_metastore_password"]
     } : {
-    host     = module.postgres_smithdb[0].host
-    db       = module.postgres_smithdb[0].database
-    user     = module.postgres_smithdb[0].username
-    password = module.postgres_smithdb[0].password
+    host     = local.postgres.smithdb.host
+    db       = local.postgres.smithdb.database
+    user     = local.postgres.smithdb.username
+    password = local.postgres.smithdb.password
   }
 }
 
@@ -308,26 +265,14 @@ resource "kubernetes_secret_v1" "object_store" {
 
 locals {
   object_store_keys = var.object_store_source != "external" ? {} : local.object_store_keys_given ? kubernetes_secret_v1.object_store[0].data : data.kubernetes_secret_v1.object_store[0].data
-  object_store = var.object_store_source == "external" ? {
-    endpoint   = var.object_store_endpoint
-    region     = var.object_store_region
-    path_style = var.object_store_path_style
-    smithdb    = var.object_store_buckets.smithdb
-    blobs      = var.object_store_buckets.blobs
+  # Where it is (modules/values), with its keys: theirs, or the ones generated for RustFS.
+  object_store = merge(module.values.object_store, var.object_store_source == "external" ? {
     access_key = local.object_store_keys["access_key_id"]
     secret_key = local.object_store_keys["secret_access_key"]
-    } : {
-    endpoint   = module.rustfs_smithdb[0].endpoint
-    region     = "us-east-1" # any value; RustFS ignores it, the SDK needs one
-    path_style = true
-    smithdb    = module.rustfs_smithdb[0].bucket
-    blobs      = local.blob_bucket
-    access_key = module.rustfs_smithdb[0].access_key
-    secret_key = module.rustfs_smithdb[0].secret_key
-  }
+  } : local.rustfs_keys)
 }
 
-# Their buckets, as modules/rustfs makes ours: head-bucket first, so a bucket they made is left as it
+# Their buckets, as charts/datastores makes ours: head-bucket first, so a bucket they made is left as it
 # is, rules and all, and the keys need no right to create one that exists. Only a bucket this Job
 # creates gets the blob expiry: without it the blob bucket grows without bound (57 GB in two lab days).
 resource "kubernetes_job_v1" "object_store_bucket" {
@@ -450,7 +395,7 @@ resource "kubernetes_job_v1" "object_store_bucket" {
 
 resource "kubernetes_secret_v1" "smithdb_config" {
   metadata {
-    name      = "smithdb-config"
+    name      = module.values.secret_names.smithdb
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
@@ -464,62 +409,20 @@ resource "kubernetes_secret_v1" "smithdb_config" {
   type = "Opaque"
 }
 
-module "redis_langsmith" {
-  source = "./modules/redis"
-  count  = var.redis_source == "in-cluster" ? 1 : 0
-
-  namespace          = "redis-langsmith"
-  image              = var.redis_image
-  persistence        = "rdb"
-  storage_size       = local.datastores_k8s.redis_langsmith.storage
-  storage_class      = local.storage_class_retain
-  resources          = { requests = local.datastores_k8s.redis_langsmith.requests, limits = local.datastores_k8s.redis_langsmith.limits }
-  memory_limit_mi    = local.datastores.redis_langsmith.lim_mem_mi
-  allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
-  datastore_label    = local.datastore_label
-
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
-}
-
 # LangSmith core reads REDIS_DATABASE_URI from connection_url. Unlike the
 # Postgres core URL, the chart's Redis URL INCLUDES the scheme. /0 selects
-# logical DB 0 (1 Fleet, 2 Polly, 3 Insights: local.redis_db_index, as in modules/gcp).
+# logical DB 0 (1 Fleet, 2 Polly, 3 Insights: redis_db_index in modules/values, as in modules/gcp).
 resource "kubernetes_secret_v1" "langsmith_redis" {
   count = var.redis_source == "in-cluster" ? 1 : 0
 
   metadata {
-    name      = "langsmith-redis"
+    name      = module.values.secret_names.redis
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    connection_url = "redis://:${module.redis_langsmith[0].password}@${module.redis_langsmith[0].host}:${module.redis_langsmith[0].port}/${local.redis_db_index.langsmith}"
+    connection_url = "redis://:${local.redis.langsmith.password}@${local.redis.langsmith.host}:${local.redis.langsmith.port}/${module.values.redis_db_index.langsmith}"
   }
   type = "Opaque"
-}
-
-# SmithDB's object store. RustFS instead of MinIO (community edition no longer
-# maintained). Bucket "smithdb"; SmithDB writes under its smithdb/ prefix. With
-# the customer's object store it runs for the sandboxes' JuiceFS bucket alone:
-# SmithDB's segments and the blobs, which grow with every trace, go to theirs.
-module "rustfs_smithdb" {
-  source = "./modules/rustfs"
-  count  = local.rustfs_in_cluster ? 1 : 0
-
-  namespace          = "rustfs-smithdb"
-  image              = var.rustfs_image
-  bucket             = "smithdb"
-  extra_buckets      = concat(var.enable_blob_storage && var.object_store_source == "in-cluster" ? [local.blob_bucket] : [], var.enable_sandboxes ? [local.juicefs_bucket] : [])
-  ttl_buckets        = var.enable_blob_storage && var.object_store_source == "in-cluster" ? [local.blob_bucket] : []
-  ttl_days           = var.blob_storage_ttl_days
-  aws_cli_image      = var.aws_cli_image
-  storage_size       = local.datastores_k8s.rustfs_smithdb.storage
-  storage_class      = local.storage_class_retain
-  resources          = { requests = local.datastores_k8s.rustfs_smithdb.requests, limits = local.datastores_k8s.rustfs_smithdb.limits }
-  allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
-  allowed_cidrs      = var.enable_sandboxes ? var.sandbox_source_cidrs : []
-  datastore_label    = local.datastore_label
-
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
 }
 
 #------------------------------------------------------------------------------
@@ -530,30 +433,30 @@ module "rustfs_smithdb" {
 #------------------------------------------------------------------------------
 # With an external Postgres each product's database and Secret are the customer's (postgres_secret).
 resource "kubernetes_secret_v1" "standalone_postgres" {
-  for_each = var.postgres_source == "in-cluster" ? local.standalone_features : {}
+  for_each = var.postgres_source == "in-cluster" ? module.values.standalone_features : {}
 
   metadata {
     name      = "langsmith-${each.key}-postgres"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    postgres_connection_url = "postgresql://${urlencode(module.postgres_langsmith[0].username)}:${urlencode(module.postgres_langsmith[0].password)}@${module.postgres_langsmith[0].host}:${module.postgres_langsmith[0].port}/${each.value}?sslmode=disable"
+    postgres_connection_url = "postgresql://${urlencode(local.postgres.langsmith.username)}:${urlencode(local.postgres.langsmith.password)}@${local.postgres.langsmith.host}:${local.postgres.langsmith.port}/${each.value}?sslmode=disable"
   }
   type = "Opaque"
 
-  depends_on = [module.postgres_langsmith]
+  depends_on = [helm_release.datastores]
 }
 
 # With an external Redis each product's Redis and Secret are the customer's (redis_secret).
 resource "kubernetes_secret_v1" "standalone_redis" {
-  for_each = var.redis_source == "in-cluster" ? local.standalone_features : {}
+  for_each = var.redis_source == "in-cluster" ? module.values.standalone_features : {}
 
   metadata {
     name      = "langsmith-${each.key}-redis"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    redis_connection_url = "redis://:${module.redis_langsmith[0].password}@${module.redis_langsmith[0].host}:${module.redis_langsmith[0].port}/${local.redis_db_index[each.key]}"
+    redis_connection_url = "redis://:${local.redis.langsmith.password}@${local.redis.langsmith.host}:${local.redis.langsmith.port}/${module.values.redis_db_index[each.key]}"
   }
   type = "Opaque"
 }

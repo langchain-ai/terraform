@@ -12,7 +12,7 @@
 # cluster that can't hold it.
 #------------------------------------------------------------------------------
 resource "terraform_data" "budget" {
-  input = local.budget_summary
+  input = module.values.budget
 
   lifecycle {
     precondition {
@@ -21,38 +21,38 @@ resource "terraform_data" "budget" {
     }
 
     precondition {
-      condition     = length(local.app_requests_missing) == 0
-      error_message = "The ${var.sizing_profile} app sizing file sets no requests for: ${join(", ", local.app_requests_missing)}. The budget can't account for them."
+      condition     = length(module.values.problems.app_requests_missing) == 0
+      error_message = "The ${var.sizing_profile} app sizing file sets no requests for: ${join(", ", module.values.problems.app_requests_missing)}. The budget can't account for them."
     }
 
     precondition {
-      condition     = alltrue([for st in values(local.pool_stats) : st.largest_pod_cpu <= st.largest_node_cpu])
-      error_message = "${join("; ", [for pool, st in local.pool_stats : "${st.largest_cpu_pod} requests ${st.largest_pod_cpu} CPU, but the largest ${pool} node has ${st.largest_node_cpu}" if st.largest_pod_cpu > st.largest_node_cpu])}. It would stay Pending. Choose a smaller sizing_profile or add bigger nodes."
+      condition     = alltrue([for st in values(module.values.pool_stats) : st.largest_pod_cpu <= st.largest_node_cpu])
+      error_message = "${join("; ", [for pool, st in module.values.pool_stats : "${st.largest_cpu_pod} requests ${st.largest_pod_cpu} CPU, but the largest ${pool} node has ${st.largest_node_cpu}" if st.largest_pod_cpu > st.largest_node_cpu])}. It would stay Pending. Choose a smaller sizing_profile or add bigger nodes."
     }
 
     precondition {
-      condition     = alltrue([for st in values(local.pool_stats) : st.largest_pod_mem <= st.largest_node_mem])
-      error_message = "${join("; ", [for pool, st in local.pool_stats : "${st.largest_mem_pod} requests ${st.largest_pod_mem} Gi memory, but the largest ${pool} node has ${st.largest_node_mem} Gi" if st.largest_pod_mem > st.largest_node_mem])}. It would stay Pending."
+      condition     = alltrue([for st in values(module.values.pool_stats) : st.largest_pod_mem <= st.largest_node_mem])
+      error_message = "${join("; ", [for pool, st in module.values.pool_stats : "${st.largest_mem_pod} requests ${st.largest_pod_mem} Gi memory, but the largest ${pool} node has ${st.largest_node_mem} Gi" if st.largest_pod_mem > st.largest_node_mem])}. It would stay Pending."
     }
 
     precondition {
-      condition     = !var.install_local_path || alltrue([for st in values(local.pool_stats) : st.largest_pod_disk <= st.largest_node_dsk])
-      error_message = "${join("; ", [for pool, st in local.pool_stats : "${st.largest_disk_pod} needs a ${st.largest_pod_disk} Gi volume, but the largest ${pool} node has ${st.largest_node_dsk} Gi of disk" if st.largest_pod_disk > st.largest_node_dsk])}. local-path volumes live on one node."
+      condition     = !var.install_local_path || alltrue([for st in values(module.values.pool_stats) : st.largest_pod_disk <= st.largest_node_dsk])
+      error_message = "${join("; ", [for pool, st in module.values.pool_stats : "${st.largest_disk_pod} needs a ${st.largest_pod_disk} Gi volume, but the largest ${pool} node has ${st.largest_node_dsk} Gi of disk" if st.largest_pod_disk > st.largest_node_dsk])}. local-path volumes live on one node."
     }
 
     precondition {
-      condition     = alltrue([for st in values(local.pool_stats) : st.requested_cpu <= st.ceiling_cpu])
-      error_message = "${join("; ", [for pool, st in local.pool_stats : "${pool} pool requests ${format("%.2f", st.requested_cpu)} CPU; ceiling ${format("%.2f", st.ceiling_cpu)}" if st.requested_cpu > st.ceiling_cpu])} (ceiling = (node CPU - node_reserved) x max_request_ratio)."
+      condition     = alltrue([for st in values(module.values.pool_stats) : st.requested_cpu <= st.ceiling_cpu])
+      error_message = "${join("; ", [for pool, st in module.values.pool_stats : "${pool} pool requests ${format("%.2f", st.requested_cpu)} CPU; ceiling ${format("%.2f", st.ceiling_cpu)}" if st.requested_cpu > st.ceiling_cpu])} (ceiling = (node CPU - node_reserved) x max_request_ratio)."
     }
 
     precondition {
-      condition     = alltrue([for st in values(local.pool_stats) : st.requested_mem_gi <= st.ceiling_mem_gi])
-      error_message = "${join("; ", [for pool, st in local.pool_stats : "${pool} pool requests ${format("%.1f", st.requested_mem_gi)} Gi memory; ceiling ${format("%.1f", st.ceiling_mem_gi)} Gi" if st.requested_mem_gi > st.ceiling_mem_gi])}."
+      condition     = alltrue([for st in values(module.values.pool_stats) : st.requested_mem_gi <= st.ceiling_mem_gi])
+      error_message = "${join("; ", [for pool, st in module.values.pool_stats : "${pool} pool requests ${format("%.1f", st.requested_mem_gi)} Gi memory; ceiling ${format("%.1f", st.ceiling_mem_gi)} Gi" if st.requested_mem_gi > st.ceiling_mem_gi])}."
     }
 
     precondition {
-      condition     = !var.install_local_path || alltrue([for st in values(local.pool_stats) : st.requested_disk <= st.ceiling_disk])
-      error_message = "${join("; ", [for pool, st in local.pool_stats : "${pool} pool needs ${format("%.0f", st.requested_disk)} Gi of volumes and cache; ceiling ${format("%.0f", st.ceiling_disk)} Gi" if st.requested_disk > st.ceiling_disk])}."
+      condition     = !var.install_local_path || alltrue([for st in values(module.values.pool_stats) : st.requested_disk <= st.ceiling_disk])
+      error_message = "${join("; ", [for pool, st in module.values.pool_stats : "${pool} pool needs ${format("%.0f", st.requested_disk)} Gi of volumes and cache; ceiling ${format("%.0f", st.ceiling_disk)} Gi" if st.requested_disk > st.ceiling_disk])}."
     }
   }
 }

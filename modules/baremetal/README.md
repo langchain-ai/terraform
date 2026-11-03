@@ -120,7 +120,7 @@ how far each is proven: on a live cluster, or by the plan tests only.
 | Load balancing | MetalLB in L2 mode: the gateway IP in its own pool (never auto-assigned), a pool for other Services; skipped for the cluster's own load balancer (`install_metallb`) | Terraform | installed: live; skipped: plan tests |
 | Ingress | Envoy Gateway (Gateway API): one Gateway, a 60 s request timeout on the chart's route and the LAN route, none on Fleet, Deployments and agent run streams, an optional HTTPS listener (`gateway_tls_secret`); or the cluster's own Gateway (`install_envoy_gateway`, `existing_gateway`), whose listener must allow routes from the `langsmith` namespace and whose timeouts are its own | Terraform + `deploy.sh` | the Gateway: live; HTTPS, an existing Gateway: plan tests; stream routes: not yet run |
 | Public access (optional) | Cloudflare Tunnel connector (`cloudflared`, 2 replicas) | Terraform | plan tests |
-| Datastores | Postgres 18 ×2 (LangSmith, SmithDB metastore), Redis 7, RustFS (S3 API) with buckets, blob storage on by default with the cloud modules' expiry (`blob_storage_ttl_days`). In the cluster only: external Postgres, Redis or object storage are not inputs yet | Terraform | live |
+| Datastores | Postgres 18 ×2 (LangSmith, SmithDB metastore), Redis 7, RustFS (S3 API) with buckets, blob storage on by default with the cloud modules' expiry (`blob_storage_ttl_days`): one release of the local chart [charts/datastores](charts/datastores/README.md), as StatefulSets or through operators (`datastore_runtime`); each can be the customer's instead (`<store>_source`) | Terraform + Helm | live (StatefulSets); plan tests (operators) |
 | Trace store | SmithDB alone by default. For a migration from ClickHouse: the chart's ClickHouse in the cluster, dual ingest, the backfill and the read switch, one Helm change each (`clickhouse_source`, `enable_smithdb`, `smithdb_*_enabled`, [SMITHDB.md](SMITHDB.md)). SmithDB's tier from the load (`smithdb_tier`) | Terraform + Helm | SmithDB alone: live; ClickHouse and the migration steps: plan tests |
 | Secrets | Datastore credentials as Kubernetes Secrets; app secrets in a local `infra/.secrets.env` (mode 600); the first admin's email in `terraform.tfvars` | Terraform + scripts | credentials and the secrets file: live; the email from `terraform.tfvars`: not yet run |
 | Application | LangSmith chart on the 0.17 or 0.18 line (line-pinned) | Helm (`deploy.sh`) | 0.17: live; 0.18: not yet run (`deploy.sh` accepts the line) |
@@ -140,7 +140,11 @@ This module is opinionated. It assumes:
 - **Node-local storage.** local-path volumes are directories on one node's disk: fast (NVMe recommended), but each volume
   is pinned to its node and has **no replication**. Back up Postgres and the object store yourself.
 - **Single-instance datastores.** Postgres, Redis and RustFS each run as one pod. That fits evaluation, development and
-  small production. For high availability, run managed or HA services and point the chart at them instead.
+  small production. For high availability, run managed or HA services and point the chart at them instead
+  (`<store>_source = "external"`), or run Postgres and Redis through operators with `datastore_runtime = "operator"`
+  and `datastore_replicas = 3`: a primary and two replicas of each, failed over by CloudNativePG and by three Redis
+  Sentinels, every replica counted by the budget with its own volume. Volumes stay node-local, so a replica is what
+  survives a lost node. RustFS stays one pod.
 - **Containers can open enough files:** containerd `LimitNOFILE=1048576` on every node (the default soft limit of 1,024
   silently breaks the SmithDB disk cache).
 - **SmithDB is the trace store.** By default it is the only one; `clickhouse_source = "in-cluster"` adds the chart's
@@ -228,8 +232,12 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 | `redis_source`, `redis_secret` | no (`in-cluster`) | `external`: the customer's Redis (`noeviction`), through a Secret with `connection_url` (redis://:password@host:port/0), and `langsmith-<product>-redis` for each product |
 | `smithdb_metastore_source`, `smithdb_metastore_secret`, `smithdb_metastore_port`, `smithdb_metastore_tls` | no (`in-cluster`) | `external`: the customer's dedicated, empty PostgreSQL 18 database, its keys `smithdb_metastore_host`, `_db`, `_user`, `_password` copied into `smithdb-config` |
 | `object_store_source`, `object_store_endpoint`, `object_store_region`, `object_store_path_style`, `object_store_buckets`, `object_store_secret`, `object_store_access_key_id`, `object_store_secret_access_key` | no (`in-cluster`) | `external`: the customer's S3-compatible store and two buckets, its keys (`access_key_id`, `secret_access_key`) copied into `smithdb-config`, from their Secret or, with the two key inputs (`TF_VAR_`), a Secret the module writes; a missing bucket is created (the blob bucket with its expiry), one that exists is left as it is; with Sandboxes, RustFS stays in the cluster for their JuiceFS bucket alone |
+| `datastore_namespace` | no (`langsmith-data`) | the one namespace every in-cluster store runs in, each named for its instance (`postgres-langsmith`, `postgres-smithdb`, `redis-langsmith`, `redis-juicefs`, `rustfs`), so a shared cluster gets one data namespace per environment beside LangSmith's |
+| `datastore_replicas` | no (`1`) | with `datastore_runtime = "operator"`, pods per Postgres and Redis instance: 1, 2 or 3 (a primary and replicas the operator fails over to; Redis adds three Sentinels above 1); the budget counts each with its volume, and the Sentinels and both operators' controllers. Refused above 1 with StatefulSets |
+| `datastore_runtime` | no (`statefulset`) | how the in-cluster Postgres and Redis run: `statefulset`, one pod each on the official image; `operator`, Postgres through [CloudNativePG](https://cloudnative-pg.io/documentation/current/) and Redis through the [OpsTree Redis operator](https://github.com/OT-CONTAINER-KIT/redis-operator), both installed by the module (`cnpg_chart_version`, `redis_operator_chart_version`, `cnpg_postgres_image`, `opstree_redis_image`) and counted by the budget. RustFS has no operator and runs the same in both. Hosts, ports and Secrets are the same in both; [the chart's README](charts/datastores/README.md) has the differences |
 | `datastore_requests` | no (the profile's) | CPU (millicores) and memory (MiB) requests for `postgres_langsmith`, `postgres_smithdb` and `rustfs_smithdb` measured under load; limits stay the profile's. On a fixed set of machines the profile's requests reserve what the stores never use |
 | `envoy_proxy_node_selector` | no (`{}`) | The nodes the Envoy proxy pods run on. Set with `metallb_l2_node_selector` to the same node, so requests arrive and are proxied on one node |
+| `clickhouse_storage_gi` | no (50, the chart's) | the in-cluster ClickHouse's volume when the retained traces set it (docs self-host-scale: about 60 GiB a day of TTL at 100 traces/s); the budget counts it against the node's disk |
 | `redis_memory_gi`, `object_store_gi` | no (the profile's) | Redis's memory (request and limit) and the object store's volume when the load sets them ([SIZING.md](SIZING.md), Redis and Object storage): the profile's fixed Redis limit caps the rate every install can take, and the budget counts the volume against the node's disk. A running store keeps its claim |
 | `values_local_file` | no (`helm/values/langsmith-values-local.yaml` when it exists) | The values overlay `deploy.sh` applies last. The budget counts the requests and replica floors set there over the sizing file's, so it counts what Helm deploys |
 | `install_metrics_server`, `install_local_path` (+ `storage_class`), `install_metallb`, `install_envoy_gateway` (+ `existing_gateway`) | no (all `true`) | skip each add-on a cluster already has; the budget counts only what is installed |
@@ -372,13 +380,16 @@ modules/baremetal/
 ├── Makefile                       # make help
 ├── README.md, ARCHITECTURE.md, SMITHDB.md, SIZING.md, TROUBLESHOOTING.md, TEARDOWN.md
 ├── infra/                         # Terraform root
-│   ├── main.tf, locals.tf, variables.tf, outputs.tf, helm_values.tf, budget.tf, smithdb_nodes.tf,
-│   │   platform.tf, trace_store.tf, sandboxes.tf
+│   ├── main.tf, values.tf, variables.tf, outputs.tf, helm_values.tf, budget.tf, smithdb_nodes.tf,
+│   │   platform.tf, trace_store.tf, sandboxes.tf, datastores.tf
 │   ├── terraform.tfvars.example
-│   ├── modules/                   # metrics-server, local-path, metallb, envoy-gateway, cloudflared,
-│   │                              # postgres, redis, rustfs
-│   ├── scripts/                   # setup-env.sh, _common.sh
+│   ├── modules/                   # metrics-server, local-path, metallb, envoy-gateway, cloudflared, and
+│   │                              # values: every size, name and Helm value, with no provider
+│   │                              # (datastore-sizes.yaml: each profile's datastores)
+│   ├── scripts/                   # setup-env.sh, terraform.sh (make plan/apply/destroy), _common.sh
 │   └── tests/                     # plan tests (mocked providers): bash scripts/plan-tests.sh modules/baremetal
+├── charts/datastores/             # Postgres, Redis and RustFS as one chart, installed by datastores.tf
+│                                  # or by a customer's own Helm or Argo CD (its README)
 └── helm/
     ├── scripts/                   # init-values.sh, deploy.sh
     └── values/                    # values.yaml, examples/, langsmith-values-local.yaml.example

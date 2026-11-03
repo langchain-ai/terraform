@@ -79,105 +79,15 @@ variable "engine_gateway_auth_header" {
   description = "The header your gateway reads its key from, such as x-api-key. Empty: Engine sends Authorization: Bearer <key>."
 }
 
-locals {
-  juicefs_bucket = "sandbox-juicefs"
-  # The JuiceFS Redis's 256Mi is a floor, unmeasured: size it from the first sandbox load test.
-  juicefs_size = { cpu_m = 100, mem_mi = 256, lim_cpu_m = 1000, lim_mem_mi = 1024, storage_gi = 5 }
-
-  sandbox_problems = compact([
-    var.enable_sandboxes && length(var.sandbox_hosts) == 0 ? "enable_sandboxes needs sandbox_hosts" : "",
-    length([for h in var.sandbox_hosts : h if !contains(keys(var.cluster_nodes), h)]) > 0 ? "sandbox_hosts must all be in cluster_nodes" : "",
-    var.enable_sandboxes && length(var.sandbox_source_cidrs) == 0 ? "enable_sandboxes needs sandbox_source_cidrs: sandbox-host runs on the host network" : "",
-    var.enable_engine && !var.enable_sandboxes ? "enable_engine needs enable_sandboxes: every Engine run executes in a sandbox" : "",
-    var.enable_engine && var.langsmith_url_scheme != "https" ? "enable_engine needs langsmith_url_scheme = https with langsmith_domain: the sandboxes call LangSmith at a TLS hostname" : "",
-    length(local.engine_gateway_apis) > 0 && !var.enable_engine ? "engine_gateway_*_base_url needs enable_engine" : "",
-    length([for u in [var.engine_gateway_anthropic_base_url, var.engine_gateway_openai_base_url] : u if u != "" && !startswith(u, "https://")]) > 0 ? "engine_gateway_*_base_url must start with https://: Engine follows no redirect" : "",
-  ])
-
-  engine_gateway_apis = compact([
-    var.engine_gateway_anthropic_base_url != "" ? "anthropic" : "",
-    var.engine_gateway_openai_base_url != "" ? "openai" : "",
-  ])
-  engine_gateway = var.enable_engine && length(local.engine_gateway_apis) > 0
-  # Both Engine workloads get the URLs and the key, mounted from the Secret deploy.sh makes. Engine reads
-  # the file at the start of each run, so a rotated key needs no restart. Through JSON: Terraform will
-  # not unify this object with {} in a conditional.
-  engine_gateway_deployment = jsondecode(local.engine_gateway ? jsonencode({
-    extraEnv = concat(
-      var.engine_gateway_anthropic_base_url != "" ? [{ name = "ENGINE_GATEWAY_ANTHROPIC_BASE_URL", value = var.engine_gateway_anthropic_base_url }] : [],
-      var.engine_gateway_openai_base_url != "" ? [{ name = "ENGINE_GATEWAY_OPENAI_BASE_URL", value = var.engine_gateway_openai_base_url }] : [],
-      [{ name = "ENGINE_GATEWAY_API_KEY_FILE", value = "/etc/engine-gateway/api-key" }],
-      var.engine_gateway_auth_header != "" ? [{ name = "ENGINE_GATEWAY_AUTH_HEADER", value = var.engine_gateway_auth_header }] : [],
-    )
-    volumes      = [{ name = "engine-gateway", secret = { secretName = "engine-model-gateway" } }]
-    volumeMounts = [{ name = "engine-gateway", mountPath = "/etc/engine-gateway", readOnly = true }]
-  }) : "{}")
-  # On every component: LangSmith shows Model gateway in Engine's settings only when this is set.
-  engine_gateway_env = local.engine_gateway ? [{ name = "ENGINE_GATEWAY_APIS", value = jsonencode(local.engine_gateway_apis) }] : []
-
-  # Pods the budget adds: one sandbox-host per sandbox node at the chart's requests, with its JuiceFS cache on that node's disk.
-  sandbox_nodes = var.enable_sandboxes ? var.sandbox_hosts : []
-  sandbox_pods = var.enable_sandboxes ? [{
-    name     = "sandboxes/sandbox-host"
-    pool     = "sandbox"
-    replicas = length(var.sandbox_hosts)
-    cpu      = "2"   # chart 0.17.26 sandboxes.sandboxHost.deployment.resources.requests
-    memory   = "2Gi" # same
-    disk     = "${var.sandbox_juicefs_cache_gi}Gi"
-  }] : []
-
-  sandbox_values = var.enable_sandboxes ? {
-    sandboxes = {
-      enabled = true
-      juicefs = {
-        name               = local.juicefs_bucket
-        existingSecretName = kubernetes_secret_v1.sandbox_juicefs[0].metadata[0].name
-        hostMount          = { mountOptions = ["--cache-size=${var.sandbox_juicefs_cache_gi * 1024}", "--cache-large-write"] }
-      }
-      sandboxHost = {
-        deployment = {
-          replicas     = length(var.sandbox_hosts)
-          nodeSelector = { "kubernetes.io/arch" = "amd64", "sandbox.langsmith.com/host" = "true" }
-        }
-      }
-    }
-  } : {}
-
-  engine_values = var.enable_engine ? {
-    engine = merge(
-      { enabled = true, intelligenceBaseUrl = var.engine_intelligence_base_url },
-      var.engine_sandbox_tenant_id != "" ? { sandboxTenantId = var.engine_sandbox_tenant_id } : {},
-    )
-  } : {}
-}
-
 resource "terraform_data" "sandboxes" {
   input = { sandboxes = var.enable_sandboxes, hosts = var.sandbox_hosts, engine = var.enable_engine }
 
   lifecycle {
     precondition {
-      condition     = length(local.sandbox_problems) == 0
-      error_message = "Sandboxes: ${join("; ", local.sandbox_problems)}."
+      condition     = length(module.values.problems.sandboxes) == 0
+      error_message = "Sandboxes: ${join("; ", module.values.problems.sandboxes)}."
     }
   }
-}
-
-module "redis_juicefs" {
-  source = "./modules/redis"
-  count  = var.enable_sandboxes ? 1 : 0
-
-  namespace          = "redis-juicefs"
-  image              = var.redis_image
-  persistence        = "aof"
-  storage_size       = local.datastores_k8s.redis_juicefs.storage
-  storage_class      = local.storage_class_retain
-  resources          = { requests = local.datastores_k8s.redis_juicefs.requests, limits = local.datastores_k8s.redis_juicefs.limits }
-  memory_limit_mi    = local.datastores.redis_juicefs.lim_mem_mi
-  allowed_namespaces = [kubernetes_namespace_v1.langsmith.metadata[0].name]
-  allowed_cidrs      = var.sandbox_source_cidrs
-  datastore_label    = local.datastore_label
-
-  depends_on = [terraform_data.budget, terraform_data.sandboxes, kubernetes_node_taint.sandbox_host]
 }
 
 # The JuiceFS configuration the chart's format Job and sandbox-host read
@@ -185,16 +95,16 @@ module "redis_juicefs" {
 resource "kubernetes_secret_v1" "sandbox_juicefs" {
   count = var.enable_sandboxes ? 1 : 0
   metadata {
-    name      = "langsmith-sandbox-juicefs"
+    name      = module.values.secret_names.juicefs
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
   data = {
-    name         = local.juicefs_bucket
-    metaurl      = "redis://:${module.redis_juicefs[0].password}@${module.redis_juicefs[0].host}:6379/0"
+    name         = module.values.juicefs_bucket
+    metaurl      = "redis://:${local.redis.juicefs.password}@${local.redis.juicefs.host}:${local.redis.juicefs.port}/0"
     storage      = "s3"
-    bucket       = "${module.rustfs_smithdb[0].endpoint}/${local.juicefs_bucket}"
-    "access-key" = module.rustfs_smithdb[0].access_key
-    "secret-key" = module.rustfs_smithdb[0].secret_key
+    bucket       = "${module.values.rustfs.endpoint}/${module.values.juicefs_bucket}"
+    "access-key" = local.rustfs_keys.access_key
+    "secret-key" = local.rustfs_keys.secret_key
   }
   type = "Opaque"
 }

@@ -21,6 +21,18 @@ variable "node_path" {
   description = "Directory on every node that holds the volumes. It lives on the root LV unless you mount a dedicated disk there."
 }
 
+variable "storage_class_delete" {
+  type        = string
+  default     = "local-path"
+  description = "Name of the default StorageClass (reclaimPolicy Delete)."
+}
+
+variable "storage_class_retain" {
+  type        = string
+  default     = "local-path-retain"
+  description = "Name of the StorageClass with reclaimPolicy Retain, for datastores."
+}
+
 variable "resources" {
   type = object({
     requests = object({ cpu = string, memory = string })

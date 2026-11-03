@@ -1,9 +1,10 @@
 #------------------------------------------------------------------------------
 # Terraform and provider version constraints for this root. The exact
 # resolved versions are in .terraform.lock.hcl (gitignored per provider dir).
-#   kubernetes  namespaces, StatefulSets, Services, Secrets, NetworkPolicies, Jobs
-#   helm        upstream charts (metrics-server, MetalLB, Envoy Gateway) and
-#               the small local charts that hold their custom resources
+#   kubernetes  namespaces, Secrets, Jobs, node labels and taints
+#   helm        upstream charts (metrics-server, MetalLB, Envoy Gateway, KEDA,
+#               the datastore operators), the local datastores chart, and the
+#               small local charts that hold the add-ons' custom resources
 #   random      generated datastore passwords and S3 keys
 #------------------------------------------------------------------------------
 

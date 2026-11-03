@@ -1,0 +1,142 @@
+# LangSmith's in-cluster datastores. The bare-metal module (infra/datastores.tf) writes every key
+# below; a customer applying the chart themselves writes the same keys (README.md).
+
+# statefulset: one plain StatefulSet per store on the official image, what the module has always run.
+# operator: Postgres as a CloudNativePG Cluster and Redis as an OpsTree RedisReplication; both operators
+# must already run in the cluster. RustFS has no operator and is a StatefulSet either way.
+runtime: statefulset
+
+# The class of every data volume. A Retain class, so a deleted claim never deletes the data.
+storageClass: local-path-retain
+
+# One namespace for every store, as a shared cluster wants (one data namespace per environment, beside
+# LangSmith's). Each object is named for its instance (postgres-langsmith, redis-juicefs, rustfs), so
+# they share it. Empty: each instance's own namespace below.
+namespace: ""
+
+# The chart creates the stores' namespaces (with the Pod Security level they need). false when they exist.
+createNamespaces: true
+
+# true: the chart renders no credential Secret and ignores every password and key below; each store reads
+# the Secret of the same name that already exists in its namespace, written by the customer's secret
+# store (External Secrets). Argo CD syncs from git, where no password may live, so without this it had
+# no way to give the chart its required passwords. The Secrets, with their keys:
+#   postgres-<instance>-credentials  statefulset: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB (Opaque)
+#                                    operator: username, password (kubernetes.io/basic-auth)
+#   redis-<instance>-credentials     password, and auth.conf holding "requirepass <password>"
+#   rustfs-credentials               access-key, secret-key, and aws-credentials (AWS CLI format)
+existingSecrets: false
+
+# Namespaces whose pods may connect to every store (NetworkPolicy): LangSmith's.
+allowedNamespaces:
+  - langsmith
+
+# A label on every datastore pod; a preferred anti-affinity on it spreads the stores across nodes
+# instead of stacking them on one disk.
+datastoreLabel:
+  langsmith.lab/datastore: "true"
+
+# Where the operators run, admitted to their stores' pods (runtime operator only).
+operatorNamespaces:
+  postgres: cnpg-system
+  redis: redis-operator
+
+postgres:
+  # runtime statefulset: the official image, 18 or later (SmithDB's metastore needs 18).
+  image: docker.io/library/postgres:18.6
+  # runtime operator: a CloudNativePG operand image of the same major.
+  operatorImage: ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie
+  instances:
+    langsmith:
+      enabled: true
+      namespace: postgres-langsmith
+      database: langsmith
+      username: langsmith
+      # Required. URL-safe: it is pasted into connection URLs.
+      password: ""
+      # More databases on this instance, owned by the same user: one per standalone product.
+      databases: []
+      maxConnections: 200
+      # runtime operator only; statefulset runs one.
+      replicas: 1
+      # Postgres sizes shared_buffers (a quarter) and effective_cache_size (a half) from the memory limit.
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: 1000m, memory: 1024Mi }
+      volumeSize: 5Gi
+    smithdb:
+      enabled: true
+      namespace: postgres-smithdb
+      database: smithdb_metastore
+      username: smithdb
+      password: ""
+      databases: []
+      maxConnections: 200
+      replicas: 1
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: 1000m, memory: 1024Mi }
+      volumeSize: 5Gi
+
+redis:
+  # runtime statefulset: the official image.
+  image: docker.io/library/redis:7.4.11
+  # runtime operator: the OpsTree images, whose entrypoint the operator drives.
+  operatorImage: quay.io/opstree/redis:v7.4.11
+  sentinelImage: quay.io/opstree/redis-sentinel:v7.4.11
+  # Each of the three Sentinels above one replica, as the operator's replication-with-Sentinel example
+  # sizes them (v0.27.0, example/v1beta2/replication_sentinel).
+  sentinelResources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 100m, memory: 128Mi }
+  instances:
+    langsmith:
+      enabled: true
+      namespace: redis-langsmith
+      password: ""
+      # rdb: periodic snapshots (queues, caches). aof: an append-only log fsynced every second (data
+      # that cannot be lost, such as JuiceFS metadata).
+      persistence: rdb
+      # LangSmith needs noeviction: a full Redis then refuses writes instead of dropping queued work.
+      maxmemoryPolicy: noeviction
+      # Clients on the host network, which no namespace selector matches.
+      allowedCidrs: []
+      # runtime operator only; above 1 adds three Sentinels for failover.
+      replicas: 1
+      # maxmemory is three quarters of the memory limit.
+      resources:
+        requests: { cpu: 50m, memory: 128Mi }
+        limits: { cpu: 500m, memory: 512Mi }
+      volumeSize: 1Gi
+    juicefs:
+      enabled: false
+      namespace: redis-juicefs
+      password: ""
+      persistence: aof
+      maxmemoryPolicy: noeviction
+      allowedCidrs: []
+      replicas: 1
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { cpu: 1000m, memory: 1024Mi }
+      volumeSize: 5Gi
+
+rustfs:
+  enabled: true
+  namespace: rustfs-smithdb
+  image: docker.io/rustfs/rustfs:1.0.1
+  awsCliImage: docker.io/amazon/aws-cli:2.37.8
+  # Required. Generated, never the image's default rustfsadmin.
+  accessKey: ""
+  secretKey: ""
+  # Each made by a Job if missing.
+  buckets:
+    - smithdb
+  # Buckets that take LangSmith's two expiry rules (ttl_s/ and ttl_l/): the blob bucket only.
+  ttlBuckets: []
+  ttlDays: { short: 14, long: 400 }
+  allowedCidrs: []
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 1000m, memory: 1024Mi }
+  volumeSize: 20Gi

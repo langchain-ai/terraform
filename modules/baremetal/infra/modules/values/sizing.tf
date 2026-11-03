@@ -5,7 +5,7 @@
 #   - app pods:   helm/values/examples/langsmith-values-sizing-<file>.yaml (read here,
 #                 so the budget uses the exact numbers Helm will deploy)
 #   - SmithDB:    resource tier per profile (same mapping as modules/gcp)
-#   - datastores: Postgres x2, Redis, MinIO built by this module
+#   - datastores: Postgres x2, Redis, RustFS in charts/datastores
 #   - add-ons:    metrics-server, local-path, MetalLB, Envoy Gateway
 #
 # Quantities stay in Kubernetes format ("500m", "2Gi") so the same tables can
@@ -15,17 +15,17 @@ locals {
   # lab reuses the dev app sizing; it differs from dev only in its SmithDB tier,
   # which is what lets it fit 6-CPU nodes.
   app_sizing_files = {
-    minimum            = "${path.module}/../helm/values/examples/langsmith-values-sizing-minimum.yaml"
-    lab                = "${path.module}/../helm/values/examples/langsmith-values-sizing-dev.yaml"
-    dev                = "${path.module}/../helm/values/examples/langsmith-values-sizing-dev.yaml"
-    production         = "${path.module}/../helm/values/examples/langsmith-values-sizing-production.yaml"
-    "production-large" = "${path.module}/../helm/values/examples/langsmith-values-sizing-production-large.yaml"
+    minimum            = "${path.module}/../../../helm/values/examples/langsmith-values-sizing-minimum.yaml"
+    lab                = "${path.module}/../../../helm/values/examples/langsmith-values-sizing-dev.yaml"
+    dev                = "${path.module}/../../../helm/values/examples/langsmith-values-sizing-dev.yaml"
+    production         = "${path.module}/../../../helm/values/examples/langsmith-values-sizing-production.yaml"
+    "production-large" = "${path.module}/../../../helm/values/examples/langsmith-values-sizing-production-large.yaml"
   }
   app_values = yamldecode(file(local.app_sizing_files[var.sizing_profile]))
   # The overlay deploy.sh applies last: requests and replica floors set there are what Helm deploys, so
   # the budget counts them over the sizing file's. Without it, requests sized from measurement read as
   # the profile's and the budget refused a cluster they fit.
-  values_local_file = var.values_local_file != "" ? var.values_local_file : "${path.module}/../helm/values/langsmith-values-local.yaml"
+  values_local_file = var.values_local_file != "" ? var.values_local_file : "${path.module}/../../../helm/values/langsmith-values-local.yaml"
   values_local      = try(yamldecode(file(local.values_local_file)), {})
 
   # Components the chart runs for a SmithDB-only install with insights/polly off.
@@ -89,63 +89,16 @@ locals {
   smithdb_tier      = local.smithdb_tiers[local.smithdb_tier_name]
 
   #----------------------------------------------------------------------------
-  # Datastores this module builds. Sizes are numbers (millicores, MiB, GiB) so
-  # feature increments can be added; *_k8s below renders them back to strings.
-  #
-  # Shared instances (one per role, see docs):
-  #   postgres-langsmith  one database + role per product: langsmith, polly, insights, fleet
-  #   redis-langsmith     one logical DB per product (standalone Redis, not Cluster)
-  #   postgres-smithdb    SmithDB metastore only
-  #   rustfs-smithdb      SmithDB trace data (RustFS, S3-compatible)
-  # production* start from the chart's own in-cluster defaults; tune after
-  # measuring real load.
+  # Datastores this module builds, sized from datastore-sizes.yaml. Sizes are
+  # numbers (millicores, MiB, GiB) so feature increments can be added;
+  # *_k8s below renders them back to strings.
   #----------------------------------------------------------------------------
   feature_class = contains(["minimum", "lab"], var.sizing_profile) ? "slim" : "full"
 
-  datastore_base_lab = {
-    postgres_langsmith = { cpu_m = 500, mem_mi = 1024, lim_cpu_m = 2000, lim_mem_mi = 2048, storage_gi = 10 }
-    postgres_smithdb   = { cpu_m = 500, mem_mi = 1024, lim_cpu_m = 2000, lim_mem_mi = 2048, storage_gi = 10 }
-    # Redis buffers every trace payload until ingest-queue moves it to SmithDB.
-    # The 1Gi limit (768 MB maxmemory, noeviction) filled at 50 traces/s of
-    # ~1-2 MiB traces; at noeviction even dequeue and lease writes fail, so it
-    # can't drain (measured under load). 4Gi -> 3 GiB maxmemory. storage_gi stays
-    # 2: volumeClaimTemplates are immutable, and local-path does not enforce it.
-    # CPU limit 2 (measured under load): Redis was throttled in 25% of periods at 1 CPU;
-    # every drain step (asynq Lua, run hashes, leases) goes through it.
-    redis_langsmith = { cpu_m = 250, mem_mi = 1024, lim_cpu_m = 2000, lim_mem_mi = 4096, storage_gi = 2 }
-    # CPU limit 4 (request stays 250m): S3 PUTs are CPU-bound (checksums,
-    # hashing). With a 1-CPU limit the warp benchmark throttled RustFS in 27%
-    # of CFS periods (88.6 MiB/s, 734 ms/PUT). Limits don't count in the
-    # budget; only requests do.
-    # Memory 2Gi -> 6Gi (measured under load): RustFS was OOMKilled 9x at 2Gi
-    # under ~70-80 traces/s of SmithDB flushes; each kill fails SmithDB PUTs
-    # ("Flush failed ... Failed to shutdown VortexMultiWriter").
-    rustfs_smithdb = { cpu_m = 250, mem_mi = 1024, lim_cpu_m = 4000, lim_mem_mi = 6144, storage_gi = 80 }
-  }
-  datastore_base = {
-    minimum = {
-      postgres_langsmith = { cpu_m = 100, mem_mi = 256, lim_cpu_m = 1000, lim_mem_mi = 1024, storage_gi = 5 }
-      postgres_smithdb   = { cpu_m = 100, mem_mi = 256, lim_cpu_m = 1000, lim_mem_mi = 1024, storage_gi = 5 }
-      redis_langsmith    = { cpu_m = 50, mem_mi = 128, lim_cpu_m = 500, lim_mem_mi = 512, storage_gi = 1 }
-      rustfs_smithdb     = { cpu_m = 100, mem_mi = 256, lim_cpu_m = 1000, lim_mem_mi = 1024, storage_gi = 20 }
-    }
-    lab = local.datastore_base_lab
-    dev = local.datastore_base_lab
-    production = {
-      postgres_langsmith = { cpu_m = 2000, mem_mi = 8192, lim_cpu_m = 4000, lim_mem_mi = 16384, storage_gi = 50 }
-      postgres_smithdb   = { cpu_m = 1000, mem_mi = 4096, lim_cpu_m = 2000, lim_mem_mi = 8192, storage_gi = 20 }
-      redis_langsmith    = { cpu_m = 2000, mem_mi = 4096, lim_cpu_m = 4000, lim_mem_mi = 8192, storage_gi = 8 }
-      # Memory limit 6Gi, as lab's (measured under load): at 4Gi RustFS reached 4094 MiB at 60
-      # traces/s, stopped answering its probes and restarted, and SmithDB's flushes failed.
-      rustfs_smithdb = { cpu_m = 1000, mem_mi = 2048, lim_cpu_m = 2000, lim_mem_mi = 6144, storage_gi = 200 }
-    }
-    "production-large" = {
-      postgres_langsmith = { cpu_m = 4000, mem_mi = 16384, lim_cpu_m = 8000, lim_mem_mi = 32768, storage_gi = 100 }
-      postgres_smithdb   = { cpu_m = 2000, mem_mi = 8192, lim_cpu_m = 4000, lim_mem_mi = 16384, storage_gi = 50 }
-      redis_langsmith    = { cpu_m = 2000, mem_mi = 4096, lim_cpu_m = 4000, lim_mem_mi = 8192, storage_gi = 16 }
-      rustfs_smithdb     = { cpu_m = 2000, mem_mi = 4096, lim_cpu_m = 4000, lim_mem_mi = 8192, storage_gi = 500 }
-    }
-  }
+  # The tables are data (datastore-sizes.yaml), read as the app's sizing files are: a tool sizing a
+  # store outside this module once read them out of this file with a regex, and silently found nothing
+  # for lab and dev, whose rows were references.
+  datastore_size_table = yamldecode(file("${path.module}/datastore-sizes.yaml"))
 
   # Products that share postgres-langsmith and redis-langsmith. Same layout as
   # modules/gcp: one logical database per product (langsmith_<name>) on the
@@ -168,16 +121,13 @@ locals {
   postgres_databases = concat(["langsmith"], values(local.standalone_features))
 
   # What each extra product adds to the shared instances.
-  shared_increment = {
-    slim = { postgres = { cpu_m = 250, mem_mi = 512, storage_gi = 5 }, redis = { cpu_m = 0, mem_mi = 128 } }
-    full = { postgres = { cpu_m = 500, mem_mi = 1024, storage_gi = 10 }, redis = { cpu_m = 0, mem_mi = 512 } }
-  }[local.feature_class]
-  n_shared = length(local.shared_products)
+  shared_increment = local.datastore_size_table.shared_increment[local.feature_class]
+  n_shared         = length(local.shared_products)
 
   # The two sizes the load sets rather than the profile (redis_memory_gi, object_store_gi), before
   # the shared products' increments. Without them, the profile's fixed Redis limit capped every
   # install's rate, and the object store's fixed volume told the budget nothing of the retained data.
-  datastore_profile = local.datastore_base[var.sizing_profile]
+  datastore_profile = local.datastore_size_table.profiles[var.sizing_profile]
   datastore_sized = merge(local.datastore_profile, {
     redis_langsmith = var.redis_memory_gi == null ? local.datastore_profile.redis_langsmith : merge(local.datastore_profile.redis_langsmith, {
       mem_mi     = ceil(var.redis_memory_gi * 1024)
@@ -224,7 +174,7 @@ locals {
   # The JuiceFS metadata Redis is a datastore like the others, so the budget and its StatefulSet read one size.
   datastores = merge(
     { for k, d in local.datastores_measured : k => d if !contains(local.external_stores, k) },
-    var.enable_sandboxes ? { redis_juicefs = local.juicefs_size } : {},
+    var.enable_sandboxes ? { redis_juicefs = local.datastore_size_table.juicefs } : {},
   )
   # The Secrets LangSmith's namespace must hold before Helm runs: ours, or the customer's for a store
   # they run (deploy.sh checks each; the chart fails late without them).
@@ -322,6 +272,10 @@ locals {
       "keda-metrics-server" = { replicas = 1, cpu_m = 100, mem_mi = 128 }
       "keda-webhooks"       = { replicas = 1, cpu_m = 50, mem_mi = 64 }
     } : {},
+    # The datastore operators (datastores.tf). CloudNativePG's chart sets no requests; these are the ones its
+    # values.yaml suggests. The OpsTree operator's are its chart's own (0.27.0, values.yaml resources).
+    local.operator_runtime && length(local.postgres_in_chart) > 0 ? { "cnpg-operator" = { replicas = 1, cpu_m = 100, mem_mi = 100 } } : {},
+    local.operator_runtime && length(local.redis_in_chart) > 0 ? { "redis-operator" = { replicas = 1, cpu_m = 500, mem_mi = 500 } } : {},
   )
 
   #----------------------------------------------------------------------------
@@ -378,7 +332,9 @@ locals {
         disk_gi  = endswith(p.disk, "Gi") ? tonumber(trimsuffix(p.disk, "Gi")) : endswith(p.disk, "Mi") ? tonumber(trimsuffix(p.disk, "Mi")) / 1024 : tonumber(p.disk) / 1073741824
       }
     ],
-    [for n, d in local.datastores : { name = "datastore/${n}", pool = "workers", replicas = 1, cpu_n = d.cpu_m / 1000, mem_gi = d.mem_mi / 1024, disk_gi = d.storage_gi }],
+    # Each replica has its own volume, so the disk counts once per pod too.
+    [for n, d in local.datastores : { name = "datastore/${local.datastore_instance_names[n]}", pool = "workers", replicas = local.datastore_pod_replicas[n], cpu_n = d.cpu_m / 1000, mem_gi = d.mem_mi / 1024, disk_gi = d.storage_gi }],
+    local.sentinel_pods,
     [for n, f in local.feature_pods : { name = "feature/${n}", pool = "workers", replicas = local.feature_replicas[n], cpu_n = f.cpu_m / 1000, mem_gi = f.mem_mi / 1024, disk_gi = 0 }],
     [for n, a in local.addon_pods : { name = "addon/${n}", pool = "workers", replicas = a.replicas, cpu_n = a.cpu_m / 1000, mem_gi = a.mem_mi / 1024, disk_gi = 0 }],
     var.expected_agent_deployments > 0 ? [{
@@ -460,20 +416,15 @@ locals {
   }
 }
 
-#------------------------------------------------------------------------------
-# Is envoy_gateway_lb_ip inside the MetalLB pool? IPs become numbers so ranges
-# (a.b.c.d-a.b.c.e) and CIDRs can be compared.
-#------------------------------------------------------------------------------
+# The label and NoSchedule taint key of each dedicated SmithDB pool, as the cloud modules put them on
+# their SmithDB node pools; the root labels and taints the nodes given those roles.
 locals {
-  # Empty when the module installs no MetalLB or Envoy: nothing to compare against the pool then.
-  lb_ip_octets = var.envoy_gateway_lb_ip == "" ? [0, 0, 0, 0] : [for o in split(".", var.envoy_gateway_lb_ip) : tonumber(o)]
-  lb_ip_num    = local.lb_ip_octets[0] * 16777216 + local.lb_ip_octets[1] * 65536 + local.lb_ip_octets[2] * 256 + local.lb_ip_octets[3]
-
-  metallb_bounds = [
-    for a in var.metallb_addresses : [
-      for ip in(can(cidrhost(a, 0)) ? [cidrhost(a, 0), cidrhost(a, -1)] : split("-", a)) :
-      sum([for i, o in split(".", ip) : tonumber(o) * pow(256, 3 - i)])
-    ]
-  ]
-  lb_ip_in_pool = anytrue([for b in local.metallb_bounds : local.lb_ip_num >= b[0] && local.lb_ip_num <= b[1]])
+  smithdb_node_label = {
+    "smithdb-cache"   = "smithdb-local/instance-store"
+    "smithdb-compute" = "smithdb-local/compute"
+  }
+  smithdb_dedicated_nodes = {
+    for name, n in var.cluster_nodes : name => local.smithdb_node_label[n.role]
+    if contains(keys(local.smithdb_node_label), n.role)
+  }
 }

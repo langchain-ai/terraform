@@ -253,7 +253,7 @@ variable "values_local_file" {
 variable "object_store_gi" {
   type        = number
   default     = null
-  description = "Volume of the in-cluster object store (rustfs-smithdb: SmithDB's bucket and the blob bucket), when the retained volume and not the sizing profile should set it (SIZING.md, Object storage). The budget counts it against the node's disk; local-path does not enforce it, and a running store keeps its claim. Null: the profile's."
+  description = "Volume of the in-cluster object store (rustfs: SmithDB's bucket and the blob bucket), when the retained volume and not the sizing profile should set it (SIZING.md, Object storage). The budget counts it against the node's disk; local-path does not enforce it, and a running store keeps its claim. Null: the profile's."
 
   validation {
     condition     = var.object_store_gi == null || try(var.object_store_gi >= 1, false)

@@ -9,19 +9,8 @@
 # Bare metal can't create nodes, so these label and taint existing ones. The
 # map key must be the node's Kubernetes name.
 #------------------------------------------------------------------------------
-locals {
-  smithdb_node_label = {
-    "smithdb-cache"   = "smithdb-local/instance-store"
-    "smithdb-compute" = "smithdb-local/compute"
-  }
-  smithdb_dedicated_nodes = {
-    for name, n in var.cluster_nodes : name => local.smithdb_node_label[n.role]
-    if contains(keys(local.smithdb_node_label), n.role)
-  }
-}
-
 resource "kubernetes_labels" "smithdb_node" {
-  for_each = local.smithdb_dedicated_nodes
+  for_each = module.values.smithdb_dedicated_nodes
 
   api_version = "v1"
   kind        = "Node"
@@ -36,7 +25,7 @@ resource "kubernetes_labels" "smithdb_node" {
 }
 
 resource "kubernetes_node_taint" "smithdb_node" {
-  for_each = local.smithdb_dedicated_nodes
+  for_each = module.values.smithdb_dedicated_nodes
 
   metadata {
     name = each.key

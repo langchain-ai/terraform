@@ -27,7 +27,7 @@ run "off_by_default" {
   command = plan
 
   assert {
-    condition     = length(module.redis_juicefs) == 0 && length(kubernetes_secret_v1.sandbox_juicefs) == 0 && length(kubernetes_node_taint.sandbox_host) == 0
+    condition     = module.values.datastore_values.redis.instances.juicefs.enabled == false && length(kubernetes_secret_v1.sandbox_juicefs) == 0 && length(kubernetes_node_taint.sandbox_host) == 0
     error_message = "With Sandboxes off nothing of theirs is created."
   }
 
@@ -47,7 +47,7 @@ run "sandboxes_on" {
   }
 
   assert {
-    condition     = length(module.redis_juicefs) == 1 && length(kubernetes_secret_v1.sandbox_juicefs) == 1
+    condition     = module.values.datastore_values.redis.instances.juicefs.enabled && length(kubernetes_secret_v1.sandbox_juicefs) == 1
     error_message = "Sandboxes get their own JuiceFS Redis and Secret."
   }
 
@@ -72,7 +72,7 @@ run "sandboxes_on" {
   }
 
   assert {
-    condition     = length([for p in output.pods : p if p.name == "sandboxes/sandbox-host" && p.replicas == 2 && p.disk_gi == 50]) == 1 && length([for p in output.pods : p if p.name == "datastore/redis_juicefs"]) == 1
+    condition     = length([for p in output.pods : p if p.name == "sandboxes/sandbox-host" && p.replicas == 2 && p.disk_gi == 50]) == 1 && length([for p in output.pods : p if p.name == "datastore/redis-juicefs"]) == 1
     error_message = "The budget counts each sandbox-host with its JuiceFS cache, and the JuiceFS Redis."
   }
 

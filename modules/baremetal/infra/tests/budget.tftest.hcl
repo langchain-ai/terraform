@@ -245,7 +245,7 @@ run "standalone_features_get_gcp_style_secrets_and_db_job" {
   }
 
   assert {
-    condition     = length(module.postgres_langsmith[0].extra_databases) == 2
+    condition     = length(module.values.datastore_values.postgres.instances.langsmith.databases) == 2
     error_message = "postgres-langsmith should ensure 2 extra databases."
   }
 }
@@ -258,7 +258,7 @@ run "lab_default_creates_no_feature_resources" {
   }
 
   assert {
-    condition     = length(kubernetes_secret_v1.standalone_postgres) == 0 && length(module.postgres_langsmith[0].extra_databases) == 0
+    condition     = length(kubernetes_secret_v1.standalone_postgres) == 0 && length(module.values.datastore_values.postgres.instances.langsmith.databases) == 0
     error_message = "No features enabled, so no feature secrets or extra databases."
   }
 }
@@ -518,12 +518,12 @@ run "load_sets_redis_and_the_object_store" {
   }
 
   assert {
-    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/redis_langsmith"]) >= 6
+    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/redis-langsmith"]) >= 6
     error_message = "redis_memory_gi should set redis-langsmith's request, which the budget counts."
   }
 
   assert {
-    condition     = one([for p in output.pods : p.disk_gi if p.name == "datastore/rustfs_smithdb"]) == 150
+    condition     = one([for p in output.pods : p.disk_gi if p.name == "datastore/rustfs"]) == 150
     error_message = "object_store_gi should set the object store's volume, which the budget counts."
   }
 
@@ -543,12 +543,12 @@ run "measured_datastore_requests_replace_the_profiles" {
   }
 
   assert {
-    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/postgres_langsmith"]) == 600 / 1024
+    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/postgres-langsmith"]) == 600 / 1024
     error_message = "datastore_requests should replace postgres-langsmith's request, products' increments included, in what the budget counts."
   }
 
   assert {
-    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/postgres_smithdb"]) == local.datastore_base.lab.postgres_smithdb.mem_mi / 1024
+    condition     = one([for p in output.pods : p.mem_gi if p.name == "datastore/postgres-smithdb"]) == module.values.datastore_sizes.profiles.lab.postgres_smithdb.mem_mi / 1024
     error_message = "A store datastore_requests does not name should keep the profile's request."
   }
 }
@@ -564,12 +564,12 @@ run "their_postgres_is_neither_built_nor_counted" {
   }
 
   assert {
-    condition     = length(module.postgres_langsmith) == 0 && length(kubernetes_secret_v1.langsmith_postgres) == 0 && length(kubernetes_secret_v1.standalone_postgres) == 0
+    condition     = module.values.datastore_values.postgres.instances.langsmith.enabled == false && length(kubernetes_secret_v1.langsmith_postgres) == 0 && length(kubernetes_secret_v1.standalone_postgres) == 0
     error_message = "With postgres_source = external the module builds no Postgres, and no Secret for it or its products."
   }
 
   assert {
-    condition     = length([for p in output.pods : p if p.name == "datastore/postgres_langsmith"]) == 0
+    condition     = length([for p in output.pods : p if p.name == "datastore/postgres-langsmith"]) == 0
     error_message = "The budget should not count a Postgres the customer runs."
   }
 
@@ -595,12 +595,12 @@ run "their_redis_is_neither_built_nor_counted" {
   }
 
   assert {
-    condition     = length(module.redis_langsmith) == 0 && length(kubernetes_secret_v1.langsmith_redis) == 0 && length(kubernetes_secret_v1.standalone_redis) == 0
+    condition     = module.values.datastore_values.redis.instances.langsmith.enabled == false && length(kubernetes_secret_v1.langsmith_redis) == 0 && length(kubernetes_secret_v1.standalone_redis) == 0
     error_message = "With redis_source = external the module builds no Redis, and no Secret for it or its products."
   }
 
   assert {
-    condition     = length([for p in output.pods : p if p.name == "datastore/redis_langsmith"]) == 0
+    condition     = length([for p in output.pods : p if p.name == "datastore/redis-langsmith"]) == 0
     error_message = "The budget should not count a Redis the customer runs."
   }
 
@@ -625,12 +625,12 @@ run "their_metastore_is_neither_built_nor_counted" {
   }
 
   assert {
-    condition     = length(module.postgres_smithdb) == 0 && length(data.kubernetes_secret_v1.smithdb_metastore) == 1
+    condition     = module.values.datastore_values.postgres.instances.smithdb.enabled == false && length(data.kubernetes_secret_v1.smithdb_metastore) == 1
     error_message = "With smithdb_metastore_source = external the module builds no metastore and reads the customer's Secret."
   }
 
   assert {
-    condition     = length([for p in output.pods : p if p.name == "datastore/postgres_smithdb"]) == 0
+    condition     = length([for p in output.pods : p if p.name == "datastore/postgres-smithdb"]) == 0
     error_message = "The budget should not count a metastore the customer runs."
   }
 
@@ -655,12 +655,12 @@ run "their_object_store_is_neither_built_nor_counted" {
   }
 
   assert {
-    condition     = length(module.rustfs_smithdb) == 0 && length(data.kubernetes_secret_v1.object_store) == 1
+    condition     = module.values.datastore_values.rustfs.enabled == false && length(data.kubernetes_secret_v1.object_store) == 1
     error_message = "With object_store_source = external the module builds no RustFS and reads the customer's keys."
   }
 
   assert {
-    condition     = length([for p in output.pods : p if p.name == "datastore/rustfs_smithdb"]) == 0
+    condition     = length([for p in output.pods : p if p.name == "datastore/rustfs"]) == 0
     error_message = "The budget should not count an object store the customer runs, nor its volume."
   }
 
@@ -742,7 +742,7 @@ run "beside_their_object_store_rustfs_holds_the_sandboxes_bucket_alone" {
   }
 
   assert {
-    condition     = length(module.rustfs_smithdb) == 1 && length([for p in output.pods : p if p.name == "datastore/rustfs_smithdb"]) == 1
+    condition     = module.values.datastore_values.rustfs.enabled && module.values.datastore_values.rustfs.buckets == ["smithdb", "sandbox-juicefs"] && length([for p in output.pods : p if p.name == "datastore/rustfs"]) == 1
     error_message = "With Sandboxes, RustFS should still run and be counted, for their JuiceFS bucket."
   }
 

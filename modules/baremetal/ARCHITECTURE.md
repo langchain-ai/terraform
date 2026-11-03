@@ -8,7 +8,7 @@ was chosen. For the overview diagram and quick start, see [README.md](README.md)
 
 | Pass | Tool | Creates |
 |---|---|---|
-| 1. Infrastructure | Terraform (`infra/`) | cluster add-ons, ingress, datastores, their Secrets, the `langsmith` namespace |
+| 1. Infrastructure | Terraform (`infra/`) | cluster add-ons, ingress, the datastores (one Helm release of [charts/datastores](charts/datastores/README.md)), their Secrets, the `langsmith` namespace |
 | 2. Application | Helm (`helm/scripts/deploy.sh`) | LangSmith and SmithDB, from the chart pinned in `deploy.sh` |
 
 Terraform never installs the LangSmith chart. It emits two outputs, `langsmith_helm_values` and `smithdb_helm_values`,
@@ -29,20 +29,25 @@ flowchart LR
   subgraph appns["langsmith"]
     ls["LangSmith services<br/>SmithDB services<br/>Gateway, HTTPRoutes"]
   end
-  subgraph ds["Datastores"]
+  subgraph ds["langsmith-data (datastore_namespace)"]
     direction TB
     p1["postgres-langsmith"]
     p2["postgres-smithdb"]
     r1["redis-langsmith"]
-    s1["rustfs-smithdb"]
+    s1["rustfs"]
   end
   eg --> ls
   cfd -.-> eg
   ls --> p1 & p2 & r1 & s1
 ```
 
-- Each datastore gets **its own namespace**, a generated password, and a **default-deny NetworkPolicy** that admits only
-  the `langsmith` namespace (Postgres and Redis; your CNI must enforce NetworkPolicy, e.g. Calico or Cilium).
+- Every datastore runs in **one data namespace** beside LangSmith's (`datastore_namespace`, default `langsmith-data`),
+  each named for its instance, with a generated password, and the namespace's **default-deny NetworkPolicy** plus one
+  policy per instance that admits only the `langsmith` namespace (your CNI must enforce NetworkPolicy, e.g. Calico or
+  Cilium). A shared cluster gets one data namespace per environment, never one per store.
+- The datastores are one release of the local chart `charts/datastores`, which a customer can apply with their own Helm
+  or Argo CD. `datastore_runtime` picks how Postgres and Redis run (the table below); with `operator`, the operators run
+  in `cnpg-system` and `redis-operator`, and each store's policy also admits its operator.
 - Datastore pods carry a shared label with **preferred pod anti-affinity**, so the scheduler spreads them across nodes
   instead of stacking them on one disk.
 
@@ -62,9 +67,25 @@ flowchart LR
 | Postgres 18 `smithdb` | SmithDB metastore: the index of every file in object storage | write-heavy during ingest; back it up with the object store |
 | Redis 7 | ingest buffer (each run's data for `redisRunsExpirySeconds`), task queues | persisted (RDB), `noeviction`, expiry tuned for LangSmith's key churn |
 | RustFS | S3-compatible object store: bucket `smithdb` (SmithDB files) and `langsmith-blobs` (large payloads) | maintained, Apache-2.0, single binary; MinIO community images are no longer published |
+| CloudNativePG, OpsTree Redis operator (only with `datastore_runtime = "operator"`) | run Postgres as a `Cluster` and Redis as a `RedisReplication` in place of the StatefulSets | operators a customer can keep running for failover and replicas; each its own release, since a custom resource cannot share a release with its CRD |
 | ClickHouse (only with `clickhouse_source = "in-cluster"`) | the chart's StatefulSet in `langsmith`, beside SmithDB for dual ingest and the backfill | the source a migration to SmithDB reads; not part of the default install |
 | TaskDB (only with `smithdb_migration_enabled`) | the chart's Postgres for the backfill Job's progress, in `langsmith` | lives only as long as the backfill |
 | Redis 7 `redis-juicefs` (only with `enable_sandboxes`) | JuiceFS metadata for sandbox volumes; AOF, `noeviction`; data in bucket `sandbox-juicefs` on the same RustFS | kept apart from LangSmith's Redis, whose expiry would lose filesystem metadata |
+
+## Datastores in each runtime
+
+| Store | `statefulset` (default) | `operator` | What LangSmith reads, in both |
+|---|---|---|---|
+| Postgres `postgres-langsmith`, `postgres-smithdb` | StatefulSet and headless Service named for the instance on `postgres:18.6`, product databases made by a Job | CloudNativePG `Cluster` named for the instance on its own 18.6 image, a managed Service of that name on the primary, product databases as `Database` resources | `postgres-<instance>.langsmith-data.svc.cluster.local:5432`, a superuser owner ([its extensions](https://docs.langchain.com/langsmith/self-host-external-postgres#requirements)), the same password |
+| Redis `redis-langsmith`, `redis-juicefs` | StatefulSet and headless Service named for the instance on `redis:7.4.11`, config and password in a mounted `redis.conf` | OpsTree `RedisReplication` `redis-<instance>-replication` on its 7.4.11 image, the same settings as an included config file; three Sentinels above one replica | `redis-<instance>.langsmith-data.svc.cluster.local:6379` (in the operator runtime a Service on the primary), `noeviction`, `maxmemory` three quarters of the limit |
+| RustFS `rustfs` | StatefulSet `rustfs`, a Job per bucket | the same: no operator | `http://rustfs.langsmith-data.svc.cluster.local:9000`, the same keys |
+
+With `datastore_replicas` above 1 (operator only) each Postgres is a primary and replicas CloudNativePG fails over,
+and each Redis a primary, replicas and three Sentinels; the Services above follow the primary, so LangSmith's
+connection strings never change. The budget counts every replica with its volume, the Sentinels and both controllers.
+
+The module keeps generating every password and key and passes them as a second values document; the Secrets in
+`langsmith` are built from the same passwords whichever runtime runs the stores.
 
 ## Request path
 
@@ -158,6 +179,8 @@ components can be pinned to them.
 - App secrets (license, admin password, salts, encryption keys) live in `infra/.secrets.env` (mode 600, gitignored) and
   reach the cluster only through `deploy.sh`, on stdin. Datastore credentials are generated by Terraform and stored in
   Kubernetes Secrets, so they are also in Terraform state: keep the state private.
-- Generated Helm values contain no secrets; the chart reads every credential from existing Secrets.
+- Generated Helm values for LangSmith contain no secrets; the chart reads every credential from existing Secrets. The
+  datastores chart takes the generated passwords as values, so they are also in its Helm release Secret in
+  `langsmith`.
 - The gateway listener is plain HTTP by default. Before exposing LangSmith beyond a trusted network, add an HTTPS
   listener (`gateway_tls_secret`) or terminate TLS in front of it (the Cloudflare Tunnel option does this).

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: datastores
+description: LangSmith's in-cluster Postgres, Redis and RustFS for the bare-metal module, as plain StatefulSets or through CloudNativePG and the OpsTree Redis operator.
+type: application
+# Bump on every change to a template or a default: the Terraform helm provider upgrades a local
+# chart only when its values or this version change.
+version: 0.4.0
+kubeVersion: ">=1.29.0-0"

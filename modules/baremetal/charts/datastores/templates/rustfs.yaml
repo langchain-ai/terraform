@@ -1,0 +1,245 @@
+{{- /*
+RustFS: S3-compatible object storage (Apache 2.0), standing in for MinIO, whose community edition is
+no longer maintained. It has no operator, so it is this StatefulSet in both runtimes.
+
+Single node, single drive: objects live on one Retain volume at /data. Credentials are files mounted
+from a Secret (RUSTFS_*_KEY_FILE), rustfs-credentials, or the customer's own of that name with
+existingSecrets: never the image's default rustfsadmin, never in env values or on the command line.
+Runs as the image's non-root user (uid 10001) under the restricted Pod Security level.
+*/ -}}
+{{- with .Values.rustfs }}
+{{- if .enabled }}
+{{- $ns := include "datastores.ns" (dict "root" $ "ns" .namespace) }}
+{{- $existing := $.Values.existingSecrets }}
+{{- $selector := dict "langsmith.lab/datastore-instance" "rustfs" }}
+{{- $labels := merge (dict "app.kubernetes.io/name" "rustfs") $selector $.Values.datastoreLabel }}
+{{- $endpoint := printf "http://rustfs.%s.svc.cluster.local:9000" $ns }}
+{{- $restricted := dict "allowPrivilegeEscalation" false "runAsNonRoot" true "capabilities" (dict "drop" (list "ALL")) }}
+{{- if not $existing }}
+{{- $access := required "rustfs.accessKey is required" .accessKey }}
+{{- $secret := required "rustfs.secretKey is required" .secretKey }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rustfs-credentials
+  namespace: {{ $ns }}
+type: Opaque
+stringData:
+  access-key: {{ $access | quote }}
+  secret-key: {{ $secret | quote }}
+  # The same keys in AWS CLI format, for the bucket Jobs (AWS_SHARED_CREDENTIALS_FILE).
+  aws-credentials: |
+    [default]
+    aws_access_key_id = {{ $access }}
+    aws_secret_access_key = {{ $secret }}
+{{- end }}
+---
+# Headless, S3 API only. The web console (9001) is not exposed; reach it with kubectl port-forward.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustfs
+  namespace: {{ $ns }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- toYaml $selector | nindent 4 }}
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rustfs
+  namespace: {{ $ns }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+spec:
+  serviceName: rustfs
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- toYaml $labels | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          {{- include "datastores.antiAffinityTerms" $ | nindent 10 }}
+      containers:
+        - name: rustfs
+          image: {{ .image }}
+          env:
+            - name: RUSTFS_VOLUMES
+              value: /data
+            - name: RUSTFS_ACCESS_KEY_FILE
+              value: /run/secrets/rustfs/access-key
+            - name: RUSTFS_SECRET_KEY_FILE
+              value: /run/secrets/rustfs/secret-key
+            # Empty: log to stdout (kubectl logs) instead of files under /logs.
+            - name: RUSTFS_OBS_LOG_DIRECTORY
+              value: ""
+          ports:
+            - name: s3
+              containerPort: 9000
+          resources:
+            {{- toYaml .resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $restricted | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: credentials
+              mountPath: /run/secrets/rustfs
+              readOnly: true
+          # Endpoints and timeouts as RustFS's own chart sets them (helm/rustfs/values.yaml): readiness
+          # on /health/ready, which reports storage quorum, so a store whose drive is failing leaves the
+          # Service instead of taking writes; liveness on /health, with a 3 s timeout. Kubernetes' 1 s
+          # default restarted RustFS twice mid-write while it was slow, not dead, under load on a lab
+          # node (rename_data past 30 s), and each restart failed every SmithDB and blob write in flight.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: s3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: s3
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: credentials
+          secret:
+            secretName: rustfs-credentials
+            items:
+              - key: access-key
+                path: access-key
+              - key: secret-key
+                path: secret-key
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        {{- include "datastores.claimSpec" (dict "root" $ "ns" $ns "name" "rustfs" "size" .volumeSize) | nindent 8 }}
+{{- /*
+Buckets: a Job each, head-bucket first, so every run after the first is a no-op. SmithDB's bucket
+takes no lifecycle rules: SmithDB manages its own retention. LangSmith's blob bucket takes the two
+prefix rules the cloud modules set: LangSmith writes payloads under ttl_s/ and ttl_l/ and expects the
+bucket to expire them; without them it grows without bound (57 GB in two lab days). Hooks, so they run
+once RustFS is ready.
+*/}}
+{{- $ttl := .ttlDays }}
+{{- $ttlBuckets := .ttlBuckets }}
+{{- $awsCli := .awsCliImage }}
+{{- range (uniq .buckets) }}
+{{- $lifecycle := "" }}
+{{- if has . $ttlBuckets }}
+{{- $lifecycle = dict "Rules" (list (dict "ID" "ttl-short" "Status" "Enabled" "Filter" (dict "Prefix" "ttl_s/") "Expiration" (dict "Days" $ttl.short)) (dict "ID" "ttl-long" "Status" "Enabled" "Filter" (dict "Prefix" "ttl_l/") "Expiration" (dict "Days" $ttl.long))) | toJson }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rustfs-create-bucket-{{ . }}
+  namespace: {{ $ns }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rustfs-bucket-init
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: create-bucket
+          image: {{ $awsCli }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              aws --endpoint-url "$S3_ENDPOINT" s3api head-bucket --bucket "$BUCKET" 2>/dev/null \
+                && echo "bucket $BUCKET exists" \
+                || { aws --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$BUCKET" && echo "bucket $BUCKET created"; }
+              if [ -n "$LIFECYCLE" ]; then
+                aws --endpoint-url "$S3_ENDPOINT" s3api put-bucket-lifecycle-configuration \
+                  --bucket "$BUCKET" --lifecycle-configuration "$LIFECYCLE"
+                echo "bucket $BUCKET expires ttl_s/ and ttl_l/ objects"
+              fi
+          env:
+            - name: S3_ENDPOINT
+              value: {{ $endpoint }}
+            - name: BUCKET
+              value: {{ . }}
+            - name: LIFECYCLE
+              value: {{ $lifecycle | quote }}
+            - name: AWS_SHARED_CREDENTIALS_FILE
+              value: /run/secrets/rustfs/aws-credentials
+            # Any region works for a single-node S3 endpoint; the CLI needs one.
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            # aws-cli writes a cache under $HOME; the non-root user has none.
+            - name: HOME
+              value: /tmp
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            {{- toYaml $restricted | nindent 12 }}
+          volumeMounts:
+            - name: credentials
+              mountPath: /run/secrets/rustfs
+              readOnly: true
+      volumes:
+        - name: credentials
+          secret:
+            secretName: rustfs-credentials
+            items:
+              - key: aws-credentials
+                path: aws-credentials
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-rustfs-clients
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- include "datastores.clients" (dict "root" $ "ns" $ns "cidrs" .allowedCidrs) | trim | nindent 8 }}
+      ports:
+        - { port: 9000, protocol: TCP }
+{{- end }}
+{{- end }}

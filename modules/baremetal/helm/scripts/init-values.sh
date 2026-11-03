@@ -9,8 +9,7 @@
 # Usage (from baremetal/):   make init-values
 #
 # Reads:
-#   terraform outputs   langsmith_helm_values, smithdb_helm_values, features
-#   terraform.tfvars    sizing_profile
+#   terraform outputs   langsmith_helm_values, smithdb_helm_values, values_files
 #   terraform.tfvars    langsmith_admin_email (else infra/.secrets.env INITIAL_ORG_ADMIN_EMAIL)
 #
 # Writes helm/values/ (gitignored, no secrets):
@@ -173,44 +172,19 @@ python3 -I -c 'import json,sys; print(json.dumps({"config": {"initialOrgAdminEma
   "$admin_email" > "$VALUES_DIR/langsmith-values-admin.yaml"
 pass "langsmith-values-admin.yaml (initial org admin)"
 
-# ── Copied once: app sizing for the profile ──────────────────────────────────
-profile="$(_parse_tfvar sizing_profile)"
-profile="${profile:-minimum}"
-# lab uses the dev app sizing (it differs from dev only in its SmithDB tier).
-sizing_source="$profile"
-[[ "$profile" == "lab" ]] && sizing_source="dev"
-sizing_file="$VALUES_DIR/langsmith-values-sizing-$profile.yaml"
-if [[ -f "$sizing_file" ]]; then
-  skip "langsmith-values-sizing-$profile.yaml exists (kept; delete it to reset)"
-else
-  cp "$EXAMPLES_DIR/langsmith-values-sizing-$sizing_source.yaml" "$sizing_file"
-  pass "langsmith-values-sizing-$profile.yaml (from examples/…-$sizing_source.yaml)"
-fi
-
-# ── Copied once: enabled features (same files and order as modules/gcp) ──────
-features_json="$(terraform -chdir="$INFRA_DIR" output -json features)"
-enabled="$(python3 -I -c '
-import json, sys
-f = json.loads(sys.argv[1])
-names = []
-if f.get("deployments"): names.append("agent-deploys")
-for name, file in (("fleet", "fleet"), ("polly", "standalone-polly"), ("insights", "standalone-insights")):
-    if name in f.get("standalone", {}): names.append(file)
-if f.get("sso_oidc"): names.append("sso")
-print(" ".join(names))
-' "$features_json")"
-
-for feature in agent-deploys fleet standalone-polly standalone-insights sso; do
-  file="$VALUES_DIR/langsmith-values-$feature.yaml"
-  if [[ " $enabled " == *" $feature "* ]]; then
-    if [[ -f "$file" ]]; then
-      skip "langsmith-values-$feature.yaml exists (kept)"
-    else
-      cp "$EXAMPLES_DIR/langsmith-values-$feature.yaml" "$file"
-      pass "langsmith-values-$feature.yaml (feature enabled)"
-    fi
+# ── Copied once: app sizing and enabled features, as deploy.sh will layer them ──
+# The files come from Terraform's list (output values_files); each one examples/ holds is copied once.
+values_files="$(terraform -chdir="$INFRA_DIR" output -json values_files | python3 -I -c 'import json, sys; print(" ".join(json.load(sys.stdin)))')"
+for name in $values_files; do
+  source_name="$name"
+  # lab uses the dev app sizing (it differs from dev only in its SmithDB tier).
+  [[ "$name" == "langsmith-values-sizing-lab.yaml" ]] && source_name="langsmith-values-sizing-dev.yaml"
+  [[ -f "$EXAMPLES_DIR/$source_name" ]] || continue
+  if [[ -f "$VALUES_DIR/$name" ]]; then
+    skip "$name exists (kept; delete it to reset)"
   else
-    skip "$feature off"
+    cp "$EXAMPLES_DIR/$source_name" "$VALUES_DIR/$name"
+    pass "$name (from examples/$source_name)"
   fi
 done
 

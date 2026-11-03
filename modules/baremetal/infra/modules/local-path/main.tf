@@ -251,7 +251,7 @@ resource "kubernetes_deployment_v1" "this" {
 # For caches and anything rebuildable.
 resource "kubernetes_storage_class_v1" "delete" {
   metadata {
-    name = "local-path"
+    name = var.storage_class_delete
     annotations = {
       "storageclass.kubernetes.io/is-default-class" = "true"
     }
@@ -268,7 +268,7 @@ resource "kubernetes_storage_class_v1" "delete" {
 # Recover or clean up by hand. Postgres, Redis, and MinIO use this class.
 resource "kubernetes_storage_class_v1" "retain" {
   metadata {
-    name = "local-path-retain"
+    name = var.storage_class_retain
   }
   storage_provisioner    = "rancher.io/local-path"
   reclaim_policy         = "Retain"
