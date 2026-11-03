@@ -1,0 +1,131 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+# No secrets here: the license key, admin password, and generated keys live in
+# infra/.secrets.env (make setup-env).
+#
+# Every value below is an EXAMPLE. Replace node names, sizes and IP addresses
+# with your cluster's.
+
+# ── Required ──────────────────────────────────────────────────────────────────
+
+kubeconfig_path = "~/.kube/config"
+kube_context    = "my-cluster" # required on purpose: never the current context
+
+# Nodes as Kubernetes sees them (the budget gate checks the profile against
+# these). Keys must be the Kubernetes node names. Allocatable values from:
+#   kubectl --context my-cluster get nodes -o custom-columns=NODE:.metadata.name,CPU:.status.allocatable.cpu,MEM:.status.allocatable.memory,EPH:.status.allocatable.ephemeral-storage
+# Roles: worker (default) | control-plane | smithdb-cache | smithdb-compute
+cluster_nodes = {
+  cp-1     = { cpu = 4, memory_gi = 15.5, disk_gi = 200, role = "control-plane" }
+  worker-a = { cpu = 8, memory_gi = 31.0, disk_gi = 400 }
+  worker-b = { cpu = 8, memory_gi = 31.0, disk_gi = 400 }
+  worker-c = { cpu = 8, memory_gi = 31.0, disk_gi = 400 }
+}
+
+# minimum | lab | dev | production | production-large (lab = dev app sizing + SmithDB minimal)
+sizing_profile = "lab"
+
+# Unused addresses on the nodes' subnet, OUTSIDE your DHCP server's pool. Both are
+# needed while install_metallb is true (the default).
+# Envoy Gateway proxy IP (LangSmith front door). MetalLB serves it from its own
+# pool that never auto-assigns, so it must NOT be in metallb_addresses.
+envoy_gateway_lb_ip = "10.20.0.50"
+
+# LoadBalancer IPs MetalLB may hand to other Services on the cluster.
+metallb_addresses = ["10.20.0.51-10.20.0.59"]
+
+# ── Optional: LangSmith ───────────────────────────────────────────────────────
+
+# Hostname for LangSmith. Empty (default) uses http://<envoy_gateway_lb_ip>.
+# langsmith_domain = "langsmith.example.com"
+# The first org admin's email, as on the cloud modules. Empty: make setup-env asks.
+# langsmith_admin_email = "admin@example.com"
+# https when TLS terminates in front of the gateway (e.g. a Cloudflare Tunnel).
+# langsmith_url_scheme = "https"
+# A kubernetes.io/tls Secret in the langsmith namespace for langsmith_domain:
+# adds an HTTPS listener on the module's Gateway.
+# gateway_tls_secret = "langsmith-tls"
+
+# ── Optional: trace store (SMITHDB.md; defaults are SmithDB alone) ──────────
+
+# clickhouse_source             = "in-cluster" # the chart's ClickHouse, for a migration
+# enable_smithdb                = true
+# smithdb_ingestion_enabled     = true         # with ClickHouse on: dual ingest
+# smithdb_migration_enabled     = true         # the backfill Job and its TaskDB
+# smithdb_query_enabled         = true
+# smithdb_migration_parallelism = 1
+# smithdb_tier                  = "small"      # minimal | small | medium; empty: from sizing_profile
+# redis_memory_gi               = 6            # the run buffer's memory, from the load (SIZING.md, Redis); null: the profile's
+# datastore_requests            = { postgres_langsmith = { cpu_m = 100, mem_mi = 4096 } }  # measured under load; {}: the profile's
+# postgres_source               = "external"   # theirs, through postgres_secret (and langsmith-<product>-postgres)
+# redis_source                  = "external"   # theirs, through redis_secret
+# smithdb_metastore_source      = "external"   # theirs, through smithdb_metastore_secret
+# object_store_source           = "external"   # theirs: object_store_endpoint, object_store_buckets, object_store_secret
+# values_local_file             = ""           # the overlay the budget counts over the sizing file; "": helm/values/langsmith-values-local.yaml
+# object_store_gi               = 1800         # the object store's volume, from the retained volume (SIZING.md, Object storage)
+# enable_blob_storage           = true         # large payloads to the blob bucket, not Redis
+# blob_storage_min_size_kb      = 20
+# blob_storage_ttl_days         = { short = 14, long = 400 } # expiry of ttl_s/ and ttl_l/
+
+# ── Optional: Sandboxes and Engine (README, "Sandboxes and Engine") ──────────
+
+# enable_sandboxes             = true
+# sandbox_hosts                = ["worker-c"]           # amd64 with KVM, TUN and FUSE; tainted for sandboxes only
+# sandbox_source_cidrs         = ["10.20.0.13/32", "10.42.0.0/16"] # each sandbox node, and the pod CIDR
+# sandbox_juicefs_cache_gi     = 50
+# enable_engine                = true                   # needs Sandboxes, https and langsmith_domain
+# engine_sandbox_tenant_id     = ""                     # required with more than one shared organization
+# engine_intelligence_base_url = "https://beacon.langchain.com/intelligence"
+# Engine through your own LLM gateway (chart 0.17.31+; ENGINE.md): the URL of each API it serves, https only.
+# engine_gateway_anthropic_base_url = ""                 # Engine calls <url>/v1/messages
+# engine_gateway_openai_base_url    = ""                 # Engine calls <url>/responses
+# engine_gateway_auth_header        = ""                 # default: Authorization: Bearer <key>
+
+# ── Optional: features (same flags as the cloud modules; all default false) ──
+
+# enable_deployments         = true # LangGraph Platform Deployments (+ KEDA)
+# expected_agent_deployments = 1    # budget reserve per agent deployment (0-20)
+# enable_fleet               = true # Fleet (replaces Agent Builder): db langsmith_fleet, Redis DB 1
+# enable_standalone_polly    = true # db langsmith_polly, Redis DB 2
+# enable_standalone_insights = true # db langsmith_insights, Redis DB 3
+# enable_sso_oidc            = true # enable only after the first admin login works
+# enable_usage_telemetry     = true
+
+# ── Optional: Cloudflare Tunnel (public HTTPS without opening inbound ports) ─
+
+# enable_cloudflare_tunnel = true
+# Token: export TF_VAR_cloudflare_tunnel_token=... (never put it in this file)
+
+# ── Optional: budget tuning ───────────────────────────────────────────────────
+
+# node_reserved     = { cpu = 0.5, memory_gi = 2 } # per worker, for OS/kubelet/CNI
+# max_request_ratio = 0.7                          # share of capacity requests may use
+
+# ── Optional: platform ────────────────────────────────────────────────────────
+
+# Each false where the cluster already has one.
+# install_metrics_server = false
+# install_metallb        = false
+# install_local_path     = false
+# storage_class          = "my-storage-class"                       # with install_local_path = false
+# install_envoy_gateway  = false
+# existing_gateway       = { name = "my-gateway", namespace = "gateways" } # with install_envoy_gateway = false
+
+# metrics_server_kubelet_insecure_tls = true # false after enabling kubelet serverTLSBootstrap
+# metallb_l2_node_selector            = { "node-role.kubernetes.io/worker" = "" }
+# envoy_proxy_node_selector           = { "kubernetes.io/hostname" = "node1" }  # beside the node answering for the IP
+# local_path_node_path                = "/opt/local-path-provisioner"
+# envoy_gateway_route_timeout         = "60s"
+
+# ── Optional: pinned versions (change deliberately) ───────────────────────────
+
+# metrics_server_chart_version = "3.14.0"
+# metallb_chart_version        = "0.16.1"
+# envoy_gateway_chart_version  = "v1.9.2"
+# keda_chart_version           = "2.21.0"
+# local_path_image             = "docker.io/rancher/local-path-provisioner:v0.0.37"
+# local_path_helper_image      = "docker.io/library/busybox:1.37.0"
+# postgres_image               = "docker.io/library/postgres:18.6"
+# redis_image                  = "docker.io/library/redis:7.4.11"
+# rustfs_image                 = "docker.io/rustfs/rustfs:1.0.1"
+# aws_cli_image                = "docker.io/amazon/aws-cli:2.37.8"
+# cloudflared_image            = "docker.io/cloudflare/cloudflared:2026.10.0"

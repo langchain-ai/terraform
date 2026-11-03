@@ -1,0 +1,22 @@
+{{- if .Values.lanRoute.enabled }}
+# Catch-all for the gateway's LAN IP once LangSmith's own HTTPRoute is bound to
+# a domain. No hostnames: matches any Host the more specific chart route
+# doesn't. The backend Service comes from the LangSmith release; until it
+# exists the route reports ResolvedRefs=False and serves 500s.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: langsmith-lan
+  namespace: {{ .Values.gatewayNamespace }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gatewayName }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ .Values.lanRoute.backendService }}
+          port: {{ .Values.lanRoute.backendPort }}
+{{- end }}

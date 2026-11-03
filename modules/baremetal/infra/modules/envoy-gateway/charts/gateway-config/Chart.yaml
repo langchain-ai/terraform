@@ -1,0 +1,5 @@
+apiVersion: v2
+name: gateway-config
+description: EnvoyProxy, GatewayClass, and Gateway for the bare-metal module.
+type: application
+version: 0.2.0
