@@ -1,16 +1,48 @@
 [
   {
-    "Sid": "ECRDeploymentBuildsRepositoryManage",
+    "Sid": "ECRDeploymentBuildsRepositoryCreate",
+    "Effect": "Allow",
+    "Action": ["ecr:CreateRepository", "ecr:TagResource"],
+    "Resource": "arn:aws:ecr:*:${account_id}:repository/*-smith-deployment-builds",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ECRDeploymentBuildsRepositoryRead",
     "Effect": "Allow",
     "Action": [
-      "ecr:CreateRepository",
       "ecr:DescribeRepositories",
-      "ecr:TagResource",
-      "ecr:UntagResource",
       "ecr:ListTagsForResource",
-      "ecr:PutLifecyclePolicy",
       "ecr:GetLifecyclePolicy"
     ],
     "Resource": "arn:aws:ecr:*:${account_id}:repository/*-smith-deployment-builds"
+  },
+  {
+    "Sid": "ECRDeploymentBuildsRepositoryManage",
+    "Effect": "Allow",
+    "Action": ["ecr:TagResource", "ecr:PutLifecyclePolicy"],
+    "Resource": "arn:aws:ecr:*:${account_id}:repository/*-smith-deployment-builds",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ECRDeploymentBuildsRepositoryUntag",
+    "Effect": "Allow",
+    "Action": ["ecr:UntagResource"],
+    "Resource": "arn:aws:ecr:*:${account_id}:repository/*-smith-deployment-builds",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      },
+      "ForAllValues:StringNotEquals": {
+        "aws:TagKeys": ["managed_by"]
+      }
+    }
   }
 ]
