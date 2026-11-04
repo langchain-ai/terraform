@@ -10,6 +10,7 @@ locals {
   ec2_eni_statements                    = jsondecode(templatefile("${path.module}/policies/ec2-eni.json", local.policy_template_vars))
   eks_statements                        = jsondecode(templatefile("${path.module}/policies/eks.json", local.policy_template_vars))
   elasticache_statements                = jsondecode(templatefile("${path.module}/policies/elasticache.json", local.policy_template_vars))
+  ecr_statements                        = jsondecode(templatefile("${path.module}/policies/ecr.json", local.policy_template_vars))
   elbv2_statements                      = jsondecode(templatefile("${path.module}/policies/elbv2.json", local.policy_template_vars))
   eventbridge_statements                = jsondecode(templatefile("${path.module}/policies/eventbridge.json", local.policy_template_vars))
   iam_statements                        = jsondecode(templatefile("${path.module}/policies/iam.json", local.policy_template_vars))
@@ -60,7 +61,8 @@ locals {
     elbv2                      = concat(local.elbv2_statements, local.delete_statements_for_policy.elbv2)
     data                       = concat(local.rds_statements, local.secrets_manager_statements, local.kms_statements, local.delete_statements_for_policy.data, local.delete_statements_for_policy.storage)
     storage                    = concat(local.elasticache_statements, local.s3_statements)
-    lambda                     = concat(local.lambda_statements, local.eventbridge_statements, local.delete_statements_for_policy.lambda)
+    # ECR rides along here because the role is at IAM's default limit of 10 attached managed policies.
+    lambda = concat(local.lambda_statements, local.eventbridge_statements, local.ecr_statements, local.delete_statements_for_policy.lambda)
     dns = concat(
       local.route53_statements,
       local.route53_public_statements,
