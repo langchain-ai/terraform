@@ -105,9 +105,9 @@ Set `reduced_access = false` again before an upgrade that adds a role assignment
 > **CAUTION:** Do not remove the entry from `data_planes` before you delete the data plane in LangSmith. LangSmith needs its role assignments to delete the data plane resources.
 
 1. If the data plane has `reduced_access = true`, set it to `false` and run `terraform apply`. Wait 5 minutes for Azure to apply the role change.
-2. Delete the data plane in LangSmith. LangSmith deletes the AKS cluster, PostgreSQL, Redis, the sandbox storage, the network, and the private DNS zones. It keeps the resource group, the Key Vault, and the Blob storage accounts with trace and SmithDB data. A new data plane with the same name reuses them.
-3. When you no longer need the retained data, delete the Blob storage accounts in the resource group.
-4. Remove the entry from `data_planes` and run `terraform apply`. Terraform deletes the resource group, the Key Vault, the custom role, and the role assignments. With the default `features {}`, the AzureRM provider refuses to delete a resource group that still contains resources Terraform does not manage, such as the retained storage accounts.
+2. Delete the data plane in LangSmith. LangSmith deletes the AKS cluster, PostgreSQL, Redis, the sandbox storage, the network, and the private DNS zones. It keeps the resource group, the Key Vault, the Blob storage accounts with trace and SmithDB data, and, if in-cluster deployment builds were on, the container registry with the built images. A new data plane with the same name reuses them.
+3. When you no longer need the retained data, delete the Blob storage accounts and the container registry in the resource group.
+4. Remove the entry from `data_planes` and run `terraform apply`. Terraform deletes the resource group, the Key Vault, the custom role, and the role assignments. With the default `features {}`, the AzureRM provider refuses to delete a resource group that still contains resources Terraform does not manage, such as the retained storage accounts and registry.
 
 ## Inputs
 
