@@ -116,6 +116,14 @@ locals {
     Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = context } }
   }] : statement if length(var.cmk_key_arns) > 0] }
   cmk_statements = merge(local.cmk_bucket_statements, {
+    # With S3 Bucket Keys the encryption context is the bucket ARN.
+    workload-iam-role = concat(local.cmk_bucket_statements["workload-iam-role"], [for statement in [{
+      Sid       = "ReadMigrationInventoryKMS"
+      Effect    = "Allow"
+      Action    = ["kms:Decrypt"]
+      Resource  = var.cmk_key_arns
+      Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = ["arn:${local.partition}:s3:::*-smithdb-blob", "arn:${local.partition}:s3:::*-smithdb-blob/byoc-migration/*"] } }
+    }] : statement if length(var.cmk_key_arns) > 0])
     smithdb-iam-role = concat(local.cmk_bucket_statements["smithdb-iam-role"], [for statement in [{
       Sid       = "ReadLangsmithBlobKMS"
       Effect    = "Allow"
