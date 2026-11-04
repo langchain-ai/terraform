@@ -8,8 +8,7 @@ config:
   deployment:
     # Enables the Deployments nav item in the UI. Also requires config.hostname to be
     # set in langsmith-values-{env}.yaml — find the ALB hostname with:
-    #   kubectl get ingress -n langsmith langsmith-ingress \
-    #     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+    #   terraform -chdir=infra output -raw alb_dns_name
     enabled: true
     # Set to true if TLS is enabled (tls_certificate_source = "acm" or "letsencrypt").
     # false = HTTP-only ALB (tls_certificate_source = "none"). The operator uses this to

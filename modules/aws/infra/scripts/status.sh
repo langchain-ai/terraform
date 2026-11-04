@@ -427,19 +427,11 @@ else
     fi
   fi
 
-  # Ingress / ALB
-  _alb_host=$(kubectl get ingress -n "$_NAMESPACE" langsmith-ingress \
-    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null) || _alb_host=""
+  _alb_host=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || _alb_host=""
   if [[ -n "$_alb_host" ]]; then
-    pass "Ingress ALB: ${_alb_host}"
+    pass "Terraform ALB: ${_alb_host}"
   else
-    _ingress_exists=$(kubectl get ingress -n "$_NAMESPACE" langsmith-ingress &>/dev/null && echo "yes" || echo "no")
-    if [[ "$_ingress_exists" == "yes" ]]; then
-      warn "Ingress exists but ALB hostname not yet assigned (~2 min to provision)"
-      action "Wait 2 min, then re-run make deploy to pick up the hostname"
-    else
-      skip "No ingress found"
-    fi
+    warn "No Terraform ALB output available"
   fi
 fi
 

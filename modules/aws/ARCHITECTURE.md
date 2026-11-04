@@ -43,7 +43,7 @@ LangSmith on AWS is deployed in three passes.
 │    • postgres       — metadata store (in-cluster or RDS)                     │
 │                                                                              │
 │  Storage:  RDS PostgreSQL → metadata / S3 → trace blobs (VPC endpoint)      │
-│  Ingress:  AWS ALB | NGINX | Envoy Gateway | Istio  (see Ingress Options)    │
+│  Ingress:  Terraform ALB → Envoy (default), Istio, or langsmith-frontend (NGINX)    │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  Pass 1 — AWS Infrastructure                                                 │
 │                                                                              │
@@ -55,7 +55,7 @@ LangSmith on AWS is deployed in three passes.
 │  Add-ons:    ALB controller + EBS CSI driver + metrics server               │
 │  Bootstrap:  k8s-bootstrap (KEDA, ESO, Envoy Gateway),                      │
 │              cert-manager (standalone, active when tls=letsencrypt)         │
-│  Ingress:    ALB → Envoy Gateway (default), or ALB Ingress, Istio, NGINX    │
+│  Ingress:    Terraform ALB → Envoy (default), Istio, or langsmith-frontend (NGINX)    │
 │  Opt-in:     Network Firewall (FQDN-based egress filtering)                 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -76,13 +76,13 @@ LangSmith on AWS is deployed in three passes.
 
 ## Network Topology
 
-**Default (ALB ingress):**
+**ALB only:**
 ```
 Internet
     │
     ▼
 AWS Application Load Balancer (ALB — port 80 or 443)
-    │  TLS via ACM / Let's Encrypt (optional)
+    │  TLS via ACM (optional)
     ▼
 EKS Cluster (private subnets)
   ├── kube-system namespace
@@ -97,12 +97,12 @@ EKS Cluster (private subnets)
                     └── S3 bucket ──────────────► VPC Gateway Endpoint (no public route)
 ```
 
-**Envoy Gateway (opt-in, `enable_envoy_gateway = true`):**
+**Envoy Gateway (default and recommended):**
 ```
 Internet
     │
     ▼
-AWS Network Load Balancer (NLB — ACM TLS termination at port 443)
+Terraform Application Load Balancer (ACM TLS at port 443)
     │
     ▼
 envoy-gateway-system namespace
@@ -144,45 +144,31 @@ route and never touches the firewall.
 
 ## Ingress Options
 
-Four mutually exclusive ingress options are supported. The choice determines whether
-split dataplane (agent pods in a separate namespace) is possible:
+Terraform owns one ALB in all three modes. The AWS Load Balancer Controller
+maintains target registrations through TargetGroupBindings, without provisioning
+another application load balancer.
 
-| Option | Variable | Split dataplane | Traffic path | When to use |
-|---|---|---|---|---|
-| **ALB (AWS LBC)** | *(default)* | No | `ALB → frontend NodePort` | Default. Single-namespace deployments, POC, simplest TLS via ACM. |
-| **NGINX Ingress** | `enable_nginx_ingress = true` | No | `ALB → TGB → NGINX controller → frontend ClusterIP` | When NGINX is already the standard in your org. ALB TGB wires the pre-provisioned ALB target group to the NGINX pods. |
-| **Envoy Gateway** | `enable_envoy_gateway = true` | Yes | `ALB → TGB → Envoy proxy pod:10080 → HTTPRoute → services` | Cross-namespace HTTPRoute routing. Recommended for split dataplane on new AWS deployments. |
-| **Istio** | `enable_istio_gateway = true` | Yes | `ALB → TGB → istio-ingressgateway:80 → VirtualService → services` | For clusters with Istio already installed or when mTLS mesh is required. Istio 1.23+ binds port 80 directly via `NET_BIND_SERVICE`. |
+| Option | Configuration | Traffic path | Scope |
+| --- | --- | --- | --- |
+| **Envoy Gateway (default, recommended)** | Leave gateway flags unset | ALB → Envoy pods:10080 → HTTPRoute → services | Core application and dynamic agent routing |
+| Istio Gateway | `enable_istio_gateway = true` | ALB → Istio pods:80 → VirtualService → services | Core application and dynamic agent routing |
+| No gateway | `enable_envoy_gateway = false`, other controllers disabled | ALB → langsmith-frontend (NGINX):8080 → application services | Sandboxes and Engine; ACM or HTTP-only |
 
-### Split Dataplane — Why ALB Cannot Support It
+No-gateway mode disables chart Ingress/Gateway resources. `make deploy` discovers
+the frontend ClusterIP Service and creates a TargetGroupBinding with a Service
+owner reference. This accommodates Helm name overrides and removes the binding
+when the Service is deleted. Terraform configures the frontend target group,
+`/health` check, and node security-group access from the ALB on port 8080.
 
-Standard Kubernetes Ingress is namespace-scoped. The ALB controller can only route to
-services within the same namespace as the Ingress resource. Agent pods in `langsmith-agents`
-are invisible to an Ingress in `langsmith`.
+### Dynamic routing
 
-Envoy Gateway and Istio both support cross-namespace routing via the Kubernetes Gateway API
-(HTTPRoutes) and VirtualServices respectively.
+langsmith-frontend (NGINX) handles application APIs, Sandboxes, and Engine. Agent deployment
+endpoints use separate HTTPRoutes or VirtualServices and require Envoy or Istio.
+Sandbox service URLs need additional wildcard routing.
 
-### ALB + Envoy Gateway (chained pattern)
-
-When a customer has an existing ALB with SSO (Okta/Cognito), WAF, and TLS configured,
-Envoy Gateway is added behind it rather than replacing it:
-
-```
-Internet
-    │
-    ▼
-ALB ← unchanged: WAF, SSO (Okta/Cognito OIDC), TLS, DNS
-    │
-    ▼  (ALB target group retargeted to Envoy NLB — only change)
-Envoy Gateway NLB (internal-scheme, auto-provisioned by k8s-bootstrap)
-    │
-    ├── HTTPRoute → langsmith ns        (control plane)
-    └── HTTPRoute → langsmith-agents ns (agent pods — split dataplane)
-```
-
-See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the Helm values
-and `doc_use_cases/enable_split_dataplane_aws/` for the full split dataplane guide.
+ALB DNS, certificates, client CIDRs, and supplied security-group attachment have
+one Terraform owner in every mode. Gateway proxy Services remain ClusterIP, so
+the ALB forwards directly to gateway pod IPs.
 
 ---
 
@@ -325,21 +311,21 @@ Envoy Gateway is an opt-in alternative to the ALB ingress controller, enabled by
 | GatewayClass | `eg` | cluster-scoped |
 | Gateway | `langsmith-gateway` | `langsmith` |
 
-The GatewayClass is created explicitly (not via the certgen job) to ensure it persists across re-applies. The Gateway exposes listeners on port 80 (HTTP) and port 443 (HTTP, for ACM TLS termination at NLB) with `allowedRoutes.namespaces.from: All` — enabling HTTPRoutes from any namespace to attach.
+The GatewayClass is created explicitly (not via the certgen job) to ensure it persists across re-applies. The Gateway exposes listeners on port 80 (HTTP) and port 443 (HTTP, behind ACM TLS termination at the ALB) with `allowedRoutes.namespaces.from: All` — enabling HTTPRoutes from any namespace to attach.
 
 ### How traffic flows
 
 ```
 Client
   │
-  ▼ NLB (AWS NLB created by Envoy Gateway for the Gateway resource)
-  │  ACM TLS termination at port 443 (annotated by deploy.sh)
+  ▼ Terraform-managed ALB
+  │  ACM TLS termination at port 443
   ▼
 Envoy proxy pod (envoy-gateway-system namespace)
   │
   ▼ HTTPRoute (langsmith namespace) — created by LangSmith Helm chart when gateway.enabled: true
   │
-  ▼ langsmith-frontend:80
+  ▼ langsmith-frontend (NGINX)
 ```
 
 ### Multi-namespace dataplane support
@@ -374,7 +360,8 @@ aws eks describe-cluster --name <cluster-name> --query "cluster.status"
 kubectl get nodes -o wide
 
 # ALB status
-kubectl get ingress -n langsmith
+terraform -chdir=infra output -raw alb_dns_name
+kubectl get targetgroupbindings -A
 
 # RDS status
 aws rds describe-db-instances \

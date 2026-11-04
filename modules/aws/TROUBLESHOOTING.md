@@ -73,11 +73,11 @@ aws eks associate-access-policy --cluster-name <cluster-name> --principal-arn <r
 
 ---
 
-### Issue #3 — ALB not created after Helm install
+### Issue #3 — ALB has no healthy application targets
 
-**Symptom:** `kubectl get ingress -n langsmith` shows no ADDRESS after several minutes.
+**Symptom:** The Terraform ALB exists but returns 503 after application deployment.
 
-**Cause:** AWS Load Balancer Controller is not running or lacks the required IRSA permissions, the Terraform-provisioned ALB is not being referenced correctly, or `alb_scheme = "internal"` is set (internal ALBs won't have a public address — see Issue #14).
+**Cause:** The target binding is missing, pods are unhealthy, or AWS Load Balancer Controller lacks permission to register targets. In no-gateway mode, run `make deploy` to create the frontend binding after Helm installs its Service.
 
 **Fix:**
 
@@ -365,7 +365,7 @@ The endpoint update takes a few minutes, after which the previously failed resou
 
 ### Issue #14 — ALB has no public address (internal scheme)
 
-**Symptom:** `kubectl get ingress -n langsmith` shows an ADDRESS, but the hostname resolves only within the VPC. Browser access from outside the network fails.
+**Symptom:** The Terraform ALB hostname resolves only within the VPC. Browser access from outside the network fails.
 
 **Cause:** `alb_scheme = "internal"` was set in `terraform.tfvars`. Internal ALBs are only reachable from within the VPC (via VPN, peering, or PrivateLink).
 
@@ -383,60 +383,32 @@ terraform apply -var-file=terraform.tfvars
 
 ---
 
-### Issue #15 — ALB hostname changed after ingress recreation
+### Issue #15 — ALB endpoint or target registration does not match the application
 
-**Symptom:** LangSmith URL stops working. Agent deployments stuck in DEPLOYING state.
-DNS records or bookmarks point to an old ALB hostname that no longer resolves.
+Terraform owns the ALB in every routing mode. Helm uninstall does not recreate
+it. Do not look for an ALB hostname on an application Ingress or gateway Service.
 
-**Cause:** Deleting the Kubernetes ingress (via `helm uninstall`, `kubectl delete ingress`,
-or namespace deletion) deprovisions the ALB. When the ingress is recreated, a new ALB with
-a different hostname is issued. The `config.deployment.url` in the Helm values still points
-to the old hostname, so the operator's health checks fail and deployments stay stuck.
+Check the Terraform endpoint and the bindings:
 
-This also happens if the ALB controller creates a new ALB instead of reusing the
-existing one. The `group.name` annotation is what keeps the controller reusing a
-single stable ALB across ingress reconciliations. There is no supported annotation
-for binding an ingress to a pre-provisioned ALB — `load-balancer-arn` is not a real
-controller annotation, it was silently ignored, and setting it produced a second,
-orphaned ALB. `init-values.sh` no longer emits it.
-
-**Prevention:**
-- Ensure the `group.name` annotation is set (`init-values.sh` does this automatically)
-- Never delete the ingress unless you plan to update all hostname-dependent config
-- On Helm 4, avoid `helm rollback` without `--server-side=false`: the ingress SSA
-  conflict can trigger a delete/recreate cycle. Helm 3 has no server-side apply, so
-  it is unaffected and rejects the flag.
-
-**Fix:**
 ```bash
-# 1. Check what hostname the ingress currently has
-kubectl get ingress langsmith-ingress -n langsmith \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+terraform -chdir=infra output -raw alb_dns_name
+kubectl get targetgroupbindings -A
+```
 
-# 2. Check what Terraform expects
-terraform output alb_dns_name
+For direct frontend routing, `make deploy` installs the binding after the
+frontend Service exists. Its owner reference removes the binding when that
+Service is deleted. If infrastructure or the application was recreated, refresh
+values and redeploy:
 
-# 3. If they differ, re-run init-values.sh to refresh the hostname and redeploy
+```bash
 make init-values
 make deploy
 ```
 
-**On deployments created before `load-balancer-arn` was removed:** the printed URL
-returns `404 Not Found` from `awselb/2.0` while every pod is `Running`.
-`kubectl describe ingress langsmith-ingress -n langsmith` shows two ALB hostnames —
-the Terraform-provisioned one carrying the host rule but no listener rules, and the
-controller-created `k8s-<group>-<id>` one carrying the listener rules. Confirm the
-workload is healthy, then repoint at the controller-owned ALB and delete the orphan.
-
-```bash
-# App is fine if this serves the UI — the problem is at the ALB/ingress layer
-kubectl port-forward svc/langsmith-frontend -n langsmith 8080:80
-
-# Identify which ALB actually has the rules
-curl -I --max-time 10 -H "Host: <ingress-host-rule>" http://<alb-dns-name>/
-
-make init-values && make deploy
-```
+Check target health using `frontend_target_group_arn` for no-gateway mode or
+`gateway_target_group_arn` for Envoy/Istio. The target ports are 8080 for frontend
+NGINX, 10080 for Envoy, and 80 for Istio. Check pod readiness, ALB-to-node
+security-group rules, and controller logs if targets remain unhealthy.
 
 ---
 

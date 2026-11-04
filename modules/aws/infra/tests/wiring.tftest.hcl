@@ -656,3 +656,22 @@ run "in_cluster_fleet_storage_plans_no_shared_credentials" {
     error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
   }
 }
+
+run "direct_frontend_opens_only_its_pod_port" {
+  command = plan
+  variables { enable_envoy_gateway = false }
+
+  assert {
+    condition     = length(aws_vpc_security_group_ingress_rule.alb_to_frontend) == 1 && aws_vpc_security_group_ingress_rule.alb_to_frontend[0].from_port == 8080 && aws_vpc_security_group_ingress_rule.alb_to_frontend[0].to_port == 8080 && length(aws_vpc_security_group_ingress_rule.alb_to_envoy) == 0 && length(aws_vpc_security_group_ingress_rule.alb_to_istio) == 0
+    error_message = "Direct ALB traffic must be admitted to the frontend pod port."
+  }
+}
+
+run "default_envoy_has_no_direct_frontend_access" {
+  command = plan
+
+  assert {
+    condition     = local.enable_envoy_gateway && length(aws_vpc_security_group_ingress_rule.alb_to_frontend) == 0 && length(aws_vpc_security_group_ingress_rule.alb_to_envoy) == 1
+    error_message = "Envoy must remain the default without also opening direct frontend access."
+  }
+}

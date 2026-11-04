@@ -2,9 +2,8 @@
 # Terraform output before the Helm chart is deployed.
 # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html
 #
-# The AWS Load Balancer Controller takes ownership of listener rules and target groups
-# via the Ingress annotation: alb.ingress.kubernetes.io/load-balancer-arn
-# https://kubernetes-sigs.github.io/aws-load-balancer-controller/
+# Terraform owns listeners and target groups in every mode. TargetGroupBindings
+# let the AWS Load Balancer Controller register pod IPs without creating an ALB.
 
 terraform {
   required_providers {
@@ -199,14 +198,34 @@ resource "aws_lb_target_group" "gateway" {
   tags = var.tags
 }
 
-# ── Listeners ─────────────────────────────────────────────────────────────────
-# Traffic routing by mode:
-#   ALB mode (no gateway):  HTTP:80 → fixed-response 404 (ALB Ingress Controller adds rules)
-#                           HTTP:80 → redirect HTTPS (when tls=acm)
-#                           HTTPS:443 → fixed-response 404 (ALB Ingress Controller adds rules)
-#   Gateway mode:           HTTP:80 → forward to gateway TG (Envoy/Istio proxy pods)
-#                           HTTP:80 → redirect HTTPS (when tls=acm)
-#                           HTTPS:443 → forward to gateway TG (when tls=acm + gateway)
+# langsmith-frontend (NGINX) already routes the core application's UI and API requests.
+# Its binding is installed after the application Helm release creates the
+# Service; gateway bindings remain part of infrastructure bootstrap.
+resource "aws_lb_target_group" "frontend" {
+  count = local.gateway_enabled ? 0 : 1
+
+  name_prefix = substr("${var.name}-fe-", 0, 6)
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    path    = "/health"
+    port    = "traffic-port"
+    matcher = "200"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = var.tags
+}
+
+locals {
+  application_target_group_arn = local.gateway_enabled ? aws_lb_target_group.gateway[0].arn : aws_lb_target_group.frontend[0].arn
+}
 
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
@@ -214,12 +233,7 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    # Priority: ACM redirect > gateway forward > ALB-controller (fixed-response placeholder)
-    type = (
-      var.tls_certificate_source == "acm" ? "redirect" :
-      local.gateway_enabled ? "forward" :
-      "fixed-response"
-    )
+    type = var.tls_certificate_source == "acm" ? "redirect" : "forward"
 
     dynamic "redirect" {
       for_each = var.tls_certificate_source == "acm" ? [1] : []
@@ -230,24 +244,12 @@ resource "aws_lb_listener" "http" {
       }
     }
 
-    # gateway_enabled + no ACM: ALB forwards directly to Envoy/Istio proxy pods.
     dynamic "forward" {
-      for_each = var.tls_certificate_source != "acm" && local.gateway_enabled ? [aws_lb_target_group.gateway[0].arn] : []
+      for_each = var.tls_certificate_source != "acm" ? [local.application_target_group_arn] : []
       content {
         target_group {
           arn = forward.value
         }
-      }
-    }
-
-    # ALB-only mode (no gateway, no ACM): placeholder 404 — the ALB Ingress Controller
-    # adds real forwarding rules via Ingress resource annotations.
-    dynamic "fixed_response" {
-      for_each = var.tls_certificate_source != "acm" && !local.gateway_enabled ? [1] : []
-      content {
-        content_type = "text/plain"
-        message_body = "Not Found"
-        status_code  = "404"
       }
     }
   }
@@ -263,25 +265,10 @@ resource "aws_lb_listener" "https" {
   certificate_arn   = var.acm_certificate_arn
 
   default_action {
-    # Gateway mode with ACM: forward HTTPS to the Envoy/Istio proxy.
-    # ALB-only mode: placeholder 404 — the ALB Ingress Controller adds real rules.
-    type = local.gateway_enabled ? "forward" : "fixed-response"
-
-    dynamic "forward" {
-      for_each = local.gateway_enabled ? [aws_lb_target_group.gateway[0].arn] : []
-      content {
-        target_group {
-          arn = forward.value
-        }
-      }
-    }
-
-    dynamic "fixed_response" {
-      for_each = !local.gateway_enabled ? [1] : []
-      content {
-        content_type = "text/plain"
-        message_body = "Not Found"
-        status_code  = "404"
+    type = "forward"
+    forward {
+      target_group {
+        arn = local.application_target_group_arn
       }
     }
   }

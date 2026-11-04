@@ -37,3 +37,8 @@ output "gateway_target_group_arn" {
   description = "ARN of the target group for gateway proxy (Envoy or Istio). Null when gateway mode is not enabled."
   value       = local.gateway_enabled ? aws_lb_target_group.gateway[0].arn : null
 }
+
+output "frontend_target_group_arn" {
+  description = "Frontend target group ARN bound after application deployment; null when a gateway is enabled."
+  value       = local.gateway_enabled ? null : aws_lb_target_group.frontend[0].arn
+}

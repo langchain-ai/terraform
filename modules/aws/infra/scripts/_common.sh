@@ -9,7 +9,7 @@
 # Usage: source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 #
 # Provides:
-#   _parse_tfvar <key>        — Read a value from terraform.tfvars
+#   _parse_tfvar <key>        — Read a value, honoring TFVARS_OVERRIDE_FILE
 #   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
 #   _use_cluster_kubeconfig <cluster> <region> — Export KUBECONFIG for one cluster
 #   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
@@ -30,9 +30,33 @@ INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
 _parse_tfvar() {
   local key="$1"
   local tfvars_file="${INFRA_DIR}/terraform.tfvars"
-  local raw val
-  raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
+  local raw="" val
+  # Permutation overrides take the same precedence as Terraform auto.tfvars.
+  if [[ -n "${TFVARS_OVERRIDE_FILE:-}" ]]; then
+    raw=$(grep -E "^\s*${key}\s*=" "$TFVARS_OVERRIDE_FILE" 2>/dev/null | head -1) || raw=""
+    [[ -z "$raw" ]] || tfvars_file="$TFVARS_OVERRIDE_FILE"
+  fi
+  if [[ -z "$raw" ]]; then
+    raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
+  fi
   [[ -n "$raw" ]] || return 1
+  # Lists are used by the CIDR and subnet prompts. Preserve every entry;
+  # the quoted-scalar branch below would otherwise keep only the final element.
+  if [[ "$raw" =~ =[[:space:]]*\[ ]]; then
+    raw=$(awk -v key="$key" '
+      !found && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { found = 1 }
+      found {
+        sub(/#.*/, "")
+        print
+        if (index($0, "]")) exit
+      }
+    ' "$tfvars_file")
+    val=$(printf '%s\n' "$raw" | sed 's/^[^=]*=//' |
+      tr -d '[:space:]"[]' | sed 's/,$//')
+    [[ -n "$val" ]] || return 1
+    printf '%s\n' "$val"
+    return
+  fi
   # Quoted string: key = "value"
   val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
   if [[ -z "$val" ]]; then

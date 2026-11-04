@@ -13,7 +13,7 @@
 # Where am I?        make status
 # Terraform flags:   make plan ARGS="-target=module.eks"   (see make help)
 
-.PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
+.PHONY: help quickstart test-quickstart test-routing status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
         init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end sso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
@@ -58,6 +58,9 @@ quickstart: ## Interactive setup wizard — generates terraform.tfvars
 
 test-quickstart: ## Test QuickStart Route 53 choices and update-mode defaults (no AWS calls)
 	$(INFRA_DIR)/scripts/test-quickstart-dns.sh
+
+test-routing: ## Test direct frontend target registration (no AWS calls)
+	python3 $(HELM_DIR)/scripts/test-frontend-target-group.py
 
 # ── Pass 1: Infrastructure ────────────────────────────────────────────────────
 
@@ -165,7 +168,7 @@ uninstall: ## Uninstall LangSmith Helm release
 clean: ## Remove local generated files (run after make destroy and make purge-secrets)
 	$(INFRA_DIR)/scripts/clean.sh
 
-test-e2e: ## Run E2E gateway tests (ALB or Envoy Gateway)
+test-e2e: ## Check live Terraform ALB routing and application health
 	$(HELM_DIR)/scripts/test-e2e.sh
 
 test-permutations: ## Run permutation tests sequentially on current cluster (ARGS="1 2 5" for subset)
