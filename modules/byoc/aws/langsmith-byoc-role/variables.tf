@@ -136,6 +136,17 @@ variable "byoiam_karpenter_controller_policy_arn" {
   }
 }
 
+variable "cmk_key_arns" {
+  description = "Optional. Customer-managed KMS key ARNs that new LangSmith data plane resources are encrypted with. The role may use them only through the AWS services that store data plane data. The key owner must also allow this role on each key."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.cmk_key_arns) <= 5 && alltrue([for arn in var.cmk_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Provide at most five KMS key ARNs."
+  }
+}
+
 variable "allow_self_hosted_migration_permissions" {
   description = "Self-hosted to BYOC migration only. Grants permissions needed for the migration. Enable for the duration of a self-hosted to BYOC migration."
   type        = bool

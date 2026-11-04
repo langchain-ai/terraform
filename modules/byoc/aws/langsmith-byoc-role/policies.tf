@@ -179,3 +179,67 @@ resource "aws_iam_role_policy" "byoiam_custom_names" {
     Statement = local.byoiam_custom_name_statements
   })
 }
+
+locals {
+  cmk_via_services  = [for service in ["ec2", "ecr", "eks", "elasticache", "lambda", "network-firewall", "rds", "secretsmanager"] : "${service}.*.amazonaws.com"]
+  eks_log_group_arn = "arn:aws:logs:*:${local.account_id}:log-group:/aws/eks/*-smith-eks/cluster"
+
+  cmk_statements = [for statement in [
+    {
+      Sid      = "CMKDescribe"
+      Effect   = "Allow"
+      Action   = ["kms:DescribeKey"]
+      Resource = var.cmk_key_arns
+    },
+    {
+      Sid       = "CMKUseViaServices"
+      Effect    = "Allow"
+      Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKeyWithoutPlaintext"]
+      Resource  = var.cmk_key_arns
+      Condition = { StringLike = { "kms:ViaService" = local.cmk_via_services } }
+    },
+    {
+      Sid      = "CMKGrantsViaServices"
+      Effect   = "Allow"
+      Action   = ["kms:CreateGrant", "kms:ListGrants", "kms:RetireGrant"]
+      Resource = var.cmk_key_arns
+      Condition = {
+        StringLike = { "kms:ViaService" = local.cmk_via_services }
+        Bool       = { "kms:GrantIsForAWSResource" = "true" }
+      }
+    },
+    {
+      # EKS creates its control-plane log group unencrypted, so Crossplane
+      # creates it first with the key.
+      Sid      = "CMKEKSControlPlaneLogGroup"
+      Effect   = "Allow"
+      Action   = ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:AssociateKmsKey", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource"]
+      Resource = [local.eks_log_group_arn]
+    },
+    {
+      Sid      = "CMKDescribeLogGroups"
+      Effect   = "Allow"
+      Action   = ["logs:DescribeLogGroups"]
+      Resource = ["arn:aws:logs:*:${local.account_id}:log-group:*"]
+    },
+    {
+      Sid      = "CMKDeleteEKSControlPlaneLogGroup"
+      Effect   = "Allow"
+      Action   = ["logs:DeleteLogGroup"]
+      Resource = [local.eks_log_group_arn]
+    },
+  ] : statement if length(var.cmk_key_arns) > 0 && (statement.Sid != "CMKDeleteEKSControlPlaneLogGroup" || var.allow_delete_permissions)]
+}
+
+# Inline because the role is at IAM's default limit of 10 attached managed policies.
+resource "aws_iam_role_policy" "cmk" {
+  count = length(local.cmk_statements) > 0 ? 1 : 0
+
+  name = "${var.role_name}-cmk"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.cmk_statements
+  })
+}

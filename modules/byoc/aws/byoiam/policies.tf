@@ -95,6 +95,49 @@ locals {
     }]
   }
 
+  cmk_via = { for service in ["s3", "secretsmanager"] : service => {
+    "kms:ViaService" = [for region in sort(tolist(var.regions)) : "${service}.${region}.amazonaws.com"]
+  } }
+  cmk_bucket_context = { for key, permission in local.s3_permissions : key => flatten([
+    for bucket in permission.buckets : ["arn:${local.partition}:s3:::${bucket}", "arn:${local.partition}:s3:::${bucket}/*"]
+  ]) }
+  cmk_rds_secret_statement = {
+    Sid       = "DecryptRDSMasterSecrets"
+    Effect    = "Allow"
+    Action    = ["kms:Decrypt"]
+    Resource  = var.cmk_key_arns
+    Condition = { StringEquals = local.cmk_via.secretsmanager, StringLike = { "kms:EncryptionContext:SecretARN" = local.rds_secret_arns } }
+  }
+  cmk_bucket_statements = { for key, context in local.cmk_bucket_context : key => [for statement in [{
+    Sid       = "BucketKMS"
+    Effect    = "Allow"
+    Action    = ["kms:Decrypt", "kms:GenerateDataKey"]
+    Resource  = var.cmk_key_arns
+    Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = context } }
+  }] : statement if length(var.cmk_key_arns) > 0] }
+  cmk_statements = merge(local.cmk_bucket_statements, {
+    smithdb-iam-role = concat(local.cmk_bucket_statements["smithdb-iam-role"], [for statement in [{
+      Sid       = "ReadLangsmithBlobKMS"
+      Effect    = "Allow"
+      Action    = ["kms:Decrypt"]
+      Resource  = var.cmk_key_arns
+      Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = ["arn:${local.partition}:s3:::*-smith-blob", "arn:${local.partition}:s3:::*-smith-blob/*"] } }
+    }] : statement if length(var.cmk_key_arns) > 0])
+    postgres-setup-iam-role = [for statement in [local.cmk_rds_secret_statement] : statement if length(var.cmk_key_arns) > 0]
+    smithdb-setup-iam-role  = [for statement in [local.cmk_rds_secret_statement] : statement if length(var.cmk_key_arns) > 0]
+    external-secrets-iam-role = [for statement in [merge(local.cmk_rds_secret_statement, {
+      Sid       = "DecryptSecrets"
+      Condition = { StringEquals = local.cmk_via.secretsmanager, StringLike = { "kms:EncryptionContext:SecretARN" = concat(local.application_secret_arns, local.rds_secret_arns) } }
+    })] : statement if length(var.cmk_key_arns) > 0]
+    # EKS envelope encryption of Kubernetes secrets.
+    eks-cluster-role = [for statement in [{
+      Sid      = "ClusterSecretsKMS"
+      Effect   = "Allow"
+      Action   = ["kms:Encrypt", "kms:Decrypt", "kms:ListGrants", "kms:DescribeKey"]
+      Resource = var.cmk_key_arns
+    }] : statement if length(var.cmk_key_arns) > 0]
+  })
+
   inline_statements = {
     workload-iam-role = concat(local.s3_statements["workload-iam-role"], [
       {
@@ -289,6 +332,7 @@ locals {
     instance_profile_name = var.karpenter_instance_profile_name
   }
   karpenter_policy_base = jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars))
+  ebs_kms_key_arns      = distinct(concat(var.ebs_kms_key_arns, var.cmk_key_arns))
   ebs_kms_condition = {
     StringEquals = { "kms:ViaService" = [for region in sort(tolist(var.regions)) : "ec2.${region}.amazonaws.com"] }
   }
@@ -297,22 +341,25 @@ locals {
       Sid       = "AllowVolumeKMS"
       Effect    = "Allow"
       Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext"]
-      Resource  = var.ebs_kms_key_arns
+      Resource  = local.ebs_kms_key_arns
       Condition = local.ebs_kms_condition
     },
     {
       Sid       = "AllowVolumeKMSGrants"
       Effect    = "Allow"
       Action    = ["kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant"]
-      Resource  = var.ebs_kms_key_arns
+      Resource  = local.ebs_kms_key_arns
       Condition = merge(local.ebs_kms_condition, { Bool = { "kms:GrantIsForAWSResource" = "true" } })
     }
-  ] : statement if length(var.ebs_kms_key_arns) > 0]
+  ] : statement if length(local.ebs_kms_key_arns) > 0]
   karpenter_policy = jsonencode(merge(local.karpenter_policy_base, {
     Statement = concat(local.karpenter_policy_base.Statement, local.ebs_kms_statements)
   }))
   inline_policies = merge(
-    { for key, statements in local.inline_statements : key => jsonencode({ Version = "2012-10-17", Statement = statements }) },
+    { for key in setunion(keys(local.inline_statements), keys(local.cmk_statements)) : key => jsonencode({
+      Version   = "2012-10-17"
+      Statement = concat(lookup(local.inline_statements, key, []), lookup(local.cmk_statements, key, []))
+    }) if length(concat(lookup(local.inline_statements, key, []), lookup(local.cmk_statements, key, []))) > 0 },
     { lbc-role = jsonencode(jsondecode(templatefile("${path.module}/policies/load_balancer_controller.json.tftpl", local.template_vars))) },
     { for key, statements in { ebs-csi-role = local.ebs_kms_statements } : key => jsonencode({ Version = "2012-10-17", Statement = statements }) if length(statements) > 0 }
   )
