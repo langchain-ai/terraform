@@ -2,14 +2,15 @@
 # lists. The role applies only within one data plane resource group. Role
 # assignments and the custom blob role of the data plane are
 # Microsoft.Authorization actions; they come from the User Access
-# Administrator assignment in data_planes.tf.
+# Administrator assignment in data_planes.tf, which exists only with full
+# access.
 #
 # Azure checks the join, assign, and approval actions on the linked resource
 # when LangSmith creates a resource that uses it. The activity log does not
 # show these checks, but a create fails without them.
 locals {
   # Full access (reduced_access = false): create, update, and delete a data
-  # plane.
+  # plane. Teardown keeps the resource group, so the role cannot delete it.
   langsmith_byoc_actions = concat(local.langsmith_byoc_reduced_actions, [
     "Microsoft.ContainerService/managedClusters/delete",
 
@@ -39,15 +40,11 @@ locals {
     "Microsoft.Storage/storageAccounts/managementPolicies/delete",
 
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
-
-    # The control plane writes the data plane secrets once, at create.
-    "Microsoft.KeyVault/vaults/secrets/write",
   ])
 
   # Reduced access (reduced_access = true): keep a running data plane up to
-  # date. It cannot
-  # delete a data plane, its data stores, or its network, and it cannot write
-  # Key Vault secrets.
+  # date. It cannot delete a data plane, its data stores, or its network, and
+  # it cannot create or delete role assignments.
   langsmith_byoc_reduced_actions = [
     "*/read",
 
@@ -132,7 +129,9 @@ locals {
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
 
-    # Key Vault private endpoint
+    # Key Vault. The control plane writes the data plane secrets through ARM.
+    # The role has no Key Vault data actions, so it cannot read them.
+    "Microsoft.KeyVault/vaults/secrets/write",
     "Microsoft.KeyVault/vaults/PrivateEndpointConnectionsApproval/action",
     "Microsoft.KeyVault/vaults/privateEndpointConnections/write",
     "Microsoft.KeyVault/vaults/privateEndpointConnections/delete",

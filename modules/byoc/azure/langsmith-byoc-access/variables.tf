@@ -19,8 +19,10 @@ variable "data_planes" {
     location = string
     tags     = optional(map(string), {})
     # Set to true after the data plane is active. The LangSmith role then
-    # loses the actions that delete the data plane. Set it back to false
-    # before you delete or re-create the data plane.
+    # loses the actions that delete the data plane, and the User Access
+    # Administrator assignment goes away. Set it back to false before an
+    # upgrade that adds a role assignment, and before you delete or re-create
+    # the data plane.
     reduced_access = optional(bool, false)
   }))
   default = {}
@@ -35,6 +37,12 @@ variable "data_planes" {
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
   }
+}
+
+variable "restrict_federated_credential_issuers" {
+  description = "Assign two built-in Azure Policies (Preview, Deny) on each data plane resource group. They deny a federated identity credential whose issuer is not an AKS cluster in this tenant."
+  type        = bool
+  default     = true
 }
 
 variable "tags" {

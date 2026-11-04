@@ -81,13 +81,55 @@ resource "azurerm_role_assignment" "langsmith_byoc" {
 }
 
 # The data plane creates role assignments for its workload identities and the
-# custom blob role of the data plane.
+# custom blob role of the data plane. A running data plane creates none, so
+# reduced_access deletes this assignment. Set reduced_access back to false
+# before an upgrade that adds a role assignment, and before teardown.
 resource "azurerm_role_assignment" "langsmith_user_access_administrator" {
-  for_each = var.data_planes
+  for_each = { for key, data_plane in var.data_planes : key => data_plane if !data_plane.reduced_access }
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "User Access Administrator"
   principal_id         = azuread_service_principal.langsmith.object_id
   principal_type       = "ServicePrincipal"
   description          = var.external_id
+}
+
+# LangSmith writes federated identity credentials for the data plane
+# identities. These two built-in policies (Preview) deny a credential whose
+# issuer is not an AKS cluster in this tenant, so no identity in the resource
+# group can trust a cluster outside it. With reduced access, LangSmith has no
+# Microsoft.Authorization write actions and cannot remove the assignments.
+resource "azurerm_resource_group_policy_assignment" "federated_credential_issuer_types" {
+  for_each = var.restrict_federated_credential_issuers ? var.data_planes : {}
+
+  name                 = "langsmith-fic-issuer-types"
+  display_name         = "LangSmith BYOC: allow only AKS issuers for federated credentials"
+  resource_group_id    = azurerm_resource_group.data_plane[each.key].id
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/2571b7c3-3056-4a61-b00a-9bc5232234f5"
+
+  parameters = jsonencode({
+    effect                    = { value = "Deny" }
+    allowFederatedCredentials = { value = true }
+    allowAKS                  = { value = true }
+    allowAWS                  = { value = false }
+    allowGCS                  = { value = false }
+    allowGitHub               = { value = false }
+  })
+}
+
+# The issuer of an AKS cluster has the cluster tenant in its path. The policy
+# checks only issuers on *.oic.prod-aks.azure.com; the policy above denies all
+# other issuers.
+resource "azurerm_resource_group_policy_assignment" "federated_credential_aks_tenant" {
+  for_each = var.restrict_federated_credential_issuers ? var.data_planes : {}
+
+  name                 = "langsmith-fic-aks-tenant"
+  display_name         = "LangSmith BYOC: allow only AKS clusters in this tenant for federated credentials"
+  resource_group_id    = azurerm_resource_group.data_plane[each.key].id
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/ae62c456-33de-4dc8-b100-7ce9028a7d99"
+
+  parameters = jsonencode({
+    effect         = { value = "Deny" }
+    allowedTenants = { value = [data.azurerm_client_config.current.tenant_id] }
+  })
 }
