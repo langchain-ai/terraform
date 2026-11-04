@@ -15,6 +15,6 @@ These modules provision customer-owned resources used with LangSmith Bring Your 
 
 | Azure module | Purpose |
 | --- | --- |
-| [`azure/langsmith-byoc-access`](azure/langsmith-byoc-access/README.md) | LangSmith service principal, and one resource group, Key Vault, set of role assignments, and set of policy assignments per data plane. |
+| [`azure/langsmith-byoc-access`](azure/langsmith-byoc-access/README.md) | LangSmith service principal, and one resource group, Key Vault, and set of role assignments per data plane. |
 
 Use the BYOVPC module when supplying your own network for a BYOC data plane. You own the network lifecycle, and provide VPC and subnet IDs when creating the data plane in LangSmith.

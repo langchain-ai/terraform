@@ -9,14 +9,13 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the secret that LangSmith writes. No public network access. |
 | Custom role `langsmith-byoc-<key>-<suffix>` | One per data plane | The actions that LangSmith needs in that resource group. `reduced_access` selects full or reduced actions. The role can only be assigned in that resource group. |
 | Role assignments: the LangSmith custom role, and `User Access Administrator` with full access only | One or two per data plane | Give the LangSmith service principal access to that resource group only. |
-| Azure Policy assignments `langsmith-fic-issuer-types` and `langsmith-fic-aks-tenant` | Two per data plane | Deny a federated identity credential whose issuer is not an AKS cluster in your tenant. `restrict_federated_credential_issuers = false` removes them. |
 
 > **WARNING:** Use each resource group only for its data plane. The resource group must contain exactly one Key Vault, the one from this module. LangSmith can change and delete resources in the resource group, so do not put other resources in it.
 
 ## Prerequisites
 
 1. An Azure subscription for the LangSmith data planes.
-2. Azure credentials with the `Owner` role on that subscription. The module creates custom roles, role assignments, and policy assignments, and the provider registers resource providers.
+2. Azure credentials with the `Owner` role on that subscription. The module creates custom roles and role assignments, and the provider registers resource providers.
 3. An Entra ID role that can create and update a service principal for a multi-tenant app, for example `Cloud Application Administrator`.
 4. Terraform `>= 1.11.0`, the AzureRM provider `>= 4.42.0, < 5.0.0`, and the AzureAD provider `~> 3.0`.
 5. The client ID of the LangSmith multi-tenant app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`.
@@ -107,7 +106,7 @@ Set `reduced_access = false` again before an upgrade that adds a role assignment
 1. If the data plane has `reduced_access = true`, set it to `false` and run `terraform apply`. Wait 5 minutes for Azure to apply the role change.
 2. Delete the data plane in LangSmith. LangSmith deletes the AKS cluster, PostgreSQL, Redis, the sandbox storage, the network, and the private DNS zones. It keeps the resource group, the Key Vault, and the Blob storage accounts with trace and SmithDB data. A new data plane with the same name reuses them.
 3. When you no longer need the retained data, delete the Blob storage accounts in the resource group.
-4. Remove the entry from `data_planes` and run `terraform apply`. Terraform deletes the resource group, the Key Vault, the policy assignments, the custom role, and the role assignments. With the default `features {}`, the AzureRM provider refuses to delete a resource group that still contains resources Terraform does not manage, such as the retained storage accounts.
+4. Remove the entry from `data_planes` and run `terraform apply`. Terraform deletes the resource group, the Key Vault, the custom role, and the role assignments. With the default `features {}`, the AzureRM provider refuses to delete a resource group that still contains resources Terraform does not manage, such as the retained storage accounts.
 
 ## Inputs
 
@@ -116,7 +115,6 @@ Set `reduced_access = false` again before an upgrade that adds a role assignment
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
 | `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false) }))` | no | `{}` | One entry per data plane. The key is the data plane name. |
-| `restrict_federated_credential_issuers` | `bool` | no | `true` | Assign the two federated credential policies on each data plane resource group. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
@@ -132,7 +130,6 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 
 - **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
 - **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. The description of each assignment is the `external_id`.
-- **Federated credential policies:** LangSmith writes federated identity credentials for the data plane identities. Two built-in Azure Policies (Preview) deny a credential whose issuer is not an AKS cluster in your tenant. So no data plane identity can trust a cluster that LangSmith runs. With reduced access, LangSmith has no `Microsoft.Authorization` write actions and cannot remove the policy assignments. With full access, `User Access Administrator` can remove them.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes

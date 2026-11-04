@@ -39,12 +39,6 @@ variable "data_planes" {
   }
 }
 
-variable "restrict_federated_credential_issuers" {
-  description = "Assign two built-in Azure Policies (Preview, Deny) on each data plane resource group. They deny a federated identity credential whose issuer is not an AKS cluster in this tenant."
-  type        = bool
-  default     = true
-}
-
 variable "tags" {
   description = "Tags for all resource groups and Key Vaults that this module creates."
   type        = map(string)
