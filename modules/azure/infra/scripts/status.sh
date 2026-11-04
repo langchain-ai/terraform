@@ -234,7 +234,6 @@ else
     _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
     case "$_ingress_controller" in
       envoy-gateway) _ingress_ns="envoy-gateway-system" ;;
-      nginx)         _ingress_ns="ingress-nginx" ;;
       istio)         _ingress_ns="istio-system" ;;
       istio-addon)   _ingress_ns="aks-istio-ingress" ;;
       *)             _ingress_ns="" ;;
@@ -418,8 +417,6 @@ else
   _ingress_scope="public"
   [[ "$_ingress_lb" == "internal" ]] && _ingress_scope="private"
   case "${_ingress_controller:-envoy-gateway}" in
-    nginx)
-      _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
     istio-addon)
       # The add-on runs one gateway per load-balancer type; internal is
       # aks-istio-ingressgateway-internal.

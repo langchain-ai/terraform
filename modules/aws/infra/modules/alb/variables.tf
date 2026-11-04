@@ -89,9 +89,3 @@ variable "enable_istio_gateway" {
   description = "When true, provisions a target group for the Istio ingress gateway and sets the ALB listener default action to forward to it. ALB becomes the external entry point; Istio NLB stays internal."
   default     = false
 }
-
-variable "enable_nginx_ingress" {
-  type        = bool
-  description = "When true, provisions a target group for the NGINX ingress controller and sets the ALB listener default action to forward to it. ALB becomes the external entry point; NGINX routes internally via standard Ingress resources."
-  default     = false
-}

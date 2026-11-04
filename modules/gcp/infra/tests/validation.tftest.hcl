@@ -47,7 +47,7 @@ run "enums_reject_an_unlisted_value" {
     postgres_source                           = "cloudsql"
     postgres_ssl_mode                         = "REQUIRED"
     redis_source                              = "memorystore"
-    ingress_type                              = "nginx"
+    ingress_type                              = "unsupported"
     clickhouse_source                         = "clickhouse-cloud"
     tls_certificate_source                    = "acm"
     sizing_profile                            = "small"

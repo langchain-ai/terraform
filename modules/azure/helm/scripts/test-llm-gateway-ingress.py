@@ -55,23 +55,9 @@ def case(fn):
 
 
 @case
-def nginx_gets_only_the_timeouts_and_keeps_tls():
-    out = gw.build(chart_ingress("nginx", {"cert-manager.io/cluster-issuer": "letsencrypt-prod"}), "nginx", "langsmith-llm-gateway")
-    ann = out["metadata"]["annotations"]
-    assert ann == {
-        "nginx.ingress.kubernetes.io/proxy-read-timeout": "900",
-        "nginx.ingress.kubernetes.io/proxy-send-timeout": "900",
-    }, ann
-    assert out["spec"]["tls"] == [{"secretName": "langsmith-tls", "hosts": ["ls.example.com"]}]
-    assert out["spec"]["ingressClassName"] == "nginx"
-    path = out["spec"]["rules"][0]["http"]["paths"][0]
-    assert path["path"] == "/gateway/" and path["pathType"] == "Prefix", path
-    assert path["backend"]["service"]["name"] == "langsmith-frontend"
-
-
-@case
 def agic_keeps_the_health_probe_and_gets_the_request_timeout():
     out = gw.build(chart_ingress("azure-application-gateway", {
+        "cert-manager.io/cluster-issuer": "letsencrypt-prod",
         "appgw.ingress.kubernetes.io/health-probe-path": "/health",
         "appgw.ingress.kubernetes.io/health-probe-status-codes": "200-399",
     }), "agic", "langsmith-llm-gateway")
@@ -81,24 +67,29 @@ def agic_keeps_the_health_probe_and_gets_the_request_timeout():
         "appgw.ingress.kubernetes.io/health-probe-status-codes": "200-399",
         "appgw.ingress.kubernetes.io/request-timeout": "900",
     }, ann
+    assert out["spec"]["tls"] == [{"secretName": "langsmith-tls", "hosts": ["ls.example.com"]}]
+    assert out["spec"]["ingressClassName"] == "azure-application-gateway"
+    path = out["spec"]["rules"][0]["http"]["paths"][0]
+    assert path["path"] == "/gateway/" and path["pathType"] == "Prefix", path
+    assert path["backend"]["service"]["name"] == "langsmith-frontend"
 
 
 @case
 def a_subdomain_prefixes_the_gateway_path():
-    out = gw.build(chart_ingress("nginx", {}, path="/langsmith"), "nginx", "x")
+    out = gw.build(chart_ingress("azure-application-gateway", {}, path="/langsmith"), "agic", "x")
     assert out["spec"]["rules"][0]["http"]["paths"][0]["path"] == "/langsmith/gateway/"
 
 
 @case
 def no_tls_and_no_host_are_left_out_rather_than_emptied():
-    out = gw.build(chart_ingress("nginx", {}, host="", tls=False), "nginx", "x")
+    out = gw.build(chart_ingress("azure-application-gateway", {}, host="", tls=False), "agic", "x")
     assert "tls" not in out["spec"], out["spec"]
     assert "host" not in out["spec"]["rules"][0], out["spec"]["rules"][0]
 
 
 @case
 def labels_mark_the_object_as_the_deploy_scripts():
-    out = gw.build(chart_ingress("nginx", {}), "nginx", "langsmith-llm-gateway")
+    out = gw.build(chart_ingress("azure-application-gateway", {}), "agic", "langsmith-llm-gateway")
     assert out["metadata"]["name"] == "langsmith-llm-gateway"
     assert out["metadata"]["namespace"] == "langsmith"
     assert out["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "langsmith-azure-deploy"
