@@ -373,6 +373,20 @@
           "aws:ResourceTag/managed_by": "langsmith"
         }
       }
+    },
+    {
+      "Sid": "ECRDeploymentBuildsRepositoryDelete",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:DeleteRepository",
+        "ecr:DeleteLifecyclePolicy"
+      ],
+      "Resource": "arn:aws:ecr:*:${account_id}:repository/*-smith-deployment-builds",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "langsmith"
+        }
+      }
     }
   ],
   "dns": [
