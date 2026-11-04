@@ -14,7 +14,7 @@ variable "external_id" {
 }
 
 variable "data_planes" {
-  description = "Map of data planes. The key is the data plane name. Each data plane gets a dedicated resource group (langsmith-byoc-<key>) with only a Key Vault in it. Do not add other resources to that resource group: LangSmith deletes the whole resource group when you delete the data plane."
+  description = "Map of data planes. The key is the data plane name. Each data plane gets a dedicated resource group (langsmith-byoc-<key>) with only a Key Vault in it. Do not add other resources to that resource group: LangSmith can change and delete resources in it."
   type = map(object({
     location = string
     tags     = optional(map(string), {})

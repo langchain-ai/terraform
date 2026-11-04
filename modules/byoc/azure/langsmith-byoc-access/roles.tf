@@ -1,8 +1,8 @@
 # Actions of the LangSmith custom role. reduced_access picks one of the two
 # lists. The role applies only within one data plane resource group. Role
-# assignments, the custom blob role of the
-# data plane, and delete locks are Microsoft.Authorization actions; they come
-# from the User Access Administrator assignment in data_planes.tf.
+# assignments and the custom blob role of the data plane are
+# Microsoft.Authorization actions; they come from the User Access
+# Administrator assignment in data_planes.tf.
 #
 # Azure checks the join, assign, and approval actions on the linked resource
 # when LangSmith creates a resource that uses it. The activity log does not
@@ -11,15 +11,12 @@ locals {
   # Full access (reduced_access = false): create, update, and delete a data
   # plane.
   langsmith_byoc_actions = concat(local.langsmith_byoc_reduced_actions, [
-    # The control plane deletes the resource group when you delete the data
-    # plane. Remove this action when teardown keeps the resource group.
-    "Microsoft.Resources/subscriptions/resourceGroups/delete",
-
     "Microsoft.ContainerService/managedClusters/delete",
 
     "Microsoft.Network/virtualNetworks/delete",
     "Microsoft.Network/virtualNetworks/subnets/delete",
     "Microsoft.Network/networkSecurityGroups/delete",
+    "Microsoft.Network/applicationSecurityGroups/delete",
     "Microsoft.Network/natGateways/delete",
     "Microsoft.Network/publicIPAddresses/delete",
     "Microsoft.Network/privateEndpoints/delete",
@@ -73,6 +70,12 @@ locals {
     "Microsoft.Network/virtualNetworks/subnets/join/action",
     "Microsoft.Network/networkSecurityGroups/write",
     "Microsoft.Network/networkSecurityGroups/join/action",
+    # The private endpoint subnet uses one application security group per
+    # endpoint kind (PostgreSQL, Redis, HTTPS). The network security group
+    # rules name the groups, and each private endpoint joins one.
+    "Microsoft.Network/applicationSecurityGroups/write",
+    "Microsoft.Network/applicationSecurityGroups/joinIpConfiguration/action",
+    "Microsoft.Network/applicationSecurityGroups/joinNetworkSecurityRule/action",
     "Microsoft.Network/natGateways/write",
     "Microsoft.Network/natGateways/join/action",
     "Microsoft.Network/publicIPAddresses/write",

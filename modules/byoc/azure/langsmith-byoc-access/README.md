@@ -10,7 +10,7 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 | Custom role `langsmith-byoc-<key>-<suffix>` | One per data plane | The actions that LangSmith needs in that resource group. `reduced_access` selects full or reduced actions. The role can only be assigned in that resource group. |
 | Role assignments: one LangSmith custom role and `User Access Administrator` | Two per data plane | Give the LangSmith service principal access to that resource group only. |
 
-> **WARNING:** LangSmith deletes the whole resource group when you delete the data plane. Do not put other resources in it.
+> **WARNING:** Use each resource group only for its data plane. The resource group must contain exactly one Key Vault, the one from this module. LangSmith can change and delete resources in the resource group, so do not put other resources in it.
 
 ## Prerequisites
 
@@ -99,11 +99,12 @@ Terraform then updates the actions of the LangSmith custom role in place. The ro
 
 ### Remove a data plane
 
-> **CAUTION:** Do not remove the entry from `data_planes` before you delete the data plane in LangSmith. Terraform then tries to delete a resource group that contains the data plane. With the default `features {}`, the AzureRM provider stops the delete.
+> **CAUTION:** Do not remove the entry from `data_planes` before you delete the data plane in LangSmith. LangSmith needs its role assignments to delete the data plane resources.
 
 1. If the data plane has `reduced_access = true`, set it to `false` and run `terraform apply`. Wait 5 minutes for Azure to apply the role change.
-2. Delete the data plane in LangSmith. LangSmith deletes the resource group and all its contents.
-3. Remove the entry from `data_planes` and run `terraform apply`.
+2. Delete the data plane in LangSmith. LangSmith deletes the AKS cluster, PostgreSQL, Redis, the sandbox storage, the network, and the private DNS zones. It keeps the resource group, the Key Vault, and the Blob storage accounts with trace and SmithDB data. A new data plane with the same name reuses them.
+3. When you no longer need the retained data, delete the Blob storage accounts in the resource group.
+4. Remove the entry from `data_planes` and run `terraform apply`. With the default `features {}`, the AzureRM provider refuses to delete a resource group that still contains resources Terraform does not manage, such as the retained storage accounts.
 
 ## Inputs
 
@@ -126,7 +127,7 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 ## Security model
 
 - **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
-- **Role assignments:** two per data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions), and `User Access Administrator`, because the data plane creates role assignments for its workload identities, one custom blob role, and delete locks for PostgreSQL and Redis. The description of each assignment is the `external_id`.
+- **Role assignments:** two per data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions), and `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. The description of each assignment is the `external_id`.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes

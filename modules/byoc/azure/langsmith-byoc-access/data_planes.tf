@@ -3,7 +3,9 @@
 # in LangSmith.
 
 # One dedicated resource group per data plane. LangSmith deploys the data
-# plane into it and deletes the whole resource group with the data plane.
+# plane into it. When you delete the data plane, LangSmith keeps the resource
+# group, the Key Vault, and the Blob storage accounts with trace and SmithDB
+# data.
 resource "azurerm_resource_group" "data_plane" {
   for_each = var.data_planes
 
@@ -78,9 +80,8 @@ resource "azurerm_role_assignment" "langsmith_byoc" {
   description        = var.external_id
 }
 
-# The data plane creates role assignments for its workload identities, the
-# custom blob role of the data plane, and delete locks for PostgreSQL and
-# Redis.
+# The data plane creates role assignments for its workload identities and the
+# custom blob role of the data plane.
 resource "azurerm_role_assignment" "langsmith_user_access_administrator" {
   for_each = var.data_planes
 
