@@ -18,6 +18,7 @@ locals {
     clickhouse-backup-iam-role        = { name = "byoc-smith-ch-backup-role", service = "pods.eks.amazonaws.com" }
     privatelink-lambda-role           = { name = "byoc-smith-privatelink-lambda-role", service = "lambda.amazonaws.com" }
     juicefs-csi-iam-role              = { name = "byoc-smith-juicefs-csi-iam-role", service = "pods.eks.amazonaws.com" }
+    playground-iam-role               = { name = "byoc-playground-smith-workload-iam-role", service = "pods.eks.amazonaws.com" }
   }
   roles     = { for key, role in local.default_roles : key => merge(role, { name = lookup(var.role_names, key, role.name) }) }
   role_arns = { for key, role in local.roles : key => "arn:${local.partition}:iam::${local.account_id}:role/${role.name}" }
@@ -40,6 +41,7 @@ locals {
     smithdb-setup-iam-role     = { namespace = "langsmith", service_accounts = ["*-langsmith-smithdb-setup"] }
     clickhouse-backup-iam-role = { namespace = "langsmith", service_accounts = ["langsmith-clickhouse"] }
     juicefs-csi-iam-role       = { namespace = "sandbox", service_accounts = ["sandbox-host"] }
+    playground-iam-role        = { namespace = "langsmith", service_accounts = ["*-langsmith-playground"] }
   }
 
   node_policy_names = ["AmazonEKSWorkerNodePolicy", "AmazonEKS_CNI_Policy", "AmazonEC2ContainerRegistryReadOnly", "AmazonSSMManagedInstanceCore"]
