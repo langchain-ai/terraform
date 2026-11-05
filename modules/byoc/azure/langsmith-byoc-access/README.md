@@ -130,7 +130,7 @@ The workload identity of the data plane gets `Cognitive Services User` on each r
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
-| `data_planes` | `map(object)` | no | `{}` | One entry per data plane. The key is the data plane name. See the fields below. |
+| `data_planes` | `map(object)` | yes | - | One entry per data plane, at least one. The key is the data plane name. See the fields below. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
 Fields of each `data_planes` entry:

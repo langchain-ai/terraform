@@ -29,7 +29,11 @@ variable "data_planes" {
     # API key. Set it after the data plane is active.
     engine_foundry_resource_ids = optional(list(string), [])
   }))
-  default = {}
+
+  validation {
+    condition     = length(var.data_planes) > 0
+    error_message = "data_planes must have at least one data plane."
+  }
 
   # The key is part of the resource group name (at most 90 characters) and of
   # the Key Vault name, which allows no consecutive hyphens and must start with
