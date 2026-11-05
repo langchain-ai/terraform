@@ -54,3 +54,9 @@ variable "s3_ttl_long_days" {
   description = "Days before deleting long-lived trace blobs (ttl_l/ prefix). Default: 400."
   default     = 400
 }
+
+variable "s3_ttl_long_days_list" {
+  type        = list(number)
+  description = "Extra long-lived retention periods in days. Each value N deletes ttl_<N>d/ objects after N days."
+  default     = []
+}

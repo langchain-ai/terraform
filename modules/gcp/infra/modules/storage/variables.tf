@@ -38,6 +38,12 @@ variable "ttl_long_days" {
   default     = 400
 }
 
+variable "ttl_long_days_list" {
+  description = "Extra long-lived retention periods in days. Each value N deletes ttl_<N>d/ objects after N days."
+  type        = list(number)
+  default     = []
+}
+
 variable "force_destroy" {
   description = "Allow bucket deletion even with objects"
   type        = bool

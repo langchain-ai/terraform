@@ -58,6 +58,7 @@ resource "aws_vpc_endpoint" "s3" {
 #
 # Rule "base":     delete ttl_s/* objects after N days (default: 14)  — standard traces
 # Rule "extended": delete ttl_l/* objects after N days (default: 400) — long-retention traces
+# Rule "ttl_<N>d": delete ttl_<N>d/* objects after N days, one per s3_ttl_long_days_list value
 resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
   count  = var.s3_ttl_enabled ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
@@ -81,6 +82,20 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
     }
     expiration {
       days = var.s3_ttl_long_days
+    }
+  }
+
+  dynamic "rule" {
+    for_each = var.s3_ttl_long_days_list
+    content {
+      id     = "ttl_${rule.value}d"
+      status = "Enabled"
+      filter {
+        prefix = "ttl_${rule.value}d/"
+      }
+      expiration {
+        days = rule.value
+      }
     }
   }
 }

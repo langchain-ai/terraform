@@ -833,6 +833,29 @@ variable "blob_ttl_long_days" {
   }
 }
 
+variable "blob_ttl_long_days_list" {
+  type        = list(number)
+  description = "Extra long-lived retention periods in days. Each value N adds a rule that deletes objects under ttl_<N>d/ after N days. List every value LangSmith can write: config.ttl.longlivedAllowedDays in the Helm values, or its default options (30 to 400) when that is empty."
+  default     = []
+
+  validation {
+    condition     = alltrue([for d in var.blob_ttl_long_days_list : d >= 1 && floor(d) == d])
+    error_message = "blob_ttl_long_days_list values must be whole numbers of days, 1 or greater."
+  }
+
+  validation {
+    condition     = length(distinct(var.blob_ttl_long_days_list)) == length(var.blob_ttl_long_days_list)
+    error_message = "blob_ttl_long_days_list must not contain the same value twice: each value is one lifecycle rule and rule names must be unique."
+  }
+
+  # The Azure policy and the google provider's lifecycle_rule blocks both stop at
+  # 100 rules, and the module already uses up to three. One limit for every cloud.
+  validation {
+    condition     = length(var.blob_ttl_long_days_list) <= 97
+    error_message = "blob_ttl_long_days_list can have at most 97 values."
+  }
+}
+
 variable "storage_allowed_ips" {
   type        = list(string)
   description = "Public IPs / CIDRs allowed through the storage account default-deny firewall. AKS pod traffic is allowlisted automatically via the Microsoft.Storage service endpoint on the AKS subnet — only add operator workstations, CI runners, or other external clients that need to reach the blob data plane."

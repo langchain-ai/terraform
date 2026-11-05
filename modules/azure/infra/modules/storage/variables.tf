@@ -36,6 +36,12 @@ variable "ttl_long_days" {
   default     = 400
 }
 
+variable "ttl_long_days_list" {
+  type        = list(number)
+  description = "Extra long-lived retention periods in days. Each value N deletes ttl_<N>d/ blobs after N days."
+  default     = []
+}
+
 variable "workload_identity_principal_id" {
   type        = string
   description = "Principal ID of the User-Assigned Managed Identity created by the k8s-cluster module. Granted Storage Blob Data Contributor on this account."

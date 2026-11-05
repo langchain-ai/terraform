@@ -136,6 +136,8 @@ resource "azurerm_role_assignment" "blob_data_contributor" {
 #                 the user hasn't explicitly kept long-term
 # Rule "extended": delete ttl_l/* blobs after N days (default: 400) — traces
 #                  explicitly marked for long retention (~13 months)
+# Rule "ttl<N>d":  delete ttl_<N>d/* blobs after N days, one per ttl_long_days_list
+#                  value. Azure accepts only letters and digits in a rule name.
 resource "azurerm_storage_management_policy" "lifecycle_policy" {
   count              = var.ttl_enabled ? 1 : 0
   storage_account_id = azurerm_storage_account.storage_account.id
@@ -176,6 +178,29 @@ resource "azurerm_storage_management_policy" "lifecycle_policy" {
       }
       version {
         delete_after_days_since_creation = var.ttl_long_days
+      }
+    }
+  }
+
+  dynamic "rule" {
+    for_each = var.ttl_long_days_list
+    content {
+      name    = "ttl${rule.value}d"
+      enabled = true
+      filters {
+        prefix_match = ["${var.container_name}/ttl_${rule.value}d/"]
+        blob_types   = ["blockBlob"]
+      }
+      actions {
+        base_blob {
+          delete_after_days_since_creation_greater_than = rule.value
+        }
+        snapshot {
+          delete_after_days_since_creation_greater_than = rule.value
+        }
+        version {
+          delete_after_days_since_creation = rule.value
+        }
       }
     }
   }

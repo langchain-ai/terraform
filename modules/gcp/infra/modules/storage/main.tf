@@ -50,6 +50,19 @@ resource "google_storage_bucket" "langsmith_traces" {
     }
   }
 
+  dynamic "lifecycle_rule" {
+    for_each = var.ttl_long_days_list
+    content {
+      condition {
+        age            = lifecycle_rule.value
+        matches_prefix = ["ttl_${lifecycle_rule.value}d/"]
+      }
+      action {
+        type = "Delete"
+      }
+    }
+  }
+
   # CORS configuration
   cors {
     origin          = ["*"]

@@ -59,3 +59,16 @@ output "identity_ids" {
   description = "User-assigned identities assigned to the account for its customer-managed key; empty under the service-managed key."
   value       = try(azurerm_storage_account.storage_account.identity[0].identity_ids, toset([]))
 }
+
+output "lifecycle_rules" {
+  description = "Lifecycle policy rules as planned or created: name, prefixes and delete days for base blobs, snapshots and versions. Empty when ttl_enabled is false."
+  value = flatten([for p in azurerm_storage_management_policy.lifecycle_policy : [
+    for r in p.rule : {
+      name          = r.name
+      prefixes      = tolist(one(r.filters).prefix_match)
+      base_days     = one(one(r.actions).base_blob).delete_after_days_since_creation_greater_than
+      snapshot_days = one(one(r.actions).snapshot).delete_after_days_since_creation_greater_than
+      version_days  = one(one(r.actions).version).delete_after_days_since_creation
+    }
+  ]])
+}

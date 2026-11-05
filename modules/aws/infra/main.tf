@@ -349,6 +349,7 @@ module "storage" {
   s3_ttl_enabled          = var.s3_ttl_enabled
   s3_ttl_short_days       = var.s3_ttl_short_days
   s3_ttl_long_days        = var.s3_ttl_long_days
+  s3_ttl_long_days_list   = var.s3_ttl_long_days_list
   kms_key_arn             = var.s3_kms_key_arn
   versioning_enabled      = var.s3_versioning_enabled
 }

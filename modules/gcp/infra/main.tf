@@ -516,9 +516,10 @@ module "storage" {
   bucket_name = local.bucket_name
 
   # Configuration
-  ttl_short_days = var.storage_ttl_short_days
-  ttl_long_days  = var.storage_ttl_long_days
-  force_destroy  = var.storage_force_destroy
+  ttl_short_days     = var.storage_ttl_short_days
+  ttl_long_days      = var.storage_ttl_long_days
+  ttl_long_days_list = var.storage_ttl_long_days_list
+  force_destroy      = var.storage_force_destroy
 
   # Labels
   labels = local.common_labels

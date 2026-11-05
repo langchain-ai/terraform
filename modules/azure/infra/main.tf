@@ -2191,9 +2191,10 @@ module "blob" {
   shared_access_key_enabled = var.storage_shared_access_key_enabled
   allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
 
-  ttl_enabled    = var.blob_ttl_enabled
-  ttl_short_days = var.blob_ttl_short_days
-  ttl_long_days  = var.blob_ttl_long_days
+  ttl_enabled        = var.blob_ttl_enabled
+  ttl_short_days     = var.blob_ttl_short_days
+  ttl_long_days      = var.blob_ttl_long_days
+  ttl_long_days_list = var.blob_ttl_long_days_list
 
   # Workload Identity from k8s-cluster module — implicit dep on module.aks.
   workload_identity_principal_id = module.aks.workload_identity_principal_id
