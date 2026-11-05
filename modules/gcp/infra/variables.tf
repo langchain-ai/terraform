@@ -1237,7 +1237,7 @@ variable "smithdb_instance_store_local_ssd_count" {
 
 variable "smithdb_instance_store_disk_size" {
   type        = number
-  description = "Boot disk size in GB for cache pool nodes. Null gives 100 for local-ssd and 300 for network-disk, where the backfill Job takes its 100Gi of ephemeral storage from the boot disk. network-disk with the backfill requires at least 300."
+  description = "Legacy cache-pool boot disk size in GB. Null gives 100 for local-ssd and 300 for network-disk."
   default     = null
 }
 
@@ -1307,6 +1307,6 @@ variable "smithdb_node_max_count" {
 }
 variable "smithdb_node_disk_size_gb" {
   type        = number
-  description = "SmithDB boot disk size in GB. Keeps the existing network-disk default; migration scratch uses this disk."
+  description = "SmithDB boot disk size in GB. Keeps the existing network-disk default."
   default     = 300
 }

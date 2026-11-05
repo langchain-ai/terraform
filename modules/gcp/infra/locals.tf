@@ -143,8 +143,7 @@ locals {
     var.smithdb_instance_store_local_ssd_count,
     local.smithdb_legacy_network_disk ? 0 : local.smithdb_pool_default.local_ssd_count,
   )
-  # network-disk: the backfill Job takes 100Gi of ephemeral storage from the
-  # boot disk, and a 200 GB boot disk has only about 97 GiB allocatable.
+  # Retain the legacy pool disk sizes during transition.
   smithdb_instance_store_disk_size = coalesce(var.smithdb_instance_store_disk_size, local.smithdb_legacy_network_disk ? 300 : 100)
   smithdb_compute_machine_type     = coalesce(var.smithdb_compute_machine_type, local.smithdb_pool_default.compute_type)
 

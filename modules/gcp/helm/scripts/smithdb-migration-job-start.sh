@@ -171,11 +171,10 @@ else
   pass "Connection settings stored in the $EXTERNAL_SECRET Secret"
 fi
 
-# Migration pod and TaskDB resources are not in this file on GCP: the SmithDB size
-# sets them.
+# Keep migration and TaskDB CPU and memory at chart defaults.
 {
   echo "# Written by make smithdb-migration-job-start; rerun it to change these answers."
-  echo "# Migration pod and TaskDB resources use the chart defaults."
+  echo "# Migration pod and TaskDB CPU and memory use chart defaults."
   echo "smithdb:"
   echo "  migration:"
   echo "    job:"

@@ -501,8 +501,8 @@ run "smithdb_network_disk_does_not_reuse_legacy_ssd_settings" {
   }
 }
 
-# The 300 GB default passes in smithdb_network_disk_uses_the_created_storage_class.
-run "smithdb_network_disk_backfill_on_a_small_boot_disk_is_rejected" {
+# Migration scratch uses a PVC, so the node boot disk can be smaller.
+run "smithdb_network_disk_backfill_uses_a_separate_scratch_disk" {
   command = plan
 
   variables {
@@ -513,7 +513,10 @@ run "smithdb_network_disk_backfill_on_a_small_boot_disk_is_rejected" {
     smithdb_migration_enabled = true
   }
 
-  expect_failures = [terraform_data.validate_inputs]
+  assert {
+    condition     = output.smithdb_cache_storage == "network-disk" && output.smithdb_node_pool_config.disk_size_gb == 100
+    error_message = "Network-cache migration scratch must not require a 300 GB boot disk."
+  }
 }
 
 # An N2 type with no Local SSD puts the emptyDir cache on the boot disk.

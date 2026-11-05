@@ -193,13 +193,6 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_cache_storage = 'network-disk' requires a C3 or C3D general-purpose machine type without Local SSD. The resolved pool is ${local.smithdb_node_machine_type}. Set smithdb_node_machine_type to a C3 or C3D type without Local SSD."
     }
 
-    # In network-disk mode, the backfill Job takes its 100Gi of ephemeral
-    # storage from the cache pool boot disk.
-    precondition {
-      condition     = !local.smithdb_create_cache_storage_class || !var.smithdb_migration_enabled || var.smithdb_node_disk_size_gb >= 300
-      error_message = "smithdb_cache_storage = 'network-disk' with smithdb_migration_enabled = true requires smithdb_node_disk_size_gb >= 300 for the 100Gi backfill Job. The resolved boot disk is ${var.smithdb_node_disk_size_gb} GB."
-    }
-
     # local-ssd puts each cache in an emptyDir, so the cache pool needs Local SSD
     # ephemeral storage. That is an explicit count, or a type that bundles it.
     precondition {

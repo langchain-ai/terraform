@@ -72,8 +72,8 @@ without reduced resource overrides.
 Counts apply across all zones, not per zone. Set `smithdb_node_machine_type`,
 `smithdb_node_min_count`, and `smithdb_node_max_count` to override them.
 The existing network-mode boot disk default stays 300 GB. `resourceTier`
-controls service requests and limits; migration and TaskDB keep chart or
-customer resources. Increase the node ceiling when adding migration pods.
+controls service requests and limits; migration and TaskDB keep chart-default
+or customer CPU and memory. Increase the node ceiling when adding migration pods.
 
 For a created metastore, the existing defaults remain `db-custom-4-16384`,
 `db-custom-6-32768`, and `db-custom-10-65536` for Small, Medium, and Large.
@@ -94,9 +94,9 @@ limit.
 
 Every SmithDB workload, including migration, TaskDB, and the metastore hook,
 uses `langsmith-nodepool/smithdb=true` with a matching `NoSchedule` toleration.
-Migration keeps its chart default 8 CPU, 32Gi memory, and 100Gi of node
-`ephemeral-storage`; it does not get a cache PVC. Its scratch space uses the
-node boot disk. More parallel migration pods can require more nodes.
+Migration keeps its chart-default 8 CPU and 32Gi memory and uses a separate
+100Gi Hyperdisk scratch volume at `/tmp`. More parallel migration pods can
+require more nodes.
 
 ### local-ssd
 
@@ -273,22 +273,19 @@ sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`.
 [Backfill access](#backfill-access-to-the-traces-bucket). `make deploy` starts
 the migration Job on the SmithDB pool.
 
-A backfill that an earlier module version started has no
-`langsmith-values-smithdb-migration.yaml`, so `deploy.sh` stops. Run
-`make smithdb-migration-job-start` once, choose the chart-managed TaskDB and 1
-pod, then run `make deploy-all`. The Job pod template does not change, so the
-Job continues.
+Finish and disable an existing backfill before moving to network-disk cache;
+the migration Job pod template changes.
 
 - Time window. An empty `smithdb_migration_start_time` keeps the chart default
   window. On chart 0.17.0-rc.42, the default window is 400 days, and the
   migration Job log shows the window. To copy all history, set
   `smithdb_migration_start_time` in `infra/terraform.tfvars` to a time before
   the oldest trace, before `make deploy-all`.
-- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and 100 GiB of
-  ephemeral storage on the SmithDB pool. If the pool cannot add the nodes, raise
-  `smithdb_node_max_count`. Above about 20 pods, raise the TaskDB resources
+- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and 100 GiB of scratch
+  storage: a cache PVC in network-disk mode or node storage with local SSD.
+  If the pool cannot add the nodes, raise `smithdb_node_max_count`. Above about 20 pods, raise the TaskDB resources
   instead of adding pods.
-- Resources. Migration and TaskDB use chart defaults or your resource settings.
+- Resources. Migration and TaskDB use chart-default CPU and memory or your settings.
   The migration values file does not set resources. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Duration. On a test cluster, about 10,000 rows took about 2 hours, with more
@@ -474,8 +471,8 @@ smithdb:
   migration:
     job:
       resources:
-        requests: {cpu: "8", memory: "48Gi", ephemeral-storage: "100Gi"}
-        limits: {cpu: "8", memory: "48Gi", ephemeral-storage: "100Gi"}
+        requests: {cpu: "8", memory: "48Gi"}
+        limits: {cpu: "8", memory: "48Gi"}
 ```
 
 Keep TaskDB and its PVC. Delete only the failed migration Job, then run

@@ -56,6 +56,53 @@ helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
 jq -e '.resourceTier == "large" and .query.deployment.resources == {} and .query.deployment.volumes == []' "$TEST_DIR/values.json" >/dev/null
 echo "PASS: new network-cache deployments preserve an explicitly selected resource tier"
 
+# Exercise the real generator in both cache modes, after older migration values.
+cat > "$TEST_DIR/chart/values.yaml" <<'VALUES'
+smithdb:
+  migration:
+    job:
+      resources:
+        requests: {cpu: "8", memory: 32Gi, ephemeral-storage: 100Gi}
+        limits: {cpu: "8", memory: 32Gi, ephemeral-storage: 100Gi}
+VALUES
+sed -n '/^  # Migration scratch on network disk/,/^  echo "  ✔ Written /p' \
+  "$SCRIPT_DIR/../../helm/scripts/init-values.sh" | sed '$d' > "$TEST_DIR/generate.sh"
+terraform() {
+  case "$*" in
+    *"output -raw smithdb_cache_storage") echo "$CACHE_MODE" ;;
+    *"output -raw smithdb_cache_storage_class_name") echo smithdb-cache-test ;;
+    *) return 2 ;;
+  esac
+}
+for CACHE_MODE in network-disk local-ssd; do
+  export INFRA_DIR="$TEST_DIR"
+  export _smithdb_overrides_file="$TEST_DIR/$CACHE_MODE-generated.yaml"
+  printf 'smithdb:\n  enabled: true\n' > "$_smithdb_overrides_file"
+  source "$TEST_DIR/generate.sh"
+  VALUES_ARGS=(-f "$TEST_DIR/legacy.json" -f "$_smithdb_overrides_file")
+  if [[ "$CACHE_MODE" == network-disk ]]; then _smithdb_managed_values; fi
+  helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
+    sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
+  jq -e '.migration.job.parallelism == 3 and .migration.job.resources.requests.cpu == "12" and
+    .migration.job.resources.requests.memory == "32Gi" and
+    .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"' "$TEST_DIR/values.json" >/dev/null
+  if [[ "$CACHE_MODE" == network-disk ]]; then
+    jq -e '
+      .migration.job.volumes == [{name:"cache",ephemeral:{volumeClaimTemplate:{spec:{
+        accessModes:["ReadWriteOnce"],storageClassName:.cache.storageClassName,
+        resources:{requests:{storage:"100Gi"}}}}}}] and
+      .migration.job.volumeMounts == [{name:"cache",mountPath:"/tmp"}] and
+      .migration.job.podSecurityContext.fsGroup == 1001 and
+      (.migration.job.resources.requests | has("ephemeral-storage") | not) and
+      (.migration.job.resources.limits | has("ephemeral-storage") | not)
+    ' "$TEST_DIR/values.json" >/dev/null
+  else
+    jq -e '.migration.job.volumes == null and .migration.job.resources.requests["ephemeral-storage"] == "100Gi"' "$TEST_DIR/values.json" >/dev/null
+  fi
+  echo "PASS: generated migration $CACHE_MODE scratch preserves CPU, memory, parallelism, and TaskDB"
+done
+unset -f terraform
+
 jq -n '{items: ([range(0;5) | {
   kind:"Deployment", metadata:{name:("langsmith-smithdb-" + tostring), generation:2},
   spec:{replicas:1, template:{spec:{nodeSelector:{"langsmith-nodepool/smithdb":"true"},
