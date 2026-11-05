@@ -45,9 +45,7 @@ The Terraform root creates:
   flag is on, so a steady-state install leaves the identity able to reach
   nothing but its own account; and
 - a dedicated general-purpose AKS node pool for SmithDB, TaskDB, and migration;
-- a Premium SSD v2 StorageClass for per-pod cache volumes. The StorageClass is cluster-scoped,
-  so its name carries the deployment suffix unless
-  `smithdb_cache_storage_class_name` names one.
+- a Premium SSD v2 StorageClass named `smithdb-cache` for per-pod cache volumes.
 
 By default, the same SmithDB workload identity authenticates to PostgreSQL
 through Microsoft Entra ID and is configured as the Flexible Server's Entra
@@ -101,14 +99,14 @@ the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
    replicas. Do not edit it; see [Sizing](#sizing).
 2. `langsmith-values-smithdb.yaml`, the overlay. `init-values.sh` copies it once
    and never overwrites it, so scheduling and other hand edits go here.
-3. `langsmith-values-smithdb-overrides.yaml`, which `init-values.sh` writes from
-   the identity, storage, and metastore outputs on every run.
-4. `langsmith-values-smithdb-migration.yaml`, which
+3. `langsmith-values-smithdb-migration.yaml`, which
    `make smithdb-migration-job-start` writes with the TaskDB source and the
    migration pod count. `deploy.sh` loads it only while
    `smithdb_migration_enabled = true`.
    `helm/values/examples/langsmith-values-smithdb-migration.yaml` shows the
    layout.
+4. `langsmith-values-smithdb-overrides.yaml`, which `init-values.sh` writes from
+   the identity, storage, and metastore outputs on every run.
 
 A later file wins, so a `smithdb.resourceTier` line in the overlay replaces the
 size. An overlay copied before the sizing file existed has that line.
