@@ -76,7 +76,7 @@ trap 'rm -rf "$TMP"' EXIT
 # blank, the DNS module activates and dns_choice is consumed (1=new, 2=reuse).
 write_fresh_answers() {
   local file="$1" acm_arn="$2" domain="$3" dns_choice="${4:-}"
-  local invalid_zone_id="${5:-}" zone_id="${6:-}"
+  local invalid_zone_id="${5:-}" zone_id="${6:-}" smithdb="${7:-false}" sizing="${8:-}" smithdb_defaults="${9:-false}"
   {
     printf '%s\n' "1"             # Deployment profile: dev
     printf '\n'                    # Name prefix
@@ -93,7 +93,11 @@ write_fresh_answers() {
     printf '%s\n' "2"             # PostgreSQL: in-cluster
     printf '%s\n' "2"             # Redis: in-cluster
     printf '\n'                    # ClickHouse: in-cluster
-    printf '\n'                    # SmithDB: disabled
+    if [[ "$smithdb" == "true" ]]; then
+      printf '%s\n' y
+    else
+      printf '\n'                  # SmithDB: disabled
+    fi
     printf '%s\n' "3"             # Gateway: ALB
     printf '%s\n' "$domain"       # Custom domain
     printf '%s\n' "1"             # TLS: ACM
@@ -110,7 +114,15 @@ write_fresh_answers() {
         printf '%s\n' "$zone_id"
       fi
     fi
-    printf '\n'                    # Sizing: dev
+    printf '%s\n' "$sizing"        # Sizing: dev unless overridden
+    if [[ "$smithdb" == "true" ]]; then
+      if [[ "$smithdb_defaults" == "true" ]]; then
+        printf '\n\n\n\n'          # SmithDB instance, min, max, disk defaults
+      else
+        printf '%s\n' "m6a.4xlarge" 0 2 2 7 0 400
+        # Invalid minimum, maximum, and boot disk size must each be re-asked.
+      fi
+    fi
     printf '\n'                    # Deployments: no
     printf '\n'                    # Fleet: no
     printf '\n'                    # LangSmith Chat: no
@@ -124,7 +136,7 @@ write_fresh_answers() {
 # list explicit makes a newly inserted prompt fail the test instead of silently
 # shifting later answers onto the wrong questions.
 write_update_defaults() {
-  local file="$1"
+  local file="$1" smithdb="${2:-false}"
   {
     printf '\n' # Update existing file
     printf '\n' # Deployment profile
@@ -145,6 +157,9 @@ write_update_defaults() {
     printf '\n' # Route 53 choice
     printf '\n' # Existing zone ID
     printf '\n' # Sizing
+    if [[ "$smithdb" == "true" ]]; then
+      printf '\n\n\n\n' # SmithDB instance, min, max, disk
+    fi
     printf '\n' # Deployments
     printf '\n' # Fleet
     printf '\n' # LangSmith Chat
@@ -222,6 +237,40 @@ lacks_key "existing ACM omits dns_existing_zone_id" "$ACM_INFRA/terraform.tfvars
   "dns_existing_zone_id"
 log_lacks "existing ACM skips the Route 53 question" "$TMP/acm.log" \
   "Route 53 hosted zone for acm.example.com:"
+
+echo "6. SmithDB capacity is independent and survives update mode"
+SMITHDB_INFRA="$TMP/smithdb"
+write_fresh_answers "$TMP/smithdb.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 true
+run_wizard "SmithDB setup completes after invalid bounds" "$SMITHDB_INFRA" "$TMP/smithdb.answers" "$TMP/smithdb.log"
+has_line "SmithDB minimum written" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_min_count                = 2"
+has_line "SmithDB maximum written" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_max_count                = 7"
+if awk '$1 == "smithdb_node_root_volume_size_gb" { found = ($3 == 400) } END { exit !found }' "$SMITHDB_INFRA/terraform.tfvars"; then
+  ok "SmithDB boot disk written"
+else
+  bad "SmithDB boot disk written"
+fi
+sed 's/^smithdb_transition_mode[[:space:]]*=.*/smithdb_transition_mode = true/' "$SMITHDB_INFRA/terraform.tfvars" > "$TMP/transition.tfvars"
+mv "$TMP/transition.tfvars" "$SMITHDB_INFRA/terraform.tfvars"
+write_update_defaults "$TMP/smithdb-update.answers" true
+run_wizard "SmithDB update accepts current settings" "$SMITHDB_INFRA" "$TMP/smithdb-update.answers" "$TMP/smithdb-update.log"
+has_line "SmithDB minimum preserved" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_min_count                = 2"
+has_line "SmithDB maximum preserved" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_max_count                = 7"
+has_line "SmithDB transition mode survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_transition_mode               = true"
+
+echo "7. SmithDB defaults follow pod sizing independently of the setup preset"
+for sizing in dev production-large; do
+  case "$sizing" in
+    dev) sizing_choice=2; smithdb_max=5 ;;
+    production-large) sizing_choice=4; smithdb_max=10 ;;
+  esac
+  DEFAULT_INFRA="$TMP/smithdb-$sizing-defaults"
+  write_fresh_answers "$TMP/$sizing.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 true "$sizing_choice" true
+  run_wizard "SmithDB $sizing defaults complete" "$DEFAULT_INFRA" "$TMP/$sizing.answers" "$TMP/$sizing.log"
+  has_line "LangSmith type is independent for $sizing" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6a.2xlarge"]'
+  has_line "SmithDB type follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = null'
+  has_line "SmithDB initial capacity for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
+  has_line "SmithDB ceiling follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = $smithdb_max"
+done
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

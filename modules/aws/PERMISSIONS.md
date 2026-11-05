@@ -27,7 +27,7 @@ A custom policy needs these services. The **Required when** column is the config
 | ElastiCache | `elasticache:*` | Redis replication group | `redis_source = "external"` (the default), or `enable_sandboxes = true` |
 | ACM | `acm:*` | The LangSmith certificate and its validation | `langsmith_domain` is set and `acm_certificate_arn` is not |
 | Route 53 | `route53:*` | Hosted zone and records | `langsmith_domain` is set and `acm_certificate_arn` is not |
-| SQS, EventBridge | `sqs:*`, `events:*` | Karpenter's interruption queue and rules | `enable_smithdb = true` |
+| SQS, EventBridge | `sqs:*`, `events:*` | Karpenter's interruption queue and rules | `enable_smithdb = true` and `smithdb_transition_mode = true` |
 | WAF | `wafv2:*` | Web ACL and its ALB association | `create_waf = true` |
 | Network Firewall | `network-firewall:*` | Egress firewall, policy, rule group | `create_firewall = true` |
 | CloudTrail | `cloudtrail:*` | Trail | `create_cloudtrail = true` |
@@ -164,7 +164,7 @@ The deployment creates the following roles. IRSA roles trust the cluster's OIDC 
 | `<cluster-name>-cert-manager` | `cert-manager/cert-manager` | `route53:ChangeResourceRecordSets` and `route53:ListResourceRecordSets` on the hosted zone, `route53:GetChange`, `route53:ListHostedZonesByName` | `create_cert_manager_irsa = true` |
 | `<base_name>-engine-irsa` | Engine's API server and queue service accounts | `AmazonBedrockMantleInferenceAccess` (AWS managed), or the policy in `engine_bedrock_policy_arn`. Also the `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` access of the LangSmith role, and its Bedrock `InvokeModel` access when `enable_bedrock_access = true` | `enable_engine = true` |
 | `<base_name>-smithdb-irsa` | The SmithDB service account | Object access on the SmithDB bucket, plus `kms:Decrypt` and `kms:GenerateDataKey` when `s3_kms_key_arn` is set | `enable_smithdb = true` |
-| Karpenter controller and node roles | The Karpenter service account, and `ec2.amazonaws.com` | Policies the module creates for node provisioning and the interruption queue | `enable_smithdb = true` |
+| Karpenter controller and node roles | The Karpenter service account, and `ec2.amazonaws.com` | Policies the module creates for node provisioning and the interruption queue | `enable_smithdb = true` and `smithdb_transition_mode = true` |
 | `<base_name>-sandbox-host` | `ec2.amazonaws.com` | The node group policies above | `enable_sandboxes = true` |
 | `<name>-bastion`, with an instance profile | `ec2.amazonaws.com` | `AmazonSSMManagedInstanceCore`, plus `eks:DescribeCluster` and `eks:ListClusters` | `create_bastion = true` |
 

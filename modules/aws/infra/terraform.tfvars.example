@@ -200,11 +200,9 @@ enable_public_eks_cluster = false
 # Node group sizing — controls the EC2 instances that run your pods.
 #
 # Instance type guidance:
-# Full specs: https://aws.amazon.com/ec2/instance-types/m5/
-#   ClickHouse (in-cluster) requires nodes with at least 4 vCPU and 16 GB RAM.
-#   m5.4xlarge  = 16 vCPU, 64 GB RAM  (recommended for production)
-#   m5.2xlarge  =  8 vCPU, 32 GB RAM  (minimum viable for ClickHouse)
-#   m5.xlarge   =  4 vCPU, 16 GB RAM  (tight — only if no in-cluster ClickHouse)
+# General-purpose AMD x86 nodes: m6a.2xlarge = 8 vCPU / 32 GiB for LangSmith.
+# SmithDB has its own pool below; increase LangSmith capacity for larger profiles.
+# ClickHouse (in-cluster) requires at least 4 vCPU / 16 GiB per node.
 #
 # min_size guidance:
 #   3  — base LangSmith with no addons. Enough to schedule all core pods
@@ -213,13 +211,10 @@ enable_public_eks_cluster = false
 #         Insights from the start. All workloads schedule immediately.
 #  10  — max_size ceiling for autoscaler. Adjust based on expected load.
 #
-# Cost estimate (us-east-1, on-demand):
-#   3x m5.4xlarge ≈ $1.38/hr ≈ $1,000/mo
-#   6x m5.4xlarge ≈ $2.76/hr ≈ $2,000/mo
 eks_managed_node_groups = {
   default = {
     name           = "node-group-default"
-    instance_types = ["m5.4xlarge"]
+    instance_types = ["m6a.2xlarge"]
     min_size       = 3
     max_size       = 10
   }
@@ -846,23 +841,20 @@ enable_bedrock_access = false
 # langsmith_insights_encryption_key      = ""   # set via TF_VAR or setup-env.sh
 
 #------------------------------------------------------------------------------
-# SMITHDB (chart 0.16+)
+# SMITHDB (chart 0.17+)
 #------------------------------------------------------------------------------
-# SmithDB is the in-chart columnar store/query engine used alongside ClickHouse
-# in LangSmith v16. It shares the LangSmith namespace and Helm release. Enabling
-# it provisions:
+# SmithDB shares the LangSmith namespace and Helm release. Enabling it provisions:
 #   - a dedicated metastore Postgres (RDS) — separate from the LangSmith app DB
 #   - a dedicated object-store S3 bucket for .vortex segments
 #   - an IRSA role for the SmithDB service account (S3 access, no static keys)
-#   - the Karpenter controller + SmithDB instance-store + compute NodePools
-#     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
+#   - a dedicated general-purpose EKS managed group and gp3 cache StorageClass
 #
 # Pass 2 uses the repository's ~0.17.0 pin, which resolves to the latest
 # compatible 0.17.x chart unless CHART_VERSION explicitly overrides it.
 #
 # The generated values initially deploy SmithDB services with ingestion,
 # migration, and query integration disabled. Follow ../SMITHDB.md to enable each
-# stage after validation. Keep ClickHouse enabled throughout LangSmith v16.
+# stage after validation.
 
 # enable_smithdb = false
 # smithdb_ingestion_enabled = false
@@ -897,21 +889,14 @@ enable_bedrock_access = false
 # smithdb_s3_versioning_enabled = false
 # smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
 
-# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
-# When enable_smithdb = true, the eks module installs the Karpenter controller
-# and this module creates two SmithDB pools:
-#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (no userdata needed)
-#   - compute: for compaction / cluster-manager / the metastore-migration job
-# Both amd64 and arm64 are supported; amd64 is the default so SmithDB matches
-# core LangSmith. For Graviton set smithdb_node_arch = "arm64".
-# Karpenter version MUST match eks_cluster_version (compatibility matrix:
-# https://karpenter.sh/docs/upgrading/compatibility/). K8s 1.34 -> >= 1.6,
-# 1.35 -> >= 1.9, 1.36 -> 1.13.
-# smithdb_karpenter_chart_version           = "1.6.3"
-# smithdb_node_arch                         = "amd64"
-# smithdb_capacity_type                     = ["on-demand"]
-# smithdb_instance_store_sizes              = ["4xlarge", "8xlarge"]
-# smithdb_instance_store_min_local_nvme_gib = 800
-# smithdb_instance_store_limits             = { cpu = 512, memory = "4096Gi" }
-# smithdb_compute_sizes                     = ["2xlarge", "4xlarge", "8xlarge"]
-# smithdb_compute_limits                    = { cpu = 256, memory = "1024Gi" }
+# ── SmithDB nodes (includes TaskDB and migration) ─────────────────────────────
+# Null instance type/max follow sizing_profile:
+# default/dev/minimum: m6a.4xlarge / 5; production: m6a.8xlarge / 10;
+# production-large: m6a.16xlarge / 10. Caches use chart-default sizes on gp3.
+# smithdb_node_instance_type = null
+# smithdb_node_min_count     = 2
+# smithdb_node_max_count     = null
+# smithdb_node_root_volume_size_gb = 100
+#
+# Existing Karpenter deployments only: follow ../SMITHDB.md before upgrading.
+# smithdb_transition_mode = false

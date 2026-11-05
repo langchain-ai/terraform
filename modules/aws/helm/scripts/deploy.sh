@@ -613,7 +613,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
   if [[ -f "$_smithdb_base" && -f "$_smithdb_overrides" ]]; then
-    VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+    VALUES_ARGS+=(-f "$_smithdb_base")
     echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml (chart line: ${CHART_VERSION})"
   else
     echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
@@ -637,6 +637,14 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     VALUES_ARGS+=(-f "$_smithdb_migration")
     echo "  ✔ langsmith-values-smithdb-migration.yaml"
   fi
+  if ! grep -q '^    storageClassName:' "$_smithdb_overrides"; then
+    echo "ERROR: SmithDB cache storage is missing. Run make init-values." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(-f "$_smithdb_overrides")
+  source "$INFRA_DIR/scripts/_smithdb-transition.sh"
+  _smithdb_managed_values
+  _smithdb_check_migration "$NAMESPACE" "$RELEASE_NAME" "$_smithdb_migration_enabled"
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────

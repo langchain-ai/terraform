@@ -318,10 +318,10 @@ For an applied environment, verify:
 ```bash
 terraform -chdir=infra output smithdb_s3_vpc_endpoint_id
 kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
-kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+kubectl get nodes -L langsmith-nodepool/smithdb
 ```
 
-Render the v16 chart with all integration gates disabled first. Confirm the
+Render the pinned Helm chart with all integration gates disabled first. Confirm the
 metastore migration succeeds and SmithDB can write to S3 through the endpoint
 before testing ingestion, historical migration, or query cutover.
 
