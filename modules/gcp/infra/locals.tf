@@ -163,10 +163,9 @@ locals {
   smithdb_metastore_tier = coalesce(var.smithdb_metastore_tier, local.smithdb_metastore_tier_defaults[local.smithdb_sizing])
 
   # network-disk with dedicated pools: k8s-bootstrap creates a Hyperdisk
-  # Balanced class (cluster-scoped, so with the suffix). minimal uses the GKE
-  # built-in standard-rwo class.
+  # Balanced class. minimal uses the GKE built-in standard-rwo class.
   smithdb_create_cache_storage_class = local.smithdb_dedicated_pools && local.smithdb_network_disk
-  smithdb_cache_storage_class        = "smithdb-cache${local.suffix}"
+  smithdb_cache_storage_class        = "smithdb-cache"
 
   # With SmithDB off, the proxy is off, so the metastore TLS variables have no
   # effect and the preconditions in main.tf do not reject them.

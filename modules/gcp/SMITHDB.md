@@ -85,7 +85,7 @@ an external metastore does not use it.
 ### network-disk
 
 Each cache pod gets its own temporary PVC through
-`smithdb.cache.storageClassName`. The class `smithdb-cache<suffix>` uses
+`smithdb.cache.storageClassName`. The class `smithdb-cache` uses
 `pd.csi.storage.gke.io`, Hyperdisk Balanced, 7000 provisioned IOPS,
 1000 MiB/s throughput, `WaitForFirstConsumer`, and volume expansion. The chart
 sets cache capacity from `resourceTier`. C3 and C3D general-purpose nodes
@@ -342,7 +342,7 @@ gcloud storage ls "gs://$(terraform -chdir=infra output -raw smithdb_object_stor
   capacity. Do the check in `ingestion` and `compaction-worker` too. A size near
   the boot disk means raw block Local SSD.
 - `network-disk`: one `<pod>-cache` PVC for each cache pod, on
-  `smithdb-cache<suffix>`.
+  `smithdb-cache`.
 
 ## Backfill access to the traces bucket
 

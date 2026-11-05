@@ -460,8 +460,8 @@ run "smithdb_network_disk_uses_the_created_storage_class" {
   }
   assert {
     condition = (
-      module.k8s_bootstrap.smithdb_cache_storage_class_name == "smithdb-cache-a1b2c3d4" &&
-      yamldecode(output.smithdb_helm_values).smithdb.cache == { storageClassName = "smithdb-cache-a1b2c3d4" } &&
+      module.k8s_bootstrap.smithdb_cache_storage_class_name == "smithdb-cache" &&
+      yamldecode(output.smithdb_helm_values).smithdb.cache == { storageClassName = "smithdb-cache" } &&
       yamldecode(output.smithdb_helm_values).smithdb.migration.startTime == "2026-01-01T08:30:00.5+02:00" &&
       alltrue([
         for c in ["query", "ingestion", "compactionWorker"] :
@@ -584,7 +584,7 @@ run "smithdb_medium_network_disk_uses_the_c3_pool" {
   assert {
     condition = (
       yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "medium" &&
-      yamldecode(output.smithdb_helm_values).smithdb.cache == { storageClassName = "smithdb-cache-a1b2c3d4" } &&
+      yamldecode(output.smithdb_helm_values).smithdb.cache == { storageClassName = "smithdb-cache" } &&
       alltrue([
         for c in ["query", "ingestion", "compactionWorker"] :
         keys(yamldecode(output.smithdb_helm_values).smithdb[c].deployment) == ["nodeSelector", "replicas", "tolerations"] &&
