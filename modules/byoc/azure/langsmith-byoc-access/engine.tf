@@ -1,8 +1,3 @@
-# Optional: lets LangSmith Engine call Azure AI Foundry without an API key,
-# through the workload identity of the data plane. LangSmith creates that
-# identity, but its roles stop at the data plane resource group, so it cannot
-# grant a role on a Foundry resource.
-
 locals {
   engine_foundry_data_planes = {
     for key, data_plane in var.data_planes : key => data_plane
