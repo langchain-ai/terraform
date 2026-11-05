@@ -167,6 +167,7 @@ locals {
 
   apis = toset([
     "artifactregistry.googleapis.com",
+    "binaryauthorization.googleapis.com",
     "compute.googleapis.com",
     "container.googleapis.com",
     "dns.googleapis.com",
