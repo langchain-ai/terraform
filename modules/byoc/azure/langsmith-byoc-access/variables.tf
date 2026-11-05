@@ -24,6 +24,12 @@ variable "data_planes" {
     # upgrade that adds a role assignment, and before you delete or re-create
     # the data plane.
     reduced_access = optional(bool, false)
+    # Set after the data plane is active. Remove it before you delete the data
+    # plane. See flow_logs.tf.
+    flow_logs = optional(object({
+      storage_account_id = string
+      retention_days     = optional(number, 30)
+    }))
   }))
   default = {}
 
