@@ -100,6 +100,21 @@ Terraform then updates the actions of the LangSmith custom role in place and del
 
 Set `reduced_access = false` again before an upgrade that adds a role assignment. LangChain tells you when an upgrade needs this.
 
+### Let Engine use Azure AI Foundry (optional)
+
+When the data plane is active, add your Foundry resource IDs and run `terraform apply`:
+
+```hcl
+data_planes = {
+  prod = {
+    location                    = "eastus"
+    engine_foundry_resource_ids = ["/subscriptions/<id>/resourceGroups/<name>/providers/Microsoft.CognitiveServices/accounts/<name>"]
+  }
+}
+```
+
+The workload identity of the data plane gets `Cognitive Services User` on each resource, so LangSmith Engine can call Claude and GPT there without an API key. Remove the IDs before you delete the data plane.
+
 ### Remove a data plane
 
 > **CAUTION:** Do not remove the entry from `data_planes` before you delete the data plane in LangSmith. LangSmith needs its role assignments to delete the data plane resources.
@@ -115,7 +130,7 @@ Set `reduced_access = false` again before an upgrade that adds a role assignment
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
-| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false) }))` | no | `{}` | One entry per data plane. The key is the data plane name. |
+| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false), engine_foundry_resource_ids = optional(list(string), []) }))` | no | `{}` | One entry per data plane. The key is the data plane name. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
