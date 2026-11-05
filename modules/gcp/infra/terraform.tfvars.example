@@ -397,7 +397,7 @@ enable_sso_oidc = false
 #   - a dedicated single-region GCS bucket for .vortex segments
 #   - a least-privilege GCP service account bound to the chart's SmithDB KSA
 #     via Workload Identity (objectAdmin on that bucket only)
-#   - two GKE node pools, cache and compute (none for smithdb_sizing = "minimal")
+#   - a separate general-purpose GKE SmithDB pool with network-backed cache volumes
 #
 # Requires GKE Standard. Autopilot manages its own node pools, so the dedicated
 # SmithDB pools do not exist there and SmithDB pods would stay Pending.
@@ -410,13 +410,13 @@ enable_smithdb = false
 
 # --- Sizing ----------------------------------------------------------------
 # minimal, small, medium, or large, and local-ssd or network-disk. Unset, the
-# size follows sizing_profile and the cache follows the size:
+# size follows sizing_profile and cache defaults to network-disk:
 #   minimum -> minimal, dev and default -> small, production -> medium,
 #   production-large -> large (12 SmithDB pods, about 350 vCPU).
 # small, medium, and large are for 10, 100, and 1000 ingest QPS. What each
 # size resolves to: modules/gcp/SMITHDB.md#sizing.
 # smithdb_sizing        = "small"
-# smithdb_cache_storage = "local-ssd"
+# smithdb_cache_storage = "network-disk"
 
 # --- Staged rollout ---------------------------------------------------------
 # Migration and query both require ingestion, and Terraform enforces that.
@@ -509,6 +509,16 @@ enable_smithdb = false
 # smithdb_bucket_versioning_enabled = false
 
 # --- Node pools -------------------------------------------------------------
+# Network-cache pool: counts are total across zones, independent of LangSmith.
+# smithdb_node_machine_type = "c3-standard-22"
+# smithdb_node_min_count    = 2
+# smithdb_node_max_count    = 5
+# smithdb_node_disk_size_gb = 300
+# Existing deployments: retain previous settings and set transition mode first.
+# See SMITHDB.md#move-an-existing-deployment-to-the-new-pool.
+# smithdb_transition_mode = false
+#
+# Legacy local-ssd pool settings (also retained during transition):
 # Unset shape variables take the defaults for the size and cache mode
 # (SMITHDB.md#sizing). A value set here wins, also after a size change.
 #

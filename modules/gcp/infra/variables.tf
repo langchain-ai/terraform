@@ -978,8 +978,8 @@ variable "enable_sso_oidc" {
 #
 # SmithDB is the in-chart columnar store/query engine that runs alongside
 # ClickHouse. Enabling it provisions a dedicated Cloud SQL metastore, its own GCS
-# bucket, a Workload Identity service account, and two GKE node pools (cache and
-# compute, none for smithdb_sizing = minimal). Off by default — no effect on
+# bucket, a Workload Identity service account, and a general-purpose GKE pool.
+# Off by default, with no effect on
 # existing deployments.
 #
 # Enabling the infrastructure never changes the chart line on its own: Pass 2
@@ -988,7 +988,7 @@ variable "enable_sso_oidc" {
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, cache + compute node pools). Pass 2 uses the repository's pinned 0.17 chart line. Requires GKE Standard rather than Autopilot."
+  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, a dedicated general-purpose node pool). Pass 2 uses the repository's pinned 0.17 chart line. Requires GKE Standard rather than Autopilot."
   default     = false
 }
 
@@ -1031,7 +1031,7 @@ variable "smithdb_migration_start_time" {
 # See SMITHDB.md#sizing for what each size and cache mode resolves to.
 variable "smithdb_sizing" {
   type        = string
-  description = "SmithDB size: minimal, small, medium, or large. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large. minimal uses the chart small tier with reduced resources and runs on the general node pool, with no SmithDB node pools."
+  description = "SmithDB size: minimal, small, medium, or large. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large. minimal is a compatibility name for the chart small tier."
   default     = null
 
   validation {
@@ -1042,7 +1042,7 @@ variable "smithdb_sizing" {
 
 variable "smithdb_cache_storage" {
   type        = string
-  description = "SmithDB cache storage: local-ssd (emptyDir on node Local SSD) or network-disk. network-disk is a per-pod Hyperdisk Balanced volume on a C3 or C3D cache pool, or standard-rwo for minimal. Null gives network-disk for minimal and local-ssd for the other sizes. A change replaces the cache node pool."
+  description = "SmithDB cache storage: local-ssd (emptyDir on node Local SSD) or network-disk. network-disk (default) is a per-pod Hyperdisk Balanced volume on one C3 or C3D general-purpose pool. local-ssd retains the two legacy pools."
   default     = null
 
   validation {
@@ -1275,4 +1275,38 @@ variable "smithdb_compute_max_nodes" {
   type        = number
   description = "Maximum nodes per zone in the SmithDB compute pool."
   default     = 3
+}
+
+variable "smithdb_transition_mode" {
+  type        = bool
+  description = "Retain the old SmithDB pools while workloads move to the general-purpose pool. Keep the previous smithdb_instance_store_* and smithdb_compute_* settings during transition."
+  default     = false
+}
+variable "smithdb_node_machine_type" {
+  type        = string
+  description = "General-purpose SmithDB machine type. Null selects c3-standard-22, c3-standard-44, or c3-standard-88 for Small, Medium, or Large."
+  default     = null
+}
+variable "smithdb_node_min_count" {
+  type        = number
+  description = "Minimum SmithDB nodes across all zones."
+  default     = 2
+  validation {
+    condition     = var.smithdb_node_min_count >= 1 && floor(var.smithdb_node_min_count) == var.smithdb_node_min_count
+    error_message = "smithdb_node_min_count must be a whole number of at least 1."
+  }
+}
+variable "smithdb_node_max_count" {
+  type        = number
+  description = "Maximum SmithDB nodes across all zones. Null selects 5 for Small or 10 for Medium and Large."
+  default     = null
+  validation {
+    condition     = var.smithdb_node_max_count == null ? true : var.smithdb_node_max_count >= var.smithdb_node_min_count && floor(var.smithdb_node_max_count) == var.smithdb_node_max_count
+    error_message = "smithdb_node_max_count must be a whole number at least smithdb_node_min_count."
+  }
+}
+variable "smithdb_node_disk_size_gb" {
+  type        = number
+  description = "SmithDB boot disk size in GB. Keeps the existing network-disk default; migration scratch uses this disk."
+  default     = 300
 }

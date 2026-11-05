@@ -174,7 +174,12 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_metastore_use_auth_proxy = false on a created metastore requires smithdb_metastore_use_ssl = false and smithdb_metastore_ssl_mode = 'ALLOW_UNENCRYPTED_AND_ENCRYPTED' (mode 2, test and staging only). Direct TLS from SmithDB to Cloud SQL fails with UnknownIssuer. See the metastore TLS section of SMITHDB.md."
     }
 
-    # minimal has no SmithDB node pools, so no node has Local SSD for the cache.
+    precondition {
+      condition     = !var.enable_smithdb || !local.smithdb_network_disk || local.smithdb_node_max_count >= var.smithdb_node_min_count
+      error_message = "smithdb_node_max_count must be at least smithdb_node_min_count."
+    }
+
+    # minimal is a compatibility name for Small with network-backed caches.
     precondition {
       condition     = !var.enable_smithdb || !local.smithdb_minimal || local.smithdb_network_disk
       error_message = "smithdb_sizing = 'minimal' requires smithdb_cache_storage = 'network-disk'. Leave smithdb_cache_storage unset, or select a larger smithdb_sizing."
@@ -184,22 +189,22 @@ resource "terraform_data" "validate_inputs" {
     # cannot attach them, and C4 and N4 need a Hyperdisk boot disk, which the
     # SmithDB pools do not use. A C3 type without -lssd also rejects Local SSD.
     precondition {
-      condition     = !local.smithdb_create_cache_storage_class || (can(regex("^c3d?-", local.smithdb_instance_store_machine_type)) && local.smithdb_instance_store_local_ssd_count == 0)
-      error_message = "smithdb_cache_storage = 'network-disk' requires a C3 or C3D cache machine type and smithdb_instance_store_local_ssd_count = 0. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
+      condition     = !local.smithdb_create_cache_storage_class || can(regex("^c3d?-standard-[0-9]+$", local.smithdb_node_machine_type))
+      error_message = "smithdb_cache_storage = 'network-disk' requires a C3 or C3D general-purpose machine type without Local SSD. The resolved pool is ${local.smithdb_node_machine_type}. Set smithdb_node_machine_type to a C3 or C3D type without Local SSD."
     }
 
     # In network-disk mode, the backfill Job takes its 100Gi of ephemeral
     # storage from the cache pool boot disk.
     precondition {
-      condition     = !local.smithdb_create_cache_storage_class || !var.smithdb_migration_enabled || local.smithdb_instance_store_disk_size >= 300
-      error_message = "smithdb_cache_storage = 'network-disk' with smithdb_migration_enabled = true requires smithdb_instance_store_disk_size >= 300 for the 100Gi backfill Job. The resolved boot disk is ${local.smithdb_instance_store_disk_size} GB."
+      condition     = !local.smithdb_create_cache_storage_class || !var.smithdb_migration_enabled || var.smithdb_node_disk_size_gb >= 300
+      error_message = "smithdb_cache_storage = 'network-disk' with smithdb_migration_enabled = true requires smithdb_node_disk_size_gb >= 300 for the 100Gi backfill Job. The resolved boot disk is ${var.smithdb_node_disk_size_gb} GB."
     }
 
     # local-ssd puts each cache in an emptyDir, so the cache pool needs Local SSD
     # ephemeral storage. That is an explicit count, or a type that bundles it.
     precondition {
       condition     = !local.smithdb_dedicated_pools || local.smithdb_network_disk || local.smithdb_instance_store_local_ssd_count > 0 || endswith(local.smithdb_instance_store_machine_type, "lssd")
-      error_message = "smithdb_cache_storage = 'local-ssd' requires Local SSD on the cache pool: smithdb_instance_store_local_ssd_count > 0, or a machine type that ends in lssd. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
+      error_message = "smithdb_cache_storage = 'local-ssd' requires smithdb_instance_store_local_ssd_count > 0, or a machine type that ends in lssd."
     }
 
     precondition {
@@ -587,9 +592,8 @@ module "smithdb" {
 
 #------------------------------------------------------------------------------
 # SmithDB Node Pools (Optional, enable_smithdb)
-# A cache pool (Local SSD, or none in network-disk mode) plus a compute pool.
-# Not created for smithdb_sizing = minimal, or on Autopilot, where Google
-# manages node pools; see the SmithDB section of README.md for that path.
+# Network caches share one general-purpose pool. Local SSD retains the old
+# cache and compute pools; transition mode keeps them while workloads move.
 #------------------------------------------------------------------------------
 module "smithdb_nodes" {
   source = "./modules/smithdb-nodes"
@@ -602,6 +606,13 @@ module "smithdb_nodes" {
 
   node_service_account_email = var.gke_node_service_account_email
   node_locations             = var.smithdb_node_locations
+
+  create_general_pool = local.smithdb_network_disk
+  create_legacy_pools = local.smithdb_legacy_pools
+  machine_type        = local.smithdb_node_machine_type
+  min_nodes           = var.smithdb_node_min_count
+  max_nodes           = local.smithdb_node_max_count
+  disk_size_gb        = var.smithdb_node_disk_size_gb
 
   instance_store_machine_type    = local.smithdb_instance_store_machine_type
   instance_store_local_ssd_count = local.smithdb_instance_store_local_ssd_count

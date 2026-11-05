@@ -54,7 +54,7 @@ if ! _tfvar_is_true "enable_smithdb" || ! _tfvar_is_true "smithdb_ingestion_enab
   exit 1
 fi
 pass "SmithDB and ingestion are on"
-# The size sets the migration pod resources, so read what the last apply resolved.
+# Require the SmithDB infrastructure to be applied before preparing migration.
 _sizing=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_sizing 2>/dev/null) || _sizing=""
 if [[ -z "$_sizing" ]]; then
   fail "Could not read smithdb_sizing from Terraform outputs. Is terraform apply complete?"
@@ -101,13 +101,8 @@ esac
 header "3. Sizing"
 # LangSmith docs: allocated vCPUs = historical runs / 5,000,000 / target days, at 8 vCPU per migration pod by default.
 # A fixed 50% headroom is added on top, since the docs call the formula an estimate.
-# minimal runs SmithDB on the general node pool with 1-2 vCPU migration pods, so it suggests 1 pod.
 _pod_vcpu=8
 _pod_shape="8 vCPU / 32 GiB / 100 GiB disk each"
-if [[ "$_sizing" == "minimal" ]]; then
-  _pod_vcpu=1
-  _pod_shape="1-2 vCPU / 4-8 GiB / 10-20 GiB disk each"
-fi
 _ask_int "About how many historical runs" ""
 _runs="$_REPLY"
 while true; do
@@ -119,19 +114,14 @@ _days="$_REPLY"
 _headroom=50
 _suggested=$(awk -v r="$_runs" -v d="$_days" -v h="$_headroom" -v c="$_pod_vcpu" 'BEGIN { p = r / 5000000 / d / c * (1 + h / 100); n = int(p); if (n < p) n++; if (n < 1) n = 1; print n }')
 (( _suggested > 20 )) && _suggested=20
-if [[ "$_sizing" == "minimal" ]]; then
-  info "SmithDB size minimal: the general node pool runs the migration, so 1 pod is suggested"
-  _suggested=1
-else
-  info "$_runs runs in $_days days at 5,000,000 runs per vCPU per day, plus ${_headroom}% headroom, at 8 vCPU per pod: $_suggested pod(s)"
-fi
+info "$_runs runs in $_days days at 5,000,000 runs per vCPU per day, plus ${_headroom}% headroom, at 8 vCPU per pod: $_suggested pod(s)"
 _ask_int "Parallelism: migration pods running at once ($_pod_shape)" "$_suggested"
 _parallelism="$_REPLY"
 if (( _parallelism > 20 )); then
   warn "Above about 20 pods, raise TaskDB CPU and memory instead of adding pods (chart guidance)"
 fi
-if (( _parallelism > 1 )) && [[ "$_sizing" != "minimal" ]]; then
-  info "Migration pods run on the SmithDB cache pool. If the pool cannot add nodes for $_parallelism pods, raise smithdb_instance_store_max_nodes"
+if (( _parallelism > 1 )); then
+  info "Migration pods use SmithDB nodes. Raise smithdb_node_max_count if the pool needs more capacity"
 fi
 pass "Parallelism: $_parallelism"
 # Same rule of thumb, solved for time, without headroom: the plain estimate for the pod count chosen.
@@ -185,7 +175,7 @@ fi
 # sets them.
 {
   echo "# Written by make smithdb-migration-job-start; rerun it to change these answers."
-  echo "# Migration pod and TaskDB resources come from the SmithDB size (langsmith-values-smithdb-sizing.yaml) and the chart defaults."
+  echo "# Migration pod and TaskDB resources use the chart defaults."
   echo "smithdb:"
   echo "  migration:"
   echo "    job:"

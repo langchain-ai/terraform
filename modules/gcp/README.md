@@ -125,7 +125,7 @@ gcp/
 │       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
 │       ├── secrets/        ← Secret Manager secrets for credentials (optional via flags)
 │       ├── smithdb/        ← SmithDB metastore, object-store bucket, Workload Identity SA (optional)
-│       └── smithdb-nodes/  ← SmithDB cache + compute GKE node pools (optional)
+│       └── smithdb-nodes/  ← SmithDB general-purpose GKE node pool (optional)
 │   └── scripts/
 │       ├── _common.sh          ← Shared helpers (tfvar parser, color/status helpers)
 │       ├── preflight.sh        ← Pre-Terraform tooling/auth/API checks
@@ -509,7 +509,7 @@ Setting `enable_smithdb = true` provisions four things:
 | Cloud SQL Postgres metastore | `modules/smithdb` | Dedicated instance on a private IP, `POSTGRES_18` by default, with a tier that follows `smithdb_sizing` |
 | GCS object-store bucket | `modules/smithdb` | Single-region, uniform access, no lifecycle deletes |
 | Workload Identity service account | `modules/smithdb` | `roles/storage.objectAdmin` on that bucket only |
-| Two GKE node pools | `modules/smithdb-nodes` | A cache pool and a compute pool; none for `smithdb_sizing = "minimal"` |
+| GKE SmithDB node pool | `modules/smithdb-nodes` | Separate general-purpose pool; network-backed cache volumes by default |
 
 ### Requirements and constraints
 
@@ -525,7 +525,7 @@ Setting `enable_smithdb = true` provisions four things:
 
 6) **Pin the pool zones.** The cluster is regional, so an unpinned pool tries every zone in the region and fails if the machine type or disk count is unavailable in any of them. Check availability, then set `smithdb_node_locations`.
 
-Both pools are tainted and default to `min_node_count = 0`, so the cluster autoscaler holds them empty until SmithDB pods with matching tolerations appear. That is the closest native analogue to consolidation-style provisioning.
+The SmithDB pool uses `langsmith-nodepool/smithdb=true` and a matching `NoSchedule` taint. QuickStart sets its independent machine type and total minimum/maximum counts. Defaults are 2–5 nodes for Small and 2–10 for Medium/Large. The prior two pools remain an explicit Local SSD option. See [transition steps](SMITHDB.md#move-an-existing-deployment-to-the-new-pool) for existing deployments.
 
 ### Networking
 
@@ -547,7 +547,7 @@ List what is published with `helm search repo langchain/langsmith --versions`.
 
 ### Sizing and staged rollout
 
-`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) in `infra/terraform.tfvars` set the chart tier, the resources, the node pool shapes, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
+`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) in `infra/terraform.tfvars` set the chart tier, node pool shape, and default tier of a created metastore. Network-backed cache volumes are the default; service resources come from `resourceTier`. `minimal` is a compatibility name for Small. An unset `smithdb_sizing` follows `sizing_profile`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
 
 The historical migration (backfill) is the one stage with its own make targets:
 

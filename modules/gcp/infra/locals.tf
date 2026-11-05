@@ -72,13 +72,16 @@ locals {
 
   smithdb_sizing        = coalesce(var.smithdb_sizing, local.smithdb_sizing_by_profile[var.sizing_profile])
   smithdb_minimal       = local.smithdb_sizing == "minimal"
-  smithdb_cache_storage = coalesce(var.smithdb_cache_storage, local.smithdb_minimal ? "network-disk" : "local-ssd")
+  smithdb_cache_storage = var.smithdb_transition_mode ? "network-disk" : coalesce(var.smithdb_cache_storage, "network-disk")
   smithdb_network_disk  = local.smithdb_cache_storage == "network-disk"
 
-  # The chart has the small, medium, and large tiers. minimal uses small with
-  # explicit resources, and runs on the general node pool.
-  smithdb_resource_tier   = local.smithdb_minimal ? "small" : local.smithdb_sizing
-  smithdb_dedicated_pools = var.enable_smithdb && !var.gke_use_autopilot && !local.smithdb_minimal
+  # minimal remains a compatibility name for the chart Small tier.
+  smithdb_resource_tier       = local.smithdb_minimal ? "small" : local.smithdb_sizing
+  smithdb_dedicated_pools     = var.enable_smithdb && !var.gke_use_autopilot
+  smithdb_legacy_network_disk = var.smithdb_transition_mode ? coalesce(var.smithdb_cache_storage, "local-ssd") == "network-disk" : local.smithdb_network_disk
+  smithdb_legacy_pools        = !local.smithdb_minimal && (!local.smithdb_network_disk || var.smithdb_transition_mode)
+  smithdb_node_machine_type   = coalesce(var.smithdb_node_machine_type, local.smithdb_pool_default.network_disk_type)
+  smithdb_node_max_count      = coalesce(var.smithdb_node_max_count, contains(["medium", "large"], local.smithdb_resource_tier) ? 10 : 5)
 
   # Per-replica resources and cache size for each chart tier. Copied from chart
   # 0.17.0-rc.42, templates/_helpers.tpl, "langsmith.smithdb.tierResources".
@@ -124,22 +127,6 @@ locals {
   smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
   smithdb_compute_components = ["compaction", "clusterManager"]
 
-  # minimal: explicit resources, limits 2x requests. A partial resources block
-  # keeps the chart default for each key that it omits. The chart Job default
-  # has 100Gi of ephemeral-storage, so the Job block sets every key.
-  # The taskdb keeps the chart default resources.
-  smithdb_minimal_resources = {
-    query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
-    ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
-    compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
-    compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
-    clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
-    migration_job = {
-      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
-      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
-    }
-  }
-
   # Default node pool shapes. An explicit smithdb_* pool variable wins.
   smithdb_pool_defaults = {
     small  = { local_ssd_type = "n2-standard-16", local_ssd_count = 2, network_disk_type = "c3-standard-22", compute_type = "n2-standard-8" }
@@ -150,15 +137,15 @@ locals {
 
   smithdb_instance_store_machine_type = coalesce(
     var.smithdb_instance_store_machine_type,
-    local.smithdb_network_disk ? local.smithdb_pool_default.network_disk_type : local.smithdb_pool_default.local_ssd_type,
+    local.smithdb_legacy_network_disk ? local.smithdb_pool_default.network_disk_type : local.smithdb_pool_default.local_ssd_type,
   )
   smithdb_instance_store_local_ssd_count = coalesce(
     var.smithdb_instance_store_local_ssd_count,
-    local.smithdb_network_disk ? 0 : local.smithdb_pool_default.local_ssd_count,
+    local.smithdb_legacy_network_disk ? 0 : local.smithdb_pool_default.local_ssd_count,
   )
   # network-disk: the backfill Job takes 100Gi of ephemeral storage from the
   # boot disk, and a 200 GB boot disk has only about 97 GiB allocatable.
-  smithdb_instance_store_disk_size = coalesce(var.smithdb_instance_store_disk_size, local.smithdb_network_disk ? 300 : 100)
+  smithdb_instance_store_disk_size = coalesce(var.smithdb_instance_store_disk_size, local.smithdb_legacy_network_disk ? 300 : 100)
   smithdb_compute_machine_type     = coalesce(var.smithdb_compute_machine_type, local.smithdb_pool_default.compute_type)
 
   # Default Cloud SQL tier of a created metastore, for each size. The docs
@@ -180,7 +167,7 @@ locals {
   # Balanced class (cluster-scoped, so with the suffix). minimal uses the GKE
   # built-in standard-rwo class.
   smithdb_create_cache_storage_class = local.smithdb_dedicated_pools && local.smithdb_network_disk
-  smithdb_cache_storage_class        = local.smithdb_minimal ? "standard-rwo" : "smithdb-cache${local.suffix}"
+  smithdb_cache_storage_class        = "smithdb-cache${local.suffix}"
 
   # With SmithDB off, the proxy is off, so the metastore TLS variables have no
   # effect and the preconditions in main.tf do not reject them.
@@ -243,43 +230,32 @@ locals {
     })
   }
 
-  # network-disk: the chart makes a per-pod cache volume from the StorageClass,
-  # sized from the tier.
+  # Network caches use the chart tier. Every SmithDB workload shares one pool.
+  smithdb_pin_general_pool = {
+    nodeSelector = { "langsmith-nodepool/smithdb" = "true" }
+    tolerations  = [{ key = "langsmith-nodepool/smithdb", operator = "Equal", value = "true", effect = "NoSchedule" }]
+  }
   smithdb_values_network_disk = {
     smithdb = merge(
-      local.smithdb_values_pools_common,
-      { cache = { storageClassName = local.smithdb_cache_storage_class } },
+      { resourceTier = local.smithdb_resource_tier, cache = { storageClassName = local.smithdb_cache_storage_class } },
+      { for c in ["query", "mutations", "runRules", "statsQuery", "ingestion", "compactionWorker", "compaction", "clusterManager"] : c => {
+        deployment = merge(local.smithdb_pin_general_pool, contains(keys(local.smithdb_replicas), c) ? { replicas = local.smithdb_replicas[c] } : {})
+      } },
+      { for c in local.smithdb_cache_components : c => {
+        deployment  = merge(local.smithdb_pin_general_pool, { replicas = local.smithdb_replicas[c] })
+        autoscaling = local.smithdb_values_cache_autoscaling[c]
+      } },
       {
-        for c in local.smithdb_cache_components : c => {
-          deployment  = local.smithdb_values_cache_deployment[c]
-          autoscaling = local.smithdb_values_cache_autoscaling[c]
-        }
-      },
-    )
-  }
-
-  # minimal: no node pins, the explicit resources, and one replica for each
-  # autoscaled component (chart autoscaling.hpa keys).
-  smithdb_values_minimal = {
-    smithdb = merge(
-      { resourceTier = "small", cache = { storageClassName = local.smithdb_cache_storage_class } },
-      {
-        for c in local.smithdb_cache_components : c => {
-          deployment  = { resources = local.smithdb_minimal_resources[c] }
-          autoscaling = { hpa = { minReplicas = 1, maxReplicas = 1 } }
-        }
-      },
-      { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
-      {
+        metastoreMigration = { job = local.smithdb_pin_general_pool }
         migration = merge(local.smithdb_start_time_values, {
-          job = { resources = local.smithdb_minimal_resources.migration_job }
+          job    = local.smithdb_pin_general_pool
+          taskdb = { postgres = { statefulSet = local.smithdb_pin_general_pool } }
         })
       },
     )
   }
 
   smithdb_helm_values = !var.enable_smithdb ? null : (
-    local.smithdb_minimal ? yamlencode(local.smithdb_values_minimal) :
     local.smithdb_network_disk ? yamlencode(local.smithdb_values_network_disk) : yamlencode(local.smithdb_values_local_ssd)
   )
 

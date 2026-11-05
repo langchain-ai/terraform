@@ -413,24 +413,48 @@ if [[ "$USE_AUTOPILOT" == "false" ]]; then
     && ENABLE_SMITHDB="true" || true
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
     _ask_choice "SmithDB size (see SMITHDB.md#sizing)" \
-      "minimal — development only, no SmithDB node pools" \
+      "minimal — compatibility name for Small" \
       "small   — 10 ingest / 10 query QPS" \
       "medium  — 100 ingest / 40 query QPS" \
       "large   — 1000 ingest / 100 query QPS, about 350 vCPU"
     _smithdb_sizing=$(echo "minimal small medium large" | cut -d' ' -f"$_CHOICE")
-    # minimal writes null: null gives network-disk for minimal, and a later
-    # size change gets local-ssd.
+    # Network storage is the default for every tier.
     _smithdb_cache="network-disk"
     _smithdb_cache_value="null"
     if [[ "$_smithdb_sizing" != "minimal" ]]; then
       _ask_choice "SmithDB cache storage" \
-        "local-ssd    — node Local SSD (recommended)" "network-disk — Hyperdisk Balanced on C3 nodes"
-      [[ "$_CHOICE" == "1" ]] && _smithdb_cache="local-ssd"
+        "network-disk — Hyperdisk Balanced on general-purpose nodes (recommended)" "local-ssd — two legacy pools with node Local SSD"
+      [[ "$_CHOICE" == "2" ]] && _smithdb_cache="local-ssd"
       _smithdb_cache_value="\"${_smithdb_cache}\""
     fi
     SMITHDB_SIZING_LINES="
 smithdb_sizing            = \"${_smithdb_sizing}\"
 smithdb_cache_storage     = ${_smithdb_cache_value}"
+    if [[ "$_smithdb_cache" == "network-disk" ]]; then
+      case "$_smithdb_sizing" in
+        medium) _smithdb_machine=c3-standard-44; _smithdb_max=10 ;;
+        large) _smithdb_machine=c3-standard-88; _smithdb_max=10 ;;
+        *) _smithdb_machine=c3-standard-22; _smithdb_max=5 ;;
+      esac
+      _ask "SmithDB machine type" "$_smithdb_machine"
+      _smithdb_machine="$_REPLY"
+      while true; do
+        _ask_int "Minimum SmithDB nodes (all zones)" "2"
+        _smithdb_min="$_REPLY"
+        (( _smithdb_min >= 1 )) && break
+        echo "  Minimum must be at least 1."
+      done
+      while true; do
+        _ask_int "Maximum SmithDB nodes (all zones)" "$_smithdb_max"
+        _smithdb_max="$_REPLY"
+        (( _smithdb_max >= _smithdb_min )) && break
+        echo "  Maximum must be at least the minimum."
+      done
+      SMITHDB_SIZING_LINES+="
+smithdb_node_machine_type = \"${_smithdb_machine}\"
+smithdb_node_min_count    = ${_smithdb_min}
+smithdb_node_max_count    = ${_smithdb_max}"
+    fi
     printf "  $(_dim "SmithDB starts in dual write: LangSmith writes to SmithDB and ClickHouse, reads stay on ClickHouse.")\n"
   fi
 fi
