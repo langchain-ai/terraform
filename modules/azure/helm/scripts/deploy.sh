@@ -686,7 +686,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     fail "enable_smithdb = true but the SmithDB values files are missing — run: make init-values"
     exit 1
   fi
-  VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base" -f "$_smithdb_overrides")
+  VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base")
   echo "  ✔ langsmith-values-smithdb-sizing.yaml + langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
 
   # init-values.sh writes the migration gate into the overrides. A run of
@@ -709,6 +709,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   elif [[ -f "$_smithdb_migration_file" ]]; then
     echo "  ○ langsmith-values-smithdb-migration.yaml (file exists but smithdb_migration_enabled = false — skipped)"
   fi
+  VALUES_ARGS+=(-f "$_smithdb_overrides")
   source "$HELM_DIR/../infra/scripts/_smithdb-values.sh"
   _smithdb_check_migration "$NAMESPACE" "$RELEASE_NAME" "$_smithdb_migration_enabled"
   _smithdb_pool_tolerations=$(terraform -chdir="$INFRA_DIR" output -json smithdb_node_tolerations) || {

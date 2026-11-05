@@ -65,7 +65,7 @@ variable "smithdb_node_max_count" {
 
 variable "smithdb_node_os_disk_size_gb" {
   type        = number
-  description = "SmithDB node OS disk size in GB. Null keeps the AKS default; migration needs 100Gi of allocatable node ephemeral storage per pod."
+  description = "SmithDB node OS disk size in GB. Null keeps the AKS default."
   default     = null
 }
 

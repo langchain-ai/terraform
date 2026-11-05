@@ -282,17 +282,14 @@ sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`. The
 apply then grants the trace-blob read role and waits 300 seconds (see
 [Infrastructure](#infrastructure)). The deploy starts the migration Job.
 
-A backfill that an earlier module version started has no
-`langsmith-values-smithdb-migration.yaml`, so `deploy.sh` stops. Run
-`make smithdb-migration-job-start` once, choose the chart-managed TaskDB and 1
-pod, then run `make deploy-all`. The Job pod template does not change, so the
-Job continues.
+Finish and disable an existing backfill before upgrading; the migration Job
+pod template changes when scratch storage moves to Managed Disk.
 
-- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and 100 GiB of node
-  ephemeral storage by default. Raise `smithdb_node_max_count` if it cannot add
+- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and a separate 100 GiB
+  Managed Disk scratch volume at `/tmp` by default. Raise `smithdb_node_max_count` if it cannot add
   the nodes for them. Above about 20 pods, raise the TaskDB resources instead of
   adding pods.
-- Resources. Migration and TaskDB keep chart defaults or your explicit settings.
+- Resources. Migration and TaskDB keep chart-default CPU and memory or your explicit settings.
   `resourceTier` does not size them. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Safety hold. The Job holds the tasks for the last two hours before its start
@@ -397,9 +394,8 @@ smithdb_node_zones     = ["1", "2", "3"]
 
 Keep at least one node for Helm hooks and a maximum greater than the minimum
 for rolling updates. Raise the maximum for migration parallelism and confirm
-the regional vCPU quota covers it. Node OS disks keep the AKS default. Migration
-needs 100 GiB of **allocatable** node ephemeral storage per pod, after the OS,
-images, and logs; set `smithdb_node_os_disk_size_gb` if more space is needed.
+the regional vCPU quota covers it. Node OS disks keep the AKS default; migration
+scratch uses the cache StorageClass.
 
 An existing `additional_node_pools.smithdb` entry keeps its VM, bounds, zones,
 and other settings. The module adds the required label and taint. Every workload
@@ -426,7 +422,8 @@ controls other pools and databases. Run `make apply`, `make init-values`, then
 `make deploy`. This creates the dedicated pool before moving SmithDB to it;
 existing LangSmith pools remain. The deploy replaces old node selectors and
 clears service resource overrides so the chart tier takes effect. It preserves
-migration and TaskDB resources, credentials, and unrelated volumes.
+migration and TaskDB CPU, memory, and credentials. Migration scratch moves to a
+100 GiB Managed Disk volume.
 
 Finish any existing backfill first, then run `make smithdb-migration-job-end`
 and deploy with migration disabled before moving pools. An existing migration

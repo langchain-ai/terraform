@@ -5,7 +5,7 @@
 # deploy.sh loads the real file after the other SmithDB values files, and only
 # while smithdb_migration_enabled = true. See SMITHDB.md#staged-rollout.
 #
-# The file sets no migration pod or TaskDB resources; both use chart defaults.
+# CPU and memory use chart defaults; init-values.sh supplies migration scratch storage.
 
 smithdb:
   migration:

@@ -180,11 +180,11 @@ else
   pass "Connection settings stored in the $EXTERNAL_SECRET Secret"
 fi
 
-# Migration and TaskDB keep chart defaults or explicit customer values.
+# Migration and TaskDB keep chart-default CPU and memory or customer values.
 mkdir -p "$VALUES_DIR"
 {
   echo "# Written by make smithdb-migration-job-start; rerun it to change these answers."
-  echo "# Migration pod and TaskDB resources use chart defaults unless you override them."
+  echo "# Migration pod and TaskDB CPU and memory use chart defaults unless overridden."
   echo "smithdb:"
   echo "  migration:"
   echo "    job:"
