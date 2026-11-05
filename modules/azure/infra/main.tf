@@ -74,11 +74,7 @@ locals {
   # not the account's blob URL.
   sandbox_juicefs_bucket = var.enable_sandboxes ? replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1") : null
 
-  # A StorageClass is cluster-scoped, unlike everything else this module creates
-  # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
-  # the second apply fails on an object the first one owns. Suffix it the same
-  # way as the namespaced resources above.
-  smithdb_cache_storage_class = var.smithdb_cache_storage_class_name != "" ? var.smithdb_cache_storage_class_name : "smithdb-cache-premium-v2${local.name_suffix}${local.uniq_suffix}"
+  smithdb_cache_storage_class = var.smithdb_cache_storage_class_name != "" ? var.smithdb_cache_storage_class_name : "smithdb-cache"
 
   # Max 24 chars, globally unique. Attaching takes the customer's name with no
   # fallback, same as aks_name above.

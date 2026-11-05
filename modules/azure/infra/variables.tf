@@ -1446,7 +1446,7 @@ variable "smithdb_storage_container_name" {
 
 variable "smithdb_cache_storage_class_name" {
   type        = string
-  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes. A StorageClass is cluster-scoped, so the default empty value derives a per-deployment name from name_prefix and unique_resource_names. Set it only to adopt a specific name."
+  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes. Empty uses smithdb-cache."
   default     = ""
 }
 
