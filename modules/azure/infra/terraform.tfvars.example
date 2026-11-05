@@ -141,6 +141,12 @@ additional_node_pools = {
 # refuses to deploy without one. The error it prints names the exact value to
 # set. See SMITHDB.md, "Version requirements".
 enable_smithdb = false
+# Dedicated general-purpose nodes. Unset size and maximum follow smithdb_sizing.
+# smithdb_node_vm_size         = "Standard_D16s_v5"
+# smithdb_node_min_count       = 2
+# smithdb_node_max_count       = 5
+# smithdb_node_zones           = ["1", "2", "3"] # only this pool; does not move databases
+# smithdb_node_os_disk_size_gb = 256 # optional; migration needs 100Gi allocatable per pod
 
 # Roll out one stage at a time after the infrastructure-only deployment is
 # healthy. make smithdb-migration-job-start and make smithdb-migration-job-end

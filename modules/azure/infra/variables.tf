@@ -1378,7 +1378,7 @@ variable "smithdb_query_enabled" {
 
 variable "smithdb_sizing" {
   type        = string
-  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  description = "SmithDB chart tier, replicas, and default metastore SKU: small, medium, or large. minimal keeps its metastore default and uses the small chart tier without resource overrides. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
   default     = null
   nullable    = true
 

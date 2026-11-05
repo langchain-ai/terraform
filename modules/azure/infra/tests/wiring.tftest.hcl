@@ -462,12 +462,8 @@ run "smithdb_sizing_follows_sizing_profile_minimum" {
     error_message = "minimal did not select the small chart tier"
   }
   assert {
-    condition     = yamldecode(output.smithdb_helm_values).smithdb.query.autoscaling.hpa.maxReplicas == 1
-    error_message = "minimal did not cap the query HPA at one replica"
-  }
-  assert {
-    condition     = yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources.requests.cpu == "1"
-    error_message = "minimal did not set explicit query resources"
+    condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources) && !can(yamldecode(output.smithdb_helm_values).smithdb.migration.job.resources)
+    error_message = "The compatibility minimal size must use chart resources for services and migration."
   }
 }
 
@@ -495,10 +491,14 @@ run "smithdb_small_sets_the_tier_without_resources" {
   command = plan
 
   variables {
-    enable_smithdb            = true
-    availability_zones        = ["1", "2", "3"]
-    smithdb_sizing            = "small"
-    smithdb_migration_enabled = false
+    enable_smithdb               = true
+    availability_zones           = ["1", "2", "3"]
+    smithdb_sizing               = "small"
+    smithdb_migration_enabled    = false
+    smithdb_node_min_count       = 3
+    smithdb_node_max_count       = 7
+    smithdb_node_vm_size         = "Standard_D16s_v5"
+    smithdb_node_os_disk_size_gb = 256
   }
 
   assert {
@@ -508,6 +508,17 @@ run "smithdb_small_sets_the_tier_without_resources" {
   assert {
     condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources)
     error_message = "small set explicit resources, which replace the chart tier"
+  }
+  assert {
+    condition = (
+      local.aks_managed_node_pools["smithdb"].min_count == 3 &&
+      local.aks_managed_node_pools["smithdb"].max_count == 7 &&
+      local.aks_managed_node_pools["smithdb"].vm_size == "Standard_D16s_v5" &&
+      local.aks_managed_node_pools["smithdb"].os_disk_size_gb == 256 &&
+      local.aks_managed_node_pools["smithdb"].node_labels["langsmith-nodepool/smithdb"] == "true" &&
+      contains(local.aks_managed_node_pools["smithdb"].node_taints, "langsmith-nodepool/smithdb=true:NoSchedule")
+    )
+    error_message = "SmithDB pool settings or isolation did not reach the managed pools."
   }
 }
 
@@ -562,7 +573,7 @@ run "smithdb_off_adds_no_values" {
   }
 
   assert {
-    condition     = output.smithdb_helm_values == null && output.smithdb_sizing == null
+    condition     = output.smithdb_helm_values == null && output.smithdb_sizing == null && !contains(keys(local.aks_managed_node_pools), "smithdb")
     error_message = "enable_smithdb = false still produced SmithDB sizing or Helm values"
   }
 }
@@ -794,5 +805,37 @@ run "tls_existing_plans_through_k8s_bootstrap" {
   assert {
     condition     = module.k8s_bootstrap.cert_manager_namespace != null
     error_message = "tls_certificate_source = \"existing\" dropped the cert-manager release, which install_cert_manager still asks for"
+  }
+}
+
+run "smithdb_custom_pool_keeps_settings_and_inherits_missing_disk_and_zones" {
+  command = plan
+  variables {
+    enable_smithdb               = true
+    availability_zones           = []
+    smithdb_node_zones           = ["2"]
+    smithdb_node_os_disk_size_gb = 256
+    additional_node_pools = {
+      smithdb = {
+        vm_size     = "Standard_D32s_v5"
+        min_count   = 1
+        max_count   = 4
+        node_labels = { team = "data" }
+        node_taints = ["workload=smithdb:NoSchedule"]
+      }
+    }
+  }
+  assert {
+    condition = (
+      local.aks_managed_node_pools["smithdb"].vm_size == "Standard_D32s_v5" &&
+      local.aks_managed_node_pools["smithdb"].min_count == 1 &&
+      local.aks_managed_node_pools["smithdb"].os_disk_size_gb == 256 &&
+      toset(module.aks.node_pool_zones["smithdb"]) == toset(["2"]) &&
+      local.aks_managed_node_pools["smithdb"].node_labels["team"] == "data" &&
+      contains(local.aks_managed_node_pools["smithdb"].node_taints, "workload=smithdb:NoSchedule") &&
+      anytrue([for t in output.smithdb_node_tolerations : t.key == "workload" && t.value == "smithdb" && t.effect == "NoSchedule"]) &&
+      contains(local.aks_managed_node_pools["smithdb"].node_taints, "langsmith-nodepool/smithdb=true:NoSchedule")
+    )
+    error_message = "A custom SmithDB pool lost settings or omitted optional attributes hid the dedicated disk/zone knobs."
   }
 }

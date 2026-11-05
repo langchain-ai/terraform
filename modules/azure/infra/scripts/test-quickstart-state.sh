@@ -433,6 +433,38 @@ eq "a rerun over a kept map exits 0"   "$?" "0"
 eq "a kept multi-line map is written back whole" "$(awk '/^tags/,/^}/' "$NI/terraform.tfvars")" \
   "$(printf 'tags = {\n  team = "platform" # required by policy\n}')"
 
+echo "11. SmithDB node settings reach generated tfvars and survive edits"
+qs --yes --smithdb --smithdb-vm-size Standard_D32s_v5 --smithdb-min 3 --smithdb-max 8 --smithdb-zones 1,2
+eq "SmithDB run exits 0" "$?" "0"
+has "SmithDB enabled" enable_smithdb true
+has "SmithDB VM written" smithdb_node_vm_size '"Standard_D32s_v5"'
+has "SmithDB minimum written" smithdb_node_min_count 3
+has "SmithDB maximum written" smithdb_node_max_count 8
+has "SmithDB zones written" smithdb_node_zones '\["1", "2"\]'
+OUTPUT="$NI/terraform.tfvars"
+INFRA_DIR="$NI"
+ENABLE_SMITHDB=false; SMITHDB_NODE_VM=""; SMITHDB_NODE_MIN=2; SMITHDB_NODE_MAX=""; SMITHDB_NODE_ZONES=""
+_load_tfvars
+eq "SmithDB flag reloaded" "$ENABLE_SMITHDB" true
+eq "SmithDB VM reloaded" "$SMITHDB_NODE_VM" Standard_D32s_v5
+eq "SmithDB bounds reloaded" "$SMITHDB_NODE_MIN/$SMITHDB_NODE_MAX" 3/8
+eq "SmithDB zones reloaded" "$SMITHDB_NODE_ZONES" 1,2
+# An independent SmithDB tier override must size the new pool before it is pinned.
+printf 'smithdb_sizing = "large"\n' >> "$OUTPUT"
+_load_tfvars
+awk '/^_smithdb_node_defaults\(\)/ {p=1} p {print} p && /^}/ {exit}' "$SRC" > smithdb-defaults.sh
+# shellcheck source=/dev/null
+source ./smithdb-defaults.sh
+SMITHDB_NODE_VM=""
+_smithdb_node_defaults
+eq "independent SmithDB tier sets the VM default" "$_SMITHDB_VM_DEFAULT" Standard_D64s_v5
+qs --yes --smithdb --smithdb-min 3 --smithdb-max 3
+eq "SmithDB requires rollout headroom" "$?" "2"
+qs --yes --smithdb --smithdb-zones '1,4'
+eq "SmithDB rejects invalid zones" "$?" "2"
+qs --yes --smithdb-min 3
+eq "node flags require SmithDB" "$?" "2"
+
 echo ""
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

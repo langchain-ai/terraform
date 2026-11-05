@@ -162,7 +162,7 @@ output "smithdb_metastore_sku_name" {
 }
 
 output "smithdb_helm_values" {
-  description = "SmithDB chart tier, replicas, and minimal-size resources as YAML. init-values.sh writes it to helm/values/langsmith-values-smithdb-sizing.yaml. Null when SmithDB is disabled."
+  description = "SmithDB chart tier and replicas as YAML. init-values.sh writes it to helm/values/langsmith-values-smithdb-sizing.yaml. Null when SmithDB is disabled."
   value       = local.smithdb_helm_values
 }
 

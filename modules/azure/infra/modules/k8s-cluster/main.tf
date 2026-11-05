@@ -846,8 +846,7 @@ check "aks_additional_node_pool_zone_drift" {
       "keep a regional pool as it is and silence this, set zones = [] on its ",
       "additional_node_pools entry. For the default large pool, that means ",
       "copying its default entry from variables.tf into additional_node_pools ",
-      "and adding zones = []. On a zoned cluster with SmithDB on, plan refuses ",
-      "zones = [], and the pool has to be replaced with a zonal one.",
+      "and adding zones = []. The SmithDB pool must stay zonal for its cache disks.",
     ])
   }
 }

@@ -44,8 +44,8 @@ The Terraform root creates:
   is the source the historical backfill reads. The grant exists only while that
   flag is on, so a steady-state install leaves the identity able to reach
   nothing but its own account; and
-- a Premium SSD v2 StorageClass for per-pod cache volumes. SmithDB workloads
-  schedule on ordinary AKS nodes by default. The StorageClass is cluster-scoped,
+- a dedicated general-purpose AKS node pool for SmithDB, TaskDB, and migration;
+- a Premium SSD v2 StorageClass for per-pod cache volumes. The StorageClass is cluster-scoped,
   so its name carries the deployment suffix unless
   `smithdb_cache_storage_class_name` names one.
 
@@ -97,8 +97,8 @@ the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `deploy.sh` loads up to four SmithDB files, in this order:
 
 1. `langsmith-values-smithdb-sizing.yaml`, which `init-values.sh` writes from
-   the `smithdb_helm_values` output on every run. It holds the chart tier, the
-   replicas, and the `minimal` resources. Do not edit it; see [Sizing](#sizing).
+   the `smithdb_helm_values` output on every run. It holds the chart tier and
+   replicas. Do not edit it; see [Sizing](#sizing).
 2. `langsmith-values-smithdb.yaml`, the overlay. `init-values.sh` copies it once
    and never overwrites it, so scheduling and other hand edits go here.
 3. `langsmith-values-smithdb-overrides.yaml`, which `init-values.sh` writes from
@@ -144,8 +144,8 @@ release `prod` uses `prod-langsmith-smithdb`.
 
 ## Sizing
 
-`smithdb_sizing` sets the chart `resourceTier`, the replicas, the `minimal`
-resources, and the default metastore SKU. Set it in `infra/terraform.tfvars`,
+`smithdb_sizing` sets the chart `resourceTier`, replicas, default node size,
+and default metastore SKU. CPU and memory use chart defaults. Set it in `infra/terraform.tfvars`,
 then run `make deploy-all`:
 
 ```hcl
@@ -154,34 +154,33 @@ smithdb_sizing = "small"   # minimal, small, medium, or large
 
 When it is unset, it follows `sizing_profile`: `minimum`
 gives `minimal`, `dev` and `default` give `small`, `production` gives `medium`,
-and `production-large` gives `large`.
+and `production-large` gives `large`. `minimal` retains its metastore default
+and uses the `small` chart tier without resource overrides.
 
 The component rows are per replica, as CPU / memory / cache volume:
 
-| | `minimal` | `small` | `medium` | `large` |
-|---|---|---|---|---|
-| Throughput: ingest / query QPS | development only | 10 / 10 | 100 / 40 | 1000 / 100 |
-| Chart `resourceTier` | `small`, explicit resources | `small` | `medium` | `large` |
-| Replicas: `query` / `ingestion` / `compactionWorker` | 1 / 1 / 1 | 1 / 1 / 1 | 1 / 1 / 1 | 4 / 2 / 4 |
-| `query` | 1 / 2Gi / 200Gi | 4 / 8Gi / 200Gi | 28 / 48Gi / 200Gi | 28 / 50Gi / 1000Gi |
-| `ingestion` | 1 / 2Gi / 100Gi | 4 / 8Gi / 100Gi | 16 / 32Gi / 100Gi | 56 / 150Gi / 1000Gi |
-| `compactionWorker` | 1 / 2Gi / 100Gi | 8 / 16Gi / 100Gi | 16 / 32Gi / 100Gi | 28 / 50Gi / 300Gi |
-| `compaction` | 500m / 1Gi | 2 / 4Gi | 4 / 8Gi | 8 / 16Gi |
-| `clusterManager` | 250m / 256Mi | 250m / 256Mi | 250m / 256Mi | 2 / 2Gi |
-| Sum at these replicas (pods) | 3.75 / 7.25Gi (5) | 18.25 / 36.25Gi (5) | 64.25 / 120.25Gi (5) | 346 / 718Gi (12) |
-| Backfill Job | 1 / 4Gi | 8 / 32Gi | 8 / 32Gi | 8 / 32Gi |
-| Cache HPA `maxReplicas` | 1 | 10 (chart default) | 10 (chart default) | 10 (chart default) |
-| VM for the largest pod, for example | general pool | 16 vCPU, `Standard_D16s_v5` | 32 vCPU, `Standard_D32s_v5` | 64 vCPU and over 150 GiB, `Standard_D64s_v5` |
-| Default metastore SKU (vCPU / memory) | `GP_Standard_D2ds_v5` (2 / 8Gi) | `MO_Standard_E2ds_v5` (2 / 16Gi) | `MO_Standard_E4ds_v5` (4 / 32Gi) | `MO_Standard_E8ds_v5` (8 / 64Gi) |
+| | `small` | `medium` | `large` |
+|---|---|---|---|
+| Throughput: ingest / query QPS | 10 / 10 | 100 / 40 | 1000 / 100 |
+| Chart `resourceTier` | `small` | `medium` | `large` |
+| Replicas: `query` / `ingestion` / `compactionWorker` | 1 / 1 / 1 | 1 / 1 / 1 | 4 / 2 / 4 |
+| `query` | 4 / 8Gi / 200Gi | 28 / 48Gi / 200Gi | 28 / 50Gi / 1000Gi |
+| `ingestion` | 4 / 8Gi / 100Gi | 16 / 32Gi / 100Gi | 56 / 150Gi / 1000Gi |
+| `compactionWorker` | 8 / 16Gi / 100Gi | 16 / 32Gi / 100Gi | 28 / 50Gi / 300Gi |
+| `compaction` | 2 / 4Gi | 4 / 8Gi | 8 / 16Gi |
+| `clusterManager` | 250m / 256Mi | 250m / 256Mi | 2 / 2Gi |
+| Sum at these replicas (pods) | 18.25 / 36.25Gi (5) | 64.25 / 120.25Gi (5) | 346 / 718Gi (12) |
+| Backfill Job | 8 / 32Gi | 8 / 32Gi | 8 / 32Gi |
+| Cache HPA `maxReplicas` | 10 (chart default) | 10 (chart default) | 10 (chart default) |
+| VM for the largest pod, for example | 16 vCPU, `Standard_D16s_v5` | 32 vCPU, `Standard_D32s_v5` | 64 vCPU and over 150 GiB, `Standard_D64s_v5` |
+| Default metastore SKU (vCPU / memory) | `MO_Standard_E2ds_v5` (2 / 16Gi) | `MO_Standard_E4ds_v5` (4 / 32Gi) | `MO_Standard_E8ds_v5` (8 / 64Gi) |
 
 - The throughput and replica rows come from the SmithDB sizing table in the
   [LangSmith self-hosted docs](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
   The replicas are the HPA `minReplicas` of the three cache components.
   `compaction` and `clusterManager` have no HPA and run one replica.
 - The `small`, `medium`, and `large` component rows and the cache volumes come
-  from the chart tier, where requests equal limits. `minimal` runs the `small`
-  tier, so it keeps the `small` cache volumes. Its values are requests, and its
-  limits are 2x. Use `minimal` only for development and test.
+  from the chart tier, where requests equal limits.
 - The metastore defaults match the "Metastore capacity" section of the same
   docs page. A `smithdb_metastore_sku_name` that you set replaces the default,
   also after a size change. A SKU change restarts the Flexible Server.
@@ -194,6 +193,7 @@ it through. It must also re-export these outputs, which the scripts read
 through `LANGSMITH_INFRA_DIR`:
 
 - `smithdb_helm_values`. Without it, `init-values.sh` stops when SmithDB is on.
+- `smithdb_node_tolerations`, which deploy reads to match all pool taints;
 - `smithdb_sizing`, which `make smithdb-migration-job-start` reads to suggest a
   migration pod count.
 
@@ -288,12 +288,12 @@ A backfill that an earlier module version started has no
 pod, then run `make deploy-all`. The Job pod template does not change, so the
 Job continues.
 
-- Pod count. Each migration pod requests 8 vCPU and 32 GiB, or 1 vCPU and
-  4 GiB for `minimal`. Raise the node pool `max_count` if it cannot add the
-  nodes for them. Above about 20 pods, raise the TaskDB resources instead of
+- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and 100 GiB of node
+  ephemeral storage by default. Raise `smithdb_node_max_count` if it cannot add
+  the nodes for them. Above about 20 pods, raise the TaskDB resources instead of
   adding pods.
-- Resources. The SmithDB size sets the migration pod and TaskDB resources.
-  The migration values file does not set resources. See
+- Resources. Migration and TaskDB keep chart defaults or your explicit settings.
+  `resourceTier` does not size them. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Safety hold. The Job holds the tasks for the last two hours before its start
   time until two hours after it, so it cannot miss late updates to runs that
@@ -377,16 +377,34 @@ links a zone name to a VNet once, so creating a second one fails.
 PostgreSQL uses the delegated database subnet and the VNet's private PostgreSQL
 DNS zone. Each Private Endpoint takes one further address in its subnet.
 
-SmithDB pods run on the default node pool, so they consume its pod and IP
-budget rather than adding a pool of their own. In node-subnet mode the subnet capacity check counts
-`(default_node_pool_max_count + 1) * (default_node_pool_max_pods + 1)`, which is
-a per-node reservation and already covers anything scheduled onto those nodes;
-in overlay mode it counts nodes only, and the pods draw from `aks_pod_cidr`.
-What SmithDB does change is how much of that budget is in use, so size the
-default pool for the SmithDB pod count the chart adds and raise
-`default_node_pool_max_count` before enabling ingestion. The capacity check then
-follows the new maximum on its own. Use `additional_node_pools` with chart
-scheduling overrides when SmithDB needs isolation from the rest of LangSmith.
+SmithDB, TaskDB, and migration run on the dedicated `smithdb` pool. The label
+is `langsmith-nodepool/smithdb=true`, with the matching `NoSchedule` taint.
+LangSmith's existing node pools stay separate. The subnet capacity check includes
+the SmithDB pool at its maximum size.
+
+QuickStart asks for the SmithDB VM size, node bounds, and zones. To enable it
+without prompts, use `make quickstart ARGS="--yes --smithdb"`. The defaults are
+`Standard_D16s_v5` for small, `Standard_D32s_v5` for medium, or
+`Standard_D64s_v5` for large, with 2 minimum nodes and a maximum of 5 for small
+or 10 for medium/large. Override them in `infra/terraform.tfvars`:
+
+```hcl
+smithdb_node_vm_size   = "Standard_D16s_v5"
+smithdb_node_min_count = 2
+smithdb_node_max_count = 5
+smithdb_node_zones     = ["1", "2", "3"]
+```
+
+Keep at least one node for Helm hooks and a maximum greater than the minimum
+for rolling updates. Raise the maximum for migration parallelism and confirm
+the regional vCPU quota covers it. Node OS disks keep the AKS default. Migration
+needs 100 GiB of **allocatable** node ephemeral storage per pod, after the OS,
+images, and logs; set `smithdb_node_os_disk_size_gb` if more space is needed.
+
+An existing `additional_node_pools.smithdb` entry keeps its VM, bounds, zones,
+and other settings. The module adds the required label and taint. Every workload
+receives tolerations for the resolved pool taints, including custom taints.
+Extra customer tolerations remain.
 
 Terraform creates the cache StorageClass with 7,000 IOPS and 1,000 MB/s. The
 generated Helm overrides select it for SmithDB's per-pod cache PVCs.
@@ -396,126 +414,27 @@ within two Azure limits: throughput cannot exceed 0.25 MB/s per provisioned IOPS
 volume size, which rises 500 IOPS per GiB above 6 GiB. Cache volume size is a
 chart value, so Terraform cannot check the second limit.
 
-Premium SSD v2 is what makes zones a requirement rather than a preference. In
-most regions that offer availability zones, a Premium SSD v2 disk attaches only
-to a zonal VM, so `enable_smithdb = true` requires `availability_zones` to name
-at least one zone. The root module refuses the combination at plan time, because
-AKS zones apply at creation and carry `ignore_changes` - recovering from a
-nonzonal pool means rebuilding it, not editing a variable. A
-[small set of regions](https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments)
-does support nonzonal Premium SSD v2.
-
-On an attached AKS cluster, set `availability_zones` to the zones the existing
-nodes already use, and confirm those nodes are zonal before enabling SmithDB.
-
-Adding zones to an already-built cluster does not re-zone it. The module ignores
-zone changes on an existing node pool, so the plan comes back clean, the
-precondition above is satisfied, and the nodes stay where they were. The
-`aks_node_pool_zone_drift` check (the default pool) and the
-`aks_additional_node_pool_zone_drift` check (the additional pools) report this as
-a plan warning naming the live zones against the requested ones. Read that
-warning: a nonzonal pool with SmithDB enabled gets a cache StorageClass no pod
-can bind to. Re-zoning means rebuilding the pool. On a zoned cluster with
-SmithDB on, plan also refuses an `additional_node_pools` entry that sets
-`zones = []`: SmithDB's components carry no `nodeSelector` by default, so a
-regional pool can receive them. That refusal reads the requested zones, not the
-live ones. An additional pool created regional before `availability_zones`
-reached additional pools, the default `large` pool included, passes it, and only
-the drift warning names it. Replace such a pool with a zonal one before turning
-SmithDB on. On a cluster built nonzonal, the path is a
-zonal additional pool with SmithDB pinned to it; see
-[Adding a zonal pool to a nonzonal cluster](#adding-a-zonal-pool-to-a-nonzonal-cluster).
+Premium SSD v2 requires zonal nodes in most regions. `smithdb_node_zones`
+sets only the SmithDB pool's zones; unset, it follows `availability_zones`.
+The module refuses a nonzonal SmithDB pool. Other pools can remain regional.
+AKS pool zones apply at creation only; read any zone-drift warning before deploy.
 
 ### Adding a zonal pool to a nonzonal cluster
 
-A cluster built without zones can take SmithDB without a rebuild. Add a zonal
-pool to `additional_node_pools` and leave `availability_zones` as it is.
-`availability_zones` also places PostgreSQL and Redis, so changing it on a
-running deployment can move them. A pool with `zones` set satisfies the plan-time
-zone check on its own.
+Set `smithdb_node_zones` without changing `availability_zones`, which also
+controls other pools and databases. Run `make apply`, `make init-values`, then
+`make deploy`. This creates the dedicated pool before moving SmithDB to it;
+existing LangSmith pools remain. The deploy replaces old node selectors and
+clears service resource overrides so the chart tier takes effect. It preserves
+migration and TaskDB resources, credentials, and unrelated volumes.
 
-```hcl
-additional_node_pools = {
-  large = {
-    vm_size   = "Standard_D16s_v3"
-    min_count = 0
-    max_count = 2
-  }
-  smithdb = {
-    vm_size     = "Standard_D16s_v3"
-    min_count   = 1
-    max_count   = 3
-    zones       = ["1", "2", "3"]
-    node_taints = ["workload=smithdb:NoSchedule"]
-  }
-}
-```
+Finish any existing backfill first, then run `make smithdb-migration-job-end`
+and deploy with migration disabled before moving pools. An existing migration
+Job's pod template cannot change; deploy stops instead of changing or deleting it.
 
-Restate every pool you already run, because the map replaces the default rather
-than merging with it. Set `zones` when the pool is created.
-
-Taint the pool. An untainted pool takes any pod, and the first rollout after it
-joins can fill it with LangSmith services until SmithDB no longer fits. The pool
-can't scale out past `max_count` for the stranded pod.
-
-Leave room for a rollout. A single-replica deployment starts its new pod before
-it stops the old one, so a pool with no spare node for the largest SmithDB pod
-leaves the new pod `Pending` after any values change, including each staged gate
-flip. The chart exposes no `strategy` for compaction or compactionWorker. Plan
-rejects a `smithdb` pool whose `max_count` equals its `min_count`. Confirm the VM
-family's regional vCPU quota covers `max_count` nodes, or the autoscaler cannot
-add the surge node either. If a rollout stalls anyway, delete the old pod and
-the rollout completes.
-
-Size the VM for the largest SmithDB pod at the chosen size; see the VM row in
-[Sizing](#sizing). The `D16s_v3` pool above fits `small`, not `medium` or
-`large`.
-
-The pool does nothing until SmithDB is scheduled onto it. Pin every SmithDB
-service to the pool and give it the matching toleration in
-`langsmith-values-smithdb.yaml`. `init-values.sh` copies that file once and
-never overwrites it.
-
-```yaml
-smithdb:
-  query:
-    deployment:
-      nodeSelector: &smithdb_pool
-        kubernetes.azure.com/agentpool: smithdb
-      tolerations: &smithdb_toleration
-        - key: workload
-          operator: Equal
-          value: smithdb
-          effect: NoSchedule
-  ingestion:
-    deployment:
-      nodeSelector: *smithdb_pool
-      tolerations: *smithdb_toleration
-  compactionWorker:
-    deployment:
-      nodeSelector: *smithdb_pool
-      tolerations: *smithdb_toleration
-  compaction:
-    deployment:
-      nodeSelector: *smithdb_pool
-      tolerations: *smithdb_toleration
-  clusterManager:
-    deployment:
-      nodeSelector: *smithdb_pool
-      tolerations: *smithdb_toleration
-  mutations:
-    deployment:
-      nodeSelector: *smithdb_pool
-      tolerations: *smithdb_toleration
-  runRules:
-    deployment:
-      nodeSelector: *smithdb_pool
-      tolerations: *smithdb_toleration
-  statsQuery:
-    deployment:
-      nodeSelector: *smithdb_pool
-      tolerations: *smithdb_toleration
-```
+For an attached cluster with `existing_cluster_node_pools_managed = false`,
+Terraform creates no pools. Provide zonal nodes with the label and taint above,
+or set `existing_cluster_node_pools_managed = true` so Terraform adds the pool.
 
 ## Pre-apply review
 
@@ -532,10 +451,9 @@ Before a real apply, also confirm:
   [Metastore SKU on an existing install](#metastore-sku-on-an-existing-install);
 - Premium SSD v2 is available in the chosen region, and the AKS nodes are zonal.
   In most regions that offer availability zones a Premium SSD v2 disk attaches
-  only to a zonal VM, so `availability_zones` has to name the zones the nodes
-  run in. Zones apply at cluster creation, so an existing nonzonal pool needs
-  rebuilding rather than a variable change;
-- the default node pool is sized for the SmithDB pods the chart adds, and the
+  only to a zonal VM. Set `smithdb_node_zones` for the dedicated pool without
+  rebuilding existing pools;
+- the SmithDB pool is sized for its chart tier and migration pods, and the
   AKS subnet holds every pool at maximum scale; and
 - the chart PR's Azure provider values and workload-identity annotations match
   the outputs listed above.
