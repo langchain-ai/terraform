@@ -107,13 +107,13 @@ When the data plane is active, add your Foundry resource ID and run `terraform a
 ```hcl
 data_planes = {
   prod = {
-    location                    = "eastus"
-    engine_foundry_resource_id = "/subscriptions/<id>/resourceGroups/<name>/providers/Microsoft.CognitiveServices/accounts/<name>"
+    location                   = "eastus"
+    engine_foundry_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ai-prod/providers/Microsoft.CognitiveServices/accounts/contoso-foundry"
   }
 }
 ```
 
-The workload identity of the data plane gets `Cognitive Services User` on that resource, so LangSmith Engine can call Claude and GPT there without an API key. Remove the ID before you delete the data plane.
+To find the ID, run `az cognitiveservices account show -g <resource-group> -n <foundry-resource> --query id -o tsv`. The workload identity of the data plane gets `Cognitive Services User` on that resource, so LangSmith Engine can call Claude and GPT there without an API key. Remove the ID before you delete the data plane.
 
 ### Remove a data plane
 
