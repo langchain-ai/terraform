@@ -130,8 +130,17 @@ The workload identity of the data plane gets `Cognitive Services User` on each r
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
-| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false), engine_foundry_resource_ids = optional(list(string), []) }))` | no | `{}` | One entry per data plane. The key is the data plane name. |
+| `data_planes` | `map(object)` | no | `{}` | One entry per data plane. The key is the data plane name. See the fields below. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
+
+Fields of each `data_planes` entry:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `location` | `string` | yes | - | Azure region of the data plane. |
+| `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
+| `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
+| `engine_foundry_resource_ids` | `list(string)` | no | `[]` | Azure AI Foundry resource IDs that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
 
