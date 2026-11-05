@@ -116,11 +116,31 @@ run "duplicates_are_rejected" {
   expect_failures = [var.blob_ttl_long_days_list]
 }
 
-run "fractional_and_zero_days_are_rejected" {
+run "zero_days_are_rejected" {
   command = plan
 
   variables {
-    blob_ttl_long_days_list = [0, 30.5]
+    blob_ttl_long_days_list = [30, 0]
+  }
+
+  expect_failures = [var.blob_ttl_long_days_list]
+}
+
+run "fractional_days_are_rejected" {
+  command = plan
+
+  variables {
+    blob_ttl_long_days_list = [30, 30.5]
+  }
+
+  expect_failures = [var.blob_ttl_long_days_list]
+}
+
+run "more_than_3650_days_are_rejected" {
+  command = plan
+
+  variables {
+    blob_ttl_long_days_list = [30, 3651]
   }
 
   expect_failures = [var.blob_ttl_long_days_list]

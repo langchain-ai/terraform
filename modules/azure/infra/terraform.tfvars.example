@@ -352,6 +352,7 @@ keyvault_purge_protection = false   # set true for production
 blob_ttl_enabled    = true
 blob_ttl_short_days = 14    # short-lived trace payloads
 blob_ttl_long_days  = 400   # run attachments (~13 months)
+# blob_ttl_long_days_list = [30, 90, 365]  # custom long-lived retention: delete ttl_<N>d/ after N days
 # storage_replication_type = "LRS" # LRS | ZRS (zone loss) | GRS/RAGRS (region) | GZRS/RAGZRS (both). Choose before the first apply: README "Storage redundancy"
 # storage_shared_access_key_enabled = false  # trace-blob account; nothing in LangSmith uses a key
 # smithdb_storage_shared_access_key_enabled = false  # true only for SmithDB static-key auth; README "Storage security defaults"

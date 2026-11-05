@@ -217,6 +217,7 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 #------------------------------------------------------------------------------
 storage_ttl_short_days = 14    # Short-lived trace TTL (ttl_s/ prefix, default: 14 days)
 storage_ttl_long_days  = 400   # Long-lived trace TTL (ttl_l/ prefix, default: 400 days)
+# storage_ttl_long_days_list = [30, 90, 365] # Custom long-lived retention: delete ttl_<N>d/ after N days
 storage_force_destroy  = false # Prevent bucket deletion with objects
 
 #------------------------------------------------------------------------------

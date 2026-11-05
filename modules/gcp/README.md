@@ -385,6 +385,7 @@ helm upgrade langsmith langchain/langsmith \
 | `clickhouse_tls` | `true` | no | Enable TLS for ClickHouse connections |
 | `storage_ttl_short_days` | `14` | no | GCS TTL for `ttl_s/` prefix |
 | `storage_ttl_long_days` | `400` | no | GCS TTL for `ttl_l/` prefix |
+| `storage_ttl_long_days_list` | `[]` | no | One rule per value N: GCS TTL of N days for the `ttl_<N>d/` prefix (custom long-lived retention) |
 | `storage_force_destroy` | `false` | no | Allow bucket deletion with objects inside |
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |

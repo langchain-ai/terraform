@@ -543,6 +543,7 @@ dns_create_zone = true
 s3_ttl_enabled    = true
 s3_ttl_short_days = 14     # delete short-lived traces after 14 days
 s3_ttl_long_days  = 400    # delete long-lived traces after ~13 months
+# s3_ttl_long_days_list = [30, 90, 365]  # custom long-lived retention: delete ttl_<N>d/ after N days
 
 # S3 KMS encryption — upgrades from SSE-S3 (AES256) to SSE-KMS with a customer-managed key.
 # Adds ~$1/mo per key plus $0.03/10k requests. Leave empty for default SSE-S3.

@@ -1116,6 +1116,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
+| `s3_ttl_long_days_list` | `[]` | no | One rule per value N: TTL of N days for the `ttl_<N>d/` prefix (custom long-lived retention) |
 | `s3_kms_key_arn` | `""` | no | KMS CMK ARN for S3 encryption (empty = SSE-S3) |
 | `s3_versioning_enabled` | `false` | no | Enable S3 bucket versioning |
 | `tls_certificate_source` | `acm` | no | `acm`, `letsencrypt`, or `none` |
