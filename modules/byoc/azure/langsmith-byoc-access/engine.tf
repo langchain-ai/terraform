@@ -6,7 +6,7 @@
 locals {
   engine_foundry_data_planes = {
     for key, data_plane in var.data_planes : key => data_plane
-    if length(data_plane.engine_foundry_resource_ids) > 0
+    if data_plane.engine_foundry_resource_id != null
   }
 }
 
@@ -28,14 +28,10 @@ data "azurerm_user_assigned_identity" "engine" {
 # Cognitive Services User allows inference on Claude and GPT. Cognitive
 # Services OpenAI User allows only the OpenAI models.
 resource "azurerm_role_assignment" "engine_foundry" {
-  for_each = merge([
-    for key, data_plane in local.engine_foundry_data_planes : {
-      for scope in data_plane.engine_foundry_resource_ids : "${key}|${scope}" => { data_plane = key, scope = scope }
-    }
-  ]...)
+  for_each = local.engine_foundry_data_planes
 
-  scope                = each.value.scope
+  scope                = each.value.engine_foundry_resource_id
   role_definition_name = "Cognitive Services User"
-  principal_id         = data.azurerm_user_assigned_identity.engine[each.value.data_plane].principal_id
+  principal_id         = data.azurerm_user_assigned_identity.engine[each.key].principal_id
   principal_type       = "ServicePrincipal"
 }

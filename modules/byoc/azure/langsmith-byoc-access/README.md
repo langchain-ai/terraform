@@ -102,18 +102,18 @@ Set `reduced_access = false` again before an upgrade that adds a role assignment
 
 ### Let Engine use Azure AI Foundry (optional)
 
-When the data plane is active, add your Foundry resource IDs and run `terraform apply`:
+When the data plane is active, add your Foundry resource ID and run `terraform apply`:
 
 ```hcl
 data_planes = {
   prod = {
     location                    = "eastus"
-    engine_foundry_resource_ids = ["/subscriptions/<id>/resourceGroups/<name>/providers/Microsoft.CognitiveServices/accounts/<name>"]
+    engine_foundry_resource_id = "/subscriptions/<id>/resourceGroups/<name>/providers/Microsoft.CognitiveServices/accounts/<name>"
   }
 }
 ```
 
-The workload identity of the data plane gets `Cognitive Services User` on each resource, so LangSmith Engine can call Claude and GPT there without an API key. Remove the IDs before you delete the data plane.
+The workload identity of the data plane gets `Cognitive Services User` on that resource, so LangSmith Engine can call Claude and GPT there without an API key. Remove the ID before you delete the data plane.
 
 ### Remove a data plane
 
@@ -140,7 +140,7 @@ Fields of each `data_planes` entry:
 | `location` | `string` | yes | - | Azure region of the data plane. |
 | `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
-| `engine_foundry_resource_ids` | `list(string)` | no | `[]` | Azure AI Foundry resource IDs that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
+| `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
 
