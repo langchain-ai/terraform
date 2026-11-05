@@ -90,7 +90,7 @@ Existing chart-managed migrations keep using `smithdb-migration-taskdb/postgres_
 With the flag on, Terraform grants the SmithDB role read access to the traces bucket, and the deploy starts the migration Job.
 Once the Job is Complete, run `make smithdb-migration-job-end`, then the same three commands, to remove the grant, TaskDB, and its settings.
 An external TaskDB Postgres is not deleted.
-Migration and TaskDB use chart-default resources; change migration parallelism in `langsmith-values-smithdb-migration.yaml` as needed.
+Each migration pod uses a 100 GiB EBS scratch volume at `/tmp`. Migration and TaskDB use chart-default CPU and memory; change migration parallelism in `langsmith-values-smithdb-migration.yaml` as needed.
 Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `make deploy`. Kubernetes cannot update an existing Job's pod template; the recreated Job resumes from progress saved in TaskDB.
 
 ## Production notes

@@ -183,7 +183,7 @@ else
   pass "Connection settings stored in SSM"
 fi
 
-# Keep resource sizing and storage at chart defaults.
+# Keep CPU and memory at chart defaults; init-values.sh supplies scratch storage.
 {
   echo "# Written by make smithdb-migration-job-start; rerun it to change these answers."
   echo "smithdb:"
@@ -209,7 +209,7 @@ fi
   fi
 } > "$MIGRATION_FILE"
 pass "Written: helm/values/langsmith-values-smithdb-migration.yaml"
-info "Migration and TaskDB use chart defaults; change parallelism in that file as needed"
+info "Migration and TaskDB use chart-default CPU and memory; change parallelism in that file as needed"
 info "Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun make deploy to resume from saved progress"
 
 header "6. terraform.tfvars"
