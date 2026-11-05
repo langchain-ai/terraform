@@ -66,7 +66,7 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
   count = var.enable_smithdb ? 1 : 0
 
   metadata {
-    name = "smithdb-cache-${local.base_name}"
+    name = "smithdb-cache"
   }
   storage_provisioner = "ebs.csi.aws.com"
   parameters = {
