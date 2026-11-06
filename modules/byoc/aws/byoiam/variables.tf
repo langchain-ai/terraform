@@ -62,6 +62,17 @@ variable "ebs_kms_key_arns" {
   }
 }
 
+variable "cmk_key_arns" {
+  description = "Optional. Customer-managed KMS key ARNs that new LangSmith data plane resources are encrypted with. Roles that read data plane buckets, RDS master secrets, EBS volumes, or EKS secrets may use them through those services. The key owner must also allow those roles on each key."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.cmk_key_arns) <= 5 && alltrue([for arn in var.cmk_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Provide at most five KMS key ARNs."
+  }
+}
+
 variable "permissions_boundary_arn" {
   description = "Optional customer IAM permissions boundary applied to all 16 application/infrastructure roles (not AWS service-linked roles)."
   type        = string
