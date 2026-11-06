@@ -41,6 +41,30 @@ locals {
     local.sandbox_host_production_profile ? "n2-standard-32" : "n2-standard-8",
   )
 
+  #----------------------------------------------------------------------------
+  # Ingress TLS
+  #----------------------------------------------------------------------------
+  tls_enabled        = var.tls_certificate_source != "none"
+  tls_google_managed = var.tls_certificate_source == "google-managed"
+
+  # cert-manager writes the TLS Secret from your own issuer.
+  tls_cert_manager_issued = var.tls_certificate_source == "cert-manager"
+
+  # 'existing' with a Secret the operator creates. Terraform only references it,
+  # so the key stays out of state.
+  tls_external_secret = var.tls_certificate_source == "existing" && var.tls_existing_secret_name != ""
+
+  # The Secret the HTTPS listener references. Empty with no TLS, and with a
+  # Google-managed certificate, which the load balancer holds instead.
+  tls_listener_secret_name = (
+    !local.tls_enabled || local.tls_google_managed ? "" :
+    local.tls_external_secret ? var.tls_existing_secret_name : var.tls_secret_name
+  )
+
+  # Gateway API CRDs for Envoy Gateway. Envoy Gateway v1.9 needs Gateway API
+  # v1.6, and the upstream upgrade order is Gateway API first, then Envoy Gateway.
+  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
+
   # Cloud SQL
   postgres_instance_name = "${local.base_name}-pg${local.suffix}"
   postgres_database_name = "langsmith"

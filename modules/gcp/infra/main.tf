@@ -100,14 +100,37 @@ resource "terraform_data" "validate_inputs" {
       error_message = "postgres_password is required when postgres_source = 'external'. Set TF_VAR_postgres_password in your environment."
     }
 
+    # 'existing' takes either a Secret the operator creates, or the PEM inputs
+    # that Terraform writes to a Secret. Not both: the Secret would win silently.
     precondition {
-      condition     = var.tls_certificate_source != "letsencrypt" || var.letsencrypt_email != ""
-      error_message = "letsencrypt_email is required when tls_certificate_source = 'letsencrypt'."
+      condition = var.tls_certificate_source != "existing" || (
+        (var.tls_existing_secret_name != "") != (var.tls_certificate_crt != "" && var.tls_certificate_key != "")
+      )
+      error_message = "tls_certificate_source = 'existing' needs exactly one of: tls_existing_secret_name (recommended, a kubernetes.io/tls Secret you create), or both tls_certificate_crt and tls_certificate_key."
+    }
+
+    # cert-manager issues for a hostname, so it needs one.
+    precondition {
+      condition     = var.tls_certificate_source != "cert-manager" || var.langsmith_domain != ""
+      error_message = "tls_certificate_source = 'cert-manager' requires langsmith_domain."
     }
 
     precondition {
-      condition     = var.tls_certificate_source != "existing" || (var.tls_certificate_crt != "" && var.tls_certificate_key != "")
-      error_message = "tls_certificate_crt and tls_certificate_key are required when tls_certificate_source = 'existing'."
+      condition     = var.tls_certificate_source != "cert-manager" || var.cert_manager_issuer_name != ""
+      error_message = "tls_certificate_source = 'cert-manager' requires cert_manager_issuer_name, the name of your Issuer or ClusterIssuer."
+    }
+
+    # The certificate lives on the Google Cloud load balancer, which only the GKE
+    # Gateway creates. Envoy Gateway terminates TLS in the cluster from a Secret.
+    # The gke_gateway_class validation allows only the global class, which reads
+    # a certificate map. The default langsmith_domain is an example, and a
+    # certificate for it can never be authorized.
+    precondition {
+      condition = var.tls_certificate_source != "google-managed" || (
+        var.install_ingress && var.ingress_type == "gke" &&
+        var.langsmith_domain != "" && var.langsmith_domain != "langsmith.example.com"
+      )
+      error_message = "tls_certificate_source = 'google-managed' requires install_ingress = true, ingress_type = 'gke', and langsmith_domain set to your own domain, not the example langsmith.example.com. For Envoy Gateway, use 'existing' or 'cert-manager'."
     }
 
     precondition {
@@ -378,6 +401,10 @@ module "gke_cluster" {
   release_channel            = var.gke_release_channel
   deletion_protection        = var.gke_deletion_protection
   network_policy_provider    = var.gke_network_policy_provider
+
+  # The GKE Gateway controller, for ingress_type = "gke" (the default). With
+  # ingress_type = "envoy" it stays off.
+  enable_gateway_api = var.install_ingress && var.ingress_type == "gke"
 
   # Dedicated sandbox-host nodes. Sandboxes run Firecracker through nested
   # virtualization and are isolated from the default LangSmith workload pool.
@@ -703,7 +730,38 @@ module "dns" {
   domain_name        = var.langsmith_domain
   create_zone        = var.dns_create_zone
   existing_zone_name = var.dns_existing_zone_name
-  create_certificate = var.dns_create_certificate
+}
+
+#------------------------------------------------------------------------------
+# Certificate Manager (tls_certificate_source = "google-managed")
+# A Google-managed certificate on the GKE Gateway load balancer, with a DNS
+# authorization that the DNS module's zone holds when it is enabled.
+#------------------------------------------------------------------------------
+module "certificate_manager" {
+  source = "./modules/certificate-manager"
+  count  = local.tls_google_managed ? 1 : 0
+
+  project_id       = var.project_id
+  name             = "${local.base_name}-langsmith-tls"
+  domain           = var.langsmith_domain
+  include_wildcard = var.tls_google_managed_include_wildcard
+  issuance_config  = var.tls_google_managed_issuance_config
+  dns_zone_name    = var.enable_dns_module ? module.dns[0].zone_name : ""
+  labels           = local.common_labels
+
+  depends_on = [google_project_service.apis, terraform_data.validate_inputs]
+}
+
+# Plan-time warnings for TLS settings that work but are not recommended.
+check "tls_settings" {
+  assert {
+    condition     = !(var.tls_certificate_source == "existing" && var.tls_certificate_crt != "")
+    error_message = "tls_certificate_crt and tls_certificate_key are deprecated: Terraform stores the private key in state. Create a kubernetes.io/tls Secret in the LangSmith namespace and set tls_existing_secret_name instead."
+  }
+  assert {
+    condition     = var.dns_create_certificate == null
+    error_message = "dns_create_certificate is deprecated and has no effect. Remove it from terraform.tfvars. For a Google-managed certificate, set tls_certificate_source = 'google-managed' with ingress_type = 'gke'."
+  }
 }
 
 #------------------------------------------------------------------------------
@@ -722,6 +780,10 @@ module "k8s_bootstrap" {
   # Namespace configuration
   langsmith_namespace         = var.langsmith_namespace
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
+
+  # Only the GKE Gateway needs Google's load balancer ranges admitted. With
+  # ingress_type = "envoy" this stays off.
+  allow_gke_gateway_traffic = var.install_ingress && var.ingress_type == "gke"
 
   # sandbox-host manages Firecracker VMs in child cgroups and must not receive
   # a namespace-injected parent limit, so inject requests only, and only for
@@ -765,17 +827,20 @@ module "k8s_bootstrap" {
 
   # TLS Configuration
   tls_certificate_source = var.tls_certificate_source
-  install_cert_manager   = var.install_cert_manager || var.tls_certificate_source == "letsencrypt"
-  letsencrypt_email      = var.letsencrypt_email
+  install_cert_manager   = var.install_cert_manager || local.tls_cert_manager_issued
+  cert_manager_version   = var.cert_manager_version
 
-  # Existing TLS certificates (when tls_certificate_source = "existing")
-  tls_certificate_crt = var.tls_certificate_crt
-  tls_certificate_key = var.tls_certificate_key
-  tls_secret_name     = var.tls_secret_name
+  # Your own issuer (tls_certificate_source = "cert-manager")
+  cert_manager_issuer_name = var.cert_manager_issuer_name
+  cert_manager_issuer_kind = var.cert_manager_issuer_kind
+
+  # Existing TLS certificates (when tls_certificate_source = "existing"). With
+  # tls_existing_secret_name the operator owns the Secret, so the PEM inputs
+  # are not passed and Terraform creates no Secret.
+  tls_certificate_crt = local.tls_external_secret ? "" : var.tls_certificate_crt
+  tls_certificate_key = local.tls_external_secret ? "" : var.tls_certificate_key
+  tls_secret_name     = local.tls_listener_secret_name
   langsmith_domain    = var.langsmith_domain
-
-  # Gateway name for cert-manager HTTP01 challenges
-  gateway_name = var.install_ingress && var.ingress_type == "envoy" ? "${local.base_name}-gateway" : "langsmith-gateway"
 
   # License key (optional)
   langsmith_license_key = var.langsmith_license_key
@@ -983,6 +1048,7 @@ module "ingress" {
   cluster_name = module.gke_cluster.cluster_name
 
   ingress_type        = var.ingress_type
+  gke_gateway_class   = var.gke_gateway_class
   langsmith_domain    = var.langsmith_domain
   langsmith_namespace = var.langsmith_namespace
 
@@ -990,8 +1056,10 @@ module "ingress" {
   gateway_name = "${local.base_name}-gateway"
 
   # TLS configuration for Gateway HTTPS listener
-  tls_certificate_source = var.tls_certificate_source
-  tls_secret_name        = var.tls_secret_name
+  tls_certificate_source   = var.tls_certificate_source
+  tls_secret_name          = local.tls_listener_secret_name
+  tls_certificate_map_name = local.tls_google_managed ? module.certificate_manager[0].certificate_map_name : ""
+  gateway_api_crds_url     = local.gateway_api_crds_url
 
   depends_on = [time_sleep.wait_for_cluster, module.k8s_bootstrap]
 }

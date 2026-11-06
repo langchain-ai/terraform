@@ -133,30 +133,74 @@ kubectl run redis-test --rm -it --image=redis:7 -n langsmith -- \
 
 ---
 
-### Issue #6 — cert-manager fails to issue Let's Encrypt certificate
+### Issue #6 — cert-manager does not issue the certificate
 
-**Symptom:** `kubectl get certificate -n langsmith` shows `READY=False`. ACME HTTP01 challenge failing.
+**Symptom:** With `tls_certificate_source = "cert-manager"`, `kubectl get certificate -n langsmith` shows `READY=False`, and the Gateway's HTTPS listener cannot find its Secret.
 
-**Cause:** The DNS A record does not point to the Envoy Gateway IP, or port 80 is blocked by a firewall rule on the load balancer.
+**Cause:** The issuer in `cert_manager_issuer_name` does not exist, is not Ready, or cannot issue for `langsmith_domain`.
 
 **Fix:**
 
 ```bash
-# Get Gateway external IP
-kubectl get svc -n envoy-gateway-system \
-  -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway \
-  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'
-
-# Check certificate and challenge status
-kubectl describe certificate <cert-name> -n langsmith
-kubectl get challenges -n langsmith
-kubectl describe challenge -n langsmith
-
-# Verify DNS resolution
-dig +short <your-langsmith-domain>
+kubectl describe certificate <tls_secret_name> -n langsmith
+kubectl get certificaterequest -n langsmith
+kubectl describe clusterissuer <cert_manager_issuer_name>   # or: kubectl describe issuer <name> -n langsmith
 ```
 
-The DNS A record must resolve to the Gateway IP before the certificate can be issued. cert-manager's HTTP01 solver needs port 80 to be accessible from the internet.
+The events of the Certificate and of its CertificateRequest give the reason. An ACME issuer must use DNS-01: Terraform does not route HTTP-01 challenges to the Gateway ([TLS.md](TLS.md)).
+
+---
+
+### Issue #6b — Google-managed certificate stays PROVISIONING
+
+**Symptom:** `make status` shows the TLS certificate as `PROVISIONING` or `FAILED`, and HTTPS on the GKE Gateway fails the handshake.
+
+**Cause:** The DNS authorization CNAME is missing or wrong, or a CAA record does not allow `pki.goog`.
+
+**Fix:**
+
+```bash
+terraform -chdir=infra output tls_dns_authorization_record           # the record to add
+terraform -chdir=infra output tls_dns_authorization_record_managed   # true when Terraform wrote it
+dig +short CNAME _acme-challenge.<your-langsmith-domain>
+dig +short CAA <your-langsmith-domain>
+gcloud certificate-manager certificates describe \
+  "$(terraform -chdir=infra output -raw managed_certificate_name)" --project <project>
+```
+
+The `authorizationAttemptInfo` field of the describe output names the failing domain and the reason.
+
+---
+
+### Issue #6d — GKE Gateway returns 404 `fault filter abort` or 502 after a deploy
+
+**Symptom:** The certificate is `ACTIVE` and the TLS handshake succeeds, but HTTPS returns `404` with the body `fault filter abort`, or `502`.
+
+**Cause:** `404` with `fault filter abort` comes from the Google load balancer when no route matches yet. Right after the Gateway or the LangSmith HTTPRoute changes, the new URL map needs a few minutes to reach every Google edge location. `502` means that the route matches, but no backend passes its health check yet.
+
+**Fix:** Wait a few minutes, then check the route and the backends:
+
+```bash
+kubectl get httproute -n langsmith        # the LangSmith route must be Accepted on the https listener
+kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.listeners[?(@.name=="https")].attachedRoutes}'
+gcloud compute backend-services list --global --project <project> --filter='name~langsmith-frontend' --format='value(name)'
+gcloud compute backend-services get-health <backend-service> --global --project <project>
+```
+
+If a backend stays `UNHEALTHY`, check that the `langsmith-default` NetworkPolicy allows `130.211.0.0/22` and `35.191.0.0/16`. Terraform adds them when `ingress_type = "gke"`.
+
+---
+
+### Issue #6c — terraform apply stops at the cert-manager version check
+
+**Symptom:** `null_resource.cert_manager_upgrade_guard` fails with `cert-manager vX.Y.Z is installed. cert-manager supports upgrades one minor version at a time`.
+
+**Fix:** step the release up first, then apply again:
+
+```bash
+make cert-manager-upgrade
+make apply
+```
 
 ---
 
@@ -184,7 +228,7 @@ Create a new HMAC key in GCP Console: Storage > Settings > Interoperability > Cr
 
 ---
 
-### Issue #8 — Envoy Gateway webhook blocking GKE operations
+### Issue #8 — Envoy Gateway webhook blocking GKE operations (`ingress_type = "envoy"`)
 
 **Symptom:**
 ```
@@ -207,11 +251,13 @@ kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system
 
 ---
 
-### Issue #9 — Envoy Gateway external IP changed after re-apply
+### Issue #9 — Envoy Gateway external IP changed after re-apply (`ingress_type = "envoy"`)
 
 **Symptom:** DNS no longer resolves to the correct IP after Terraform re-apply, or existing firewall allowlists stop working.
 
-**Cause:** The Envoy Gateway external IP is tied to the `Gateway` Kubernetes resource managed by Terraform. If that resource is deleted and recreated (e.g. due to a `taint`, a module change that forces replacement, or a `terraform destroy` + re-apply), GCP issues a **new** IP address. There is no way to reserve the original IP.
+**Cause:** The Envoy Gateway external IP is tied to the `Gateway` Kubernetes resource managed by Terraform. If that resource is deleted and recreated (e.g. due to a `taint`, a module change that forces replacement, or a `terraform destroy` + re-apply), GCP issues a **new** IP address. There is no way to reserve the original IP. The GKE Gateway (`ingress_type = "gke"`, the default) uses a reserved static IP, which only `terraform destroy` releases.
+
+An install that did not set `ingress_type` moves from Envoy Gateway to the GKE Gateway on the first apply after the default changed, and gets a new IP. That move is not tested on a running install. Set `ingress_type = "envoy"` to stay on Envoy Gateway.
 
 **Prevention:**
 - Never `terraform taint` or manually delete the `Gateway` resource.
@@ -431,15 +477,25 @@ kubectl logs -n langsmith deploy/langsmith-backend --tail=100 -f
 ```bash
 kubectl get certificate -n langsmith
 kubectl describe certificate <cert-name> -n langsmith
-kubectl get challenges -n langsmith
+kubectl get certificaterequest -n langsmith
 kubectl get clusterissuer
+
+# google-managed (GKE Gateway): the certificate is in Certificate Manager
+gcloud certificate-manager certificates describe \
+  "$(terraform -chdir=infra output -raw managed_certificate_name)" \
+  --project <project> --format='value(managed.state)'
 ```
 
 ### Gateway and load balancer
 
 ```bash
-kubectl get gateway -n envoy-gateway-system
+# GKE Gateway (ingress_type = "gke", the default): the Gateway is in the LangSmith namespace
+kubectl get gateway -n langsmith
+kubectl describe gateway -n langsmith
 kubectl get httproute -n langsmith
+
+# Envoy Gateway (ingress_type = "envoy")
+kubectl get gateway -n envoy-gateway-system
 kubectl get svc -n envoy-gateway-system -o wide
 kubectl get pods -n envoy-gateway-system
 ```
@@ -512,7 +568,7 @@ echo "=== Context ===" && kubectl config current-context
 echo "=== Nodes ===" && kubectl get nodes
 echo "=== Pods ===" && kubectl get pods -n langsmith
 echo "=== Certificate ===" && kubectl get certificate -n langsmith
-echo "=== Gateway ===" && kubectl get gateway -n envoy-gateway-system
+echo "=== Gateway ===" && kubectl get gateway -A
 echo "=== Secrets ===" && kubectl get secrets -n langsmith | grep -E "langsmith-postgres|langsmith-redis"
 echo "=== Helm ===" && helm status langsmith -n langsmith 2>/dev/null | grep -E "STATUS|LAST DEPLOYED"
 ```
