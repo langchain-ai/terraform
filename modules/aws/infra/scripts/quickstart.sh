@@ -640,10 +640,13 @@ _confirm_storage_change "ClickHouse" "$_ex_ch" "$CH_SOURCE"
 
 _section "7. SmithDB"
 
-ENABLE_SMITHDB="$(_existing enable_smithdb true)"
+# Older configurations may omit these flags and rely on Terraform's defaults.
+_smithdb_default=true
+[[ "$UPDATE_MODE" == "true" ]] && _smithdb_default=false
+ENABLE_SMITHDB="$(_existing enable_smithdb "$_smithdb_default")"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  SMITHDB_INGESTION="$(_existing smithdb_ingestion_enabled true)"
+  SMITHDB_INGESTION="$(_existing smithdb_ingestion_enabled "$_smithdb_default")"
   SMITHDB_MIGRATION="$(_existing smithdb_migration_enabled false)"
   SMITHDB_QUERY="$(_existing smithdb_query_enabled false)"
 fi

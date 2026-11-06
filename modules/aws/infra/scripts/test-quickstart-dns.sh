@@ -210,6 +210,15 @@ has_line "disabled SmithDB survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   'enable_smithdb                        = false'
 has_line "disabled ingestion survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   'smithdb_ingestion_enabled             = false'
+sed '/^enable_smithdb[[:space:]]*=/d; /^smithdb_ingestion_enabled[[:space:]]*=/d' \
+  "$REUSE_INFRA/terraform.tfvars" > "$TMP/legacy.tfvars"
+mv "$TMP/legacy.tfvars" "$REUSE_INFRA/terraform.tfvars"
+run_wizard "legacy update with omitted SmithDB flags completes" "$REUSE_INFRA" \
+  "$TMP/update.answers" "$TMP/legacy-update.log"
+has_line "omitted SmithDB flag stays disabled on update" "$REUSE_INFRA/terraform.tfvars" \
+  'enable_smithdb                        = false'
+has_line "omitted ingestion flag stays disabled on update" "$REUSE_INFRA/terraform.tfvars" \
+  'smithdb_ingestion_enabled             = false'
 
 echo "3. Creating a new zone writes the choice without an existing ID"
 NEW_INFRA="$TMP/new"
