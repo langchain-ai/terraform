@@ -142,7 +142,7 @@ Fields of each `data_planes` entry:
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 
-A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
+A `data_planes` key must have 1 to 35 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, do not use two hyphens in sequence, and do not start with `internal`. LangSmith uses the same rules for Azure data plane names.
 
 ## Outputs
 

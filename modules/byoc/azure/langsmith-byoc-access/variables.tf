@@ -33,13 +33,14 @@ variable "data_planes" {
 
   # The key is part of the resource group name (at most 90 characters) and of
   # the Key Vault name, which allows no consecutive hyphens and must start with
-  # a letter.
+  # a letter. LangSmith accepts Azure data plane names of at most 35 characters
+  # that do not start with "internal".
   validation {
     condition = alltrue([
       for key in keys(var.data_planes) :
-      can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
+      can(regex("^[a-z]([a-z0-9-]{0,33}[a-z0-9])?$", key)) && !strcontains(key, "--") && !startswith(key, "internal")
     ])
-    error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+    error_message = "Each data_planes key must be 1 to 35 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, contain no consecutive hyphens, and not start with \"internal\"."
   }
 }
 
