@@ -28,13 +28,20 @@ plan time.
 
 ## Configure infrastructure
 
-Set `enable_smithdb = true` in `infra/terraform.tfvars`, or answer yes in
-`make quickstart`. QuickStart also asks for SmithDB's machine type and minimum
-and maximum node counts, independently of LangSmith. For example:
+New GKE Standard setups created by `make quickstart` enable SmithDB and
+ingestion (dual write) automatically. Historical migration and SmithDB queries
+start disabled. Regenerating an existing file preserves its SmithDB settings.
+
+QuickStart asks for SmithDB's size, cache mode, and minimum/maximum node counts,
+independently of LangSmith. The machine type follows the selected SmithDB size
+or sizing profile automatically. For example:
 
 ```hcl
+enable_smithdb            = true
+smithdb_ingestion_enabled = true
+smithdb_migration_enabled = false
+smithdb_query_enabled     = false
 smithdb_sizing            = "small"
-smithdb_node_machine_type = "c3-standard-22"
 smithdb_node_min_count    = 2
 smithdb_node_max_count    = 5
 ```

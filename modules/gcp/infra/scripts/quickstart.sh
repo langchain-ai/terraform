@@ -6,7 +6,8 @@
 
 # quickstart.sh — Interactive setup wizard for LangSmith on GCP
 #
-# Generates infra/terraform.tfvars from a guided questionnaire.
+# Generates infra/terraform.tfvars from a guided questionnaire. New GKE Standard
+# setups enable SmithDB and ingestion; migration and queries remain disabled.
 # Run from the gcp/ directory:
 #
 #   ./infra/scripts/quickstart.sh
@@ -104,6 +105,7 @@ _section() {
 
 # ── Guard ─────────────────────────────────────────────────────────────────────
 
+_update=false
 if [[ -f "$OUTPUT" ]]; then
   echo ""
   _yellow "WARNING"; printf ": %s already exists.\n" "$OUTPUT"
@@ -111,6 +113,7 @@ if [[ -f "$OUTPUT" ]]; then
     echo "Aborted."
     exit 0
   fi
+  _update=true
 fi
 
 # ── Banner ────────────────────────────────────────────────────────────────────
@@ -376,7 +379,10 @@ _section "6. Product Features (LangGraph Platform)"
 ENABLE_DEPLOYMENTS="false"
 ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"
-ENABLE_SMITHDB="false"
+ENABLE_SMITHDB="true"
+SMITHDB_INGESTION_ENABLED="true"
+SMITHDB_MIGRATION_ENABLED="false"
+SMITHDB_QUERY_ENABLED="false"
 SMITHDB_SIZING_LINES=""
 
 # SmithDB teardown posture follows the same split as the LangSmith metastore:
@@ -402,61 +408,85 @@ if [[ "$PROFILE" == "prod" ]]; then
   _ask_yn "Enable Insights? (ClickHouse-backed analytics)" "n" \
     && ENABLE_INSIGHTS="true" || true
 else
-  printf "  $(_dim "Dev profile: all features disabled. Edit terraform.tfvars to enable.")\n"
+  printf "  $(_dim "Dev profile: optional addons disabled. Edit terraform.tfvars to enable.")\n"
 fi
 
-# SmithDB needs its own node pools (or the general pool for minimal), which
-# Autopilot cannot provide, so only offer it on Standard clusters.
-if [[ "$USE_AUTOPILOT" == "false" ]]; then
+# Keep existing SmithDB choices and advanced settings when regenerating tfvars.
+if [[ "$_update" == true ]]; then
+  ENABLE_SMITHDB=$(_parse_tfvar enable_smithdb)
+  ENABLE_SMITHDB="${ENABLE_SMITHDB:-false}"
+  SMITHDB_INGESTION_ENABLED=$(_parse_tfvar smithdb_ingestion_enabled)
+  SMITHDB_INGESTION_ENABLED="${SMITHDB_INGESTION_ENABLED:-false}"
+  SMITHDB_MIGRATION_ENABLED=$(_parse_tfvar smithdb_migration_enabled)
+  SMITHDB_MIGRATION_ENABLED="${SMITHDB_MIGRATION_ENABLED:-false}"
+  SMITHDB_QUERY_ENABLED=$(_parse_tfvar smithdb_query_enabled)
+  SMITHDB_QUERY_ENABLED="${SMITHDB_QUERY_ENABLED:-false}"
+  _existing_protection=$(_parse_tfvar smithdb_metastore_deletion_protection)
+  SMITHDB_DELETION_PROTECTION="${_existing_protection:-$SMITHDB_DELETION_PROTECTION}"
+  _existing_force_destroy=$(_parse_tfvar smithdb_bucket_force_destroy)
+  SMITHDB_BUCKET_FORCE_DESTROY="${_existing_force_destroy:-$SMITHDB_BUCKET_FORCE_DESTROY}"
+  SMITHDB_SIZING_LINES=$(awk '
+    /^[[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*=/ {
+      key = $0; sub(/^[[:space:]]*/, "", key); sub(/[[:space:]]*=.*/, "", key)
+      keep = (key ~ /^smithdb_/ || key == "sizing_profile") &&
+        key !~ /^smithdb_(ingestion_enabled|migration_enabled|query_enabled|metastore_deletion_protection|bucket_force_destroy)$/
+    }
+    keep && $0 !~ /^[[:space:]]*(#|$)/ { print }
+  ' "$OUTPUT")
+  [[ -z "$SMITHDB_SIZING_LINES" ]] || SMITHDB_SIZING_LINES="
+$SMITHDB_SIZING_LINES"
+  printf "  $(_dim "Existing SmithDB settings preserved.")\n"
+elif [[ "$USE_AUTOPILOT" == "true" ]]; then
+  ENABLE_SMITHDB=false
+  SMITHDB_INGESTION_ENABLED=false
+  printf "  $(_dim "SmithDB requires GKE Standard; disabled for Autopilot.")\n"
+else
   echo ""
-  _ask_yn "Enable SmithDB? (columnar trace store, adds SmithDB node pools)" "n" \
-    && ENABLE_SMITHDB="true" || true
-  if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-    _ask_choice "SmithDB size (see SMITHDB.md#sizing)" \
-      "minimal — compatibility name for Small" \
-      "small   — 10 ingest / 10 query QPS" \
-      "medium  — 100 ingest / 40 query QPS" \
-      "large   — 1000 ingest / 100 query QPS, about 350 vCPU"
-    _smithdb_sizing=$(echo "minimal small medium large" | cut -d' ' -f"$_CHOICE")
-    # Network storage is the default for every tier.
-    _smithdb_cache="network-disk"
-    _smithdb_cache_value="null"
-    if [[ "$_smithdb_sizing" != "minimal" ]]; then
-      _ask_choice "SmithDB cache storage" \
-        "network-disk — Hyperdisk Balanced on general-purpose nodes (recommended)" "local-ssd — two legacy pools with node Local SSD"
-      [[ "$_CHOICE" == "2" ]] && _smithdb_cache="local-ssd"
-      _smithdb_cache_value="\"${_smithdb_cache}\""
-    fi
-    SMITHDB_SIZING_LINES="
+  printf "  $(_dim "SmithDB and ingestion are enabled. Migration and queries start disabled.")\n"
+  printf "  $(_dim "SmithDB uses a dedicated general-purpose node pool with network-disk cache by default.")\n"
+  printf "  $(_dim "The smithdb-cache storage class provisions Hyperdisk Balanced volumes with 7,000 IOPS and 1,000 MiB/s per volume.")\n"
+  printf "  $(_dim "The selected SmithDB size determines the machine type automatically.")\n"
+  _ask_choice "SmithDB size (see SMITHDB.md#sizing)" \
+    "minimal — compatibility name for Small" \
+    "small   — 10 ingest / 10 query QPS" \
+    "medium  — 100 ingest / 40 query QPS" \
+    "large   — 1000 ingest / 100 query QPS, about 350 vCPU"
+  _smithdb_sizing=$(echo "minimal small medium large" | cut -d' ' -f"$_CHOICE")
+  # Network storage is the default for every tier.
+  _smithdb_cache="network-disk"
+  _smithdb_cache_value="null"
+  if [[ "$_smithdb_sizing" != "minimal" ]]; then
+    _ask_choice "SmithDB cache storage" \
+      "network-disk — Hyperdisk Balanced on general-purpose nodes (recommended)" "local-ssd — two legacy pools with node Local SSD"
+    [[ "$_CHOICE" == "2" ]] && _smithdb_cache="local-ssd"
+    _smithdb_cache_value="\"${_smithdb_cache}\""
+  fi
+  SMITHDB_SIZING_LINES="
 smithdb_sizing            = \"${_smithdb_sizing}\"
 smithdb_cache_storage     = ${_smithdb_cache_value}"
-    if [[ "$_smithdb_cache" == "network-disk" ]]; then
-      case "$_smithdb_sizing" in
-        medium) _smithdb_machine=c3-standard-44; _smithdb_max=10 ;;
-        large) _smithdb_machine=c3-standard-88; _smithdb_max=10 ;;
-        *) _smithdb_machine=c3-standard-22; _smithdb_max=5 ;;
-      esac
-      _ask "SmithDB machine type" "$_smithdb_machine"
-      _smithdb_machine="$_REPLY"
-      while true; do
-        _ask_int "Minimum SmithDB nodes (all zones)" "2"
-        _smithdb_min="$_REPLY"
-        (( _smithdb_min >= 1 )) && break
-        echo "  Minimum must be at least 1."
-      done
-      while true; do
-        _ask_int "Maximum SmithDB nodes (all zones)" "$_smithdb_max"
-        _smithdb_max="$_REPLY"
-        (( _smithdb_max >= _smithdb_min )) && break
-        echo "  Maximum must be at least the minimum."
-      done
-      SMITHDB_SIZING_LINES+="
-smithdb_node_machine_type = \"${_smithdb_machine}\"
+  if [[ "$_smithdb_cache" == "network-disk" ]]; then
+    case "$_smithdb_sizing" in
+      medium) _smithdb_max=10 ;;
+      large) _smithdb_max=10 ;;
+      *) _smithdb_max=5 ;;
+    esac
+    while true; do
+      _ask_int "Minimum SmithDB nodes (all zones)" "2"
+      _smithdb_min="$_REPLY"
+      (( _smithdb_min >= 1 )) && break
+      echo "  Minimum must be at least 1."
+    done
+    while true; do
+      _ask_int "Maximum SmithDB nodes (all zones)" "$_smithdb_max"
+      _smithdb_max="$_REPLY"
+      (( _smithdb_max >= _smithdb_min )) && break
+      echo "  Maximum must be at least the minimum."
+    done
+    SMITHDB_SIZING_LINES+="
 smithdb_node_min_count    = ${_smithdb_min}
 smithdb_node_max_count    = ${_smithdb_max}"
-    fi
-    printf "  $(_dim "SmithDB starts in dual write: LangSmith writes to SmithDB and ClickHouse, reads stay on ClickHouse.")\n"
   fi
+  printf "  $(_dim "LangSmith writes to SmithDB and ClickHouse; reads stay on ClickHouse.")\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -613,9 +643,9 @@ enable_insights      = ${ENABLE_INSIGHTS}
 # for cutover, set smithdb_query_enabled = true. ClickHouse stays enabled throughout.
 #------------------------------------------------------------------------------
 enable_smithdb            = ${ENABLE_SMITHDB}
-smithdb_ingestion_enabled = ${ENABLE_SMITHDB}
-smithdb_migration_enabled = false
-smithdb_query_enabled     = false${SMITHDB_SIZING_LINES}
+smithdb_ingestion_enabled = ${SMITHDB_INGESTION_ENABLED}
+smithdb_migration_enabled = ${SMITHDB_MIGRATION_ENABLED}
+smithdb_query_enabled     = ${SMITHDB_QUERY_ENABLED}${SMITHDB_SIZING_LINES}
 
 # Teardown controls for the metastore and object store. Production keeps both
 # protected; a dev stack stays destroyable and rebuildable without manual steps.
@@ -649,7 +679,7 @@ printf "  %-22s %s\n" "ClickHouse:" "$CH_SOURCE"
 printf "  %-22s %s\n" "TLS:"        "$TLS_SOURCE"
 [[ -n "$DOMAIN" ]] && printf "  %-22s %s\n" "Domain:" "$DOMAIN"
 printf "  %-22s %s\n" "Features:"   "deployments=${ENABLE_DEPLOYMENTS}  agent_builder=${ENABLE_AGENT_BUILDER}  insights=${ENABLE_INSIGHTS}"
-printf "  %-22s %s\n" "SmithDB:"    "$ENABLE_SMITHDB${_smithdb_sizing:+ (${_smithdb_sizing}, ${_smithdb_cache}, dual write)}"
+printf "  %-22s %s\n" "SmithDB:"    "$ENABLE_SMITHDB (ingestion=${SMITHDB_INGESTION_ENABLED}, migration=${SMITHDB_MIGRATION_ENABLED}, query=${SMITHDB_QUERY_ENABLED})"
 
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"

@@ -406,6 +406,9 @@ enable_sso_oidc = false
 # so no chart version needs to be set. List what is published with:
 #   helm search repo langchain/langsmith --versions
 #------------------------------------------------------------------------------
+# New GKE Standard QuickStart setups enable SmithDB and ingestion automatically.
+# Migration and query start disabled; existing settings are preserved on update.
+# The raw Terraform default remains disabled.
 enable_smithdb = false
 
 # --- Sizing ----------------------------------------------------------------
@@ -416,6 +419,7 @@ enable_smithdb = false
 # small, medium, and large are for 10, 100, and 1000 ingest QPS. What each
 # size resolves to: modules/gcp/SMITHDB.md#sizing.
 # smithdb_sizing        = "small"
+# Network caches use smithdb-cache: Hyperdisk Balanced, 7000 IOPS, 1000 MiB/s.
 # smithdb_cache_storage = "network-disk"
 
 # --- Staged rollout ---------------------------------------------------------
@@ -510,6 +514,7 @@ enable_smithdb = false
 
 # --- Node pools -------------------------------------------------------------
 # Network-cache pool: counts are total across zones, independent of LangSmith.
+# Leave the machine type unset to follow the SmithDB size or sizing profile.
 # smithdb_node_machine_type = "c3-standard-22"
 # smithdb_node_min_count    = 2
 # smithdb_node_max_count    = 5

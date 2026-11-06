@@ -502,6 +502,8 @@ SmithDB is the in-chart columnar store and query engine that runs alongside Clic
 
 See [SMITHDB.md](SMITHDB.md) for the full deployment and staged-rollout guide. The rest of this section covers the GCP-specific design decisions.
 
+New GKE Standard QuickStart setups enable SmithDB and ingestion automatically, with historical migration and queries disabled. Existing SmithDB settings are preserved when regenerating the file. The raw Terraform default remains `enable_smithdb = false`.
+
 Setting `enable_smithdb = true` provisions four things:
 
 | Resource | Module | Notes |
@@ -525,7 +527,7 @@ Setting `enable_smithdb = true` provisions four things:
 
 6) **Pin the pool zones.** The cluster is regional, so an unpinned pool tries every zone in the region and fails if the machine type or disk count is unavailable in any of them. Check availability, then set `smithdb_node_locations`.
 
-The SmithDB pool uses `langsmith-nodepool/smithdb=true` and a matching `NoSchedule` taint. QuickStart sets its independent machine type and total minimum/maximum counts. Defaults are 2–5 nodes for Small and 2–10 for Medium/Large. The prior two pools remain an explicit Local SSD option. See [transition steps](SMITHDB.md#move-an-existing-deployment-to-the-new-pool) for existing deployments.
+The SmithDB pool uses `langsmith-nodepool/smithdb=true` and a matching `NoSchedule` taint. QuickStart uses the machine type selected by SmithDB sizing and asks for independent total minimum/maximum counts. Defaults are 2–5 nodes for Small and 2–10 for Medium/Large. The prior two pools remain an explicit Local SSD option. See [transition steps](SMITHDB.md#move-an-existing-deployment-to-the-new-pool) for existing deployments.
 
 ### Networking
 
