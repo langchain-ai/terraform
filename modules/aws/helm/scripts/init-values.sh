@@ -1021,29 +1021,6 @@ if [[ "$_enable_smithdb" == "true" ]]; then
 smithdb:
   cache:
     storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
-  # Migration scratch on EBS until the chart provides this default.
-  migration:
-    job:
-      podSecurityContext:
-        fsGroup: 1001
-      resources:
-        requests:
-          ephemeral-storage: null
-        limits:
-          ephemeral-storage: null
-      volumes:
-        - name: cache
-          ephemeral:
-            volumeClaimTemplate:
-              spec:
-                accessModes: ["ReadWriteOnce"]
-                storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
-                resources:
-                  requests:
-                    storage: 100Gi
-      volumeMounts:
-        - name: cache
-          mountPath: /tmp
   serviceAccount:
     annotations:
       eks.amazonaws.com/role-arn: "${SMITHDB_IRSA_ROLE_ARN}"

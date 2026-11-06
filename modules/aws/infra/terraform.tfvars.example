@@ -888,7 +888,7 @@ enable_bedrock_access = false
 # smithdb_s3_versioning_enabled = false
 # smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
 
-# ── SmithDB nodes (includes TaskDB and migration) ─────────────────────────────
+# ── SmithDB nodes (includes TaskDB) ─────────────────────────────
 # Null instance type/max follow sizing_profile:
 # default/dev/minimum: m6a.4xlarge / 5; production: m6a.8xlarge / 10;
 # production-large: m6a.16xlarge / 10. Caches use chart-default sizes on gp3.

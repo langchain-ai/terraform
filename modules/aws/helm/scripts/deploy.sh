@@ -644,7 +644,6 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   VALUES_ARGS+=(-f "$_smithdb_overrides")
   source "$INFRA_DIR/scripts/_smithdb-transition.sh"
   _smithdb_managed_values
-  _smithdb_check_migration "$NAMESPACE" "$RELEASE_NAME" "$_smithdb_migration_enabled"
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────

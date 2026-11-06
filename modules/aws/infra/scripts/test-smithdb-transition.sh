@@ -29,7 +29,11 @@ cat > "$TEST_DIR/legacy.json" <<'VALUES'
     "volumeMounts":[{"name":"local-ssd-storage","mountPath":"/data"}]
   }},
   "compaction":{"deployment":{"resources":{"requests":{"cpu":"99"}}}},
-  "migration":{"job":{"parallelism":3,"resources":{"requests":{"cpu":"12","ephemeral-storage":"100Gi"}}},
+  "migration":{"job":{"parallelism":3,"resources":{"requests":{"cpu":"12","ephemeral-storage":"100Gi"}},
+    "nodeSelector":{"customer-pool":"migration"},
+    "tolerations":[{"key":"customer-pool","operator":"Equal","value":"migration","effect":"NoSchedule"}],
+    "volumes":[{"name":"scratch","emptyDir":{}}],
+    "volumeMounts":[{"name":"scratch","mountPath":"/tmp"}],"podSecurityContext":{"fsGroup":1001}},
     "taskdb":{"postgres":{"auth":{"existingSecretName":"existing-taskdb"},"statefulSet":{"resources":{"requests":{"memory":"12Gi"}}}}}}
 }}
 VALUES
@@ -38,15 +42,14 @@ _sizing_profile=production
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-jq -e '
+jq -e --slurpfile before "$TEST_DIR/legacy.json" '
   .resourceTier == "medium" and
   .query.deployment.resources == {} and .compaction.deployment.resources == {} and
   .query.deployment.volumes == [{name:"customer-config",configMap:{name:"customer-config"}}] and
   .query.deployment.volumeMounts == [{name:"cache",mountPath:"/data"},{name:"customer-config",mountPath:"/config"}] and
   .compactionWorker.deployment.volumes == [] and
   .compactionWorker.deployment.volumeMounts == [{name:"cache",mountPath:"/tmp"}] and
-  .migration.job.parallelism == 3 and .migration.job.resources.requests.cpu == "12" and
-  .migration.job.resources.requests["ephemeral-storage"] == "100Gi" and
+  .migration.job == $before[0].smithdb.migration.job and
   .migration.taskdb.postgres.statefulSet.resources.requests.memory == "12Gi" and
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
@@ -69,6 +72,8 @@ smithdb:
         requests: {cpu: "8", memory: 32Gi, ephemeral-storage: 100Gi}
         limits: {cpu: "8", memory: 32Gi, ephemeral-storage: 100Gi}
 VALUES
+helm template values-test "$TEST_DIR/chart" -f "$TEST_DIR/legacy.json" |
+  sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/before.json"
 (
   export _smithdb_overrides="$TEST_DIR/generated.yaml"
   export SMITHDB_CACHE_STORAGE_CLASS=smithdb-cache-test
@@ -87,20 +92,12 @@ VALUES_ARGS=(-f "$TEST_DIR/legacy.json" -f "$TEST_DIR/generated.yaml")
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-jq -e '
-  .migration.job.volumes == [{name:"cache",ephemeral:{volumeClaimTemplate:{spec:{
-    accessModes:["ReadWriteOnce"],storageClassName:.cache.storageClassName,
-    resources:{requests:{storage:"100Gi"}}}}}}] and
-  .migration.job.volumeMounts == [{name:"cache",mountPath:"/tmp"}] and
-  .migration.job.podSecurityContext.fsGroup == 1001 and
-  (.migration.job.resources.requests | has("ephemeral-storage") | not) and
-  (.migration.job.resources.limits | has("ephemeral-storage") | not) and
-  .migration.job.resources.requests.cpu == "12" and
-  .migration.job.resources.requests.memory == "32Gi" and
-  .migration.job.parallelism == 3 and
+jq -e --slurpfile before "$TEST_DIR/before.json" '
+  .cache.storageClassName == "smithdb-cache-test" and
+  .migration.job == $before[0].migration.job and
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
-echo "PASS: generated migration EBS scratch replaces node storage and preserves CPU, memory, parallelism, and TaskDB"
+echo "PASS: generated service cache settings preserve the migration Job and TaskDB settings"
 
 jq -n '{items: ([range(0;5) | {
   kind:"Deployment", metadata:{name:("langsmith-smithdb-" + tostring), generation:2},
@@ -120,12 +117,6 @@ cat > "$TEST_DIR/bin/kubectl" <<'MOCK'
 set -euo pipefail
 echo "kubectl $*" >> "$TEST_DIR/events"
 case "$1 $2" in
-  'get jobs,deployments')
-    if [[ "$CASE" == completed ]]; then
-      echo '{"items":[{"kind":"Job","metadata":{"name":"langsmith-smithdb-migration"},"spec":{"template":{"spec":{}}},"status":{"conditions":[{"type":"Complete","status":"True"}]}}]}'
-    elif [[ "$CASE" == migration ]]; then
-      echo '{"items":[{"kind":"Job","metadata":{"name":"langsmith-smithdb-migration"},"spec":{"template":{"spec":{"nodeSelector":{"smithdb-local/instance-store":"true"}}}}}]}'
-    else cat "$TEST_DIR/empty.json"; fi ;;
   'get deployments,statefulsets')
     case "$CASE" in
       unhealthy) jq '.items[0].status.updatedReplicas=0' "$TEST_DIR/workloads.json" ;;
@@ -144,7 +135,7 @@ case "$1 $2" in
     if [[ -f "$TEST_DIR/deleted" || "$CASE" == retry ]]; then cat "$TEST_DIR/empty.json"; else cat "$TEST_DIR/nodes.json"; fi ;;
   'get pods')
     if [[ "$CASE" == old_pod ]]; then
-      echo '{"items":[{"metadata":{"name":"taskdb"},"spec":{"nodeName":"old-node"},"status":{"phase":"Running"}}]}'
+      echo '{"items":[{"metadata":{"name":"migration-job","ownerReferences":[{"kind":"Job"}]},"spec":{"nodeName":"old-node"},"status":{"phase":"Running"}}]}'
     else cat "$TEST_DIR/empty.json"; fi ;;
   'delete nodepool') touch "$TEST_DIR/deleted" ;;
   'wait --for=delete') : ;;
@@ -171,7 +162,7 @@ esac
 MOCK
 chmod +x "$TEST_DIR/bin/"*
 
-for CASE in unhealthy taskdb cache migration api_failure other_pool old_pod termination healthy; do
+for CASE in unhealthy taskdb cache api_failure other_pool old_pod termination healthy; do
   export CASE
   rm -f "$TEST_DIR/deleted" "$TEST_DIR/waited"
   : > "$TEST_DIR/events"
@@ -193,13 +184,6 @@ rm -f "$TEST_DIR/deleted" "$TEST_DIR/waited"
 _smithdb_cleanup langsmith langsmith us-east-2 smithdb-cache-test test-eks > "$TEST_DIR/log" 2>&1
 grep -q 'aws ec2 wait instance-terminated.*i-0123456789abcdef0' "$TEST_DIR/events"
 echo "PASS: retry waits for EC2 even after Kubernetes objects disappear"
-
-export CASE=completed
-_smithdb_check_migration langsmith langsmith false
-if _smithdb_check_migration langsmith langsmith true > "$TEST_DIR/log" 2>&1; then
-  echo "FAIL: changing a completed legacy Job template was allowed"; exit 1
-fi
-echo "PASS: completed legacy Job can be removed but cannot be mutated"
 
 # Test the user entry point: a failed live check must prevent Terraform from
 # applying the controller-removal plan; a successful cleanup must finish first.

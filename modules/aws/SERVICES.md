@@ -146,7 +146,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 ### SmithDB (optional)
 - **What**: In-chart trace ingestion and query services
 - **Cloud dependencies**: Dedicated PostgreSQL 18, dedicated S3, and SmithDB-specific IRSA
-- **Scheduling**: Dedicated EKS managed node group for SmithDB, TaskDB, and migration; gp3 cache volumes
+- **Scheduling**: Dedicated EKS managed node group for SmithDB services and TaskDB; gp3 cache volumes
 - **Network**: Same-region S3 traffic uses the shared Gateway VPC endpoint
 - **Rollout**: Ingestion, migration, and query integration default off and are enabled in separate stages
 

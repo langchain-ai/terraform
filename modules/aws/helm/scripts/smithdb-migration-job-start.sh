@@ -183,13 +183,23 @@ else
   pass "Connection settings stored in SSM"
 fi
 
-# Keep CPU and memory at chart defaults; init-values.sh supplies scratch storage.
+# The block mirrors the LangSmith docs' sample: resources stay at chart defaults, written out so they can be edited in one place.
 {
   echo "# Written by make smithdb-migration-job-start; rerun it to change these answers."
+  echo "# Resources are chart defaults; change them only when scaling (LangSmith docs: Migrate ClickHouse history to SmithDB)."
   echo "smithdb:"
   echo "  migration:"
   echo "    job:"
   echo "      parallelism: $_parallelism"
+  echo "      resources:   # per migration pod; 32Gi memory is a practical minimum"
+  echo "        requests:"
+  echo "          cpu: \"8\""
+  echo "          memory: \"32Gi\""
+  echo "          ephemeral-storage: \"100Gi\""
+  echo "        limits:"
+  echo "          cpu: \"8\""
+  echo "          memory: \"32Gi\""
+  echo "          ephemeral-storage: \"100Gi\""
   echo "    taskdb:"
   echo "      postgres:"
   if [[ "$_taskdb_source" == "chart" ]]; then
@@ -209,7 +219,8 @@ fi
   fi
 } > "$MIGRATION_FILE"
 pass "Written: helm/values/langsmith-values-smithdb-migration.yaml"
-info "Migration and TaskDB use chart-default CPU and memory; change parallelism in that file as needed"
+info "To change migration pod or TaskDB resources, edit that file before make deploy"
+info "If migration pods are OOMKilled (very large traces), raise memory there (keep requests = limits)"
 info "Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun make deploy to resume from saved progress"
 
 header "6. terraform.tfvars"

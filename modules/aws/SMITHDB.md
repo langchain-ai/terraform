@@ -33,7 +33,7 @@ smithdb_external_metastore_username = "smithdb"
 Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file.
 The Postgres database and S3 bucket must be dedicated to SmithDB.
 
-SmithDB, including TaskDB and migration, uses a separate node group. Defaults:
+SmithDB services and TaskDB use a separate node group. Defaults:
 
 | `sizing_profile` | Instance type | Minimum nodes | Maximum nodes |
 | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ SmithDB, including TaskDB and migration, uses a separate node group. Defaults:
 The sizing profile selects the instance type automatically. QuickStart asks for
 `smithdb_node_min_count` and `smithdb_node_max_count`. Set
 `smithdb_node_instance_type` in `infra/terraform.tfvars` to override the instance
-type. Increase the maximum for additional migration capacity.
+type. Increase the maximum for additional capacity.
 LangSmith uses its own group, defaulting to `m6a.2xlarge`.
 
 Nodes keep the 100 GiB boot-disk default. `smithdb.resourceTier` sets service
@@ -93,7 +93,7 @@ Existing chart-managed migrations keep using `smithdb-migration-taskdb/postgres_
 With the flag on, Terraform grants the SmithDB role read access to the traces bucket, and the deploy starts the migration Job.
 Once the Job is Complete, run `make smithdb-migration-job-end`, then the same three commands, to remove the grant, TaskDB, and its settings.
 An external TaskDB Postgres is not deleted.
-Each migration pod uses a 100 GiB EBS scratch volume at `/tmp`. Migration and TaskDB use chart-default CPU and memory; change migration parallelism in `langsmith-values-smithdb-migration.yaml` as needed.
+If migration pods are OOMKilled, raise their memory in `langsmith-values-smithdb-migration.yaml` (keep requests equal to limits).
 Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `make deploy`. Kubernetes cannot update an existing Job's pod template; the recreated Job resumes from progress saved in TaskDB.
 
 ## Production notes
