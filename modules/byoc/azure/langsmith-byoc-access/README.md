@@ -114,7 +114,7 @@ data_planes = {
 }
 ```
 
-Terraform creates a VNet flow log for the data plane VNet in the default Network Watcher of the region (`NetworkWatcher_<location>` in `NetworkWatcherRG`). The storage account is yours, in the same region. `retention_days` defaults to 30. LangSmith gets no access to the flow log or the storage account.
+Terraform creates a VNet flow log for the data plane VNet in the default Network Watcher of the region (`NetworkWatcher_<location>` in `NetworkWatcherRG`). Azure creates that watcher with the first VNet in a region. If you turned that off or create watchers yourself, set `network_watcher_name` and `network_watcher_resource_group_name`. The storage account is yours, in the same region. `retention_days` defaults to 30. LangSmith gets no access to the flow log or the storage account.
 
 ### Remove a data plane
 
@@ -131,7 +131,7 @@ Terraform creates a VNet flow log for the data plane VNet in the default Network
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
-| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false), flow_logs = optional(object({ storage_account_id = string, retention_days = optional(number, 30) })) }))` | no | `{}` | One entry per data plane. The key is the data plane name. |
+| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false), flow_logs = optional(object({ storage_account_id = string, retention_days = optional(number, 30), network_watcher_name = optional(string), network_watcher_resource_group_name = optional(string, "NetworkWatcherRG") })) }))` | no | `{}` | One entry per data plane. The key is the data plane name. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.

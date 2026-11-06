@@ -29,6 +29,10 @@ variable "data_planes" {
     flow_logs = optional(object({
       storage_account_id = string
       retention_days     = optional(number, 30)
+      # Defaults to the watcher that Azure creates with the first VNet in a
+      # region. Set these if you create watchers yourself.
+      network_watcher_name                = optional(string)
+      network_watcher_resource_group_name = optional(string, "NetworkWatcherRG")
     }))
   }))
   default = {}
