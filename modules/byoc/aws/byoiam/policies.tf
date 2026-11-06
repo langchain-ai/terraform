@@ -248,6 +248,24 @@ locals {
         "arn:${local.partition}:elasticache:${region}:${local.account_id}:user:*-smith-juicefs-redis-user"
       ]])
     }])
+    # Playground runs user-provided code, so it may only assume roles, such as
+    # Bedrock roles, and only with an external ID. Pod Identity session tags are
+    # transitive, so AssumeRole also needs sts:TagSession.
+    playground-iam-role = [
+      {
+        Sid       = "AssumeRolesWithExternalId"
+        Effect    = "Allow"
+        Action    = ["sts:AssumeRole"]
+        Resource  = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = { Null = { "sts:ExternalId" = "false" } }
+      },
+      {
+        Sid      = "TagAssumedRoleSessions"
+        Effect   = "Allow"
+        Action   = ["sts:TagSession"]
+        Resource = ["arn:${local.partition}:iam::*:role/*"]
+      }
+    ]
     privatelink-lambda-role = [
       {
         Sid    = "ManageEKSAPITargets"
