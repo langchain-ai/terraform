@@ -84,7 +84,7 @@ After `terraform apply`, share the `crossplane_role_arn` and `break_glass_role_a
 
 We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation.
 
-By default, the Crossplane role does not include permissions to delete LangSmith-managed resources. Set `allow_delete_permissions = true` before teardown to grant those resource deletion permissions.
+By default, the Crossplane role does not include permissions to delete LangSmith-managed resources. Set `allow_delete_permissions = true` before teardown to grant those resource deletion permissions. That flag does not delete S3 buckets. Set `allow_retained_data_deletion = true` only for LangSmith test accounts that should delete data buckets and their objects on teardown. Customer accounts must leave it false.
 
 ### Customer-supplied VPC (BYOVPC)
 
@@ -188,7 +188,8 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `langsmith_byoc_break_glass_principal_arn_patterns` | `list(string)` | no | BYOCBreakGlass SSO role patterns | IAM principal ARN patterns for LangSmith Identity Center BYOC break-glass sessions. |
 | `tags` | `map(string)` | no | `{}` | Tags applied to all roles and policies. |
 | `allow_public_ingress` | `bool` | no | `false` | Grants the Route 53 public-zone permissions needed when exposing the data plane on the public internet. |
-| `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
+| `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. Does not delete S3 buckets. |
+| `allow_retained_data_deletion` | `bool` | no | `false` | Deletes LangSmith S3 buckets and objects, including governance-locked versions. Leave false outside LangSmith test accounts. |
 | `allow_vpc_creation_permissions` | `bool` | no | `true` | Grants base-network management permissions. Set to `false` for a customer-supplied VPC. |
 | `allow_iam_management_permissions` | `bool` | no | `true` | Grants IAM creation, mutation, and deletion permissions. Set to `false` for customer-managed IAM. |
 | `allow_self_hosted_migration_permissions` | `bool` | no | `false` | Grants VPC peering acceptance and SmithDB role trust updates for a self-hosted to BYOC migration. |
