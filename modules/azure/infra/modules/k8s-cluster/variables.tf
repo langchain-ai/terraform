@@ -323,7 +323,7 @@ variable "ingress_load_balancer_needs_subnet_grant" {
 
 variable "ingress_load_balancer_manage_subnet_assignment" {
   type        = bool
-  description = "Whether Terraform grants the cluster identity Network Contributor on ingress_load_balancer_subnet_id when it is not the node subnet."
+  description = "Whether Terraform grants the cluster identity Network Contributor on the internal load balancer's subnet: ingress_load_balancer_subnet_id when it is not the node subnet, or the node subnet for a created cluster with a system-assigned identity."
   default     = true
 }
 
