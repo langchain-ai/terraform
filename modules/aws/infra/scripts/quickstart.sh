@@ -640,12 +640,13 @@ _confirm_storage_change "ClickHouse" "$_ex_ch" "$CH_SOURCE"
 
 _section "7. SmithDB"
 
-_ex_smithdb=$(_existing "enable_smithdb" "false")
-_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
-_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
-_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
-ENABLE_SMITHDB="false"
+ENABLE_SMITHDB="$(_existing enable_smithdb true)"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  SMITHDB_INGESTION="$(_existing smithdb_ingestion_enabled true)"
+  SMITHDB_MIGRATION="$(_existing smithdb_migration_enabled false)"
+  SMITHDB_QUERY="$(_existing smithdb_query_enabled false)"
+fi
 SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type null)"
 SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
 SMITHDB_NODE_MIN="$(_existing smithdb_node_min_count 2)"
@@ -669,27 +670,18 @@ fi
 
 echo ""
 printf "  ${DIM}SmithDB is LangChain's purpose-built trace database for LangSmith.${RESET}\n"
-printf "  ${DIM}Enabling it adds:${RESET}\n"
+printf "  ${DIM}SmithDB and ingestion are enabled by default. SmithDB adds:${RESET}\n"
 printf "  ${DIM}  - A dedicated RDS PostgreSQL metastore${RESET}\n"
-printf "  ${DIM}  - A dedicated S3 object-store bucket${RESET}\n"
-printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes ServiceAccount${RESET}\n"
-printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection${RESET}\n"
-printf "  ${DIM}  - A dedicated general-purpose managed node pool and per-pod EBS cache disks${RESET}\n"
-printf "  ${DIM}Ingestion, migration, and query cutover stay disabled initially.${RESET}\n"
+printf "  ${DIM}  - A dedicated S3 bucket for object storage${RESET}\n"
+printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes service account${RESET}\n"
+printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection details${RESET}\n"
+printf "  ${DIM}  - A dedicated general-purpose managed node pool${RESET}\n"
+printf "  ${DIM}  - A SmithDB cache storage class (smithdb-cache) for per-pod gp3${RESET}\n"
+printf "  ${DIM}    EBS volumes, each configured with 7,000 IOPS and 1,000 MiB/s${RESET}\n"
+printf "  ${DIM}    of throughput${RESET}\n"
+printf "  ${DIM}The sizing profile selects the instance type automatically.${RESET}\n"
+printf "  ${DIM}Migration and query cutover remain disabled initially.${RESET}\n"
 echo ""
-if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
-  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
-  ENABLE_SMITHDB="true"
-  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
-  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
-  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
-fi
-if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" != "true" ]]; then
-  echo ""
-  _yellow "WARNING"; printf ": disabling SmithDB may remove its metastore, S3 bucket, and storage nodes.\n"
-  printf "  QuickStart does not move or preserve the data stored in those resources.\n"
-  _confirm_or_abort "Continue with disabling SmithDB?" "n"
-fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Traffic Routing
@@ -1073,7 +1065,6 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
       *) SMITHDB_NODE_MAX=5 ;;
     esac
   fi
-  _ask "$(_choice_arg smithdb_node_instance_type)" "SmithDB instance type (null uses the sizing profile default)" "$SMITHDB_NODE_TYPE"; SMITHDB_NODE_TYPE="$_REPLY"
   _ask_int_at_least 1 "$(_choice_arg smithdb_node_min_count)" "SmithDB minimum nodes" "$SMITHDB_NODE_MIN"; SMITHDB_NODE_MIN="$_REPLY"
   (( SMITHDB_NODE_MAX > SMITHDB_NODE_MIN )) || SMITHDB_NODE_MAX=$((SMITHDB_NODE_MIN + 1))
   _ask_int_at_least "$((SMITHDB_NODE_MIN + 1))" "$(_choice_arg smithdb_node_max_count)" "SmithDB maximum nodes (must exceed minimum)" "$SMITHDB_NODE_MAX"; SMITHDB_NODE_MAX="$_REPLY"

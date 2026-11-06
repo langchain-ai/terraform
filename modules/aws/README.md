@@ -1157,7 +1157,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
-| `enable_smithdb` | `false` | no | Provision SmithDB PostgreSQL, S3, IRSA, a managed node group, and EBS caches. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `false` | no | Provision SmithDB PostgreSQL, S3, IRSA, a managed node group, and EBS caches. QuickStart enables SmithDB and ingestion by default. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |

@@ -1,7 +1,8 @@
 # SmithDB on AWS
 
 This module provides AWS reference infrastructure and Helm values for SmithDB.
-SmithDB is optional and shares the LangSmith cluster and Helm release.
+SmithDB shares the LangSmith cluster and Helm release. New QuickStart setups
+enable SmithDB and ingestion by default; existing settings are preserved.
 
 ## What is provisioned
 
@@ -18,7 +19,8 @@ so same-region SmithDB S3 traffic takes the private AWS network path.
 
 ## Configure infrastructure
 
-Enable SmithDB through `make quickstart` or set `enable_smithdb = true` in
+Run `make quickstart` or set `enable_smithdb = true` and
+`smithdb_ingestion_enabled = true` in
 `infra/terraform.tfvars`. Managed PostgreSQL is the default. To use an existing
 metastore:
 
@@ -39,8 +41,10 @@ SmithDB, including TaskDB and migration, uses a separate node group. Defaults:
 | `production` | `m6a.8xlarge` | 2 | 10 |
 | `production-large` | `m6a.16xlarge` | 2 | 10 |
 
-QuickStart configures `smithdb_node_instance_type`, `smithdb_node_min_count`, and
-`smithdb_node_max_count`. Increase the maximum for additional migration capacity.
+The sizing profile selects the instance type automatically. QuickStart asks for
+`smithdb_node_min_count` and `smithdb_node_max_count`. Set
+`smithdb_node_instance_type` in `infra/terraform.tfvars` to override the instance
+type. Increase the maximum for additional migration capacity.
 LangSmith uses its own group, defaulting to `m6a.2xlarge`.
 
 Nodes keep the 100 GiB boot-disk default. `smithdb.resourceTier` sets service
@@ -62,23 +66,22 @@ The deploy script pins the latest 0.17.x Helm chart (`~0.17.0`):
 make deploy
 ```
 
-The generated values deploy SmithDB services with all LangSmith integration
-gates disabled:
+For new QuickStart setups, the generated values enable ingestion while leaving
+migration and query cutover disabled:
 
 ```yaml
 smithdb:
   langsmith:
     ingestion:
-      enabled: false
+      enabled: true
     migration:
       enabled: false
     query:
       enabled: false
 ```
 
-Follow the installation guide provided by LangChain to validate services,
-enable dual ingestion, optionally migrate historical data, and finally switch
-queries.
+Follow the installation guide provided by LangChain to validate services and
+dual ingestion, optionally migrate historical data, and finally switch queries.
 For the scripts path, set `smithdb_ingestion_enabled`,
 `smithdb_migration_enabled`, and `smithdb_query_enabled` in
 `infra/terraform.tfvars`; the app path exposes the same flags. Apply each stage
@@ -101,7 +104,7 @@ Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `m
   `kms:GenerateDataKey` and `kms:Decrypt`; the key policy must also permit it.
 - Do not place object-store credentials in Helm values. Pods use IRSA.
 - Verify SmithDB workloads schedule on the dedicated managed group and can
-  reach PostgreSQL and S3 before enabling ingestion.
+  reach PostgreSQL and S3.
 
 ## Existing Karpenter deployments
 

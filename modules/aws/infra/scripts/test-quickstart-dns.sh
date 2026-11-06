@@ -76,7 +76,7 @@ trap 'rm -rf "$TMP"' EXIT
 # blank, the DNS module activates and dns_choice is consumed (1=new, 2=reuse).
 write_fresh_answers() {
   local file="$1" acm_arn="$2" domain="$3" dns_choice="${4:-}"
-  local invalid_zone_id="${5:-}" zone_id="${6:-}" smithdb="${7:-false}" sizing="${8:-}" smithdb_defaults="${9:-false}"
+  local invalid_zone_id="${5:-}" zone_id="${6:-}" invalid_bounds="${7:-false}" sizing="${8:-}"
   {
     printf '%s\n' "1"             # Deployment profile: dev
     printf '\n'                    # Name prefix
@@ -93,11 +93,6 @@ write_fresh_answers() {
     printf '%s\n' "2"             # PostgreSQL: in-cluster
     printf '%s\n' "2"             # Redis: in-cluster
     printf '\n'                    # ClickHouse: in-cluster
-    if [[ "$smithdb" == "true" ]]; then
-      printf '%s\n' y
-    else
-      printf '\n'                  # SmithDB: disabled
-    fi
     printf '%s\n' "3"             # Gateway: ALB
     printf '%s\n' "$domain"       # Custom domain
     printf '%s\n' "1"             # TLS: ACM
@@ -115,13 +110,11 @@ write_fresh_answers() {
       fi
     fi
     printf '%s\n' "$sizing"        # Sizing: dev unless overridden
-    if [[ "$smithdb" == "true" ]]; then
-      if [[ "$smithdb_defaults" == "true" ]]; then
-        printf '\n\n\n\n'          # SmithDB instance, min, max, disk defaults
-      else
-        printf '%s\n' "m6a.4xlarge" 0 2 2 7 0 400
-        # Invalid minimum, maximum, and boot disk size must each be re-asked.
-      fi
+    if [[ "$invalid_bounds" == "true" ]]; then
+      printf '%s\n' 0 2 2 7 0 400
+      # Invalid minimum, maximum, and boot disk size must each be re-asked.
+    else
+      printf '\n\n\n'              # SmithDB min, max, disk defaults
     fi
     printf '\n'                    # Deployments: no
     printf '\n'                    # Fleet: no
@@ -136,7 +129,7 @@ write_fresh_answers() {
 # list explicit makes a newly inserted prompt fail the test instead of silently
 # shifting later answers onto the wrong questions.
 write_update_defaults() {
-  local file="$1" smithdb="${2:-false}"
+  local file="$1" smithdb="${2:-true}"
   {
     printf '\n' # Update existing file
     printf '\n' # Deployment profile
@@ -150,7 +143,6 @@ write_update_defaults() {
     printf '\n' # PostgreSQL
     printf '\n' # Redis
     printf '\n' # ClickHouse
-    printf '\n' # SmithDB
     printf '\n' # Gateway
     printf '\n' # TLS
     printf '\n' # Certificate management
@@ -158,7 +150,7 @@ write_update_defaults() {
     printf '\n' # Existing zone ID
     printf '\n' # Sizing
     if [[ "$smithdb" == "true" ]]; then
-      printf '\n\n\n\n' # SmithDB instance, min, max, disk
+      printf '\n\n\n' # SmithDB min, max, disk
     fi
     printf '\n' # Deployments
     printf '\n' # Fleet
@@ -196,11 +188,14 @@ log_has "invalid zone ID is rejected" "$TMP/reuse.log" \
 log_has "summary shows reused zone" "$TMP/reuse.log" \
   "existing (Z1ABCDEF123456)"
 
-echo "2. Update mode preserves the zone choice, the zone ID, and SSO"
-# Turn SSO on the way `make sso` does: by editing only that line.
-sed 's/^enable_sso_oidc[[:space:]]*=.*/enable_sso_oidc = true/' "$REUSE_INFRA/terraform.tfvars" > "$TMP/sso.tfvars"
+echo "2. Update mode preserves DNS, SSO, and disabled SmithDB settings"
+# Preserve explicit settings changed outside QuickStart.
+sed -e 's/^enable_sso_oidc[[:space:]]*=.*/enable_sso_oidc = true/' \
+  -e 's/^enable_smithdb[[:space:]]*=.*/enable_smithdb = false/' \
+  -e 's/^smithdb_ingestion_enabled[[:space:]]*=.*/smithdb_ingestion_enabled = false/' \
+  "$REUSE_INFRA/terraform.tfvars" > "$TMP/sso.tfvars"
 mv "$TMP/sso.tfvars" "$REUSE_INFRA/terraform.tfvars"
-write_update_defaults "$TMP/update.answers"
+write_update_defaults "$TMP/update.answers" false
 run_wizard "existing-zone update run completes" "$REUSE_INFRA" \
   "$TMP/update.answers" "$TMP/update.log"
 has_line "reuse choice survives rerun" "$REUSE_INFRA/terraform.tfvars" \
@@ -211,6 +206,10 @@ has_line "SSO setting survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "enable_sso_oidc         = true"
 has_line "admin email survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "langsmith_admin_email = \"admin@example.com\""
+has_line "disabled SmithDB survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  'enable_smithdb                        = false'
+has_line "disabled ingestion survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  'smithdb_ingestion_enabled             = false'
 
 echo "3. Creating a new zone writes the choice without an existing ID"
 NEW_INFRA="$TMP/new"
@@ -249,13 +248,18 @@ if awk '$1 == "smithdb_node_root_volume_size_gb" { found = ($3 == 400) } END { e
 else
   bad "SmithDB boot disk written"
 fi
-sed 's/^smithdb_transition_mode[[:space:]]*=.*/smithdb_transition_mode = true/' "$SMITHDB_INFRA/terraform.tfvars" > "$TMP/transition.tfvars"
+sed -e 's/^smithdb_transition_mode[[:space:]]*=.*/smithdb_transition_mode = true/' \
+  -e 's/^smithdb_node_instance_type[[:space:]]*=.*/smithdb_node_instance_type = "m6i.4xlarge"/' \
+  -e 's/^smithdb_ingestion_enabled[[:space:]]*=.*/smithdb_ingestion_enabled = false/' \
+  "$SMITHDB_INFRA/terraform.tfvars" > "$TMP/transition.tfvars"
 mv "$TMP/transition.tfvars" "$SMITHDB_INFRA/terraform.tfvars"
 write_update_defaults "$TMP/smithdb-update.answers" true
 run_wizard "SmithDB update accepts current settings" "$SMITHDB_INFRA" "$TMP/smithdb-update.answers" "$TMP/smithdb-update.log"
 has_line "SmithDB minimum preserved" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_min_count                = 2"
 has_line "SmithDB maximum preserved" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_max_count                = 7"
 has_line "SmithDB transition mode survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_transition_mode               = true"
+has_line "SmithDB instance override survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6i.4xlarge"'
+has_line "disabled ingestion survives with SmithDB enabled" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = false'
 
 echo "7. SmithDB defaults follow pod sizing independently of the setup preset"
 for sizing in dev production-large; do
@@ -264,12 +268,16 @@ for sizing in dev production-large; do
     production-large) sizing_choice=4; smithdb_max=10 ;;
   esac
   DEFAULT_INFRA="$TMP/smithdb-$sizing-defaults"
-  write_fresh_answers "$TMP/$sizing.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 true "$sizing_choice" true
+  write_fresh_answers "$TMP/$sizing.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false "$sizing_choice"
   run_wizard "SmithDB $sizing defaults complete" "$DEFAULT_INFRA" "$TMP/$sizing.answers" "$TMP/$sizing.log"
   has_line "LangSmith type is independent for $sizing" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6a.2xlarge"]'
   has_line "SmithDB type follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = null'
   has_line "SmithDB initial capacity for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
   has_line "SmithDB ceiling follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = $smithdb_max"
+  has_line "SmithDB enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
+  has_line "ingestion enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
+  has_line "migration remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_migration_enabled             = false'
+  has_line "query cutover remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_query_enabled                 = false'
 done
 
 echo ""
