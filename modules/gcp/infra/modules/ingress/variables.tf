@@ -56,3 +56,14 @@ variable "tls_secret_name" {
   type        = string
   default     = "langsmith-tls"
 }
+
+variable "load_balancer_type" {
+  description = "Envoy Gateway load balancer: 'external' (public IP) or 'internal' (private IP in the VPC)"
+  type        = string
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "internal"], var.load_balancer_type)
+    error_message = "load_balancer_type must be 'external' or 'internal'."
+  }
+}
