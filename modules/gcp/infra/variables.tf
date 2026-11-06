@@ -55,8 +55,8 @@ variable "name_prefix" {
   default     = "ls" # Short for LangSmith
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{0,10}$", var.name_prefix))
-    error_message = "Name prefix must be 1-11 characters, start with a letter, and contain only lowercase letters, numbers, and hyphens."
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,9}[a-z0-9])?$", var.name_prefix))
+    error_message = "Name prefix must be 1-11 characters, start with a letter, end with a letter or number, and contain only lowercase letters, numbers, and hyphens."
   }
 }
 
@@ -778,27 +778,47 @@ variable "tls_secret_name" {
 #------------------------------------------------------------------------------
 # Tags/Labels (Applied to all resources)
 #------------------------------------------------------------------------------
+# The same map lands on GCP resources and on Kubernetes objects (node labels,
+# namespaces, StorageClasses), so keys and values follow both rule sets: GCP's
+# lowercase charset and Kubernetes' alphanumeric first and last character.
 variable "labels" {
-  description = "Custom labels to apply to all resources (in addition to default labels)"
+  description = "Custom labels to apply to all resources, in addition to the standard ones. A key here overrides the standard label of the same name (app, environment, managed-by, project, name-prefix, owner, cost-center). Keys: lowercase letter first, then lowercase letters, digits, '_' or '-', ending in a letter or digit, at most 63 characters. Values: the same characters, starting and ending with a letter or digit, 1-63 characters."
   type        = map(string)
   default     = {}
 
   validation {
-    condition     = alltrue([for k, v in var.labels : can(regex("^[a-z][a-z0-9_-]{0,62}$", k))])
-    error_message = "Label keys must be valid GCP label keys."
+    condition     = alltrue([for k, v in var.labels : can(regex("^[a-z]([a-z0-9_-]{0,61}[a-z0-9])?$", k))])
+    error_message = "Each labels key must start with a lowercase letter, contain only lowercase letters, digits, '_' and '-', end in a letter or digit, and be at most 63 characters."
+  }
+
+  # Not empty: google provider 5.x drops an empty value from labels and
+  # default_labels, so it would land on the cluster and Cloud SQL only.
+  validation {
+    condition     = alltrue([for k, v in var.labels : can(regex("^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$", v))])
+    error_message = "Each labels value must be 1-63 characters of lowercase letters, digits, '_' and '-', starting and ending with a letter or digit. Rewrite emails and display names, for example name@example.com as name_example_com, and use \"true\" for a flag label rather than an empty value."
   }
 }
 
 variable "owner" {
-  description = "Owner of the resources (team or individual) - used in labels"
+  description = "Owner label value (a team or person). Follows the labels value rules: lowercase letters, digits, '_' and '-', at most 63 characters, so write an email as name_example_com. Empty omits the label."
   type        = string
   default     = "platform-team"
+
+  validation {
+    condition     = can(regex("^([a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?)?$", var.owner))
+    error_message = "owner must contain only lowercase letters, digits, '_' and '-', start and end with a letter or digit, and be at most 63 characters. GCP labels cannot store '@' or '.', so write name@example.com as name_example_com."
+  }
 }
 
 variable "cost_center" {
-  description = "Cost center for billing attribution - used in labels"
+  description = "Cost center label value for billing attribution. Follows the labels value rules. Empty omits the label."
   type        = string
   default     = ""
+
+  validation {
+    condition     = can(regex("^([a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?)?$", var.cost_center))
+    error_message = "cost_center must contain only lowercase letters, digits, '_' and '-', start and end with a letter or digit, and be at most 63 characters."
+  }
 }
 
 #------------------------------------------------------------------------------
