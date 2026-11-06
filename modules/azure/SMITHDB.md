@@ -1,8 +1,9 @@
 # SmithDB on Azure
 
-SmithDB support on Azure is optional and starts at the LangSmith chart 0.17
-line. Set `enable_smithdb = true` to provision its Azure dependencies
-independently of the LangSmith application database and trace-blob account.
+New QuickStart setups enable SmithDB and ingestion, with migration and query
+disabled. SmithDB support starts at the LangSmith chart 0.17 line. Its Azure
+dependencies are separate from the LangSmith application database and trace-blob
+account. Existing settings stay unchanged when rerunning QuickStart.
 
 ## Version requirements
 
@@ -218,8 +219,8 @@ stage with its own make targets. They set `smithdb_migration_enabled` for you.
 
 | Stage | How | ingestion / migration / query |
 |---|---|---|
-| Off | The defaults | false / false / false |
-| Dual write | Set `smithdb_ingestion_enabled = true` | true / false / false |
+| Off | Set `smithdb_ingestion_enabled = false` | false / false / false |
+| Dual write | New QuickStart default, or set `smithdb_ingestion_enabled = true` | true / false / false |
 | Backfill | `make smithdb-migration-job-start` | true / true / false |
 | End of backfill | `make smithdb-migration-job-end` | true / false / false |
 | Cutover | Set `smithdb_query_enabled = true` | true / false / true |
@@ -377,14 +378,15 @@ is `langsmith-nodepool/smithdb=true`, with the matching `NoSchedule` taint.
 LangSmith's existing node pools stay separate. The subnet capacity check includes
 the SmithDB pool at its maximum size.
 
-QuickStart asks for the SmithDB VM size, node bounds, and zones. To enable it
-without prompts, use `make quickstart ARGS="--yes --smithdb"`. The defaults are
+QuickStart uses the sizing profile for the SmithDB VM size and asks for node
+bounds and zones in full setup. To use the defaults without prompts, run
+`make quickstart ARGS="--yes"`. The VM sizes are
 `Standard_D16s_v5` for small, `Standard_D32s_v5` for medium, or
 `Standard_D64s_v5` for large, with 2 minimum nodes and a maximum of 5 for small
 or 10 for medium/large. Override them in `infra/terraform.tfvars`:
 
 ```hcl
-smithdb_node_vm_size   = "Standard_D16s_v5"
+smithdb_node_vm_size   = null # follows sizing; set a VM size to override
 smithdb_node_min_count = 2
 smithdb_node_max_count = 5
 smithdb_node_zones     = ["1", "2", "3"]

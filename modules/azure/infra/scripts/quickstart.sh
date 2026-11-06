@@ -41,8 +41,7 @@ Flags (all need --yes):
   --dns-label LABEL      Public DNS label, unique across the region (default: langsmith-<name>)
   --domain FQDN          Custom domain: TLS from Let's Encrypt (HTTP-01) and an Azure DNS zone
   --email ADDRESS        ACME account email, required with --domain
-  --smithdb              Add a dedicated SmithDB node pool
-  --smithdb-vm-size SIZE  SmithDB VM size (default: D16s_v5 dev, D32s_v5 prod)
+  --smithdb-vm-size SIZE  Override the SmithDB VM size (default: follows sizing profile)
   --smithdb-min N         Minimum SmithDB nodes (default: 2)
   --smithdb-max N         Maximum SmithDB nodes (default: 5 dev, 10 prod)
   --smithdb-zones ZONES   SmithDB zones, comma-separated (default: 1,2,3)
@@ -351,7 +350,7 @@ BLOB_TTL_ENABLED BLOB_TTL_SHORT_DAYS BLOB_TTL_LONG_DAYS
 NETWORK_MODE AKS_SKU_TIER
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION
 ENABLE_DEPLOYMENTS ENABLE_AGENT_BUILDER ENABLE_INSIGHTS ENABLE_POLLY
-ENABLE_SMITHDB SMITHDB_SIZING SMITHDB_NODE_VM SMITHDB_NODE_MIN SMITHDB_NODE_MAX SMITHDB_NODE_ZONES
+ENABLE_SMITHDB SMITHDB_INGESTION SMITHDB_MIGRATION SMITHDB_QUERY SMITHDB_SIZING SMITHDB_NODE_VM SMITHDB_NODE_MIN SMITHDB_NODE_MAX SMITHDB_NODE_ZONES
 PRESERVE_UNKNOWN"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -393,6 +392,11 @@ _load_state() {
   # node-subnet deployment's tfvars, the migration request _load_tfvars refuses
   # to write.
   grep -q '^NETWORK_MODE=' "$STATE_FILE" || NETWORK_MODE="node-subnet"
+  # Older checkpoints kept these flags in tfvars; absent settings stay disabled.
+  grep -q '^ENABLE_SMITHDB=' "$STATE_FILE" || ENABLE_SMITHDB="$(_parse_tfvar enable_smithdb || echo false)"
+  grep -q '^SMITHDB_INGESTION=' "$STATE_FILE" || SMITHDB_INGESTION="$(_parse_tfvar smithdb_ingestion_enabled || echo false)"
+  grep -q '^SMITHDB_MIGRATION=' "$STATE_FILE" || SMITHDB_MIGRATION="$(_parse_tfvar smithdb_migration_enabled || echo false)"
+  grep -q '^SMITHDB_QUERY=' "$STATE_FILE" || SMITHDB_QUERY="$(_parse_tfvar smithdb_query_enabled || echo false)"
 }
 
 # Read one quoted scalar out of an existing terraform.tfvars, preserving spaces
@@ -497,6 +501,11 @@ _load_tfvars() {
   # migration on the next apply; the guard would refuse it, but the wizard
   # should not be the one asking.
   NETWORK_MODE="node-subnet"
+  # An existing file without SmithDB settings keeps the module's disabled defaults.
+  ENABLE_SMITHDB="false"
+  SMITHDB_INGESTION="false"
+  SMITHDB_MIGRATION="false"
+  SMITHDB_QUERY="false"
 
   # Read on its own because "" is an answer here, the "none" choice, and _tfvar
   # reports it like an absent key. Falling through to the "dev" initializer would
@@ -577,6 +586,9 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_pods)  && NODE_MAX_PODS="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar enable_smithdb)            && ENABLE_SMITHDB="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar smithdb_ingestion_enabled) && SMITHDB_INGESTION="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar smithdb_migration_enabled) && SMITHDB_MIGRATION="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar smithdb_query_enabled)     && SMITHDB_QUERY="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar smithdb_node_min_count)    && SMITHDB_NODE_MIN="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar smithdb_node_max_count)    && [[ "$_TF_VAL" != "null" ]] && SMITHDB_NODE_MAX="$_TF_VAL"
   _TF_VAL=$(_tfvar_line smithdb_node_zones)
@@ -1651,7 +1663,11 @@ ENABLE_DEPLOYMENTS="false"
 ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"
 ENABLE_POLLY="false"
-ENABLE_SMITHDB="false"
+# New setups start dual writing; migration and query cutover remain manual.
+ENABLE_SMITHDB="true"
+SMITHDB_INGESTION="true"
+SMITHDB_MIGRATION="false"
+SMITHDB_QUERY="false"
 SMITHDB_SIZING=""
 SMITHDB_NODE_VM=""
 SMITHDB_NODE_MIN=2
@@ -1693,15 +1709,12 @@ _run_section_9() {
     4) SIZING_PROFILE="production-large" ;;
   esac
 
-  if _ask_yn "Enable SmithDB with its own general-purpose node pool?" "$(_yn_default "$ENABLE_SMITHDB")"; then
-    ENABLE_SMITHDB="true"
+  if [[ "$ENABLE_SMITHDB" == "true" ]]; then
     _smithdb_node_defaults
-    while true; do
-      _ask "SmithDB VM size" "${SMITHDB_NODE_VM:-$_SMITHDB_VM_DEFAULT}"
-      [[ "$_REPLY" =~ ^Standard_[A-Za-z0-9_]+$ ]] && break
-      _red "  Enter an Azure VM size, e.g. Standard_D16s_v5."; echo
-    done
-    SMITHDB_NODE_VM="$_REPLY"
+    _hint "SmithDB and ingestion are enabled by default; migration and query cutover remain disabled initially."
+    _hint "SmithDB uses a dedicated general-purpose node pool and the smithdb-cache Premium SSD v2 storage class."
+    _hint "Cache defaults: 7,000 IOPS and 1,000 MB/s."
+    _hint "SmithDB VM size: ${SMITHDB_NODE_VM:-$_SMITHDB_VM_DEFAULT} (override in terraform.tfvars)."
     while true; do
       _ask_int "SmithDB minimum nodes (at least 1)" "$SMITHDB_NODE_MIN"
       (( _REPLY >= 1 )) && break
@@ -1720,8 +1733,6 @@ _run_section_9() {
       _red "  Enter zones such as 1,2,3."; echo
     done
     SMITHDB_NODE_ZONES="$_REPLY"
-  else
-    ENABLE_SMITHDB="false"
   fi
 }
 
@@ -1872,19 +1883,16 @@ _run_noninteractive() {
     *)        _die "--profile must be dev or prod." 2 ;;
   esac
   _apply_profile_defaults
-  if [[ "$_ARG_SMITHDB" == "true" ]]; then
-    ENABLE_SMITHDB="true"
+  if [[ "$ENABLE_SMITHDB" == "true" ]]; then
     _smithdb_node_defaults
-    SMITHDB_NODE_VM="${_ARG_SMITHDB_VM:-$_SMITHDB_VM_DEFAULT}"
+    SMITHDB_NODE_VM="$_ARG_SMITHDB_VM"
     SMITHDB_NODE_MIN="${_ARG_SMITHDB_MIN:-2}"
     SMITHDB_NODE_MAX="${_ARG_SMITHDB_MAX:-$_SMITHDB_MAX_DEFAULT}"
     SMITHDB_NODE_ZONES="${_ARG_SMITHDB_ZONES:-1,2,3}"
-    [[ "$SMITHDB_NODE_VM" =~ ^Standard_[A-Za-z0-9_]+$ ]] || _die "--smithdb-vm-size needs an Azure VM size." 2
+    [[ -z "$SMITHDB_NODE_VM" || "$SMITHDB_NODE_VM" =~ ^Standard_[A-Za-z0-9_]+$ ]] || _die "--smithdb-vm-size needs an Azure VM size." 2
     [[ "$SMITHDB_NODE_MIN" =~ ^[1-9][0-9]*$ && "$SMITHDB_NODE_MAX" =~ ^[1-9][0-9]*$ ]] || _die "SmithDB node counts must be positive whole numbers." 2
     (( SMITHDB_NODE_MAX > SMITHDB_NODE_MIN )) || _die "--smithdb-max must exceed --smithdb-min." 2
     [[ "$SMITHDB_NODE_ZONES" =~ ^[123](,[123])*$ ]] || _die "--smithdb-zones must list zones such as 1,2,3." 2
-  elif [[ -n "${_ARG_SMITHDB_VM}${_ARG_SMITHDB_MIN}${_ARG_SMITHDB_MAX}${_ARG_SMITHDB_ZONES}" ]]; then
-    _die "SmithDB node flags require --smithdb." 2
   fi
 
   SUBSCRIPTION_ID="$_ARG_SUBSCRIPTION"
@@ -2153,6 +2161,7 @@ while [[ "$NONINTERACTIVE" != "true" ]]; do
   printf "  %-24s %s\n" "9. Sizing:"          "$SIZING_PROFILE"
   printf "  %-24s %s\n" "   SmithDB:" "$ENABLE_SMITHDB"
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+    printf "  %-24s %s\n" "   SmithDB ingestion:" "$SMITHDB_INGESTION"
     _smithdb_node_defaults
     printf "  %-24s %s\n" "   SmithDB nodes:" "${SMITHDB_NODE_VM:-$_SMITHDB_VM_DEFAULT} min=$SMITHDB_NODE_MIN max=${SMITHDB_NODE_MAX:-$_SMITHDB_MAX_DEFAULT} zones=$SMITHDB_NODE_ZONES"
   fi
@@ -2257,7 +2266,8 @@ amr_sku redis_high_availability keyvault_purge_protection
 blob_ttl_enabled blob_ttl_short_days blob_ttl_long_days
 langsmith_namespace langsmith_release_name sizing_profile
 enable_deployments enable_agent_builder enable_insights enable_polly
-enable_smithdb smithdb_node_vm_size smithdb_node_min_count smithdb_node_max_count smithdb_node_zones
+enable_smithdb smithdb_ingestion_enabled smithdb_migration_enabled smithdb_query_enabled
+smithdb_node_vm_size smithdb_node_min_count smithdb_node_max_count smithdb_node_zones
 create_waf create_diagnostics create_bastion"
 
 PRESERVED=""
@@ -2383,14 +2393,16 @@ aks_sku_tier                = "${AKS_SKU_TIER}"
 ingress_controller = "${INGRESS_CONTROLLER}"
 TFVARS
 
-if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+if [[ "$ENABLE_SMITHDB" == "true" || -n "$SMITHDB_NODE_VM" ]]; then
   _smithdb_node_defaults
   _smithdb_zones_hcl=${SMITHDB_NODE_ZONES//,/\", \"}
+  _smithdb_vm_hcl=null
+  [[ -n "$SMITHDB_NODE_VM" ]] && _smithdb_vm_hcl="\"${SMITHDB_NODE_VM}\""
   cat >> "$OUTPUT" << TFVARS
 
 # SmithDB: dedicated general-purpose nodes with Managed Disk cache volumes.
-enable_smithdb          = true
-smithdb_node_vm_size    = "${SMITHDB_NODE_VM:-$_SMITHDB_VM_DEFAULT}"
+enable_smithdb          = ${ENABLE_SMITHDB}
+smithdb_node_vm_size    = ${_smithdb_vm_hcl}
 smithdb_node_min_count  = ${SMITHDB_NODE_MIN}
 smithdb_node_max_count  = ${SMITHDB_NODE_MAX:-$_SMITHDB_MAX_DEFAULT}
 smithdb_node_zones      = ["${_smithdb_zones_hcl}"]
@@ -2398,6 +2410,11 @@ TFVARS
 else
   echo "enable_smithdb = false" >> "$OUTPUT"
 fi
+cat >> "$OUTPUT" << TFVARS
+smithdb_ingestion_enabled = ${SMITHDB_INGESTION}
+smithdb_migration_enabled = ${SMITHDB_MIGRATION}
+smithdb_query_enabled     = ${SMITHDB_QUERY}
+TFVARS
 
 [[ -n "$ISTIO_ADDON_REVISION" ]] && echo "istio_addon_revision = \"${ISTIO_ADDON_REVISION}\"" >> "$OUTPUT"
 [[ -n "$AGW_SKU_TIER" ]]         && echo "agw_sku_tier = \"${AGW_SKU_TIER}\""                 >> "$OUTPUT"
