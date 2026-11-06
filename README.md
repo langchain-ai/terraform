@@ -33,7 +33,6 @@ For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byo
   - Agent Builder
   - Insights (ClickHouse-backed analytics)
   - Polly (AI evaluation & monitoring)
-- **Optional hardening (AWS today):** AWS Network Firewall (FQDN egress), WAFv2, CloudTrail, private EKS API endpoint with SSM bastion.
 - **Ingress flexibility:** cloud-native load balancers by default, or Envoy Gateway (Gateway API) for multi-namespace dataplane deployments.
 
 ## Deployment tiers

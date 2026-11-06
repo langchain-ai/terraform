@@ -12,7 +12,7 @@
 #
 # terraform test with mock_provider plans the real root module with no cloud
 # credentials and no state, and assertions reach modules and resources directly,
-# so a flag flip is checkable as length(module.waf). Provider schema validation
+# so a flag flip is checkable as length(module.cert_manager). Provider schema validation
 # still runs, so a generated value that the provider itself rejects fails here
 # too.
 #

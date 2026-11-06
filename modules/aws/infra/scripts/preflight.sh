@@ -592,15 +592,6 @@ else
   fi
 fi
 
-# WAFv2 — optional
-info "WAFv2 — optional, for production WAF coverage..."
-WAF_OUT=$(aws wafv2 list-web-acls --scope REGIONAL --region "$REGION" 2>&1 || true)
-if check_denied "$WAF_OUT"; then
-  warning "WAFv2 permission denied (optional — not required for basic deployment)"
-else
-  success "WAFv2 permissions OK (optional)"
-fi
-
 # ── Resource creation tests ───────────────────────────────────────────────────
 printf "\n"
 

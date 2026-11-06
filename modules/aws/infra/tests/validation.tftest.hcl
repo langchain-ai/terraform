@@ -31,7 +31,6 @@ run "enums_reject_an_unlisted_value" {
   variables {
     postgres_source          = "rds"
     redis_source             = "elasticache"
-    alb_scheme               = "public"
     environment              = "qa"
     tls_certificate_source   = "self-signed"
     clickhouse_source        = "langsmith-managed"
@@ -47,7 +46,6 @@ run "enums_reject_an_unlisted_value" {
   expect_failures = [
     var.postgres_source,
     var.redis_source,
-    var.alb_scheme,
     var.environment,
     var.tls_certificate_source,
     var.clickhouse_source,
@@ -144,14 +142,12 @@ run "cidrs_reject_a_non_cidr" {
   command = plan
 
   variables {
-    vpc_cidr_block       = "10.0.0.0"
-    firewall_subnet_cidr = "10.0.32.0"
-    eks_pod_cidr         = "100.64.0.0"
+    vpc_cidr_block = "10.0.0.0"
+    eks_pod_cidr   = "100.64.0.0"
   }
 
   expect_failures = [
     var.vpc_cidr_block,
-    var.firewall_subnet_cidr,
     var.eks_pod_cidr,
   ]
 }

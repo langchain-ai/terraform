@@ -193,7 +193,7 @@ has_line "reuse choice survives rerun" "$REUSE_INFRA/terraform.tfvars" \
 has_line "existing zone ID survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "dns_existing_zone_id   = \"Z1ABCDEF123456\""
 has_line "SSO setting survives rerun" "$REUSE_INFRA/terraform.tfvars" \
-  "enable_sso_oidc         = true"
+  "enable_sso_oidc = true"
 has_line "admin email survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "langsmith_admin_email = \"admin@example.com\""
 

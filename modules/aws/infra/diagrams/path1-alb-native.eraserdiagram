@@ -53,7 +53,6 @@ Option B: In-Cluster ClickHouse [icon: database, color: red] {
 AWS Account [icon: aws, color: orange] {
 
   // ── Account-level services ──────────────────
-  CloudTrail [icon: aws-cloudtrail, color: gray]
   CloudWatch Logs [icon: aws-cloudwatch, color: orange]
   SSM Parameter Store [icon: aws-systems-manager, color: gray]
   AWS Secrets Manager [icon: aws-systems-manager, color: gray]
@@ -220,8 +219,8 @@ ESO Controller --> SSM Parameter Store: :443 GetParameter
 ESO Controller --> AWS Secrets Manager: :443 GetSecretValue
 ESO Controller --> langsmith: inject langsmith-config-secret
 
-// ── Controlled egress (private → internet via NAT) ─
-Private Subnets AZ1-3 > NAT Gateway: controlled egress only
+// ── Outbound internet traffic via NAT ─
+Private Subnets AZ1-3 > NAT Gateway: outbound internet traffic
 NAT Gateway --> beacon.langchain.com: :443 HTTPS (required)
 NAT Gateway --> LangChain ClickHouse Cloud: :9000 TCP (Option A only)
 
@@ -229,7 +228,6 @@ NAT Gateway --> LangChain ClickHouse Cloud: :9000 TCP (Option A only)
 backend --> CloudWatch Logs: :443 HTTPS
 ingestQueue --> CloudWatch Logs: :443 HTTPS
 AWS LB Controller --> CloudWatch Logs: :443 HTTPS
-CloudTrail --> CloudWatch Logs: API audit trail
 
 // ─────────────────────────────────────────────
 // Legend

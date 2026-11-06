@@ -47,10 +47,6 @@ AWS Account [icon: aws, color: blue] {
 
   // ── Account-level services (outside VPC) ──────────────────
 
-  // CloudTrail — opt-in: create_cloudtrail = true in tfvars
-  // Captures EKS API audit events and AWS API calls for compliance
-  CloudTrail [icon: aws-cloudtrail, color: gray]
-
   // CloudWatch Logs — receives logs from EKS nodes, controllers, LangSmith pods
   CloudWatch Logs [icon: server, color: gray]
 
@@ -95,7 +91,7 @@ AWS Account [icon: aws, color: blue] {
 
   // ─────────────────────────────────────────────────────────
   // VPC 10.0.0.0/16
-  // Three-tier subnet layout: public, firewall (opt-in), private
+  // Subnet layout: public and private
   // ─────────────────────────────────────────────────────────
   VPC 10.0.0.0/16 [icon: aws-vpc, color: blue] {
 
@@ -112,14 +108,6 @@ AWS Account [icon: aws, color: blue] {
       // NAT Gateway — single by default (cost-optimised)
       // HA option: one NAT Gateway per AZ (tfvars: single_nat_gateway = false)
       NAT Gateway [icon: aws-nat-gateway, color: gray]
-    }
-
-    // ── AWS Network Firewall Subnet (opt-in) ─────────────────
-    // Sits between private subnets and the NAT Gateway
-    // Enforces domain-based egress rules (e.g. allow beacon.langchain.com only)
-    // Enable with: create_network_firewall = true in tfvars
-    Network Firewall Subnet [color: gray] {
-      AWS Network Firewall [icon: aws-network-firewall, color: gray]
     }
 
     // ── Private Subnets AZ1-3 ────────────────────────────────
@@ -398,12 +386,9 @@ NAT Gateway --> beacon.langchain.com: :443 HTTPS (REQUIRED — license validatio
 NAT Gateway --> ClickHouse Cloud Endpoint: :9000 TCP (if not PrivateLink)
 NAT Gateway --> acme-v02.api.letsencrypt.org: :443 HTTPS (cert-manager only)
 
-// ── Network Firewall (opt-in) ─────────────────────────────────
-Private Subnets AZ1-3 --> AWS Network Firewall: egress filtered by domain rules
-AWS Network Firewall --> NAT Gateway: allowed domains only
+Private Subnets AZ1-3 --> NAT Gateway: outbound internet traffic
 
 // ── Observability ─────────────────────────────────────────────
-CloudTrail --> CloudWatch Logs: API audit events
 langsmith-backend --> CloudWatch Logs: application logs
 aws-load-balancer-controller --> CloudWatch Logs: controller logs
 
