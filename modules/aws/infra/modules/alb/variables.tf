@@ -25,6 +25,21 @@ variable "allowed_cidr_blocks" {
   default     = ["0.0.0.0/0"]
 }
 
+# Security-group-scoped ingress, evaluated in addition to allowed_cidr_blocks.
+# Preferred over widening allowed_cidr_blocks when the caller is a known workload
+# in this VPC: the rule names the source security group, so it stays valid as
+# node IPs churn and it grants nothing to unrelated traffic.
+#
+# Only effective for an internal ALB. Traffic from a private subnet to an
+# internet-facing ALB leaves via the NAT gateway and arrives with the NAT
+# Elastic IP as its source, so the source security group is no longer visible
+# and these rules will not match.
+variable "allowed_security_group_ids" {
+  type        = list(string)
+  description = "Security group IDs allowed to reach the ALB on HTTP/HTTPS, in addition to allowed_cidr_blocks. Only matches for an internal ALB."
+  default     = []
+}
+
 variable "tls_certificate_source" {
   type        = string
   description = "TLS mode: 'acm', 'letsencrypt', or 'none'"
