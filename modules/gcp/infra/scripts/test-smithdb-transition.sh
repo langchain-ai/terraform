@@ -26,7 +26,12 @@ cat > "$TEST_DIR/legacy.json" <<'VALUES'
   }},
   "compaction":{"deployment":{"resources":{"requests":{"cpu":"99"}}}},
   "compactionWorker":{"deployment":{"volumes":[{"name":"local-ssd-storage","emptyDir":{}}],"volumeMounts":[{"name":"local-ssd-storage","mountPath":"/data"}]}},
-  "migration":{"job":{"parallelism":3,"resources":{"requests":{"cpu":"12","ephemeral-storage":"100Gi"}}},
+  "migration":{"job":{"parallelism":3,"nodeSelector":{"customer-pool":"migration"},
+    "tolerations":[{"key":"customer-pool","operator":"Equal","value":"migration","effect":"NoSchedule"}],
+    "podSecurityContext":{"fsGroup":1234},
+    "volumes":[{"name":"scratch","emptyDir":{"sizeLimit":"100Gi"}}],
+    "volumeMounts":[{"name":"scratch","mountPath":"/tmp"}],
+    "resources":{"requests":{"cpu":"12","ephemeral-storage":"100Gi"}}},
     "taskdb":{"postgres":{"auth":{"existingSecretName":"existing-taskdb"},"statefulSet":{"resources":{"requests":{"memory":"12Gi"}}}}}}
 }}
 VALUES
@@ -35,73 +40,38 @@ VALUES_ARGS+=(--set smithdb.resourceTier=medium)
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-jq -e '
+jq -e --slurpfile original "$TEST_DIR/legacy.json" '
   .resourceTier == "medium" and
   .query.deployment.resources == {} and .compaction.deployment.resources == {} and
   .query.deployment.volumes == [{name:"customer-config",configMap:{name:"customer-config"}}] and
   .query.deployment.volumeMounts == [{name:"cache",mountPath:"/data"},{name:"customer-config",mountPath:"/config"}] and
   .compactionWorker.deployment.volumes == [] and
   .compactionWorker.deployment.volumeMounts == [{name:"cache",mountPath:"/tmp"}] and
-  .migration.job.parallelism == 3 and .migration.job.resources.requests.cpu == "12" and
-  .migration.job.resources.requests["ephemeral-storage"] == "100Gi" and
+  .migration.job == $original[0].smithdb.migration.job and
   .migration.taskdb.postgres.statefulSet.resources.requests.memory == "12Gi" and
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
 echo "PASS: network cache clears legacy service overrides and preserves migration, TaskDB, and customer volumes"
 
-VALUES_ARGS=(--set smithdb.enabled=true --set smithdb.resourceTier=large)
-_smithdb_managed_values
-helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
-  sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-jq -e '.resourceTier == "large" and .query.deployment.resources == {} and .query.deployment.volumes == []' "$TEST_DIR/values.json" >/dev/null
-echo "PASS: new network-cache deployments preserve an explicitly selected resource tier"
-
-# Exercise the real generator in both cache modes, after older migration values.
 cat > "$TEST_DIR/chart/values.yaml" <<'VALUES'
 smithdb:
   migration:
     job:
+      nodeSelector: {}
+      tolerations: []
       resources:
         requests: {cpu: "8", memory: 32Gi, ephemeral-storage: 100Gi}
         limits: {cpu: "8", memory: 32Gi, ephemeral-storage: 100Gi}
 VALUES
-sed -n '/^  # Migration scratch on network disk/,/^  echo "  ✔ Written /p' \
-  "$SCRIPT_DIR/../../helm/scripts/init-values.sh" | sed '$d' > "$TEST_DIR/generate.sh"
-terraform() {
-  case "$*" in
-    *"output -raw smithdb_cache_storage") echo "$CACHE_MODE" ;;
-    *"output -raw smithdb_cache_storage_class_name") echo smithdb-cache-test ;;
-    *) return 2 ;;
-  esac
-}
-for CACHE_MODE in network-disk local-ssd; do
-  export INFRA_DIR="$TEST_DIR"
-  export _smithdb_overrides_file="$TEST_DIR/$CACHE_MODE-generated.yaml"
-  printf 'smithdb:\n  enabled: true\n' > "$_smithdb_overrides_file"
-  source "$TEST_DIR/generate.sh"
-  VALUES_ARGS=(-f "$TEST_DIR/legacy.json" -f "$_smithdb_overrides_file")
-  if [[ "$CACHE_MODE" == network-disk ]]; then _smithdb_managed_values; fi
-  helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
-    sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-  jq -e '.migration.job.parallelism == 3 and .migration.job.resources.requests.cpu == "12" and
-    .migration.job.resources.requests.memory == "32Gi" and
-    .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"' "$TEST_DIR/values.json" >/dev/null
-  if [[ "$CACHE_MODE" == network-disk ]]; then
-    jq -e '
-      .migration.job.volumes == [{name:"cache",ephemeral:{volumeClaimTemplate:{spec:{
-        accessModes:["ReadWriteOnce"],storageClassName:.cache.storageClassName,
-        resources:{requests:{storage:"100Gi"}}}}}}] and
-      .migration.job.volumeMounts == [{name:"cache",mountPath:"/tmp"}] and
-      .migration.job.podSecurityContext.fsGroup == 1001 and
-      (.migration.job.resources.requests | has("ephemeral-storage") | not) and
-      (.migration.job.resources.limits | has("ephemeral-storage") | not)
-    ' "$TEST_DIR/values.json" >/dev/null
-  else
-    jq -e '.migration.job.volumes == null and .migration.job.resources.requests["ephemeral-storage"] == "100Gi"' "$TEST_DIR/values.json" >/dev/null
-  fi
-  echo "PASS: generated migration $CACHE_MODE scratch preserves CPU, memory, parallelism, and TaskDB"
-done
-unset -f terraform
+VALUES_ARGS=(--set smithdb.enabled=true --set smithdb.resourceTier=large)
+_smithdb_managed_values
+helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
+  sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
+jq -e '.resourceTier == "large" and .query.deployment.resources == {} and .query.deployment.volumes == [] and
+  .migration.job == {nodeSelector:{},tolerations:[],resources:{
+    requests:{cpu:"8",memory:"32Gi","ephemeral-storage":"100Gi"},
+    limits:{cpu:"8",memory:"32Gi","ephemeral-storage":"100Gi"}}}' "$TEST_DIR/values.json" >/dev/null
+echo "PASS: new network-cache deployments preserve the resource tier and chart migration settings"
 
 jq -n '{items: ([range(0;5) | {
   kind:"Deployment", metadata:{name:("langsmith-smithdb-" + tostring), generation:2},
@@ -117,10 +87,6 @@ cat > "$TEST_DIR/bin/kubectl" <<'MOCK'
 set -euo pipefail
 echo "kubectl $*" >> "$TEST_DIR/events"
 case "$1 $2" in
-  'get jobs,deployments')
-    if [[ "$CASE" == migration ]]; then
-      echo '{"items":[{"kind":"Job","metadata":{"name":"langsmith-smithdb-migration"},"spec":{"template":{"spec":{"nodeSelector":{"smithdb-local/instance-store":"true"}}}}}]}'
-    else cat "$TEST_DIR/empty.json"; fi ;;
   'get deployments,statefulsets')
     case "$CASE" in
       unhealthy) jq '.items[0].status.updatedReplicas=0' "$TEST_DIR/workloads.json" ;;
@@ -154,7 +120,7 @@ case "$2" in
 esac
 MOCK
 chmod +x "$TEST_DIR/bin/"*
-for CASE in unhealthy taskdb cache migration api_failure old_pod unrelated_cache healthy; do
+for CASE in unhealthy taskdb cache api_failure old_pod unrelated_cache healthy; do
   export CASE
   if _smithdb_transition_ready langsmith langsmith smithdb-cache-test > "$TEST_DIR/log" 2>&1; then
     [[ "$CASE" == healthy || "$CASE" == unrelated_cache ]] || { echo "FAIL: accepted $CASE"; exit 1; }
@@ -166,7 +132,7 @@ done
 jq -n '{variables:{enable_smithdb:{value:true}, smithdb_transition_mode:{value:false}, region:{value:"us-central1"}, project_id:{value:"fixture"}, langsmith_namespace:{value:"langsmith"}, langsmith_release_name:{value:"langsmith"}},
  planned_values:{outputs:{cluster_name:{value:"test-gke"},smithdb_cache_storage:{value:"network-disk"},smithdb_cache_storage_class_name:{value:"smithdb-cache-test"}}},
  resource_changes:[{type:"google_container_node_pool",name:"instance_store",change:{actions:["delete"],after:null}}]}' > "$TEST_DIR/plan.json"
-for CASE in unhealthy migration healthy; do
+for CASE in unhealthy old_pod healthy; do
   export CASE
   : > "$TEST_DIR/events"
   if bash "$SCRIPT_DIR/apply.sh" -auto-approve > "$TEST_DIR/log" 2>&1; then

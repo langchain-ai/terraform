@@ -228,7 +228,7 @@ locals {
     })
   }
 
-  # Network caches use the chart tier. Every SmithDB workload shares one pool.
+  # Network caches use the chart tier. Services and TaskDB share one pool.
   smithdb_pin_general_pool = {
     nodeSelector = { "langsmith-nodepool/smithdb" = "true" }
     tolerations  = [{ key = "langsmith-nodepool/smithdb", operator = "Equal", value = "true", effect = "NoSchedule" }]
@@ -245,8 +245,12 @@ locals {
       } },
       {
         metastoreMigration = { job = local.smithdb_pin_general_pool }
-        migration = merge(local.smithdb_start_time_values, {
-          job    = local.smithdb_pin_general_pool
+        migration = merge(local.smithdb_start_time_values, local.smithdb_minimal ? {
+          job = { resources = {
+            requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+            limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
+          } }
+          } : {}, {
           taskdb = { postgres = { statefulSet = local.smithdb_pin_general_pool } }
         })
       },

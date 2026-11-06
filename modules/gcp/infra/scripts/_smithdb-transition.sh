@@ -7,7 +7,7 @@ _smithdb_managed_values() {
   local path values setting
   for path in query.deployment mutations.deployment runRules.deployment statsQuery.deployment \
     ingestion.deployment compactionWorker.deployment compaction.deployment clusterManager.deployment \
-    metastoreMigration.job migration.job migration.taskdb.postgres.statefulSet; do
+    metastoreMigration.job migration.taskdb.postgres.statefulSet; do
     VALUES_ARGS+=(
       --set-json "smithdb.$path.nodeSelector={\"langsmith-nodepool/smithdb\":\"true\"}"
       --set-json "smithdb.$path.tolerations=[{\"key\":\"langsmith-nodepool/smithdb\",\"operator\":\"Equal\",\"value\":\"true\",\"effect\":\"NoSchedule\"}]"
@@ -59,27 +59,9 @@ TEMPLATE
     sed '/^#/d; /^---$/d' | jq -er '.data.values'
 )
 
-# Shared by deploy and apply. Never delete TaskDB, its PVC, or a migration Job.
-_smithdb_check_migration() {
-  local workloads
-  workloads=$(kubectl get jobs,deployments -n "$1" -l "app.kubernetes.io/instance=$2" -o json) || return 1
-  if ! jq -e --arg enabled "${3:-true}" '[.items[] | select(
-      (.metadata.name | contains("smithdb-migration")) and
-      (.kind == "Deployment" or .spec.template.spec.nodeSelector["langsmith-nodepool/smithdb"] != "true") and
-      (.kind == "Deployment" or $enabled != "false" or
-        (any(.status.conditions[]?; .type == "Complete" and .status == "True") | not))
-    )] | length == 0' <<< "$workloads" >/dev/null; then
-    echo "ERROR: finish the existing SmithDB migration before changing node groups." >&2
-    echo "Keep TaskDB, its PVC, and credentials until migration completes." >&2
-    echo "For a completed Job, run make smithdb-migration-job-end before changing pools." >&2
-    return 1
-  fi
-}
-
 # Refuse to remove legacy pools until deployments and TaskDB have moved.
 _smithdb_transition_ready() {
   local namespace="$1" release="$2" cache_class="$3" workloads nodes pods
-  _smithdb_check_migration "$namespace" "$release" || return 1
   workloads=$(kubectl get deployments,statefulsets -n "$namespace" -l "app.kubernetes.io/instance=$release" -o json) || return 1
   if ! jq -e '[.items[] | select(
       (.metadata.name | contains("smithdb")) or

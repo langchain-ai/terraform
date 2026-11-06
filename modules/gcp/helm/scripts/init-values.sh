@@ -855,7 +855,7 @@ ${_smithdb_proxy_block}
 
   # The TaskDB credential and the migration sizing are in
   # langsmith-values-smithdb-migration.yaml, which make
-  # smithdb-migration-job-start writes and deploy.sh loads before this file.
+  # smithdb-migration-job-start writes and deploy.sh loads after this file.
   #
   # The backfill's *source* blob store - the traces bucket holding the run
   # payloads LangSmith offloaded out of ClickHouse - needs nothing here. The
@@ -876,42 +876,6 @@ ${_smithdb_proxy_block}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDBYAML
-
-  # Migration scratch on network disk until the chart provides this default.
-  _smithdb_cache_mode=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage)
-  if [[ "$_smithdb_cache_mode" == "network-disk" ]]; then
-    SMITHDB_CACHE_STORAGE_CLASS=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage_class_name)
-    if [[ -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
-      echo "ERROR: SmithDB cache StorageClass is missing. Run make apply, then make init-values." >&2
-      exit 1
-    fi
-    cat >> "$_smithdb_overrides_file" <<MIGRATION_CACHE
-  cache:
-    storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
-  migration:
-    job:
-      podSecurityContext:
-        fsGroup: 1001
-      resources:
-        requests:
-          ephemeral-storage: null
-        limits:
-          ephemeral-storage: null
-      volumes:
-        - name: cache
-          ephemeral:
-            volumeClaimTemplate:
-              spec:
-                accessModes: ["ReadWriteOnce"]
-                storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
-                resources:
-                  requests:
-                    storage: 100Gi
-      volumeMounts:
-        - name: cache
-          mountPath: /tmp
-MIGRATION_CACHE
-  fi
 
   echo "  ✔ Written langsmith-values-smithdb-overrides.yaml"
   echo ""

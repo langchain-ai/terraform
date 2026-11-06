@@ -611,7 +611,7 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     exit 1
   fi
 
-  VALUES_ARGS+=(-f "$_smithdb_sizing_file" -f "$_smithdb_file")
+  VALUES_ARGS+=(-f "$_smithdb_sizing_file" -f "$_smithdb_file" -f "$_smithdb_overrides_file")
   echo "  ✔ langsmith-values-smithdb-sizing.yaml"
   echo "  ✔ langsmith-values-smithdb.yaml"
   echo "  ✔ langsmith-values-smithdb-overrides.yaml"
@@ -638,10 +638,8 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     VALUES_ARGS+=(-f "$_smithdb_migration_file")
     echo "  ✔ langsmith-values-smithdb-migration.yaml"
   fi
-  VALUES_ARGS+=(-f "$_smithdb_overrides_file")
   if [[ "$_smithdb_cache_mode" == "network-disk" ]]; then
     source "$INFRA_DIR/scripts/_smithdb-transition.sh"
-    _smithdb_check_migration "$NAMESPACE" "$RELEASE_NAME" "$_smithdb_migration_enabled"
     _smithdb_managed_values
   fi
 elif [[ -f "$VALUES_DIR/langsmith-values-smithdb.yaml" ]]; then

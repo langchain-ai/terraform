@@ -68,7 +68,8 @@ use the LangSmith application database or blob-storage bucket.
 shape, and default metastore tier. An unset value follows `sizing_profile`:
 `minimum`, `dev`, and `default` use Small; `production` uses Medium;
 `production-large` uses Large. `minimal` remains a compatibility name for Small,
-without reduced resource overrides.
+without reduced service resource overrides. Its existing migration Job resource
+overrides remain.
 
 | Chart tier | SmithDB machine | Minimum nodes | Maximum nodes |
 |---|---|---|---|
@@ -79,8 +80,8 @@ without reduced resource overrides.
 Counts apply across all zones, not per zone. Set `smithdb_node_machine_type`,
 `smithdb_node_min_count`, and `smithdb_node_max_count` to override them.
 The existing network-mode boot disk default stays 300 GB. `resourceTier`
-controls service requests and limits; migration and TaskDB keep chart-default
-or customer CPU and memory. Increase the node ceiling when adding migration pods.
+controls service requests and limits; TaskDB keeps chart-default or customer
+CPU and memory.
 
 For a created metastore, the existing defaults remain `db-custom-4-16384`,
 `db-custom-6-32768`, and `db-custom-10-65536` for Small, Medium, and Large.
@@ -99,11 +100,9 @@ sets cache capacity from `resourceTier`. C3 and C3D general-purpose nodes
 support these volumes; N2 does not. Volumes on one node share its throughput
 limit.
 
-Every SmithDB workload, including migration, TaskDB, and the metastore hook,
-uses `langsmith-nodepool/smithdb=true` with a matching `NoSchedule` toleration.
-Migration keeps its chart-default 8 CPU and 32Gi memory and uses a separate
-100Gi Hyperdisk scratch volume at `/tmp`. More parallel migration pods can
-require more nodes.
+SmithDB services, TaskDB, and the metastore hook use
+`langsmith-nodepool/smithdb=true` with a matching `NoSchedule` toleration.
+Migration Job settings are preserved.
 
 ### local-ssd
 
@@ -272,27 +271,28 @@ migration:
   SmithDB metastore.
 - For the size, the script asks for the number of historical runs and the
   target days. It suggests a migration pod count from the docs formula (runs /
-  5,000,000 / days / 8 vCPU per pod), plus 50%, with a maximum of 20.
+  5,000,000 / days / 8 vCPU per pod), plus 50%, with a maximum of 20. For
+  `minimal`, it suggests 1.
 
 The script writes `helm/values/langsmith-values-smithdb-migration.yaml`. It
 sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`.
 `make apply` then grants the read access in
 [Backfill access](#backfill-access-to-the-traces-bucket). `make deploy` starts
-the migration Job on the SmithDB pool.
+the migration Job.
 
-Finish and disable an existing backfill before moving to network-disk cache;
-the migration Job pod template changes.
+Finish any migration pods using the old pools before removing those pools.
 
 - Time window. An empty `smithdb_migration_start_time` keeps the chart default
   window. On chart 0.17.0-rc.42, the default window is 400 days, and the
   migration Job log shows the window. To copy all history, set
   `smithdb_migration_start_time` in `infra/terraform.tfvars` to a time before
   the oldest trace, before `make deploy-all`.
-- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and 100 GiB of scratch
-  storage: a cache PVC in network-disk mode or node storage with local SSD.
-  If the pool cannot add the nodes, raise `smithdb_node_max_count`. Above about 20 pods, raise the TaskDB resources
+- Pod count. Each migration pod keeps its chart-default 8 vCPU, 32 GiB, and
+  100 GiB of node ephemeral storage. For `minimal`, the existing overrides are
+  1 vCPU, 4 GiB, and 10 GiB. Above about 20 pods, raise the TaskDB resources
   instead of adding pods.
-- Resources. Migration and TaskDB use chart-default CPU and memory or your settings.
+- Resources. Existing migration Job resource settings remain; TaskDB uses
+  chart-default CPU and memory or your settings.
   The migration values file does not set resources. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Duration. On a test cluster, about 10,000 rows took about 2 hours, with more

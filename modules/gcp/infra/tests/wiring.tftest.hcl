@@ -402,8 +402,14 @@ run "smithdb_minimal_uses_the_small_tier_on_its_own_pool" {
     error_message = "Minimum must use chart Small on the dedicated general-purpose pool."
   }
   assert {
-    condition     = !strcontains(output.smithdb_helm_values, "resources:") && yamldecode(output.smithdb_helm_values).smithdb.migration.job.nodeSelector == { "langsmith-nodepool/smithdb" = "true" }
-    error_message = "Minimum must retain chart resources, including migration."
+    condition = alltrue([
+      for c in ["query", "ingestion", "compactionWorker", "compaction", "clusterManager"] :
+      !contains(keys(yamldecode(output.smithdb_helm_values).smithdb[c].deployment), "resources")
+      ]) && yamldecode(output.smithdb_helm_values).smithdb.migration.job.resources == {
+      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
+    }
+    error_message = "Minimum must retain chart service resources and its existing migration Job resources."
   }
 }
 
@@ -498,24 +504,6 @@ run "smithdb_network_disk_does_not_reuse_legacy_ssd_settings" {
   assert {
     condition     = output.smithdb_cache_storage == "network-disk" && output.smithdb_node_pool_config.machine_type == "c3-standard-22" && module.smithdb_nodes[0].instance_store_pool_name == null && module.smithdb_nodes[0].compute_pool_name == null
     error_message = "Legacy node settings must not put the network-cache workloads back on SSD pools."
-  }
-}
-
-# Migration scratch uses a PVC, so the node boot disk can be smaller.
-run "smithdb_network_disk_backfill_uses_a_separate_scratch_disk" {
-  command = plan
-
-  variables {
-    enable_smithdb            = true
-    smithdb_cache_storage     = "network-disk"
-    smithdb_node_disk_size_gb = 100
-    smithdb_ingestion_enabled = true
-    smithdb_migration_enabled = true
-  }
-
-  assert {
-    condition     = output.smithdb_cache_storage == "network-disk" && output.smithdb_node_pool_config.disk_size_gb == 100
-    error_message = "Network-cache migration scratch must not require a 300 GB boot disk."
   }
 }
 
@@ -892,7 +880,7 @@ run "in_cluster_redis_plans_nothing" {
   }
 }
 
-run "smithdb_network_default_schedules_all_workloads_on_one_pool" {
+run "smithdb_network_default_schedules_services_and_taskdb_on_one_pool" {
   command = plan
   variables {
     enable_smithdb            = true
@@ -908,8 +896,8 @@ run "smithdb_network_default_schedules_all_workloads_on_one_pool" {
     condition = alltrue([
       for c in ["query", "mutations", "runRules", "statsQuery", "ingestion", "compactionWorker", "compaction", "clusterManager"] :
       yamldecode(output.smithdb_helm_values).smithdb[c].deployment.nodeSelector == { "langsmith-nodepool/smithdb" = "true" } && yamldecode(output.smithdb_helm_values).smithdb[c].deployment.tolerations == [{ key = "langsmith-nodepool/smithdb", operator = "Equal", value = "true", effect = "NoSchedule" }]
-    ]) && yamldecode(output.smithdb_helm_values).smithdb.metastoreMigration.job.nodeSelector == { "langsmith-nodepool/smithdb" = "true" } && yamldecode(output.smithdb_helm_values).smithdb.migration.job.nodeSelector == { "langsmith-nodepool/smithdb" = "true" } && yamldecode(output.smithdb_helm_values).smithdb.migration.taskdb.postgres.statefulSet.nodeSelector == { "langsmith-nodepool/smithdb" = "true" } && !strcontains(output.smithdb_helm_values, "resources:")
-    error_message = "Every SmithDB workload must use the dedicated pool and retain chart resources."
+    ]) && yamldecode(output.smithdb_helm_values).smithdb.metastoreMigration.job.nodeSelector == { "langsmith-nodepool/smithdb" = "true" } && yamldecode(output.smithdb_helm_values).smithdb.migration.taskdb.postgres.statefulSet.nodeSelector == { "langsmith-nodepool/smithdb" = "true" } && !strcontains(output.smithdb_helm_values, "resources:")
+    error_message = "SmithDB services and TaskDB must use the dedicated pool and retain chart resources."
   }
 }
 run "smithdb_transition_retains_old_capacity_while_values_move" {
