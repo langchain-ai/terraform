@@ -74,9 +74,11 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Write answers for a fresh dev deployment using ALB + ACM. When acm_arn is
 # blank, the DNS module activates and dns_choice is consumed (1=new, 2=reuse).
+# tags_answers may hold several lines, one per attempt at the tags prompt. The
+# wizard runs terraform fmt, so expected tag lines carry its = alignment.
 write_fresh_answers() {
   local file="$1" acm_arn="$2" domain="$3" dns_choice="${4:-}"
-  local invalid_zone_id="${5:-}" zone_id="${6:-}"
+  local invalid_zone_id="${5:-}" zone_id="${6:-}" tags_answers="${7:-}"
   {
     printf '%s\n' "1"             # Deployment profile: dev
     printf '\n'                    # Name prefix
@@ -84,6 +86,7 @@ write_fresh_answers() {
     printf '\n'                    # Region
     printf '\n'                    # Owner
     printf '\n'                    # Cost center
+    printf '%s\n' "$tags_answers" # Additional tags
     printf '%s\n' "admin@example.com" # Initial org admin email
     printf '\n'                    # Create VPC: yes
     printf '\n'                    # EKS version
@@ -130,6 +133,7 @@ write_update_defaults() {
     printf '\n' # Deployment profile
     printf '\n' # Owner
     printf '\n' # Cost center
+    printf '\n' # Additional tags
     printf '\n' # Initial org admin email
     printf '\n' # EKS version
     printf '\n' # Node instance type
@@ -167,7 +171,9 @@ run_wizard() {
 echo "1. Reusing an existing zone validates and writes both DNS answers"
 REUSE_INFRA="$TMP/reuse"
 write_fresh_answers "$TMP/reuse.answers" "" "langsmith.example.com" \
-  "2" "not-a-zone" "Z1ABCDEF123456"
+  "2" "not-a-zone" "Z1ABCDEF123456" \
+  "aws:team=data
+team = data platform, contact=ops@example.com"
 run_wizard "fresh existing-zone run completes" "$REUSE_INFRA" \
   "$TMP/reuse.answers" "$TMP/reuse.log"
 has_line "reuse choice is written" "$REUSE_INFRA/terraform.tfvars" \
@@ -180,8 +186,15 @@ log_has "invalid zone ID is rejected" "$TMP/reuse.log" \
   "ERROR: enter a valid Route 53 hosted zone ID starting with Z."
 log_has "summary shows reused zone" "$TMP/reuse.log" \
   "existing (Z1ABCDEF123456)"
+log_has "reserved tag prefix is rejected" "$TMP/reuse.log" \
+  "ERROR: 'aws:team' — the aws: prefix is reserved."
+has_line "tags block is written" "$REUSE_INFRA/terraform.tfvars" "tags = {"
+has_line "tag with a space is written" "$REUSE_INFRA/terraform.tfvars" \
+  '  "team"    = "data platform"'
+has_line "tag with an email is written" "$REUSE_INFRA/terraform.tfvars" \
+  '  "contact" = "ops@example.com"'
 
-echo "2. Update mode preserves the zone choice, the zone ID, and SSO"
+echo "2. Update mode preserves the zone choice, the zone ID, SSO, and tags"
 # Turn SSO on the way `make sso` does: by editing only that line.
 sed 's/^enable_sso_oidc[[:space:]]*=.*/enable_sso_oidc = true/' "$REUSE_INFRA/terraform.tfvars" > "$TMP/sso.tfvars"
 mv "$TMP/sso.tfvars" "$REUSE_INFRA/terraform.tfvars"
@@ -196,6 +209,10 @@ has_line "SSO setting survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "enable_sso_oidc         = true"
 has_line "admin email survives rerun" "$REUSE_INFRA/terraform.tfvars" \
   "langsmith_admin_email = \"admin@example.com\""
+has_line "tag with a space survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  '  "team"    = "data platform"'
+has_line "tag with an email survives rerun" "$REUSE_INFRA/terraform.tfvars" \
+  '  "contact" = "ops@example.com"'
 
 echo "3. Creating a new zone writes the choice without an existing ID"
 NEW_INFRA="$TMP/new"
@@ -206,6 +223,8 @@ has_line "new-zone choice is written" "$NEW_INFRA/terraform.tfvars" \
   "dns_create_zone        = true"
 lacks_key "new-zone mode omits an existing ID" "$NEW_INFRA/terraform.tfvars" \
   "dns_existing_zone_id"
+lacks_key "blank tags answer writes no tags block" "$NEW_INFRA/terraform.tfvars" \
+  "tags"
 log_has "summary shows newly created zone" "$TMP/new.log" \
   "Terraform-managed (new.example.com)"
 

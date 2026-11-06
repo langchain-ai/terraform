@@ -72,6 +72,7 @@ resource "aws_db_instance" "metastore" {
   multi_az                  = var.metastore_multi_az
   deletion_protection       = var.metastore_deletion_protection
   backup_retention_period   = var.metastore_backup_retention_period
+  copy_tags_to_snapshot     = true
   skip_final_snapshot       = var.metastore_skip_final_snapshot
   final_snapshot_identifier = var.metastore_skip_final_snapshot ? null : "${local.rds_identifier}-final"
   tags                      = local.tags
