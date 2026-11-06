@@ -1870,6 +1870,12 @@ locals {
 
   smithdb_cache_components = ["query", "ingestion", "compactionWorker"]
 
+  # Preserve the existing minimal migration Job sizing independently of service tiers.
+  smithdb_minimal_migration_resources = {
+    requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+    limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
+  }
+
   # Default metastore SKU for each size. The docs section "Metastore capacity"
   # (langsmith/self-host-smithdb-scale) gives a dedicated metastore 2 vCPU /
   # 16 GiB for small, 4 / 32 for medium, and 8 / 64 for large, which is the
@@ -1899,6 +1905,7 @@ locals {
           autoscaling = { hpa = { minReplicas = local.smithdb_replicas[c] } }
         }
       },
+      local.smithdb_minimal ? { migration = { job = { resources = local.smithdb_minimal_migration_resources } } } : {},
     )
   }
 

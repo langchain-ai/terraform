@@ -462,8 +462,15 @@ run "smithdb_sizing_follows_sizing_profile_minimum" {
     error_message = "minimal did not select the small chart tier"
   }
   assert {
-    condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources) && !can(yamldecode(output.smithdb_helm_values).smithdb.migration.job.resources)
-    error_message = "The compatibility minimal size must use chart resources for services and migration."
+    condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources) && !can(yamldecode(output.smithdb_helm_values).smithdb.migration.taskdb.postgres.statefulSet.resources)
+    error_message = "The compatibility minimal size must use chart resources for services and TaskDB."
+  }
+  assert {
+    condition = yamldecode(output.smithdb_helm_values).smithdb.migration.job.resources == {
+      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
+    }
+    error_message = "minimal must preserve the existing migration Job resources."
   }
 }
 
@@ -506,8 +513,8 @@ run "smithdb_small_sets_the_tier_without_resources" {
     error_message = "small did not select the small chart tier"
   }
   assert {
-    condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources)
-    error_message = "small set explicit resources, which replace the chart tier"
+    condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources) && !can(yamldecode(output.smithdb_helm_values).smithdb.migration.job.resources)
+    error_message = "small set explicit resources for services or the migration Job"
   }
   assert {
     condition = (

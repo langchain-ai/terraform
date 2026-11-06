@@ -8,7 +8,7 @@ _smithdb_managed_values() {
   pool_tolerations=${1:-'[{"key":"langsmith-nodepool/smithdb","operator":"Equal","value":"true","effect":"NoSchedule"}]'}
   for path in query.deployment mutations.deployment runRules.deployment statsQuery.deployment \
     ingestion.deployment compactionWorker.deployment compaction.deployment clusterManager.deployment \
-    metastoreMigration.job migration.job migration.taskdb.postgres.statefulSet; do
+    metastoreMigration.job migration.taskdb.postgres.statefulSet; do
     VALUES_ARGS+=(
       --set-json "smithdb.$path.nodeSelector={\"langsmith-nodepool/smithdb\":\"true\"}"
     )
@@ -38,7 +38,7 @@ _smithdb_cache_values() (
   printf 'apiVersion: v2\nname: smithdb-cache\nversion: 0.1.0\n' > "$chart/Chart.yaml"
   cat > "$chart/templates/values.yaml" <<'TEMPLATE'
 {{- $settings := dict "smithdb.resourceTier" (default .Values.fallbackTier .Values.smithdb.resourceTier) -}}
-{{- range $path := list "query.deployment" "mutations.deployment" "runRules.deployment" "statsQuery.deployment" "ingestion.deployment" "compactionWorker.deployment" "compaction.deployment" "clusterManager.deployment" "metastoreMigration.job" "migration.job" "migration.taskdb.postgres.statefulSet" -}}
+{{- range $path := list "query.deployment" "mutations.deployment" "runRules.deployment" "statsQuery.deployment" "ingestion.deployment" "compactionWorker.deployment" "compaction.deployment" "clusterManager.deployment" "metastoreMigration.job" "migration.taskdb.postgres.statefulSet" -}}
   {{- $pod := $.Values.smithdb -}}
   {{- range $key := splitList "." $path -}}
     {{- $pod = get (default (dict) $pod) $key -}}
@@ -75,20 +75,3 @@ TEMPLATE
   helm template smithdb-cache "$chart" "$@" --set-string "fallbackTier=$tier" --set-json "_smithdbPoolTolerations=$pool_tolerations" |
     sed '/^#/d; /^---$/d' | jq -er '.data.values'
 )
-
-# An existing Job cannot move pools without replacing its immutable template.
-_smithdb_check_migration() {
-  local workloads
-  workloads=$(kubectl get jobs,deployments -n "$1" -l "app.kubernetes.io/instance=$2" -o json) || return 1
-  if ! jq -e --arg enabled "${3:-true}" '[.items[] | select(
-      (.metadata.name | contains("smithdb-migration")) and
-      (.kind == "Deployment" or .spec.template.spec.nodeSelector["langsmith-nodepool/smithdb"] != "true") and
-      (.kind == "Deployment" or $enabled != "false" or
-        (any(.status.conditions[]?; .type == "Complete" and .status == "True") | not))
-    )] | length == 0' <<< "$workloads" >/dev/null; then
-    echo "ERROR: finish the existing SmithDB migration before changing node groups." >&2
-    echo "Keep TaskDB, its PVC, and credentials until migration completes." >&2
-    echo "For a completed Job, run make smithdb-migration-job-end before changing pools." >&2
-    return 1
-  fi
-}

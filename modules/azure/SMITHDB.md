@@ -45,7 +45,7 @@ The Terraform root creates:
   is the source the historical backfill reads. The grant exists only while that
   flag is on, so a steady-state install leaves the identity able to reach
   nothing but its own account; and
-- a dedicated general-purpose AKS node pool for SmithDB, TaskDB, and migration;
+- a dedicated general-purpose AKS node pool for SmithDB and TaskDB;
 - a Premium SSD v2 StorageClass named `smithdb-cache` for per-pod cache volumes.
 
 By default, the same SmithDB workload identity authenticates to PostgreSQL
@@ -96,18 +96,18 @@ the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `deploy.sh` loads up to four SmithDB files, in this order:
 
 1. `langsmith-values-smithdb-sizing.yaml`, which `init-values.sh` writes from
-   the `smithdb_helm_values` output on every run. It holds the chart tier and
-   replicas. Do not edit it; see [Sizing](#sizing).
+   the `smithdb_helm_values` output on every run. It holds the chart tier,
+   replicas, and `minimal` migration Job resources. Do not edit it; see [Sizing](#sizing).
 2. `langsmith-values-smithdb.yaml`, the overlay. `init-values.sh` copies it once
    and never overwrites it, so scheduling and other hand edits go here.
-3. `langsmith-values-smithdb-migration.yaml`, which
+3. `langsmith-values-smithdb-overrides.yaml`, which `init-values.sh` writes from
+   the identity, storage, and metastore outputs on every run.
+4. `langsmith-values-smithdb-migration.yaml`, which
    `make smithdb-migration-job-start` writes with the TaskDB source and the
    migration pod count. `deploy.sh` loads it only while
    `smithdb_migration_enabled = true`.
    `helm/values/examples/langsmith-values-smithdb-migration.yaml` shows the
    layout.
-4. `langsmith-values-smithdb-overrides.yaml`, which `init-values.sh` writes from
-   the identity, storage, and metastore outputs on every run.
 
 A later file wins, so a `smithdb.resourceTier` line in the overlay replaces the
 size. An overlay copied before the sizing file existed has that line.
@@ -144,7 +144,7 @@ release `prod` uses `prod-langsmith-smithdb`.
 ## Sizing
 
 `smithdb_sizing` sets the chart `resourceTier`, replicas, default node size,
-and default metastore SKU. CPU and memory use chart defaults. Set it in `infra/terraform.tfvars`,
+and default metastore SKU. Service CPU and memory use chart defaults. Set it in `infra/terraform.tfvars`,
 then run `make deploy-all`:
 
 ```hcl
@@ -154,7 +154,9 @@ smithdb_sizing = "small"   # minimal, small, medium, or large
 When it is unset, it follows `sizing_profile`: `minimum`
 gives `minimal`, `dev` and `default` give `small`, `production` gives `medium`,
 and `production-large` gives `large`. `minimal` retains its metastore default
-and uses the `small` chart tier without resource overrides.
+and uses the `small` chart tier for services. The migration Job keeps its
+existing `minimal` resources: requests of 1 vCPU, 4 GiB memory, and 10 GiB
+ephemeral storage; limits of 2 vCPU, 8 GiB, and 20 GiB.
 
 The component rows are per replica, as CPU / memory / cache volume:
 
@@ -281,15 +283,18 @@ sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`. The
 apply then grants the trace-blob read role and waits 300 seconds (see
 [Infrastructure](#infrastructure)). The deploy starts the migration Job.
 
-Finish and disable an existing backfill before upgrading; the migration Job
-pod template changes when scratch storage moves to Managed Disk.
+A backfill that an earlier module version started has no
+`langsmith-values-smithdb-migration.yaml`, so `deploy.sh` stops. Run
+`make smithdb-migration-job-start` once, choose the chart-managed TaskDB and 1
+pod, then run `make deploy-all`. The Job pod template does not change, so the
+Job continues.
 
-- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and a separate 100 GiB
-  Managed Disk scratch volume at `/tmp` by default. Raise `smithdb_node_max_count` if it cannot add
-  the nodes for them. Above about 20 pods, raise the TaskDB resources instead of
+- Pod count. Each migration pod requests 8 vCPU and 32 GiB, or 1 vCPU and
+  4 GiB for `minimal`. Raise the node pool `max_count` if it cannot add the
+  nodes for them. Above about 20 pods, raise the TaskDB resources instead of
   adding pods.
-- Resources. Migration and TaskDB keep chart-default CPU and memory or your explicit settings.
-  `resourceTier` does not size them. See
+- Resources. Migration keeps its existing sizing and storage settings; TaskDB
+  uses chart defaults or your explicit settings. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Safety hold. The Job holds the tasks for the last two hours before its start
   time until two hours after it, so it cannot miss late updates to runs that
@@ -373,7 +378,7 @@ links a zone name to a VNet once, so creating a second one fails.
 PostgreSQL uses the delegated database subnet and the VNet's private PostgreSQL
 DNS zone. Each Private Endpoint takes one further address in its subnet.
 
-SmithDB, TaskDB, and migration run on the dedicated `smithdb` pool. The label
+SmithDB and TaskDB run on the dedicated `smithdb` pool. The label
 is `langsmith-nodepool/smithdb=true`, with the matching `NoSchedule` taint.
 LangSmith's existing node pools stay separate. The subnet capacity check includes
 the SmithDB pool at its maximum size.
@@ -393,13 +398,12 @@ smithdb_node_zones     = ["1", "2", "3"]
 ```
 
 Keep at least one node for Helm hooks and a maximum greater than the minimum
-for rolling updates. Raise the maximum for migration parallelism and confirm
-the regional vCPU quota covers it. Node OS disks keep the AKS default; migration
-scratch uses the cache StorageClass.
+for rolling updates. Confirm the regional vCPU quota covers it. Node OS disks
+keep the AKS default.
 
 An existing `additional_node_pools.smithdb` entry keeps its VM, bounds, zones,
-and other settings. The module adds the required label and taint. Every workload
-receives tolerations for the resolved pool taints, including custom taints.
+and other settings. The module adds the required label and taint. Workloads on
+this pool receive tolerations for its taints, including custom taints.
 Extra customer tolerations remain.
 
 Terraform creates the cache StorageClass with 7,000 IOPS and 1,000 MB/s. The
@@ -422,12 +426,8 @@ controls other pools and databases. Run `make apply`, `make init-values`, then
 `make deploy`. This creates the dedicated pool before moving SmithDB to it;
 existing LangSmith pools remain. The deploy replaces old node selectors and
 clears service resource overrides so the chart tier takes effect. It preserves
-migration and TaskDB CPU, memory, and credentials. Migration scratch moves to a
-100 GiB Managed Disk volume.
-
-Finish any existing backfill first, then run `make smithdb-migration-job-end`
-and deploy with migration disabled before moving pools. An existing migration
-Job's pod template cannot change; deploy stops instead of changing or deleting it.
+migration Job settings and TaskDB CPU, memory, and credentials. Migration Job
+scheduling and scratch storage stay unchanged.
 
 For an attached cluster with `existing_cluster_node_pools_managed = false`,
 Terraform creates no pools. Provide zonal nodes with the label and taint above,
@@ -450,7 +450,7 @@ Before a real apply, also confirm:
   In most regions that offer availability zones a Premium SSD v2 disk attaches
   only to a zonal VM. Set `smithdb_node_zones` for the dedicated pool without
   rebuilding existing pools;
-- the SmithDB pool is sized for its chart tier and migration pods, and the
+- the SmithDB pool is sized for its chart tier and TaskDB, and the
   AKS subnet holds every pool at maximum scale; and
 - the chart PR's Azure provider values and workload-identity annotations match
   the outputs listed above.

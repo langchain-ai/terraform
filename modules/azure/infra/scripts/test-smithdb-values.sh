@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Effective values and migration scheduling checks; no cloud access.
+# Effective SmithDB values checks; no cloud access.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_smithdb-values.sh"
@@ -29,7 +29,14 @@ cat > "$TEST_DIR/legacy.json" <<'VALUES'
     "volumes":[{"name":"local-ssd-storage","emptyDir":{}}],
     "volumeMounts":[{"name":"local-ssd-storage","mountPath":"/tmp"}]
   }},
-  "migration":{"job":{"parallelism":3,"resources":{"requests":{"cpu":"12","ephemeral-storage":"100Gi"}}},
+  "migration":{"job":{
+    "parallelism":3,
+    "nodeSelector":{"customer-pool":"migration"},
+    "tolerations":[{"key":"customer-migration","operator":"Exists"}],
+    "podSecurityContext":{"fsGroup":2000},
+    "volumes":[{"name":"migration-scratch","emptyDir":{"sizeLimit":"100Gi"}}],
+    "volumeMounts":[{"name":"migration-scratch","mountPath":"/tmp"}],
+    "resources":{"requests":{"cpu":"12","ephemeral-storage":"100Gi"}}},
     "taskdb":{"postgres":{"auth":{"existingSecretName":"existing-taskdb"},"statefulSet":{"resources":{"requests":{"memory":"12Gi"}}}}}}
 }}
 VALUES
@@ -38,7 +45,7 @@ _sizing_profile=production
 _smithdb_managed_values '[{"key":"langsmith-nodepool/smithdb","operator":"Equal","value":"true","effect":"NoSchedule"},{"key":"workload","operator":"Equal","value":"smithdb","effect":"NoSchedule"}]'
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-jq -e '
+jq --slurpfile original "$TEST_DIR/legacy.json" -e '
   .resourceTier == "medium" and
   .query.deployment.nodeSelector == {"langsmith-nodepool/smithdb":"true"} and
   (.metastoreMigration.job.tolerations | any(.key == "workload" and .value == "smithdb")) and
@@ -50,8 +57,7 @@ jq -e '
   .compactionWorker.deployment.volumeMounts == [{name:"cache",mountPath:"/tmp"}] and
   .query.deployment.volumes == [{name:"customer-config",configMap:{name:"customer-config"}}] and
   .query.deployment.volumeMounts == [{name:"cache",mountPath:"/data"},{name:"customer-config",mountPath:"/config"}] and
-  .migration.job.parallelism == 3 and .migration.job.resources.requests.cpu == "12" and
-  .migration.job.resources.requests["ephemeral-storage"] == "100Gi" and
+  .migration.job == $original[0].smithdb.migration.job and
   .migration.taskdb.postgres.statefulSet.resources.requests.memory == "12Gi" and
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
@@ -62,7 +68,7 @@ _sizing_profile=dev
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-jq -e '.resourceTier == "large" and .query.deployment.resources == {} and .query.deployment.volumes == []' "$TEST_DIR/values.json" >/dev/null
+jq -e '.resourceTier == "large" and .query.deployment.resources == {} and .query.deployment.volumes == [] and (.migration | has("job") | not)' "$TEST_DIR/values.json" >/dev/null
 echo "PASS: new Managed Disk deployments preserve an explicitly selected resource tier"
 
 # Exercise the generated override after chart defaults and older customer values.
@@ -93,37 +99,16 @@ VALUES
     "$SCRIPT_DIR/../../helm/scripts/init-values.sh" > "$TEST_DIR/generate.sh"
   source "$TEST_DIR/generate.sh"
 )
+# Capture the original chart/customer Job before applying generated overrides.
+helm template values-test "$TEST_DIR/chart" -f "$TEST_DIR/legacy.json" |
+  sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/original.json"
 VALUES_ARGS=(-f "$TEST_DIR/legacy.json" -f "$TEST_DIR/generated.yaml")
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
-jq -e '
-  .migration.job.volumes == [{name:"cache",ephemeral:{volumeClaimTemplate:{spec:{
-    accessModes:["ReadWriteOnce"],storageClassName:.cache.storageClassName,
-    resources:{requests:{storage:"100Gi"}}}}}}] and
-  .migration.job.volumeMounts == [{name:"cache",mountPath:"/tmp"}] and
-  .migration.job.podSecurityContext.fsGroup == 1001 and
-  (.migration.job.resources.requests | has("ephemeral-storage") | not) and
-  (.migration.job.resources.limits | has("ephemeral-storage") | not) and
-  .migration.job.resources.requests.cpu == "12" and
-  .migration.job.resources.requests.memory == "32Gi" and
-  .migration.job.parallelism == 3 and
+jq --slurpfile original "$TEST_DIR/original.json" -e '
+  (.migration.job | del(.labels)) == ($original[0].migration.job | del(.labels)) and
+  .migration.job.labels == {"azure.workload.identity/use":"true"} and
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
-echo "PASS: generated migration Managed Disk scratch replaces node storage and preserves CPU, memory, parallelism, and TaskDB"
-
-kubectl() { printf '%s\n' "$WORKLOADS"; }
-WORKLOADS='{"items":[{"kind":"Job","metadata":{"name":"langsmith-smithdb-migration"},"spec":{"template":{"spec":{"nodeSelector":{"old-pool":"true"}}}}}]}'
-if _smithdb_check_migration langsmith langsmith true > "$TEST_DIR/log" 2>&1; then
-  echo "FAIL: active legacy migration Job was allowed to change pools"; exit 1
-fi
-echo "PASS: active legacy migration Job blocks scheduling changes"
-WORKLOADS=$(jq '.items[0].status.conditions=[{type:"Complete",status:"True"}]' <<< "$WORKLOADS")
-if _smithdb_check_migration langsmith langsmith true > "$TEST_DIR/log" 2>&1; then
-  echo "FAIL: completed legacy migration Job was allowed to mutate"; exit 1
-fi
-_smithdb_check_migration langsmith langsmith false
-echo "PASS: completed legacy migration Job can be removed without mutating its template"
-WORKLOADS=$(jq '.items[0].spec.template.spec.nodeSelector={"langsmith-nodepool/smithdb":"true"} | del(.items[0].status)' <<< "$WORKLOADS")
-_smithdb_check_migration langsmith langsmith true
-echo "PASS: migration Job already on the dedicated pool is unchanged"
+echo "PASS: generated overrides preserve original chart and customer migration Job settings"

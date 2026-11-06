@@ -1069,30 +1069,9 @@ smithdb:
     job:
       labels:
         azure.workload.identity/use: "true"
-      # Migration scratch on Managed Disk until the chart provides this default.
-      podSecurityContext:
-        fsGroup: 1001
-      resources:
-        requests:
-          ephemeral-storage: null
-        limits:
-          ephemeral-storage: null
-      volumes:
-        - name: cache
-          ephemeral:
-            volumeClaimTemplate:
-              spec:
-                accessModes: ["ReadWriteOnce"]
-                storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
-                resources:
-                  requests:
-                    storage: 100Gi
-      volumeMounts:
-        - name: cache
-          mountPath: /tmp
     # The TaskDB credential and the migration pod count are in
     # langsmith-values-smithdb-migration.yaml, which make
-    # smithdb-migration-job-start writes and deploy.sh loads before this file.
+    # smithdb-migration-job-start writes and deploy.sh loads after this file.
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}

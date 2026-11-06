@@ -144,7 +144,7 @@ enable_smithdb = true
 # smithdb_node_min_count       = 2
 # smithdb_node_max_count       = 5
 # smithdb_node_zones           = ["1", "2", "3"] # only this pool; does not move databases
-# smithdb_node_os_disk_size_gb = 256 # optional; migration scratch uses the cache StorageClass
+# smithdb_node_os_disk_size_gb = 256 # optional
 
 # Start with dual writes; migration and query cutover are separate steps.
 # make smithdb-migration-job-start and make smithdb-migration-job-end control

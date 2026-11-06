@@ -62,13 +62,10 @@ smithdb:
   # their late updates. Set it before the backfill deploy. To change it on a
   # running backfill, see SMITHDB.md, "Staged rollout".
   migration:
-    job:
-      # extraEnv:
-      #   - name: SMITHDB_MIGRATION__WORKER_POOL__RECENT_RUNS_SAFETY_DELAY
-      #     value: "900"
-      nodeSelector: {langsmith-nodepool/smithdb: "true"}
-      tolerations:
-        - {key: langsmith-nodepool/smithdb, operator: Equal, value: "true", effect: NoSchedule}
+    # job:
+    #   extraEnv:
+    #     - name: SMITHDB_MIGRATION__WORKER_POOL__RECENT_RUNS_SAFETY_DELAY
+    #       value: "900"
     taskdb:
       postgres:
         statefulSet:
