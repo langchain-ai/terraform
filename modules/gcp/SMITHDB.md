@@ -16,9 +16,8 @@ With `enable_smithdb = true`, the infrastructure pass creates:
   public access prevention;
 - a GCP service account for SmithDB, bound through Workload Identity, with
   `roles/storage.objectAdmin` on that bucket only;
-- two GKE node pools that autoscale from zero, cache and compute (none for
-  `minimal`);
-- a Hyperdisk Balanced StorageClass in `network-disk` mode (not for `minimal`);
+- one general-purpose GKE SmithDB pool, separate from LangSmith;
+- a Hyperdisk Balanced cache StorageClass;
 - the `smithdb-metastore` and `smithdb-taskdb` Kubernetes Secrets;
 - the output `smithdb_helm_values`, which `make init-values` writes to
   `helm/values/langsmith-values-smithdb-sizing.yaml`.
@@ -29,18 +28,27 @@ plan time.
 
 ## Configure infrastructure
 
-Set `enable_smithdb = true` in `infra/terraform.tfvars`, or answer yes in
-`make quickstart`. Then set the size and the cache mode in the same file, and
-run `make deploy-all`:
+New GKE Standard setups created by `make quickstart` enable SmithDB and
+ingestion (dual write) automatically. Historical migration and SmithDB queries
+start disabled. Regenerating an existing file preserves its SmithDB settings.
+
+QuickStart asks for SmithDB's size, cache mode, and minimum/maximum node counts,
+independently of LangSmith. The machine type follows the selected SmithDB size
+or sizing profile automatically. For example:
 
 ```hcl
-smithdb_sizing        = "small"
-smithdb_cache_storage = "local-ssd"
+enable_smithdb            = true
+smithdb_ingestion_enabled = true
+smithdb_migration_enabled = false
+smithdb_query_enabled     = false
+smithdb_sizing            = "small"
+smithdb_node_min_count    = 2
+smithdb_node_max_count    = 5
 ```
 
-Both lines are optional. An unset `smithdb_sizing` follows `sizing_profile`.
-An unset `smithdb_cache_storage` gives `network-disk` for `minimal` and
-`local-ssd` for the other sizes. `minimal` requires `network-disk`.
+Network-backed cache volumes are the default. Run `make deploy-all` after
+changing infrastructure settings. Explicit `smithdb_cache_storage = "local-ssd"`
+retains the previous cache and compute pools.
 
 For BYO Postgres:
 
@@ -56,144 +64,73 @@ use the LangSmith application database or blob-storage bucket.
 
 ## Sizing
 
-`smithdb_sizing` sets the chart `resourceTier`, the explicit resources, the
-replicas, the node pool shapes, and the default tier of a created metastore.
-When it is unset, it follows `sizing_profile`: `minimum` gives `minimal`, `dev` and `default` give `small`, `production` gives
-`medium`, and `production-large` gives `large`.
+`smithdb_sizing` selects the chart `resourceTier`, baseline replicas, node
+shape, and default metastore tier. An unset value follows `sizing_profile`:
+`minimum`, `dev`, and `default` use Small; `production` uses Medium;
+`production-large` uses Large. `minimal` remains a compatibility name for Small,
+without reduced service resource overrides. Its existing migration Job resource
+overrides remain.
 
-The component rows are per replica, as CPU / memory / cache size:
+| Chart tier | SmithDB machine | Minimum nodes | Maximum nodes |
+|---|---|---|---|
+| Small | `c3-standard-22` | 2 | 5 |
+| Medium | `c3-standard-44` | 2 | 10 |
+| Large | `c3-standard-88` | 2 | 10 |
 
-| | `minimal` | `small` | `medium` | `large` |
-|---|---|---|---|---|
-| Throughput: ingest / query QPS | development only | 10 / 10 | 100 / 40 | 1000 / 100 |
-| Chart `resourceTier` | `small`, explicit resources | `small` | `medium` | `large` |
-| Replicas: `query` / `ingestion` / `compactionWorker` | 1 / 1 / 1 | 1 / 1 / 1 | 1 / 1 / 1 | 4 / 2 / 4 |
-| `query` | 1 / 2Gi / 200Gi | 4 / 8Gi / 200Gi | 28 / 48Gi / 200Gi | 28 / 50Gi / 1000Gi |
-| `ingestion` | 1 / 2Gi / 100Gi | 4 / 8Gi / 100Gi | 16 / 32Gi / 100Gi | 56 / 150Gi / 1000Gi |
-| `compactionWorker` | 1 / 2Gi / 100Gi | 8 / 16Gi / 100Gi | 16 / 32Gi / 100Gi | 28 / 50Gi / 300Gi |
-| `compaction` | 500m / 1Gi | 2 / 4Gi | 4 / 8Gi | 8 / 16Gi |
-| `clusterManager` | 250m / 256Mi | 250m / 256Mi | 250m / 256Mi | 2 / 2Gi |
-| Sum at these replicas (pods) | 3.75 / 7.25Gi (5) | 18.25 / 36.25Gi (5) | 64.25 / 120.25Gi (5) | 346 / 718Gi (12) |
-| Backfill Job (CPU / memory / ephemeral) | 1 / 4Gi / 10Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi |
-| Backfill taskdb, requests; limits | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi |
-| Cache HPA `maxReplicas` | 1 | 10 (chart default) | 10 (chart default) | 10 (chart default) |
-| Cache pool, `local-ssd` (boot disk) | not allowed | n2-standard-16, 2 LSSD (100 GB) | n2-standard-32, 4 LSSD (100 GB) | n2-standard-64, 8 LSSD (100 GB) |
-| Cache pool, `network-disk` (boot disk) | no pool; `standard-rwo` | c3-standard-22 (300 GB) | c3-standard-44 (300 GB) | c3-standard-88 (300 GB) |
-| Compute pool | no pool | n2-standard-8 | n2-standard-8 | n2-standard-16 |
-| Metastore: docs vCPU / memory; default Cloud SQL tier (vCPU / memory) | not in the docs; `db-custom-2-8192` (2 / 8Gi) | 2 / 16Gi; `db-custom-4-16384` (4 / 16Gi) | 4 / 32Gi; `db-custom-6-32768` (6 / 32Gi) | 8 / 64Gi; `db-custom-10-65536` (10 / 64Gi) |
+Counts apply across all zones, not per zone. Set `smithdb_node_machine_type`,
+`smithdb_node_min_count`, and `smithdb_node_max_count` to override them.
+The existing network-mode boot disk default stays 300 GB. `resourceTier`
+controls service requests and limits; TaskDB keeps chart-default or customer
+CPU and memory.
 
-- The throughput and replica rows come from the SmithDB sizing table in the
-  [LangSmith self-hosted docs](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
-  The replicas are the HPA `minReplicas` of the three cache components.
-  `compaction` and `clusterManager` have no HPA and run one replica.
-  `smithdb_tier_replicas` in `infra/locals.tf` is the code copy.
-- The `small`, `medium`, and `large` component rows come from chart 0.17.0-rc.42
-  `templates/_helpers.tpl` (`langsmith.smithdb.tierResources`), where requests
-  equal limits. The chart tier sets these per-replica values only, not the
-  replicas. `smithdb_tiers` in `infra/locals.tf` is the code copy.
-- `minimal` values are requests, and its limits are 2x. `minimal` runs on the
-  general node pool, so that pool must have room for it. Use `minimal` only for
-  development and test.
-- The taskdb row is the chart default for each size. The module sets no taskdb
-  resources.
-- A backfill on a test cluster ran with the `minimal` resources of the five
-  components and of the backfill Job. The taskdb had the chart default
-  resources.
-- The metastore row is for a created metastore
-  (`smithdb_metastore_source = "create"`). The docs values come from the
-  section "Metastore capacity" in
-  [SmithDB scale](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
-  The docs baseline tiers do not include the metastore.
-- A Cloud SQL custom tier (`db-custom-*`, Enterprise edition) has 1 vCPU or an
-  even number of vCPU, and at most 6.5 GB of memory for each vCPU. So each
-  default tier has more vCPU than the docs value, to get the docs memory.
-  `minimal` keeps the earlier default. `smithdb_metastore_tier_defaults` in
-  `infra/locals.tf` is the code copy.
-- A `smithdb_metastore_tier` value that you set replaces the default, also after
-  a size change. An external metastore does not use the tier. Then
-  `terraform -chdir=infra output smithdb_metastore_tier` reports that the
-  output is not found, because Terraform does not store a null output.
-- A tier change takes the metastore offline for less than 60 seconds. The docs
-  tell you to monitor the database resource use and the transaction latency
-  during the rollout.
-
-`large` runs 10 cache pods. On `n2-standard-64` (`local-ssd`), each `ingestion`
-pod uses one node, and each other node holds two 28 CPU pods. That is about 6
-cache nodes, plus 1 node for the backfill Job. On `c3-standard-88`
-(`network-disk`), it is about 4 cache nodes, plus 1 for the backfill Job. The
-compute pool needs 1 node. `smithdb_instance_store_max_nodes` (default 3) is per
-zone, so 3 zones give a maximum of 9 cache nodes. If you set
-`smithdb_node_locations` to one zone, set `smithdb_instance_store_max_nodes` to
-7 or more. `make preflight` checks the quota at the maximum node count. For
-`large` with `local-ssd` in 3 zones, that is 720 N2 vCPU and 27,000 GB of Local
-SSD.
-
-The pool rows are defaults. A `smithdb_instance_store_*` or
-`smithdb_compute_machine_type` value that you set replaces them, also after a
-size change. Terraform does not check that a pinned value fits the size:
-
-- The machine type must have more vCPU than the largest pod on the pool. For
-  example, the `medium` query pod requests 28 CPU, so `n2-standard-16` cannot
-  hold it.
-- An N2 cache pool takes only these Local SSD counts (375 GB each):
-  - 12-20 vCPU: 2, 4, 8, 16, or 24.
-  - 22-40 vCPU: 4, 8, 16, or 24.
-  - 42-80 vCPU: 8, 16, or 24.
-
-  Compute Engine rejects other counts when it creates the pool. That happens
-  after Terraform deletes the old pool.
-- C3 and Z3 `-lssd` types have a fixed count. Set
-  `smithdb_instance_store_local_ssd_count = 0` for them.
-
-Terraform rejects `local-ssd` when the cache pool has no Local SSD: a count of 0
-on a type that does not end in `lssd`. It also rejects `network-disk` with the
-backfill when the boot disk is below 300 GB, because the Job requests 100Gi.
-
-A change of the machine type, the Local SSD count, or the cache mode replaces
-the node pool, and each cache starts empty. Object storage keeps the data.
+For a created metastore, the existing defaults remain `db-custom-4-16384`,
+`db-custom-6-32768`, and `db-custom-10-65536` for Small, Medium, and Large.
+`minimal` keeps `db-custom-2-8192`. An explicit `smithdb_metastore_tier` wins;
+an external metastore does not use it.
 
 ## Cache storage
 
-`query`, `ingestion`, and `compactionWorker` keep a cache at `/data`. With no
-cache values, chart 0.17 gives each pod a PVC from the default StorageClass. On
-GKE, that class is `standard-rwo`, which is below the
-[cache floor](https://docs.langchain.com/langsmith/self-host-smithdb-infrastructure#cache-storage)
-of 7000 IOPS and 1000 MiB/s. The generated sizing file always sets the cache.
+### network-disk
+
+Each cache pod gets its own temporary PVC through
+`smithdb.cache.storageClassName`. The class `smithdb-cache` uses
+`pd.csi.storage.gke.io`, Hyperdisk Balanced, 7000 provisioned IOPS,
+1000 MiB/s throughput, `WaitForFirstConsumer`, and volume expansion. The chart
+sets cache capacity from `resourceTier`. C3 and C3D general-purpose nodes
+support these volumes; N2 does not. Volumes on one node share its throughput
+limit.
+
+SmithDB services, TaskDB, and the metastore hook use
+`langsmith-nodepool/smithdb=true` with a matching `NoSchedule` toleration.
+Migration Job settings are preserved.
 
 ### local-ssd
 
-Use `local-ssd` for production. Each cache is an `emptyDir` on node Local SSD.
-The cache pool uses the GKE Local SSD-backed *ephemeral storage* mode, so the
-Local SSD capacity is node allocatable `ephemeral-storage`. Raw block Local SSD
-does not back `emptyDir`, and the cache then goes to the boot disk with no error.
+An explicit `smithdb_cache_storage = "local-ssd"` keeps the existing cache and
+compute pools and their `smithdb_instance_store_*` / `smithdb_compute_*`
+settings. Cache pods use `emptyDir` on Local SSD with the required explicit
+resource requests and limits. These are the only service resource overrides.
+Use GKE's `ephemeral_storage_local_ssd_config`, rather than raw-block Local
+SSD, so kubelet reports the capacity as node `ephemeral-storage`.
 
-For each cache component, the sizing file sets this cache block:
+## Move an existing deployment to the new pool
 
-- the cache pool pin;
-- `volumes: [{name: cache, emptyDir: {sizeLimit: <cache size>}}]`;
-- `resources` with `ephemeral-storage` in `requests` and `limits`. The chart
-  requires them for an `emptyDir` cache.
+Finish any running historical migration first. Keep the prior cache mode,
+size, and legacy pool settings for the first step.
 
-### network-disk
+1. Set `smithdb_transition_mode = true`, then run `make apply`. This adds the
+   general-purpose pool and retains the old pools and their shapes.
+2. Run `make init-values`, then `make deploy`. Network mode replaces old
+   selectors, tolerations, local-SSD cache volumes, and service resource
+   overrides while preserving unrelated volumes and migration/TaskDB settings.
+3. Set `smithdb_cache_storage = "network-disk"` and
+   `smithdb_transition_mode = false`, then run `make apply`.
 
-Each cache is a per-pod Hyperdisk Balanced volume. `modules/k8s-bootstrap`
-creates the class `smithdb-cache<suffix>`: `pd.csi.storage.gke.io`,
-`type: hyperdisk-balanced`, 7000 provisioned IOPS, 1000 MiB/s provisioned
-throughput, `WaitForFirstConsumer`, `Delete`, and volume expansion. The chart
-sizes each volume from the tier.
-
-- The cache machine type must be C3 or C3D, with 0 Local SSD. E2, N1, N2, and
-  N2D cannot attach Hyperdisk Balanced, and C4 and N4 need a Hyperdisk boot
-  disk. Terraform rejects other types.
-- All Hyperdisk and Persistent Disk volumes on a node share one VM throughput
-  limit. For c3-standard-22 that limit is 1800 MiB/s, so three 1000 MiB/s cache
-  volumes on one node cannot all get full throughput.
-
-### minimal
-
-`minimal` runs SmithDB on the general node pool with reduced resources and one
-replica for each cache component. Each cache is a PVC from the GKE built-in
-`standard-rwo` class. Terraform rejects `minimal` with `local-ssd`.
+`make apply` checks the exact plan before removing the old pools. It stops
+unless SmithDB and TaskDB have completed their rollout onto the new pool,
+cache volumes use the generated StorageClass, and no application pod still
+uses an old pool. Keep TaskDB and its data until migration finishes. These
+checks run through `make apply`; direct Terraform commands bypass them.
 
 ## Metastore TLS on GCP
 
@@ -274,6 +211,11 @@ later file wins:
    `helm/values/examples/langsmith-values-smithdb-migration.yaml` shows the
    layout.
 
+For network mode, `make deploy` then replaces pool selectors and tolerations,
+removes legacy service resource and local-cache volume overrides, and keeps
+unrelated customer settings. Manual Helm commands must supply equivalent
+values themselves.
+
 `deploy.sh` stops before Helm in these cases:
 
 - A SmithDB values file is missing. `deploy.sh` tells you to run
@@ -322,7 +264,7 @@ make deploy-all
 migration:
 
 - TaskDB is a temporary Postgres that holds the task state. A chart-managed
-  TaskDB runs on the compute pool (the general pool for `minimal`) and uses the
+  TaskDB runs on the SmithDB pool and uses the
   `smithdb-taskdb` Secret that Terraform creates. An external TaskDB is a
   Postgres that you supply. The script writes its connection settings to the
   `smithdb-taskdb-external` Secret. Do not use the LangSmith Postgres or the
@@ -336,25 +278,21 @@ The script writes `helm/values/langsmith-values-smithdb-migration.yaml`. It
 sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`.
 `make apply` then grants the read access in
 [Backfill access](#backfill-access-to-the-traces-bucket). `make deploy` starts
-the migration Job on the cache pool.
+the migration Job.
 
-A backfill that an earlier module version started has no
-`langsmith-values-smithdb-migration.yaml`, so `deploy.sh` stops. Run
-`make smithdb-migration-job-start` once, choose the chart-managed TaskDB and 1
-pod, then run `make deploy-all`. The Job pod template does not change, so the
-Job continues.
+Finish any migration pods using the old pools before removing those pools.
 
 - Time window. An empty `smithdb_migration_start_time` keeps the chart default
   window. On chart 0.17.0-rc.42, the default window is 400 days, and the
   migration Job log shows the window. To copy all history, set
   `smithdb_migration_start_time` in `infra/terraform.tfvars` to a time before
   the oldest trace, before `make deploy-all`.
-- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and 100 GiB of
-  ephemeral storage on the cache pool. If the pool cannot add the nodes, raise
-  `smithdb_instance_store_max_nodes`. Above about 20 pods, raise the TaskDB
-  resources instead of adding pods. For `minimal`, each pod requests 1 vCPU,
-  4 GiB, and 10 GiB on the general pool.
-- Resources. The SmithDB size sets the migration pod and TaskDB resources.
+- Pod count. Each migration pod keeps its chart-default 8 vCPU, 32 GiB, and
+  100 GiB of node ephemeral storage. For `minimal`, the existing overrides are
+  1 vCPU, 4 GiB, and 10 GiB. Above about 20 pods, raise the TaskDB resources
+  instead of adding pods.
+- Resources. Existing migration Job resource settings remain; TaskDB uses
+  chart-default CPU and memory or your settings.
   The migration values file does not set resources. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Duration. On a test cluster, about 10,000 rows took about 2 hours, with more
@@ -399,7 +337,7 @@ off, so run a backfill before the next cutover.
 
 ```sh
 kubectl get pods,jobs,pvc -n langsmith | grep -E '^NAME|smithdb'
-kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+kubectl get nodes -L langsmith-nodepool/smithdb,smithdb-local/instance-store,smithdb-local/compute
 kubectl get pvc -n langsmith
 kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 
@@ -411,7 +349,7 @@ gcloud storage ls "gs://$(terraform -chdir=infra output -raw smithdb_object_stor
   capacity. Do the check in `ingestion` and `compaction-worker` too. A size near
   the boot disk means raw block Local SSD.
 - `network-disk`: one `<pod>-cache` PVC for each cache pod, on
-  `smithdb-cache<suffix>`. `minimal`: the same, on `standard-rwo`.
+  `smithdb-cache`.
 
 ## Backfill access to the traces bucket
 
@@ -440,16 +378,10 @@ Do steps 1 to 4 before `make apply`. With the upgrade path in
 `MIGRATION-0.16-to-0.17.md`, do them before its step 3. Its steps 3 to 5 then
 run `make apply`, `make init-values`, and `make deploy`.
 
-1) Select the size. An unset `smithdb_sizing` now follows `sizing_profile`, so
-`production` gives `medium`, `production-large` gives `large`, and `minimum`
-gives `minimal` with no pools.
-For `medium`, Terraform replaces the cache pool with `n2-standard-32` and 4
-Local SSD. The compute pool stays `n2-standard-8`.
-For `large`, Terraform replaces the cache pool with `n2-standard-64` and 8
-Local SSD, and the compute pool with `n2-standard-16`. `large` runs 12 SmithDB
-pods that request about 350 vCPU. To stay smaller, set `smithdb_sizing` to
-`medium` or `small`. To keep the 0.16 pool (n2-standard-16, 2 Local SSD) and
-the chart tier `small`, set these lines in `infra/terraform.tfvars`:
+1) Select the size. An unset `smithdb_sizing` follows `sizing_profile` as
+shown in [Sizing](#sizing). Keep the prior tier and pool settings while moving
+nodes, using [the transition steps](#move-an-existing-deployment-to-the-new-pool).
+To stay on the Small tier and retain the old Local SSD pools instead, set:
 
 ```hcl
 smithdb_sizing        = "small"
@@ -494,28 +426,24 @@ candidate, use `CHART_VERSION=0.17.0-rc.N make deploy`. Then do the checks in
 
 ### Direct Helm upgrades
 
-A direct `helm upgrade`, for example with values from `helm get values`, does
-not load the sizing file. Remove the 0.16 keys: the `local-ssd-storage`
-volumes, the `/data` `volumeMounts` (chart 0.17 mounts `cache` at `/data`), and
-`smithdb.migration.deployment`. Then pass the Terraform output last, so that it
-sets the full [cache block](#local-ssd) on `query`, `ingestion`, and
-`compactionWorker`:
+A direct `helm upgrade` does not run the cleanup and checks in `make deploy`.
+From saved values, remove old SmithDB selectors, tolerations, service resource
+overrides, cache volumes and mounts, and `smithdb.migration.deployment`.
+Keep migration and TaskDB resources and credentials. Helm merges maps, so
+passing new values alone does not remove old keys. Pass the generated output
+last to apply the selected [cache and scheduling settings](#cache-storage):
 
 ```sh
 terraform -chdir=infra output -raw smithdb_helm_values > smithdb-sizing.yaml
-helm upgrade langsmith langchain/langsmith -n langsmith --version <0.17 version> \
-  -f current-values.yaml -f smithdb-sizing.yaml
+helm upgrade langsmith langchain/langsmith -n langsmith --version <0.17 version> -f current-values.yaml -f smithdb-sizing.yaml
 ```
-
-A rename of the volume on `query` only is not enough: `ingestion` and
-`compactionWorker` then get PVCs on the default class, with no error.
 
 ## Troubleshooting
 
 ### taskdb Pending on a zonal PVC
 
 The taskdb PVC is a zonal disk. The taskdb stays `Pending` with `volume node
-affinity conflict` when the compute pool cannot add a node in that zone. A PVC
+affinity conflict` when the SmithDB pool cannot add a node in that zone. A PVC
 from chart 0.16 can be in any zone of the general pool.
 
 ```sh
@@ -524,7 +452,8 @@ kubectl describe pv <VOLUME> | grep -A4 'Node Affinity'
 ```
 
 Add that zone to `smithdb_node_locations`, or increase
-`smithdb_compute_max_nodes`, then run `make apply`.
+`smithdb_node_max_count` (or `smithdb_compute_max_nodes` for local SSD), then
+run `make apply`.
 
 ### Immutable migration Job
 
@@ -549,8 +478,8 @@ smithdb:
   migration:
     job:
       resources:
-        requests: {cpu: "8", memory: "48Gi", ephemeral-storage: "100Gi"}
-        limits: {cpu: "8", memory: "48Gi", ephemeral-storage: "100Gi"}
+        requests: {cpu: "8", memory: "48Gi"}
+        limits: {cpu: "8", memory: "48Gi"}
 ```
 
 Keep TaskDB and its PVC. Delete only the failed migration Job, then run
@@ -590,7 +519,7 @@ instance. Make the SmithDB user the owner of its database, run
 In `network-disk` mode, each HPA replica of a cache component gets its own PVC
 at the tier cache size. Each PVC adds disk cost, and the replicas on a node
 share its throughput limit. `large` starts with 10 cache PVCs, 7200Gi in total.
-`minimal` caps each HPA at one replica.
+
 
 ## Node pools outside this module
 
@@ -613,15 +542,15 @@ gcloud container node-pools create smithdb-lssd \
   block Local SSD, the cache goes to the boot disk.
 - For `network-disk`, use a C3 or C3D type with a 300 GB boot disk and no Local
   SSD. Create the class from [network-disk](#network-disk), and set
-  `smithdb.cache.storageClassName`.
+  `smithdb.cache.storageClassName`, with the label
+  `langsmith-nodepool/smithdb=true` and matching `NoSchedule` taint.
 - The compute pool has no Local SSD, a smaller type, and the label and taint
   `smithdb-local/compute`.
-- On Autopilot, the nodeSelector must change to
-  `cloud.google.com/gke-ephemeral-storage-local-ssd`. This path is not tested.
+- This module requires GKE Standard.
 
 ## Production notes
 
-- Use `local-ssd` for the cache.
+- Network cache volumes are the default; local SSD remains an explicit option.
 - Keep Cloud SQL deletion protection and backups enabled.
 - Keep `smithdb_bucket_force_destroy = false`.
 - Set `smithdb_bucket_kms_key` to use CMEK. The module grants the Cloud Storage

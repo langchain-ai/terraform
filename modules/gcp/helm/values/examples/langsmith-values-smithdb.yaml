@@ -8,7 +8,7 @@
 # enable_smithdb = true. deploy.sh loads three SmithDB files, and a later file
 # wins:
 #   1. langsmith-values-smithdb-sizing.yaml     generated from terraform output
-#      smithdb_helm_values: tier, resources, HPA minimum replicas, cache
+#      smithdb_helm_values: tier, HPA minimum replicas, cache
 #      volumes, node placement
 #   2. langsmith-values-smithdb.yaml            your copy of this file
 #   3. langsmith-values-smithdb-overrides.yaml  generated: bucket, Workload
@@ -35,7 +35,5 @@ smithdb:
       # credential fields, so no HMAC keys are needed or possible here.
       type: "gcs"
 
-  # smithdb.metastoreMigration is a transient Helm pre-install hook. It is not
-  # pinned to a SmithDB pool, because it runs before any SmithDB pod exists. The
-  # autoscaler then has no pending pod to scale a pool up from zero. The general
-  # pool always has running nodes. Chart 0.17 sets its requests and limits.
+  # Network mode schedules every SmithDB workload, including migration and
+  # TaskDB, on the dedicated SmithDB pool. resourceTier sets service resources.

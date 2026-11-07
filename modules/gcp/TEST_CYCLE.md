@@ -263,11 +263,11 @@ metastore, and BYO PostgreSQL. For an applied environment, verify:
 
 ```bash
 terraform -chdir=infra output smithdb_node_pools
-kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+kubectl get nodes -L langsmith-nodepool/smithdb,smithdb-local/instance-store,smithdb-local/compute
 kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
 
 # local-ssd: the cache mount must be Local SSD, not the boot disk.
-# network-disk and minimal: /data is a per-pod PVC (kubectl get pvc -n langsmith).
+# network-disk (default): /data is a per-pod PVC (kubectl get pvc -n langsmith).
 kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 ```
 
