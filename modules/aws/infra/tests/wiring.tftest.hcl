@@ -383,6 +383,43 @@ run "enable_smithdb_adds_only_smithdb" {
     condition     = length(module.bastion) == 0
     error_message = "enable_smithdb = true also planned the bastion"
   }
+  assert {
+    condition     = length(kubernetes_storage_class_v1.smithdb_cache) == 1 && module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2
+    error_message = "SmithDB must have managed capacity and its own EBS cache class"
+  }
+  assert {
+    condition     = length(kubectl_manifest.smithdb_nodepool_instance_store) == 0 && length(kubectl_manifest.smithdb_nodepool_compute) == 0
+    error_message = "new SmithDB installations must not provision Karpenter pools"
+  }
+}
+
+run "smithdb_transition_retains_both_old_pools_and_adds_managed_capacity" {
+  command = plan
+
+  variables {
+    enable_smithdb          = true
+    smithdb_transition_mode = true
+    smithdb_node_min_count  = 3
+    smithdb_node_max_count  = 7
+  }
+
+  assert {
+    condition = (
+      length(kubectl_manifest.smithdb_nodepool_instance_store) == 1 &&
+      length(kubectl_manifest.smithdb_nodepool_compute) == 1 &&
+      length(kubectl_manifest.smithdb_ec2nc_instance_store) == 1 &&
+      length(kubectl_manifest.smithdb_ec2nc_compute) == 1
+    )
+    error_message = "transition mode must preserve both old pools and their node classes"
+  }
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 3 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 7 &&
+      module.eks.eks_managed_node_group_inputs["default"].min_size == 3
+    )
+    error_message = "SmithDB capacity settings must reach its managed pool independently of LangSmith"
+  }
 }
 
 # ── DNS, which is gated on two variables rather than a flag ──────────────────

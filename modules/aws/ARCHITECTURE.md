@@ -357,8 +357,8 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 
 SmithDB remains disabled by default. When enabled, Pass 1 adds a dedicated
 PostgreSQL 18 metastore, a dedicated S3 object store, SmithDB IRSA, and
-Karpenter-managed local-NVMe/compute pools. S3 data traffic uses the shared
-Gateway VPC endpoint. Pass 2 requires an explicit compatible v16 chart and
+a dedicated EKS managed node group with EBS caches. S3 data traffic uses the shared
+Gateway VPC endpoint. Pass 2 uses the pinned 0.17.x Helm chart and
 starts with ingestion, migration, and query integration disabled. See
 [SMITHDB.md](SMITHDB.md).
 

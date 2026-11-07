@@ -176,6 +176,15 @@ _ask_int() {
   done
 }
 
+_ask_int_at_least() {
+  local minimum="$1"; shift
+  while true; do
+    _ask_int "$@"
+    (( 10#$_REPLY >= minimum )) && return
+    _red "  ERROR: enter at least $minimum."
+  done
+}
+
 _ask_required() {
   while true; do
     _ask "$@"
@@ -542,12 +551,12 @@ else
   fi
 fi
 
-NODE_INSTANCE="$(_existing "instance_types" "$([[ "$PROFILE" == "prod" ]] && echo "m5.4xlarge" || echo "m5.2xlarge")")"
+NODE_INSTANCE="$(_existing "instance_types" "m6a.2xlarge")"
 NODE_MIN="$(_existing "min_size" "$([[ "$PROFILE" == "prod" ]] && echo "3" || echo "2")")"
 NODE_MAX="$(_existing "max_size" "$([[ "$PROFILE" == "prod" ]] && echo "10" || echo "5")")"
 
 echo ""
-_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "Node group instance type")" "$NODE_INSTANCE"
+_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "LangSmith node group instance type")" "$NODE_INSTANCE"
 NODE_INSTANCE="$_REPLY"
 _ask_int "$(_choice_arg "min_size")" "$(_numbered_prompt "4.5" "Node group min size")" "$NODE_MIN"
 NODE_MIN="$_REPLY"
@@ -631,12 +640,21 @@ _confirm_storage_change "ClickHouse" "$_ex_ch" "$CH_SOURCE"
 
 _section "7. SmithDB"
 
-_ex_smithdb=$(_existing "enable_smithdb" "false")
-_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
-_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
-_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
-ENABLE_SMITHDB="false"
+# Older configurations may omit these flags and rely on Terraform's defaults.
+_smithdb_default=true
+[[ "$UPDATE_MODE" == "true" ]] && _smithdb_default=false
+ENABLE_SMITHDB="$(_existing enable_smithdb "$_smithdb_default")"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  SMITHDB_INGESTION="$(_existing smithdb_ingestion_enabled "$_smithdb_default")"
+  SMITHDB_MIGRATION="$(_existing smithdb_migration_enabled false)"
+  SMITHDB_QUERY="$(_existing smithdb_query_enabled false)"
+fi
+SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type null)"
+SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
+SMITHDB_NODE_MIN="$(_existing smithdb_node_min_count 2)"
+SMITHDB_NODE_MAX="$(_existing smithdb_node_max_count null)"
+SMITHDB_NODE_DISK="$(_existing smithdb_node_root_volume_size_gb 100)"
 
 if [[ "$PROFILE" == "prod" ]]; then
   SMITHDB_DELETION_PROTECTION="true"
@@ -655,27 +673,18 @@ fi
 
 echo ""
 printf "  ${DIM}SmithDB is LangChain's purpose-built trace database for LangSmith.${RESET}\n"
-printf "  ${DIM}Enabling it adds:${RESET}\n"
+printf "  ${DIM}SmithDB and ingestion are enabled by default. SmithDB adds:${RESET}\n"
 printf "  ${DIM}  - A dedicated RDS PostgreSQL metastore${RESET}\n"
-printf "  ${DIM}  - A dedicated S3 object-store bucket${RESET}\n"
-printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes ServiceAccount${RESET}\n"
-printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection${RESET}\n"
-printf "  ${DIM}  - Karpenter with two EC2 node pools: local NVMe storage and general compute${RESET}\n"
-printf "  ${DIM}Ingestion, migration, and query cutover stay disabled initially.${RESET}\n"
+printf "  ${DIM}  - A dedicated S3 bucket for object storage${RESET}\n"
+printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes service account${RESET}\n"
+printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection details${RESET}\n"
+printf "  ${DIM}  - A dedicated general-purpose managed node pool${RESET}\n"
+printf "  ${DIM}  - A SmithDB cache storage class (smithdb-cache) for per-pod gp3${RESET}\n"
+printf "  ${DIM}    EBS volumes, each configured with 7,000 IOPS and 1,000 MiB/s${RESET}\n"
+printf "  ${DIM}    of throughput${RESET}\n"
+printf "  ${DIM}The sizing profile selects the instance type automatically.${RESET}\n"
+printf "  ${DIM}Migration and query cutover remain disabled initially.${RESET}\n"
 echo ""
-if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
-  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
-  ENABLE_SMITHDB="true"
-  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
-  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
-  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
-fi
-if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" != "true" ]]; then
-  echo ""
-  _yellow "WARNING"; printf ": disabling SmithDB may remove its metastore, S3 bucket, and storage nodes.\n"
-  printf "  QuickStart does not move or preserve the data stored in those resources.\n"
-  _confirm_or_abort "Continue with disabling SmithDB?" "n"
-fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Traffic Routing
@@ -1051,6 +1060,20 @@ case "$((_CHOICE - _size_offset))" in
   4) SIZING="production-large" ;;
 esac
 
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  # Resolve capacity after pod sizing, which can differ from the setup preset.
+  if [[ "$SMITHDB_NODE_MAX" == "null" ]]; then
+    case "$SIZING" in
+      production|production-large) SMITHDB_NODE_MAX=10 ;;
+      *) SMITHDB_NODE_MAX=5 ;;
+    esac
+  fi
+  _ask_int_at_least 1 "$(_choice_arg smithdb_node_min_count)" "SmithDB minimum nodes" "$SMITHDB_NODE_MIN"; SMITHDB_NODE_MIN="$_REPLY"
+  (( SMITHDB_NODE_MAX > SMITHDB_NODE_MIN )) || SMITHDB_NODE_MAX=$((SMITHDB_NODE_MIN + 1))
+  _ask_int_at_least "$((SMITHDB_NODE_MIN + 1))" "$(_choice_arg smithdb_node_max_count)" "SmithDB maximum nodes (must exceed minimum)" "$SMITHDB_NODE_MAX"; SMITHDB_NODE_MAX="$_REPLY"
+  _ask_int_at_least 1 "$(_choice_arg smithdb_node_root_volume_size_gb)" "SmithDB boot disk size (GiB)" "$SMITHDB_NODE_DISK"; SMITHDB_NODE_DISK="$_REPLY"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 13. Add-on Features
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1265,6 +1288,7 @@ _show_summary() {
   _summary_section "7. SmithDB"
   _summary_bool_row "SmithDB:" "$ENABLE_SMITHDB"
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+    _summary_row "  Node pool:" "${SMITHDB_NODE_TYPE/null/profile default}  min=$SMITHDB_NODE_MIN  max=$SMITHDB_NODE_MAX"
     _summary_bool_row "  Ingestion:" "$SMITHDB_INGESTION"
     _summary_bool_row "  Migration:" "$SMITHDB_MIGRATION"
     _summary_bool_row "  Query:" "$SMITHDB_QUERY"
@@ -1428,6 +1452,11 @@ redis_instance_type = "${REDIS_INSTANCE}"
 TFVARS
 fi
 
+SMITHDB_NODE_TYPE_HCL=null
+if [[ -n "$SMITHDB_NODE_TYPE" && "$SMITHDB_NODE_TYPE" != "null" ]]; then
+  SMITHDB_NODE_TYPE_HCL="\"${SMITHDB_NODE_TYPE}\""
+fi
+
 cat >> "$OUTPUT" << TFVARS
 
 #------------------------------------------------------------------------------
@@ -1439,6 +1468,11 @@ clickhouse_source = "${CH_SOURCE}"
 # SmithDB
 #------------------------------------------------------------------------------
 enable_smithdb                           = ${ENABLE_SMITHDB}
+smithdb_transition_mode                  = ${SMITHDB_TRANSITION}
+smithdb_node_instance_type               = ${SMITHDB_NODE_TYPE_HCL}
+smithdb_node_min_count                   = ${SMITHDB_NODE_MIN}
+smithdb_node_max_count                   = ${SMITHDB_NODE_MAX}
+smithdb_node_root_volume_size_gb          = ${SMITHDB_NODE_DISK}
 smithdb_ingestion_enabled                = ${SMITHDB_INGESTION}
 smithdb_migration_enabled                = ${SMITHDB_MIGRATION}
 smithdb_query_enabled                    = ${SMITHDB_QUERY}

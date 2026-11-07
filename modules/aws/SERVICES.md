@@ -144,9 +144,9 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 - **Objects**: `ClusterSecretStore` + `ExternalSecret` applied in `deploy.sh` (after ESO CRDs exist)
 
 ### SmithDB (optional)
-- **What**: In-chart trace ingestion/query services used alongside ClickHouse in LangSmith v16
+- **What**: In-chart trace ingestion and query services
 - **Cloud dependencies**: Dedicated PostgreSQL 18, dedicated S3, and SmithDB-specific IRSA
-- **Scheduling**: Karpenter local-NVMe pool for cache-heavy workloads and a compute pool for support workloads
+- **Scheduling**: Dedicated EKS managed node group for SmithDB services and TaskDB; gp3 cache volumes
 - **Network**: Same-region S3 traffic uses the shared Gateway VPC endpoint
 - **Rollout**: Ingestion, migration, and query integration default off and are enabled in separate stages
 

@@ -180,7 +180,10 @@ locals {
 
   # Passed outside the typed eks_managed_node_groups input, which would drop
   # metadata_options and any override attribute the object type doesn't declare.
-  extra_eks_managed_node_groups = var.enable_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {}
+  extra_eks_managed_node_groups = merge(
+    var.enable_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {},
+    var.enable_smithdb ? { smithdb = local.smithdb_node_group } : {},
+  )
 
   sandbox_juicefs_bucket_url = "https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com"
 }
