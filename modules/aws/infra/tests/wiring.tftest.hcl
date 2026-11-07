@@ -416,7 +416,7 @@ run "default_install_smithdb_state" {
     error_message = "new SmithDB installations must not provision Karpenter pools"
   }
   assert {
-    condition     = output.smithdb_ingestion_enabled && output.smithdb_query_enabled && !output.smithdb_migration_enabled
+    condition     = output.smithdb_ingestion_enabled && output.smithdb_query_enabled
     error_message = "a default install must have SmithDB ingestion and query on and migration off"
   }
 }
@@ -434,7 +434,7 @@ run "enable_smithdb_false_opts_out" {
     error_message = "enable_smithdb = false still planned SmithDB, its node group or its cache class"
   }
   assert {
-    condition     = !output.smithdb_ingestion_enabled && !output.smithdb_query_enabled && !output.smithdb_migration_enabled
+    condition     = !output.smithdb_ingestion_enabled && !output.smithdb_query_enabled
     error_message = "enable_smithdb = false must report every SmithDB gate off"
   }
 }

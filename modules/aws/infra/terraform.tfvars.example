@@ -895,7 +895,6 @@ enable_bedrock_access = false
 
 # enable_smithdb            = true
 # smithdb_ingestion_enabled = true
-# smithdb_migration_enabled = false
 # smithdb_query_enabled     = true
 
 # ── Metastore (dedicated RDS Postgres; set source = "external" to bring your own)

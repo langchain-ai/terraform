@@ -336,8 +336,6 @@ if [ "$(_tfvar create_dns_zone || echo "false")" = "true" ] \
   && [ "$(_tfvar tls_certificate_source || echo "letsencrypt")" = "dns01" ]; then
   _assigns "DNS Zone Contributor"
 fi
-[ "$(_tfvar enable_smithdb || echo "false")" = "true" ] \
-  && [ "$(_tfvar smithdb_migration_enabled || echo "false")" = "true" ] && _assigns "Storage Blob Data Reader"
 
 # Grants made at a network scope outside the deployment's resource group, as
 # "<tfvars key><TAB><scope><TAB><role>" lines. Only a supplied VNet has any:

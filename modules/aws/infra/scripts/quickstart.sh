@@ -642,15 +642,14 @@ _section "7. SmithDB"
 # outputs: its tfvars may leave a key to its default, and the defaults changed
 # in 0.18. Before a 0.18 apply there are no gate outputs, and an unset key keeps
 # 0.17's meaning, off. A new setup defaults to SmithDB on.
-_ex_smithdb="true"; _ex_smithdb_ingestion="false"; _ex_smithdb_migration="false"; _ex_smithdb_query="false"
+_ex_smithdb="true"; _ex_smithdb_ingestion="false"; _ex_smithdb_query="false"
 if [[ "$UPDATE_MODE" == "true" ]]; then
   _ex_smithdb=$(_read_applied_flag "enable_smithdb" false)
   _ex_smithdb_ingestion=$(_read_applied_flag "smithdb_ingestion_enabled" false)
-  _ex_smithdb_migration=$(_read_applied_flag "smithdb_migration_enabled" false)
   _ex_smithdb_query=$(_read_applied_flag "smithdb_query_enabled" false)
 fi
 ENABLE_SMITHDB="false"
-SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+SMITHDB_INGESTION="false"; SMITHDB_QUERY="false"
 SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
 [[ "$SMITHDB_NODE_TYPE" == "null" ]] && SMITHDB_NODE_TYPE="m6a.4xlarge"
 SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
@@ -690,7 +689,7 @@ printf "  ${DIM}    of throughput${RESET}\n"
 printf "  ${DIM}Every sizing profile runs the SmithDB small tier, on m6a.4xlarge nodes by${RESET}\n"
 printf "  ${DIM}default. ../SMITHDB.md describes scaling up to the medium or large tier.${RESET}\n"
 printf "  ${DIM}A new install writes to and queries SmithDB from the start. An existing${RESET}\n"
-printf "  ${DIM}install that turns SmithDB on starts with ingestion, migration, and query${RESET}\n"
+printf "  ${DIM}install that turns SmithDB on starts with ingestion and query${RESET}\n"
 printf "  ${DIM}off, because its traces are in ClickHouse; ../SMITHDB.md stages them.${RESET}\n"
 echo ""
 if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
@@ -700,7 +699,6 @@ if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable S
     # Keep an existing install's gates: turning query on before its ClickHouse
     # history is migrated would hide that history from the UI.
     SMITHDB_INGESTION="$_ex_smithdb_ingestion"
-    SMITHDB_MIGRATION="$_ex_smithdb_migration"
     SMITHDB_QUERY="$_ex_smithdb_query"
   else
     SMITHDB_INGESTION="true"; SMITHDB_QUERY="true"
@@ -1301,7 +1299,6 @@ _show_summary() {
     _summary_row "  Node pool:" "${SMITHDB_NODE_TYPE}  min=$SMITHDB_NODE_MIN  max=$SMITHDB_NODE_MAX"
     _summary_row "  Cache:" "$SMITHDB_CACHE_STORAGE"
     _summary_bool_row "  Ingestion:" "$SMITHDB_INGESTION"
-    _summary_bool_row "  Migration:" "$SMITHDB_MIGRATION"
     _summary_bool_row "  Query:" "$SMITHDB_QUERY"
   fi
 
@@ -1470,7 +1467,6 @@ smithdb_node_min_count                   = ${SMITHDB_NODE_MIN}
 smithdb_node_max_count                   = ${SMITHDB_NODE_MAX}
 smithdb_node_root_volume_size_gb          = ${SMITHDB_NODE_DISK}
 smithdb_ingestion_enabled                = ${SMITHDB_INGESTION}
-smithdb_migration_enabled                = ${SMITHDB_MIGRATION}
 smithdb_query_enabled                    = ${SMITHDB_QUERY}
 smithdb_metastore_deletion_protection    = ${SMITHDB_DELETION_PROTECTION}
 smithdb_metastore_skip_final_snapshot    = ${SMITHDB_SKIP_FINAL_SNAPSHOT}

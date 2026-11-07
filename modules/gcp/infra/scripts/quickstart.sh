@@ -584,13 +584,12 @@ enable_insights      = ${ENABLE_INSIGHTS}
 
 #------------------------------------------------------------------------------
 # SmithDB
-# The three gates below are a staged rollout, and a new install starts with
-# ingestion (dual write). For the backfill, run make smithdb-migration-job-start;
-# for cutover, set smithdb_query_enabled = true. ClickHouse stays enabled throughout.
+# The gates below are a staged rollout, and a new install starts with
+# ingestion (dual write). For cutover, set smithdb_query_enabled = true.
+# ClickHouse stays enabled throughout.
 #------------------------------------------------------------------------------
 enable_smithdb            = ${ENABLE_SMITHDB}
 smithdb_ingestion_enabled = ${ENABLE_SMITHDB}
-smithdb_migration_enabled = false
 smithdb_query_enabled     = false${SMITHDB_SIZING_LINES}
 
 # Teardown controls for the metastore and object store. Production keeps both
@@ -643,9 +642,4 @@ printf "     ${CYAN}make apply${RESET}\n"
 echo ""
 printf "  4. Deploy LangSmith:\n"
 printf "     ${CYAN}make init-values && make deploy${RESET}\n"
-if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  echo ""
-  printf "  ${DIM}SmithDB historical migration (backfill), after the deploy:${RESET}\n"
-  printf "     ${CYAN}make smithdb-migration-job-start${RESET}\n"
-fi
 echo ""

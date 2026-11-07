@@ -231,11 +231,6 @@ resource "terraform_data" "validate_inputs" {
     # The gates default to true, so they count only with SmithDB on: opting
     # out takes enable_smithdb = false alone (outputs.tf reports them the same way).
     precondition {
-      condition     = !var.enable_smithdb || !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
-      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
-    }
-
-    precondition {
       condition     = !var.enable_smithdb || !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
@@ -1321,8 +1316,6 @@ module "smithdb" {
   s3_kms_key_arn        = var.s3_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
-
-  migration_source_bucket_arn = var.enable_smithdb && var.smithdb_migration_enabled ? module.storage.bucket_arn : ""
 
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules

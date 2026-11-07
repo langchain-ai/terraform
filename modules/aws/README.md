@@ -1335,7 +1335,6 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
 | `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), IRSA, a managed node group, and EBS caches. An install upgraded from 0.17 without SmithDB sets `false` first. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
-| `smithdb_migration_enabled` | `false` | no | Migrate historical ClickHouse data to SmithDB. Set by `make smithdb-migration-job-start` |
 | `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
@@ -1343,7 +1342,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for the small tier that every sizing profile runs, `m6a.8xlarge` for medium, `m6a.16xlarge` for large. See [SMITHDB.md](SMITHDB.md#scaling-up) |
 | `smithdb_cache_storage` | `network-disk` | no | SmithDB cache storage: `network-disk` (gp3 volumes) or `local-ssd` (the nodes' instance-store NVMe as RAID0, which needs a type such as `m6id.4xlarge`). See [SMITHDB.md](SMITHDB.md#local-ssd-cache) |
-| `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes, including TaskDB |
+| `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes |
 | `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes; must exceed the minimum |
 | `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |
 | `smithdb_transition_mode` | `false` | no | Retain Karpenter during an existing deployment's transition. See [SMITHDB.md](SMITHDB.md#existing-karpenter-deployments) |
