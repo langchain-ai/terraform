@@ -197,8 +197,6 @@ _smithdb_enabled=false
 _tfvar_is_true "enable_smithdb" && _smithdb_enabled=true
 _smithdb_ingestion_enabled=false
 _tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
-_smithdb_migration_enabled=false
-_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
 _smithdb_query_enabled=false
 _tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
 
@@ -553,23 +551,18 @@ for entry in "${_addon_gate[@]}"; do
 done
 
 # Prints each chart 0.16 SmithDB value in a values file. Chart 0.17 rejects
-# them, and its error does not name the file. Chart 0.17 has no deployment key
-# at any depth under smithdb.migration. Keys can be quoted, and a flow-style
-# smithdb line is also read for the volume name.
+# them, and its error does not name the file. Keys can be quoted, and a
+# flow-style smithdb line is also read for the volume name.
 _smithdb_legacy_values() {
   awk '
     { sub(/[ \t]+#.*$/, "") }
     /^[ \t]*(#|$)/ { next }
     { match($0, /^ */); ind = RLENGTH }
-    ind == 0 { sdb = ($0 ~ /^.?smithdb.?:/); child = -1; if (sdb && /local-ssd-storage/) ssd = 1; next }
+    ind == 0 { sdb = ($0 ~ /^.?smithdb.?:/); if (sdb && /local-ssd-storage/) ssd = 1; next }
     !sdb { next }
     /local-ssd-storage/ { ssd = 1 }
-    child < 0 { child = ind }
-    ind <= child { mig = ($0 ~ /^[ \t]*.?migration.?:/); next }
-    mig && /^[ \t]*.?deployment.?:/ { dep = 1 }
     END {
       if (ssd) print "the volume name local-ssd-storage (chart 0.17 requires cache)"
-      if (dep) print "smithdb.migration.deployment (chart 0.17 uses smithdb.migration.job)"
     }
   ' "$1"
 }
@@ -611,29 +604,6 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
   echo "  ✔ langsmith-values-smithdb-sizing.yaml"
   echo "  ✔ langsmith-values-smithdb.yaml"
   echo "  ✔ langsmith-values-smithdb-overrides.yaml"
-
-  # init-values.sh writes the migration gate into the overrides. A run of
-  # make smithdb-migration-job-end without make init-values leaves it on, and the
-  # chart then fails on the TaskDB password with no hint of the cause.
-  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides_file")
-  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
-    echo "ERROR: langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration," >&2
-    echo "       but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled." >&2
-    echo "Run: make init-values, then make deploy" >&2
-    exit 1
-  fi
-
-  # Written by make smithdb-migration-job-start: TaskDB source and migration pod count.
-  _smithdb_migration_file="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
-  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
-    if [[ ! -f "$_smithdb_migration_file" ]]; then
-      echo "ERROR: langsmith-values-smithdb-migration.yaml not found, and smithdb_migration_enabled = true." >&2
-      echo "Run: make smithdb-migration-job-start" >&2
-      exit 1
-    fi
-    VALUES_ARGS+=(-f "$_smithdb_migration_file")
-    echo "  ✔ langsmith-values-smithdb-migration.yaml"
-  fi
 elif [[ -f "$VALUES_DIR/langsmith-values-smithdb.yaml" ]]; then
   echo "  ○ langsmith-values-smithdb.yaml (file exists but enable_smithdb=false — skipped)"
 fi
@@ -752,126 +722,6 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   _legacy_sandbox_tag=$(_parse_tfvar "sandbox_host_image_tag") || _legacy_sandbox_tag=""
   if [[ -n "$_legacy_sandbox_tag" && "$_legacy_sandbox_tag" != "$_sandbox_host_image_tag" ]]; then
     echo "  ⚠️  sandbox_host_image_tag = \"$_legacy_sandbox_tag\" in terraform.tfvars is ignored. Remove it."
-  fi
-fi
-
-# A Job's spec.template is immutable, and the backfill Job is a plain resource
-# rather than a Helm hook, so nothing recreates it on upgrade. Any change to its
-# pod template therefore fails the apply: a chart bump moving the Auth Proxy
-# image, a values change here, a different metastore secret. The API server
-# rejects it and Helm reports the whole PodSpec back as a single-line dump ending
-# in "field is immutable", which names neither the Job nor the fix.
-#
-# Compare the template Helm is about to send with the one on the cluster, and
-# stop first if they differ. Only the fields Helm controls are compared, because
-# the live object also carries controller-uid labels and API-server defaults that
-# would otherwise read as drift on every run. The pod template also carries the
-# label helm.sh/chart=langsmith-<version>, so every chart version change fails
-# the apply. That check needs only kubectl.
-#
-# Deleting the Job is safe and is not the same as losing the backfill: task state
-# lives in the taskdb StatefulSet, which the chart keeps, so a fresh Job re-plans
-# and resumes. The delete is left to the operator rather than done here, because
-# it terminates a backfill that may be mid-flight.
-_migration_job="${RELEASE_NAME}-smithdb-migration"
-if [[ "$_smithdb_migration_enabled" == "true" ]] \
-  && kubectl get job "$_migration_job" -n "$NAMESPACE" >/dev/null 2>&1; then
-
-  _live_job=$(kubectl get job "$_migration_job" -n "$NAMESPACE" -o json 2>/dev/null) || _live_job=""
-
-  # The label value as templates/_helpers.tpl "langsmith.chart" builds it.
-  _drift=""
-  _next_chart_label="langsmith-${_resolved_chart//+/_}"
-  _live_chart_label=$(kubectl get job "$_migration_job" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.template.metadata.labels.helm\.sh/chart}' 2>/dev/null) || _live_chart_label=""
-  if [[ -n "$_live_chart_label" && "$_live_chart_label" != "$_next_chart_label" ]]; then
-    _drift="         - pod template label helm.sh/chart ${_live_chart_label} -> ${_next_chart_label}"
-  fi
-
-  # helm template emits YAML, and kubectl converts it to JSON without needing a
-  # YAML library on the host. Both sides can fail for unrelated reasons, in which
-  # case the check is skipped rather than allowed to block a deploy. The render
-  # uses the resolved version, the same one that the chart label check uses.
-  _next_job=$(helm template "$RELEASE_NAME" langchain/langsmith \
-    --namespace "$NAMESPACE" \
-    --version "$_resolved_chart" \
-    ${_devel_flag} \
-    "${VALUES_ARGS[@]}" \
-    --show-only templates/smithdb/migration-job.yaml 2>/dev/null \
-    | kubectl create --dry-run=client -o json -f - 2>/dev/null) || _next_job=""
-
-  if [[ -z "$_drift" && -n "$_live_job" && -n "$_next_job" ]]; then
-    _drift=$(LIVE_JOB="$_live_job" NEXT_JOB="$_next_job" python3 -c '
-import json, os
-
-def signature(pod):
-    """Just the parts Helm sets, keyed by container name."""
-    out = {}
-    for section in ("initContainers", "containers"):
-        for c in pod.get(section) or []:
-            env = {}
-            for e in c.get("env") or []:
-                value = e.get("value")
-                if value is None:
-                    src = e.get("valueFrom") or {}
-                    ref = (src.get("secretKeyRef") or src.get("configMapKeyRef")
-                           or src.get("fieldRef") or {})
-                    value = "ref:%s/%s" % (ref.get("name", ""),
-                                           ref.get("key") or ref.get("fieldPath", ""))
-                env[e["name"]] = value
-            out[c["name"]] = {
-                "image": c.get("image"),
-                "command": c.get("command"),
-                "args": c.get("args"),
-                "resources": c.get("resources"),
-                "env": env,
-            }
-    return out
-
-live_pod = json.loads(os.environ["LIVE_JOB"])["spec"]["template"]["spec"]
-next_pod = json.loads(os.environ["NEXT_JOB"])["spec"]["template"]["spec"]
-live = signature(live_pod)
-nxt = signature(next_pod)
-
-reasons = []
-for field in ("nodeSelector", "tolerations"):
-    if (live_pod.get(field) or None) != (next_pod.get(field) or None):
-        reasons.append("pod %s changed" % field)
-for name in sorted(set(live) | set(nxt)):
-    if name not in live:
-        reasons.append("container %s is new" % name)
-        continue
-    if name not in nxt:
-        reasons.append("container %s is removed" % name)
-        continue
-    a, b = live[name], nxt[name]
-    if a["image"] != b["image"]:
-        reasons.append("%s image %s -> %s" % (name, a["image"], b["image"]))
-    for field in ("command", "args", "resources"):
-        if a[field] != b[field]:
-            reasons.append("%s %s changed" % (name, field))
-    changed = sorted(k for k in set(a["env"]) | set(b["env"])
-                     if a["env"].get(k) != b["env"].get(k))
-    if changed:
-        shown = ", ".join(changed[:4])
-        if len(changed) > 4:
-            shown += ", and %d more" % (len(changed) - 4)
-        reasons.append("%s env: %s" % (name, shown))
-
-print("\n".join("         - " + r for r in reasons))
-' 2>/dev/null) || _drift=""
-  fi
-
-  if [[ -n "$_drift" ]]; then
-    echo "ERROR: the existing $_migration_job Job does not match what this deploy renders," >&2
-    echo "       and a Job's pod template cannot be changed in place:" >&2
-    echo "$_drift" >&2
-    echo "       Delete the Job, then deploy again. Backfill progress is kept in the" >&2
-    echo "       taskdb, so a fresh Job resumes rather than starting over:" >&2
-    echo "         kubectl delete job $_migration_job -n $NAMESPACE --cascade=foreground --wait=true" >&2
-    echo "       Failures already recorded are non-retryable and survive the delete:" >&2
-    echo "         ./smithdb migrate --self-hosted diagnose retry-failed --all --yes" >&2
-    exit 1
   fi
 fi
 
@@ -1058,11 +908,7 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
   echo ""
   echo "SmithDB services are deployed. LangSmith integration advances in stages,"
   echo "driven by infra/terraform.tfvars; ClickHouse stays enabled throughout."
-  echo "  ingestion: $_smithdb_ingestion_enabled   migration: $_smithdb_migration_enabled   query: $_smithdb_query_enabled"
-  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
-    echo "  Watch the migration Job; run make smithdb-migration-job-end once it is Complete:"
-    echo "    kubectl get job ${RELEASE_NAME}-smithdb-migration -n $NAMESPACE"
-  fi
+  echo "  ingestion: $_smithdb_ingestion_enabled   query: $_smithdb_query_enabled"
   echo ""
   echo "  Verify the cache mount (Local SSD for local-ssd, a PVC for network-disk):"
   echo "    kubectl exec -n $NAMESPACE deploy/${RELEASE_NAME}-smithdb-query -- df -h /data"

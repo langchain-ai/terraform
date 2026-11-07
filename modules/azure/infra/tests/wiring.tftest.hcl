@@ -495,10 +495,9 @@ run "smithdb_small_sets_the_tier_without_resources" {
   command = plan
 
   variables {
-    enable_smithdb            = true
-    availability_zones        = ["1", "2", "3"]
-    smithdb_sizing            = "small"
-    smithdb_migration_enabled = false
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    smithdb_sizing     = "small"
   }
 
   assert {
@@ -511,7 +510,7 @@ run "smithdb_small_sets_the_tier_without_resources" {
   }
 }
 
-run "smithdb_large_with_backfill_sets_replicas" {
+run "smithdb_large_sets_replicas" {
   command = plan
 
   variables {
@@ -520,7 +519,6 @@ run "smithdb_large_with_backfill_sets_replicas" {
     sizing_profile            = "minimum"
     smithdb_sizing            = "large"
     smithdb_ingestion_enabled = true
-    smithdb_migration_enabled = true
   }
 
   assert {

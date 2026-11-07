@@ -24,12 +24,6 @@ output "metastore_password" {
   sensitive   = true
 }
 
-output "taskdb_password" {
-  description = "Password for the in-chart taskdb Postgres used by the ClickHouse-to-SmithDB migration."
-  value       = random_password.taskdb.result
-  sensitive   = true
-}
-
 output "metastore_instance_name" {
   description = "Cloud SQL instance name for the metastore, or null when using an external metastore."
   value       = local.create_metastore ? google_sql_database_instance.metastore[0].name : null

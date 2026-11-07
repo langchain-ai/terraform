@@ -384,19 +384,9 @@ output "smithdb_metastore_secret_name" {
   value       = var.enable_smithdb ? "smithdb-metastore" : null
 }
 
-output "smithdb_taskdb_secret_name" {
-  description = "Kubernetes secret holding the in-chart taskdb Postgres password used by the historical migration"
-  value       = var.enable_smithdb ? "smithdb-taskdb" : null
-}
-
 output "smithdb_ingestion_enabled" {
   description = "Whether LangSmith writes are routed to SmithDB as well as ClickHouse"
   value       = var.smithdb_ingestion_enabled
-}
-
-output "smithdb_migration_enabled" {
-  description = "Whether the historical ClickHouse-to-SmithDB migration integration is enabled"
-  value       = var.smithdb_migration_enabled
 }
 
 output "smithdb_query_enabled" {

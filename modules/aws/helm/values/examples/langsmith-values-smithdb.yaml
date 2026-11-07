@@ -50,17 +50,6 @@ smithdb:
           value: "true"
           effect: NoSchedule
 
-  # TaskDB, parallelism, and migration pod resources come from langsmith-values-smithdb-migration.yaml, written by make smithdb-migration-job-start.
-  migration:
-    job:
-      nodeSelector:
-        smithdb-local/instance-store: "true"
-      tolerations:
-        - key: smithdb-local/instance-store
-          operator: Equal
-          value: "true"
-          effect: NoSchedule
-
   # Compute-oriented long-running workloads use the dedicated compute node group.
   compaction:
     deployment:

@@ -750,12 +750,11 @@ Seeds these secrets, which Terraform never sees:
 | `langsmith-agent-builder-encryption-key` | Generated (Fernet) |
 | `langsmith-insights-encryption-key` | Generated (Fernet) |
 | `langsmith-polly-encryption-key` | Generated (Fernet) |
-| `smithdb-taskdb-password` | Generated (`openssl rand -hex 32`) |
 | `langsmith-sandbox-callback-signing-jwk` | Generated (Ed25519 JWK), only with `enable_sandboxes = true`. Needs OpenSSL 3, as [Sandboxes](#sandboxes) describes |
 
 It also seeds `postgres-admin-password` and `langsmith-license-key`, from `secrets.auto.tfvars` or the environment, when the vault does not already hold them. That is what `keyvault_manage_secrets = false` relies on. On the default path Terraform wrote both and the script skips them.
 
-- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, a new Fernet key makes existing encrypted data unreadable, and a new taskdb password locks the SmithDB backfill out of a taskdb that already initialized. Rotate deliberately with `make keyvault` instead.
+- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable. Rotate deliberately with `make keyvault` instead.
 - **Validates the admin password before storing it:** min 12 characters, with a lowercase letter, an uppercase letter, and a symbol from ``!#$%()+,-./:?@[\]^_{~}``. The Helm chart's auth-bootstrap job rejects a password without a symbol, and it fails ~10 minutes into the release rather than at the point you typed it.
 - Requires the **Key Vault Secrets Officer** role on the vault, which `make apply` grants to the deployer identity.
 - Set `LANGSMITH_ADMIN_PASSWORD` to run it non-interactively (CI); it exits with a clear error if the password is unset and stdin is not a tty.

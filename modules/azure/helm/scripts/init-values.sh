@@ -66,7 +66,6 @@ else
   _langsmith_release_fullname="${_langsmith_release_name}-langsmith"
 fi
 _smithdb_ingestion_enabled=$(_parse_tfvar "smithdb_ingestion_enabled") || _smithdb_ingestion_enabled="false"
-_smithdb_migration_enabled=$(_parse_tfvar "smithdb_migration_enabled") || _smithdb_migration_enabled="false"
 _smithdb_query_enabled=$(_parse_tfvar "smithdb_query_enabled") || _smithdb_query_enabled="false"
 
 # Derive protocol from TLS source
@@ -382,12 +381,12 @@ if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
   exit 1
 fi
-if [[ "$_enable_smithdb" != "true" && ("$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
+if [[ "$_enable_smithdb" != "true" && ("$_smithdb_ingestion_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
   fail "SmithDB integration gates require enable_smithdb = true"
   exit 1
 fi
-if [[ "$_smithdb_ingestion_enabled" != "true" && ("$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
-  fail "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true"
+if [[ "$_smithdb_ingestion_enabled" != "true" && "$_smithdb_query_enabled" == "true" ]]; then
+  fail "smithdb_query_enabled requires smithdb_ingestion_enabled = true"
   exit 1
 fi
 
@@ -1065,18 +1064,9 @@ smithdb:
     job:
       labels:
         azure.workload.identity/use: "true"
-  migration:
-    job:
-      labels:
-        azure.workload.identity/use: "true"
-    # The TaskDB credential and the migration pod count are in
-    # langsmith-values-smithdb-migration.yaml, which make
-    # smithdb-migration-job-start writes and deploy.sh loads after this file.
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
-    migration:
-      enabled: ${_smithdb_migration_enabled}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDB_YAML

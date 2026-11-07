@@ -633,10 +633,9 @@ _section "7. SmithDB"
 
 _ex_smithdb=$(_existing "enable_smithdb" "false")
 _ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
-_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
 _ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
 ENABLE_SMITHDB="false"
-SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+SMITHDB_INGESTION="false"; SMITHDB_QUERY="false"
 
 if [[ "$PROFILE" == "prod" ]]; then
   SMITHDB_DELETION_PROTECTION="true"
@@ -661,13 +660,12 @@ printf "  ${DIM}  - A dedicated S3 object-store bucket${RESET}\n"
 printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes ServiceAccount${RESET}\n"
 printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection${RESET}\n"
 printf "  ${DIM}  - Karpenter with two EC2 node pools: local NVMe storage and general compute${RESET}\n"
-printf "  ${DIM}Ingestion, migration, and query cutover stay disabled initially.${RESET}\n"
+printf "  ${DIM}Ingestion and query cutover stay disabled initially.${RESET}\n"
 echo ""
 if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
   "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SMITHDB="true"
   [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
-  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
   [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
 fi
 if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" != "true" ]]; then
@@ -1266,7 +1264,6 @@ _show_summary() {
   _summary_bool_row "SmithDB:" "$ENABLE_SMITHDB"
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
     _summary_bool_row "  Ingestion:" "$SMITHDB_INGESTION"
-    _summary_bool_row "  Migration:" "$SMITHDB_MIGRATION"
     _summary_bool_row "  Query:" "$SMITHDB_QUERY"
   fi
 
@@ -1440,7 +1437,6 @@ clickhouse_source = "${CH_SOURCE}"
 #------------------------------------------------------------------------------
 enable_smithdb                           = ${ENABLE_SMITHDB}
 smithdb_ingestion_enabled                = ${SMITHDB_INGESTION}
-smithdb_migration_enabled                = ${SMITHDB_MIGRATION}
 smithdb_query_enabled                    = ${SMITHDB_QUERY}
 smithdb_metastore_deletion_protection    = ${SMITHDB_DELETION_PROTECTION}
 smithdb_metastore_skip_final_snapshot    = ${SMITHDB_SKIP_FINAL_SNAPSHOT}
