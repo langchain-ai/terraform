@@ -170,7 +170,7 @@ variable "langsmith_image_pull_secret_name" {
 variable "smithdb_cache_storage_class_name" {
   type        = string
   description = "Name of the StorageClass created for SmithDB cache volumes."
-  default     = "smithdb-cache-premium-v2"
+  default     = "smithdb-cache"
 }
 
 variable "tags" {

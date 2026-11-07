@@ -53,6 +53,7 @@ lint_scripts() {
 check_scripts() {
   lint_scripts || return $?
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
+  bash "$REPO_ROOT/modules/azure/infra/scripts/test-smithdb-values.sh" || return $?
   bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
 }
 

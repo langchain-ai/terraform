@@ -353,7 +353,7 @@ run "smithdb_accepts_a_zonal_additional_pool" {
     additional_node_pools = {
       smithdb = {
         vm_size   = "Standard_D16s_v3"
-        min_count = 0
+        min_count = 1
         max_count = 3
         zones     = ["1", "2", "3"]
       }
@@ -1059,5 +1059,35 @@ run "dns01_plans_with_istio_addon" {
     tls_certificate_source = "dns01"
     langsmith_domain       = "langsmith.example.com"
     letsencrypt_email      = "fixture@example.com"
+  }
+}
+
+run "smithdb_node_minimum_rejects_scale_to_zero" {
+  command = plan
+  variables {
+    smithdb_node_min_count = 0
+  }
+  expect_failures = [var.smithdb_node_min_count]
+}
+
+run "smithdb_node_maximum_requires_rollout_headroom" {
+  command = plan
+  variables {
+    smithdb_node_min_count = 2
+    smithdb_node_max_count = 2
+  }
+  expect_failures = [var.smithdb_node_max_count]
+}
+
+run "smithdb_node_zones_leave_other_pools_regional" {
+  command = plan
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    smithdb_node_zones = ["2"]
+  }
+  assert {
+    condition     = toset(module.aks.node_pool_zones["smithdb"]) == toset(["2"]) && module.aks.node_pool_zones["large"] == null
+    error_message = "Dedicated SmithDB zones changed the existing general-purpose pools."
   }
 }

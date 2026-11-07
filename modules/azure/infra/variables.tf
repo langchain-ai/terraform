@@ -1378,7 +1378,7 @@ variable "smithdb_query_enabled" {
 
 variable "smithdb_sizing" {
   type        = string
-  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  description = "SmithDB chart tier, replicas, and default metastore SKU: small, medium, or large. minimal keeps its metastore default and uses the small chart tier without resource overrides. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
   default     = null
   nullable    = true
 
@@ -1446,7 +1446,7 @@ variable "smithdb_storage_container_name" {
 
 variable "smithdb_cache_storage_class_name" {
   type        = string
-  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes. A StorageClass is cluster-scoped, so the default empty value derives a per-deployment name from name_prefix and unique_resource_names. Set it only to adopt a specific name."
+  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes. Empty uses smithdb-cache."
   default     = ""
 }
 
