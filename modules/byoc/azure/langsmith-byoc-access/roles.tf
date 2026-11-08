@@ -123,6 +123,10 @@ locals {
     "Microsoft.Storage/storageAccounts/privateEndpointConnections/write",
     "Microsoft.Storage/storageAccounts/privateEndpointConnections/delete",
 
+    # The registry that in-cluster deployment builds push to. LangSmith keeps
+    # it when builds are turned off, so the role cannot delete it.
+    "Microsoft.ContainerRegistry/registries/write",
+
     # Managed identities
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
