@@ -4,6 +4,14 @@ Terraform modules for deploying **LangSmith Self-Hosted** on AWS, Azure, GCP, an
 
 LangSmith is LangChain's observability, evaluation, and prompt-engineering platform. This repository packages the cloud foundation (network / cluster / database / cache / object storage / secrets / DNS) and the Helm deployment of the LangSmith application as reusable, production-ready Terraform.
 
+> [!NOTE]
+> **Under active development.**
+> Expect breaking changes and rough edges.
+> We're not accepting issues or external contributions at this time.
+> You're welcome to explore and fork these modules, but correctness, stability, and compatibility are not guaranteed.
+>
+> Review and test changes in your environment before applying them to production.
+
 ## Who this is for
 
 Enterprise customers running LangSmith in their own cloud account or OpenShift cluster. If you are evaluating Self-Hosted or standing up a production deployment, start here.
