@@ -100,6 +100,21 @@ Terraform then updates the actions of the LangSmith custom role in place and del
 
 Set `reduced_access = false` again before an upgrade that adds a role assignment. LangChain tells you when an upgrade needs this.
 
+### Let Engine use Azure AI Foundry (optional)
+
+When the data plane is active, add your Foundry resource ID and run `terraform apply`:
+
+```hcl
+data_planes = {
+  prod = {
+    location                   = "eastus"
+    engine_foundry_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ai-prod/providers/Microsoft.CognitiveServices/accounts/contoso-foundry"
+  }
+}
+```
+
+To find the ID, run `az cognitiveservices account show -g <resource-group> -n <foundry-resource> --query id -o tsv`. The workload identity of the data plane gets `Cognitive Services User` on that resource, so LangSmith Engine can call Claude and GPT there without an API key. Remove the ID before you delete the data plane.
+
 ### Remove a data plane
 
 > **CAUTION:** Do not remove the entry from `data_planes` before you delete the data plane in LangSmith. LangSmith needs its role assignments to delete the data plane resources.
@@ -115,8 +130,17 @@ Set `reduced_access = false` again before an upgrade that adds a role assignment
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
-| `data_planes` | `map(object({ location = string, tags = optional(map(string), {}), reduced_access = optional(bool, false) }))` | no | `{}` | One entry per data plane. The key is the data plane name. |
+| `data_planes` | `map(object)` | no | `{}` | One entry per data plane. The key is the data plane name. See the fields below. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
+
+Fields of each `data_planes` entry:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `location` | `string` | yes | - | Azure region of the data plane. |
+| `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
+| `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
+| `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
 
