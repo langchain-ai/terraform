@@ -228,8 +228,8 @@ kubectl get crd gateways.gateway.networking.k8s.io \
   -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}{"\n"}{range .metadata.managedFields[*]}{.manager}{"\n"}{end}'
 ```
 
-After the upgrade, the first line must be `v1.6.1`. If it is not, open an issue with
-both outputs.
+After the upgrade, the first line must be `v1.6.1`. If it is not, contact
+[customer support](README.md#support) with both outputs.
 
 - Plan a maintenance window. The proxy pod restarts one time, and the old pod drains
   open connections for up to 60 seconds. Streams that stay open longer stop, and

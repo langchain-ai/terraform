@@ -2,7 +2,7 @@
 
 Terraform modules for deploying **LangSmith Self-Hosted** on AWS, Azure, GCP, and OpenShift.
 
-LangSmith is LangChain's observability, evaluation, and prompt-engineering platform. This repository packages the cloud foundation (network / cluster / database / cache / object storage / secrets / DNS) and the Helm deployment of the LangSmith application as reusable, production-ready Terraform.
+LangSmith is LangChain's observability, evaluation, and prompt-engineering platform. This repository packages the cloud foundation (network / cluster / database / cache / object storage / secrets / DNS) and the Helm deployment of the LangSmith application as reusable Terraform modules and deployment scripts.
 
 > [!NOTE]
 > **Under active development.**
@@ -11,6 +11,7 @@ LangSmith is LangChain's observability, evaluation, and prompt-engineering platf
 > You're welcome to explore and fork these modules, but correctness, stability, and compatibility are not guaranteed.
 >
 > Review and test changes in your environment before applying them to production.
+> For customer support, use the [support channels](#support) below.
 
 ## Who this is for
 
@@ -20,12 +21,12 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 
 ## Pick your cloud
 
-| Provider | Guide | Cluster | Status |
-|---|---|---|---|
-| AWS | [`modules/aws/`](modules/aws/README.md) | EKS | GA |
-| Azure | [`modules/azure/`](modules/azure/README.md) | AKS | GA |
-| GCP | [`modules/gcp/`](modules/gcp/README.md) | GKE | GA |
-| OpenShift | [`modules/ocp/`](modules/ocp/README.md) | OCP / ROSA | Preview |
+| Provider | Guide | Cluster |
+|---|---|---|
+| AWS | [`modules/aws/`](modules/aws/README.md) | EKS |
+| Azure | [`modules/azure/`](modules/azure/README.md) | AKS |
+| GCP | [`modules/gcp/`](modules/gcp/README.md) | GKE |
+| OpenShift | [`modules/ocp/`](modules/ocp/README.md) | OCP / ROSA |
 
 The AWS, Azure, and GCP directories are self-contained deployments with a `Makefile`, an `infra/` Terraform layout, Helm values, and provider-specific operator scripts. The OpenShift preview follows its own layout. See [`modules/README.md`](modules/README.md) for the differences between providers.
 
@@ -137,7 +138,8 @@ git fetch --tags
 git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"
 ```
 
-Report an issue against the line you are running. Fixes land on `main` first and are
+For bugs or feature requests, use the [support channels](#support) and include the
+release tag you are running. Fixes land on `main` first and are
 backported to a maintenance branch where they apply cleanly; values-schema changes tied to
 the newer chart are not backported, because the older chart ignores the affected keys rather
 than rejecting them and would deploy a half-configured release.
@@ -165,7 +167,7 @@ The per-release history is published in [GitHub Releases](https://github.com/lan
 - **Enterprise customers:** start at [enterprise-hub.langchain.com](https://enterprise-hub.langchain.com/) — the front door for onboarding, education, professional services, and support.
 - **Customers with a LangChain support agreement:** open a ticket through your usual support channel.
 - **General questions:** contact your LangChain account team.
-- **Bugs and feature requests for these modules:** open an issue on this repository.
+- **Bugs and feature requests for these modules:** use the customer support channels above and include your release tag.
 
 ## History
 
