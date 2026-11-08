@@ -1,6 +1,13 @@
 locals {
   # Found by provisioning and tearing down data planes with nothing more.
   base_provisioner_permissions = [
+    # In-cluster deployment builds push to one repository per data plane. Its
+    # IAM policy grants the data plane's build service account write access.
+    "artifactregistry.repositories.create",
+    "artifactregistry.repositories.get",
+    "artifactregistry.repositories.getIamPolicy",
+    "artifactregistry.repositories.setIamPolicy",
+    "artifactregistry.repositories.update",
     "cloudsql.databases.create",
     "cloudsql.databases.delete",
     "cloudsql.databases.get",
@@ -159,6 +166,7 @@ locals {
   ]
 
   apis = toset([
+    "artifactregistry.googleapis.com",
     "compute.googleapis.com",
     "container.googleapis.com",
     "dns.googleapis.com",

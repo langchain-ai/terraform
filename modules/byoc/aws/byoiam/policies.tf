@@ -239,7 +239,15 @@ locals {
         StringLike = { "s3:prefix" = ["clickhouse", "clickhouse/*"] }
       })
     }])
-    juicefs-csi-iam-role = local.s3_statements["juicefs-csi-iam-role"]
+    juicefs-csi-iam-role = concat(local.s3_statements["juicefs-csi-iam-role"], [{
+      Sid    = "JuiceFSRedisIAMAuthentication"
+      Effect = "Allow"
+      Action = ["elasticache:Connect"]
+      Resource = flatten([for region in sort(tolist(var.regions)) : [
+        "arn:${local.partition}:elasticache:${region}:${local.account_id}:replicationgroup:*-smith-redis",
+        "arn:${local.partition}:elasticache:${region}:${local.account_id}:user:*-smith-juicefs-redis-user"
+      ]])
+    }])
     privatelink-lambda-role = [
       {
         Sid    = "ManageEKSAPITargets"
