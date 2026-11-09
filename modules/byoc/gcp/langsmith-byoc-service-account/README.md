@@ -100,7 +100,7 @@ It also grants `roles/container.admin` on the project to `var.crossplane_service
 
 In-cluster deployment builds are not supported with `byo_iam`. They run as a build service account that the provisioner creates for each data plane.
 
-With `deployment_observability`, the module also grants `langsmith-workload` `roles/monitoring.viewer` on the project and `roles/logging.viewAccessor` with a condition limiting it to log views whose names end in `-smith-logs/views/_AllLogs`, the views of the data planes' log buckets.
+Deployment observability is not supported with `byo_iam` either. LangSmith would read logs and metrics as `langsmith-workload` before it could confirm that account's grants.
 
 In this mode, the provisioner gets:
 
@@ -116,10 +116,10 @@ Create the data plane with `byoiam_enabled` set to `true`.
 
 ## Deployment observability
 
-Set `deployment_observability = true` before LangSmith turns on deployment observability for a data plane in the project. LangSmith then shows Monitoring charts and searchable runtime and build log history for each LangGraph deployment, and reads them from this project:
+Set `deployment_observability = true` before LangSmith turns on deployment observability for a data plane in the project. It is not supported with `byo_iam`. LangSmith then shows Monitoring charts and searchable runtime and build log history for each LangGraph deployment, and reads them from this project:
 
 - **Metrics:** the data plane's GKE cluster runs Managed Prometheus managed collection, which scrapes the LangGraph deployment pods. Managed Prometheus bills per sample ingested. CPU, memory and restart charts use GKE system metrics, which are free.
-- **Logs:** LangSmith creates a log bucket for each data plane, `<data plane>-smith-logs`, in the data plane's region, and a sink that routes only the LangSmith namespace's container logs from the data plane's cluster to it. The bucket keeps them for 30 days unless LangSmith sets another retention; Cloud Logging bills retention past 30 days. The project's `_Default` bucket keeps its copy, so those logs are stored twice. The bucket is kept, with its logs, if observability is turned off.
+- **Logs:** LangSmith creates a log bucket for each data plane, `langsmith-<hash>-logs`, in the data plane's region, and a sink that routes only the LangGraph deployment and build container logs from the data plane's cluster to it. The bucket keeps them for 30 days unless LangSmith sets another retention; Cloud Logging bills retention past 30 days. The project's `_Default` bucket keeps its copy, so those logs are stored twice. The bucket is kept, with its logs, if observability is turned off.
 - **Reads:** the LangSmith app's service account gets `roles/logging.viewAccessor` on its data plane's log bucket view only, so it reads no other logs in the project, and `roles/monitoring.viewer` on the project.
 
 The setting makes these changes:
@@ -128,8 +128,7 @@ The setting makes these changes:
 |---|---|
 | APIs (with `enable_apis`) | `logging.googleapis.com`, `monitoring.googleapis.com` |
 | `<prefix>Provisioner` | `logging.buckets.create`, `logging.buckets.get`, `logging.buckets.update`, `logging.sinks.create`, `logging.sinks.delete`, `logging.sinks.get`, `logging.sinks.update` |
-| `<prefix>ProjectIamGranter` condition (without `byo_iam`) | `roles/logging.viewAccessor` and `roles/monitoring.viewer` join the roles the provisioner may grant. LangSmith grants `roles/logging.viewAccessor` with a condition naming the data plane's log view. Changing the condition replaces the binding. |
-| `langsmith-workload` (with `byo_iam`) | `roles/monitoring.viewer` on the project, and `roles/logging.viewAccessor` with a condition limiting it to the data planes' log views |
+| `<prefix>ProjectIamGranter` condition | `roles/logging.viewAccessor` and `roles/monitoring.viewer` join the roles the provisioner may grant. LangSmith grants `roles/logging.viewAccessor` with a condition naming the data plane's log view. Changing the condition replaces the binding. |
 
 Sinks do not support IAM conditions, so the sink permissions apply to every sink in the project: the provisioner could route any of the project's logs to another destination, or change or delete the project's other sinks (not `_Required`). Turn it on only in a project that holds only LangSmith resources.
 
@@ -144,7 +143,7 @@ Sinks do not support IAM conditions, so the sink permissions apply to every sink
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
-| `deployment_observability` | Let LangSmith turn on deployment observability. See [Deployment observability](#deployment-observability). | `false` |
+| `deployment_observability` | Let LangSmith turn on deployment observability. Not with `byo_iam`. See [Deployment observability](#deployment-observability). | `false` |
 
 ## Outputs
 

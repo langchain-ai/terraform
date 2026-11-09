@@ -353,16 +353,11 @@ resource "google_service_account_iam_member" "crossplane" {
 
 locals {
   byo_iam_service_accounts = var.byo_iam ? {
-    # With deployment_observability, it also reads the data planes' log
-    # buckets through the conditional grant below.
     "langsmith-workload" = {
       display_name = "LangSmith workload"
       description  = "LangSmith application workloads in the data plane GKE clusters"
-      roles = concat(
-        ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/redis.dbConnectionUser"],
-        var.deployment_observability ? ["roles/monitoring.viewer"] : [],
-      )
-      act_as = false
+      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/redis.dbConnectionUser"]
+      act_as       = false
     }
     # Secret Manager access is the conditional grant below.
     "langsmith-external-secrets" = {
@@ -440,22 +435,6 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
     title       = "langsmith-data-plane-secrets"
     description = "LangSmith data plane secrets"
     expression  = "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
-  }
-}
-
-# LangSmith reads each data plane's deployment logs from the _AllLogs view of
-# its log bucket, <data plane>-smith-logs, and no other log view.
-resource "google_project_iam_member" "byo_iam_workload_log_views" {
-  count = var.byo_iam && var.deployment_observability ? 1 : 0
-
-  project = var.project_id
-  role    = "roles/logging.viewAccessor"
-  member  = "serviceAccount:${google_service_account.byo_iam["langsmith-workload"].email}"
-
-  condition {
-    title       = "langsmith-deployment-logs"
-    description = "LangSmith data plane deployment logs"
-    expression  = "resource.name.endsWith(\"-smith-logs/views/_AllLogs\")"
   }
 }
 
