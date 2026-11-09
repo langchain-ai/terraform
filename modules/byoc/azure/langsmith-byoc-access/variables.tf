@@ -28,6 +28,11 @@ variable "data_planes" {
     # gets Cognitive Services User on it, so Engine can call it without an API
     # key. Set it after the data plane is active.
     engine_foundry_resource_id = optional(string)
+    # Let LangSmith turn on deployment observability: Monitoring charts and
+    # searchable log history for LangGraph deployments, kept in a Log
+    # Analytics workspace and an Azure Monitor workspace in the resource group.
+    # Adds the actions in local.langsmith_byoc_observability_actions.
+    deployment_observability = optional(bool, false)
   }))
   default = {}
 

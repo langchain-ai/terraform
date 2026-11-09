@@ -63,7 +63,12 @@ resource "azurerm_role_definition" "langsmith_byoc" {
   assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
 
   permissions {
-    actions = each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions
+    actions = concat(
+      each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions,
+      each.value.deployment_observability ? (
+        each.value.reduced_access ? local.langsmith_byoc_observability_reduced_actions : local.langsmith_byoc_observability_actions
+      ) : [],
+    )
   }
 }
 
