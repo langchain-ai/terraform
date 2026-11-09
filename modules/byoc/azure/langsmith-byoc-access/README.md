@@ -100,6 +100,32 @@ Terraform then updates the actions of the LangSmith custom role in place and del
 
 Set `reduced_access = false` again before an upgrade that adds a role assignment. LangChain tells you when an upgrade needs this.
 
+### Bring your own identities (optional)
+
+> **CAUTION:** Do not change `byo_iam` after the data plane exists.
+
+Set `byo_iam = true` before you create the data plane:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", byo_iam = true }
+}
+```
+
+The module then creates the seven data plane identities, the custom blob role `langsmith-byoc-<key>-blob-<suffix>`, and their role assignments. The identity names are fixed:
+
+- `byoc-smith-aks-identity`
+- `byoc-smith-cert-manager-identity`
+- `byoc-smith-external-secrets-identity`
+- `byoc-smith-workload-identity`
+- `byoc-smith-postgres-setup-identity`
+- `byoc-smith-smithdb-identity`
+- `byoc-smith-sandbox-identity`
+
+LangSmith gets no `User Access Administrator` assignment. Its custom role loses the identity write and delete actions. LangSmith cannot create role assignments, role definitions, or identities. LangSmith still creates the federated identity credentials on the identities, because the AKS OIDC issuer URL exists only after the cluster exists.
+
+Pass `byoiam_enabled: true` in the data plane create request.
+
 ### Let Engine use Azure AI Foundry (optional)
 
 When the data plane is active, add your Foundry resource ID and run `terraform apply`:
@@ -140,6 +166,7 @@ Fields of each `data_planes` entry:
 | `location` | `string` | yes | - | Azure region of the data plane. |
 | `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
+| `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.

@@ -63,7 +63,10 @@ resource "azurerm_role_definition" "langsmith_byoc" {
   assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
 
   permissions {
-    actions = each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions
+    actions = setsubtract(
+      each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions,
+      each.value.byo_iam ? local.langsmith_byoiam_removed_actions : [],
+    )
   }
 }
 
@@ -83,9 +86,11 @@ resource "azurerm_role_assignment" "langsmith_byoc" {
 # The data plane creates role assignments for its workload identities and the
 # custom blob role of the data plane. A running data plane creates none, so
 # reduced_access deletes this assignment. Set reduced_access back to false
-# before an upgrade that adds a role assignment, and before teardown.
+# before an upgrade that adds a role assignment, and before teardown. With
+# byo_iam you create every role assignment, so LangSmith never gets User
+# Access Administrator.
 resource "azurerm_role_assignment" "langsmith_user_access_administrator" {
-  for_each = { for key, data_plane in var.data_planes : key => data_plane if !data_plane.reduced_access }
+  for_each = { for key, data_plane in var.data_planes : key => data_plane if !data_plane.reduced_access && !data_plane.byo_iam }
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "User Access Administrator"

@@ -140,4 +140,13 @@ locals {
     "Microsoft.KeyVault/vaults/privateEndpointConnections/write",
     "Microsoft.KeyVault/vaults/privateEndpointConnections/delete",
   ]
+
+  # With byo_iam the customer creates and deletes the identities, so the role
+  # loses these actions. It keeps assign/action and the federated credential
+  # actions: the AKS OIDC issuer exists only after cluster creation, so
+  # LangSmith writes the federated identity credentials.
+  langsmith_byoiam_removed_actions = [
+    "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+  ]
 }
