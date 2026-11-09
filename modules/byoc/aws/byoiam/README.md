@@ -45,9 +45,9 @@ At time of data plane creation, toggle off IAM role creation.
 Engine: the shared workload role includes native Bedrock inference and Mantle
 access, and trusts Engine service accounts. Engine remains opt-in per data plane.
 
-Playground: the playground role can only assume other roles, such as Bedrock
-roles, that are tagged `LangSmithPlayground=true`, and only with an external ID.
-Those roles trust it instead of the shared workload role.
+Bedrock IAM roles: the playground role and the shared workload role, which the
+LLM gateway runs as, can assume roles tagged `LangSmithBedrock=true`, and only
+with an external ID. The playground role can do nothing else.
 
 The outputs expose the shared role names and ARNs, Karpenter instance profile
 name, and Karpenter controller policy ARN.
