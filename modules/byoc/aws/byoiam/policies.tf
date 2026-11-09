@@ -1,8 +1,5 @@
 locals {
-  # The LLM gateway (workload role) and the playground role assume customer
-  # Bedrock roles that opt in with the LangSmithBedrock tag, always with an
-  # external ID. Pod Identity session tags are transitive, so AssumeRole also
-  # needs sts:TagSession, limited to those keys.
+  # Pod Identity session tags are transitive, so AssumeRole also needs sts:TagSession.
   bedrock_assume_role_statements = [
     {
       Sid      = "AssumeBedrockRoles"
@@ -277,7 +274,6 @@ locals {
         "arn:${local.partition}:elasticache:${region}:${local.account_id}:user:*-smith-juicefs-redis-user"
       ]])
     }])
-    # Playground runs user-provided code, so its role holds nothing else.
     playground-iam-role = local.bedrock_assume_role_statements
     privatelink-lambda-role = [
       {
