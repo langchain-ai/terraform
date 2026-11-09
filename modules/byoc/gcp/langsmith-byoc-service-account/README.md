@@ -80,7 +80,9 @@ Custom role IDs are unique per project, so set `custom_role_id_prefix` when more
 
 ### Limit changes to data plane names
 
-If the project also holds resources that are not LangSmith's, set `restrict_to_langsmith_names = true`. The provisioner can then change and delete only the data plane's own resources of the kinds below, found by name. LangSmith names every data plane resource `langsmith-<hash>-<key>` and every data plane secret `ls-<data plane>-<key>`.
+If the project also holds resources that are not LangSmith's, set `restrict_to_langsmith_names = true` and [`byo_iam = true`](#bring-your-own-iam). The provisioner can then change and delete only the data plane's own resources of the kinds below, found by name. LangSmith names every data plane resource `langsmith-<hash>-<key>` and every data plane secret `ls-<data plane>-<key>`.
+
+> **IMPORTANT:** Use `restrict_to_langsmith_names` together with `byo_iam`. Without `byo_iam`, the provisioner can grant the data plane roles on the project (`<prefix>ProjectIamGranter`). An IAM condition limits which roles it grants but not to whom, and those roles include `roles/container.admin`, `roles/cloudsql.admin` and `roles/secretmanager.secretAccessor` on the whole project. By granting one to itself, the provisioner could reach every GKE cluster, Cloud SQL instance or secret in the project, whatever its name. With `byo_iam`, the provisioner has no project IAM writes.
 
 > **CAUTION:** Data planes created before LangSmith named resources `langsmith-` have other names. The provisioner can't update or delete their resources of these kinds, so they can't be upgraded or torn down. Set this only in a project whose data planes were all created with the `langsmith-` names, or recreate the older data planes first.
 
@@ -165,7 +167,7 @@ Create the data plane with `byoiam_enabled` set to `true`.
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
-| `restrict_to_langsmith_names` | Limit the provisioner's creates, changes and deletes of the kinds listed under Limit changes to data plane names to data plane names. See [Limit changes to data plane names](#limit-changes-to-data-plane-names). | `false` |
+| `restrict_to_langsmith_names` | Limit the provisioner's creates, changes and deletes of the kinds listed under Limit changes to data plane names to data plane names. Use with `byo_iam`. See [Limit changes to data plane names](#limit-changes-to-data-plane-names). | `false` |
 
 ## Outputs
 
