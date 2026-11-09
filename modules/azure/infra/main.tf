@@ -1063,6 +1063,15 @@ resource "terraform_data" "validate_network" {
       error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
     }
 
+    # SmithDB requests its Entra token for the metastore with the commercial
+    # scope, https://ossrdbms-aad.database.windows.net/.default, which an Azure
+    # Government Flexible Server does not accept (LG-913). Only the password
+    # path works there until the product reads the cloud's scope.
+    precondition {
+      condition     = !(var.enable_smithdb && var.azure_environment == "usgovernment" && nonsensitive(var.smithdb_metastore_admin_password == null))
+      error_message = "enable_smithdb = true in Azure Government needs smithdb_metastore_admin_password. Without it the SmithDB metastore uses Microsoft Entra authentication, and SmithDB requests its PostgreSQL token for the commercial Azure scope, so every login fails (LG-913). Set TF_VAR_smithdb_metastore_admin_password to a strong password to use password authentication."
+    }
+
     # A flag rather than lifecycle prevent_destroy, which takes only a literal:
     # selecting between a guarded and an unguarded copy of the Redis would
     # replace it whenever the flag changed.
