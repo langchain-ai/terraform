@@ -175,32 +175,13 @@ fleetTriggerServer:
 # -- SmithDB ---------------------------------------------------------------
 
 smithdb:
+  resourceTier: small
   query:
-    deployment:
-      resources:
-        requests:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "200Gi"
-        limits:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "200Gi"
     autoscaling:
       hpa:
         minReplicas: 1
 
   ingestion:
-    deployment:
-      resources:
-        requests:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "100Gi"
-        limits:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "100Gi"
     autoscaling:
       hpa:
         minReplicas: 1
@@ -208,25 +189,8 @@ smithdb:
   compaction:
     deployment:
       replicas: 1
-      resources:
-        requests:
-          cpu: "2"
-          memory: "4Gi"
-        limits:
-          cpu: "2"
-          memory: "4Gi"
 
   compactionWorker:
-    deployment:
-      resources:
-        requests:
-          cpu: "8"
-          memory: "16Gi"
-          ephemeral-storage: "100Gi"
-        limits:
-          cpu: "8"
-          memory: "16Gi"
-          ephemeral-storage: "100Gi"
     autoscaling:
       hpa:
         minReplicas: 1
@@ -234,13 +198,6 @@ smithdb:
   clusterManager:
     deployment:
       replicas: 1
-      resources:
-        requests:
-          cpu: "250m"
-          memory: "256Mi"
-        limits:
-          cpu: "250m"
-          memory: "256Mi"
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # ClickHouse is the one component that actually uses its resources.
