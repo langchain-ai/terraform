@@ -51,3 +51,9 @@ variable "byo_iam" {
   type        = bool
   default     = false
 }
+
+variable "deployment_observability" {
+  description = "Let LangSmith turn on deployment observability: Monitoring charts and searchable log history for LangGraph deployments, kept in this project. Adds the Cloud Logging and Monitoring APIs, the provisioner's log bucket and sink permissions, and roles/logging.viewAccessor and roles/monitoring.viewer for the LangSmith app. Set it before LangSmith turns the feature on for a data plane."
+  type        = bool
+  default     = false
+}

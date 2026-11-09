@@ -69,11 +69,11 @@ By default, the provisioner holds three custom roles, not predefined admin roles
 - **`<prefix>ProjectIamGranter`**: reads and sets the project IAM policy. The binding has an IAM condition so the provisioner can only add or remove grants of the project roles the data planes use: `artifactregistry.reader`, `cloudsql.admin`, `cloudsql.client`, `cloudsql.instanceUser`, `container.admin`, `container.defaultNodeServiceAccount`, `redis.dbConnectionUser` and `secretmanager.secretAccessor`. Data plane workloads get narrower grants: External Secrets' `secretmanager.secretAccessor` has a condition limiting it to the data plane's own secrets, and cert-manager gets `dns.admin` on the data plane's DNS zones only (through the zones' IAM policies), never on the project.
 - **`<prefix>ServiceAccountUser`**: `iam.serviceAccounts.actAs`, so GKE nodes and workloads can run as the data plane service accounts. IAM conditions are not evaluated for actAs, so this binding is unconditional.
 
-With `byo_iam`, the permissions change. See [Bring your own IAM](#bring-your-own-iam).
+With `byo_iam`, the permissions change. See [Bring your own IAM](#bring-your-own-iam). [Deployment observability](#deployment-observability) adds permissions when you turn it on.
 
 ### Use a project that holds only LangSmith resources
 
-The project is the boundary of the provisioner's access, as the data plane resource group is on Azure. GCP IAM conditions cannot limit service account permissions by account name; they see only the account's numeric ID. So by default, the provisioner's service account permissions (`iam.serviceAccounts.setIamPolicy`, `actAs`) apply to every service account in the project. Through them, the provisioner could act as any of those accounts. Likewise, `artifactregistry.repositories.setIamPolicy` applies to every Artifact Registry repository in the project. Keep other workloads, service accounts and repositories out of the project. [`byo_iam`](#bring-your-own-iam) takes the other service accounts out of the provisioner's reach, but its other permissions still apply to the whole project.
+The project is the boundary of the provisioner's access, as the data plane resource group is on Azure. GCP IAM conditions cannot limit service account permissions by account name; they see only the account's numeric ID. So by default, the provisioner's service account permissions (`iam.serviceAccounts.setIamPolicy`, `actAs`) apply to every service account in the project. Through them, the provisioner could act as any of those accounts. Likewise, `artifactregistry.repositories.setIamPolicy` applies to every Artifact Registry repository in the project, and with [deployment observability](#deployment-observability), the log sink permissions apply to every log in the project. Keep other workloads, service accounts and repositories out of the project. [`byo_iam`](#bring-your-own-iam) takes the other service accounts out of the provisioner's reach, but its other permissions still apply to the whole project.
 
 Custom role IDs are unique per project, so set `custom_role_id_prefix` when more than one copy of the module targets a project.
 
@@ -100,6 +100,8 @@ It also grants `roles/container.admin` on the project to `var.crossplane_service
 
 In-cluster deployment builds are not supported with `byo_iam`. They run as a build service account that the provisioner creates for each data plane.
 
+With `deployment_observability`, the module also grants `langsmith-workload` `roles/monitoring.viewer` on the project and `roles/logging.viewAccessor` with a condition limiting it to log views whose names end in `-smith-logs/views/_AllLogs`, the views of the data planes' log buckets.
+
 In this mode, the provisioner gets:
 
 - **`<prefix>Provisioner`** without `iam.serviceAccounts.create`, `delete`, `update` and `setIamPolicy`. It keeps `get`, `list` and `getIamPolicy`.
@@ -112,6 +114,25 @@ LangSmith still creates the Workload Identity bindings on these accounts, the To
 
 Create the data plane with `byoiam_enabled` set to `true`.
 
+## Deployment observability
+
+Set `deployment_observability = true` before LangSmith turns on deployment observability for a data plane in the project. LangSmith then shows Monitoring charts and searchable runtime and build log history for each LangGraph deployment, and reads them from this project:
+
+- **Metrics:** the data plane's GKE cluster runs Managed Prometheus managed collection, which scrapes the LangGraph deployment pods. Managed Prometheus bills per sample ingested. CPU, memory and restart charts use GKE system metrics, which are free.
+- **Logs:** LangSmith creates a log bucket for each data plane, `<data plane>-smith-logs`, in the data plane's region, and a sink that routes only the LangSmith namespace's container logs from the data plane's cluster to it. The bucket keeps them for 30 days unless LangSmith sets another retention; Cloud Logging bills retention past 30 days. The project's `_Default` bucket keeps its copy, so those logs are stored twice. The bucket is kept, with its logs, if observability is turned off.
+- **Reads:** the LangSmith app's service account gets `roles/logging.viewAccessor` on its data plane's log bucket view only, so it reads no other logs in the project, and `roles/monitoring.viewer` on the project.
+
+The setting makes these changes:
+
+| | Added |
+|---|---|
+| APIs (with `enable_apis`) | `logging.googleapis.com`, `monitoring.googleapis.com` |
+| `<prefix>Provisioner` | `logging.buckets.create`, `logging.buckets.get`, `logging.buckets.update`, `logging.sinks.create`, `logging.sinks.delete`, `logging.sinks.get`, `logging.sinks.update` |
+| `<prefix>ProjectIamGranter` condition (without `byo_iam`) | `roles/logging.viewAccessor` and `roles/monitoring.viewer` join the roles the provisioner may grant. LangSmith grants `roles/logging.viewAccessor` with a condition naming the data plane's log view. Changing the condition replaces the binding. |
+| `langsmith-workload` (with `byo_iam`) | `roles/monitoring.viewer` on the project, and `roles/logging.viewAccessor` with a condition limiting it to the data planes' log views |
+
+Sinks do not support IAM conditions, so the sink permissions apply to every sink in the project: the provisioner could route any of the project's logs to another destination, or change or delete the project's other sinks (not `_Required`). Turn it on only in a project that holds only LangSmith resources.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -123,6 +144,7 @@ Create the data plane with `byoiam_enabled` set to `true`.
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
+| `deployment_observability` | Let LangSmith turn on deployment observability. See [Deployment observability](#deployment-observability). | `false` |
 
 ## Outputs
 
