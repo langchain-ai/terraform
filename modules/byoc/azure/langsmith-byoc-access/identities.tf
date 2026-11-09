@@ -31,8 +31,8 @@ resource "azurerm_user_assigned_identity" "data_plane" {
   tags                = merge(var.tags, each.value.tags)
 }
 
-# The custom blob role of the data plane. The workload identities read and
-# write the trace and SmithDB blobs with it.
+# The custom blob role of the data plane. The blob_objects assignments limit it
+# to the containers of each identity.
 resource "azurerm_role_definition" "blob_objects" {
   for_each = local.byo_iam_data_planes
 
@@ -83,19 +83,63 @@ resource "azurerm_role_assignment" "external_secrets_key_vault" {
   principal_type       = "ServicePrincipal"
 }
 
-# The workload, smithdb, and sandbox identities use the blob containers of the
-# data plane.
+# Blob access per identity, by container. The container names are fixed:
+# langsmith holds the traces, smithdb the SmithDB files, and sandboxes the
+# sandbox data. Each storage account exists only after the data plane does, so
+# the assignments use the resource group as scope, and a condition limits each
+# identity to its containers.
+locals {
+  byo_iam_blob_access = {
+    workload = { read = ["langsmith"], write = ["langsmith"] }
+    smithdb  = { read = ["langsmith", "smithdb"], write = ["smithdb"] }
+    sandbox  = { read = ["sandboxes"], write = ["sandboxes"] }
+  }
+
+  byo_iam_blob_conditions = {
+    for short, access in local.byo_iam_blob_access : short => <<-EOT
+      (
+        !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+        OR
+        (${join(" OR ", [for container in access.read : "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals '${container}'"])})
+      )
+      AND
+      (
+        (
+          !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'})
+          AND
+          !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete'})
+        )
+        OR
+        (${join(" OR ", [for container in access.write : "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals '${container}'"])})
+      )
+    EOT
+  }
+}
+
 resource "azurerm_role_assignment" "blob_objects" {
   for_each = merge([
     for key, dp in local.byo_iam_data_planes : {
-      for short in ["workload", "smithdb", "sandbox"] : "${key}/${short}" => key
+      for short in keys(local.byo_iam_blob_access) : "${key}/${short}" => { data_plane = key, short = short }
     }
   ]...)
 
-  scope              = azurerm_resource_group.data_plane[each.value].id
-  role_definition_id = azurerm_role_definition.blob_objects[each.value].role_definition_resource_id
+  scope              = azurerm_resource_group.data_plane[each.value.data_plane].id
+  role_definition_id = azurerm_role_definition.blob_objects[each.value.data_plane].role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.data_plane[each.key].principal_id
   principal_type     = "ServicePrincipal"
+  condition          = local.byo_iam_blob_conditions[each.value.short]
+  condition_version  = "2.0"
+}
+
+# The workload identity reads the PostgreSQL, Redis, and sandbox storage
+# metrics.
+resource "azurerm_role_assignment" "workload_monitoring" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_resource_group.data_plane[each.key].id
+  role_definition_name = "Monitoring Reader"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/workload"].principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 # LangSmith operates the workloads in the cluster. The cluster does not exist

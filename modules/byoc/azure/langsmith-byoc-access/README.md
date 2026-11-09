@@ -122,6 +122,21 @@ The module then creates the seven data plane identities, the custom blob role `l
 - `byoc-smith-smithdb-identity`
 - `byoc-smith-sandbox-identity`
 
+The role assignments:
+
+| Identity | Role | Scope |
+|---|---|---|
+| `aks` | Network Contributor | resource group |
+| `cert-manager` | DNS Zone Contributor | resource group |
+| `external-secrets` | Key Vault Secrets User | Key Vault |
+| `workload` | Monitoring Reader | resource group |
+| `workload` | blob role, container `langsmith` | resource group, with a condition |
+| `smithdb` | blob role: read `langsmith`, read and write `smithdb` | resource group, with a condition |
+| `sandbox` | blob role, container `sandboxes` | resource group, with a condition |
+| LangSmith application | Azure Kubernetes Service RBAC Cluster Admin | resource group |
+
+The storage accounts and the cluster exist only after the data plane does, so the assignments use the resource group as scope. The conditions keep each identity to its own containers.
+
 LangSmith gets no `User Access Administrator` assignment. Its custom role loses the identity write and delete actions. LangSmith cannot create role assignments, role definitions, or identities. LangSmith still creates the federated identity credentials on the identities, because the AKS OIDC issuer URL exists only after the cluster exists.
 
 Pass `byoiam_enabled: true` in the data plane create request.
