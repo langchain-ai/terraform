@@ -143,9 +143,78 @@ locals {
     "iam.serviceAccounts.setIamPolicy",
   ]
 
+  # With restrict_to_langsmith_names, these permissions leave the provisioner
+  # role for roles of their own, each bound with an IAM condition on the
+  # resource name. Data plane resources are named langsmith-<hash>-<key> and
+  # data plane secrets ls-<data plane>-<key>, so the provisioner can change or
+  # delete only those, not other resources of these kinds in the project.
+  #
+  # Only these services evaluate IAM conditions on resource.name. A condition
+  # that uses an attribute the resource does not provide never grants access,
+  # so the permissions of the other services stay in the provisioner role.
+  #
+  # Creates stay unconditioned for Cloud SQL, GKE and forwarding rules, where
+  # IAM may check them against the parent rather than the new resource. A new
+  # resource cannot change an existing one. Bucket and secret creates are
+  # checked against the new resource's name, so they are conditioned too.
+  name_fenced_roles = {
+    CloudSql = {
+      title       = "Cloud SQL"
+      expression  = "resource.name.extract(\"/instances/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["cloudsql.instances.delete", "cloudsql.instances.update"]
+    }
+    Gke = {
+      title = "GKE"
+      # Node pool changes are checked against their cluster.
+      expression  = "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["container.clusters.delete", "container.clusters.update"]
+    }
+    ForwardingRules = {
+      title      = "forwarding rules"
+      expression = "resource.name.extract(\"/forwardingRules/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "compute.forwardingRules.delete",
+        "compute.forwardingRules.pscDelete",
+        "compute.forwardingRules.pscSetLabels",
+        "compute.forwardingRules.pscUpdate",
+        "compute.forwardingRules.setLabels",
+      ]
+    }
+    # Buckets, their objects and managed folders. Cloud Storage resource names
+    # have _ in place of the project.
+    Storage = {
+      title      = "Cloud Storage"
+      expression = "resource.name.startsWith(\"projects/_/buckets/langsmith-\")"
+      permissions = [
+        "storage.buckets.create",
+        "storage.buckets.delete",
+        "storage.buckets.setIamPolicy",
+        "storage.buckets.update",
+        "storage.managedFolders.create",
+        "storage.managedFolders.delete",
+        "storage.managedFolders.setIamPolicy",
+        "storage.objects.delete",
+      ]
+    }
+    # Secret Manager names hold the project number, and versions are
+    # <secret>/versions/<n>, so the condition matches the secret ID.
+    SecretManager = {
+      title       = "Secret Manager"
+      expression  = "resource.name.extract(\"/secrets/{name}\").startsWith(\"ls-\")"
+      permissions = ["secretmanager.secrets.create", "secretmanager.secrets.delete", "secretmanager.versions.add"]
+    }
+  }
+
+  name_fenced_permissions = flatten([for role in values(local.name_fenced_roles) : role.permissions])
+
+  provisioner_removed_permissions = concat(
+    var.byo_iam ? local.byo_iam_removed_permissions : [],
+    var.restrict_to_langsmith_names ? local.name_fenced_permissions : [],
+  )
+
   provisioner_permissions = (
-    var.byo_iam
-    ? sort(setsubtract(local.base_provisioner_permissions, local.byo_iam_removed_permissions))
+    length(local.provisioner_removed_permissions) > 0
+    ? sort(setsubtract(local.base_provisioner_permissions, local.provisioner_removed_permissions))
     : local.base_provisioner_permissions
   )
 
@@ -254,6 +323,33 @@ resource "google_project_iam_member" "provisioner" {
   project = var.project_id
   role    = google_project_iam_custom_role.provisioner.name
   member  = "serviceAccount:${google_service_account.provisioner.email}"
+}
+
+resource "google_project_iam_custom_role" "name_fenced" {
+  for_each = var.restrict_to_langsmith_names ? local.name_fenced_roles : {}
+
+  project     = var.project_id
+  role_id     = "${var.custom_role_id_prefix}Named${each.key}"
+  title       = "LangSmith BYOC provisioner: ${each.value.title}"
+  description = "Changes and deletes ${each.value.title} resources of LangSmith BYOC data planes. The binding limits it to data plane names."
+  stage       = "BETA"
+  permissions = each.value.permissions
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "name_fenced" {
+  for_each = var.restrict_to_langsmith_names ? local.name_fenced_roles : {}
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.name_fenced[each.key].name
+  member  = "serviceAccount:${google_service_account.provisioner.email}"
+
+  condition {
+    title       = "langsmith-data-plane-names"
+    description = "LangSmith data plane ${each.value.title} resources only"
+    expression  = each.value.expression
+  }
 }
 
 resource "google_project_iam_member" "service_account_user" {
