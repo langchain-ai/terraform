@@ -1,4 +1,29 @@
 locals {
+  bedrock_assume_role_statements = [
+    {
+      Sid      = "AssumeBedrockRoles"
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole"]
+      Resource = ["arn:${local.partition}:iam::*:role/*"]
+      Condition = {
+        StringEquals = { "iam:ResourceTag/LangSmithBedrock" = "true" }
+        Null         = { "sts:ExternalId" = "false" }
+      }
+    },
+    {
+      Sid      = "TagBedrockRoleSessions"
+      Effect   = "Allow"
+      Action   = ["sts:TagSession"]
+      Resource = ["arn:${local.partition}:iam::*:role/*"]
+      Condition = {
+        StringEquals = { "iam:ResourceTag/LangSmithBedrock" = "true" }
+        "ForAllValues:StringEquals" = { "aws:TagKeys" = [
+          "eks-cluster-arn", "eks-cluster-name", "kubernetes-namespace",
+          "kubernetes-service-account", "kubernetes-pod-name", "kubernetes-pod-uid"
+        ] }
+      }
+    }
+  ]
   regional_condition = { StringEquals = { "aws:RequestedRegion" = sort(tolist(var.regions)) } }
   s3_condition       = { StringEquals = { "s3:ResourceAccount" = local.account_id } }
   rds_secret_arns = [for region in sort(tolist(var.regions)) :
@@ -185,7 +210,7 @@ locals {
           "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/*",
           "arn:${local.partition}:bedrock:*:${local.account_id}:application-inference-profile/*"
         ]
-    }], local.migration_source_blob_statements)
+    }], local.bedrock_assume_role_statements, local.migration_source_blob_statements)
     postgres-setup-iam-role = local.setup_statements["postgres-setup-iam-role"]
     smithdb-setup-iam-role  = local.setup_statements["smithdb-setup-iam-role"]
     smithdb-iam-role = concat(local.s3_statements["smithdb-iam-role"], [
@@ -248,6 +273,7 @@ locals {
         "arn:${local.partition}:elasticache:${region}:${local.account_id}:user:*-smith-juicefs-redis-user"
       ]])
     }])
+    playground-iam-role = local.bedrock_assume_role_statements
     privatelink-lambda-role = [
       {
         Sid    = "ManageEKSAPITargets"
