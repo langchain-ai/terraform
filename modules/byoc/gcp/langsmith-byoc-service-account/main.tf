@@ -146,38 +146,92 @@ locals {
   # With restrict_to_langsmith_names, these permissions leave the provisioner
   # role for roles of their own, each bound with an IAM condition on the
   # resource name. Data plane resources are named langsmith-<hash>-<key> and
-  # data plane secrets ls-<data plane>-<key>, so the provisioner can change or
-  # delete only those, not other resources of these kinds in the project.
+  # data plane secrets ls-<data plane>-<key>, so the provisioner can create,
+  # change or delete only those, not other resources of these kinds in the
+  # project.
   #
-  # Only these services evaluate IAM conditions on resource.name. A condition
-  # that uses an attribute the resource does not provide never grants access,
-  # so the permissions of the other services stay in the provisioner role.
-  #
-  # Creates stay unconditioned for Cloud SQL, GKE and forwarding rules, where
-  # IAM may check them against the parent rather than the new resource. A new
-  # resource cannot change an existing one. Bucket and secret creates are
-  # checked against the new resource's name, so they are conditioned too.
+  # Each kind here was checked in a test project on 2026-11-09: a langsmith-
+  # name was allowed and any other name denied. A condition that uses an
+  # attribute the resource does not provide never grants access, so kinds
+  # whose IAM checks carry no resource name (Artifact Registry repositories,
+  # Cloud DNS, Cloud SQL databases, Service Directory, servicenetworking)
+  # stay in the provisioner role. Creates of networks, subnets, routers,
+  # addresses, global addresses, service connection policies and PSC
+  # forwarding rules (pscCreate) were not checked and stay unconditioned; a
+  # new resource cannot change an existing one.
   name_fenced_roles = {
     CloudSql = {
       title       = "Cloud SQL"
       expression  = "resource.name.extract(\"/instances/{name}\").startsWith(\"langsmith-\")"
-      permissions = ["cloudsql.instances.delete", "cloudsql.instances.update"]
+      permissions = ["cloudsql.instances.create", "cloudsql.instances.delete", "cloudsql.instances.update"]
     }
     Gke = {
       title = "GKE"
       # Node pool changes are checked against their cluster.
       expression  = "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\")"
-      permissions = ["container.clusters.delete", "container.clusters.update"]
+      permissions = ["container.clusters.create", "container.clusters.delete", "container.clusters.update"]
     }
     ForwardingRules = {
       title      = "forwarding rules"
       expression = "resource.name.extract(\"/forwardingRules/{name}\").startsWith(\"langsmith-\")"
       permissions = [
+        "compute.forwardingRules.create",
         "compute.forwardingRules.delete",
         "compute.forwardingRules.pscDelete",
         "compute.forwardingRules.pscSetLabels",
         "compute.forwardingRules.pscUpdate",
         "compute.forwardingRules.setLabels",
+      ]
+    }
+    Networks = {
+      title      = "VPC networks"
+      expression = "resource.name.extract(\"/networks/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "compute.networks.addPeering",
+        "compute.networks.delete",
+        "compute.networks.removePeering",
+        "compute.networks.update",
+        "compute.networks.updatePeering",
+        "compute.networks.updatePolicy",
+      ]
+    }
+    Subnetworks = {
+      title      = "subnets"
+      expression = "resource.name.extract(\"/subnetworks/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "compute.subnetworks.delete",
+        "compute.subnetworks.setPrivateIpGoogleAccess",
+        "compute.subnetworks.update",
+      ]
+    }
+    # Cloud Routers, and the Cloud NAT configured on them.
+    Routers = {
+      title       = "Cloud Routers"
+      expression  = "resource.name.extract(\"/routers/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["compute.routers.delete", "compute.routers.update"]
+    }
+    # Regional addresses. The compute.globalAddresses permissions (the private
+    # services access range) were not checked and stay in the provisioner role.
+    Addresses = {
+      title      = "addresses"
+      expression = "resource.name.extract(\"/addresses/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "compute.addresses.delete",
+        "compute.addresses.deleteInternal",
+        "compute.addresses.setLabels",
+      ]
+    }
+    RedisClusters = {
+      title       = "Memorystore for Redis Cluster"
+      expression  = "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["redis.clusters.create", "redis.clusters.delete", "redis.clusters.update"]
+    }
+    ConnectionPolicies = {
+      title      = "service connection policies"
+      expression = "resource.name.extract(\"/serviceConnectionPolicies/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "networkconnectivity.serviceConnectionPolicies.delete",
+        "networkconnectivity.serviceConnectionPolicies.update",
       ]
     }
     # Buckets, their objects and managed folders. Cloud Storage resource names

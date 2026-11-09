@@ -9,7 +9,7 @@ Provisions the service account in **your GCP project** that the LangSmith contro
 | `var.service_account_id` (default `langsmith-byoc-provisioner`) | The identity the control plane provisions data planes as. |
 | Custom roles `<prefix>Provisioner`, `<prefix>ProjectIamGranter`, `<prefix>ServiceAccountUser` | Exactly the permissions data plane provisioning and teardown use, bound to the service account. See [Permissions](#permissions). With `byo_iam`, only `<prefix>Provisioner`, with fewer permissions. |
 | Data plane service accounts, their project roles, and the custom role `<prefix>ServiceAccountIamManager` | Only with `byo_iam`. See [Bring your own IAM](#bring-your-own-iam). |
-| Custom roles `<prefix>NamedCloudSql`, `<prefix>NamedGke`, `<prefix>NamedForwardingRules`, `<prefix>NamedStorage`, `<prefix>NamedSecretManager` | Only with `restrict_to_langsmith_names`. See [Limit changes to data plane names](#limit-changes-to-data-plane-names). |
+| Custom roles `<prefix>Named<kind>` (one per kind in the table under [Limit changes to data plane names](#limit-changes-to-data-plane-names)) | Only with `restrict_to_langsmith_names`. See [Limit changes to data plane names](#limit-changes-to-data-plane-names). |
 | Token Creator on that service account | Lets `var.crossplane_service_account`, the LangSmith control plane, impersonate it. No other LangSmith identity is trusted. |
 | Project APIs | Enables the APIs data planes use. Set `enable_apis = false` if you manage the project's APIs elsewhere. |
 
@@ -84,34 +84,38 @@ If the project also holds resources that are not LangSmith's, set `restrict_to_l
 
 > **CAUTION:** Data planes created before LangSmith named resources `langsmith-` have other names. The provisioner can't update or delete their resources of these kinds, so they can't be upgraded or torn down. Set this only in a project whose data planes were all created with the `langsmith-` names, or recreate the older data planes first.
 
-The permissions below move from `<prefix>Provisioner` to a role per service. Each role is bound with an IAM condition on the resource name:
+The permissions below move from `<prefix>Provisioner` to a role per kind. Each role is bound with an IAM condition on the resource name:
 
 | Role | Permissions | Condition |
 |------|-------------|-----------|
-| `<prefix>NamedCloudSql` | `cloudsql.instances.delete`, `update` | `resource.name.extract("/instances/{name}").startsWith("langsmith-")` |
-| `<prefix>NamedGke` | `container.clusters.delete`, `update` (node pool changes are checked against their cluster) | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
-| `<prefix>NamedForwardingRules` | `compute.forwardingRules.delete`, `setLabels`, `pscDelete`, `pscSetLabels`, `pscUpdate` | `resource.name.extract("/forwardingRules/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedCloudSql` | `cloudsql.instances.create`, `delete`, `update` | `resource.name.extract("/instances/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedGke` | `container.clusters.create`, `delete`, `update` (node pool changes are checked against their cluster) | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedForwardingRules` | `compute.forwardingRules.create`, `delete`, `setLabels`, `pscDelete`, `pscSetLabels`, `pscUpdate` | `resource.name.extract("/forwardingRules/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedNetworks` | `compute.networks.delete`, `update`, `updatePolicy`, `addPeering`, `removePeering`, `updatePeering` | `resource.name.extract("/networks/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedSubnetworks` | `compute.subnetworks.delete`, `update`, `setPrivateIpGoogleAccess` | `resource.name.extract("/subnetworks/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedRouters` | `compute.routers.delete`, `update` (Cloud NAT is configured on the router) | `resource.name.extract("/routers/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedAddresses` | `compute.addresses.delete`, `deleteInternal`, `setLabels` | `resource.name.extract("/addresses/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedRedisClusters` | `redis.clusters.create`, `delete`, `update` | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedConnectionPolicies` | `networkconnectivity.serviceConnectionPolicies.delete`, `update` | `resource.name.extract("/serviceConnectionPolicies/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedStorage` | `storage.buckets.create`, `delete`, `update`, `setIamPolicy`; `storage.managedFolders.create`, `delete`, `setIamPolicy`; `storage.objects.delete` | `resource.name.startsWith("projects/_/buckets/langsmith-")` |
 | `<prefix>NamedSecretManager` | `secretmanager.secrets.create`, `delete`; `secretmanager.versions.add` | `resource.name.extract("/secrets/{name}").startsWith("ls-")` |
 
-The provisioner keeps the `get` and `list` permissions of these kinds. It keeps the Cloud SQL, GKE and forwarding rule `create` permissions unconditioned. IAM may check those against the project rather than the new resource, and a new resource cannot change an existing one.
+Each kind was checked in a test project: a `langsmith-` name was allowed and any other name denied. The provisioner keeps the `get`, `list` and `use` permissions of these kinds. It also keeps unconditioned the creates that were not checked: networks, subnets, routers, addresses, global addresses (`compute.globalAddresses.*`, the private services access range), service connection policies and PSC forwarding rules (`pscCreate`). A new resource cannot change an existing one.
 
 Name your own resources of these kinds so they don't start with `langsmith-`, and your own secrets so their IDs don't start with `ls-`.
 
-The module grants no `createTagBinding` permission. A project-wide `createTagBinding` would let the provisioner tag a resource that is not LangSmith's, so any future grant of it must have the same name conditions.
+The module grants no `createTagBinding` permission. A project-wide `createTagBinding` would let the provisioner tag a resource that is not LangSmith's and then change it under a tag condition. Compute Engine checks `createTagBinding` against the resource's numeric ID, so a name condition can't narrow it for networks, subnets, routers or addresses.
 
-Only some Google Cloud services check IAM conditions against resource names. A condition never grants a permission on a resource that doesn't provide its name, so these stay unconditioned in `<prefix>Provisioner`, and the provisioner can still change or delete any resource of these kinds in the project:
+These kinds don't carry the resource name in their IAM checks, so a name condition can't narrow them. They stay unconditioned in `<prefix>Provisioner`, and the provisioner can still change or delete any resource of these kinds in the project:
 
-- VPC networks, subnets, addresses and Cloud Routers (Cloud NAT)
-- Memorystore for Redis Cluster
 - Artifact Registry repositories
-- Cloud DNS managed zones
-- Service connection policies (`networkconnectivity`) and Service Directory
-- Private services access connections (`servicenetworking`)
-- Cloud SQL databases. The condition on instances does not cover them.
+- Cloud DNS managed zones and record sets
+- Cloud SQL databases. They do follow a tag on their instance, but LangSmith doesn't tag its instances yet.
+- Service Directory
+- Private services access connections (`servicenetworking`) and global addresses
 - Service accounts. Use [`byo_iam`](#bring-your-own-iam) to take them out of the provisioner's reach.
 
-Use a dedicated project for a full boundary. As a partial measure, you can tag your own resources with a protected tag and add an IAM deny policy, or a condition such as `!resource.matchTag(...)`, for the provisioner. Taggable kinds then follow the tag, and kinds that can't be tagged are not protected. Do not put the tag on the project, because resources inherit project tags.
+Use a dedicated project for a full boundary. As a partial measure, tag your own resources of the kinds above with a protected tag and add a condition such as `!resource.matchTag(...)` to the provisioner's bindings, or an IAM deny policy. Artifact Registry repositories and Cloud SQL instances can be tagged; Cloud DNS managed zones can't, so they stay unprotected. Do not put the tag on the project, because resources inherit project tags.
 
 The setting needs no other provider than the module's Google provider `~> 6.0`.
 
@@ -161,7 +165,7 @@ Create the data plane with `byoiam_enabled` set to `true`.
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
-| `restrict_to_langsmith_names` | Limit the provisioner's changes and deletes of Cloud SQL instances, GKE clusters, forwarding rules, Cloud Storage and Secret Manager secrets to data plane names. See [Limit changes to data plane names](#limit-changes-to-data-plane-names). | `false` |
+| `restrict_to_langsmith_names` | Limit the provisioner's creates, changes and deletes of the kinds listed under Limit changes to data plane names to data plane names. See [Limit changes to data plane names](#limit-changes-to-data-plane-names). | `false` |
 
 ## Outputs
 

@@ -36,7 +36,7 @@ variable "enable_apis" {
 }
 
 variable "custom_role_id_prefix" {
-  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, and with restrict_to_langsmith_names NamedCloudSql, NamedGke, NamedForwardingRules, NamedStorage, NamedSecretManager)."
+  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, and with restrict_to_langsmith_names Named<kind> roles such as NamedCloudSql and NamedNetworks)."
   type        = string
   default     = "langsmithByoc"
 
@@ -53,7 +53,7 @@ variable "byo_iam" {
 }
 
 variable "restrict_to_langsmith_names" {
-  description = "Limit the provisioner's changes and deletes of Cloud SQL instances, GKE clusters, forwarding rules, Cloud Storage buckets and Secret Manager secrets to the data plane names (langsmith- and, for secrets, ls-). Only for projects whose data planes were all created with those names. See the README."
+  description = "Limit the provisioner's creates, changes and deletes of Cloud SQL instances, GKE clusters, forwarding rules, VPC networks, subnets, Cloud Routers, addresses, Memorystore for Redis Cluster, service connection policies, Cloud Storage buckets and Secret Manager secrets to the data plane names (langsmith- and, for secrets, ls-). Only for projects whose data planes were all created with those names. See the README."
   type        = bool
   default     = false
 }
