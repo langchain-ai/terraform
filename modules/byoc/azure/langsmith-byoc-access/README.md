@@ -112,15 +112,15 @@ data_planes = {
 }
 ```
 
-The module then creates the seven data plane identities, the custom blob role `langsmith-byoc-<key>-blob-<suffix>`, and their role assignments. The identity names are fixed:
+The module then creates the seven data plane identities, the custom blob role `langsmith-byoc-<key>-blob-<suffix>`, and their role assignments. The identity names are fixed, and LangSmith uses the same names when it creates the identities:
 
-- `byoc-smith-aks-identity`
-- `byoc-smith-cert-manager-identity`
-- `byoc-smith-external-secrets-identity`
-- `byoc-smith-workload-identity`
-- `byoc-smith-postgres-setup-identity`
-- `byoc-smith-smithdb-identity`
-- `byoc-smith-sandbox-identity`
+- `langsmith-aks`
+- `langsmith-cert-manager`
+- `langsmith-external-secrets`
+- `langsmith-workload`
+- `langsmith-postgres-setup`
+- `langsmith-smithdb`
+- `langsmith-sandbox`
 
 The role assignments:
 

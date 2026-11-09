@@ -5,18 +5,12 @@ locals {
   }
 }
 
-data "azurerm_resources" "engine_identities" {
-  for_each = local.engine_foundry_data_planes
-
-  resource_group_name = "langsmith-byoc-${each.key}"
-  type                = "Microsoft.ManagedIdentity/userAssignedIdentities"
-}
-
-# LangSmith names it <prefix>-smith-workload-identity.
+# The workload identity of the data plane. With byo_iam this module creates
+# it; otherwise LangSmith does, with the same name.
 data "azurerm_user_assigned_identity" "engine" {
   for_each = local.engine_foundry_data_planes
 
-  name                = one([for identity in data.azurerm_resources.engine_identities[each.key].resources : identity.name if endswith(identity.name, "-smith-workload-identity")])
+  name                = "langsmith-workload"
   resource_group_name = "langsmith-byoc-${each.key}"
 }
 

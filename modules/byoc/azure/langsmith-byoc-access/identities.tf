@@ -8,7 +8,8 @@ locals {
   byo_iam_data_planes = { for key, dp in var.data_planes : key => dp if dp.byo_iam }
 
   # The identities that a data plane needs. LangSmith expects the exact name
-  # byoc-smith-<short>-identity for each of them.
+  # langsmith-<short> for each of them, the same name that it uses when it
+  # creates them.
   byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox"]
 
   byo_iam_identities = merge([
@@ -25,7 +26,7 @@ locals {
 resource "azurerm_user_assigned_identity" "data_plane" {
   for_each = local.byo_iam_identities
 
-  name                = "byoc-smith-${each.value.short}-identity"
+  name                = "langsmith-${each.value.short}"
   resource_group_name = azurerm_resource_group.data_plane[each.value.data_plane].name
   location            = azurerm_resource_group.data_plane[each.value.data_plane].location
   tags                = merge(var.tags, each.value.tags)
