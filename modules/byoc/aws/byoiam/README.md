@@ -46,8 +46,8 @@ Engine: the shared workload role includes native Bedrock inference and Mantle
 access, and trusts Engine service accounts. Engine remains opt-in per data plane.
 
 Playground: the playground role can only assume other roles, such as Bedrock
-roles, and only with an external ID. Those roles trust it instead of the
-shared workload role.
+roles, that are tagged `LangSmithPlayground=true`, and only with an external ID.
+Those roles trust it instead of the shared workload role.
 
 The outputs expose the shared role names and ARNs, Karpenter instance profile
 name, and Karpenter controller policy ARN.

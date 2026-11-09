@@ -248,22 +248,34 @@ locals {
         "arn:${local.partition}:elasticache:${region}:${local.account_id}:user:*-smith-juicefs-redis-user"
       ]])
     }])
-    # Playground runs user-provided code, so it may only assume roles, such as
-    # Bedrock roles, and only with an external ID. Pod Identity session tags are
-    # transitive, so AssumeRole also needs sts:TagSession.
+    # Playground runs user-provided code, so it may only assume roles tagged
+    # LangSmithPlayground=true, such as Bedrock roles, and only with an external
+    # ID. The tag keeps roles that trust the account root out of reach. Pod
+    # Identity session tags are transitive, so AssumeRole also needs
+    # sts:TagSession, limited to those keys.
     playground-iam-role = [
       {
-        Sid       = "AssumeRolesWithExternalId"
-        Effect    = "Allow"
-        Action    = ["sts:AssumeRole"]
-        Resource  = ["arn:${local.partition}:iam::*:role/*"]
-        Condition = { Null = { "sts:ExternalId" = "false" } }
+        Sid      = "AssumeTaggedRolesWithExternalId"
+        Effect   = "Allow"
+        Action   = ["sts:AssumeRole"]
+        Resource = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = {
+          StringEquals = { "iam:ResourceTag/LangSmithPlayground" = "true" }
+          Null         = { "sts:ExternalId" = "false" }
+        }
       },
       {
         Sid      = "TagAssumedRoleSessions"
         Effect   = "Allow"
         Action   = ["sts:TagSession"]
         Resource = ["arn:${local.partition}:iam::*:role/*"]
+        Condition = {
+          StringEquals = { "iam:ResourceTag/LangSmithPlayground" = "true" }
+          "ForAllValues:StringEquals" = { "aws:TagKeys" = [
+            "eks-cluster-arn", "eks-cluster-name", "kubernetes-namespace",
+            "kubernetes-service-account", "kubernetes-pod-name", "kubernetes-pod-uid"
+          ] }
+        }
       }
     ]
     privatelink-lambda-role = [
