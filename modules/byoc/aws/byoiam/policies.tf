@@ -1,5 +1,4 @@
 locals {
-  # Pod Identity session tags are transitive, so AssumeRole also needs sts:TagSession.
   bedrock_assume_role_statements = [
     {
       Sid      = "AssumeBedrockRoles"
