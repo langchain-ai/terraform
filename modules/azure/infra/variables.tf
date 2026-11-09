@@ -1453,7 +1453,7 @@ variable "smithdb_metastore_admin_username" {
 
 variable "smithdb_metastore_admin_password" {
   type        = string
-  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used."
+  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used. Required when enable_smithdb = true and azure_environment = \"usgovernment\", where SmithDB's Entra token scope is the commercial one (LG-913). With SmithDB off, it can stay null in any cloud."
   sensitive   = true
   default     = null
   nullable    = true
