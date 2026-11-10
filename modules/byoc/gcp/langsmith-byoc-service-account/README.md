@@ -83,8 +83,6 @@ Custom role IDs are unique per project, so set `custom_role_id_prefix` when more
 
 The provisioner can create, change and delete only the data plane's own resources of the kinds below, found by name. LangSmith names every data plane resource `langsmith-<hash>-<key>` and every data plane secret `ls-<data plane>-<key>`. With `byo_iam`, the project roles of the data plane service accounts and of the LangSmith control plane are limited by name too. See [With `byo_iam`](#with-byo_iam).
 
-> **IMPORTANT:** If the project also holds resources that are not LangSmith's, set [`byo_iam = true`](#bring-your-own-iam). Without `byo_iam`, the provisioner can grant the data plane roles on the project (`<prefix>ProjectIamGranter`). An IAM condition limits which roles it grants but not to whom, and those roles include `roles/container.admin`, `roles/cloudsql.admin` and `roles/secretmanager.secretAccessor` on the whole project. By granting one to itself, the provisioner could reach every GKE cluster, Cloud SQL instance or secret in the project, whatever its name. With `byo_iam`, the provisioner has no project IAM writes, and the roles it could reach by acting as a data plane service account are limited by name too, except as listed under [What names can't limit](#what-names-cant-limit).
-
 > **CAUTION:** Data planes created before LangSmith named resources `langsmith-` have other names. The provisioner can't update or delete their resources of these kinds, so they can't be upgraded or torn down. Use this module version only in a project whose data planes were all created with the `langsmith-` names, or recreate the older data planes first.
 
 The permissions below are in a role per kind, not in `<prefix>Provisioner`. Each role is bound with an IAM condition on the resource name:
@@ -130,6 +128,7 @@ The Crossplane condition is `resource.name.extract("/clusters/{name}").startsWit
 
 These IAM checks carry no resource name, or a name LangSmith doesn't choose, so a name condition can't narrow them. In a project shared with your own resources, LangSmith's identities can still do the following:
 
+- **Project role grants.** Without `byo_iam`, the provisioner grants the data plane service accounts their project roles (`<prefix>ProjectIamGranter`). An IAM condition limits which roles it can grant, but not to whom, and the grants are project-wide.
 - **Kubernetes API through IP-based endpoints.** The control plane's Crossplane service account can still send Kubernetes requests, as `roles/container.admin`, to any GKE cluster in the project whose IP-based control plane endpoint it can reach. To protect your own clusters, give them a private IP-based endpoint, or authorized networks that leave out the LangSmith control plane. Their DNS-based endpoints are covered by the condition.
 - **Artifact Registry.** The provisioner can change or delete any repository and set its IAM policy. `langsmith-node` and `langsmith-sandbox-host` can read every repository (`roles/artifactregistry.reader`).
 - **Cloud DNS** managed zones and record sets.

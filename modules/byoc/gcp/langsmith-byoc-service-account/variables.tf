@@ -47,7 +47,7 @@ variable "custom_role_id_prefix" {
 }
 
 variable "byo_iam" {
-  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Recommended when the project also holds resources that are not LangSmith's. Set it before you create data planes in the project."
+  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Set it before you create data planes in the project."
   type        = bool
   default     = false
 }
