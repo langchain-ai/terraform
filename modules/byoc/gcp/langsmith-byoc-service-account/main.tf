@@ -150,15 +150,18 @@ locals {
   # change or delete only those, not other resources of these kinds in the
   # project.
   #
-  # Each kind here was checked in a test project on 2026-11-09: a langsmith-
-  # name was allowed and any other name denied. A condition that uses an
-  # attribute the resource does not provide never grants access, so kinds
-  # whose IAM checks carry no resource name (Artifact Registry repositories,
-  # Cloud DNS, Cloud SQL databases, Service Directory, servicenetworking)
-  # stay in the provisioner role. Creates of networks, subnets, routers,
-  # addresses, global addresses, service connection policies and PSC
-  # forwarding rules (pscCreate) were not checked and stay unconditioned; a
-  # new resource cannot change an existing one.
+  # Each permission here was checked in a test project on 2026-11-09: a
+  # langsmith- name was allowed and any other name denied. A condition that
+  # uses an attribute the resource does not provide never grants access, so
+  # kinds whose IAM checks carry no resource name (Artifact Registry
+  # repositories, Cloud DNS, Cloud SQL databases, Service Directory,
+  # servicenetworking) stay in the provisioner role.
+  #
+  # Creating a subnet or Cloud Router checks compute.networks.updatePolicy on
+  # its network, and creating a global address checks compute.networks.use, so
+  # the network fence also keeps the provisioner from adding them to a network
+  # that is not LangSmith's. The use permissions are checked against the
+  # subnet, address or network that a new resource refers to.
   name_fenced_roles = {
     CloudSql = {
       title       = "Cloud SQL"
@@ -177,6 +180,7 @@ locals {
       permissions = [
         "compute.forwardingRules.create",
         "compute.forwardingRules.delete",
+        "compute.forwardingRules.pscCreate",
         "compute.forwardingRules.pscDelete",
         "compute.forwardingRules.pscSetLabels",
         "compute.forwardingRules.pscUpdate",
@@ -188,37 +192,50 @@ locals {
       expression = "resource.name.extract(\"/networks/{name}\").startsWith(\"langsmith-\")"
       permissions = [
         "compute.networks.addPeering",
+        "compute.networks.create",
         "compute.networks.delete",
         "compute.networks.removePeering",
         "compute.networks.update",
         "compute.networks.updatePeering",
         "compute.networks.updatePolicy",
+        "compute.networks.use",
       ]
     }
     Subnetworks = {
       title      = "subnets"
       expression = "resource.name.extract(\"/subnetworks/{name}\").startsWith(\"langsmith-\")"
       permissions = [
+        "compute.subnetworks.create",
         "compute.subnetworks.delete",
         "compute.subnetworks.setPrivateIpGoogleAccess",
         "compute.subnetworks.update",
+        "compute.subnetworks.use",
       ]
     }
     # Cloud Routers, and the Cloud NAT configured on them.
     Routers = {
       title       = "Cloud Routers"
       expression  = "resource.name.extract(\"/routers/{name}\").startsWith(\"langsmith-\")"
-      permissions = ["compute.routers.delete", "compute.routers.update"]
+      permissions = ["compute.routers.create", "compute.routers.delete", "compute.routers.update"]
     }
-    # Regional addresses. The compute.globalAddresses permissions (the private
-    # services access range) were not checked and stay in the provisioner role.
+    # Regional addresses, and the global address of the private services
+    # access range: both names end in /addresses/<name>.
     Addresses = {
       title      = "addresses"
       expression = "resource.name.extract(\"/addresses/{name}\").startsWith(\"langsmith-\")"
       permissions = [
+        "compute.addresses.create",
+        "compute.addresses.createInternal",
         "compute.addresses.delete",
         "compute.addresses.deleteInternal",
         "compute.addresses.setLabels",
+        "compute.addresses.use",
+        "compute.addresses.useInternal",
+        "compute.globalAddresses.create",
+        "compute.globalAddresses.createInternal",
+        "compute.globalAddresses.delete",
+        "compute.globalAddresses.deleteInternal",
+        "compute.globalAddresses.setLabels",
       ]
     }
     RedisClusters = {
@@ -226,10 +243,13 @@ locals {
       expression  = "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\")"
       permissions = ["redis.clusters.create", "redis.clusters.delete", "redis.clusters.update"]
     }
+    # Creating a policy checks no permission on its network, so the provisioner
+    # can still create a langsmith- policy in any network in the project.
     ConnectionPolicies = {
       title      = "service connection policies"
       expression = "resource.name.extract(\"/serviceConnectionPolicies/{name}\").startsWith(\"langsmith-\")"
       permissions = [
+        "networkconnectivity.serviceConnectionPolicies.create",
         "networkconnectivity.serviceConnectionPolicies.delete",
         "networkconnectivity.serviceConnectionPolicies.update",
       ]
@@ -356,10 +376,12 @@ resource "google_project_iam_custom_role" "project_iam_granter" {
 }
 
 # Data planes run GKE nodes and workloads as service accounts the provisioner
-# creates. IAM conditions are not evaluated for actAs, so this role is
-# unconditional. The provisioner can only create and grant within the limits
-# above. With byo_iam, the provisioner gets actAs on the node service accounts
-# only, so the role and its binding are not created.
+# creates. IAM checks on a service account carry only its numeric unique ID,
+# not its email, and the provisioner creates these accounts, so no condition
+# can single them out and this role is unconditional. The provisioner can only
+# create and grant within the limits above. With byo_iam, the provisioner gets
+# actAs on the node service accounts only, so the role and its binding are not
+# created.
 resource "google_project_iam_custom_role" "service_account_user" {
   count = var.byo_iam ? 0 : 1
 
@@ -385,7 +407,7 @@ resource "google_project_iam_custom_role" "name_fenced" {
   project     = var.project_id
   role_id     = "${var.custom_role_id_prefix}Named${each.key}"
   title       = "LangSmith BYOC provisioner: ${each.value.title}"
-  description = "Changes and deletes ${each.value.title} resources of LangSmith BYOC data planes. The binding limits it to data plane names."
+  description = "Creates, changes and deletes ${each.value.title} resources of LangSmith BYOC data planes. The binding limits it to data plane names."
   stage       = "BETA"
   permissions = each.value.permissions
 
@@ -494,10 +516,12 @@ locals {
       roles        = []
       act_as       = false
     }
+    # With restrict_to_langsmith_names, the narrower roles below replace
+    # roles/cloudsql.admin.
     "langsmith-postgres-setup" = {
       display_name = "LangSmith Postgres setup"
       description  = "Sets up the data plane Cloud SQL databases"
-      roles        = ["roles/cloudsql.admin"]
+      roles        = var.restrict_to_langsmith_names ? ["roles/cloudsql.viewer"] : ["roles/cloudsql.admin"]
       act_as       = false
     }
     "langsmith-node" = {
@@ -520,6 +544,39 @@ locals {
       for role in sa.roles : "${name}/${role}" => { account = name, role = role }
     }
   ]...)
+
+  # With restrict_to_langsmith_names, these grants are limited to the data
+  # plane resources by name. Each was checked in a test project on 2026-11-09:
+  # cloudsql.instances.get, connect (the Cloud SQL connectors) and login (IAM
+  # database authentication), and redis.clusters.connect, were allowed on a
+  # langsmith- instance or cluster and denied on any other.
+  byo_iam_role_conditions = var.restrict_to_langsmith_names ? {
+    "roles/cloudsql.client"        = local.name_fenced_roles.CloudSql.expression
+    "roles/cloudsql.instanceUser"  = local.name_fenced_roles.CloudSql.expression
+    "roles/cloudsql.viewer"        = local.name_fenced_roles.CloudSql.expression
+    "roles/redis.dbConnectionUser" = local.name_fenced_roles.RedisClusters.expression
+  } : {}
+
+  # The postgres-setup Job lists and creates database users and sets the
+  # postgres password (gcloud sql users list, create, set-password). IAM
+  # checks of Cloud SQL users carry no instance name, so these permissions
+  # reach every instance in the project. They replace roles/cloudsql.admin,
+  # which could also change, export or delete any instance. The Job reads its
+  # instance through roles/cloudsql.viewer, limited by name above.
+  postgres_setup_permissions = [
+    "cloudsql.users.create",
+    "cloudsql.users.list",
+    "cloudsql.users.update",
+  ]
+
+  # Kubernetes API requests to GKE are authorized by IAM with an empty
+  # resource name, so a condition on the cluster name alone denies them on
+  # every cluster. The condition below limits the GKE API (getting
+  # credentials, changing or deleting a cluster) and the clusters' DNS-based
+  # endpoints, which LangSmith uses, to langsmith- clusters. Through a
+  # cluster's IP-based endpoint, Kubernetes requests are still allowed on
+  # every cluster in the project that the control plane can reach.
+  crossplane_container_admin_condition = "${local.name_fenced_roles.Gke.expression} || resource.name == \"\""
 }
 
 resource "google_service_account" "byo_iam" {
@@ -539,6 +596,37 @@ resource "google_project_iam_member" "byo_iam" {
   project = var.project_id
   role    = each.value.role
   member  = "serviceAccount:${google_service_account.byo_iam[each.value.account].email}"
+
+  dynamic "condition" {
+    for_each = contains(keys(local.byo_iam_role_conditions), each.value.role) ? [local.byo_iam_role_conditions[each.value.role]] : []
+
+    content {
+      title       = "langsmith-data-plane-names"
+      description = "LangSmith data plane resources only"
+      expression  = condition.value
+    }
+  }
+}
+
+resource "google_project_iam_custom_role" "postgres_setup" {
+  count = var.byo_iam && var.restrict_to_langsmith_names ? 1 : 0
+
+  project     = var.project_id
+  role_id     = "${var.custom_role_id_prefix}PostgresSetup"
+  title       = "LangSmith BYOC Postgres setup"
+  description = "Creates the database users of LangSmith BYOC data planes and sets the postgres password"
+  stage       = "BETA"
+  permissions = local.postgres_setup_permissions
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "postgres_setup" {
+  count = var.byo_iam && var.restrict_to_langsmith_names ? 1 : 0
+
+  project = var.project_id
+  role    = google_project_iam_custom_role.postgres_setup[0].name
+  member  = "serviceAccount:${google_service_account.byo_iam["langsmith-postgres-setup"].email}"
 }
 
 # External Secrets reads only the data plane secrets, whose IDs start with
@@ -559,13 +647,24 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
 }
 
 # The control plane's Crossplane service account reaches the data plane GKE
-# clusters through this role.
+# clusters through this role. With restrict_to_langsmith_names, it is limited
+# as described at crossplane_container_admin_condition.
 resource "google_project_iam_member" "byo_iam_crossplane_container_admin" {
   count = var.byo_iam ? 1 : 0
 
   project = var.project_id
   role    = "roles/container.admin"
   member  = "serviceAccount:${var.crossplane_service_account}"
+
+  dynamic "condition" {
+    for_each = var.restrict_to_langsmith_names ? [local.crossplane_container_admin_condition] : []
+
+    content {
+      title       = "langsmith-data-plane-clusters"
+      description = "LangSmith data plane GKE clusters, and Kubernetes API requests"
+      expression  = condition.value
+    }
+  }
 }
 
 resource "google_project_iam_custom_role" "service_account_iam_manager" {
