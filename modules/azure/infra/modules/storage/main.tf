@@ -179,4 +179,28 @@ resource "azurerm_storage_management_policy" "lifecycle_policy" {
       }
     }
   }
+
+  # Backstop for redaction rules: LangSmith writes the unredacted large fields of
+  # projects that redact at ingestion under ttl_1d/ and deletes them once their
+  # runs are done. This rule removes any it could not, with their snapshots and
+  # versions.
+  rule {
+    name    = "redaction-raw"
+    enabled = true
+    filters {
+      prefix_match = ["${var.container_name}/ttl_1d"]
+      blob_types   = ["blockBlob"]
+    }
+    actions {
+      base_blob {
+        delete_after_days_since_creation_greater_than = 1
+      }
+      snapshot {
+        delete_after_days_since_creation_greater_than = 1
+      }
+      version {
+        delete_after_days_since_creation = 1
+      }
+    }
+  }
 }

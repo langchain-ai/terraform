@@ -83,6 +83,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
       days = var.s3_ttl_long_days
     }
   }
+
+  # Backstop for redaction rules: LangSmith writes the unredacted large fields of
+  # projects that redact at ingestion under ttl_1d/ and deletes them once their
+  # runs are done. This rule removes any it could not, including the previous
+  # versions when versioning is on. S3 expires in whole days, so an object can
+  # live for up to about two days.
+  rule {
+    id     = "redaction-raw"
+    status = "Enabled"
+    filter {
+      prefix = "ttl_1d/"
+    }
+    expiration {
+      days = 1
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
 }
 
 # Bucket policy: only the LangSmith IRSA role, and only via the VPC Gateway
