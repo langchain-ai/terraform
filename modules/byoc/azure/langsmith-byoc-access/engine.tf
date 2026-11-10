@@ -5,7 +5,7 @@ locals {
   }
 }
 
-# Without byo_iam, LangSmith creates the workload identity.
+# Without byo_iam, LangSmith creates this identity.
 data "azurerm_user_assigned_identity" "engine" {
   for_each = { for key, data_plane in local.engine_foundry_data_planes : key => data_plane if !data_plane.byo_iam }
 

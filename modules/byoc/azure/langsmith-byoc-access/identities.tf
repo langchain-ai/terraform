@@ -1,15 +1,11 @@
-# Everything in this file exists once per data plane with byo_iam = true. You
-# create the data plane identities and their role assignments here, so
-# LangSmith needs no User Access Administrator assignment. LangSmith still
-# creates the federated identity credentials on the identities: the AKS OIDC
-# issuer URL exists only after the cluster exists.
+# One set per data plane with byo_iam = true. LangSmith creates only the
+# federated identity credentials, because the AKS OIDC issuer exists only
+# after the cluster.
 
 locals {
   byo_iam_data_planes = { for key, dp in var.data_planes : key => dp if dp.byo_iam }
 
-  # The identities that a data plane needs. LangSmith expects the exact name
-  # langsmith-<short>-identity for each of them, the same name that it uses when it
-  # creates them.
+  # LangSmith expects the name langsmith-<short>-identity.
   byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox"]
 
   byo_iam_identities = merge([
@@ -32,8 +28,7 @@ resource "azurerm_user_assigned_identity" "data_plane" {
   tags                = merge(var.tags, each.value.tags)
 }
 
-# The custom blob role of the data plane. The blob_objects assignments limit it
-# to the containers of each identity.
+# The blob_objects conditions limit this role to the containers of each identity.
 resource "azurerm_role_definition" "blob_objects" {
   for_each = local.byo_iam_data_planes
 
@@ -52,9 +47,7 @@ resource "azurerm_role_definition" "blob_objects" {
   }
 }
 
-# The AKS identity manages the network of the cluster. The VNet does not exist
-# yet, so the assignment is at resource group scope. The resource group holds
-# one data plane only.
+# The VNet does not exist yet, so the scope is the resource group.
 resource "azurerm_role_assignment" "aks_network" {
   for_each = local.byo_iam_data_planes
 
@@ -64,7 +57,7 @@ resource "azurerm_role_assignment" "aks_network" {
   principal_type       = "ServicePrincipal"
 }
 
-# cert-manager writes DNS records for its certificate challenges.
+# cert-manager writes the DNS records for certificate challenges.
 resource "azurerm_role_assignment" "cert_manager_dns" {
   for_each = local.byo_iam_data_planes
 
@@ -74,7 +67,7 @@ resource "azurerm_role_assignment" "cert_manager_dns" {
   principal_type       = "ServicePrincipal"
 }
 
-# external-secrets reads the secret that the control plane writes.
+# external-secrets reads the control plane secret.
 resource "azurerm_role_assignment" "external_secrets_key_vault" {
   for_each = local.byo_iam_data_planes
 
@@ -84,11 +77,8 @@ resource "azurerm_role_assignment" "external_secrets_key_vault" {
   principal_type       = "ServicePrincipal"
 }
 
-# Blob access per identity, by container. The container names are fixed:
-# langsmith holds the traces, smithdb the SmithDB files, and sandboxes the
-# sandbox data. Each storage account exists only after the data plane does, so
-# the assignments use the resource group as scope, and a condition limits each
-# identity to its containers.
+# Blob access per identity and container. The storage accounts do not exist
+# yet, so the scope is the resource group and a condition sets the containers.
 locals {
   byo_iam_blob_access = {
     workload = { read = ["langsmith"], write = ["langsmith"] }
@@ -132,8 +122,7 @@ resource "azurerm_role_assignment" "blob_objects" {
   condition_version  = "2.0"
 }
 
-# The workload identity reads the PostgreSQL, Redis, and sandbox storage
-# metrics.
+# The workload identity reads the data store metrics.
 resource "azurerm_role_assignment" "workload_monitoring" {
   for_each = local.byo_iam_data_planes
 
@@ -143,8 +132,8 @@ resource "azurerm_role_assignment" "workload_monitoring" {
   principal_type       = "ServicePrincipal"
 }
 
-# LangSmith operates the workloads in the cluster. The cluster does not exist
-# yet; an assignment at resource group scope applies to it.
+# LangSmith runs the cluster workloads. The cluster does not exist yet, so the
+# scope is the resource group.
 resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
   for_each = local.byo_iam_data_planes
 
