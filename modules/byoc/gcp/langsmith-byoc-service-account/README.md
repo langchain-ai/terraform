@@ -80,7 +80,7 @@ With `byo_iam`, the permissions change. See [Bring your own IAM](#bring-your-own
 
 The project is the boundary of the provisioner's access, as the data plane resource group is on Azure. GCP IAM conditions cannot limit service account permissions by account name: IAM checks a service account as `projects/-/serviceAccounts/<numeric unique ID>`, whether the request names it by email or by ID. So by default, the provisioner's service account permissions (`iam.serviceAccounts.setIamPolicy`, `actAs`) apply to every service account in the project. Through them, the provisioner could act as any of those accounts. Likewise, `artifactregistry.repositories.setIamPolicy` applies to every Artifact Registry repository in the project, and with [deployment observability](#deployment-observability), the log sink permissions apply to every log in the project. The project IAM granter's condition limits only which roles the provisioner grants, not to whom or with what condition, so the provisioner could grant itself `secretmanager.secretAccessor` on every secret in the project, and with deployment observability, `logging.viewAccessor` on every log. Keep other workloads, service accounts and repositories out of the project. [`byo_iam`](#bring-your-own-iam) takes the other service accounts out of the provisioner's reach, but its other permissions still apply to the whole project.
 
-Custom role IDs are unique per project, so set `custom_role_id_prefix` when more than one copy of the module targets a project.
+Apply one copy of this module per project: it creates the project's `managed_by` tag key, which can exist only once. Custom role IDs are unique per project, so set `custom_role_id_prefix` if the project already has roles with the default IDs.
 
 ### Limit changes to data plane names
 
@@ -128,7 +128,7 @@ The provisioner can set the IAM policies of the six data plane service accounts,
 
 The LangSmith control plane installs LangSmith into each data plane cluster through the cluster's DNS-based endpoint, as `var.crossplane_service_account`. GKE authorizes Kubernetes API requests through IAM with an empty resource name, so a condition on the cluster name can't limit them. A condition on a tag of the cluster does:
 
-- The module creates the tag `managed_by: langsmith` in the project, and lets the provisioner use that value (`roles/resourcemanager.tagUser` on it).
+- The module creates the tag `managed_by: langsmith` in the project, and lets the provisioner use that value (`roles/resourcemanager.tagUser` on it). The project must not already have a `managed_by` tag key, and holds one copy of the module.
 - LangSmith binds the tag to each data plane cluster it creates. The provisioner can bind it only to `langsmith-` clusters (`<prefix>NamedGke`), and can't tag the project, whose tags every cluster would inherit.
 - `roles/container.admin` for `var.crossplane_service_account` has the condition `resource.matchTagId(<key>, <value>)`. It covers the GKE API and the Kubernetes API, through both the DNS-based and the IP-based endpoints, on tagged clusters only.
 - The DNS-based endpoint checks `container.clusters.connect` without the cluster's tags, so `<prefix>ClusterConnect` grants that permission alone, limited to `langsmith-` cluster names. Connecting gives no access inside a cluster.
