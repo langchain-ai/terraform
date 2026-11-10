@@ -135,8 +135,7 @@ resource "azurerm_role_assignment" "workload_monitoring" {
 # Deployment observability. host-backend reads the deployment logs and metrics
 # as the workload identity, and the metrics collector writes metrics as its own
 # identity. The workspaces and the data collection rule do not exist yet, so the
-# scope is the resource group. LangSmith checks these grants when it creates a
-# data plane with byo_iam.
+# scope is the resource group. LangSmith uses them only when observability is on.
 resource "azurerm_role_assignment" "workload_observability" {
   for_each = merge([
     for key, dp in local.byo_iam_data_planes : {
