@@ -105,3 +105,27 @@ output "langsmith_image_pull_secret_service_accounts" {
   description = "The service accounts in the LangSmith namespace that carry langsmith_image_pull_secret_name as imagePullSecrets. Empty without one."
   value       = local.langsmith_image_pull_secret_service_accounts
 }
+
+output "sandbox_juicefs_redis" {
+  description = "The in-cluster JuiceFS Redis: its Service, image, arguments, volume size and storage class reclaim policy, or null when this module runs none."
+  value = one([
+    for ss in kubernetes_stateful_set_v1.sandbox_juicefs_redis : {
+      service        = kubernetes_service_v1.sandbox_juicefs_redis[0].metadata[0].name
+      image          = ss.spec[0].template[0].spec[0].container[0].image
+      args           = ss.spec[0].template[0].spec[0].container[0].args
+      memory_limit   = ss.spec[0].template[0].spec[0].container[0].resources[0].limits["memory"]
+      storage        = ss.spec[0].volume_claim_template[0].spec[0].resources[0].requests["storage"]
+      reclaim_policy = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].reclaim_policy
+    }
+  ])
+}
+
+output "sandbox_juicefs_redis_node_ingress" {
+  description = "Address prefixes and ports the node-subnet NetworkPolicy admits to the in-cluster JuiceFS Redis, or null when this module creates none."
+  value = one([
+    for p in kubernetes_network_policy_v1.sandbox_juicefs_redis_from_nodes : {
+      cidrs = [for f in p.spec[0].ingress[0].from : f.ip_block[0].cidr]
+      ports = [for port in p.spec[0].ingress[0].ports : "${port.protocol}/${port.port}"]
+    }
+  ])
+}

@@ -66,8 +66,24 @@ locals {
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
   # The chart names sandbox-host's service account <fullname>-sandbox-host.
-  sandbox_host_service_account = "${local.langsmith_release_fullname}-sandbox-host"
-  sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+  sandbox_host_service_account     = "${local.langsmith_release_fullname}-sandbox-host"
+  sandbox_juicefs_redis_name       = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+  sandbox_juicefs_redis_amr        = var.enable_sandboxes && var.sandbox_juicefs_redis_source == "amr"
+  sandbox_juicefs_redis_in_cluster = var.enable_sandboxes && var.sandbox_juicefs_redis_source == "in-cluster"
+  # The in-cluster Redis's Service, in the LangSmith namespace. sandbox-host
+  # resolves it through cluster DNS (dnsPolicy ClusterFirstWithHostNet).
+  sandbox_juicefs_redis_service = "sandbox-juicefs-redis"
+  sandbox_juicefs_metaurl = !var.enable_sandboxes ? null : (
+    var.sandbox_juicefs_redis_source == "amr" ? "${module.sandbox_juicefs_redis[0].connection_url}/0" :
+    var.sandbox_juicefs_redis_source == "in-cluster" ? "redis://:${random_password.sandbox_juicefs_redis[0].result}@${local.sandbox_juicefs_redis_service}.${var.langsmith_namespace}.svc.cluster.local:6379/1" :
+    var.sandbox_juicefs_redis_url
+  )
+  # Replaces the write-only JuiceFS config Secret when the Redis behind it
+  # changes: the AMR resource ID, or a digest of the URL for the other sources,
+  # so a new password or a new external URL is written without a revision bump.
+  sandbox_juicefs_redis_id = !var.enable_sandboxes ? null : (
+    local.sandbox_juicefs_redis_amr ? module.sandbox_juicefs_redis[0].id : "${var.sandbox_juicefs_redis_source}:${try(sha256(local.sandbox_juicefs_metaurl), "unset")}"
+  )
 
   # JuiceFS reads the container from the first label of the bucket host and the
   # account from access-key, so the bucket is https://<container>.core.windows.net,
@@ -487,7 +503,7 @@ locals {
     !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24) ? "" : "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly.",
     length(local.postgres_name) <= 63 ? "" : "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly.",
     length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
-    !var.enable_sandboxes || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
+    !local.sandbox_juicefs_redis_amr || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
     !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
   ])
 }
@@ -1056,11 +1072,17 @@ resource "terraform_data" "validate_network" {
       error_message = "additional_node_pools.sandboxhost replaces the generated sandbox-host pool, so it needs node_labels \"sandbox.langsmith.com/host\" = \"true\" and node_taints \"sandbox.langsmith.com/host=true:NoSchedule\". Without them sandbox-host never schedules."
     }
 
-    # JuiceFS metadata lives in Azure Managed Redis, which Azure Government does
-    # not offer; see redis_source.
+    # sandbox_juicefs_redis_source = amr provisions Azure Managed Redis for the
+    # JuiceFS metadata, which Azure Government does not offer; see redis_source.
+    # The in-cluster and external sources need no AMR.
     precondition {
-      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment")
-      error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
+      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment" && var.sandbox_juicefs_redis_source == "amr")
+      error_message = "enable_sandboxes = true with sandbox_juicefs_redis_source = amr provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer. Set sandbox_juicefs_redis_source = in-cluster for a Redis in the cluster, or external with sandbox_juicefs_redis_url for one you run."
+    }
+
+    precondition {
+      condition     = !(var.enable_sandboxes && var.sandbox_juicefs_redis_source == "external" && nonsensitive(var.sandbox_juicefs_redis_url == null))
+      error_message = "sandbox_juicefs_redis_source = external needs sandbox_juicefs_redis_url, the JuiceFS metadata URL of your Redis. Set TF_VAR_sandbox_juicefs_redis_url or put it in secrets.auto.tfvars."
     }
 
     # SmithDB requests its Entra token for the metastore with the commercial
@@ -2079,7 +2101,7 @@ check "sandbox_pool_on_attached_cluster" {
 }
 
 module "sandbox_juicefs_redis" {
-  count                   = var.enable_sandboxes ? 1 : 0
+  count                   = local.sandbox_juicefs_redis_amr ? 1 : 0
   source                  = "./modules/redis"
   name                    = local.sandbox_juicefs_redis_name
   location                = var.location
@@ -2097,6 +2119,14 @@ module "sandbox_juicefs_redis" {
   cluster_location        = var.redis_location
 
   tags = local.common_tags
+}
+
+# With sandbox_juicefs_redis_source = in-cluster, k8s-bootstrap runs the Redis
+# and requires this password. It is in state, as the AMR access key is.
+resource "random_password" "sandbox_juicefs_redis" {
+  count   = local.sandbox_juicefs_redis_in_cluster ? 1 : 0
+  length  = 40
+  special = false
 }
 
 # JuiceFS data goes in its own container in the LangSmith Blob account, and
@@ -2406,7 +2436,8 @@ module "k8s_bootstrap" {
   tags                             = local.common_tags
 
   # Sandboxes. No account key: the format Job and sandbox-host reach Blob
-  # through workload identity. AMR serves database 0 only.
+  # through workload identity. AMR serves database 0 only; the in-cluster Redis
+  # is dedicated, so database 1 keeps JuiceFS off the default database anyway.
   enable_sandboxes            = var.enable_sandboxes
   platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
   network_policy_engine       = module.aks.network_policy_engine
@@ -2414,13 +2445,18 @@ module "k8s_bootstrap" {
   sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
   sandbox_juicefs_config = var.enable_sandboxes ? {
     name         = var.sandbox_juicefs_name
-    metaurl      = "${module.sandbox_juicefs_redis[0].connection_url}/0"
+    metaurl      = local.sandbox_juicefs_metaurl
     storage      = "wasb"
     bucket       = local.sandbox_juicefs_bucket
     "access-key" = module.blob.storage_account_name
   } : {}
-  sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
-  sandbox_juicefs_redis_id        = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].id : null
+  sandbox_juicefs_config_revision  = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id         = local.sandbox_juicefs_redis_id
+  sandbox_juicefs_redis_in_cluster = local.sandbox_juicefs_redis_in_cluster
+  sandbox_juicefs_redis_password   = local.sandbox_juicefs_redis_in_cluster ? random_password.sandbox_juicefs_redis[0].result : null
+  sandbox_juicefs_redis_image      = var.sandbox_juicefs_redis_image
+  sandbox_juicefs_redis_storage_gb = var.sandbox_juicefs_redis_storage_gb
+  sandbox_juicefs_redis_memory_mb  = var.sandbox_juicefs_redis_memory_mb
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.

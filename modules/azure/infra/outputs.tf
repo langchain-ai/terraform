@@ -401,5 +401,10 @@ output "sandbox_juicefs_container_name" {
 
 output "sandbox_juicefs_redis_name" {
   description = "Azure Managed Redis cluster holding JuiceFS metadata."
-  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+  value       = local.sandbox_juicefs_redis_amr ? local.sandbox_juicefs_redis_name : null
+}
+
+output "sandbox_juicefs_redis_source" {
+  description = "Where the JuiceFS metadata Redis runs (amr, in-cluster or external), or null when sandboxes are off. helm/scripts/deploy.sh reads it to apply the Cilium policy for the in-cluster Redis."
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_redis_source : null
 }

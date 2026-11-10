@@ -525,6 +525,241 @@ resource "kubernetes_secret_v1" "sandbox_juicefs" {
   }
 }
 
+# ── In-cluster JuiceFS metadata Redis ─────────────────────────────────────────
+# With sandbox_juicefs_redis_source = in-cluster, for clouds without Azure
+# Managed Redis. Dedicated rather than the chart's Redis, which snapshots only
+# and is shared with the queues: losing this one loses every sandbox
+# filesystem. One replica, an append-only file synced every second, noeviction
+# so a full Redis refuses writes instead of dropping metadata, and maxmemory
+# below the container limit so Redis refuses before the kernel kills it. The
+# disk is retained when the claim is deleted.
+locals {
+  sandbox_juicefs_redis_name   = "sandbox-juicefs-redis"
+  sandbox_juicefs_redis_labels = { "app.kubernetes.io/name" = "sandbox-juicefs-redis", "app.kubernetes.io/part-of" = "langsmith-sandboxes" }
+}
+
+resource "kubernetes_storage_class_v1" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster ? 1 : 0
+
+  metadata {
+    name = "sandbox-juicefs-redis-retain"
+  }
+
+  storage_provisioner    = "disk.csi.azure.com"
+  reclaim_policy         = "Retain"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+  parameters = {
+    skuName = "Premium_LRS"
+  }
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster ? 1 : 0
+
+  metadata {
+    name      = local.sandbox_juicefs_redis_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    labels    = local.sandbox_juicefs_redis_labels
+  }
+
+  data = {
+    password = var.sandbox_juicefs_redis_password
+  }
+
+  type = "Opaque"
+
+  lifecycle {
+    precondition {
+      condition     = var.sandbox_juicefs_redis_password != null
+      error_message = "The in-cluster JuiceFS Redis needs a password, and none was passed."
+    }
+  }
+}
+
+resource "kubernetes_service_v1" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster ? 1 : 0
+
+  metadata {
+    name      = local.sandbox_juicefs_redis_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    labels    = local.sandbox_juicefs_redis_labels
+  }
+
+  spec {
+    selector = local.sandbox_juicefs_redis_labels
+    port {
+      name        = "redis"
+      port        = 6379
+      target_port = "redis"
+      protocol    = "TCP"
+    }
+  }
+}
+
+resource "kubernetes_stateful_set_v1" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster ? 1 : 0
+
+  metadata {
+    name      = local.sandbox_juicefs_redis_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    labels    = local.sandbox_juicefs_redis_labels
+  }
+
+  # The image pull and volume provisioning happen after the apply, beside the
+  # chart's own pods; deploy.sh's rollout wait covers the namespace.
+  wait_for_rollout = false
+
+  spec {
+    replicas     = 1
+    service_name = kubernetes_service_v1.sandbox_juicefs_redis[0].metadata[0].name
+
+    selector {
+      match_labels = local.sandbox_juicefs_redis_labels
+    }
+
+    template {
+      metadata {
+        labels = local.sandbox_juicefs_redis_labels
+      }
+
+      spec {
+        automount_service_account_token = false
+
+        # The redis image's user. fs_group gives it the volume.
+        security_context {
+          run_as_user     = 999
+          run_as_group    = 999
+          run_as_non_root = true
+          fs_group        = 999
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
+        container {
+          name  = "redis"
+          image = var.sandbox_juicefs_redis_image
+          args = [
+            "redis-server",
+            "--appendonly", "yes",
+            "--appendfsync", "everysec",
+            "--maxmemory-policy", "noeviction",
+            "--maxmemory", "${floor(var.sandbox_juicefs_redis_memory_mb * 0.8)}mb",
+            "--requirepass", "$(REDIS_PASSWORD)",
+            "--dir", "/data",
+          ]
+
+          env {
+            name = "REDIS_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.sandbox_juicefs_redis[0].metadata[0].name
+                key  = "password"
+              }
+            }
+          }
+
+          port {
+            name           = "redis"
+            container_port = 6379
+            protocol       = "TCP"
+          }
+
+          readiness_probe {
+            tcp_socket {
+              port = "redis"
+            }
+            period_seconds = 10
+          }
+
+          resources {
+            requests = {
+              cpu    = "100m"
+              memory = "${var.sandbox_juicefs_redis_memory_mb}Mi"
+            }
+            limits = {
+              memory = "${var.sandbox_juicefs_redis_memory_mb}Mi"
+            }
+          }
+
+          security_context {
+            allow_privilege_escalation = false
+            read_only_root_filesystem  = true
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
+
+          volume_mount {
+            name       = "data"
+            mount_path = "/data"
+          }
+        }
+      }
+    }
+
+    volume_claim_template {
+      metadata {
+        name = "data"
+      }
+      spec {
+        access_modes       = ["ReadWriteOnce"]
+        storage_class_name = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].metadata[0].name
+        resources {
+          requests = {
+            storage = "${var.sandbox_juicefs_redis_storage_gb}Gi"
+          }
+        }
+      }
+    }
+  }
+}
+
+# sandbox-host runs on the host network, so it reaches the Redis from a node
+# IP, as it reaches platform-backend (above). The format Job runs in the
+# namespace and is admitted by allow-from-ingress. Cilium on AKS never matches
+# a node IP by ipBlock, so there helm/scripts/deploy.sh applies the twin.
+resource "kubernetes_network_policy_v1" "sandbox_juicefs_redis_from_nodes" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster && var.network_policy_engine != "cilium" ? 1 : 0
+
+  metadata {
+    name      = "allow-nodes-to-sandbox-redis"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {
+      match_labels = local.sandbox_juicefs_redis_labels
+    }
+
+    ingress {
+      dynamic "from" {
+        for_each = var.node_subnet_cidrs
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
+      ports {
+        port     = "6379"
+        protocol = "TCP"
+      }
+    }
+
+    policy_types = ["Ingress"]
+  }
+
+  lifecycle {
+    precondition {
+      # An ingress rule with ports and no peers admits every source.
+      condition     = length(var.node_subnet_cidrs) > 0
+      error_message = "The NetworkPolicy admitting sandbox-host to the JuiceFS Redis needs the AKS node subnet's address prefixes, and none were found."
+    }
+  }
+}
+
 # ── cert-manager ──────────────────────────────────────────────────────────────
 # TLS automation infrastructure. Manages Let's Encrypt certificates.
 # ClusterIssuers are applied separately by helm/scripts/deploy.sh.
