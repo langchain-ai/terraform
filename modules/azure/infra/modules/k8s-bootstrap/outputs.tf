@@ -114,7 +114,8 @@ output "sandbox_juicefs_redis" {
       image          = ss.spec[0].template[0].spec[0].container[0].image
       args           = ss.spec[0].template[0].spec[0].container[0].args
       memory_limit   = ss.spec[0].template[0].spec[0].container[0].resources[0].limits["memory"]
-      storage        = ss.spec[0].volume_claim_template[0].spec[0].resources[0].requests["storage"]
+      storage        = kubernetes_persistent_volume_claim_v1.sandbox_juicefs_redis[0].spec[0].resources[0].requests["storage"]
+      claim          = ss.spec[0].template[0].spec[0].volume[0].persistent_volume_claim[0].claim_name
       reclaim_policy = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].reclaim_policy
     }
   ])

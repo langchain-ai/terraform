@@ -597,6 +597,32 @@ resource "kubernetes_service_v1" "sandbox_juicefs_redis" {
   }
 }
 
+# A standalone claim rather than a volume_claim_template: a template is
+# immutable, so a size change would recreate the StatefulSet and still leave
+# the bound claim at its old size. This claim grows in place through the
+# expansion-enabled class. Bound when the pod first schedules.
+resource "kubernetes_persistent_volume_claim_v1" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster ? 1 : 0
+
+  metadata {
+    name      = "${local.sandbox_juicefs_redis_name}-data"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    labels    = local.sandbox_juicefs_redis_labels
+  }
+
+  wait_until_bound = false
+
+  spec {
+    access_modes       = ["ReadWriteOnce"]
+    storage_class_name = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].metadata[0].name
+    resources {
+      requests = {
+        storage = "${var.sandbox_juicefs_redis_storage_gb}Gi"
+      }
+    }
+  }
+}
+
 resource "kubernetes_stateful_set_v1" "sandbox_juicefs_redis" {
   count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster ? 1 : 0
 
@@ -696,19 +722,11 @@ resource "kubernetes_stateful_set_v1" "sandbox_juicefs_redis" {
             mount_path = "/data"
           }
         }
-      }
-    }
 
-    volume_claim_template {
-      metadata {
-        name = "data"
-      }
-      spec {
-        access_modes       = ["ReadWriteOnce"]
-        storage_class_name = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].metadata[0].name
-        resources {
-          requests = {
-            storage = "${var.sandbox_juicefs_redis_storage_gb}Gi"
+        volume {
+          name = "data"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim_v1.sandbox_juicefs_redis[0].metadata[0].name
           }
         }
       }

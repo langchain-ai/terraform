@@ -1079,7 +1079,8 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
     Azure Managed Redis is not offered, such as Azure Government. It writes an append-only file synced every second,
     runs `noeviction` with `maxmemory` at 80% of `sandbox_juicefs_redis_memory_mb` (default `1024`), and requires a
     password Terraform generates. Its volume, `sandbox_juicefs_redis_storage_gb` (default `16`), is a Premium SSD
-    claim on the `sandbox-juicefs-redis-retain` class, so deleting the claim keeps the disk. The disk is in the
+    claim, `sandbox-juicefs-redis-data`, on the `sandbox-juicefs-redis-retain` class. Raising the size grows the
+    disk in place on the next apply; a claim cannot shrink. Deleting the claim keeps the disk. The disk is in the
     cluster's node resource group, so deleting the cluster deletes it. It runs one replica with no failover: a node
     loss stops sandboxes until the pod reschedules and reattaches its disk, which a zonal disk does only in its own
     zone. Back the disk up, for example with Azure Backup for AKS or a disk snapshot schedule.

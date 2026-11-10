@@ -1587,7 +1587,7 @@ variable "sandbox_juicefs_redis_url" {
 
 variable "sandbox_juicefs_redis_storage_gb" {
   type        = number
-  description = "Size in GB of the in-cluster JuiceFS Redis volume, which holds the append-only file and the snapshots it is rewritten from. Used only with sandbox_juicefs_redis_source = in-cluster. JuiceFS needs about 300 bytes of memory per file, and the files on disk run to a few times the memory in use."
+  description = "Size in GB of the in-cluster JuiceFS Redis volume, which holds the append-only file and the snapshots it is rewritten from. Used only with sandbox_juicefs_redis_source = in-cluster. JuiceFS needs about 300 bytes of memory per file, and the files on disk run to a few times the memory in use. Raising it grows the claim and its disk in place on the next apply; Kubernetes cannot shrink a claim, so a lower value fails the apply."
   default     = 16
 
   validation {

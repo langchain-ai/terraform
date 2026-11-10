@@ -448,6 +448,10 @@ run "in_cluster_juicefs_redis_persists_and_never_evicts" {
     error_message = "The in-cluster JuiceFS Redis volume is not a retained 16Gi claim with a 1024Mi limit: ${jsonencode(module.k8s_bootstrap.sandbox_juicefs_redis)}"
   }
   assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.claim == "sandbox-juicefs-redis-data"
+    error_message = "The in-cluster JuiceFS Redis does not mount the standalone claim sandbox-juicefs-redis-data, which is what lets the size change in place"
+  }
+  assert {
     condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "docker.io/redis:7" && module.k8s_bootstrap.sandbox_juicefs_redis.service == local.sandbox_juicefs_redis_service
     error_message = "The in-cluster JuiceFS Redis image is not the chart's redis:7, or its Service is not the one the metaurl names"
   }
