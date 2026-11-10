@@ -10,7 +10,7 @@ locals {
 data "azurerm_user_assigned_identity" "engine" {
   for_each = local.engine_foundry_data_planes
 
-  name                = "langsmith-workload"
+  name                = "langsmith-workload-identity"
   resource_group_name = "langsmith-byoc-${each.key}"
 }
 
