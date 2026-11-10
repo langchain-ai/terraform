@@ -307,7 +307,7 @@ The zone names are Microsoft's recommended names from the [private endpoint DNS 
 
 Limits in Azure Government:
 
-- **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
+- **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run. The same applies to the Sandboxes JuiceFS Redis: with `enable_sandboxes = true`, set `sandbox_juicefs_redis_source = "in-cluster"` or `"external"`. See [Sandboxes](#sandboxes)
 - **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
 - **SmithDB metastore needs a password.** SmithDB requests its Entra token for the commercial Azure scope, which a Government Flexible Server refuses (LG-913), so `enable_smithdb = true` without `TF_VAR_smithdb_metastore_admin_password` is refused at plan. See [SMITHDB.md](SMITHDB.md)
 - **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
@@ -1079,9 +1079,10 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
     Azure Managed Redis is not offered, such as Azure Government. It writes an append-only file synced every second,
     runs `noeviction` with `maxmemory` at 80% of `sandbox_juicefs_redis_memory_mb` (default `1024`), and requires a
     password Terraform generates. Its volume, `sandbox_juicefs_redis_storage_gb` (default `16`), is a Premium SSD
-    claim on the `sandbox-juicefs-redis-retain` class, so deleting the claim keeps the disk. It runs one replica with
-    no failover: a node loss stops sandboxes until the pod reschedules and reattaches its disk, which a zonal disk
-    does only in its own zone. Back the disk up, for example with Azure Backup for AKS or a disk snapshot schedule.
+    claim on the `sandbox-juicefs-redis-retain` class, so deleting the claim keeps the disk. The disk is in the
+    cluster's node resource group, so deleting the cluster deletes it. It runs one replica with no failover: a node
+    loss stops sandboxes until the pod reschedules and reattaches its disk, which a zonal disk does only in its own
+    zone. Back the disk up, for example with Azure Backup for AKS or a disk snapshot schedule.
     The image defaults to the chart's own `docker.io/redis:7`; behind a mirror, set `sandbox_juicefs_redis_image`.
   - `external`: a Redis you run, given by `sandbox_juicefs_redis_url` (`redis://` or `rediss://`, in
     `secrets.auto.tfvars`). It must run `noeviction`, should write an append-only file, and must accept connections
