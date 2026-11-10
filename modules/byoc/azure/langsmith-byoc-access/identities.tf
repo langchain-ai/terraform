@@ -154,3 +154,41 @@ resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
   principal_type       = "ServicePrincipal"
   description          = var.external_id
 }
+
+# LangSmith can write federated identity credentials on the identities. These
+# Azure built-in policies deny a credential unless its issuer is the OIDC
+# issuer of an AKS cluster in your tenant and in the region of the data plane.
+# The LangSmith custom role cannot change policy assignments. Both policies are
+# in preview.
+resource "azurerm_resource_group_policy_assignment" "fic_issuer_types" {
+  for_each = local.byo_iam_data_planes
+
+  name                 = "langsmith-fic-issuer-types"
+  display_name         = "LangSmith BYOC: federated credentials from AKS only"
+  resource_group_id    = azurerm_resource_group.data_plane[each.key].id
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/2571b7c3-3056-4a61-b00a-9bc5232234f5"
+
+  parameters = jsonencode({
+    effect                    = { value = "Deny" }
+    allowFederatedCredentials = { value = true }
+    allowAKS                  = { value = true }
+    allowGitHub               = { value = false }
+    allowAWS                  = { value = false }
+    allowGCS                  = { value = false }
+  })
+}
+
+resource "azurerm_resource_group_policy_assignment" "fic_aks_sources" {
+  for_each = local.byo_iam_data_planes
+
+  name                 = "langsmith-fic-aks-sources"
+  display_name         = "LangSmith BYOC: federated credentials from AKS in this tenant and region"
+  resource_group_id    = azurerm_resource_group.data_plane[each.key].id
+  policy_definition_id = "/providers/Microsoft.Authorization/policyDefinitions/ae62c456-33de-4dc8-b100-7ce9028a7d99"
+
+  parameters = jsonencode({
+    effect           = { value = "Deny" }
+    allowedTenants   = { value = [data.azurerm_client_config.current.tenant_id] }
+    allowedLocations = { value = [lower(replace(azurerm_resource_group.data_plane[each.key].location, " ", ""))] }
+  })
+}

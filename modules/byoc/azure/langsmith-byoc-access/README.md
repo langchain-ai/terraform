@@ -139,6 +139,13 @@ The storage accounts and the cluster exist only after the data plane does, so th
 
 LangSmith gets no `User Access Administrator` assignment. Its custom role loses the identity write and delete actions. LangSmith cannot create role assignments, role definitions, or identities. LangSmith still creates the federated identity credentials on the identities, because the AKS OIDC issuer URL exists only after the cluster exists.
 
+The module assigns two Azure built-in policies to the resource group with the effect `Deny`. They allow a federated identity credential only when its issuer is the OIDC issuer of an AKS cluster in your tenant and in the region of the data plane. LangSmith cannot change policy assignments. Both policies are in preview.
+
+| Policy assignment | Built-in policy |
+|---|---|
+| `langsmith-fic-issuer-types` | Managed Identity Federated Credentials should be from allowed issuer types |
+| `langsmith-fic-aks-sources` | Managed Identity Federated Credentials from Azure Kubernetes should be from trusted sources |
+
 Pass `byoiam_enabled: true` in the data plane create request.
 
 ### Let Engine use Azure AI Foundry (optional)
