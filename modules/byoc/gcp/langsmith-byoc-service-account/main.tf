@@ -143,8 +143,8 @@ locals {
     "iam.serviceAccounts.setIamPolicy",
   ]
 
-  # With restrict_to_langsmith_names, these permissions leave the provisioner
-  # role for roles of their own, each bound with an IAM condition on the
+  # These permissions are not in the provisioner role but in roles of their
+  # own, each bound with an IAM condition on the
   # resource name. Data plane resources are named langsmith-<hash>-<key> and
   # data plane secrets ls-<data plane>-<key>, so the provisioner can create,
   # change or delete only those, not other resources of these kinds in the
@@ -283,14 +283,10 @@ locals {
 
   provisioner_removed_permissions = concat(
     var.byo_iam ? local.byo_iam_removed_permissions : [],
-    var.restrict_to_langsmith_names ? local.name_fenced_permissions : [],
+    local.name_fenced_permissions,
   )
 
-  provisioner_permissions = (
-    length(local.provisioner_removed_permissions) > 0
-    ? sort(setsubtract(local.base_provisioner_permissions, local.provisioner_removed_permissions))
-    : local.base_provisioner_permissions
-  )
+  provisioner_permissions = sort(setsubtract(local.base_provisioner_permissions, local.provisioner_removed_permissions))
 
   # The project roles the data plane compositions grant: to the GKE node and
   # sandbox host service accounts, the in-cluster workloads, and the control
@@ -402,7 +398,7 @@ resource "google_project_iam_member" "provisioner" {
 }
 
 resource "google_project_iam_custom_role" "name_fenced" {
-  for_each = var.restrict_to_langsmith_names ? local.name_fenced_roles : {}
+  for_each = local.name_fenced_roles
 
   project     = var.project_id
   role_id     = "${var.custom_role_id_prefix}Named${each.key}"
@@ -415,7 +411,7 @@ resource "google_project_iam_custom_role" "name_fenced" {
 }
 
 resource "google_project_iam_member" "name_fenced" {
-  for_each = var.restrict_to_langsmith_names ? local.name_fenced_roles : {}
+  for_each = local.name_fenced_roles
 
   project = var.project_id
   role    = google_project_iam_custom_role.name_fenced[each.key].name
@@ -516,12 +512,12 @@ locals {
       roles        = []
       act_as       = false
     }
-    # With restrict_to_langsmith_names, the narrower roles below replace
-    # roles/cloudsql.admin.
+    # Plus <prefix>PostgresSetup below. Together they replace
+    # roles/cloudsql.admin, which the compositions grant without byo_iam.
     "langsmith-postgres-setup" = {
       display_name = "LangSmith Postgres setup"
       description  = "Sets up the data plane Cloud SQL databases"
-      roles        = var.restrict_to_langsmith_names ? ["roles/cloudsql.viewer"] : ["roles/cloudsql.admin"]
+      roles        = ["roles/cloudsql.viewer"]
       act_as       = false
     }
     "langsmith-node" = {
@@ -545,17 +541,16 @@ locals {
     }
   ]...)
 
-  # With restrict_to_langsmith_names, these grants are limited to the data
-  # plane resources by name. Each was checked in a test project on 2026-11-09:
+  # These grants are limited to the data plane resources by name. Each was checked in a test project on 2026-11-09:
   # cloudsql.instances.get, connect (the Cloud SQL connectors) and login (IAM
   # database authentication), and redis.clusters.connect, were allowed on a
   # langsmith- instance or cluster and denied on any other.
-  byo_iam_role_conditions = var.restrict_to_langsmith_names ? {
+  byo_iam_role_conditions = {
     "roles/cloudsql.client"        = local.name_fenced_roles.CloudSql.expression
     "roles/cloudsql.instanceUser"  = local.name_fenced_roles.CloudSql.expression
     "roles/cloudsql.viewer"        = local.name_fenced_roles.CloudSql.expression
     "roles/redis.dbConnectionUser" = local.name_fenced_roles.RedisClusters.expression
-  } : {}
+  }
 
   # The postgres-setup Job lists and creates database users and sets the
   # postgres password (gcloud sql users list, create, set-password). IAM
@@ -609,7 +604,7 @@ resource "google_project_iam_member" "byo_iam" {
 }
 
 resource "google_project_iam_custom_role" "postgres_setup" {
-  count = var.byo_iam && var.restrict_to_langsmith_names ? 1 : 0
+  count = var.byo_iam ? 1 : 0
 
   project     = var.project_id
   role_id     = "${var.custom_role_id_prefix}PostgresSetup"
@@ -622,7 +617,7 @@ resource "google_project_iam_custom_role" "postgres_setup" {
 }
 
 resource "google_project_iam_member" "postgres_setup" {
-  count = var.byo_iam && var.restrict_to_langsmith_names ? 1 : 0
+  count = var.byo_iam ? 1 : 0
 
   project = var.project_id
   role    = google_project_iam_custom_role.postgres_setup[0].name
@@ -647,8 +642,8 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
 }
 
 # The control plane's Crossplane service account reaches the data plane GKE
-# clusters through this role. With restrict_to_langsmith_names, it is limited
-# as described at crossplane_container_admin_condition.
+# clusters through this role, limited as described at
+# crossplane_container_admin_condition.
 resource "google_project_iam_member" "byo_iam_crossplane_container_admin" {
   count = var.byo_iam ? 1 : 0
 
@@ -656,14 +651,10 @@ resource "google_project_iam_member" "byo_iam_crossplane_container_admin" {
   role    = "roles/container.admin"
   member  = "serviceAccount:${var.crossplane_service_account}"
 
-  dynamic "condition" {
-    for_each = var.restrict_to_langsmith_names ? [local.crossplane_container_admin_condition] : []
-
-    content {
-      title       = "langsmith-data-plane-clusters"
-      description = "LangSmith data plane GKE clusters, and Kubernetes API requests"
-      expression  = condition.value
-    }
+  condition {
+    title       = "langsmith-data-plane-clusters"
+    description = "LangSmith data plane GKE clusters, and Kubernetes API requests"
+    expression  = local.crossplane_container_admin_condition
   }
 }
 

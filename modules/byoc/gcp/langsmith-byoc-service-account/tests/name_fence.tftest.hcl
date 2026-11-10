@@ -9,31 +9,8 @@ variables {
   external_id                = "ext"
 }
 
-run "default_unchanged" {
+run "default" {
   command = plan
-
-  assert {
-    condition     = length(google_project_iam_custom_role.name_fenced) == 0 && length(google_project_iam_member.name_fenced) == 0
-    error_message = "No fenced roles by default."
-  }
-
-  assert {
-    condition     = length(google_project_iam_custom_role.provisioner.permissions) == length(local.base_provisioner_permissions)
-    error_message = "The default provisioner role is the full list."
-  }
-
-  assert {
-    condition     = length(google_project_iam_custom_role.postgres_setup) == 0 && length(google_project_iam_member.byo_iam) == 0
-    error_message = "No byo_iam grants by default."
-  }
-}
-
-run "restricted" {
-  command = plan
-
-  variables {
-    restrict_to_langsmith_names = true
-  }
 
   assert {
     condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
@@ -75,40 +52,21 @@ run "restricted" {
   }
 
   assert {
-    condition     = length(google_project_iam_custom_role.postgres_setup) == 0 && length(google_project_iam_member.byo_iam_crossplane_container_admin) == 0
+    condition     = length(google_project_iam_custom_role.postgres_setup) == 0 && length(google_project_iam_member.byo_iam_crossplane_container_admin) == 0 && length(google_project_iam_member.byo_iam) == 0
     error_message = "No byo_iam resources without byo_iam."
+  }
+
+  assert {
+    condition     = length(google_project_iam_custom_role.project_iam_granter) == 1 && length(google_project_iam_custom_role.service_account_user) == 1 && contains(google_project_iam_custom_role.provisioner.permissions, "iam.serviceAccounts.create")
+    error_message = "Without byo_iam, the provisioner keeps its IAM roles."
   }
 }
 
-run "byo_iam_unrestricted" {
+run "byo_iam" {
   command = plan
 
   variables {
     byo_iam = true
-  }
-
-  assert {
-    condition     = length(google_project_iam_member.byo_iam_crossplane_container_admin[0].condition) == 0
-    error_message = "The Crossplane grant is unconditioned without restrict_to_langsmith_names."
-  }
-
-  assert {
-    condition     = contains(keys(google_project_iam_member.byo_iam), "langsmith-postgres-setup/roles/cloudsql.admin") && length(google_project_iam_custom_role.postgres_setup) == 0
-    error_message = "postgres-setup keeps roles/cloudsql.admin."
-  }
-
-  assert {
-    condition     = alltrue([for m in google_project_iam_member.byo_iam : length(m.condition) == 0])
-    error_message = "No byo_iam project grant is conditioned."
-  }
-}
-
-run "restricted_byo_iam" {
-  command = plan
-
-  variables {
-    restrict_to_langsmith_names = true
-    byo_iam                     = true
   }
 
   assert {
@@ -167,9 +125,8 @@ run "role_ids_fit_with_longest_prefix" {
   command = plan
 
   variables {
-    restrict_to_langsmith_names = true
-    byo_iam                     = true
-    custom_role_id_prefix       = "abcdefghijabcdefghijabcdefghijabcdefghij"
+    byo_iam               = true
+    custom_role_id_prefix = "abcdefghijabcdefghijabcdefghijabcdefghij"
   }
 
   assert {

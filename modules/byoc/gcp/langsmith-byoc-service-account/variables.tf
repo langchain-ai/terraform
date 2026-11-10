@@ -36,7 +36,7 @@ variable "enable_apis" {
 }
 
 variable "custom_role_id_prefix" {
-  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, and with restrict_to_langsmith_names Named<kind> roles such as NamedCloudSql and NamedNetworks, and PostgresSetup)."
+  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, Named<kind> roles such as NamedCloudSql and NamedNetworks, and with byo_iam PostgresSetup)."
   type        = string
   default     = "langsmithByoc"
 
@@ -47,13 +47,7 @@ variable "custom_role_id_prefix" {
 }
 
 variable "byo_iam" {
-  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Set it before you create data planes in the project."
-  type        = bool
-  default     = false
-}
-
-variable "restrict_to_langsmith_names" {
-  description = "Limit the provisioner's creates, changes and deletes of Cloud SQL instances, GKE clusters, forwarding rules, VPC networks and the subnets, routers and address ranges in them, addresses, Memorystore for Redis Cluster, service connection policies, Cloud Storage buckets and Secret Manager secrets to the data plane names (langsmith- and, for secrets, ls-). With byo_iam, also limit the data plane service accounts' Cloud SQL and Redis roles and the control plane's roles/container.admin to those names. Only for projects whose data planes were all created with those names. Use with byo_iam: without it, the provisioner can grant itself project-wide roles that reach resources of any name. See the README for what it can't limit."
+  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Recommended when the project also holds resources that are not LangSmith's. Set it before you create data planes in the project."
   type        = bool
   default     = false
 }
