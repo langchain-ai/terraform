@@ -152,6 +152,18 @@ With `reduced_access`, LangSmith does not have these permissions:
 
 LangSmith cannot give a principal access to an identity or a data store, and it cannot read storage keys.
 
+#### Combine with `byo_iam`
+
+You can set `reduced_access = true` on a data plane with `byo_iam = true`:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", byo_iam = true, reduced_access = true }
+}
+```
+
+`byo_iam` already removes `User Access Administrator` and the identity write and delete actions. `reduced_access` also removes the federated identity credential, PostgreSQL administrator, Redis access policy, and storage key actions. LangSmith then cannot change any identity or grant any access.
+
 Set `reduced_access = false` again before you:
 
 - delete or recreate the data plane.
