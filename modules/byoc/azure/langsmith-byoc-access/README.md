@@ -139,7 +139,7 @@ The storage accounts and the cluster exist only after the data plane does, so th
 
 LangSmith gets no `User Access Administrator` assignment. Its custom role loses the identity write and delete actions. LangSmith cannot create role assignments, role definitions, or identities. LangSmith still creates the federated identity credentials on the identities, because the AKS OIDC issuer URL exists only after the cluster exists.
 
-Pass `byoiam_enabled: true` in the data plane create request.
+Pass `byoiam: {is_enabled: true}` in the data plane create request.
 
 ### Let Engine use Azure AI Foundry (optional)
 
