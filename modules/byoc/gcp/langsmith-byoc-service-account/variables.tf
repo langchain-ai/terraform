@@ -4,7 +4,7 @@ variable "project_id" {
 }
 
 variable "service_account_id" {
-  description = "Account ID of the provisioner service account to create in the project."
+  description = "Account ID of the provisioner service account to create in the project. Also the short name of the tag key that marks its data plane GKE clusters, so it must be unique among the project's tag keys."
   type        = string
   default     = "langsmith-byoc-provisioner"
 }
@@ -36,7 +36,7 @@ variable "enable_apis" {
 }
 
 variable "custom_role_id_prefix" {
-  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, Named<kind> roles such as NamedCloudSql and NamedNetworks, and with byo_iam PostgresSetup)."
+  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, ClusterConnect, Named<kind> roles such as NamedCloudSql and NamedNetworks, and with byo_iam PostgresSetup)."
   type        = string
   default     = "langsmithByoc"
 

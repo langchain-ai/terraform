@@ -64,8 +64,12 @@ locals {
     "compute.subnetworks.update",
     "compute.subnetworks.use",
     "container.clusters.create",
+    # The provisioner tags each data plane cluster with the cluster tag below.
+    "container.clusters.createTagBinding",
     "container.clusters.delete",
+    "container.clusters.deleteTagBinding",
     "container.clusters.get",
+    "container.clusters.listTagBindings",
     "container.clusters.update",
     "container.operations.get",
     "dns.changes.create",
@@ -170,9 +174,17 @@ locals {
     }
     Gke = {
       title = "GKE"
-      # Node pool changes are checked against their cluster.
-      expression  = "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\")"
-      permissions = ["container.clusters.create", "container.clusters.delete", "container.clusters.update"]
+      # Node pool changes are checked against their cluster. Tag bindings are
+      # too, so the provisioner can tag only langsmith- clusters with the
+      # cluster tag that the control plane's GKE access depends on.
+      expression = "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "container.clusters.create",
+        "container.clusters.createTagBinding",
+        "container.clusters.delete",
+        "container.clusters.deleteTagBinding",
+        "container.clusters.update",
+      ]
     }
     ForwardingRules = {
       title      = "forwarding rules"
@@ -474,6 +486,88 @@ resource "google_service_account_iam_member" "crossplane" {
 }
 
 # ---------------------------------------------------------------------------
+# Control plane access to the data plane GKE clusters
+#
+# The control plane's Crossplane service account installs LangSmith into each
+# data plane cluster through the cluster's DNS-based endpoint. GKE authorizes
+# Kubernetes API requests by IAM with an empty resource name, so a condition on
+# the cluster name can't limit them, but a condition on a tag of the cluster
+# does. The provisioner tags each data plane cluster with this module's cluster
+# tag, and roles/container.admin applies only to clusters with that tag.
+#
+# The DNS-based endpoint checks container.clusters.connect without the
+# cluster's tags, so connect is a separate grant limited by name.
+#
+# The provisioner can bind the tag only to langsmith- clusters (the Gke role
+# above), and holds no permission to tag the project, whose tags every cluster
+# would inherit.
+# ---------------------------------------------------------------------------
+
+# One key per provisioner: LangSmith finds the tag value by
+# <project ID>/<provisioner account ID>/data-plane.
+resource "google_tags_tag_key" "cluster" {
+  parent      = "projects/${var.project_id}"
+  short_name  = var.service_account_id
+  description = "LangSmith BYOC data plane GKE clusters of the ${var.service_account_id} provisioner. The LangSmith control plane administers clusters tagged with it."
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_tags_tag_value" "cluster" {
+  parent      = google_tags_tag_key.cluster.id
+  short_name  = "data-plane"
+  description = "A LangSmith BYOC data plane GKE cluster"
+}
+
+# The provisioner binds the tag value to the clusters it creates, and LangSmith
+# reads the value's ID as the provisioner.
+resource "google_tags_tag_value_iam_member" "provisioner" {
+  tag_value = google_tags_tag_value.cluster.id
+  role      = "roles/resourcemanager.tagUser"
+  member    = "serviceAccount:${google_service_account.provisioner.email}"
+}
+
+resource "google_project_iam_member" "crossplane_container_admin" {
+  project = var.project_id
+  role    = "roles/container.admin"
+  member  = "serviceAccount:${var.crossplane_service_account}"
+
+  condition {
+    title       = "langsmith-data-plane-clusters"
+    description = "GKE clusters tagged as LangSmith data plane clusters"
+    expression  = "resource.matchTagId(\"${google_tags_tag_key.cluster.id}\", \"${google_tags_tag_value.cluster.id}\")"
+  }
+}
+
+moved {
+  from = google_project_iam_member.byo_iam_crossplane_container_admin[0]
+  to   = google_project_iam_member.crossplane_container_admin
+}
+
+resource "google_project_iam_custom_role" "cluster_connect" {
+  project     = var.project_id
+  role_id     = "${var.custom_role_id_prefix}ClusterConnect"
+  title       = "LangSmith BYOC cluster connect"
+  description = "Connects the LangSmith control plane to the DNS-based endpoints of data plane GKE clusters. The binding limits it to data plane names."
+  stage       = "BETA"
+  permissions = ["container.clusters.connect"]
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "crossplane_cluster_connect" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.cluster_connect.name
+  member  = "serviceAccount:${var.crossplane_service_account}"
+
+  condition {
+    title       = "langsmith-data-plane-names"
+    description = "LangSmith data plane GKE clusters only"
+    expression  = local.name_fenced_roles.Gke.expression
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Bring your own IAM (byo_iam = true)
 #
 # This module creates the data plane service accounts and their project role
@@ -563,14 +657,6 @@ locals {
     "cloudsql.users.update",
   ]
 
-  # Kubernetes API requests to GKE are authorized by IAM with an empty
-  # resource name, so a condition on the cluster name alone denies them on
-  # every cluster. The condition below limits the GKE API (getting
-  # credentials, changing or deleting a cluster) and the clusters' DNS-based
-  # endpoints, which LangSmith uses, to langsmith- clusters. Through a
-  # cluster's IP-based endpoint, Kubernetes requests are still allowed on
-  # every cluster in the project that the control plane can reach.
-  crossplane_container_admin_condition = "${local.name_fenced_roles.Gke.expression} || resource.name == \"\""
 }
 
 resource "google_service_account" "byo_iam" {
@@ -638,28 +724,6 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
     description = "LangSmith data plane secrets"
     expression  = "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
   }
-}
-
-# The control plane's Crossplane service account reaches the data plane GKE
-# clusters through this role, limited as described at
-# crossplane_container_admin_condition. The module grants it, not the
-# provisioner, so roles/container.admin is not among the roles the provisioner
-# can grant.
-resource "google_project_iam_member" "crossplane_container_admin" {
-  project = var.project_id
-  role    = "roles/container.admin"
-  member  = "serviceAccount:${var.crossplane_service_account}"
-
-  condition {
-    title       = "langsmith-data-plane-clusters"
-    description = "LangSmith data plane GKE clusters, and Kubernetes API requests"
-    expression  = local.crossplane_container_admin_condition
-  }
-}
-
-moved {
-  from = google_project_iam_member.byo_iam_crossplane_container_admin[0]
-  to   = google_project_iam_member.crossplane_container_admin
 }
 
 resource "google_project_iam_custom_role" "service_account_iam_manager" {

@@ -11,12 +11,12 @@ Provisions the service account in **your GCP project** that the LangSmith contro
 | Data plane service accounts, their project roles, and the custom roles `<prefix>ServiceAccountIamManager` and `<prefix>PostgresSetup` | Only with `byo_iam`. See [Bring your own IAM](#bring-your-own-iam). |
 | Custom roles `<prefix>Named<kind>` (one per kind in the table under [Limit changes to data plane names](#limit-changes-to-data-plane-names)) | The create, change and delete permissions of those kinds, bound with a condition on the resource name. See [Limit changes to data plane names](#limit-changes-to-data-plane-names). |
 | Token Creator on that service account | Lets `var.crossplane_service_account`, the LangSmith control plane, impersonate it. No other LangSmith identity is trusted. |
-| `roles/container.admin` for `var.crossplane_service_account`, limited to `langsmith-` GKE clusters | Lets the LangSmith control plane reach the data plane clusters. See [GKE access of the control plane](#gke-access-of-the-control-plane). |
+| A cluster tag, `roles/container.admin` for `var.crossplane_service_account` on clusters with that tag, and the custom role `<prefix>ClusterConnect` | Lets the LangSmith control plane reach the data plane clusters, and no other cluster in the project. See [GKE access of the control plane](#gke-access-of-the-control-plane). |
 | Project APIs | Enables the APIs data planes use. Set `enable_apis = false` if you manage the project's APIs elsewhere. |
 
 ## Prerequisites
 
-1. A GCP project for the LangSmith data plane, and credentials with permission to create service accounts, grant project IAM roles, and enable APIs in it.
+1. A GCP project for the LangSmith data plane, and credentials with permission to create service accounts, grant project IAM roles, create tags (`roles/resourcemanager.tagAdmin`), and enable APIs in it.
 2. Terraform `>= 1.11.0` and the Google provider `~> 6.0`.
 3. The `crossplane_service_account` provided by LangChain.
 4. The external ID from **Settings > Data Planes** in the LangSmith UI. Copy this value and use it as `external_id`. Do not make your own value.
@@ -72,7 +72,7 @@ By default, the provisioner holds custom roles, not predefined admin roles:
 - **`<prefix>ServiceAccountUser`**: `iam.serviceAccounts.actAs`, so GKE nodes and workloads can run as the data plane service accounts. IAM checks on a service account carry only its numeric unique ID, and the provisioner creates these accounts, so no condition can single them out and this binding is unconditional.
 - **`<prefix>Named<kind>`**: one role per kind of data plane resource, bound with a condition on the resource name. See [Limit changes to data plane names](#limit-changes-to-data-plane-names).
 
-The module also grants `roles/container.admin` to `var.crossplane_service_account`, limited to `langsmith-` GKE clusters. The LangSmith control plane reaches the data plane clusters through it. The module makes this grant, not the provisioner, so the provisioner can't grant `roles/container.admin`. See [GKE access of the control plane](#gke-access-of-the-control-plane).
+The module also grants `roles/container.admin` to `var.crossplane_service_account` on the GKE clusters that carry the module's cluster tag. The LangSmith control plane reaches the data plane clusters through it. The module makes this grant, not the provisioner, so the provisioner can't grant `roles/container.admin`. See [GKE access of the control plane](#gke-access-of-the-control-plane).
 
 With `byo_iam`, the permissions change. See [Bring your own IAM](#bring-your-own-iam).
 
@@ -84,7 +84,7 @@ Custom role IDs are unique per project, so set `custom_role_id_prefix` when more
 
 ### Limit changes to data plane names
 
-The provisioner can create, change and delete only the data plane's own resources of the kinds below, found by name. LangSmith names every data plane resource `langsmith-<hash>-<key>` and every data plane secret `ls-<data plane>-<key>`. With `byo_iam`, the project roles of the data plane service accounts and of the LangSmith control plane are limited by name too. See [With `byo_iam`](#with-byo_iam).
+The provisioner can create, change and delete only the data plane's own resources of the kinds below, found by name. LangSmith names every data plane resource `langsmith-<hash>-<key>` and every data plane secret `ls-<data plane>-<key>`. With `byo_iam`, the project roles of the data plane service accounts are limited by name too. See [With `byo_iam`](#with-byo_iam).
 
 > **CAUTION:** Data planes created before LangSmith named resources `langsmith-` have other names. The provisioner can't update or delete their resources of these kinds, so they can't be upgraded or torn down. Use this module version only in a project whose data planes were all created with the `langsmith-` names, or recreate the older data planes first.
 
@@ -93,7 +93,7 @@ The permissions below are in a role per kind, not in `<prefix>Provisioner`. Each
 | Role | Permissions | Condition |
 |------|-------------|-----------|
 | `<prefix>NamedCloudSql` | `cloudsql.instances.create`, `delete`, `update` | `resource.name.extract("/instances/{name}").startsWith("langsmith-")` |
-| `<prefix>NamedGke` | `container.clusters.create`, `delete`, `update` (node pool changes are checked against their cluster) | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedGke` | `container.clusters.create`, `delete`, `update`, `createTagBinding`, `deleteTagBinding` (node pool changes are checked against their cluster) | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedForwardingRules` | `compute.forwardingRules.create`, `delete`, `setLabels`, `pscCreate`, `pscDelete`, `pscSetLabels`, `pscUpdate` | `resource.name.extract("/forwardingRules/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedNetworks` | `compute.networks.create`, `delete`, `update`, `updatePolicy`, `use`, `addPeering`, `removePeering`, `updatePeering` | `resource.name.extract("/networks/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedSubnetworks` | `compute.subnetworks.create`, `delete`, `update`, `use`, `setPrivateIpGoogleAccess` | `resource.name.extract("/subnetworks/{name}").startsWith("langsmith-")` |
@@ -110,7 +110,7 @@ The provisioner keeps the `get` and `list` permissions of these kinds, and `comp
 
 Name your own resources of these kinds so they don't start with `langsmith-`, and your own secrets so their IDs don't start with `ls-`.
 
-The module grants no `createTagBinding` permission. A project-wide `createTagBinding` would let the provisioner tag a resource that is not LangSmith's and then change it under a tag condition. Compute Engine checks `createTagBinding` against the resource's numeric ID, so a name condition can't narrow it for networks, subnets, routers or addresses.
+The only `createTagBinding` permission the module grants is on `langsmith-` GKE clusters, for the cluster tag. A project-wide `createTagBinding` would let the provisioner tag a resource that is not LangSmith's and then change it under a tag condition. Compute Engine checks `createTagBinding` against the resource's numeric ID, so a name condition can't narrow it for networks, subnets, routers or addresses.
 
 #### With `byo_iam`
 
@@ -126,14 +126,20 @@ The provisioner can set the IAM policies of the six data plane service accounts,
 
 #### GKE access of the control plane
 
-The condition on the Crossplane grant is `resource.name.extract("/clusters/{name}").startsWith("langsmith-") || resource.name == ""`. GKE authorizes Kubernetes API requests through IAM with an empty resource name, so a condition on the cluster name alone denies them on every cluster, LangSmith's too. The condition limits the GKE API (getting credentials, changing or deleting a cluster) and the clusters' DNS-based endpoints, which LangSmith uses, to `langsmith-` clusters. A request to the DNS-based endpoint of any other cluster is denied.
+The LangSmith control plane installs LangSmith into each data plane cluster through the cluster's DNS-based endpoint, as `var.crossplane_service_account`. GKE authorizes Kubernetes API requests through IAM with an empty resource name, so a condition on the cluster name can't limit them. A condition on a tag of the cluster does:
+
+- The module creates a tag key named after the provisioner (`var.service_account_id`) with the value `data-plane`, and lets the provisioner use it (`roles/resourcemanager.tagUser` on the value). Its namespaced name is the `cluster_tag_value` output.
+- LangSmith binds the tag to each data plane cluster it creates. The provisioner can bind it only to `langsmith-` clusters (`<prefix>NamedGke`), and can't tag the project, whose tags every cluster would inherit.
+- `roles/container.admin` for `var.crossplane_service_account` has the condition `resource.matchTagId(<key>, <value>)`. It covers the GKE API and the Kubernetes API, through both the DNS-based and the IP-based endpoints, on tagged clusters only.
+- The DNS-based endpoint checks `container.clusters.connect` without the cluster's tags, so `<prefix>ClusterConnect` grants that permission alone, limited to `langsmith-` cluster names. Connecting gives no access inside a cluster.
+
+Don't put this tag on your own clusters, or on the project. Each was checked in a test project: the Kubernetes API of an untagged cluster answered 403 through both endpoints.
 
 #### What names can't limit
 
 These IAM checks carry no resource name, or a name LangSmith doesn't choose, so a name condition can't narrow them. In a project shared with your own resources, LangSmith's identities can still do the following:
 
 - **Project role grants.** Without `byo_iam`, the provisioner grants the data plane service accounts their project roles (`<prefix>ProjectIamGranter`). An IAM condition limits which roles it can grant, but not to whom, and the grants are project-wide.
-- **Kubernetes API through IP-based endpoints.** The control plane's Crossplane service account can still send Kubernetes requests, as `roles/container.admin`, to any GKE cluster in the project whose IP-based control plane endpoint it can reach. To protect your own clusters, give them a private IP-based endpoint, or authorized networks that leave out the LangSmith control plane. Their DNS-based endpoints are covered by the condition.
 - **Artifact Registry.** The provisioner can change or delete any repository and set its IAM policy. `langsmith-node` and `langsmith-sandbox-host` can read every repository (`roles/artifactregistry.reader`).
 - **Cloud DNS** managed zones and record sets.
 - **Cloud SQL databases and users.** The provisioner can create, change and delete the databases of any instance. `langsmith-postgres-setup` can list and create users and set any user's password on any instance; logging in with that password still needs a network path to the instance. Database checks do follow a tag on their instance, but LangSmith doesn't tag its instances yet.
@@ -187,7 +193,7 @@ Create the data plane with `byoiam_enabled` set to `true`.
 | `project_id` | The GCP project that hosts the LangSmith data planes. | required |
 | `crossplane_service_account` | LangSmith control plane Crossplane service account that impersonates the provisioner. | required |
 | `external_id` | External ID from **Settings > Data Planes** in LangSmith. Must not be empty and must be at most 256 characters. The module writes it as the description of the provisioner service account. | required |
-| `service_account_id` | Account ID of the provisioner service account. | `langsmith-byoc-provisioner` |
+| `service_account_id` | Account ID of the provisioner service account. Also the short name of the tag key on its data plane GKE clusters. | `langsmith-byoc-provisioner` |
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
@@ -198,3 +204,4 @@ Create the data plane with `byoiam_enabled` set to `true`.
 |------|-------------|
 | `provisioner_service_account` | Email of the provisioner service account. |
 | `byo_iam_service_accounts` | Emails of the data plane service accounts, keyed by account ID. Empty unless `byo_iam` is `true`. |
+| `cluster_tag_value` | Namespaced name of the tag value on the data plane GKE clusters. |

@@ -1,7 +1,21 @@
 # Plan tests with a mocked provider: no credentials and no state. Run with
 # terraform init -backend=false && terraform test in the module directory.
 
-mock_provider "google" {}
+mock_provider "google" {
+  mock_resource "google_tags_tag_key" {
+    override_during = plan
+    defaults = {
+      id = "tagKeys/111"
+    }
+  }
+
+  mock_resource "google_tags_tag_value" {
+    override_during = plan
+    defaults = {
+      id = "tagValues/222"
+    }
+  }
+}
 
 variables {
   project_id                 = "p"
@@ -57,8 +71,23 @@ run "default" {
   }
 
   assert {
-    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\") || resource.name == \"\"" && !strcontains(google_project_iam_member.project_iam_granter[0].condition[0].expression, "roles/container.admin")
-    error_message = "The module grants Crossplane container.admin limited to langsmith- clusters, and the provisioner can't grant container.admin."
+    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.matchTagId(\"tagKeys/111\", \"tagValues/222\")" && !strcontains(google_project_iam_member.project_iam_granter[0].condition[0].expression, "roles/container.admin")
+    error_message = "The module grants Crossplane container.admin on clusters with the cluster tag, and the provisioner can't grant container.admin."
+  }
+
+  assert {
+    condition     = google_project_iam_custom_role.cluster_connect.permissions == toset(["container.clusters.connect"]) && google_project_iam_member.crossplane_cluster_connect.condition[0].expression == "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\")"
+    error_message = "Crossplane gets connect on langsmith- clusters only."
+  }
+
+  assert {
+    condition     = google_tags_tag_key.cluster.short_name == "langsmith-byoc-provisioner" && google_tags_tag_key.cluster.parent == "projects/p" && google_tags_tag_value.cluster.short_name == "data-plane" && google_tags_tag_value_iam_member.provisioner.role == "roles/resourcemanager.tagUser"
+    error_message = "The cluster tag is <project>/<provisioner account ID>/data-plane, and the provisioner can use it."
+  }
+
+  assert {
+    condition     = alltrue([for p in ["container.clusters.createTagBinding", "container.clusters.deleteTagBinding"] : contains(google_project_iam_custom_role.name_fenced["Gke"].permissions, p) && !contains(google_project_iam_custom_role.provisioner.permissions, p)]) && length([for p in google_project_iam_custom_role.provisioner.permissions : p if strcontains(p, "createTagBinding")]) == 0
+    error_message = "The provisioner can tag only langsmith- clusters."
   }
 
   assert {
@@ -80,8 +109,8 @@ run "byo_iam" {
   }
 
   assert {
-    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\") || resource.name == \"\""
-    error_message = "The Crossplane grant is limited to langsmith- clusters and Kubernetes requests."
+    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.matchTagId(\"tagKeys/111\", \"tagValues/222\")"
+    error_message = "The Crossplane grant is limited to clusters with the cluster tag."
   }
 
   assert {
@@ -135,7 +164,7 @@ run "role_ids_fit_with_longest_prefix" {
   }
 
   assert {
-    condition     = alltrue(concat([for r in google_project_iam_custom_role.name_fenced : length(r.role_id) <= 64], [for r in google_project_iam_custom_role.postgres_setup : length(r.role_id) <= 64]))
+    condition     = alltrue(concat([for r in google_project_iam_custom_role.name_fenced : length(r.role_id) <= 64], [for r in google_project_iam_custom_role.postgres_setup : length(r.role_id) <= 64], [length(google_project_iam_custom_role.cluster_connect.role_id) <= 64]))
     error_message = "A custom role ID is longer than 64 characters."
   }
 }
