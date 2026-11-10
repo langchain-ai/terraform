@@ -129,6 +129,8 @@ data_planes = {
 }
 ```
 
+Before you set it back to `false` or remove it, have LangSmith turn observability off or delete the data plane, because the role needs its delete actions to remove the rules, the endpoint and the association.
+
 Register `Microsoft.Insights`, `Microsoft.Monitor` and `Microsoft.OperationalInsights` first (see [Usage](#usage)). LangSmith then creates, in the data plane resource group:
 
 - **Logs:** a Log Analytics workspace, and Container Insights on the AKS cluster with a data collection rule that keeps only the LangGraph deployment and build container logs. Environment variables are not collected. The workspace keeps logs for 30 days unless LangSmith sets another retention, up to 730; Log Analytics bills ingestion, and retention past 31 days.
