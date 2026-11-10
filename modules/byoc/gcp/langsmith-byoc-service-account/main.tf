@@ -1,6 +1,13 @@
 locals {
   # Found by provisioning and tearing down data planes with nothing more.
   base_provisioner_permissions = [
+    # In-cluster deployment builds push to one repository per data plane. Its
+    # IAM policy grants the data plane's build service account write access.
+    "artifactregistry.repositories.create",
+    "artifactregistry.repositories.get",
+    "artifactregistry.repositories.getIamPolicy",
+    "artifactregistry.repositories.setIamPolicy",
+    "artifactregistry.repositories.update",
     "cloudsql.databases.create",
     "cloudsql.databases.delete",
     "cloudsql.databases.get",
@@ -100,6 +107,7 @@ locals {
     "secretmanager.secrets.delete",
     "secretmanager.secrets.get",
     "secretmanager.versions.add",
+    "servicedirectory.namespaces.create",
     "servicedirectory.services.create",
     "servicedirectory.services.delete",
     "servicenetworking.operations.get",
@@ -124,6 +132,24 @@ locals {
     "storage.objects.list",
   ]
 
+  # With deployment_observability, each data plane keeps its LangSmith
+  # namespace's container logs in its own log bucket, which a sink routes them
+  # to.
+  observability_provisioner_permissions = [
+    "logging.buckets.create",
+    "logging.buckets.get",
+    "logging.buckets.update",
+    "logging.sinks.create",
+    "logging.sinks.delete",
+    "logging.sinks.get",
+    "logging.sinks.update",
+  ]
+
+  all_provisioner_permissions = concat(
+    local.base_provisioner_permissions,
+    var.deployment_observability ? local.observability_provisioner_permissions : [],
+  )
+
   # With byo_iam, this module creates the data plane service accounts, so the
   # provisioner does not create, update, delete or set the IAM policy of
   # service accounts at the project level. It keeps get, list and
@@ -137,15 +163,15 @@ locals {
 
   provisioner_permissions = (
     var.byo_iam
-    ? sort(setsubtract(local.base_provisioner_permissions, local.byo_iam_removed_permissions))
-    : local.base_provisioner_permissions
+    ? sort(setsubtract(local.all_provisioner_permissions, local.byo_iam_removed_permissions))
+    : local.all_provisioner_permissions
   )
 
   # The project roles the data plane compositions grant: to the GKE node and
   # sandbox host service accounts, the in-cluster workloads, and the control
   # plane's Crossplane service account for its access to the cluster. The
   # provisioner may grant only these.
-  granted_roles = [
+  base_granted_roles = [
     "roles/artifactregistry.reader",
     "roles/cloudsql.admin",
     "roles/cloudsql.client",
@@ -157,7 +183,21 @@ locals {
     "roles/secretmanager.secretAccessor",
   ]
 
-  apis = toset([
+  # The app reads its data plane's log bucket through one log view (an IAM
+  # condition on the grant), and deployment metrics through Managed Prometheus.
+  observability_granted_roles = [
+    "roles/logging.viewAccessor",
+    "roles/monitoring.viewer",
+  ]
+
+  granted_roles = concat(
+    local.base_granted_roles,
+    var.deployment_observability ? local.observability_granted_roles : [],
+  )
+
+  apis = toset(concat([
+    "artifactregistry.googleapis.com",
+    "binaryauthorization.googleapis.com",
     "compute.googleapis.com",
     "container.googleapis.com",
     "dns.googleapis.com",
@@ -169,7 +209,7 @@ locals {
     "servicedirectory.googleapis.com",
     "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
-  ])
+  ], var.deployment_observability ? ["logging.googleapis.com", "monitoring.googleapis.com"] : []))
 }
 
 resource "google_project_service" "apis" {

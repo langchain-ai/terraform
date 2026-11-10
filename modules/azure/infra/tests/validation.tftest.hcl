@@ -341,6 +341,57 @@ run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# SmithDB requests its Entra token for the metastore with the commercial
+# scope, which an Azure Government Flexible Server refuses (LG-913), so in
+# Government the metastore must use a password. The accepting run below plans
+# the same inputs with a password, so a failure here can only be this rule.
+run "smithdb_in_government_refuses_entra_metastore_auth" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    azure_environment  = "usgovernment"
+    location           = "usgovvirginia"
+    redis_source       = "in-cluster"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_in_government_accepts_a_metastore_password" {
+  command = plan
+
+  variables {
+    enable_smithdb                   = true
+    availability_zones               = ["1", "2", "3"]
+    azure_environment                = "usgovernment"
+    location                         = "usgovvirginia"
+    redis_source                     = "in-cluster"
+    smithdb_metastore_admin_password = "plan-tests-only-Passw0rd"
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_auth_mode == "password"
+    error_message = "a Government SmithDB metastore with a password did not plan password authentication: ${output.smithdb_metastore_auth_mode}"
+  }
+}
+
+# Commercial Azure keeps Entra as the default: the rule is Government only.
+run "smithdb_in_public_keeps_entra_metastore_auth" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_auth_mode == "entra"
+    error_message = "a commercial SmithDB metastore without a password did not plan Entra authentication: ${output.smithdb_metastore_auth_mode}"
+  }
+}
+
 # The other direction: the default pool stays nonzonal and a zonal additional
 # pool supplies SmithDB's nodes, which is how a running cluster gains zones
 # without a rebuild.

@@ -228,7 +228,7 @@ install_cert_manager = false   # cluster already runs cert-manager
 install_keda         = false   # cluster already runs KEDA
 ```
 
-Both default to `true`. Something still has to provide the component: the LangSmith Deployments operator scales agent deployments through KEDA, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
+Both default to `true`. Something still has to provide the component: the LangSmith Deployments operator scales agent deployments through KEDA, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `install_keda` on, Terraform also creates the NetworkPolicy `allow-keda-to-postgres`, which admits the `keda` namespace to the LangSmith namespace on TCP 5432: each agent deployment's ScaledObject polls that deployment's PostgreSQL, which runs in the LangSmith namespace under its default-deny policy. A KEDA you install yourself needs the same rule for its own namespace. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
 
@@ -309,6 +309,7 @@ Limits in Azure Government:
 
 - **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
 - **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+- **SmithDB metastore needs a password.** SmithDB requests its Entra token for the commercial Azure scope, which a Government Flexible Server refuses (LG-913), so `enable_smithdb = true` without `TF_VAR_smithdb_metastore_admin_password` is refused at plan. See [SMITHDB.md](SMITHDB.md)
 - **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
 
 **The state backend needs the cloud too.** `azure_environment` configures the providers, not the `azurerm` backend, which Terraform initializes before it reads any variable. A state storage account in Government needs `environment = "usgovernment"` in the `backend "azurerm"` block, or `ARM_ENVIRONMENT=usgovernment` in the shell that runs `terraform init`.
@@ -1490,10 +1491,12 @@ also refuses a range with fewer `/24`s than the pools can reach nodes.
 Manager in node-subnet mode unless you name one. Cilium (Azure CNI Powered by
 Cilium) enforces NetworkPolicy with eBPF, needs overlay mode and Kubernetes
 1.31 or later, and is what Microsoft now recommends; Azure Network Policy
-Manager loses Linux support on 2028-09-30. The one NetworkPolicy this module
-creates, the namespace rule that admits the ingress gateway by its subnet,
-works on both. Cilium's documented limitation is that `ipBlock` rules cannot
-select node or pod addresses, which that rule does not do. The sandbox rule
+Manager loses Linux support on 2028-09-30. The namespace rules this module
+creates (default-deny, the rule that admits the ingress controller and the
+namespace itself, and the rule that admits KEDA to PostgreSQL on 5432) work on
+both. Cilium's documented limitation is that `ipBlock` rules cannot select node
+or pod addresses; the only `ipBlock` among them admits the Application Gateway
+subnet, which is neither. The sandbox rule
 that admits the nodes to platform-backend does, so it takes a different form
 on each engine (see [Sandboxes](#sandboxes)).
 

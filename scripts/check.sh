@@ -3,7 +3,7 @@
 # .github/workflows/checks.yaml, and run locally before handing back:
 #   bash scripts/check.sh                   # every root, plus every script
 #   bash scripts/check.sh modules/aws       # the roots under one dir, terraform only
-#   bash scripts/check.sh --scripts         # every tracked *.sh, no terraform
+#   bash scripts/check.sh --scripts         # shellcheck and AWS/GCP secret tests
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
 # state) and tflint with the provider's pinned ruleset. Under each directory
@@ -50,6 +50,12 @@ lint_scripts() {
   echo "== shellcheck $count script(s) at -S $SHELLCHECK_SEVERITY"
   (cd "$REPO_ROOT" && git ls-files -z '*.sh' \
     | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY")
+}
+
+check_scripts() {
+  lint_scripts || return $?
+  bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
+  bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
 }
 
 # Print the terraform roots at or beneath one repo-relative directory. Roots are
@@ -100,7 +106,7 @@ EOF
 }
 
 case "${1:-}" in
-  --scripts) lint_scripts; exit $? ;;
+  --scripts) check_scripts; exit $? ;;
 esac
 
 lint_all=0
@@ -139,7 +145,7 @@ done
 if ! command -v terraform >/dev/null 2>&1; then
   echo "   (terraform not installed, skipping validate and tflint)"
   if [ "$lint_all" -eq 1 ]; then
-    lint_scripts; exit $?
+    check_scripts; exit $?
   fi
   exit 0
 fi
@@ -205,7 +211,7 @@ for arg in "$@"; do
 done
 
 if [ "$lint_all" -eq 1 ]; then
-  lint_scripts || fail $?
+  check_scripts || fail $?
 fi
 
 exit "$status"
