@@ -24,6 +24,9 @@ variable "data_planes" {
     # upgrade that adds a role assignment, and before you delete or re-create
     # the data plane.
     reduced_access = optional(bool, false)
+    # Create the identities and role assignments yourself. LangSmith gets no
+    # User Access Administrator. Do not change after creation.
+    byo_iam = optional(bool, false)
     # Azure AI Foundry resource ID. The workload identity of the data plane
     # gets Cognitive Services User on it, so Engine can call it without an API
     # key. Set it after the data plane is active.
@@ -31,7 +34,8 @@ variable "data_planes" {
     # Let LangSmith turn on deployment observability: Monitoring charts and
     # searchable log history for LangGraph deployments, kept in a Log
     # Analytics workspace and an Azure Monitor workspace in the resource group.
-    # Adds the actions in local.langsmith_byoc_observability_actions.
+    # Adds the actions in local.langsmith_byoc_observability_actions. Not
+    # supported with byo_iam.
     deployment_observability = optional(bool, false)
   }))
   default = {}
@@ -45,6 +49,13 @@ variable "data_planes" {
       can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+  }
+
+  # Deployment observability creates an identity and role assignments, which
+  # LangSmith cannot do with byo_iam.
+  validation {
+    condition     = alltrue([for data_plane in values(var.data_planes) : !(data_plane.deployment_observability && data_plane.byo_iam)])
+    error_message = "deployment_observability is not supported with byo_iam."
   }
 }
 

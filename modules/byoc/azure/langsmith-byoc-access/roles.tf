@@ -11,7 +11,7 @@
 locals {
   # Full access (reduced_access = false): create, update, and delete a data
   # plane. Teardown keeps the resource group, so the role cannot delete it.
-  langsmith_byoc_actions = concat(local.langsmith_byoc_reduced_actions, [
+  langsmith_byoc_actions = concat(local.langsmith_byoc_update_actions, [
     "Microsoft.ContainerService/managedClusters/delete",
 
     "Microsoft.Network/virtualNetworks/delete",
@@ -42,10 +42,26 @@ locals {
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
   ])
 
-  # Reduced access (reduced_access = true): keep a running data plane up to
-  # date. It cannot delete a data plane, its data stores, or its network, and
-  # it cannot create or delete role assignments.
+  # Reduced access: full access without the actions that grant access, read
+  # storage keys, or change identities. LangSmith uses them only at creation,
+  # teardown, and some upgrades.
   langsmith_byoc_reduced_actions = [
+    for action in local.langsmith_byoc_actions : action
+    if !contains(local.langsmith_byoc_reduced_removed_actions, action)
+  ]
+
+  langsmith_byoc_reduced_removed_actions = [
+    "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+    "Microsoft.DBforPostgreSQL/flexibleServers/administrators/write",
+    "Microsoft.Cache/*/accessPolicyAssignments/write",
+    "Microsoft.Storage/storageAccounts/listKeys/action",
+  ]
+
+  # Create and update actions. Keep the order: a reorder changes every role.
+  langsmith_byoc_update_actions = [
     "*/read",
 
     # AKS
@@ -166,4 +182,10 @@ locals {
     "Microsoft.Insights/dataCollectionRules/delete",
     "Microsoft.Insights/dataCollectionRuleAssociations/delete",
   ])
+
+  # With byo_iam, the customer creates and deletes the identities.
+  langsmith_byoiam_removed_actions = [
+    "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+  ]
 }
