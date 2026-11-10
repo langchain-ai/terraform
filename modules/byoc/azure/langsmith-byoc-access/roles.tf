@@ -40,11 +40,15 @@ locals {
     "Microsoft.Storage/storageAccounts/managementPolicies/delete",
 
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+    # A new federated credential gives a new token issuer access to an
+    # identity. Upgrades that add a workload service account need it.
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
   ])
 
   # Reduced access (reduced_access = true): keep a running data plane up to
   # date. It cannot delete a data plane, its data stores, or its network, and
-  # it cannot create or delete role assignments.
+  # it cannot create or delete role assignments or federated credentials.
   langsmith_byoc_reduced_actions = [
     "*/read",
 
@@ -130,8 +134,6 @@ locals {
     # Managed identities
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
-    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
-    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
 
     # Key Vault. The control plane writes the data plane secrets through ARM.
     # The role has no Key Vault data actions, so it cannot read them.
@@ -142,9 +144,9 @@ locals {
   ]
 
   # With byo_iam the customer creates and deletes the identities, so the role
-  # loses these actions. It keeps assign/action and the federated credential
-  # actions: the AKS OIDC issuer exists only after cluster creation, so
-  # LangSmith writes the federated identity credentials.
+  # loses these actions. It keeps assign/action, and with full access the
+  # federated credential actions: the AKS OIDC issuer exists only after cluster
+  # creation, so LangSmith writes the federated identity credentials.
   langsmith_byoiam_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",

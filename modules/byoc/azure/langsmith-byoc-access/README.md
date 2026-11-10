@@ -96,9 +96,9 @@ data_planes = {
 }
 ```
 
-Terraform then updates the actions of the LangSmith custom role in place and deletes the `User Access Administrator` assignment. The custom role assignment stays, so LangSmith keeps access. With reduced access, LangSmith keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network, and it cannot create or delete role assignments. The apply takes about 10 minutes, because Terraform waits until Azure shows the changed role.
+Terraform then updates the actions of the LangSmith custom role in place and deletes the `User Access Administrator` assignment. The custom role assignment stays, so LangSmith keeps access. With reduced access, LangSmith keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network. It cannot create or delete role assignments or federated identity credentials. The apply takes about 10 minutes, because Terraform waits until Azure shows the changed role.
 
-Set `reduced_access = false` again before an upgrade that adds a role assignment. LangChain tells you when an upgrade needs this.
+Set `reduced_access = false` again before an upgrade that adds a role assignment or a federated identity credential. LangChain tells you when an upgrade needs this.
 
 ### Bring your own identities (optional)
 
@@ -137,7 +137,7 @@ The role assignments:
 
 The storage accounts and the cluster exist only after the data plane does, so the assignments use the resource group as scope. The conditions keep each identity to its own containers.
 
-LangSmith gets no `User Access Administrator` assignment. Its custom role loses the identity write and delete actions. LangSmith cannot create role assignments, role definitions, or identities. LangSmith still creates the federated identity credentials on the identities, because the AKS OIDC issuer URL exists only after the cluster exists.
+LangSmith gets no `User Access Administrator` assignment. Its custom role loses the identity write and delete actions. LangSmith cannot create role assignments, role definitions, or identities. LangSmith still creates the federated identity credentials on the identities, because the AKS OIDC issuer URL exists only after the cluster exists. With `reduced_access = true` as well, LangSmith cannot write identities or federated identity credentials.
 
 Pass `byoiam: {is_enabled: true}` in the data plane create request.
 
