@@ -152,6 +152,10 @@ locals {
     "Microsoft.Monitor/accounts/write",
     "Microsoft.Insights/dataCollectionEndpoints/write",
     "Microsoft.Insights/dataCollectionRules/write",
+    # Azure checks these on the workspace when a data collection rule sends logs
+    # there, and when AKS turns on Container Insights with it.
+    "Microsoft.OperationalInsights/workspaces/sharedKeys/action",
+    "Microsoft.OperationsManagement/solutions/write",
     # Associates the log collection rule with the AKS cluster.
     "Microsoft.Insights/dataCollectionRuleAssociations/write",
   ]

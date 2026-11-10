@@ -141,8 +141,10 @@ The setting adds these actions to the LangSmith custom role of that data plane:
 
 | Access | Added actions |
 |---|---|
-| Full and reduced | `Microsoft.OperationalInsights/workspaces/write`, `Microsoft.Monitor/accounts/write`, `Microsoft.Insights/dataCollectionEndpoints/write`, `Microsoft.Insights/dataCollectionRules/write`, `Microsoft.Insights/dataCollectionRuleAssociations/write` |
+| Full and reduced | `Microsoft.OperationalInsights/workspaces/write`, `Microsoft.OperationalInsights/workspaces/sharedKeys/action`, `Microsoft.OperationsManagement/solutions/write`, `Microsoft.Monitor/accounts/write`, `Microsoft.Insights/dataCollectionEndpoints/write`, `Microsoft.Insights/dataCollectionRules/write`, `Microsoft.Insights/dataCollectionRuleAssociations/write` |
 | Full only | `Microsoft.Insights/dataCollectionEndpoints/delete`, `Microsoft.Insights/dataCollectionRules/delete`, `Microsoft.Insights/dataCollectionRuleAssociations/delete` |
+
+Azure checks `workspaces/sharedKeys/action` on the Log Analytics workspace when a data collection rule sends logs to it, and both actions when AKS turns on Container Insights with it. The shared keys can write to the workspace but not query it. The role grants both actions only in the data plane resource group.
 
 The role assignments for the collector and the workload identity come from the `User Access Administrator` assignment, so keep `reduced_access = false` while LangSmith turns observability on or off. You can set it to `true` again afterwards.
 
