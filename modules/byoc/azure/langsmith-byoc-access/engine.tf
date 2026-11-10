@@ -5,18 +5,11 @@ locals {
   }
 }
 
-data "azurerm_resources" "engine_identities" {
-  for_each = local.engine_foundry_data_planes
-
-  resource_group_name = "langsmith-byoc-${each.key}"
-  type                = "Microsoft.ManagedIdentity/userAssignedIdentities"
-}
-
-# LangSmith names it <prefix>-smith-workload-identity.
+# Without byo_iam, LangSmith creates this identity.
 data "azurerm_user_assigned_identity" "engine" {
-  for_each = local.engine_foundry_data_planes
+  for_each = { for key, data_plane in local.engine_foundry_data_planes : key => data_plane if !data_plane.byo_iam }
 
-  name                = one([for identity in data.azurerm_resources.engine_identities[each.key].resources : identity.name if endswith(identity.name, "-smith-workload-identity")])
+  name                = "langsmith-workload-identity"
   resource_group_name = "langsmith-byoc-${each.key}"
 }
 
@@ -27,6 +20,10 @@ resource "azurerm_role_assignment" "engine_foundry" {
 
   scope                = each.value.engine_foundry_resource_id
   role_definition_name = "Cognitive Services User"
-  principal_id         = data.azurerm_user_assigned_identity.engine[each.key].principal_id
-  principal_type       = "ServicePrincipal"
+  principal_id = (
+    each.value.byo_iam
+    ? azurerm_user_assigned_identity.data_plane["${each.key}/workload"].principal_id
+    : data.azurerm_user_assigned_identity.engine[each.key].principal_id
+  )
+  principal_type = "ServicePrincipal"
 }

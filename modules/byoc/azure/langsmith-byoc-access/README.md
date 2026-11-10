@@ -69,26 +69,68 @@ Keep the Terraform state in remote storage.
 
 ## Manage data planes
 
-The `data_planes` map holds one entry per data plane. The key is the data plane name.
+Each entry in `data_planes` is one data plane. The key is the data plane name.
 
 ### Add a data plane
 
-1. Add an entry to `data_planes` and run `terraform apply`.
-2. Make the create request body from the outputs, and send it to the LangSmith API. `vpc_cidr` is the VNet that LangSmith creates: a private range from `/16` to `/18`.
+1. Add an entry to `data_planes`.
+2. Run `terraform apply`.
+3. Get the IDs for the form:
 
-```bash
-terraform output -json langsmith_byoc_access | jq --arg dp prod '{
-  name: $dp,
-  region: .data_planes[$dp].region,
-  azure_entra_tenant_id: .azure_entra_tenant_id,
-  resource_group_id: .data_planes[$dp].resource_group_id,
-  vpc_cidr: "10.80.0.0/16"
-}'
+   ```bash
+   terraform output -json langsmith_byoc_access | jq --arg dp prod '{
+     tenant_id: .azure_entra_tenant_id,
+     resource_group_id: .data_planes[$dp].resource_group_id,
+     region: .data_planes[$dp].region
+   }'
+   ```
+
+4. In LangSmith, go to **Settings > Data Planes**. Click **+ Data Plane**.
+5. Enter the name (the `data_planes` key), the region, the tenant ID, and the resource group ID.
+6. Enter a VNet CIDR. Use a private range from `/16` to `/18`, for example `10.80.0.0/16`.
+7. Click **Create data plane**.
+
+### Bring your own identities (optional)
+
+> **CAUTION:** Set `byo_iam` before you create the data plane. Do not change it later.
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", byo_iam = true }
+}
 ```
+
+In the create form, select **Use existing managed identities**.
+
+The module creates these identities. LangSmith expects these names:
+
+| Identity | Role | Scope |
+|---|---|---|
+| `langsmith-aks-identity` | Network Contributor | resource group |
+| `langsmith-cert-manager-identity` | DNS Zone Contributor | resource group |
+| `langsmith-external-secrets-identity` | Key Vault Secrets User | Key Vault |
+| `langsmith-workload-identity` | Monitoring Reader | resource group |
+| `langsmith-workload-identity` | blob role, container `langsmith` | resource group, with a condition |
+| `langsmith-postgres-setup-identity` | none | - |
+| `langsmith-smithdb-identity` | blob role: read `langsmith`, read and write `smithdb` | resource group, with a condition |
+| `langsmith-sandbox-identity` | blob role, container `sandboxes` | resource group, with a condition |
+| LangSmith application | Azure Kubernetes Service RBAC Cluster Admin | resource group |
+
+The blob role is `langsmith-byoc-<key>-blob-<suffix>`. The conditions keep each identity to its own containers.
+
+With `byo_iam`, LangSmith does not need these permissions:
+
+| Permission | Why |
+|---|---|
+| `User Access Administrator` | You create the role assignments. |
+| `Microsoft.ManagedIdentity/userAssignedIdentities/write` | You create the identities. |
+| `Microsoft.ManagedIdentity/userAssignedIdentities/delete` | You delete the identities. |
+
+LangSmith still creates the federated identity credentials. The AKS OIDC issuer exists only after LangSmith creates the cluster.
 
 ### Reduce access after deployment
 
-When the data plane is active, set `reduced_access = true` and run `terraform apply`:
+When the data plane is active, set `reduced_access = true`. Then run `terraform apply`:
 
 ```hcl
 data_planes = {
@@ -96,13 +138,42 @@ data_planes = {
 }
 ```
 
-Terraform then updates the actions of the LangSmith custom role in place and deletes the `User Access Administrator` assignment. The custom role assignment stays, so LangSmith keeps access. With reduced access, LangSmith keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network, and it cannot create or delete role assignments. The apply takes about 10 minutes, because Terraform waits until Azure shows the changed role.
+The apply takes about 10 minutes. LangSmith can still upgrade, scale, and repair the data plane.
 
-Set `reduced_access = false` again before an upgrade that adds a role assignment. LangChain tells you when an upgrade needs this.
+With `reduced_access`, LangSmith does not have these permissions:
+
+| Area | Permissions |
+|---|---|
+| Role assignments | `User Access Administrator` |
+| PostgreSQL | `flexibleServers/administrators/write` |
+| Redis | `*/accessPolicyAssignments/write` |
+| Storage | `storageAccounts/listKeys/action` |
+| Managed identities | `userAssignedIdentities/write`, `userAssignedIdentities/delete`, `federatedIdentityCredentials/write`, `federatedIdentityCredentials/delete` |
+
+LangSmith cannot give a principal access to an identity or a data store, and it cannot read storage keys.
+
+#### Combine with `byo_iam`
+
+You can set `reduced_access = true` on a data plane with `byo_iam = true`:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", byo_iam = true, reduced_access = true }
+}
+```
+
+`byo_iam` already removes `User Access Administrator` and the identity write and delete actions. `reduced_access` also removes the federated identity credential, PostgreSQL administrator, Redis access policy, and storage key actions. LangSmith then cannot change identities, role assignments, federated identity credentials, PostgreSQL administrators, or Redis access policies.
+
+Set `reduced_access = false` again before you:
+
+- delete or recreate the data plane.
+- apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
+
+[`roles.tf`](roles.tf) has the full lists.
 
 ### Let Engine use Azure AI Foundry (optional)
 
-When the data plane is active, add your Foundry resource ID and run `terraform apply`:
+When the data plane is active, add the Foundry resource ID. Then run `terraform apply`:
 
 ```hcl
 data_planes = {
@@ -113,16 +184,21 @@ data_planes = {
 }
 ```
 
-To find the ID, run `az cognitiveservices account show -g <resource-group> -n <foundry-resource> --query id -o tsv`. The workload identity of the data plane gets `Cognitive Services User` on that resource, so LangSmith Engine can call Claude and GPT there without an API key. Remove the ID before you delete the data plane.
+To get the ID, run `az cognitiveservices account show -g <resource-group> -n <foundry-resource> --query id -o tsv`.
+
+The workload identity gets `Cognitive Services User` on that resource. Engine can then call Claude and GPT without an API key. Remove the ID before you delete the data plane.
 
 ### Remove a data plane
 
-> **CAUTION:** Do not remove the entry from `data_planes` before you delete the data plane in LangSmith. LangSmith needs its role assignments to delete the data plane resources.
+> **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
 
-1. If the data plane has `reduced_access = true`, set it to `false` and run `terraform apply`. Wait 5 minutes for Azure to apply the role change.
-2. Delete the data plane in LangSmith. LangSmith deletes the AKS cluster, PostgreSQL, Redis, the sandbox storage, the network, and the private DNS zones. It keeps the resource group, the Key Vault, the Blob storage accounts with trace and SmithDB data, and, if in-cluster deployment builds were on, the container registry with the built images. A new data plane with the same name reuses them.
-3. When you no longer need the retained data, delete the Blob storage accounts and the container registry in the resource group.
-4. Remove the entry from `data_planes` and run `terraform apply`. Terraform deletes the resource group, the Key Vault, the custom role, and the role assignments. With the default `features {}`, the AzureRM provider refuses to delete a resource group that still contains resources Terraform does not manage, such as the retained storage accounts and registry.
+1. If `reduced_access = true`, set it to `false`. Run `terraform apply`. Wait 5 minutes.
+2. Delete the data plane in LangSmith.
+3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. A new data plane with the same name uses them again.
+4. When you do not need the data, delete the storage accounts and the registry.
+5. Remove the entry from `data_planes`. Run `terraform apply`.
+
+> **NOTE:** The AzureRM provider does not delete a resource group that contains resources that Terraform does not manage. Do step 4 before step 5.
 
 ## Inputs
 
@@ -140,6 +216,7 @@ Fields of each `data_planes` entry:
 | `location` | `string` | yes | - | Azure region of the data plane. |
 | `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
+| `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
