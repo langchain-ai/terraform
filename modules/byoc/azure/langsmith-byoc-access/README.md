@@ -40,6 +40,11 @@ provider "azurerm" {
     "Microsoft.ManagedIdentity",
     "Microsoft.Network",
     "Microsoft.Storage",
+    # Only for deployment_observability.
+    "Microsoft.Insights",
+    "Microsoft.Monitor",
+    "Microsoft.OperationalInsights",
+    "Microsoft.OperationsManagement",
   ]
 }
 
@@ -188,14 +193,45 @@ To get the ID, run `az cognitiveservices account show -g <resource-group> -n <fo
 
 The workload identity gets `Cognitive Services User` on that resource. Engine can then call Claude and GPT without an API key. Remove the ID before you delete the data plane.
 
+### Turn on deployment observability (optional)
+
+Deployment observability shows Monitoring charts and searchable runtime and build log history for each LangGraph deployment in LangSmith. The data stays in the data plane resource group. It is not supported with `byo_iam`, because LangSmith creates an identity and role assignments for it. Set `deployment_observability = true`, keep `reduced_access = false`, and run `terraform apply` before LangSmith turns it on for the data plane:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", deployment_observability = true }
+}
+```
+
+Before you set it back to `false` or remove it, have LangSmith turn observability off or delete the data plane, because the role needs its delete actions to remove the rules, the endpoint and the association.
+
+Register `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.OperationalInsights` and `Microsoft.OperationsManagement` first (see [Usage](#usage)). LangSmith then creates, in the data plane resource group:
+
+- **Logs:** a Log Analytics workspace, and Container Insights on the AKS cluster with a data collection rule that keeps only the LangGraph deployment and build container logs. Environment variables are not collected. The workspace keeps logs for 30 days unless LangSmith sets another retention, up to 730; Log Analytics bills ingestion, and retention past 31 days.
+- **Metrics:** an Azure Monitor workspace, a data collection endpoint and rule, and a managed identity that may publish only through that rule. A collector in the cluster scrapes the LangGraph deployment pods, CPU and memory, and kube-state-metrics, and writes them through the rule. Azure Monitor bills per sample ingested. Azure creates the workspace's managed resource group, `MA_<workspace>_<region>_managed`, which holds its default rule and endpoint.
+- **Reads:** the data plane's workload identity gets `Log Analytics Reader` on the Log Analytics workspace and `Monitoring Data Reader` on the Azure Monitor workspace, and on nothing else.
+
+The setting adds these actions to the LangSmith custom role of that data plane:
+
+| Access | Added actions |
+|---|---|
+| Full and reduced | `Microsoft.OperationalInsights/workspaces/write`, `Microsoft.OperationalInsights/workspaces/sharedKeys/action`, `Microsoft.OperationsManagement/solutions/write`, `Microsoft.Monitor/accounts/write`, `Microsoft.Insights/dataCollectionEndpoints/write`, `Microsoft.Insights/dataCollectionRules/write`, `Microsoft.Insights/dataCollectionRuleAssociations/write` |
+| Full only | `Microsoft.Insights/dataCollectionEndpoints/delete`, `Microsoft.Insights/dataCollectionRules/delete`, `Microsoft.Insights/dataCollectionRuleAssociations/delete` |
+
+Azure checks `workspaces/sharedKeys/action` on the Log Analytics workspace when a data collection rule sends logs to it, and both actions when AKS turns on Container Insights with it. The shared keys can write to the workspace but not query it. The role grants both actions only in the data plane resource group.
+
+The role assignments for the collector and the workload identity come from the `User Access Administrator` assignment, so keep `reduced_access = false` while LangSmith turns observability on or off. You can set it to `true` again afterwards.
+
+When observability is turned off, LangSmith deletes the rules, the endpoint, the collector and its identity, and the role assignments. It keeps both workspaces with their data, and the Container Insights add-on, which collects nothing without its rule. The role cannot delete either workspace.
+
 ### Remove a data plane
 
 > **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
 
 1. If `reduced_access = true`, set it to `false`. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
-3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. A new data plane with the same name uses them again.
-4. When you do not need the data, delete the storage accounts and the registry.
+3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
+4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
 5. Remove the entry from `data_planes`. Run `terraform apply`.
 
 > **NOTE:** The AzureRM provider does not delete a resource group that contains resources that Terraform does not manage. Do step 4 before step 5.
@@ -218,6 +254,7 @@ Fields of each `data_planes` entry:
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
+| `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. Not with `byo_iam`. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
 

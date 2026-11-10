@@ -157,6 +157,32 @@ locals {
     "Microsoft.KeyVault/vaults/privateEndpointConnections/delete",
   ]
 
+  # Added with deployment_observability. Container Insights collects the
+  # LangGraph deployment and build logs into a Log Analytics workspace, and an
+  # in-cluster collector writes deployment metrics through a data collection
+  # rule into an Azure Monitor workspace. LangSmith keeps both workspaces, with
+  # their data, when observability is turned off or the data plane is deleted,
+  # so the role cannot delete them.
+  langsmith_byoc_observability_reduced_actions = [
+    "Microsoft.OperationalInsights/workspaces/write",
+    "Microsoft.Monitor/accounts/write",
+    "Microsoft.Insights/dataCollectionEndpoints/write",
+    "Microsoft.Insights/dataCollectionRules/write",
+    # Azure checks these on the workspace when a data collection rule sends logs
+    # there, and when AKS turns on Container Insights with it.
+    "Microsoft.OperationalInsights/workspaces/sharedKeys/action",
+    "Microsoft.OperationsManagement/solutions/write",
+    # Associates the log collection rule with the AKS cluster.
+    "Microsoft.Insights/dataCollectionRuleAssociations/write",
+  ]
+  # Turning observability off, or deleting the data plane, deletes the rules,
+  # the endpoint and the association.
+  langsmith_byoc_observability_actions = concat(local.langsmith_byoc_observability_reduced_actions, [
+    "Microsoft.Insights/dataCollectionEndpoints/delete",
+    "Microsoft.Insights/dataCollectionRules/delete",
+    "Microsoft.Insights/dataCollectionRuleAssociations/delete",
+  ])
+
   # With byo_iam, the customer creates and deletes the identities.
   langsmith_byoiam_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",

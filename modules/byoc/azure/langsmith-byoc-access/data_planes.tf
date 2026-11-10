@@ -64,10 +64,15 @@ resource "azurerm_role_definition" "langsmith_byoc" {
 
   permissions {
     # Keep the list order. setsubtract sorts it.
-    actions = [
-      for action in(each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions) : action
-      if !(each.value.byo_iam && contains(local.langsmith_byoiam_removed_actions, action))
-    ]
+    actions = concat(
+      [
+        for action in(each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions) : action
+        if !(each.value.byo_iam && contains(local.langsmith_byoiam_removed_actions, action))
+      ],
+      each.value.deployment_observability ? (
+        each.value.reduced_access ? local.langsmith_byoc_observability_reduced_actions : local.langsmith_byoc_observability_actions
+      ) : [],
+    )
   }
 }
 
