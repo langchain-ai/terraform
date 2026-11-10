@@ -35,7 +35,8 @@ instance goes to its own `namespace`.
   migrations create extensions ([external Postgres requirements](https://docs.langchain.com/langsmith/self-host-external-postgres#requirements)),
   and Redis runs `maxmemory-policy noeviction` ([external Redis](https://docs.langchain.com/langsmith/self-host-external-redis)).
 
-Each namespace gets a default-deny NetworkPolicy and Pod Security `baseline` (`restricted` when it holds RustFS alone);
+Each namespace gets a default-deny NetworkPolicy, except one in `allowedNamespaces` (the stores in LangSmith's own
+namespace, whose pods nothing here admits), and Pod Security `baseline` (`restricted` when it holds RustFS alone);
 each instance a policy that admits its own namespace, `allowedNamespaces` and its `allowedCidrs`, and a preferred anti-affinity on
 `datastoreLabel` that spreads the stores across nodes. Postgres sizes `shared_buffers` (a quarter) and
 `effective_cache_size` (a half) from its memory limit; Redis sets `maxmemory` to three quarters of its own, leaving room

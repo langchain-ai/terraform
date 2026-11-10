@@ -25,6 +25,12 @@ metadata:
   labels:
     pod-security.kubernetes.io/enforce: {{ $level }}
 {{- end }}
+{{- /*
+Not in a namespace the stores' clients share (datastore_namespace = LangSmith's): a deny on every pod there
+cut off every LangSmith pod, since nothing here admits traffic to them (Robin's review of #488). The stores
+there stay isolated by their own policies, which select them.
+*/ -}}
+{{- if not (has $ns $.Values.allowedNamespaces) }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -34,4 +40,5 @@ metadata:
 spec:
   podSelector: {}
   policyTypes: [Ingress]
+{{- end }}
 {{- end }}
