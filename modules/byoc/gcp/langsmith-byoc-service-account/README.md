@@ -128,7 +128,7 @@ The provisioner can set the IAM policies of the six data plane service accounts,
 
 The LangSmith control plane installs LangSmith into each data plane cluster through the cluster's DNS-based endpoint, as `var.crossplane_service_account`. GKE authorizes Kubernetes API requests through IAM with an empty resource name, so a condition on the cluster name can't limit them. A condition on a tag of the cluster does:
 
-- The module creates the tag `managed_by: langsmith` in the project, and lets the provisioner use that value (`roles/resourcemanager.tagUser` on it). If the project already has a `managed_by` tag key, set `create_cluster_tag_key = false` and pass the key's ID (`tagKeys/<number>`) as `cluster_tag_key`, and the module adds the `langsmith` value to it.
+- The module creates the tag `managed_by: langsmith` in the project, and lets the provisioner use that value (`roles/resourcemanager.tagUser` on it).
 - LangSmith binds the tag to each data plane cluster it creates. The provisioner can bind it only to `langsmith-` clusters (`<prefix>NamedGke`), and can't tag the project, whose tags every cluster would inherit.
 - `roles/container.admin` for `var.crossplane_service_account` has the condition `resource.matchTagId(<key>, <value>)`. It covers the GKE API and the Kubernetes API, through both the DNS-based and the IP-based endpoints, on tagged clusters only.
 - The DNS-based endpoint checks `container.clusters.connect` without the cluster's tags, so `<prefix>ClusterConnect` grants that permission alone, limited to `langsmith-` cluster names. Connecting gives no access inside a cluster.

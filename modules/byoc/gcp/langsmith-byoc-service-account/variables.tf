@@ -52,39 +52,6 @@ variable "byo_iam" {
   default     = false
 }
 
-variable "create_cluster_tag_key" {
-  description = "Create the project's managed_by tag key. Set false when the project already has a managed_by key, and pass its ID as cluster_tag_key."
-  type        = bool
-  default     = true
-}
-
-variable "cluster_tag_key" {
-  description = "ID (tagKeys/<number>) of the project's existing managed_by tag key, with create_cluster_tag_key = false. The module adds the langsmith value to it."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = var.cluster_tag_key == null || can(regex("^tagKeys/[0-9]+$", var.cluster_tag_key))
-    error_message = "cluster_tag_key must be a tag key ID such as tagKeys/123456789."
-  }
-
-  validation {
-    condition     = var.create_cluster_tag_key || var.cluster_tag_key != null
-    error_message = "create_cluster_tag_key = false needs cluster_tag_key, the ID of the existing managed_by key."
-  }
-}
-
-variable "create_cluster_tag_value" {
-  description = "Internal to LangChain; keep true. False for a second copy of this module in a LangChain test project: that copy sets create_cluster_tag_key = false too, and uses the langsmith value that the first copy created under cluster_tag_key."
-  type        = bool
-  default     = true
-
-  validation {
-    condition     = var.create_cluster_tag_value || !var.create_cluster_tag_key
-    error_message = "create_cluster_tag_value = false needs create_cluster_tag_key = false and cluster_tag_key, the key that holds the existing langsmith value."
-  }
-}
-
 variable "deployment_observability" {
   description = "Let LangSmith turn on deployment observability: Monitoring charts and searchable log history for LangGraph deployments, kept in this project. Adds the Cloud Logging and Monitoring APIs, the provisioner's log bucket and sink permissions, and roles/logging.viewAccessor and roles/monitoring.viewer for the LangSmith app. Set it before LangSmith turns the feature on for a data plane. Not supported with byo_iam."
   type        = bool

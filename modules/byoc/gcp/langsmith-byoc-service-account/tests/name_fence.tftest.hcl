@@ -16,13 +16,6 @@ mock_provider "google" {
     }
   }
 
-  mock_data "google_tags_tag_value" {
-    defaults = {
-      id              = "tagValues/333"
-      parent          = "tagKeys/999"
-      namespaced_name = "p/managed_by/langsmith"
-    }
-  }
 }
 
 variables {
@@ -89,7 +82,7 @@ run "default" {
   }
 
   assert {
-    condition     = google_tags_tag_key.cluster[0].short_name == "managed_by" && google_tags_tag_key.cluster[0].parent == "projects/p" && google_tags_tag_value.cluster[0].short_name == "langsmith" && google_tags_tag_value_iam_member.provisioner.role == "roles/resourcemanager.tagUser"
+    condition     = google_tags_tag_key.cluster.short_name == "managed_by" && google_tags_tag_key.cluster.parent == "projects/p" && google_tags_tag_value.cluster.short_name == "langsmith" && google_tags_tag_value_iam_member.provisioner.role == "roles/resourcemanager.tagUser"
     error_message = "The cluster tag is managed_by: langsmith, and the provisioner can use it."
   }
 
@@ -161,60 +154,6 @@ run "byo_iam" {
     condition     = google_project_iam_member.byo_iam_external_secrets[0].condition[0].expression == "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
     error_message = "External Secrets stays limited to ls- secrets."
   }
-}
-
-run "shared_cluster_tag_key" {
-  command = plan
-
-  variables {
-    create_cluster_tag_key   = false
-    cluster_tag_key          = "tagKeys/999"
-    create_cluster_tag_value = false
-  }
-
-  assert {
-    condition     = length(google_tags_tag_key.cluster) == 0 && length(google_tags_tag_value.cluster) == 0 && data.google_tags_tag_value.cluster[0].parent == "tagKeys/999" && data.google_tags_tag_value.cluster[0].short_name == "langsmith"
-    error_message = "A second copy uses the existing managed_by: langsmith value and creates neither the key nor the value."
-  }
-
-  assert {
-    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.matchTagId(\"tagKeys/999\", \"tagValues/333\")"
-    error_message = "The Crossplane grant matches the existing value."
-  }
-}
-
-run "existing_managed_by_key" {
-  command = plan
-
-  variables {
-    create_cluster_tag_key = false
-    cluster_tag_key        = "tagKeys/888"
-  }
-
-  assert {
-    condition     = length(google_tags_tag_key.cluster) == 0 && google_tags_tag_value.cluster[0].parent == "tagKeys/888" && google_tags_tag_value.cluster[0].short_name == "langsmith" && length(data.google_tags_tag_value.cluster) == 0
-    error_message = "With an existing managed_by key, the module adds the langsmith value to it."
-  }
-}
-
-run "shared_value_needs_existing_key" {
-  command = plan
-
-  variables {
-    create_cluster_tag_value = false
-  }
-
-  expect_failures = [var.create_cluster_tag_value]
-}
-
-run "existing_key_needs_its_id" {
-  command = plan
-
-  variables {
-    create_cluster_tag_key = false
-  }
-
-  expect_failures = [var.cluster_tag_key]
 }
 
 run "role_ids_fit_with_longest_prefix" {
