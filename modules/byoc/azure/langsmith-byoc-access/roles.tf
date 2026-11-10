@@ -43,18 +43,23 @@ locals {
   ])
 
   # Reduced access (reduced_access = true): keep a running data plane up to
-  # date. It cannot delete a data plane, its data stores, or its network, and
-  # it cannot create or delete role assignments or federated credentials.
+  # date. It cannot delete a data plane, its data stores, or its network. It
+  # cannot give a principal access: no role assignments, federated
+  # credentials, PostgreSQL administrators, or Redis access policies.
   langsmith_byoc_reduced_actions = [
     for action in local.langsmith_byoc_update_actions : action
     if !contains(local.langsmith_byoc_reduced_removed_actions, action)
   ]
 
-  # A new federated credential gives a new token issuer access to an identity.
-  # Upgrades that add a workload service account need full access.
+  # Each of these gives a principal access to an identity or a data store. The
+  # data plane uses them at creation, and an upgrade that adds a workload
+  # service account or a data store user needs full access.
   langsmith_byoc_reduced_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
+    "Microsoft.DBforPostgreSQL/flexibleServers/administrators/write",
+    "Microsoft.Cache/*/accessPolicyAssignments/write",
+    "Microsoft.Cache/*/accessPolicyAssignments/delete",
   ]
 
   # The actions that create and update a data plane. The order of the action

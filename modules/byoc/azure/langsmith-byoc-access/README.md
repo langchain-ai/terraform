@@ -96,9 +96,9 @@ data_planes = {
 }
 ```
 
-Terraform then updates the actions of the LangSmith custom role in place and deletes the `User Access Administrator` assignment. The custom role assignment stays, so LangSmith keeps access. With reduced access, LangSmith keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network. It cannot create or delete role assignments or federated identity credentials. The apply takes about 10 minutes, because Terraform waits until Azure shows the changed role.
+Terraform then updates the actions of the LangSmith custom role in place and deletes the `User Access Administrator` assignment. The custom role assignment stays, so LangSmith keeps access. With reduced access, LangSmith keeps the data plane up to date: upgrades, scaling, and repairs. It cannot delete the data plane, its databases, its storage accounts, or its network. It cannot give a principal access: it cannot create or delete role assignments, federated identity credentials, PostgreSQL administrators, or Redis access policy assignments. The apply takes about 10 minutes, because Terraform waits until Azure shows the changed role.
 
-Set `reduced_access = false` again before an upgrade that adds a role assignment or a federated identity credential. LangChain tells you when an upgrade needs this.
+Set `reduced_access = false` again before an upgrade that adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy assignment. LangChain tells you when an upgrade needs this.
 
 ### Bring your own identities (optional)
 
