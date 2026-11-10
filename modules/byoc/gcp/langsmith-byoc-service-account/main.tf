@@ -42,6 +42,7 @@ locals {
     "compute.globalAddresses.use",
     "compute.globalOperations.get",
     "compute.instanceGroupManagers.get",
+    "compute.instanceGroupManagers.list",
     "compute.networks.addPeering",
     "compute.networks.create",
     "compute.networks.delete",

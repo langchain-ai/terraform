@@ -187,3 +187,26 @@ run "role_ids_fit_with_longest_prefix" {
     error_message = "A custom role ID is longer than 64 characters."
   }
 }
+
+run "deployment_observability" {
+  command = plan
+
+  variables {
+    deployment_observability = true
+  }
+
+  assert {
+    condition     = alltrue([for p in local.observability_provisioner_permissions : contains(google_project_iam_custom_role.provisioner.permissions, p)])
+    error_message = "Deployment observability adds its log bucket and sink permissions to the provisioner role."
+  }
+
+  assert {
+    condition     = length(setintersection(google_project_iam_custom_role.provisioner.permissions, local.name_fenced_permissions)) == 0
+    error_message = "Fenced permissions stay out of the provisioner role with deployment observability."
+  }
+
+  assert {
+    condition     = contains(local.granted_roles, "roles/logging.viewAccessor") && !contains(local.granted_roles, "roles/container.admin")
+    error_message = "The provisioner may grant the observability roles but not roles/container.admin."
+  }
+}
