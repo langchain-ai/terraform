@@ -167,6 +167,7 @@ run "shared_cluster_tag_key" {
   command = plan
 
   variables {
+    create_cluster_tag_key   = false
     cluster_tag_key          = "tagKeys/999"
     create_cluster_tag_value = false
   }
@@ -186,7 +187,8 @@ run "existing_managed_by_key" {
   command = plan
 
   variables {
-    cluster_tag_key = "tagKeys/888"
+    create_cluster_tag_key = false
+    cluster_tag_key        = "tagKeys/888"
   }
 
   assert {
@@ -195,7 +197,7 @@ run "existing_managed_by_key" {
   }
 }
 
-run "shared_value_needs_key" {
+run "shared_value_needs_existing_key" {
   command = plan
 
   variables {
@@ -203,6 +205,16 @@ run "shared_value_needs_key" {
   }
 
   expect_failures = [var.create_cluster_tag_value]
+}
+
+run "existing_key_needs_its_id" {
+  command = plan
+
+  variables {
+    create_cluster_tag_key = false
+  }
+
+  expect_failures = [var.cluster_tag_key]
 }
 
 run "role_ids_fit_with_longest_prefix" {
