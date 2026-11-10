@@ -44,7 +44,7 @@ locals {
 
   # Reduced access (reduced_access = true): full access without the actions
   # that give a principal access to an identity or a data store, read storage
-  # keys, or delete an identity. data_planes.tf also deletes the User Access
+  # keys, or write or delete an identity. data_planes.tf also deletes the User Access
   # Administrator assignment. The data plane uses these at creation and
   # teardown, and an upgrade that adds a workload service account or a data
   # store user needs full access.
@@ -54,6 +54,7 @@ locals {
   ]
 
   langsmith_byoc_reduced_removed_actions = [
+    "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",

@@ -148,14 +148,14 @@ With `reduced_access`, LangSmith does not have these permissions:
 | PostgreSQL | `flexibleServers/administrators/write` |
 | Redis | `*/accessPolicyAssignments/write` |
 | Storage | `storageAccounts/listKeys/action` |
-| Managed identities | `userAssignedIdentities/delete`, `federatedIdentityCredentials/write`, `federatedIdentityCredentials/delete` |
+| Managed identities | `userAssignedIdentities/write`, `userAssignedIdentities/delete`, `federatedIdentityCredentials/write`, `federatedIdentityCredentials/delete` |
 
 LangSmith cannot give a principal access to an identity or a data store, and it cannot read storage keys.
 
 Set `reduced_access = false` again before you:
 
 - delete or recreate the data plane.
-- apply an upgrade that adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
+- apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
 
 [`roles.tf`](roles.tf) has the full lists.
 
