@@ -70,7 +70,11 @@ platformBackend:
         cpu: "250m"
         memory: "512Mi"
       limits:
-        cpu: "1"
+        # Go sets GOMAXPROCS to the limit rounded up, at least 2: under a 1-CPU limit two threads spend the
+        # quota in 50 ms and the kernel freezes the pod for the rest of each 100 ms (ingest-queue 98% of
+        # periods throttled at 4.3 traces/s on the bare-metal lab, 2026-10-22). A limit, so the budget,
+        # which counts requests, is unchanged. Production as terraform#513 (Michael Frederick).
+        cpu: "2"
         memory: "1Gi"
 
 playground:
@@ -107,7 +111,11 @@ ingestQueue:
         cpu: "250m"
         memory: "512Mi"
       limits:
-        cpu: "1"
+        # Go sets GOMAXPROCS to the limit rounded up, at least 2: under a 1-CPU limit two threads spend the
+        # quota in 50 ms and the kernel freezes the pod for the rest of each 100 ms (ingest-queue 98% of
+        # periods throttled at 4.3 traces/s on the bare-metal lab, 2026-10-22). A limit, so the budget,
+        # which counts requests, is unchanged. Production as terraform#513 (Michael Frederick).
+        cpu: "2"
         memory: "1Gi"
 
 aceBackend:
