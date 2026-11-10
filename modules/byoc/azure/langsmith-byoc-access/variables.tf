@@ -24,6 +24,9 @@ variable "data_planes" {
     # upgrade that adds a role assignment, and before you delete or re-create
     # the data plane.
     reduced_access = optional(bool, false)
+    # Create the identities and role assignments yourself. LangSmith gets no
+    # User Access Administrator. Do not change after creation.
+    byo_iam = optional(bool, false)
     # Azure AI Foundry resource ID. The workload identity of the data plane
     # gets Cognitive Services User on it, so Engine can call it without an API
     # key. Set it after the data plane is active.
