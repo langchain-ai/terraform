@@ -289,16 +289,15 @@ locals {
   provisioner_permissions = sort(setsubtract(local.base_provisioner_permissions, local.provisioner_removed_permissions))
 
   # The project roles the data plane compositions grant: to the GKE node and
-  # sandbox host service accounts, the in-cluster workloads, and the control
-  # plane's Crossplane service account for its access to the cluster. The
-  # provisioner may grant only these.
+  # sandbox host service accounts and the in-cluster workloads. The provisioner
+  # may grant only these. The control plane's Crossplane service account gets
+  # roles/container.admin from this module instead (crossplane_container_admin).
   granted_roles = [
     "roles/artifactregistry.reader",
     "roles/cloudsql.admin",
     "roles/cloudsql.client",
     # The app logs in to Cloud SQL as its IAM database user.
     "roles/cloudsql.instanceUser",
-    "roles/container.admin",
     "roles/container.defaultNodeServiceAccount",
     "roles/redis.dbConnectionUser",
     "roles/secretmanager.secretAccessor",
@@ -643,10 +642,10 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
 
 # The control plane's Crossplane service account reaches the data plane GKE
 # clusters through this role, limited as described at
-# crossplane_container_admin_condition.
-resource "google_project_iam_member" "byo_iam_crossplane_container_admin" {
-  count = var.byo_iam ? 1 : 0
-
+# crossplane_container_admin_condition. The module grants it, not the
+# provisioner, so roles/container.admin is not among the roles the provisioner
+# can grant.
+resource "google_project_iam_member" "crossplane_container_admin" {
   project = var.project_id
   role    = "roles/container.admin"
   member  = "serviceAccount:${var.crossplane_service_account}"
@@ -656,6 +655,11 @@ resource "google_project_iam_member" "byo_iam_crossplane_container_admin" {
     description = "LangSmith data plane GKE clusters, and Kubernetes API requests"
     expression  = local.crossplane_container_admin_condition
   }
+}
+
+moved {
+  from = google_project_iam_member.byo_iam_crossplane_container_admin[0]
+  to   = google_project_iam_member.crossplane_container_admin
 }
 
 resource "google_project_iam_custom_role" "service_account_iam_manager" {

@@ -52,8 +52,13 @@ run "default" {
   }
 
   assert {
-    condition     = length(google_project_iam_custom_role.postgres_setup) == 0 && length(google_project_iam_member.byo_iam_crossplane_container_admin) == 0 && length(google_project_iam_member.byo_iam) == 0
+    condition     = length(google_project_iam_custom_role.postgres_setup) == 0 && length(google_project_iam_member.byo_iam) == 0
     error_message = "No byo_iam resources without byo_iam."
+  }
+
+  assert {
+    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\") || resource.name == \"\"" && !strcontains(google_project_iam_member.project_iam_granter[0].condition[0].expression, "roles/container.admin")
+    error_message = "The module grants Crossplane container.admin limited to langsmith- clusters, and the provisioner can't grant container.admin."
   }
 
   assert {
@@ -75,7 +80,7 @@ run "byo_iam" {
   }
 
   assert {
-    condition     = google_project_iam_member.byo_iam_crossplane_container_admin[0].condition[0].expression == "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\") || resource.name == \"\""
+    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.name.extract(\"/clusters/{name}\").startsWith(\"langsmith-\") || resource.name == \"\""
     error_message = "The Crossplane grant is limited to langsmith- clusters and Kubernetes requests."
   }
 
