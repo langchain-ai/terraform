@@ -145,6 +145,10 @@ This module is opinionated. It assumes:
   and `datastore_replicas = 3`: a primary and two replicas of each, failed over by CloudNativePG and by three Redis
   Sentinels, every replica counted by the budget with its own volume. Volumes stay node-local, so a replica is what
   survives a lost node. RustFS stays one pod.
+- **A fresh install of the datastores.** An install made with #421's modules, one per store (`module.postgres_langsmith`
+  and its siblings), does not upgrade in place: the next apply deletes their namespaces, and with them the claims on
+  their volumes, and generates new passwords. Back up the LangSmith and SmithDB Postgres, the JuiceFS Redis and the
+  object store first, apply, then restore into the new stores.
 - **Containers can open enough files:** containerd `LimitNOFILE=1048576` on every node (the default soft limit of 1,024
   silently breaks the SmithDB disk cache).
 - **SmithDB is the trace store.** By default it is the only one; `clickhouse_source = "in-cluster"` adds the chart's
