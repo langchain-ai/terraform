@@ -140,19 +140,17 @@ data_planes = {
 
 The apply takes about 10 minutes. LangSmith can still upgrade, scale, and repair the data plane.
 
-With `reduced_access`, LangSmith does not need these permissions:
+With `reduced_access`, LangSmith does not have these permissions:
 
 | Area | Permissions |
 |---|---|
 | Role assignments | `User Access Administrator` |
-| AKS | `managedClusters/delete` |
-| Network | `virtualNetworks/delete`, `virtualNetworks/subnets/delete`, `networkSecurityGroups/delete`, `applicationSecurityGroups/delete`, `natGateways/delete`, `publicIPAddresses/delete`, `privateEndpoints/delete`, `dnsZones/delete`, `privateDnsZones/delete` |
-| PostgreSQL | `flexibleServers/delete`, `flexibleServers/databases/delete`, `flexibleServers/administrators/write`, `flexibleServers/administrators/delete` |
-| Redis | `redisEnterprise/delete`, `redisEnterprise/databases/delete`, `*/accessPolicyAssignments/write`, `*/accessPolicyAssignments/delete` |
-| Storage | `storageAccounts/delete`, `storageAccounts/listKeys/action`, `blobServices/containers/delete`, `managementPolicies/delete` |
+| PostgreSQL | `flexibleServers/administrators/write` |
+| Redis | `*/accessPolicyAssignments/write` |
+| Storage | `storageAccounts/listKeys/action` |
 | Managed identities | `userAssignedIdentities/delete`, `federatedIdentityCredentials/write`, `federatedIdentityCredentials/delete` |
 
-LangSmith cannot delete the data plane or give a principal access.
+LangSmith cannot give a principal access to an identity or a data store, and it cannot read storage keys.
 
 Set `reduced_access = false` again before you:
 

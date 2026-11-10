@@ -42,24 +42,24 @@ locals {
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
   ])
 
-  # Reduced access (reduced_access = true): keep a running data plane up to
-  # date. It cannot delete a data plane, its data stores, or its network. It
-  # cannot give a principal access: no role assignments, federated
-  # credentials, PostgreSQL administrators, or Redis access policies.
+  # Reduced access (reduced_access = true): full access without the actions
+  # that give a principal access to an identity or a data store, read storage
+  # keys, or delete an identity. data_planes.tf also deletes the User Access
+  # Administrator assignment. The data plane uses these at creation and
+  # teardown, and an upgrade that adds a workload service account or a data
+  # store user needs full access.
   langsmith_byoc_reduced_actions = [
-    for action in local.langsmith_byoc_update_actions : action
+    for action in local.langsmith_byoc_actions : action
     if !contains(local.langsmith_byoc_reduced_removed_actions, action)
   ]
 
-  # Each of these gives a principal access to an identity or a data store. The
-  # data plane uses them at creation, and an upgrade that adds a workload
-  # service account or a data store user needs full access.
   langsmith_byoc_reduced_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
     "Microsoft.DBforPostgreSQL/flexibleServers/administrators/write",
     "Microsoft.Cache/*/accessPolicyAssignments/write",
-    "Microsoft.Cache/*/accessPolicyAssignments/delete",
+    "Microsoft.Storage/storageAccounts/listKeys/action",
   ]
 
   # The actions that create and update a data plane. The order of the action
