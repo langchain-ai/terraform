@@ -14,6 +14,6 @@ output "cluster_tag_value" {
 }
 
 output "cluster_tag_key" {
-  description = "ID of the project's managed_by tag key. Pass it as cluster_tag_key to another copy of this module in the project."
+  description = "ID of the project's managed_by tag key. Internal to LangChain: passed as cluster_tag_key to another copy of this module in a test project."
   value       = google_tags_tag_value.cluster.parent
 }

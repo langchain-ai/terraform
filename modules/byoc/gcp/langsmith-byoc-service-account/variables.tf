@@ -53,7 +53,7 @@ variable "byo_iam" {
 }
 
 variable "cluster_tag_value" {
-  description = "Value of the managed_by tag on the data plane GKE clusters. The LangSmith control plane administers only clusters with it. Keep the default unless LangChain gives you another value."
+  description = "Internal to LangChain; keep the default. Value of the managed_by tag on the data plane GKE clusters, which must match the control plane's BYOC_GCP_CLUSTER_TAG_VALUE. LangChain's dev and staging control planes use their own values because they share test projects with prod."
   type        = string
   default     = "langsmith"
 
@@ -64,7 +64,7 @@ variable "cluster_tag_value" {
 }
 
 variable "cluster_tag_key" {
-  description = "ID (tagKeys/<number>) of the project's managed_by tag key, when it already exists: created by another copy of this module, or by you. Unset, the module creates the key."
+  description = "Internal to LangChain; leave unset. ID (tagKeys/<number>) of an existing managed_by tag key in the project, for a second copy of this module in a LangChain test project. Unset, the module creates the key."
   type        = string
   default     = null
 
