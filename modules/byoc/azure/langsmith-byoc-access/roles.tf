@@ -11,7 +11,7 @@
 locals {
   # Full access (reduced_access = false): create, update, and delete a data
   # plane. Teardown keeps the resource group, so the role cannot delete it.
-  langsmith_byoc_actions = concat(local.langsmith_byoc_reduced_actions, [
+  langsmith_byoc_actions = concat(local.langsmith_byoc_update_actions, [
     "Microsoft.ContainerService/managedClusters/delete",
 
     "Microsoft.Network/virtualNetworks/delete",
@@ -40,16 +40,26 @@ locals {
     "Microsoft.Storage/storageAccounts/managementPolicies/delete",
 
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
-    # A new federated credential gives a new token issuer access to an
-    # identity. Upgrades that add a workload service account need it.
-    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
-    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
   ])
 
   # Reduced access (reduced_access = true): keep a running data plane up to
   # date. It cannot delete a data plane, its data stores, or its network, and
   # it cannot create or delete role assignments or federated credentials.
   langsmith_byoc_reduced_actions = [
+    for action in local.langsmith_byoc_update_actions : action
+    if !contains(local.langsmith_byoc_reduced_removed_actions, action)
+  ]
+
+  # A new federated credential gives a new token issuer access to an identity.
+  # Upgrades that add a workload service account need full access.
+  langsmith_byoc_reduced_removed_actions = [
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
+  ]
+
+  # The actions that create and update a data plane. The order of the action
+  # lists is part of the role definition, so a reorder changes every role.
+  langsmith_byoc_update_actions = [
     "*/read",
 
     # AKS
@@ -134,6 +144,8 @@ locals {
     # Managed identities
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
 
     # Key Vault. The control plane writes the data plane secrets through ARM.
     # The role has no Key Vault data actions, so it cannot read them.

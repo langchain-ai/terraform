@@ -63,10 +63,11 @@ resource "azurerm_role_definition" "langsmith_byoc" {
   assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
 
   permissions {
-    actions = setsubtract(
-      each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions,
-      each.value.byo_iam ? local.langsmith_byoiam_removed_actions : [],
-    )
+    # A for expression keeps the list order; setsubtract would sort it.
+    actions = [
+      for action in(each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions) : action
+      if !(each.value.byo_iam && contains(local.langsmith_byoiam_removed_actions, action))
+    ]
   }
 }
 
