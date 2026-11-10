@@ -52,19 +52,8 @@ variable "byo_iam" {
   default     = false
 }
 
-variable "cluster_tag_value" {
-  description = "Internal to LangChain; keep the default. Value of the managed_by tag on the data plane GKE clusters, which must match the control plane's BYOC_GCP_CLUSTER_TAG_VALUE. LangChain's dev and staging control planes use their own values because they share test projects with prod."
-  type        = string
-  default     = "langsmith"
-
-  validation {
-    condition     = can(regex("^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$", var.cluster_tag_value))
-    error_message = "cluster_tag_value must be 1 to 63 letters, digits, periods, underscores or hyphens, starting and ending with a letter or digit."
-  }
-}
-
 variable "cluster_tag_key" {
-  description = "Internal to LangChain; leave unset. ID (tagKeys/<number>) of an existing managed_by tag key in the project, for a second copy of this module in a LangChain test project. Unset, the module creates the key."
+  description = "Internal to LangChain; leave unset. ID (tagKeys/<number>) of the managed_by tag key that another copy of this module created in the project, for a second copy in a LangChain test project. That copy then uses the existing managed_by: langsmith value. Unset, the module creates the key and the value."
   type        = string
   default     = null
 

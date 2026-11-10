@@ -534,10 +534,11 @@ resource "google_service_account_iam_member" "crossplane" {
 # would inherit.
 # ---------------------------------------------------------------------------
 
-# The tag is managed_by: <cluster_tag_value>, and LangSmith finds it by
-# <project ID>/managed_by/<value>. A project's copies of this module share one
-# managed_by key, each with its own value: the first creates the key, and the
-# others take it as cluster_tag_key.
+# The tag is managed_by: langsmith. LangSmith binds it to the data plane
+# clusters by its namespaced name, <project ID>/managed_by/langsmith, so the
+# value is fixed. In a LangChain test project that holds more than one copy of
+# this module, the first creates the key and the value, and the others take the
+# key as cluster_tag_key and use the existing value.
 resource "google_tags_tag_key" "cluster" {
   count = var.cluster_tag_key == null ? 1 : 0
 
@@ -549,15 +550,40 @@ resource "google_tags_tag_key" "cluster" {
 }
 
 resource "google_tags_tag_value" "cluster" {
-  parent      = var.cluster_tag_key == null ? google_tags_tag_key.cluster[0].id : var.cluster_tag_key
-  short_name  = var.cluster_tag_value
-  description = "GKE clusters of LangSmith BYOC data planes, created through the ${var.service_account_id} provisioner"
+  count = var.cluster_tag_key == null ? 1 : 0
+
+  parent      = google_tags_tag_key.cluster[0].id
+  short_name  = "langsmith"
+  description = "GKE clusters of LangSmith BYOC data planes"
 }
 
-# The provisioner binds the tag value to the clusters it creates, and LangSmith
-# reads the value's ID as the provisioner.
+moved {
+  from = google_tags_tag_value.cluster
+  to   = google_tags_tag_value.cluster[0]
+}
+
+data "google_tags_tag_value" "cluster" {
+  count = var.cluster_tag_key == null ? 0 : 1
+
+  parent     = var.cluster_tag_key
+  short_name = "langsmith"
+}
+
+locals {
+  cluster_tag_value = var.cluster_tag_key == null ? {
+    id              = google_tags_tag_value.cluster[0].id
+    parent          = google_tags_tag_value.cluster[0].parent
+    namespaced_name = google_tags_tag_value.cluster[0].namespaced_name
+    } : {
+    id              = data.google_tags_tag_value.cluster[0].id
+    parent          = data.google_tags_tag_value.cluster[0].parent
+    namespaced_name = data.google_tags_tag_value.cluster[0].namespaced_name
+  }
+}
+
+# The provisioner binds the tag value to the clusters it creates.
 resource "google_tags_tag_value_iam_member" "provisioner" {
-  tag_value = google_tags_tag_value.cluster.id
+  tag_value = local.cluster_tag_value.id
   role      = "roles/resourcemanager.tagUser"
   member    = "serviceAccount:${google_service_account.provisioner.email}"
 }
@@ -570,7 +596,7 @@ resource "google_project_iam_member" "crossplane_container_admin" {
   condition {
     title       = "langsmith-data-plane-clusters"
     description = "GKE clusters tagged as LangSmith data plane clusters"
-    expression  = "resource.matchTagId(\"${google_tags_tag_value.cluster.parent}\", \"${google_tags_tag_value.cluster.id}\")"
+    expression  = "resource.matchTagId(\"${local.cluster_tag_value.parent}\", \"${local.cluster_tag_value.id}\")"
   }
 }
 

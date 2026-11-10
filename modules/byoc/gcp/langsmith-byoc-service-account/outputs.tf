@@ -9,11 +9,11 @@ output "byo_iam_service_accounts" {
 }
 
 output "cluster_tag_value" {
-  description = "Namespaced name of the tag value on the data plane GKE clusters (<project>/managed_by/<value>). The LangSmith control plane is GKE admin only on clusters with it."
-  value       = google_tags_tag_value.cluster.namespaced_name
+  description = "Namespaced name of the tag value on the data plane GKE clusters (<project>/managed_by/langsmith). The LangSmith control plane is GKE admin only on clusters with it."
+  value       = local.cluster_tag_value.namespaced_name
 }
 
 output "cluster_tag_key" {
   description = "ID of the project's managed_by tag key. Internal to LangChain: passed as cluster_tag_key to another copy of this module in a test project."
-  value       = google_tags_tag_value.cluster.parent
+  value       = local.cluster_tag_value.parent
 }
