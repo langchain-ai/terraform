@@ -9,6 +9,7 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the secret that LangSmith writes. No public network access. |
 | Custom role `langsmith-byoc-<key>-<suffix>` | One per data plane | The actions that LangSmith needs in that resource group. `reduced_access` selects full or reduced actions. The role can only be assigned in that resource group. |
 | Role assignments: the LangSmith custom role, and `User Access Administrator` with full access only | One or two per data plane | Give the LangSmith service principal access to that resource group only. |
+| VNet flow log `langsmith-byoc-<key>` (optional) | One per data plane with `flow_logs` | Records the network traffic of the data plane in your storage account. |
 
 > **WARNING:** Use each resource group only for its data plane. The resource group must contain exactly one Key Vault, the one from this module. LangSmith can change and delete resources in the resource group, so do not put other resources in it.
 
@@ -224,11 +225,33 @@ The role assignments for the collector and the workload identity come from the `
 
 When observability is turned off, LangSmith deletes the rules, the endpoint, the collector and its identity, and the role assignments. It keeps both workspaces with their data, and the Container Insights add-on, which collects nothing without its rule. The role cannot delete either workspace.
 
+### Turn on flow logs (optional)
+
+When the data plane is active, add your storage account. Then run `terraform apply`:
+
+```hcl
+data_planes = {
+  prod = {
+    location  = "eastus"
+    flow_logs = { storage_account_id = "<storage-account-id>" }
+  }
+}
+```
+
+Terraform creates a VNet flow log for the data plane VNet. Azure writes the logs to your storage account. LangSmith gets no access to the flow log or the storage account.
+
+- The storage account must be in the region of the data plane.
+- If the storage account has a firewall, let trusted Microsoft services through.
+- `retention_days` is 30 by default.
+- Terraform finds the Network Watcher of the region. To use a different watcher, set `network_watcher_name` and `network_watcher_resource_group_name`.
+
+Remove `flow_logs` before you delete the data plane.
+
 ### Remove a data plane
 
 > **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
 
-1. If `reduced_access = true`, set it to `false`. Run `terraform apply`. Wait 5 minutes.
+1. If `reduced_access = true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
 3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
 4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
@@ -255,6 +278,7 @@ Fields of each `data_planes` entry:
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. Not with `byo_iam`. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
+| `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
 
