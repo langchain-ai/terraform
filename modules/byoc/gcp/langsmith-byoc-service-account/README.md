@@ -122,6 +122,8 @@ Set `deployment_observability = true` before LangSmith turns on deployment obser
 - **Logs:** LangSmith creates a log bucket for each data plane, `langsmith-<hash>-logs`, in the data plane's region, and a sink that routes only the LangGraph deployment and build container logs from the data plane's cluster to it. The bucket keeps them for 30 days unless LangSmith sets another retention; Cloud Logging bills retention past 30 days. The project's `_Default` bucket keeps its copy, so those logs are stored twice. The bucket is kept, with its logs, if observability is turned off.
 - **Reads:** the LangSmith app's service account gets `roles/logging.viewAccessor` on its data plane's log bucket view only, so it reads no other logs in the project, and `roles/monitoring.viewer` on the project.
 
+Before you set it back to `false` or remove it, have LangSmith turn observability off or delete the data plane, for every data plane in the project, because the provisioner needs these permissions to remove the sinks and the read grants.
+
 The setting makes these changes:
 
 | | Added |
