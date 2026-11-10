@@ -536,9 +536,10 @@ resource "google_service_account_iam_member" "crossplane" {
 
 # The tag is managed_by: langsmith. LangSmith binds it to the data plane
 # clusters by its namespaced name, <project ID>/managed_by/langsmith, so the
-# value is fixed. In a LangChain test project that holds more than one copy of
-# this module, the first creates the key and the value, and the others take the
-# key as cluster_tag_key and use the existing value.
+# value is fixed. A project that already has a managed_by key passes it as
+# cluster_tag_key, and the module adds the value to it. In a LangChain test
+# project that holds more than one copy of this module, the first creates the
+# value, and the others set create_cluster_tag_value = false and use it.
 resource "google_tags_tag_key" "cluster" {
   count = var.cluster_tag_key == null ? 1 : 0
 
@@ -550,27 +551,22 @@ resource "google_tags_tag_key" "cluster" {
 }
 
 resource "google_tags_tag_value" "cluster" {
-  count = var.cluster_tag_key == null ? 1 : 0
+  count = var.create_cluster_tag_value ? 1 : 0
 
-  parent      = google_tags_tag_key.cluster[0].id
+  parent      = var.cluster_tag_key == null ? google_tags_tag_key.cluster[0].id : var.cluster_tag_key
   short_name  = "langsmith"
   description = "GKE clusters of LangSmith BYOC data planes"
 }
 
-moved {
-  from = google_tags_tag_value.cluster
-  to   = google_tags_tag_value.cluster[0]
-}
-
 data "google_tags_tag_value" "cluster" {
-  count = var.cluster_tag_key == null ? 0 : 1
+  count = var.create_cluster_tag_value ? 0 : 1
 
   parent     = var.cluster_tag_key
   short_name = "langsmith"
 }
 
 locals {
-  cluster_tag_value = var.cluster_tag_key == null ? {
+  cluster_tag_value = var.create_cluster_tag_value ? {
     id              = google_tags_tag_value.cluster[0].id
     parent          = google_tags_tag_value.cluster[0].parent
     namespaced_name = google_tags_tag_value.cluster[0].namespaced_name

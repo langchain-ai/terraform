@@ -47,19 +47,30 @@ variable "custom_role_id_prefix" {
 }
 
 variable "byo_iam" {
-  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Set it before you create data planes in the project."
+  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Recommended when the project also holds resources that are not LangSmith's: without it, the provisioner can grant itself project-wide Cloud SQL and Secret Manager roles, which get around the name limits. Set it before you create data planes in the project."
   type        = bool
   default     = false
 }
 
 variable "cluster_tag_key" {
-  description = "Internal to LangChain; leave unset. ID (tagKeys/<number>) of the managed_by tag key that another copy of this module created in the project, for a second copy in a LangChain test project. That copy then uses the existing managed_by: langsmith value. Unset, the module creates the key and the value."
+  description = "ID (tagKeys/<number>) of an existing managed_by tag key in the project. Set it when the project already has a managed_by key: the module then adds the langsmith value to that key instead of creating the key. Unset, the module creates the key."
   type        = string
   default     = null
 
   validation {
     condition     = var.cluster_tag_key == null || can(regex("^tagKeys/[0-9]+$", var.cluster_tag_key))
     error_message = "cluster_tag_key must be a tag key ID such as tagKeys/123456789."
+  }
+}
+
+variable "create_cluster_tag_value" {
+  description = "Internal to LangChain; keep true. False for a second copy of this module in a LangChain test project: that copy uses the langsmith value that the first copy created under cluster_tag_key."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = var.create_cluster_tag_value || var.cluster_tag_key != null
+    error_message = "create_cluster_tag_value = false needs cluster_tag_key, the key that holds the existing langsmith value."
   }
 }
 

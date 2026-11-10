@@ -167,7 +167,8 @@ run "shared_cluster_tag_key" {
   command = plan
 
   variables {
-    cluster_tag_key = "tagKeys/999"
+    cluster_tag_key          = "tagKeys/999"
+    create_cluster_tag_value = false
   }
 
   assert {
@@ -179,6 +180,29 @@ run "shared_cluster_tag_key" {
     condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.matchTagId(\"tagKeys/999\", \"tagValues/333\")"
     error_message = "The Crossplane grant matches the existing value."
   }
+}
+
+run "existing_managed_by_key" {
+  command = plan
+
+  variables {
+    cluster_tag_key = "tagKeys/888"
+  }
+
+  assert {
+    condition     = length(google_tags_tag_key.cluster) == 0 && google_tags_tag_value.cluster[0].parent == "tagKeys/888" && google_tags_tag_value.cluster[0].short_name == "langsmith" && length(data.google_tags_tag_value.cluster) == 0
+    error_message = "With an existing managed_by key, the module adds the langsmith value to it."
+  }
+}
+
+run "shared_value_needs_key" {
+  command = plan
+
+  variables {
+    create_cluster_tag_value = false
+  }
+
+  expect_failures = [var.create_cluster_tag_value]
 }
 
 run "role_ids_fit_with_longest_prefix" {

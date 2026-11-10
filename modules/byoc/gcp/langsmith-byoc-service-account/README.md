@@ -84,7 +84,7 @@ Custom role IDs are unique per project, so set `custom_role_id_prefix` when more
 
 ### Limit changes to data plane names
 
-The provisioner can create, change and delete only the data plane's own resources of the kinds below, found by name. LangSmith names every data plane resource `langsmith-<hash>-<key>` and every data plane secret `ls-<data plane>-<key>`. With `byo_iam`, the project roles of the data plane service accounts are limited by name too. See [With `byo_iam`](#with-byo_iam).
+The provisioner can create, change and delete only the data plane's own resources of the kinds below, found by name. Without `byo_iam`, it can still get around the Cloud SQL and Secret Manager limits by granting itself project roles; see [What names can't limit](#what-names-cant-limit). LangSmith names every data plane resource `langsmith-<hash>-<key>` and every data plane secret `ls-<data plane>-<key>`. With `byo_iam`, the project roles of the data plane service accounts are limited by name too. See [With `byo_iam`](#with-byo_iam).
 
 > **CAUTION:** Data planes created before LangSmith named resources `langsmith-` have other names. The provisioner can't update or delete their resources of these kinds, so they can't be upgraded or torn down. Use this module version only in a project whose data planes were all created with the `langsmith-` names, or recreate the older data planes first.
 
@@ -128,7 +128,7 @@ The provisioner can set the IAM policies of the six data plane service accounts,
 
 The LangSmith control plane installs LangSmith into each data plane cluster through the cluster's DNS-based endpoint, as `var.crossplane_service_account`. GKE authorizes Kubernetes API requests through IAM with an empty resource name, so a condition on the cluster name can't limit them. A condition on a tag of the cluster does:
 
-- The module creates the tag `managed_by: langsmith` in the project, and lets the provisioner use that value (`roles/resourcemanager.tagUser` on it).
+- The module creates the tag `managed_by: langsmith` in the project, and lets the provisioner use that value (`roles/resourcemanager.tagUser` on it). If the project already has a `managed_by` tag key, pass its ID (`tagKeys/<number>`) as `cluster_tag_key`, and the module adds the `langsmith` value to that key.
 - LangSmith binds the tag to each data plane cluster it creates. The provisioner can bind it only to `langsmith-` clusters (`<prefix>NamedGke`), and can't tag the project, whose tags every cluster would inherit.
 - `roles/container.admin` for `var.crossplane_service_account` has the condition `resource.matchTagId(<key>, <value>)`. It covers the GKE API and the Kubernetes API, through both the DNS-based and the IP-based endpoints, on tagged clusters only.
 - The DNS-based endpoint checks `container.clusters.connect` without the cluster's tags, so `<prefix>ClusterConnect` grants that permission alone, limited to `langsmith-` cluster names. Connecting gives no access inside a cluster.
@@ -139,7 +139,7 @@ Don't put this tag on your own clusters, or on the project. Each was checked in 
 
 These IAM checks carry no resource name, or a name LangSmith doesn't choose, so a name condition can't narrow them. In a project shared with your own resources, LangSmith's identities can still do the following:
 
-- **Project role grants.** Without `byo_iam`, the provisioner grants the data plane service accounts their project roles (`<prefix>ProjectIamGranter`). An IAM condition limits which roles it can grant, but not to whom, and the grants are project-wide.
+- **Project role grants.** Without `byo_iam`, the provisioner grants the data plane service accounts their project roles (`<prefix>ProjectIamGranter`). An IAM condition limits which roles it can grant, but not to whom, and the grants are project-wide. So the provisioner can grant itself `roles/cloudsql.admin` or `roles/secretmanager.secretAccessor`, which gets around the Cloud SQL and `ls-` secret limits above. Use [`byo_iam`](#bring-your-own-iam) in a project that holds resources that aren't LangSmith's.
 - **Artifact Registry.** The provisioner can change or delete any repository and set its IAM policy. `langsmith-node` and `langsmith-sandbox-host` can read every repository (`roles/artifactregistry.reader`).
 - **Cloud DNS** managed zones and record sets.
 - **Cloud SQL databases and users.** The provisioner can create, change and delete the databases of any instance. `langsmith-postgres-setup` can list and create users and set any user's password on any instance; logging in with that password still needs a network path to the instance. Database checks do follow a tag on their instance, but LangSmith doesn't tag its instances yet.
