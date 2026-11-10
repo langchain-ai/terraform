@@ -136,6 +136,24 @@ locals {
     "storage.objects.list",
   ]
 
+  # With deployment_observability, each data plane keeps its LangSmith
+  # namespace's container logs in its own log bucket, which a sink routes them
+  # to.
+  observability_provisioner_permissions = [
+    "logging.buckets.create",
+    "logging.buckets.get",
+    "logging.buckets.update",
+    "logging.sinks.create",
+    "logging.sinks.delete",
+    "logging.sinks.get",
+    "logging.sinks.update",
+  ]
+
+  all_provisioner_permissions = concat(
+    local.base_provisioner_permissions,
+    var.deployment_observability ? local.observability_provisioner_permissions : [],
+  )
+
   # With byo_iam, this module creates the data plane service accounts, so the
   # provisioner does not create, update, delete or set the IAM policy of
   # service accounts at the project level. It keeps get, list and
@@ -298,13 +316,13 @@ locals {
     local.name_fenced_permissions,
   )
 
-  provisioner_permissions = sort(setsubtract(local.base_provisioner_permissions, local.provisioner_removed_permissions))
+  provisioner_permissions = sort(setsubtract(local.all_provisioner_permissions, local.provisioner_removed_permissions))
 
   # The project roles the data plane compositions grant: to the GKE node and
   # sandbox host service accounts and the in-cluster workloads. The provisioner
   # may grant only these. The control plane's Crossplane service account gets
   # roles/container.admin from this module instead (crossplane_container_admin).
-  granted_roles = [
+  base_granted_roles = [
     "roles/artifactregistry.reader",
     "roles/cloudsql.admin",
     "roles/cloudsql.client",
@@ -315,7 +333,19 @@ locals {
     "roles/secretmanager.secretAccessor",
   ]
 
-  apis = toset([
+  # The app reads its data plane's log bucket through one log view (an IAM
+  # condition on the grant), and deployment metrics through Managed Prometheus.
+  observability_granted_roles = [
+    "roles/logging.viewAccessor",
+    "roles/monitoring.viewer",
+  ]
+
+  granted_roles = concat(
+    local.base_granted_roles,
+    var.deployment_observability ? local.observability_granted_roles : [],
+  )
+
+  apis = toset(concat([
     "artifactregistry.googleapis.com",
     "binaryauthorization.googleapis.com",
     "compute.googleapis.com",
@@ -329,7 +359,7 @@ locals {
     "servicedirectory.googleapis.com",
     "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
-  ])
+  ], var.deployment_observability ? ["logging.googleapis.com", "monitoring.googleapis.com"] : []))
 }
 
 resource "google_project_service" "apis" {

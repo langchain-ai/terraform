@@ -73,3 +73,14 @@ variable "cluster_tag_key" {
     error_message = "cluster_tag_key must be a tag key ID such as tagKeys/123456789."
   }
 }
+
+variable "deployment_observability" {
+  description = "Let LangSmith turn on deployment observability: Monitoring charts and searchable log history for LangGraph deployments, kept in this project. Adds the Cloud Logging and Monitoring APIs, the provisioner's log bucket and sink permissions, and roles/logging.viewAccessor and roles/monitoring.viewer for the LangSmith app. Set it before LangSmith turns the feature on for a data plane. Not supported with byo_iam."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !(var.deployment_observability && var.byo_iam)
+    error_message = "deployment_observability is not supported with byo_iam."
+  }
+}

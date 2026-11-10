@@ -309,6 +309,7 @@ Limits in Azure Government:
 
 - **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
 - **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+- **SmithDB metastore needs a password.** SmithDB requests its Entra token for the commercial Azure scope, which a Government Flexible Server refuses (LG-913), so `enable_smithdb = true` without `TF_VAR_smithdb_metastore_admin_password` is refused at plan. See [SMITHDB.md](SMITHDB.md)
 - **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
 
 **The state backend needs the cloud too.** `azure_environment` configures the providers, not the `azurerm` backend, which Terraform initializes before it reads any variable. A state storage account in Government needs `environment = "usgovernment"` in the `backend "azurerm"` block, or `ARM_ENVIRONMENT=usgovernment` in the shell that runs `terraform init`.
