@@ -17,7 +17,7 @@ Provisions the service account in **your GCP project** that the LangSmith contro
 ## Prerequisites
 
 1. A GCP project for the LangSmith data plane, and credentials with permission to create service accounts, grant project IAM roles, create tags (`roles/resourcemanager.tagAdmin`), and enable APIs in it.
-2. Terraform `>= 1.11.0` and the Google provider `~> 6.0`.
+2. Terraform `>= 1.11.0` and the Google provider 6, 7 or 8 (`>= 6.0, < 9.0`).
 3. The `crossplane_service_account` provided by LangChain.
 4. The external ID from **Settings > Data Planes** in the LangSmith UI. Copy this value and use it as `external_id`. Do not make your own value.
 
