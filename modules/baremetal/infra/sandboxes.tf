@@ -123,6 +123,21 @@ resource "kubernetes_labels" "sandbox_host" {
   field_manager = "langsmith-sandbox-label"
 }
 
+data "kubernetes_nodes" "sandbox_host" {
+  count = var.enable_sandboxes ? 1 : 0
+}
+
+locals {
+  # Every taint on a sandbox host but ours, as key:effect. The force below writes the Node's whole taint
+  # list, and its destroy clears it, so any other taint would be dropped without an error (Robin's review
+  # of #488).
+  sandbox_host_other_taints = {
+    for n in try(data.kubernetes_nodes.sandbox_host[0].nodes, []) : n.metadata[0].name => [
+      for t in n.spec[0].taints : "${t.key}:${t.effect}" if t.key != "sandbox.langsmith.com/host"
+    ] if contains(var.sandbox_hosts, n.metadata[0].name)
+  }
+}
+
 resource "kubernetes_node_taint" "sandbox_host" {
   for_each = var.enable_sandboxes ? toset(var.sandbox_hosts) : toset([])
   # A Node's taints are one atomic list, owned by whoever wrote it last: the kubelet registering the
@@ -136,5 +151,12 @@ resource "kubernetes_node_taint" "sandbox_host" {
     key    = "sandbox.langsmith.com/host"
     value  = "true"
     effect = "NoSchedule"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(lookup(local.sandbox_host_other_taints, each.key, [])) == 0
+      error_message = "Sandbox host ${each.key} carries other taints (${join(", ", lookup(local.sandbox_host_other_taints, each.key, []))}). The sandbox taint replaces the node's whole taint list, and removing it clears the list, so a sandbox host carries no other taint: remove them, or choose another node."
+    }
   }
 }

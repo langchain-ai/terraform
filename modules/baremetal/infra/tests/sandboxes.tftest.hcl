@@ -37,6 +37,53 @@ run "off_by_default" {
   }
 }
 
+run "a_sandbox_host_with_another_taint_is_refused" {
+  command = plan
+
+  variables {
+    enable_sandboxes     = true
+    sandbox_hosts        = ["worker-2"]
+    sandbox_source_cidrs = ["192.0.2.0/24"]
+  }
+
+  override_data {
+    target = data.kubernetes_nodes.sandbox_host[0]
+    values = {
+      nodes = [
+        { metadata = [{ name = "worker-2" }], spec = [{ taints = [{ key = "sandbox.langsmith.com/host", value = "true", effect = "NoSchedule" }, { key = "CriticalAddonsOnly", value = "true", effect = "NoExecute" }] }] },
+        { metadata = [{ name = "worker-1" }], spec = [{ taints = [{ key = "dedicated", value = "gpu", effect = "NoSchedule" }] }] },
+      ]
+    }
+  }
+
+  expect_failures = [kubernetes_node_taint.sandbox_host]
+}
+
+run "only_our_taint_on_a_sandbox_host_passes" {
+  command = plan
+
+  variables {
+    enable_sandboxes     = true
+    sandbox_hosts        = ["worker-2"]
+    sandbox_source_cidrs = ["192.0.2.0/24"]
+  }
+
+  override_data {
+    target = data.kubernetes_nodes.sandbox_host[0]
+    values = {
+      nodes = [
+        { metadata = [{ name = "worker-2" }], spec = [{ taints = [{ key = "sandbox.langsmith.com/host", value = "true", effect = "NoSchedule" }] }] },
+        { metadata = [{ name = "worker-1" }], spec = [{ taints = [{ key = "dedicated", value = "gpu", effect = "NoSchedule" }] }] },
+      ]
+    }
+  }
+
+  assert {
+    condition     = length(kubernetes_node_taint.sandbox_host) == 1
+    error_message = "A sandbox host whose only taint is ours plans, whatever other nodes carry."
+  }
+}
+
 run "sandboxes_on" {
   command = plan
 
