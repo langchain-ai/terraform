@@ -128,7 +128,7 @@ The provisioner can set the IAM policies of the six data plane service accounts,
 
 The LangSmith control plane installs LangSmith into each data plane cluster through the cluster's DNS-based endpoint, as `var.crossplane_service_account`. GKE authorizes Kubernetes API requests through IAM with an empty resource name, so a condition on the cluster name can't limit them. A condition on a tag of the cluster does:
 
-- The module creates a tag key named after the provisioner (`var.service_account_id`) with the value `data-plane`, and lets the provisioner use it (`roles/resourcemanager.tagUser` on the value). Its namespaced name is the `cluster_tag_value` output.
+- The module creates the tag `managed_by: langsmith` in the project (`cluster_tag_value` sets the value), and lets the provisioner use that value (`roles/resourcemanager.tagUser` on it). LangSmith finds it as `<project>/managed_by/<value>`. If the project already has a `managed_by` tag key, created by you or by another copy of this module, pass its ID as `cluster_tag_key`, and the module adds its value to it.
 - LangSmith binds the tag to each data plane cluster it creates. The provisioner can bind it only to `langsmith-` clusters (`<prefix>NamedGke`), and can't tag the project, whose tags every cluster would inherit.
 - `roles/container.admin` for `var.crossplane_service_account` has the condition `resource.matchTagId(<key>, <value>)`. It covers the GKE API and the Kubernetes API, through both the DNS-based and the IP-based endpoints, on tagged clusters only.
 - The DNS-based endpoint checks `container.clusters.connect` without the cluster's tags, so `<prefix>ClusterConnect` grants that permission alone, limited to `langsmith-` cluster names. Connecting gives no access inside a cluster.
@@ -193,7 +193,9 @@ Create the data plane with `byoiam_enabled` set to `true`.
 | `project_id` | The GCP project that hosts the LangSmith data planes. | required |
 | `crossplane_service_account` | LangSmith control plane Crossplane service account that impersonates the provisioner. | required |
 | `external_id` | External ID from **Settings > Data Planes** in LangSmith. Must not be empty and must be at most 256 characters. The module writes it as the description of the provisioner service account. | required |
-| `service_account_id` | Account ID of the provisioner service account. Also the short name of the tag key on its data plane GKE clusters. | `langsmith-byoc-provisioner` |
+| `service_account_id` | Account ID of the provisioner service account. | `langsmith-byoc-provisioner` |
+| `cluster_tag_value` | Value of the `managed_by` tag on the data plane GKE clusters. Keep the default unless LangChain gives you another value. | `langsmith` |
+| `cluster_tag_key` | ID (`tagKeys/<number>`) of the project's existing `managed_by` tag key. Unset, the module creates the key. | `null` |
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
@@ -204,4 +206,5 @@ Create the data plane with `byoiam_enabled` set to `true`.
 |------|-------------|
 | `provisioner_service_account` | Email of the provisioner service account. |
 | `byo_iam_service_accounts` | Emails of the data plane service accounts, keyed by account ID. Empty unless `byo_iam` is `true`. |
-| `cluster_tag_value` | Namespaced name of the tag value on the data plane GKE clusters. |
+| `cluster_tag_value` | Namespaced name of the tag value on the data plane GKE clusters, `<project>/managed_by/<value>`. |
+| `cluster_tag_key` | ID of the project's `managed_by` tag key, for another copy of this module in the project. |

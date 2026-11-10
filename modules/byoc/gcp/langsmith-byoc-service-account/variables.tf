@@ -4,7 +4,7 @@ variable "project_id" {
 }
 
 variable "service_account_id" {
-  description = "Account ID of the provisioner service account to create in the project. Also the short name of the tag key that marks its data plane GKE clusters, so it must be unique among the project's tag keys."
+  description = "Account ID of the provisioner service account to create in the project."
   type        = string
   default     = "langsmith-byoc-provisioner"
 }
@@ -50,4 +50,26 @@ variable "byo_iam" {
   description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Set it before you create data planes in the project."
   type        = bool
   default     = false
+}
+
+variable "cluster_tag_value" {
+  description = "Value of the managed_by tag on the data plane GKE clusters. The LangSmith control plane administers only clusters with it. Keep the default unless LangChain gives you another value."
+  type        = string
+  default     = "langsmith"
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$", var.cluster_tag_value))
+    error_message = "cluster_tag_value must be 1 to 63 letters, digits, periods, underscores or hyphens, starting and ending with a letter or digit."
+  }
+}
+
+variable "cluster_tag_key" {
+  description = "ID (tagKeys/<number>) of the project's managed_by tag key, when it already exists: created by another copy of this module, or by you. Unset, the module creates the key."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.cluster_tag_key == null || can(regex("^tagKeys/[0-9]+$", var.cluster_tag_key))
+    error_message = "cluster_tag_key must be a tag key ID such as tagKeys/123456789."
+  }
 }

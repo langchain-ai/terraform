@@ -81,8 +81,8 @@ run "default" {
   }
 
   assert {
-    condition     = google_tags_tag_key.cluster.short_name == "langsmith-byoc-provisioner" && google_tags_tag_key.cluster.parent == "projects/p" && google_tags_tag_value.cluster.short_name == "data-plane" && google_tags_tag_value_iam_member.provisioner.role == "roles/resourcemanager.tagUser"
-    error_message = "The cluster tag is <project>/<provisioner account ID>/data-plane, and the provisioner can use it."
+    condition     = google_tags_tag_key.cluster[0].short_name == "managed_by" && google_tags_tag_key.cluster[0].parent == "projects/p" && google_tags_tag_value.cluster.short_name == "langsmith" && google_tags_tag_value_iam_member.provisioner.role == "roles/resourcemanager.tagUser"
+    error_message = "The cluster tag is managed_by: langsmith, and the provisioner can use it."
   }
 
   assert {
@@ -152,6 +152,25 @@ run "byo_iam" {
   assert {
     condition     = google_project_iam_member.byo_iam_external_secrets[0].condition[0].expression == "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
     error_message = "External Secrets stays limited to ls- secrets."
+  }
+}
+
+run "shared_cluster_tag_key" {
+  command = plan
+
+  variables {
+    cluster_tag_key   = "tagKeys/999"
+    cluster_tag_value = "langsmith-stg"
+  }
+
+  assert {
+    condition     = length(google_tags_tag_key.cluster) == 0 && google_tags_tag_value.cluster.parent == "tagKeys/999" && google_tags_tag_value.cluster.short_name == "langsmith-stg"
+    error_message = "A second copy adds its value to the existing managed_by key."
+  }
+
+  assert {
+    condition     = google_project_iam_member.crossplane_container_admin.condition[0].expression == "resource.matchTagId(\"tagKeys/999\", \"tagValues/222\")"
+    error_message = "The Crossplane grant matches the existing key."
   }
 }
 

@@ -503,20 +503,24 @@ resource "google_service_account_iam_member" "crossplane" {
 # would inherit.
 # ---------------------------------------------------------------------------
 
-# One key per provisioner: LangSmith finds the tag value by
-# <project ID>/<provisioner account ID>/data-plane.
+# The tag is managed_by: <cluster_tag_value>, and LangSmith finds it by
+# <project ID>/managed_by/<value>. A project's copies of this module share one
+# managed_by key, each with its own value: the first creates the key, and the
+# others take it as cluster_tag_key.
 resource "google_tags_tag_key" "cluster" {
+  count = var.cluster_tag_key == null ? 1 : 0
+
   parent      = "projects/${var.project_id}"
-  short_name  = var.service_account_id
-  description = "LangSmith BYOC data plane GKE clusters of the ${var.service_account_id} provisioner. The LangSmith control plane administers clusters tagged with it."
+  short_name  = "managed_by"
+  description = "What manages the resource. LangSmith control planes administer the GKE clusters tagged with their value."
 
   depends_on = [google_project_service.apis]
 }
 
 resource "google_tags_tag_value" "cluster" {
-  parent      = google_tags_tag_key.cluster.id
-  short_name  = "data-plane"
-  description = "A LangSmith BYOC data plane GKE cluster"
+  parent      = var.cluster_tag_key == null ? google_tags_tag_key.cluster[0].id : var.cluster_tag_key
+  short_name  = var.cluster_tag_value
+  description = "GKE clusters of LangSmith BYOC data planes, created through the ${var.service_account_id} provisioner"
 }
 
 # The provisioner binds the tag value to the clusters it creates, and LangSmith
@@ -535,7 +539,7 @@ resource "google_project_iam_member" "crossplane_container_admin" {
   condition {
     title       = "langsmith-data-plane-clusters"
     description = "GKE clusters tagged as LangSmith data plane clusters"
-    expression  = "resource.matchTagId(\"${google_tags_tag_key.cluster.id}\", \"${google_tags_tag_value.cluster.id}\")"
+    expression  = "resource.matchTagId(\"${google_tags_tag_value.cluster.parent}\", \"${google_tags_tag_value.cluster.id}\")"
   }
 }
 
