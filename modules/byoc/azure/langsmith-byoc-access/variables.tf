@@ -37,6 +37,15 @@ variable "data_planes" {
     # Adds the actions in local.langsmith_byoc_observability_actions. Not
     # supported with byo_iam.
     deployment_observability = optional(bool, false)
+    # VNet flow logs in your storage account. Set it after the data plane is
+    # active. Remove it before you delete the data plane. See flow_logs.tf.
+    flow_logs = optional(object({
+      storage_account_id = string
+      retention_days     = optional(number, 30)
+      # Leave empty to use the Network Watcher of the region.
+      network_watcher_name                = optional(string)
+      network_watcher_resource_group_name = optional(string, "NetworkWatcherRG")
+    }))
   }))
   default = {}
 
