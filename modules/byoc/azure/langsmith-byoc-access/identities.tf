@@ -6,7 +6,7 @@ locals {
   byo_iam_data_planes = { for key, dp in var.data_planes : key => dp if dp.byo_iam }
 
   # LangSmith expects the name langsmith-<short>-identity.
-  byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox", "deployment-metrics-collector"]
+  byo_iam_identity_shorts = ["aks", "kubelet", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox", "deployment-metrics-collector", "deployment-builds"]
 
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
@@ -53,6 +53,16 @@ resource "azurerm_role_assignment" "aks_network" {
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Network Contributor"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/aks"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# AKS assigns the kubelet identity to the nodes. The scope is only that identity.
+resource "azurerm_role_assignment" "aks_kubelet_operator" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_user_assigned_identity.data_plane["${each.key}/kubelet"].id
+  role_definition_name = "Managed Identity Operator"
   principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/aks"].principal_id
   principal_type       = "ServicePrincipal"
 }
@@ -155,6 +165,28 @@ resource "azurerm_role_assignment" "metrics_collector_publisher" {
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Monitoring Metrics Publisher"
   principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/deployment-metrics-collector"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Deployment builds. The build Jobs push images as the deployment builds
+# identity, and the AKS nodes pull them as the kubelet identity. The registry
+# does not exist yet, so the scope is the resource group. LangSmith uses them
+# only when deployment builds are on.
+resource "azurerm_role_assignment" "deployment_builds_push" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_resource_group.data_plane[each.key].id
+  role_definition_name = "AcrPush"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/deployment-builds"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "kubelet_pull" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_resource_group.data_plane[each.key].id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/kubelet"].principal_id
   principal_type       = "ServicePrincipal"
 }
 

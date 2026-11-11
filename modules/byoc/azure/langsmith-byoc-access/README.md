@@ -113,6 +113,9 @@ The module creates these identities. LangSmith expects these names:
 | Identity | Role | Scope |
 |---|---|---|
 | `langsmith-aks-identity` | Network Contributor | resource group |
+| `langsmith-aks-identity` | Managed Identity Operator | `langsmith-kubelet-identity` |
+| `langsmith-kubelet-identity` | AcrPull | resource group |
+| `langsmith-deployment-builds-identity` | AcrPush | resource group |
 | `langsmith-cert-manager-identity` | DNS Zone Contributor | resource group |
 | `langsmith-external-secrets-identity` | Key Vault Secrets User | Key Vault |
 | `langsmith-workload-identity` | Monitoring Reader | resource group |
@@ -128,6 +131,8 @@ The module creates these identities. LangSmith expects these names:
 The blob role is `langsmith-byoc-<key>-blob-<suffix>`. The conditions keep each identity to its own containers.
 
 The last three rows are for [deployment observability](#turn-on-deployment-observability-optional). LangSmith uses them only when observability is on. The workspaces and the data collection rule do not exist yet, so the scope is the resource group. `Log Analytics Reader` includes `*/read`, so the workload identity can read the resources in the resource group.
+
+The kubelet and deployment builds rows are for deployment builds. The registry does not exist yet, so the scope is the resource group. LangSmith gives the kubelet identity to the AKS cluster only when it creates the cluster. A data plane created before these rows existed cannot pull deployment builds.
 
 With `byo_iam`, LangSmith does not need these permissions:
 
