@@ -36,7 +36,7 @@ variable "enable_apis" {
 }
 
 variable "custom_role_id_prefix" {
-  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager)."
+  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, ClusterConnect, Named<kind> roles such as NamedCloudSql and NamedNetworks, and with byo_iam PostgresSetup)."
   type        = string
   default     = "langsmithByoc"
 
@@ -47,7 +47,7 @@ variable "custom_role_id_prefix" {
 }
 
 variable "byo_iam" {
-  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Set it before you create data planes in the project."
+  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Recommended when the project also holds resources that are not LangSmith's: without it, the provisioner can grant itself project-wide Cloud SQL and Secret Manager roles, which get around the name limits. Set it before you create data planes in the project."
   type        = bool
   default     = false
 }
