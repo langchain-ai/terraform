@@ -84,6 +84,20 @@ locals {
   sandbox_juicefs_redis_id = !var.enable_sandboxes ? null : (
     local.sandbox_juicefs_redis_amr ? module.sandbox_juicefs_redis[0].id : "${var.sandbox_juicefs_redis_source}:${try(sha256(local.sandbox_juicefs_metaurl), "unset")}"
   )
+  # deploy.sh puts this digest on sandbox-host's pod template, because the chart
+  # hashes only the name of an existing JuiceFS Secret: without it a new password
+  # or URL reaches the Secret and never restarts sandbox-host. Not for amr, whose
+  # URL changes only with a new Redis, so existing deployments see no restart.
+  sandbox_juicefs_redis_config_digest = var.enable_sandboxes && !local.sandbox_juicefs_redis_amr ? try(nonsensitive(sha256(local.sandbox_juicefs_metaurl)), null) : null
+  # A StorageClass is cluster-scoped, so it is suffixed like the SmithDB class.
+  sandbox_juicefs_redis_storage_class = "sandbox-juicefs-redis-retain${local.name_suffix}${local.uniq_suffix}"
+  # The chart's own Redis image, through the LangSmith mirror when one is set and
+  # in the layout init-values.sh writes for images.redisImage.
+  sandbox_juicefs_redis_image = var.sandbox_juicefs_redis_image != "" ? var.sandbox_juicefs_redis_image : (
+    var.langsmith_image_registry == "" ? "docker.io/redis:7" :
+    var.langsmith_image_registry_keeps_source_host ? "${trimsuffix(var.langsmith_image_registry, "/")}/docker.io/redis:7" :
+    "${trimsuffix(var.langsmith_image_registry, "/")}/redis:7"
+  )
 
   # JuiceFS reads the container from the first label of the bucket host and the
   # account from access-key, so the bucket is https://<container>.core.windows.net,
@@ -2121,6 +2135,25 @@ module "sandbox_juicefs_redis" {
   tags = local.common_tags
 }
 
+# The source the JuiceFS Redis had when sandbox_juicefs_redis_prevent_destroy
+# was turned on. ignore_changes keeps it, so a plan that changes the source,
+# which deletes the Redis behind it, fails the postcondition while the flag is
+# true. Turning the flag off removes the pin; turning it on again records the
+# source of that moment.
+resource "terraform_data" "sandbox_juicefs_redis_source_pin" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_prevent_destroy ? 1 : 0
+  input = var.sandbox_juicefs_redis_source
+
+  lifecycle {
+    ignore_changes = [input]
+
+    postcondition {
+      condition     = self.output == var.sandbox_juicefs_redis_source
+      error_message = "sandbox_juicefs_redis_prevent_destroy = true refuses changing sandbox_juicefs_redis_source from ${self.output} to ${var.sandbox_juicefs_redis_source}: the change deletes the JuiceFS metadata Redis it uses now, and JuiceFS then starts from an empty one, which loses every sandbox filesystem. Copy the metadata first (README, Sandboxes), then set sandbox_juicefs_redis_prevent_destroy = false in the same edit as the source."
+    }
+  }
+}
+
 # With sandbox_juicefs_redis_source = in-cluster, k8s-bootstrap runs the Redis
 # and requires this password. It is in state, as the AMR access key is.
 resource "random_password" "sandbox_juicefs_redis" {
@@ -2450,13 +2483,14 @@ module "k8s_bootstrap" {
     bucket       = local.sandbox_juicefs_bucket
     "access-key" = module.blob.storage_account_name
   } : {}
-  sandbox_juicefs_config_revision  = var.sandbox_juicefs_csi_config_secret_revision
-  sandbox_juicefs_redis_id         = local.sandbox_juicefs_redis_id
-  sandbox_juicefs_redis_in_cluster = local.sandbox_juicefs_redis_in_cluster
-  sandbox_juicefs_redis_password   = local.sandbox_juicefs_redis_in_cluster ? random_password.sandbox_juicefs_redis[0].result : null
-  sandbox_juicefs_redis_image      = var.sandbox_juicefs_redis_image
-  sandbox_juicefs_redis_storage_gb = var.sandbox_juicefs_redis_storage_gb
-  sandbox_juicefs_redis_memory_mb  = var.sandbox_juicefs_redis_memory_mb
+  sandbox_juicefs_config_revision          = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id                 = local.sandbox_juicefs_redis_id
+  sandbox_juicefs_redis_in_cluster         = local.sandbox_juicefs_redis_in_cluster
+  sandbox_juicefs_redis_password           = local.sandbox_juicefs_redis_in_cluster ? random_password.sandbox_juicefs_redis[0].result : null
+  sandbox_juicefs_redis_image              = local.sandbox_juicefs_redis_image
+  sandbox_juicefs_redis_storage_class_name = local.sandbox_juicefs_redis_storage_class
+  sandbox_juicefs_redis_storage_gb         = var.sandbox_juicefs_redis_storage_gb
+  sandbox_juicefs_redis_memory_mb          = var.sandbox_juicefs_redis_memory_mb
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.

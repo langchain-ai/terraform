@@ -107,16 +107,19 @@ output "langsmith_image_pull_secret_service_accounts" {
 }
 
 output "sandbox_juicefs_redis" {
-  description = "The in-cluster JuiceFS Redis: its Service, image, arguments, volume size and storage class reclaim policy, or null when this module runs none."
+  description = "The in-cluster JuiceFS Redis: its Service, image, arguments, volume size, storage class and its reclaim policy, and pod annotations, or null when this module runs none."
   value = one([
     for ss in kubernetes_stateful_set_v1.sandbox_juicefs_redis : {
-      service        = kubernetes_service_v1.sandbox_juicefs_redis[0].metadata[0].name
-      image          = ss.spec[0].template[0].spec[0].container[0].image
-      args           = ss.spec[0].template[0].spec[0].container[0].args
-      memory_limit   = ss.spec[0].template[0].spec[0].container[0].resources[0].limits["memory"]
-      storage        = kubernetes_persistent_volume_claim_v1.sandbox_juicefs_redis[0].spec[0].resources[0].requests["storage"]
-      claim          = ss.spec[0].template[0].spec[0].volume[0].persistent_volume_claim[0].claim_name
-      reclaim_policy = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].reclaim_policy
+      service         = kubernetes_service_v1.sandbox_juicefs_redis[0].metadata[0].name
+      image           = ss.spec[0].template[0].spec[0].container[0].image
+      args            = ss.spec[0].template[0].spec[0].container[0].args
+      memory_limit    = ss.spec[0].template[0].spec[0].container[0].resources[0].limits["memory"]
+      storage         = kubernetes_persistent_volume_claim_v1.sandbox_juicefs_redis[0].spec[0].resources[0].requests["storage"]
+      claim           = ss.spec[0].template[0].spec[0].volume[0].persistent_volume_claim[0].claim_name
+      claim_class     = kubernetes_persistent_volume_claim_v1.sandbox_juicefs_redis[0].spec[0].storage_class_name
+      storage_class   = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].metadata[0].name
+      reclaim_policy  = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].reclaim_policy
+      pod_annotations = ss.spec[0].template[0].metadata[0].annotations
     }
   ])
 }

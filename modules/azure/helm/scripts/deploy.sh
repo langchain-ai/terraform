@@ -973,6 +973,15 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
   VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
+
+  # The chart hashes only the name of an existing JuiceFS Secret, so a new Redis
+  # password or URL would reach the Secret and leave sandbox-host on the old
+  # one. Terraform's digest of the metaurl (in-cluster and external sources)
+  # goes on the pod template, and a change rolls sandbox-host.
+  if _juicefs_config_digest=$(_tf_out sandbox_juicefs_redis_config_digest); then
+    VALUES_ARGS+=(--set-string "sandboxes.sandboxHost.deployment.podAnnotations.checksum/juicefs-redis=$_juicefs_config_digest")
+    echo "Sandboxes: sandbox-host restarts when the JuiceFS Redis URL changes (digest ${_juicefs_config_digest:0:12})"
+  fi
 fi
 
 # sandbox-host runs on the host network, so it calls platform-backend from a node

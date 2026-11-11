@@ -542,7 +542,7 @@ resource "kubernetes_storage_class_v1" "sandbox_juicefs_redis" {
   count = var.enable_sandboxes && var.sandbox_juicefs_redis_in_cluster ? 1 : 0
 
   metadata {
-    name = "sandbox-juicefs-redis-retain"
+    name = var.sandbox_juicefs_redis_storage_class_name
   }
 
   storage_provisioner    = "disk.csi.azure.com"
@@ -647,6 +647,11 @@ resource "kubernetes_stateful_set_v1" "sandbox_juicefs_redis" {
     template {
       metadata {
         labels = local.sandbox_juicefs_redis_labels
+        # Redis reads --requirepass only at start, so a new password restarts
+        # the pod. A digest, never the password itself.
+        annotations = {
+          "checksum/password" = nonsensitive(sha256(var.sandbox_juicefs_redis_password))
+        }
       }
 
       spec {

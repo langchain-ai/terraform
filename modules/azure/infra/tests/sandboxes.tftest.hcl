@@ -482,6 +482,189 @@ run "in_cluster_juicefs_redis_follows_its_sizes_and_image" {
   }
 }
 
+# The image follows the LangSmith mirror in the layout init-values.sh writes for
+# the chart's own Redis, so a cluster that pulls only from the mirror pulls this.
+run "in_cluster_juicefs_redis_image_follows_the_langsmith_mirror" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+    langsmith_image_registry     = "nexus.example.com/mirror"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "nexus.example.com/mirror/redis:7"
+    error_message = "The in-cluster JuiceFS Redis image did not follow langsmith_image_registry: ${module.k8s_bootstrap.sandbox_juicefs_redis.image}"
+  }
+}
+
+run "in_cluster_juicefs_redis_image_keeps_the_source_host" {
+  command = plan
+
+  variables {
+    enable_sandboxes                           = true
+    sandbox_juicefs_redis_source               = "in-cluster"
+    langsmith_image_registry                   = "nexus.example.com"
+    langsmith_image_registry_keeps_source_host = true
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "nexus.example.com/docker.io/redis:7"
+    error_message = "With the source host kept, the in-cluster JuiceFS Redis image is not <registry>/docker.io/redis:7: ${module.k8s_bootstrap.sandbox_juicefs_redis.image}"
+  }
+}
+
+run "in_cluster_juicefs_redis_image_override_beats_the_mirror" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+    langsmith_image_registry     = "nexus.example.com"
+    sandbox_juicefs_redis_image  = "other.example.com/redis:7.4"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "other.example.com/redis:7.4"
+    error_message = "sandbox_juicefs_redis_image did not override the mirror default"
+  }
+}
+
+# A StorageClass is cluster-scoped: two deployments on one cluster must not
+# both create the same name.
+run "in_cluster_juicefs_redis_storage_class_is_per_deployment" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+    unique_resource_names        = true
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.storage_class == local.sandbox_juicefs_redis_storage_class && module.k8s_bootstrap.sandbox_juicefs_redis.claim_class == local.sandbox_juicefs_redis_storage_class && local.sandbox_juicefs_redis_storage_class != "sandbox-juicefs-redis-retain" && startswith(local.sandbox_juicefs_redis_storage_class, "sandbox-juicefs-redis-retain-")
+    error_message = "The JuiceFS Redis StorageClass is not suffixed per deployment, or the claim does not use it: ${jsonencode(module.k8s_bootstrap.sandbox_juicefs_redis)}"
+  }
+}
+
+# Redis reads --requirepass at start only; the digest on the pod template is
+# what restarts it when the password changes.
+run "in_cluster_juicefs_redis_restarts_on_a_new_password" {
+  command = plan
+
+  override_resource {
+    target          = random_password.sandbox_juicefs_redis
+    override_during = plan
+    values = {
+      result = "fixture-not-a-real-password"
+    }
+  }
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.pod_annotations["checksum/password"] == sha256("fixture-not-a-real-password")
+    error_message = "The in-cluster JuiceFS Redis pod template does not carry the password's sha256"
+  }
+  assert {
+    condition     = output.sandbox_juicefs_redis_config_digest == sha256("redis://:fixture-not-a-real-password@sandbox-juicefs-redis.langsmith.svc.cluster.local:6379/1")
+    error_message = "The JuiceFS config digest for the in-cluster Redis is not the sha256 of its URL"
+  }
+}
+
+# deploy.sh puts this digest on sandbox-host, because the chart hashes only the
+# Secret's name.
+run "juicefs_config_digest_for_an_external_redis" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "external"
+    sandbox_juicefs_redis_url    = "rediss://:fixture@redis.example.internal:6380/1"
+  }
+
+  assert {
+    condition     = output.sandbox_juicefs_redis_config_digest == sha256("rediss://:fixture@redis.example.internal:6380/1")
+    error_message = "The JuiceFS config digest is not the sha256 of the external URL"
+  }
+}
+
+run "juicefs_config_digest_absent_for_amr" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+  }
+
+  assert {
+    condition     = output.sandbox_juicefs_redis_config_digest == null
+    error_message = "amr got a JuiceFS config digest, which would restart sandbox-host on existing deployments"
+  }
+}
+
+# The pin holds the source recorded when the flag was turned on; the override
+# stands in for that prior state.
+run "the_redis_guard_refuses_a_source_change" {
+  command = plan
+
+  override_resource {
+    target          = terraform_data.sandbox_juicefs_redis_source_pin
+    override_during = plan
+    values = {
+      output = "amr"
+    }
+  }
+
+  variables {
+    enable_sandboxes                      = true
+    sandbox_juicefs_redis_source          = "in-cluster"
+    sandbox_juicefs_redis_prevent_destroy = true
+  }
+
+  expect_failures = [terraform_data.sandbox_juicefs_redis_source_pin]
+}
+
+run "the_redis_guard_allows_an_unchanged_source" {
+  command = plan
+
+  override_resource {
+    target          = terraform_data.sandbox_juicefs_redis_source_pin
+    override_during = plan
+    values = {
+      output = "in-cluster"
+    }
+  }
+
+  variables {
+    enable_sandboxes                      = true
+    sandbox_juicefs_redis_source          = "in-cluster"
+    sandbox_juicefs_redis_prevent_destroy = true
+  }
+
+  assert {
+    condition     = length(terraform_data.sandbox_juicefs_redis_source_pin) == 1
+    error_message = "The source pin was not planned while the guard is on"
+  }
+}
+
+run "the_redis_guard_off_plans_no_pin" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+  }
+
+  assert {
+    condition     = length(terraform_data.sandbox_juicefs_redis_source_pin) == 0
+    error_message = "The source pin was planned with sandbox_juicefs_redis_prevent_destroy = false"
+  }
+}
+
 run "in_cluster_juicefs_redis_policy_left_to_deploy_on_cilium" {
   command = plan
 

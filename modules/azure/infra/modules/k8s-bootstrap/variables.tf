@@ -322,6 +322,12 @@ variable "sandbox_juicefs_redis_image" {
   default     = "docker.io/redis:7"
 }
 
+variable "sandbox_juicefs_redis_storage_class_name" {
+  type        = string
+  description = "Name of the cluster-scoped StorageClass for the in-cluster JuiceFS Redis volume."
+  default     = "sandbox-juicefs-redis-retain"
+}
+
 variable "sandbox_juicefs_redis_storage_gb" {
   type        = number
   description = "Size in GB of the in-cluster JuiceFS Redis volume."

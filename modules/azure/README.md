@@ -1079,18 +1079,27 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
     Azure Managed Redis is not offered, such as Azure Government. It writes an append-only file synced every second,
     runs `noeviction` with `maxmemory` at 80% of `sandbox_juicefs_redis_memory_mb` (default `1024`), and requires a
     password Terraform generates. Its volume, `sandbox_juicefs_redis_storage_gb` (default `16`), is a Premium SSD
-    claim, `sandbox-juicefs-redis-data`, on the `sandbox-juicefs-redis-retain` class. Raising the size grows the
+    claim, `sandbox-juicefs-redis-data`, on the `sandbox-juicefs-redis-retain<suffix>` class (cluster-scoped, so
+    suffixed per deployment like the SmithDB class). Raising the size grows the
     disk in place on the next apply; a claim cannot shrink. Deleting the claim keeps the disk. The disk is in the
     cluster's node resource group, so deleting the cluster deletes it. It runs one replica with no failover: a node
     loss stops sandboxes until the pod reschedules and reattaches its disk, which a zonal disk does only in its own
     zone. Back the disk up, for example with Azure Backup for AKS or a disk snapshot schedule.
-    The image defaults to the chart's own `docker.io/redis:7`; behind a mirror, set `sandbox_juicefs_redis_image`.
+    The image is the chart's own `redis:7`, pulled through `langsmith_image_registry` when that is set, in the same
+    layout as the chart's Redis; `sandbox_juicefs_redis_image` overrides it. A new password restarts the Redis pod,
+    and the next `make deploy` restarts `sandbox-host` with it, so run the apply and the deploy together.
+    Traffic to it is `redis://`, not TLS, so the password and the metadata cross the node network in clear text, and
+    the node rule below admits the whole AKS subnet. Where pods take their addresses from that subnet (node-subnet
+    mode), any pod can open a connection to port 6379 and only the password stops it. Use `external` with a
+    `rediss://` URL where that matters.
   - `external`: a Redis you run, given by `sandbox_juicefs_redis_url` (`redis://` or `rediss://`, in
     `secrets.auto.tfvars`). It must run `noeviction`, should write an append-only file, and must accept connections
     from the AKS node subnet, because `sandbox-host` connects from node IPs.
 - Changing `sandbox_juicefs_redis_source` on a cluster with sandboxes points JuiceFS at an empty Redis, which loses
   every sandbox file system. Terraform does not move the metadata. Copy it first (for example with `juicefs dump` and
-  `juicefs load`), or change the source only before sandboxes hold data.
+  `juicefs load`), or change the source only before sandboxes hold data. With
+  `sandbox_juicefs_redis_prevent_destroy = true`, plan refuses a source change; set the flag to `false` in the same
+  edit.
 - `sandbox-host` runs on the host network and calls platform-backend on port 1986 from a node IP. platform-backend
   stays under the namespace's default-deny NetworkPolicy, and one more policy admits the nodes on port 1986 alone:
   - With Azure Network Policy Manager, Terraform creates `allow-nodes-to-platform-backend`, which admits the AKS node
@@ -1099,7 +1108,8 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
   - With Cilium, which never matches a node IP by `ipBlock`, `deploy.sh` applies a CiliumNetworkPolicy of the same
     name that admits the `host` and `remote-node` entities, and deletes it when sandboxes are off.
   - With `sandbox_juicefs_redis_source = "in-cluster"`, the same pair admits the nodes to the Redis on port 6379:
-    `allow-nodes-to-sandbox-redis`, from Terraform with Network Policy Manager or from `deploy.sh` with Cilium.
+    `allow-nodes-to-sandbox-redis`, from Terraform with Network Policy Manager or from `deploy.sh` with Cilium. As
+    for platform-backend, in node-subnet mode the Network Policy Manager rule also admits every pod on the subnet.
 - `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy. This replaces any tag set
   in a values file, so the image always follows the chart.
 - `sandbox_service_url_base_url` sets the base URL for HTTP services that run inside sandboxes. It needs wildcard DNS

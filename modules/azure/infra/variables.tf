@@ -1558,7 +1558,7 @@ variable "sandbox_juicefs_redis_high_availability" {
 
 variable "sandbox_juicefs_redis_prevent_destroy" {
   type        = bool
-  description = "While true, plan refuses enable_sandboxes = false, which would delete the JuiceFS metadata Redis and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes. It does not stop terraform destroy."
+  description = "While true, plan refuses enable_sandboxes = false and any change of sandbox_juicefs_redis_source, both of which delete the JuiceFS metadata Redis in use and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes or changes the source. It does not stop terraform destroy."
   default     = false
 }
 
@@ -1609,8 +1609,8 @@ variable "sandbox_juicefs_redis_memory_mb" {
 
 variable "sandbox_juicefs_redis_image" {
   type        = string
-  description = "Image of the in-cluster JuiceFS Redis. The default is the image the chart uses for its own Redis (images.redisImage), so a mirror that serves the chart's images serves this one: set it to <mirror>/redis:7, or the path your mirror uses. The pod runs as the namespace's default service account, which carries langsmith_image_pull_secret_name when that is set. Used only with sandbox_juicefs_redis_source = in-cluster."
-  default     = "docker.io/redis:7"
+  description = "Image of the in-cluster JuiceFS Redis. Empty (default) uses the chart's own Redis image, docker.io/redis:7, through langsmith_image_registry when that is set, in the layout init-values.sh writes for images.redisImage: <registry>/redis:7, or <registry>/docker.io/redis:7 with langsmith_image_registry_keeps_source_host = true. Set it to override. The pod runs as the namespace's default service account, which carries langsmith_image_pull_secret_name when that is set. Used only with sandbox_juicefs_redis_source = in-cluster."
+  default     = ""
 }
 
 variable "sandbox_juicefs_csi_config_secret_name" {
