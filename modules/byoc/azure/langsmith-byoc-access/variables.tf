@@ -18,12 +18,12 @@ variable "data_planes" {
   type = map(object({
     location = string
     tags     = optional(map(string), {})
-    # Set to true after the data plane is active. The LangSmith role then
-    # loses the actions that delete the data plane, and the User Access
-    # Administrator assignment goes away. Set it back to false before an
-    # upgrade that adds a role assignment, and before you delete or re-create
-    # the data plane.
+    # Set to true after the data plane is active. LangSmith then cannot grant
+    # access, read storage keys, or change identities. See roles.tf.
     reduced_access = optional(bool, false)
+    # With reduced_access, give LangSmith the removed access until this RFC
+    # 3339 time, for example "2026-11-12T18:00:00Z". See elevated.tf.
+    elevated_until = optional(string)
     # Create the identities and role assignments yourself. LangSmith gets no
     # User Access Administrator. Do not change after creation.
     byo_iam = optional(bool, false)
@@ -47,6 +47,13 @@ variable "data_planes" {
     }))
   }))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for dp in values(var.data_planes) : dp.elevated_until == null || can(timecmp(dp.elevated_until, "2000-01-01T00:00:00Z"))
+    ])
+    error_message = "elevated_until must be an RFC 3339 time, for example 2026-11-12T18:00:00Z."
+  }
 
   # The key is part of the resource group name (at most 90 characters) and of
   # the Key Vault name, which allows no consecutive hyphens and must start with
