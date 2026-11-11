@@ -1,5 +1,5 @@
 # Actions of the LangSmith custom role. reduced_access picks one of the two
-# lists. The role applies only within one data plane resource group. Role
+# lists. deletion_protection removes every delete action from either list. The role applies only within one data plane resource group. Role
 # assignments and the custom blob role of the data plane are
 # Microsoft.Authorization actions; they come from the User Access
 # Administrator assignment in data_planes.tf, which exists only with full
@@ -42,17 +42,19 @@ locals {
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
   ])
 
-  # Reduced access: full access without any delete action, and without the
-  # actions that grant access, read storage keys, or change identities.
-  # LangSmith uses them only at creation, teardown, and some upgrades.
+  # Reduced access: full access without the actions that grant access, read
+  # storage keys, or change identities. LangSmith uses them only at creation,
+  # teardown, and some upgrades.
   langsmith_byoc_reduced_actions = [
     for action in local.langsmith_byoc_actions : action
-    if !endswith(action, "/delete") && !contains(local.langsmith_byoc_reduced_removed_actions, action)
+    if !contains(local.langsmith_byoc_reduced_removed_actions, action)
   ]
 
   langsmith_byoc_reduced_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
     "Microsoft.DBforPostgreSQL/flexibleServers/administrators/write",
     "Microsoft.Cache/*/accessPolicyAssignments/write",
     "Microsoft.Storage/storageAccounts/listKeys/action",

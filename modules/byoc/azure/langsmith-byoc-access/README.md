@@ -156,13 +156,12 @@ With `reduced_access`, LangSmith does not have these permissions:
 | Area | Permissions |
 |---|---|
 | Role assignments | `User Access Administrator` |
-| All resources | Every `*/delete` action |
 | PostgreSQL | `flexibleServers/administrators/write` |
 | Redis | `*/accessPolicyAssignments/write` |
 | Storage | `storageAccounts/listKeys/action` |
-| Managed identities | `userAssignedIdentities/write`, `federatedIdentityCredentials/write` |
+| Managed identities | `userAssignedIdentities/write`, `userAssignedIdentities/delete`, `federatedIdentityCredentials/write`, `federatedIdentityCredentials/delete` |
 
-LangSmith cannot delete a resource, give a principal access to an identity or a data store, or read storage keys.
+LangSmith cannot give a principal access to an identity or a data store, and it cannot read storage keys.
 
 #### Combine with `byo_iam`
 
@@ -174,17 +173,29 @@ data_planes = {
 }
 ```
 
-`byo_iam` already removes `User Access Administrator` and the identity write and delete actions. `reduced_access` also removes all delete actions, and the federated identity credential, PostgreSQL administrator, Redis access policy, and storage key actions. LangSmith then cannot delete resources, or change identities, role assignments, federated identity credentials, PostgreSQL administrators, or Redis access policies.
+`byo_iam` already removes `User Access Administrator` and the identity write and delete actions. `reduced_access` also removes the federated identity credential, PostgreSQL administrator, Redis access policy, and storage key actions. LangSmith then cannot change identities, role assignments, federated identity credentials, PostgreSQL administrators, or Redis access policies.
 
 Set `reduced_access = false` again before you:
 
 - delete or recreate the data plane.
-- apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy.
-- apply an upgrade that removes a resource, such as a node pool, a DNS record, or a private endpoint connection.
-
-LangChain tells you when an upgrade needs this.
+- apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
 
 [`roles.tf`](roles.tf) has the full lists.
+
+### Protect resources from deletion
+
+When the data plane is active, set `deletion_protection = true`. Then run `terraform apply`. The LangSmith role loses every `*/delete` action, so LangSmith cannot delete a resource in the data plane resource group. You can use it with or without `reduced_access` and `byo_iam`:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", byo_iam = true, reduced_access = true, deletion_protection = true }
+}
+```
+
+LangSmith can still upgrade, scale, and repair the data plane. Set `deletion_protection = false` again before you:
+
+- delete or recreate the data plane.
+- apply an upgrade that removes or replaces a resource, such as a node pool, a DNS record, or a private endpoint connection. LangChain tells you when an upgrade needs this.
 
 ### Let Engine use Azure AI Foundry (optional)
 
@@ -260,7 +271,7 @@ Remove `flow_logs` before you delete the data plane.
 
 > **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
 
-1. If `reduced_access = true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
+1. If `reduced_access` or `deletion_protection` is `true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
 3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
 4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
@@ -284,6 +295,7 @@ Fields of each `data_planes` entry:
 | `location` | `string` | yes | - | Azure region of the data plane. |
 | `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
+| `deletion_protection` | `bool` | no | `false` | Remove every delete action from the LangSmith role after the data plane is active. See [Protect resources from deletion](#protect-resources-from-deletion). |
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
