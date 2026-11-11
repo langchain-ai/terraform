@@ -136,14 +136,14 @@ variable "byoiam_karpenter_controller_policy_arn" {
   }
 }
 
-variable "cmk_key_arns" {
-  description = "Optional. Customer-managed KMS key ARNs that new LangSmith data plane resources are encrypted with. The role may use them only through the AWS services that store data plane data. The key owner must also allow this role on each key."
-  type        = list(string)
-  default     = []
+variable "cmk_service_key_arns" {
+  description = "Optional. Customer-managed KMS key ARN per data plane service (s3, ebs, eks, rds, elasticache) for new data planes. Several services may share one key. The role may use each key only through its own service. The key owner must also allow this role on each key."
+  type        = map(string)
+  default     = {}
 
   validation {
-    condition     = length(var.cmk_key_arns) <= 5 && alltrue([for arn in var.cmk_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
-    error_message = "Provide at most five KMS key ARNs."
+    condition     = alltrue([for service, arn in var.cmk_service_key_arns : contains(["s3", "ebs", "eks", "rds", "elasticache"], service) && can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Keys must be s3, ebs, eks, rds, or elasticache, and values must be KMS key ARNs."
   }
 }
 

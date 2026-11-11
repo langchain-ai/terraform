@@ -28,7 +28,7 @@ module "byoiam" {
 | `karpenter_instance_profile_name` | Optional. Custom name for the Karpenter instance profile. |
 | `karpenter_controller_policy_name` | Optional. Custom name for the Karpenter controller policy. |
 | `ebs_kms_key_arns` | Optional. Customer-managed KMS keys for EBS volumes: keys of encrypted custom AMI snapshots and the EBS default encryption key. The Karpenter controller and EBS CSI roles may use them through EC2. The key owner must also allow those roles. |
-| `cmk_key_arns` | Optional. Customer-managed KMS keys for new data planes. Set the same keys as in the BYOC role module. The S3, RDS secret, EBS, and EKS cluster roles may use them through those services. The key owner must also allow those roles. |
+| `cmk_service_key_arns` | Optional. Customer-managed KMS key per data plane service (`s3`, `ebs`, `eks`, `rds`, `elasticache`) for new data planes. Set the same map as in the BYOC role module. The S3 roles may use the `s3` key, the RDS secret roles the `rds` key, the EBS roles the `ebs` key, and the EKS cluster role the `eks` key, each through its own service. The key owner must also allow those roles. |
 | `service_linked_roles_to_create` | Missing service-linked roles to create. Defaults to none. Import existing roles or leave them out. |
 | `smithdb_migration_writer_principal_arns` | Optional. Self-hosted LangSmith roles or users that may assume the SmithDB role during a self-hosted to BYOC migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |

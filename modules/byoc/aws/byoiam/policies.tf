@@ -101,49 +101,52 @@ locals {
   cmk_bucket_context = { for key, permission in local.s3_permissions : key => flatten([
     for bucket in permission.buckets : ["arn:${local.partition}:s3:::${bucket}", "arn:${local.partition}:s3:::${bucket}/*"]
   ]) }
+  cmk_s3_keys  = compact([lookup(var.cmk_service_key_arns, "s3", "")])
+  cmk_rds_keys = compact([lookup(var.cmk_service_key_arns, "rds", "")])
+  cmk_eks_keys = compact([lookup(var.cmk_service_key_arns, "eks", "")])
   cmk_rds_secret_statement = {
     Sid       = "DecryptRDSMasterSecrets"
     Effect    = "Allow"
     Action    = ["kms:Decrypt"]
-    Resource  = var.cmk_key_arns
+    Resource  = local.cmk_rds_keys
     Condition = { StringEquals = local.cmk_via.secretsmanager, StringLike = { "kms:EncryptionContext:SecretARN" = local.rds_secret_arns } }
   }
   cmk_bucket_statements = { for key, context in local.cmk_bucket_context : key => [for statement in [{
     Sid       = "BucketKMS"
     Effect    = "Allow"
     Action    = ["kms:Decrypt", "kms:GenerateDataKey"]
-    Resource  = var.cmk_key_arns
+    Resource  = local.cmk_s3_keys
     Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = context } }
-  }] : statement if length(var.cmk_key_arns) > 0] }
+  }] : statement if length(local.cmk_s3_keys) > 0] }
   cmk_statements = merge(local.cmk_bucket_statements, {
     # With S3 Bucket Keys the encryption context is the bucket ARN.
     workload-iam-role = concat(local.cmk_bucket_statements["workload-iam-role"], [for statement in [{
       Sid       = "ReadMigrationInventoryKMS"
       Effect    = "Allow"
       Action    = ["kms:Decrypt"]
-      Resource  = var.cmk_key_arns
+      Resource  = local.cmk_s3_keys
       Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = ["arn:${local.partition}:s3:::*-smithdb-blob", "arn:${local.partition}:s3:::*-smithdb-blob/byoc-migration/*"] } }
-    }] : statement if length(var.cmk_key_arns) > 0])
+    }] : statement if length(local.cmk_s3_keys) > 0])
     smithdb-iam-role = concat(local.cmk_bucket_statements["smithdb-iam-role"], [for statement in [{
       Sid       = "ReadLangsmithBlobKMS"
       Effect    = "Allow"
       Action    = ["kms:Decrypt"]
-      Resource  = var.cmk_key_arns
+      Resource  = local.cmk_s3_keys
       Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = ["arn:${local.partition}:s3:::*-smith-blob", "arn:${local.partition}:s3:::*-smith-blob/*"] } }
-    }] : statement if length(var.cmk_key_arns) > 0])
-    postgres-setup-iam-role = [for statement in [local.cmk_rds_secret_statement] : statement if length(var.cmk_key_arns) > 0]
-    smithdb-setup-iam-role  = [for statement in [local.cmk_rds_secret_statement] : statement if length(var.cmk_key_arns) > 0]
+    }] : statement if length(local.cmk_s3_keys) > 0])
+    postgres-setup-iam-role = [for statement in [local.cmk_rds_secret_statement] : statement if length(local.cmk_rds_keys) > 0]
+    smithdb-setup-iam-role  = [for statement in [local.cmk_rds_secret_statement] : statement if length(local.cmk_rds_keys) > 0]
     external-secrets-iam-role = [for statement in [merge(local.cmk_rds_secret_statement, {
       Sid       = "DecryptSecrets"
       Condition = { StringEquals = local.cmk_via.secretsmanager, StringLike = { "kms:EncryptionContext:SecretARN" = concat(local.application_secret_arns, local.rds_secret_arns) } }
-    })] : statement if length(var.cmk_key_arns) > 0]
+    })] : statement if length(local.cmk_rds_keys) > 0]
     # EKS envelope encryption of Kubernetes secrets.
     eks-cluster-role = [for statement in [{
       Sid      = "ClusterSecretsKMS"
       Effect   = "Allow"
       Action   = ["kms:Encrypt", "kms:Decrypt", "kms:ListGrants", "kms:DescribeKey"]
-      Resource = var.cmk_key_arns
-    }] : statement if length(var.cmk_key_arns) > 0]
+      Resource = local.cmk_eks_keys
+    }] : statement if length(local.cmk_eks_keys) > 0]
   })
 
   inline_statements = {
@@ -340,7 +343,7 @@ locals {
     instance_profile_name = var.karpenter_instance_profile_name
   }
   karpenter_policy_base = jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars))
-  ebs_kms_key_arns      = distinct(concat(var.ebs_kms_key_arns, var.cmk_key_arns))
+  ebs_kms_key_arns      = distinct(concat(var.ebs_kms_key_arns, compact([lookup(var.cmk_service_key_arns, "ebs", "")])))
   ebs_kms_condition = {
     StringEquals = { "kms:ViaService" = [for region in sort(tolist(var.regions)) : "ec2.${region}.amazonaws.com"] }
   }

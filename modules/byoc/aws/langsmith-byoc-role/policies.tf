@@ -181,54 +181,43 @@ resource "aws_iam_role_policy" "byoiam_custom_names" {
 }
 
 locals {
-  cmk_via_services  = [for service in ["ec2", "ecr", "eks", "elasticache", "lambda", "network-firewall", "rds", "secretsmanager"] : "${service}.*.amazonaws.com"]
-  eks_log_group_arn = "arn:aws:logs:*:${local.account_id}:log-group:/aws/eks/*-smith-eks/cluster"
+  # The BYOC role creates encrypted resources through these services. S3
+  # encryption needs no key use by this role.
+  cmk_services = {
+    ebs         = { label = "EBS", via = ["ec2"] }
+    eks         = { label = "EKS", via = ["eks"] }
+    rds         = { label = "RDS", via = ["rds", "secretsmanager"] }
+    elasticache = { label = "ElastiCache", via = ["elasticache"] }
+  }
+  cmk_keys = { for service, arn in var.cmk_service_key_arns : service => arn if contains(keys(local.cmk_services), service) }
 
-  cmk_statements = [for statement in [
-    {
+  cmk_statements = concat(
+    length(local.cmk_keys) > 0 ? [{
       Sid      = "CMKDescribe"
       Effect   = "Allow"
       Action   = ["kms:DescribeKey"]
-      Resource = var.cmk_key_arns
-    },
-    {
-      Sid       = "CMKUseViaServices"
-      Effect    = "Allow"
-      Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKeyWithoutPlaintext"]
-      Resource  = var.cmk_key_arns
-      Condition = { StringLike = { "kms:ViaService" = local.cmk_via_services } }
-    },
-    {
-      Sid      = "CMKGrantsViaServices"
-      Effect   = "Allow"
-      Action   = ["kms:CreateGrant", "kms:ListGrants", "kms:RetireGrant"]
-      Resource = var.cmk_key_arns
-      Condition = {
-        StringLike = { "kms:ViaService" = local.cmk_via_services }
-        Bool       = { "kms:GrantIsForAWSResource" = "true" }
-      }
-    },
-    {
-      # EKS creates its control-plane log group unencrypted, so Crossplane
-      # creates it first with the key.
-      Sid      = "CMKEKSControlPlaneLogGroup"
-      Effect   = "Allow"
-      Action   = ["logs:CreateLogGroup", "logs:PutRetentionPolicy", "logs:AssociateKmsKey", "logs:TagResource", "logs:UntagResource", "logs:ListTagsForResource"]
-      Resource = [local.eks_log_group_arn]
-    },
-    {
-      Sid      = "CMKDescribeLogGroups"
-      Effect   = "Allow"
-      Action   = ["logs:DescribeLogGroups"]
-      Resource = ["arn:aws:logs:*:${local.account_id}:log-group:*"]
-    },
-    {
-      Sid      = "CMKDeleteEKSControlPlaneLogGroup"
-      Effect   = "Allow"
-      Action   = ["logs:DeleteLogGroup"]
-      Resource = [local.eks_log_group_arn]
-    },
-  ] : statement if length(var.cmk_key_arns) > 0 && (statement.Sid != "CMKDeleteEKSControlPlaneLogGroup" || var.allow_delete_permissions)]
+      Resource = sort(distinct(values(local.cmk_keys)))
+    }] : [],
+    flatten([for service in sort(keys(local.cmk_keys)) : [
+      {
+        Sid       = "CMKUse${local.cmk_services[service].label}"
+        Effect    = "Allow"
+        Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKeyWithoutPlaintext"]
+        Resource  = [local.cmk_keys[service]]
+        Condition = { StringLike = { "kms:ViaService" = [for via in local.cmk_services[service].via : "${via}.*.amazonaws.com"] } }
+      },
+      {
+        Sid      = "CMKGrants${local.cmk_services[service].label}"
+        Effect   = "Allow"
+        Action   = ["kms:CreateGrant", "kms:ListGrants", "kms:RetireGrant"]
+        Resource = [local.cmk_keys[service]]
+        Condition = {
+          StringLike = { "kms:ViaService" = [for via in local.cmk_services[service].via : "${via}.*.amazonaws.com"] }
+          Bool       = { "kms:GrantIsForAWSResource" = "true" }
+        }
+      },
+    ]]),
+  )
 }
 
 # Inline because the role is at IAM's default limit of 10 attached managed policies.
