@@ -28,6 +28,11 @@ run "default" {
   command = plan
 
   assert {
+    condition     = contains(keys(google_project_service.apis), "cloudresourcemanager.googleapis.com")
+    error_message = "The module enables the Cloud Resource Manager API, which LangSmith's access check uses."
+  }
+
+  assert {
     condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
     error_message = "One fenced role per kind."
   }
