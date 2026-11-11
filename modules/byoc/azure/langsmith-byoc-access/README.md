@@ -182,13 +182,15 @@ Set `reduced_access = false` again before you:
 
 [`roles.tf`](roles.tf) has the full lists.
 
-### Protect resources from deletion
+### Protect resources from deletion (optional)
+
+We do not recommend this option for most data planes. Upgrades that remove or replace a resource stop until you turn it off.
 
 When the data plane is active, set `deletion_protection = true`. Then run `terraform apply`. The LangSmith role loses every `*/delete` action, so LangSmith cannot delete a resource in the data plane resource group. You can use it with or without `reduced_access` and `byo_iam`:
 
 ```hcl
 data_planes = {
-  prod = { location = "eastus", byo_iam = true, reduced_access = true, deletion_protection = true }
+  prod = { location = "eastus", deletion_protection = true }
 }
 ```
 
@@ -295,7 +297,7 @@ Fields of each `data_planes` entry:
 | `location` | `string` | yes | - | Azure region of the data plane. |
 | `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
-| `deletion_protection` | `bool` | no | `false` | Remove every delete action from the LangSmith role after the data plane is active. See [Protect resources from deletion](#protect-resources-from-deletion). |
+| `deletion_protection` | `bool` | no | `false` | Optional. Remove every delete action from the LangSmith role after the data plane is active. See [Protect resources from deletion](#protect-resources-from-deletion-optional). |
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |

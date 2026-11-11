@@ -24,9 +24,10 @@ variable "data_planes" {
     # upgrade that adds a role assignment, and before you delete or re-create
     # the data plane.
     reduced_access = optional(bool, false)
-    # Set to true after the data plane is active. The LangSmith role then
-    # loses every delete action. Set it back to false before you delete the
-    # data plane, or before an upgrade that removes a resource.
+    # Optional, and not recommended for most data planes. Set to true after
+    # the data plane is active. The LangSmith role then loses every delete
+    # action. Set it back to false before you delete the data plane, or before
+    # an upgrade that removes or replaces a resource.
     deletion_protection = optional(bool, false)
     # Create the identities and role assignments yourself. LangSmith gets no
     # User Access Administrator. Do not change after creation.
