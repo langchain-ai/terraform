@@ -189,7 +189,7 @@ locals {
   # subnet, address or network that a new resource refers to.
   name_fenced_roles = {
     CloudSql = {
-      title       = "Cloud SQL"
+      title = "Cloud SQL"
       # Tag bindings are checked against their instance too, so the provisioner
       # can tag only langsmith- instances with the tag that the postgres-setup
       # Job's Cloud SQL user permissions depend on.
