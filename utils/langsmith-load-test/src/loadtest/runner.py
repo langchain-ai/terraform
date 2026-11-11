@@ -18,6 +18,9 @@ from loadtest.echo_agent import PAYLOAD_KEY, create_echo_agent
 from loadtest.payloads.generator import PayloadGenerator
 
 
+FEEDBACK_WORKERS = 32
+
+
 @dataclass
 class LoadSettings:
     users: int = 10
@@ -30,9 +33,10 @@ class LoadSettings:
     data_seed: int | None = None
     latency_limit_seconds: float | None = None
     progress_seconds: float = 10
+    feedback_drain_seconds: float = 60
 
     def __post_init__(self) -> None:
-        for name in ("users", "duration_seconds", "run_limit", "latency_limit_seconds"):
+        for name in ("users", "duration_seconds", "run_limit", "latency_limit_seconds", "feedback_drain_seconds"):
             value = getattr(self, name)
             if value is not None and (not math.isfinite(value) or value <= 0):
                 raise ValueError(f"--{name.replace('_', '-')} must be greater than zero and finite")
@@ -91,11 +95,15 @@ async def run_load_test(
     deadline = started_at + settings.ramp_up_seconds + settings.duration_seconds
     scheduled_runs = 0
     test_id = uuid4()
-    # Feedback runs in the background on its own pool, one worker per user: the client call is a
+    # Feedback runs in the background on its own thread pool: the client call is a
     # blocking HTTP POST, and awaited in the user loop it made each user wait a server round trip
     # before its next run, so the offered rate fell as the server slowed and run latencies carried
     # feedback time. Counted when each call completes; waited for after the load, outside its duration.
-    feedback_pool = ThreadPoolExecutor(max_workers=max(1, settings.users), thread_name_prefix="feedback")
+    # At most FEEDBACK_WORKERS threads: one per user started hundreds of threads at high --users, and
+    # calls beyond them queue without slowing a run (Dzmitry Dubarau's review of #488).
+    feedback_pool = ThreadPoolExecutor(
+        max_workers=max(1, min(settings.users, FEEDBACK_WORKERS)), thread_name_prefix="feedback",
+    )
     pending_feedback: set[asyncio.Future[object]] = set()
 
     def feedback_done(done: asyncio.Future[object]) -> None:
@@ -177,8 +185,17 @@ async def run_load_test(
         with tracing:
             await asyncio.gather(*(run_user(user_number) for user_number in range(settings.users)))
             result.duration_seconds = loop.time() - started_at
-            # Feedback still in flight finishes after the load, so it is counted but not timed.
-            await asyncio.gather(*list(pending_feedback), return_exceptions=True)
+            # Feedback still in flight finishes after the load, so it is counted but not timed. Bounded:
+            # waited for without a limit, a stalled server hung the run after the load had finished.
+            if pending_feedback:
+                _, stalled = await asyncio.wait(set(pending_feedback), timeout=settings.feedback_drain_seconds)
+                if stalled:
+                    result.first_error = result.first_error or (
+                        f"{len(stalled)} feedback calls still pending {settings.feedback_drain_seconds:g} s after the load"
+                    )
+                    for future in stalled:
+                        future.cancel()  # feedback_done counts each as an error
+                    await asyncio.sleep(0)
     finally:
         feedback_pool.shutdown(wait=False, cancel_futures=True)
         if progress_task is not None:

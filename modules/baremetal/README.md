@@ -2,6 +2,11 @@
 
 **Status: Example.** Tested on kubeadm and k3s. Not a supported deployment path.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/overview-dark.png">
+  <img alt="What you give: terraform.tfvars, the secrets file from make setup-env, and optionally your own Postgres, Redis or S3 by Secret. make apply, by Terraform: the values module computes sizes and Helm values with no cluster, the budget gate refuses a plan that outgrows the nodes, and Terraform sets SmithDB and sandbox node labels and taints, installs Envoy Gateway, MetalLB, storage and pod metrics, the datastores chart (two Postgres, Redis, RustFS and its buckets), every store's Secret and smithdb-config, and optionally KEDA, CloudNativePG, OpsTree, cloudflared, the Sandboxes' JuiceFS store and a ClickHouse migration. make deploy, by Helm: init-values writes helm/values from Terraform's outputs, then the LangSmith chart with SmithDB, then the stream routes with no timeout." src="diagrams/overview-light.png">
+</picture>
+
 ## What this example is, and what it is not
 
 - It **is** one tested way to run self-hosted LangSmith with SmithDB (and, for a migration, ClickHouse beside it) on an existing Kubernetes cluster,
@@ -37,6 +42,9 @@ What carries over to any Kubernetes deployment, whatever you swap: the Helm valu
 | kubeadm on Ubuntu 22.04 | v1.36.5 | containerd 2.4.1 | Calico v3.33.0 | 4 (1 control plane, 3 workers) | langsmith 0.17.11 (app and SmithDB 0.17.38); earlier load tests on 0.17.6 | install, upgrade, deploy, load test, blob offload, an agent deployment |
 | k3s | v1.34.5+k3s1 | containerd (k3s) | flannel (k3s) | 5 (1 amd64 server holding all state, 4 arm64 agents with 16K pages, so SmithDB is pinned to the server) | langsmith 0.17.20 | SmithDB-only install, load tests to saturation, an hour's soak with every trace stored, blob expiry applied |
 
+On a k3s cluster on 2026-11-01, Sandboxes and an external object store also ran, passing a design rate of 95 traces/s,
+with one module per store, before the datastores chart and the later taint changes.
+
 [What you get](#what-you-get) says, layer by layer, what is proven on a cluster and what by the plan tests only.
 
 Add-ons as tested: MetalLB 0.16.1, Envoy Gateway v1.9.2, metrics-server chart 3.14.0, KEDA 2.21.0.
@@ -44,67 +52,17 @@ Add-ons as tested: MetalLB 0.16.1, Envoy Gateway v1.9.2, metrics-server chart 3.
 **Other distributions need changes.** k3s ships servicelb, local-storage and metrics-server by default
 ([packaged components](https://docs.k3s.io/installation/packaged-components)), which collide with the MetalLB, local-path
 and metrics-server this example installs: start k3s with `--disable servicelb --disable local-storage --disable
-metrics-server --disable traefik` (Traefik would otherwise take a MetalLB address), or keep `--disable traefik` only and set `install_metallb`, `install_local_path` and `install_metrics_server` to `false` to use k3s's own (covered by plan tests, not yet run live). RKE2
+metrics-server --disable traefik` (Traefik would otherwise take a MetalLB address), or keep `--disable traefik` only and set `install_metallb`, `install_local_path` and `install_metrics_server` to `false`
+to use k3s's own (covered by plan tests, not yet run live). k3s's own `local-path` class is reclaimPolicy Delete,
+which `make plan` refuses for the datastores: give `storage_class` a copy of it with `reclaimPolicy: Retain`. RKE2
 ships its own metrics-server, so the same collision applies there: disable it, or set `install_metrics_server = false`.
 
 ## Architecture
 
-```mermaid
-flowchart TB
-  user["Users, SDKs and API clients"]
-  cf["Cloudflare Tunnel (optional)<br/>public HTTPS, no inbound ports"]
-
-  subgraph cluster["Kubernetes cluster (bare metal)"]
-    direction TB
-    subgraph edge["Edge: Terraform"]
-      mlb["MetalLB (L2)<br/>LoadBalancer IP"]
-      envoy["Envoy Gateway<br/>Gateway + HTTPRoute"]
-    end
-
-    subgraph app["Namespace langsmith: Helm"]
-      fe["frontend"]
-      pb["platform-backend<br/>ingest API, run queries"]
-      be["backend<br/>UI and API"]
-      iq["ingest-queue<br/>workers"]
-      q["queue"]
-      subgraph smithdb["SmithDB"]
-        cm["cluster-manager"]
-        ing["ingestion"]
-        qry["query"]
-        cmp["compaction + workers"]
-      end
-    end
-
-    subgraph data["Datastores: Terraform, one namespace each"]
-      pgl[("Postgres 18<br/>LangSmith")]
-      pgs[("Postgres 18<br/>SmithDB metastore")]
-      rds[("Redis 7<br/>run buffer + queues")]
-      s3[("RustFS (S3 API)<br/>SmithDB files + payload blobs")]
-    end
-
-    subgraph platform["Cluster add-ons: Terraform"]
-      ms["metrics-server"]
-      lp["local-path StorageClasses"]
-    end
-  end
-
-  user --> mlb
-  user -.-> cf -.-> envoy
-  mlb --> envoy --> fe
-  fe --> pb & be
-  pb --> rds
-  iq --> rds
-  iq --> ing
-  pb --> qry
-  be --> pgl
-  ing --> s3
-  ing --> pgs
-  qry --> s3
-  qry --> pgs
-  cmp --> s3
-  cmp --> pgs
-  pb --> s3
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/architecture-dark.png">
+  <img alt="Three layers. Cluster add-ons installed by Terraform: Envoy Gateway, MetalLB, local-path, metrics-server and KEDA. The namespace langsmith, installed by the LangSmith Helm chart: frontend, backend, platform-backend, ingest-queue and SmithDB. The namespace langsmith-data, installed by Terraform from charts/datastores: Postgres, Redis, RustFS and SmithDB's metastore, any of which can be external instead. backend uses Postgres, platform-backend Redis, ingest-queue RustFS, SmithDB its metastore." src="diagrams/architecture-light.png">
+</picture>
 
 How a trace moves through it, every component, and why each piece is there: [ARCHITECTURE.md](ARCHITECTURE.md).
 SmithDB specifics and tuning: [SMITHDB.md](SMITHDB.md). Sizing formulas: [SIZING.md](SIZING.md).
@@ -120,13 +78,13 @@ how far each is proven: on a live cluster, or by the plan tests only.
 | Load balancing | MetalLB in L2 mode: the gateway IP in its own pool (never auto-assigned), a pool for other Services; skipped for the cluster's own load balancer (`install_metallb`) | Terraform | installed: live; skipped: plan tests |
 | Ingress | Envoy Gateway (Gateway API): one Gateway, a 60 s request timeout on the chart's route and the LAN route, none on Fleet, Deployments and agent run streams, an optional HTTPS listener (`gateway_tls_secret`); or the cluster's own Gateway (`install_envoy_gateway`, `existing_gateway`), whose listener must allow routes from the `langsmith` namespace and whose timeouts are its own | Terraform + `deploy.sh` | the Gateway: live; HTTPS, an existing Gateway: plan tests; stream routes: not yet run |
 | Public access (optional) | Cloudflare Tunnel connector (`cloudflared`, 2 replicas) | Terraform | plan tests |
-| Datastores | Postgres 18 ×2 (LangSmith, SmithDB metastore), Redis 7, RustFS (S3 API) with buckets, blob storage on by default with the cloud modules' expiry (`blob_storage_ttl_days`): one release of the local chart [charts/datastores](charts/datastores/README.md), as StatefulSets or through operators (`datastore_runtime`); each can be the customer's instead (`<store>_source`) | Terraform + Helm | live (StatefulSets); plan tests (operators) |
+| Datastores | Postgres 18 ×2 (LangSmith, SmithDB metastore), Redis 7, RustFS (S3 API) with buckets, blob storage on by default with the cloud modules' expiry (`blob_storage_ttl_days`): one release of the local chart [charts/datastores](charts/datastores/README.md), as StatefulSets or through operators (`datastore_runtime`); each can be an external one instead (`<store>_source`) | Terraform + Helm | live with one module per store, the layout before this chart, and with an external object store (2026-11-01, k3s); as this chart, plan tests and `helm template` in both runtimes |
 | Trace store | SmithDB alone by default. For a migration from ClickHouse: the chart's ClickHouse in the cluster, dual ingest, the backfill and the read switch, one Helm change each (`clickhouse_source`, `enable_smithdb`, `smithdb_*_enabled`, [SMITHDB.md](SMITHDB.md)). SmithDB's tier from the load (`smithdb_tier`) | Terraform + Helm | SmithDB alone: live; ClickHouse and the migration steps: plan tests |
 | Secrets | Datastore credentials as Kubernetes Secrets; app secrets in a local `infra/.secrets.env` (mode 600); the first admin's email in `terraform.tfvars` | Terraform + scripts | credentials and the secrets file: live; the email from `terraform.tfvars`: not yet run |
 | Application | LangSmith chart on the 0.17 or 0.18 line (line-pinned) | Helm (`deploy.sh`) | 0.17: live; 0.18: not yet run (`deploy.sh` accepts the line) |
 | Agent deployments (optional) | KEDA, plus the chart's host-backend, listener and operator (`enable_deployments`) | Terraform + Helm | live |
 | Fleet, Insights, Polly, SSO (optional) | the cloud modules' flags (`enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`) | Terraform + Helm | Fleet, Insights, Polly: plan tests; SSO: not yet tested |
-| Sandboxes and Engine (optional) | Sandboxes on KVM nodes, JuiceFS on its own Redis and bucket; Engine on them ([below](#sandboxes-and-engine-optional)) | Terraform + Helm | plan tests |
+| Sandboxes and Engine (optional) | Sandboxes on KVM nodes, JuiceFS on its own Redis and bucket; Engine on them ([below](#sandboxes-and-engine-optional)) | Terraform + Helm | Sandboxes: live once (2026-11-01, k3s, 95 traces/s design rate), before the later taint changes; Engine: plan tests |
 | Guardrails | Budget gate: requested CPU, memory and disk checked against your nodes before anything is applied; the `pods` output lists what it counted | Terraform | budget gate: live; `pods` output: plan tests |
 
 ## Assumptions
@@ -136,7 +94,11 @@ This module is opinionated. It assumes:
 - **A working Kubernetes cluster** you can reach with `kubectl`, with at least three schedulable worker nodes. It doesn't
   create the cluster. Tested on kubeadm and k3s; other distributions need the changes under [Tested](#tested).
 - **One Layer 2 network** for the nodes, with unused IP addresses outside your DHCP pool: one for the gateway, and a
-  range for MetalLB that doesn't include it.
+  range for MetalLB that doesn't include it. MetalLB's speakers find each other on 7946/tcp and 7946/udp: open both
+  between nodes on a host firewall (firewalld, ufw), or a failed node's addresses are never taken over.
+- **metrics-server skips kubelet certificate checks** (`metrics_server_kubelet_insecure_tls = true`), since kubeadm's
+  kubelets serve self-signed certificates. With serving certificates signed by the cluster (`serverTLSBootstrap`), set
+  it `false`; a security review will ask.
 - **Node-local storage.** local-path volumes are directories on one node's disk: fast (NVMe recommended), but each volume
   is pinned to its node and has **no replication**. Back up Postgres and the object store yourself.
 - **Single-instance datastores.** Postgres, Redis and RustFS each run as one pod. That fits evaluation, development and
@@ -145,8 +107,8 @@ This module is opinionated. It assumes:
   and `datastore_replicas = 3`: a primary and two replicas of each, failed over by CloudNativePG and by three Redis
   Sentinels, every replica counted by the budget with its own volume. Volumes stay node-local, so a replica is what
   survives a lost node. RustFS stays one pod.
-- **A fresh install of the datastores.** An install made with #421's modules, one per store (`module.postgres_langsmith`
-  and its siblings), does not upgrade in place: the next apply deletes their namespaces, and with them the claims on
+- **A fresh install of the datastores.** An install made before the datastores became one chart, with a module per store
+  (`module.postgres_langsmith` and its siblings), does not upgrade in place: the next apply deletes their namespaces, and with them the claims on
   their volumes, and generates new passwords. Back up the LangSmith and SmithDB Postgres, the JuiceFS Redis and the
   object store first, apply, then restore into the new stores.
 - **Containers can open enough files:** containerd `LimitNOFILE=1048576` on every node (the default soft limit of 1,024
@@ -155,7 +117,7 @@ This module is opinionated. It assumes:
   ClickHouse for dual ingest and a backfill ([SMITHDB.md](SMITHDB.md)).
 
 Not covered: building the cluster or its OS, issuing the certificate (TLS ends at the gateway from a Secret you
-provide, `gateway_tls_secret`, or in front of it, e.g. with the Cloudflare Tunnel), backups, multi-cluster or HA setups.
+provide, `gateway_tls_secret`, or in front of it, e.g. with the Cloudflare Tunnel), backups, multi-cluster setups, and high availability for RustFS and the add-ons.
 
 ## Prerequisites
 
@@ -165,9 +127,33 @@ provide, `gateway_tls_secret`, or in front of it, e.g. with the Cloudflare Tunne
 | kubectl | matching your cluster |
 | Helm | ≥ 3.12 (Helm 4 works) |
 | python3 | any 3.x (scripts use the standard library only) |
+| openssl | any (`make setup-env` generates keys with it) |
 
 A LangSmith Enterprise license key, and cluster-admin access to the target cluster (the module installs cluster-wide
 add-ons: MetalLB, Envoy Gateway, metrics-server, local-path).
+
+## Network requirements
+
+The install reaches the internet in three places, each from a different machine:
+
+| From | To | For |
+|---|---|---|
+| where you run `make` | each chart's repository: `terraform output third_party_charts`, and `https://langchain-ai.github.io/helm` for LangSmith | `make apply`, `make deploy` |
+| every node | `docker.io`, `quay.io`, `ghcr.io`, and each third-party chart's registry | images: `terraform output images` lists the module's own; the LangSmith chart's are in [Mirror images](https://docs.langchain.com/langsmith/self-host-mirroring-images) |
+| LangSmith's pods | `beacon.langchain.com:443`, unless the license is offline | license verification and usage reporting ([egress](https://docs.langchain.com/langsmith/self-host-egress)); Engine adds its endpoint ([below](#sandboxes-and-engine-optional)) |
+
+**Behind a proxy**, give LangSmith's pods the proxy through `common_env` in `terraform.tfvars`, never as `commonEnv` in
+`langsmith-values-local.yaml`: Helm replaces a list whole, so that would drop the entries the module writes there.
+`NO_PROXY` must cover the cluster (`.svc`, `.cluster.local`, the pod and Service CIDRs) and an external object store's
+endpoint, or LangSmith sends its own datastore traffic to the proxy. The nodes' container runtime takes the proxy
+separately (k3s and RKE2 read `HTTPS_PROXY` and `NO_PROXY` from their service's environment file).
+
+**Air-gapped installs are not supported yet.** The module installs metrics-server, MetalLB, Envoy Gateway, KEDA and the
+datastore operators from their public repositories, and `make deploy` adds LangSmith's, with no input to point any of
+them at a mirror; each chart also pulls controller images the module does not set. A mirror would need every chart in
+`third_party_charts` and the LangSmith chart, every image they render (`helm template` each at its version), the
+module's `images`, and the LangSmith chart's images. Engine with `engine_intelligence_base_url = ""` is the one piece
+already made for no egress.
 
 ## Quick start
 
@@ -178,29 +164,41 @@ From `modules/baremetal/`:
 cp infra/terraform.tfvars.example infra/terraform.tfvars
 $EDITOR infra/terraform.tfvars        # kube context, nodes, IP range, sizing profile
 
-# 2. Cluster add-ons and datastores
+# 2. Secrets (license key, admin login, generated keys, your object store's keys when the module
+#    writes their Secret) -> infra/.secrets.env (the admin email from tfvars when set)
+make setup-env
+
+# 3. Cluster add-ons and datastores (with a store of your own and its Secret: see below first)
 make init
 make plan                             # read the budget output: requests vs your nodes
 make apply
 
-# 3. App secrets (license key, admin login, generated keys) → infra/.secrets.env (the admin email from tfvars when set)
-make setup-env
+# 4. Back up infra/.secrets.env and infra/terraform.tfstate, now and after every apply
 
-# 4. Helm values from Terraform outputs → helm/values/
-make init-values
-
-# 5. Install LangSmith + SmithDB
+# 5. Install LangSmith + SmithDB (writes helm/values/ from Terraform outputs first, as make init-values)
 make deploy
 ```
 
-`make deploy` prints the URL when every component is ready. Log in with `INITIAL_ORG_ADMIN_EMAIL` and the password from
-`infra/.secrets.env`. `make setup-env` also makes the signing JWKS (`langsmith_signing_jwks`), which turns on OAuth login
+Step 4 is not optional. `infra/.secrets.env` holds the salt every API key is hashed with and the key every session is
+signed with, and `terraform.tfstate` holds the datastore passwords it generated: lose either and every API key, login
+and datastore connection has to be remade. Keep both in your secrets manager or an encrypted backup, never in git.
+Running Terraform from your own pipeline: keep the state in a remote backend (`infra/backend.tf`) and give the
+pipeline the same `TF_VAR_` values `make plan` passes.
+
+**With a store of your own.** `postgres_secret`, `redis_secret`, `smithdb_metastore_secret` and (unless
+`object_store_secret_managed = true`) `object_store_secret` are Secrets you create in the `langsmith` namespace, which
+the same apply creates. On the first install, create the namespace alone, then your Secrets, then everything:
+
+```bash
+make apply ARGS="-target=kubernetes_namespace_v1.langsmith"
+kubectl -n langsmith create secret generic <name> --from-literal=...   # each Secret, with the keys in Configuration
+make apply
+```
+
+`make deploy` prints the URL when every component is ready. Log in with `langsmith_admin_email` (or, when it is empty,
+the `INITIAL_ORG_ADMIN_EMAIL` `make setup-env` asked for) and `INITIAL_ORG_ADMIN_PASSWORD` from `infra/.secrets.env`. `make setup-env` also makes the signing JWKS (`langsmith_signing_jwks`), which turns on OAuth login
 (`langsmith auth login`), Remote MCP, the LLM auth proxy and sandbox service URLs; keep it with the secrets file, since
 the docs require it stable across upgrades.
-
-The first `make apply` installs the MetalLB and Envoy Gateway CRDs. If your Terraform version can't plan resources that
-depend on CRDs that don't exist yet, apply the add-ons first:
-`make apply ARGS="-target=module.metallb -target=module.envoy_gateway"`, then `make apply`.
 
 ## Sizing profiles
 
@@ -219,40 +217,61 @@ How to size for a specific workload (traces/s, payload size, users): [SIZING.md]
 
 ## Configuration
 
-All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/terraform.tfvars.example) lists every one.
+All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/terraform.tfvars.example) shows each one a first install sets and most others, commented.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `kubeconfig_path`, `kube_context` | yes | the cluster; the context is required so the module never acts on your current context |
+| `kube_context` | yes | the cluster's context, required so the module never acts on your current one |
+| `kubeconfig_path` | no (`~/.kube/config`) | the kubeconfig that holds it |
 | `cluster_nodes` | yes | node names, allocatable CPU/memory/disk and roles, for the budget gate and optional SmithDB node pools |
 | `envoy_gateway_lb_ip`, `metallb_addresses` | with `install_metallb` | the gateway's IP (its own pool, needed when the module also installs Envoy Gateway), and a separate range for other LoadBalancer Services. Without both add-ons ours, `langsmith_domain` is required instead |
 | `sizing_profile` | no (`minimum`) | see above |
 | `langsmith_domain`, `langsmith_url_scheme` | without both add-ons ours | hostname and scheme (default `http://<gateway IP>`) |
 | `langsmith_admin_email` | no | the first org admin's email, written to `initialOrgAdminEmail` as on the cloud modules; empty: `make setup-env` asks |
 | `gateway_tls_secret` | no | a `kubernetes.io/tls` Secret in the `langsmith` namespace: adds an HTTPS listener for `langsmith_domain` beside HTTP (needs `langsmith_url_scheme = "https"`) |
-| `clickhouse_source`, `enable_smithdb`, `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, `smithdb_query_enabled`, `smithdb_migration_parallelism` | no (SmithDB only) | the trace store, as the cloud modules name these inputs: ClickHouse in the cluster, dual ingest, the backfill and the read switch, one Helm change each ([SMITHDB.md](SMITHDB.md)) |
+| `clickhouse_source`, `enable_smithdb`, `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, `smithdb_query_enabled`, `smithdb_migration_parallelism` | no (SmithDB only) | the trace store, with the cloud modules' names (the parallelism is this module's own): ClickHouse in the cluster, dual ingest, the backfill and the read switch, one Helm change each ([SMITHDB.md](SMITHDB.md)) |
 | `smithdb_tier` | no (the profile's) | SmithDB's tier (`minimal`, `small`, `medium`) when the load, not the profile, should set it: the medium tier asks 28 cores a query pod at any load |
-| `postgres_source`, `postgres_secret` | no (`in-cluster`) | `external`: the customer's Postgres, through a Secret in LangSmith's namespace with `connection_url` (user:password@host:port/db), and `langsmith-<product>-postgres` for each product; the module builds none |
-| `redis_source`, `redis_secret` | no (`in-cluster`) | `external`: the customer's Redis (`noeviction`), through a Secret with `connection_url` (redis://:password@host:port/0), and `langsmith-<product>-redis` for each product |
-| `smithdb_metastore_source`, `smithdb_metastore_secret`, `smithdb_metastore_port`, `smithdb_metastore_tls` | no (`in-cluster`) | `external`: the customer's dedicated, empty PostgreSQL 18 database, its keys `smithdb_metastore_host`, `_db`, `_user`, `_password` copied into `smithdb-config` |
-| `object_store_source`, `object_store_endpoint`, `object_store_region`, `object_store_path_style`, `object_store_buckets`, `object_store_secret`, `object_store_access_key_id`, `object_store_secret_access_key` | no (`in-cluster`) | `external`: the customer's S3-compatible store and two buckets, its keys (`access_key_id`, `secret_access_key`) copied into `smithdb-config`, from their Secret or, with the two key inputs (`TF_VAR_`), a Secret the module writes; a missing bucket is created (the blob bucket with its expiry), one that exists is left as it is; with Sandboxes, RustFS stays in the cluster for their JuiceFS bucket alone |
+| `postgres_source`, `postgres_secret` | no (`in-cluster`) | `external`: an external Postgres, through a Secret in LangSmith's namespace with `connection_url` (user:password@host:port/db), and `langsmith-<product>-postgres` for each product; the module builds none |
+| `redis_source`, `redis_secret` | no (`in-cluster`) | `external`: an external Redis (`noeviction`), through a Secret with `connection_url` (redis://:password@host:port/0), and `langsmith-<product>-redis` for each product |
+| `smithdb_metastore_source`, `smithdb_metastore_secret`, `smithdb_metastore_port`, `smithdb_metastore_tls` | no (`in-cluster`) | `external`: a dedicated, empty external PostgreSQL 18 database, its keys `smithdb_metastore_host`, `_db`, `_user`, `_password` copied into `smithdb-config` |
+| `object_store_source`, `object_store_endpoint`, `object_store_region`, `object_store_path_style`, `object_store_buckets`, `object_store_secret`, `object_store_secret_managed`, `object_store_access_key_id`, `object_store_secret_access_key` | no (`in-cluster`) | `external`: an S3-compatible store outside the cluster for SmithDB's bucket and the blob bucket ([below](#an-external-object-store)) |
 | `datastore_namespace` | no (`langsmith-data`) | the one namespace every in-cluster store runs in, each named for its instance (`postgres-langsmith`, `postgres-smithdb`, `redis-langsmith`, `redis-juicefs`, `rustfs`), so a shared cluster gets one data namespace per environment beside LangSmith's |
 | `datastore_replicas` | no (`1`) | with `datastore_runtime = "operator"`, pods per Postgres and Redis instance: 1, 2 or 3 (a primary and replicas the operator fails over to; Redis adds three Sentinels above 1); the budget counts each with its volume, and the Sentinels and both operators' controllers. Refused above 1 with StatefulSets |
-| `datastore_runtime` | no (`statefulset`) | how the in-cluster Postgres and Redis run: `statefulset`, one pod each on the official image; `operator`, Postgres through [CloudNativePG](https://cloudnative-pg.io/documentation/current/) and Redis through the [OpsTree Redis operator](https://github.com/OT-CONTAINER-KIT/redis-operator), both installed by the module (`cnpg_chart_version`, `redis_operator_chart_version`, `cnpg_postgres_image`, `opstree_redis_image`) and counted by the budget. RustFS has no operator and runs the same in both. Hosts, ports and Secrets are the same in both; [the chart's README](charts/datastores/README.md) has the differences |
+| `datastore_runtime` | no (`statefulset`) | how the in-cluster Postgres and Redis run: `statefulset`, one pod each; `operator`, through CloudNativePG and the OpsTree Redis operator, which the module installs and the budget counts ([ARCHITECTURE.md](ARCHITECTURE.md#datastores-in-each-runtime)) |
 | `datastore_requests` | no (the profile's) | CPU (millicores) and memory (MiB) requests for `postgres_langsmith`, `postgres_smithdb` and `rustfs_smithdb` measured under load; limits stay the profile's. On a fixed set of machines the profile's requests reserve what the stores never use |
 | `envoy_proxy_node_selector` | no (`{}`) | The nodes the Envoy proxy pods run on. Set with `metallb_l2_node_selector` to the same node, so requests arrive and are proxied on one node |
 | `clickhouse_storage_gi` | no (50, the chart's) | the in-cluster ClickHouse's volume when the retained traces set it (docs self-host-scale: about 60 GiB a day of TTL at 100 traces/s); the budget counts it against the node's disk |
 | `redis_memory_gi`, `object_store_gi` | no (the profile's) | Redis's memory (request and limit) and the object store's volume when the load sets them ([SIZING.md](SIZING.md), Redis and Object storage): the profile's fixed Redis limit caps the rate every install can take, and the budget counts the volume against the node's disk. A running store keeps its claim |
 | `values_local_file` | no (`helm/values/langsmith-values-local.yaml` when it exists) | The values overlay `deploy.sh` applies last. The budget counts the requests and replica floors set there over the sizing file's, so it counts what Helm deploys |
 | `install_metrics_server`, `install_local_path` (+ `storage_class`), `install_metallb`, `install_envoy_gateway` (+ `existing_gateway`) | no (all `true`) | skip each add-on a cluster already has; the budget counts only what is installed |
-| `enable_sandboxes`, `sandbox_hosts`, `sandbox_source_cidrs`, `sandbox_juicefs_cache_gi` | no | Sandboxes on KVM nodes ([below](#sandboxes-and-engine-optional)) |
+| `enable_sandboxes`, `sandbox_hosts`, `sandbox_source_cidrs`, `sandbox_juicefs_cache_gi` | `sandbox_hosts` and `sandbox_source_cidrs` with `enable_sandboxes` | Sandboxes on KVM nodes ([below](#sandboxes-and-engine-optional)) |
 | `enable_engine`, `engine_sandbox_tenant_id`, `engine_intelligence_base_url` | no | Engine, on Sandboxes ([below](#sandboxes-and-engine-optional)) |
 | `blob_storage_ttl_days` | no (`{short = 14, long = 400}`) | days before the blob bucket deletes `ttl_s/` and `ttl_l/` payloads, as the cloud modules expire them |
 | `envoy_gateway_route_timeout` | no (`60s`) | with this module's Envoy Gateway, the request timeout on the chart's route and the LAN route; Envoy's own default of 15 s cuts off slow trace reads. Fleet and Deployments streams have none: with either on, `deploy.sh` applies the `langsmith-fleet-streams` route, and the operator writes `0s` on its agent routes (`HTTPROUTE_REQUEST_TIMEOUT` in the agent-deploys example values) |
 | `enable_deployments` (installs KEDA), `enable_fleet`, `enable_standalone_insights`, `enable_standalone_polly`, `enable_sso_oidc`, `enable_usage_telemetry` | no | features, same flags as the cloud modules; with SSO, `make setup-env` asks the OIDC client ID, secret and issuer, and `deploy.sh` turns basic auth off |
 | `enable_cloudflare_tunnel` + `TF_VAR_cloudflare_tunnel_token` | no | public HTTPS through a Cloudflare Tunnel |
 | `node_reserved`, `max_request_ratio` | no | budget gate headroom |
+| `common_env` | no (`[]`) | environment variables for every LangSmith component, appended to the module's `commonEnv`: a corporate proxy ([Network requirements](#network-requirements)) |
 | `*_image`, `*_chart_version` | no | pinned versions |
+
+### An external object store
+
+With `object_store_source = "external"`, SmithDB's segments and the blobs go to `object_store_endpoint`, in the two
+buckets of `object_store_buckets`, and the store's keys (`access_key_id`, `secret_access_key`) are copied into
+`smithdb-config`. They come from one of two places, chosen by `object_store_secret_managed`:
+
+- `false` (the default): a Secret named `object_store_secret` you create in the `langsmith` namespace before the
+  first apply ([With a store of your own](#quick-start)). The keys stay out of `terraform.tfvars` and the environment;
+  like every Secret the module copies, they are in Terraform state either way.
+- `true`: the module writes that Secret from `object_store_access_key_id` and `object_store_secret_access_key`, which
+  `make setup-env` keeps and `make plan` and `make apply` pass as `TF_VAR_`. A pipeline must export both on every
+  run; a run without them stops at plan. Changing it from `true` to `false` deletes the Secret the module wrote:
+  create yours after that apply, then apply again.
+
+A missing bucket is created, the blob bucket with its expiry. A bucket that exists is left as it is, lifecycle rules
+included: on a blob bucket you made, add the two expiry rules yourself (prefixes `ttl_s/` and `ttl_l/`, days from
+`blob_storage_ttl_days`), or payloads are kept forever. With Sandboxes, RustFS stays in the cluster for the JuiceFS
+bucket alone.
 
 ### Helm values layering
 
@@ -263,7 +282,7 @@ All settings are in `infra/terraform.tfvars`; [terraform.tfvars.example](infra/t
 | `helm/values/values.yaml` | committed base: external Postgres/Redis, ClickHouse off (the trace-store inputs turn it on), gateway on |
 | `langsmith-values-overrides.yaml` | Terraform output: hostname, gateway |
 | `langsmith-values-admin.yaml` | initial admin email |
-| `langsmith-values-sizing-<profile>.yaml` | copied once from `helm/values/examples/` |
+| `langsmith-values-sizing-<profile>.yaml` | written from `helm/values/examples/` on every `make init-values`, the file the budget gate counted; never edited (tune in `langsmith-values-local.yaml`) |
 | `langsmith-values-<feature>.yaml` | one per enabled feature |
 | `langsmith-values-smithdb.yaml` | Terraform output: SmithDB sizing, cache, object store and metastore wiring |
 | `langsmith-values-local.yaml` | **optional**, yours: your tuning; start from [langsmith-values-local.yaml.example](helm/values/langsmith-values-local.yaml.example) |
@@ -320,11 +339,14 @@ With `enable_deployments = true` (and the Deployments entitlement in your licens
 
 `enable_sandboxes = true` runs Sandboxes on the nodes named in `sandbox_hosts`: amd64 machines with `/dev/kvm`, TUN
 and FUSE, each from `cluster_nodes`. The module labels and taints them `sandbox.langsmith.com/host=true:NoSchedule`, so
-only the sandbox runtime lands there (the budget counts them as a pool of their own, never as worker capacity), and gives JuiceFS a Redis of its own (AOF, `noeviction`) and a `sandbox-juicefs`
-bucket on the same RustFS. The runtime uses the host network, which no NetworkPolicy namespace selector matches, so
-`sandbox_source_cidrs` names the addresses its traffic comes from (each sandbox node's own, and the pod CIDR). With
-Sandboxes on, the `langsmith` namespace runs at the privileged Pod Security level, and `make setup-env` makes the
-callback signing key. Needs the Sandboxes entitlement.
+only the sandbox runtime lands there (the budget counts them as a pool of their own, never as worker capacity), and
+gives JuiceFS a Redis of its own (AOF, `noeviction`) and a `sandbox-juicefs` bucket on the same RustFS. The runtime
+uses the host network, which no NetworkPolicy namespace selector matches, so `sandbox_source_cidrs`, required, names
+the addresses its traffic comes from: each sandbox node's own, and the pod CIDR (`10.42.0.0/16` on k3s, for
+instance). With Sandboxes on, the `langsmith` namespace runs at the privileged Pod Security level, and `make setup-env` makes the
+callback signing key. Needs the Sandboxes entitlement, and LangSmith 0.17.35 or later (the application version, not the chart's) for S3-compatible storage with static
+keys; the [self-hosted changelog](https://docs.langchain.com/langsmith/self-hosted-changelog) names the chart that
+ships it.
 
 Two things on the sandbox hosts the module does not set up, since it does not build the hosts:
 
@@ -338,7 +360,8 @@ Two things on the sandbox hosts the module does not set up, since it does not bu
 `enable_engine = true` adds Engine on the shared Insights deployment, with its two keys in the app Secret. It needs
 Sandboxes, the Engine entitlement, and `https` with a domain, which its callbacks reach it on; `make plan` refuses it
 otherwise. Engine calls its models with provider keys, through your own LLM gateway (`engine_gateway_*_base_url`), or
-through LangSmith Intelligence (`engine_intelligence_base_url`): [ENGINE.md](ENGINE.md).
+through LangSmith Intelligence (`engine_intelligence_base_url`): [ENGINE.md](ENGINE.md). What each choice sends out
+of the cluster is in [ENGINE.md](ENGINE.md#what-leaves-the-cluster).
 
 ## Verify
 
@@ -382,18 +405,19 @@ What a new install needs before its features work, from the
 ```
 modules/baremetal/
 ├── Makefile                       # make help
-├── README.md, ARCHITECTURE.md, SMITHDB.md, SIZING.md, TROUBLESHOOTING.md, TEARDOWN.md
+├── README.md, ARCHITECTURE.md, SMITHDB.md, SIZING.md, ENGINE.md, TROUBLESHOOTING.md, TEARDOWN.md
 ├── infra/                         # Terraform root
 │   ├── main.tf, values.tf, variables.tf, outputs.tf, helm_values.tf, budget.tf, smithdb_nodes.tf,
-│   │   platform.tf, trace_store.tf, sandboxes.tf, datastores.tf
+│   │   platform.tf, trace_store.tf, sandboxes.tf, datastores.tf, backend.tf, providers.tf, versions.tf
 │   ├── terraform.tfvars.example
 │   ├── modules/                   # metrics-server, local-path, metallb, envoy-gateway, cloudflared, and
 │   │                              # values: every size, name and Helm value, with no provider
 │   │                              # (datastore-sizes.yaml: each profile's datastores)
 │   ├── scripts/                   # setup-env.sh, terraform.sh (make plan/apply/destroy), _common.sh
 │   └── tests/                     # plan tests (mocked providers): bash scripts/plan-tests.sh modules/baremetal
+├── diagrams/                      # the docs' figures, PNG, light and dark
 ├── charts/datastores/             # Postgres, Redis and RustFS as one chart, installed by datastores.tf
-│                                  # or by a customer's own Helm or Argo CD (its README)
+│                                  # or by your own Helm or Argo CD (its README)
 └── helm/
     ├── scripts/                   # init-values.sh, deploy.sh
     └── values/                    # values.yaml, examples/, langsmith-values-local.yaml.example

@@ -128,6 +128,11 @@ variable "enable_standalone_polly" {
   default = false
 }
 
+variable "common_env" {
+  type    = list(object({ name = string, value = string }))
+  default = []
+}
+
 variable "enable_usage_telemetry" {
   type    = bool
   default = false
@@ -280,6 +285,11 @@ variable "object_store_source" {
 variable "opstree_redis_image" {
   type    = string
   default = "quay.io/opstree/redis:v7.4.11"
+}
+
+variable "redis_sentinel_image" {
+  type    = string
+  default = "quay.io/opstree/redis-sentinel:v7.4.11"
 }
 
 variable "postgres_image" {

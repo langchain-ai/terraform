@@ -2,7 +2,7 @@
 # The in-cluster datastores as the root installs them (../../datastores.tf): which instances run, their
 # hosts, the chart's values without the passwords, the operators' charts, and the Secrets LangSmith
 # reads each store through. Names live here once; the root's resources take them from this module, and
-# a tool that hands the same chart to a customer reads the outputs instead of copying them.
+# a tool that applies the same chart without the module reads the outputs instead of copying them.
 #------------------------------------------------------------------------------
 
 locals {
@@ -52,10 +52,11 @@ locals {
     }
   }
   rustfs_endpoint = "http://rustfs.${var.datastore_namespace}.svc.cluster.local:9000"
-  # With the customer's object store RustFS holds the sandboxes' JuiceFS bucket alone: SmithDB's
-  # segments and the blobs go to theirs.
+  # Beside an external object store RustFS holds the sandboxes' JuiceFS bucket alone: SmithDB's
+  # segments and the blobs go to theirs, and an empty smithdb bucket beside them misled whoever looked
+  # for the segments (Dzmitry Dubarau's review of #488).
   rustfs_buckets = concat(
-    ["smithdb"],
+    var.object_store_source == "in-cluster" ? ["smithdb"] : [],
     var.enable_blob_storage && var.object_store_source == "in-cluster" ? [local.blob_bucket] : [],
     var.enable_sandboxes ? [local.juicefs_bucket] : [],
   )
@@ -81,12 +82,15 @@ locals {
     redis    = { release = "redis-operator", repository = "https://ot-container-kit.github.io/helm-charts", chart = "redis-operator", version = var.redis_operator_chart_version, namespace = "redis-operator" }
   }
 
-  # Every image this module runs outside the LangSmith chart, so a mirror can carry them all.
+  # Every image this module sets outside the LangSmith chart. The third-party charts (operator_charts and
+  # the root's add-ons) pull their own controllers' images, which this list does not carry: the Sentinel
+  # image was missing until Dzmitry Dubarau's review of #488, and stayed on quay.io whatever was set.
   images = {
     postgres          = var.postgres_image
     postgres_operator = var.cnpg_postgres_image
     redis             = var.redis_image
-    redis_operator    = var.opstree_redis_image
+    redis_opstree     = var.opstree_redis_image
+    redis_sentinel    = var.redis_sentinel_image
     rustfs            = var.rustfs_image
     aws_cli           = var.aws_cli_image
     local_path        = var.local_path_image
@@ -122,6 +126,7 @@ locals {
     redis = {
       image         = var.redis_image
       operatorImage = var.opstree_redis_image
+      sentinelImage = var.redis_sentinel_image
       sentinelResources = {
         requests = { cpu = "${local.redis_sentinel.cpu_m}m", memory = "${local.redis_sentinel.mem_mi}Mi" }
         limits   = { cpu = "${local.redis_sentinel.cpu_m}m", memory = "${local.redis_sentinel.mem_mi}Mi" }
@@ -156,7 +161,7 @@ locals {
 
   # The Secrets in LangSmith's namespace the chart can read a store through, with their keys, whether
   # or not this install needs them (datastore_secrets lists those): the root's resources take these
-  # names, and a customer applying the chart themselves creates the same. Formats follow chart 0.17:
+  # names, and applying the chart without the module creates the same. Formats follow chart 0.17:
   # the core Postgres URL has no scheme, Redis's has one, a product's has one.
   secret_names = {
     postgres   = var.postgres_source == "external" ? var.postgres_secret : "langsmith-postgres"
@@ -171,7 +176,7 @@ locals {
       postgres = { name = local.secret_names.postgres, keys = ["connection_url"] }
       redis    = { name = local.secret_names.redis, keys = ["connection_url"] }
       smithdb  = { name = local.secret_names.smithdb, keys = ["smithdb_metastore_host", "smithdb_metastore_db", "smithdb_metastore_user", "smithdb_metastore_password", "smithdb_s3_access_key", "smithdb_s3_secret_key"] }
-      # The customer's, read into smithdb-config when they run the metastore or the object store.
+      # External ones, read into smithdb-config for an external metastore or object store.
       smithdb_metastore = { name = var.smithdb_metastore_secret, keys = ["smithdb_metastore_host", "smithdb_metastore_db", "smithdb_metastore_user", "smithdb_metastore_password"] }
       object_store      = { name = var.object_store_secret, keys = ["access_key_id", "secret_access_key"] }
     },

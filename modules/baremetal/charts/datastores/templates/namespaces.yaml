@@ -1,7 +1,7 @@
 {{- /*
 Each namespace the enabled stores land in, once, with a default-deny ingress policy: nothing reaches a
 store that its own policy does not admit. With the top-level namespace set every store shares one
-(a customer's shared cluster gets one data namespace per environment), so a namespace holding Postgres
+(a shared cluster gets one data namespace per environment), so a namespace holding Postgres
 or Redis is baseline, and one holding RustFS alone restricted, the level each store's pods meet.
 */ -}}
 {{- $levels := dict }}

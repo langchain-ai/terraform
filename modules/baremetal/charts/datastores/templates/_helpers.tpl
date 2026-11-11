@@ -63,3 +63,22 @@ resources:
     storage: {{ .size }}
 {{- end -}}
 {{- end -}}
+
+{{/* A single-pod store's volume is node-local, so draining its node is an outage either way: the budget
+makes the drain stop and name the pod instead of taking the store down unannounced (Dzmitry Dubarau's
+review of #488). ARCHITECTURE.md has the drain procedure. dict: name, ns, labels, selector. */}}
+{{- define "datastores.pdb" -}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .name }}
+  namespace: {{ .ns }}
+  labels:
+    {{- toYaml .labels | nindent 4 }}
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- toYaml .selector | nindent 6 }}
+{{- end -}}

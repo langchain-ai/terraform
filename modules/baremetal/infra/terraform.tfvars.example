@@ -7,8 +7,8 @@
 
 # ── Required ──────────────────────────────────────────────────────────────────
 
-kubeconfig_path = "~/.kube/config"
 kube_context    = "my-cluster" # required on purpose: never the current context
+# kubeconfig_path = "~/.kube/config" # the default
 
 # Nodes as Kubernetes sees them (the budget gate checks the profile against
 # these). Keys must be the Kubernetes node names. Allocatable values from:
@@ -60,10 +60,15 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # datastore_namespace           = "langsmith-data" # every in-cluster store, each named for its instance
 # datastore_replicas            = 3                # with operator: a primary and two replicas of each Postgres and Redis
 # datastore_runtime             = "operator"   # Postgres through CloudNativePG, Redis through the OpsTree operator; default "statefulset"
-# postgres_source               = "external"   # theirs, through postgres_secret (and langsmith-<product>-postgres)
-# redis_source                  = "external"   # theirs, through redis_secret
-# smithdb_metastore_source      = "external"   # theirs, through smithdb_metastore_secret
-# object_store_source           = "external"   # theirs: object_store_endpoint, object_store_buckets, object_store_secret
+# postgres_source               = "external"   # outside the cluster, through postgres_secret (and langsmith-<product>-postgres)
+# redis_source                  = "external"   # outside the cluster, through redis_secret
+# smithdb_metastore_source      = "external"   # outside the cluster, through smithdb_metastore_secret
+# smithdb_metastore_port        = 5432
+# smithdb_metastore_tls         = true         # most managed Postgres services require it
+# object_store_source           = "external"   # outside the cluster: object_store_endpoint, object_store_buckets, object_store_secret
+# object_store_region           = "us-east-1"  # Ceph RGW: its zonegroup's name
+# object_store_path_style       = true
+# object_store_secret_managed   = true         # the module writes object_store_secret from TF_VAR_object_store_*; false: you create it first
 # values_local_file             = ""           # the overlay the budget counts over the sizing file; "": helm/values/langsmith-values-local.yaml
 # object_store_gi               = 1800         # the object store's volume, from the retained volume (SIZING.md, Object storage)
 # enable_blob_storage           = true         # large payloads to the blob bucket, not Redis
@@ -78,7 +83,8 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # sandbox_juicefs_cache_gi     = 50
 # enable_engine                = true                   # needs Sandboxes, https and langsmith_domain
 # engine_sandbox_tenant_id     = ""                     # required with more than one shared organization
-# engine_intelligence_base_url = "https://beacon.langchain.com/intelligence"
+# common_env                   = [{ name = "HTTPS_PROXY", value = "http://proxy.corp:3128" }, { name = "NO_PROXY", value = ".svc,.cluster.local,10.42.0.0/16,10.43.0.0/16" }]
+# engine_intelligence_base_url = "https://beacon.langchain.com/intelligence" # what each sends: ENGINE.md
 # Engine through your own LLM gateway (chart 0.17.31+; ENGINE.md): the URL of each API it serves, https only.
 # engine_gateway_anthropic_base_url = ""                 # Engine calls <url>/v1/messages
 # engine_gateway_openai_base_url    = ""                 # Engine calls <url>/responses
@@ -110,12 +116,12 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # install_metrics_server = false
 # install_metallb        = false
 # install_local_path     = false
-# storage_class          = "my-storage-class"                       # with install_local_path = false
+# storage_class          = "my-storage-class"                       # with install_local_path = false; reclaimPolicy Retain
 # install_envoy_gateway  = false
 # existing_gateway       = { name = "my-gateway", namespace = "gateways" } # with install_envoy_gateway = false
 
 # metrics_server_kubelet_insecure_tls = true # false after enabling kubelet serverTLSBootstrap
-# metallb_l2_node_selector            = { "node-role.kubernetes.io/worker" = "" }
+# metallb_l2_node_selector            = { "kubernetes.io/hostname" = "node1" }  # a label every chosen node carries
 # envoy_proxy_node_selector           = { "kubernetes.io/hostname" = "node1" }  # beside the node answering for the IP
 # local_path_node_path                = "/opt/local-path-provisioner"
 # envoy_gateway_route_timeout         = "60s"
@@ -134,6 +140,7 @@ metallb_addresses = ["10.20.0.51-10.20.0.59"]
 # redis_image                  = "docker.io/library/redis:7.4.11"
 # cnpg_postgres_image          = "ghcr.io/cloudnative-pg/postgresql:18.6-standard-trixie"
 # opstree_redis_image          = "quay.io/opstree/redis:v7.4.11"
+# redis_sentinel_image         = "quay.io/opstree/redis-sentinel:v7.4.11"
 # rustfs_image                 = "docker.io/rustfs/rustfs:1.0.1"
 # aws_cli_image                = "docker.io/amazon/aws-cli:2.37.8"
 # cloudflared_image            = "docker.io/cloudflare/cloudflared:2026.10.0"

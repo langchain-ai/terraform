@@ -10,6 +10,7 @@ locals {
   sandbox_problems = compact([
     var.enable_sandboxes && length(var.sandbox_hosts) == 0 ? "enable_sandboxes needs sandbox_hosts" : "",
     length([for h in var.sandbox_hosts : h if !contains(keys(var.cluster_nodes), h)]) > 0 ? "sandbox_hosts must all be in cluster_nodes" : "",
+    length([for h in var.sandbox_hosts : h if contains(keys(local.smithdb_dedicated_nodes), h)]) > 0 ? "a sandbox host cannot also be a dedicated SmithDB node: each taint owns the node's whole taint list, so the two would overwrite each other on every apply" : "",
     var.enable_sandboxes && length(var.sandbox_source_cidrs) == 0 ? "enable_sandboxes needs sandbox_source_cidrs: sandbox-host runs on the host network" : "",
     var.enable_engine && !var.enable_sandboxes ? "enable_engine needs enable_sandboxes: every Engine run executes in a sandbox" : "",
     var.enable_engine && var.langsmith_url_scheme != "https" ? "enable_engine needs langsmith_url_scheme = https with langsmith_domain: the sandboxes call LangSmith at a TLS hostname" : "",

@@ -273,7 +273,7 @@ run "blob_storage_on_by_default" {
   }
 
   assert {
-    condition     = output.object_store.buckets == ["smithdb", "langsmith-blobs"]
+    condition     = join(",", output.object_store.buckets) == "smithdb,langsmith-blobs"
     error_message = "RustFS should create both the smithdb and langsmith-blobs buckets."
   }
 
@@ -416,6 +416,20 @@ run "telemetry_on_sets_phone_home_env" {
   }
 }
 
+run "common_env_joins_the_modules_own_list" {
+  command = plan
+
+  variables {
+    enable_usage_telemetry = true
+    common_env             = [{ name = "HTTPS_PROXY", value = "http://proxy.corp:3128" }]
+  }
+
+  assert {
+    condition     = length(output.langsmith_helm_values.commonEnv) == 2 && output.langsmith_helm_values.commonEnv[0].name == "PHONE_HOME_USAGE_REPORTING_ENABLED" && output.langsmith_helm_values.commonEnv[1].name == "HTTPS_PROXY"
+    error_message = "common_env is appended to the module's commonEnv, one list, so a proxy never drops the module's own entries."
+  }
+}
+
 run "url_defaults_to_http_on_gateway_ip" {
   command = plan
 
@@ -503,8 +517,32 @@ run "lan_route_follows_domain" {
   }
 
   assert {
-    condition     = output.cloudflare_tunnel.lan_route
+    condition     = output.cloudflare_tunnel.lan_route && output.lan_route
     error_message = "With a domain, the LAN catch-all route should be on so the gateway IP keeps serving LangSmith."
+  }
+}
+
+run "an_existing_gateway_gets_no_lan_route" {
+  command = plan
+
+  variables {
+    langsmith_domain      = "langsmith-lab.example.com"
+    install_envoy_gateway = false
+    existing_gateway      = { name = "corp-gateway", namespace = "gateways" }
+  }
+
+  assert {
+    condition     = !output.lan_route && length(module.envoy_gateway) == 0
+    error_message = "On a gateway the module does not own, no hostless route: on a shared one it would take these paths from every host."
+  }
+}
+
+run "third_party_charts_lists_what_the_apply_installs" {
+  command = plan
+
+  assert {
+    condition     = toset(keys(output.third_party_charts)) == toset(["metrics_server", "metallb", "envoy_gateway"]) && output.third_party_charts.envoy_gateway.repository == "oci://docker.io/envoyproxy"
+    error_message = "third_party_charts should list each chart this apply installs, and only those, for a mirror to carry."
   }
 }
 
@@ -570,17 +608,17 @@ run "their_postgres_is_neither_built_nor_counted" {
 
   assert {
     condition     = length([for p in output.pods : p if p.name == "datastore/postgres-langsmith"]) == 0
-    error_message = "The budget should not count a Postgres the customer runs."
+    error_message = "The budget should not count a Postgres outside the cluster."
   }
 
   assert {
     condition     = output.langsmith_helm_values.postgres.external.existingSecretName == "acme-postgres"
-    error_message = "The chart should read the customer's Secret."
+    error_message = "The chart should read the store's own Secret."
   }
 
   assert {
     condition     = output.datastore_secrets == "acme-postgres langsmith-redis smithdb-config langsmith-insights-postgres"
-    error_message = "deploy.sh should check the customer's Secret and each product's own."
+    error_message = "deploy.sh should check the store's own Secret and each product's own."
   }
 }
 
@@ -601,17 +639,17 @@ run "their_redis_is_neither_built_nor_counted" {
 
   assert {
     condition     = length([for p in output.pods : p if p.name == "datastore/redis-langsmith"]) == 0
-    error_message = "The budget should not count a Redis the customer runs."
+    error_message = "The budget should not count a Redis outside the cluster."
   }
 
   assert {
     condition     = output.langsmith_helm_values.redis.external.existingSecretName == "acme-redis"
-    error_message = "The chart should read the customer's Secret."
+    error_message = "The chart should read the store's own Secret."
   }
 
   assert {
     condition     = output.datastore_secrets == "langsmith-postgres acme-redis smithdb-config langsmith-insights-redis"
-    error_message = "deploy.sh should check the customer's Secret and each product's own."
+    error_message = "deploy.sh should check the store's own Secret and each product's own."
   }
 }
 
@@ -626,12 +664,12 @@ run "their_metastore_is_neither_built_nor_counted" {
 
   assert {
     condition     = module.values.datastore_values.postgres.instances.smithdb.enabled == false && length(data.kubernetes_secret_v1.smithdb_metastore) == 1
-    error_message = "With smithdb_metastore_source = external the module builds no metastore and reads the customer's Secret."
+    error_message = "With smithdb_metastore_source = external the module builds no metastore and reads the Secret created for it."
   }
 
   assert {
     condition     = length([for p in output.pods : p if p.name == "datastore/postgres-smithdb"]) == 0
-    error_message = "The budget should not count a metastore the customer runs."
+    error_message = "The budget should not count a metastore outside the cluster."
   }
 
   assert {
@@ -641,7 +679,7 @@ run "their_metastore_is_neither_built_nor_counted" {
 
   assert {
     condition     = strcontains(output.datastore_secrets, "smithdb-metastore")
-    error_message = "deploy.sh should check the customer's metastore Secret."
+    error_message = "deploy.sh should check the metastore's own Secret."
   }
 }
 
@@ -656,22 +694,22 @@ run "their_object_store_is_neither_built_nor_counted" {
 
   assert {
     condition     = module.values.datastore_values.rustfs.enabled == false && length(data.kubernetes_secret_v1.object_store) == 1
-    error_message = "With object_store_source = external the module builds no RustFS and reads the customer's keys."
+    error_message = "With object_store_source = external the module builds no RustFS and reads the keys created for it."
   }
 
   assert {
     condition     = length([for p in output.pods : p if p.name == "datastore/rustfs"]) == 0
-    error_message = "The budget should not count an object store the customer runs, nor its volume."
+    error_message = "The budget should not count an object store outside the cluster, nor its volume."
   }
 
   assert {
     condition     = output.smithdb_helm_values.smithdb.config.objectStore.s3.endpoint == "https://objectscale.example:9021" && output.smithdb_helm_values.smithdb.config.objectStore.s3.allowHttp == false
-    error_message = "SmithDB should reach the customer's store over HTTPS."
+    error_message = "SmithDB should reach the external store over HTTPS."
   }
 
   assert {
     condition     = output.langsmith_helm_values.config.blobStorage.apiURL == "https://objectscale.example:9021"
-    error_message = "Blob storage should use the customer's store too."
+    error_message = "Blob storage should use the external store too."
   }
 }
 
@@ -682,8 +720,15 @@ run "their_object_store_from_keys_given_needs_no_secret_made_by_hand" {
     sizing_profile                 = "lab"
     object_store_source            = "external"
     object_store_endpoint          = "http://nas.example:30292"
+    object_store_secret_managed    = true
     object_store_access_key_id     = "langsmith"
     object_store_secret_access_key = "not-a-real-key"
+    object_store_region            = "zg-1"
+  }
+
+  assert {
+    condition     = strcontains(kubernetes_job_v1.object_store_bucket["smithdb"].spec[0].template[0].spec[0].container[0].args[0], "LocationConstraint=$AWS_DEFAULT_REGION") && one([for e in kubernetes_job_v1.object_store_bucket["smithdb"].spec[0].template[0].spec[0].container[0].env : e.value if e.name == "AWS_DEFAULT_REGION"]) == "zg-1"
+    error_message = "Outside us-east-1 the bucket must be created with its region as LocationConstraint, which Ceph RGW checks against its zonegroup."
   }
 
   assert {
@@ -692,12 +737,12 @@ run "their_object_store_from_keys_given_needs_no_secret_made_by_hand" {
   }
 
   assert {
-    condition     = toset(keys(kubernetes_job_v1.object_store_bucket)) == toset(["smithdb", "langsmith-blobs"])
+    condition     = toset(keys(kubernetes_job_v1.object_store_bucket)) == toset(["smithdb", "blobs"]) && kubernetes_job_v1.object_store_bucket["blobs"].spec[0].template[0].spec[0].container[0].env[1].value == "langsmith-blobs"
     error_message = "A Job should make each of their buckets that is missing."
   }
 
   assert {
-    condition     = strcontains(kubernetes_job_v1.object_store_bucket["langsmith-blobs"].spec[0].template[0].spec[0].container[0].env[2].value, "ttl_s/") && kubernetes_job_v1.object_store_bucket["smithdb"].spec[0].template[0].spec[0].container[0].env[2].value == ""
+    condition     = strcontains(kubernetes_job_v1.object_store_bucket["blobs"].spec[0].template[0].spec[0].container[0].env[2].value, "ttl_s/") && kubernetes_job_v1.object_store_bucket["smithdb"].spec[0].template[0].spec[0].container[0].env[2].value == ""
     error_message = "Only the blob bucket takes the expiry; SmithDB manages its own."
   }
 }
@@ -720,13 +765,43 @@ run "half_a_key_pair_is_refused" {
   command = plan
 
   variables {
-    sizing_profile             = "lab"
-    object_store_source        = "external"
-    object_store_endpoint      = "http://nas.example:30292"
-    object_store_access_key_id = "langsmith"
+    sizing_profile              = "lab"
+    object_store_source         = "external"
+    object_store_endpoint       = "http://nas.example:30292"
+    object_store_secret_managed = true
+    object_store_access_key_id  = "langsmith"
   }
 
   expect_failures = [var.object_store_secret_access_key]
+}
+
+# The failure in Dzmitry Dubarau's review of #488: a pipeline run without TF_VAR_ deleted the Secret the
+# last run wrote. Managed, a run without the keys stops at plan.
+run "a_managed_secret_without_its_keys_stops_at_plan" {
+  command = plan
+
+  variables {
+    sizing_profile              = "lab"
+    object_store_source         = "external"
+    object_store_endpoint       = "http://nas.example:30292"
+    object_store_secret_managed = true
+  }
+
+  expect_failures = [var.object_store_access_key_id, var.object_store_secret_access_key]
+}
+
+run "keys_given_for_a_secret_created_by_hand_are_refused" {
+  command = plan
+
+  variables {
+    sizing_profile                 = "lab"
+    object_store_source            = "external"
+    object_store_endpoint          = "http://nas.example:30292"
+    object_store_access_key_id     = "langsmith"
+    object_store_secret_access_key = "not-a-real-key"
+  }
+
+  expect_failures = [var.object_store_access_key_id, var.object_store_secret_access_key]
 }
 
 run "beside_their_object_store_rustfs_holds_the_sandboxes_bucket_alone" {
@@ -742,13 +817,13 @@ run "beside_their_object_store_rustfs_holds_the_sandboxes_bucket_alone" {
   }
 
   assert {
-    condition     = module.values.datastore_values.rustfs.enabled && module.values.datastore_values.rustfs.buckets == ["smithdb", "sandbox-juicefs"] && length([for p in output.pods : p if p.name == "datastore/rustfs"]) == 1
+    condition     = module.values.datastore_values.rustfs.enabled && join(",", module.values.datastore_values.rustfs.buckets) == "sandbox-juicefs" && length([for p in output.pods : p if p.name == "datastore/rustfs"]) == 1
     error_message = "With Sandboxes, RustFS should still run and be counted, for their JuiceFS bucket."
   }
 
   assert {
     condition     = output.smithdb_helm_values.smithdb.config.objectStore.s3.endpoint == "https://objectscale.example:9021" && output.langsmith_helm_values.config.blobStorage.apiURL == "https://objectscale.example:9021"
-    error_message = "SmithDB's segments and the blobs should go to the customer's store, not RustFS."
+    error_message = "SmithDB's segments and the blobs should go to the external store, not RustFS."
   }
 }
 
@@ -771,6 +846,11 @@ run "on_their_storage_class_a_node_disk_holds_no_volume" {
     object_store_gi    = 5000
     install_local_path = false
     storage_class      = "ocs-storagecluster-ceph-rbd"
+  }
+
+  override_data {
+    target = data.kubernetes_storage_class_v1.given[0]
+    values = { reclaim_policy = "Retain" }
   }
 }
 
@@ -808,5 +888,39 @@ run "replica_floors_in_the_overlay_are_counted" {
   assert {
     condition     = length([for p in output.pods : p if p.name == "smithdb/ingestion" && p.replicas == 4]) == 1
     error_message = "Four ingestion replicas set in the overlay should be counted as four."
+  }
+}
+
+run "third_party_charts_lists_the_optional_ones_when_on" {
+  command = plan
+
+  variables {
+    sizing_profile     = "dev"
+    datastore_runtime  = "operator"
+    enable_deployments = true
+    cluster_nodes = {
+      worker-1 = { cpu = 64, memory_gi = 256, disk_gi = 4000 }
+      worker-2 = { cpu = 64, memory_gi = 256, disk_gi = 4000 }
+      worker-3 = { cpu = 64, memory_gi = 256, disk_gi = 4000 }
+    }
+  }
+
+  assert {
+    condition     = toset(keys(output.third_party_charts)) == toset(["metrics_server", "metallb", "envoy_gateway", "keda", "postgres_operator", "redis_operator"])
+    error_message = "With Deployments and the operator runtime on, KEDA and both operators are charts the apply installs, so a mirror needs them."
+  }
+}
+
+# The root passes redis_sentinel_image to the values module: the child's own test cannot see that line.
+run "the_root_passes_the_sentinel_image_through" {
+  command = plan
+
+  variables {
+    redis_sentinel_image = "mirror.example.com/opstree/redis-sentinel:v7.4.11"
+  }
+
+  assert {
+    condition     = output.images.redis_sentinel == "mirror.example.com/opstree/redis-sentinel:v7.4.11" && strcontains(output.datastore_values, "mirror.example.com/opstree/redis-sentinel:v7.4.11")
+    error_message = "redis_sentinel_image set on the root must reach the images output and the datastores chart's values."
   }
 }

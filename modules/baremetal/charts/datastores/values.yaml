@@ -1,5 +1,5 @@
 # LangSmith's in-cluster datastores. The bare-metal module (infra/datastores.tf) writes every key
-# below; a customer applying the chart themselves writes the same keys (README.md).
+# below; applying the chart without the module takes the same keys (README.md).
 
 # statefulset: one plain StatefulSet per store on the official image, what the module has always run.
 # operator: Postgres as a CloudNativePG Cluster and Redis as an OpsTree RedisReplication; both operators
@@ -18,7 +18,7 @@ namespace: ""
 createNamespaces: true
 
 # true: the chart renders no credential Secret and ignores every password and key below; each store reads
-# the Secret of the same name that already exists in its namespace, written by the customer's secret
+# the Secret of the same name that already exists in its namespace, written by an external secret
 # store (External Secrets). Argo CD syncs from git, where no password may live, so without this it had
 # no way to give the chart its required passwords. The Secrets, with their keys:
 #   postgres-<instance>-credentials  statefulset: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB (Opaque)

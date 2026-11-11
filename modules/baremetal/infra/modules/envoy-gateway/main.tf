@@ -12,7 +12,7 @@
 # Names match modules/azure (langsmith-proxy, langsmith-eg, langsmith-gateway).
 # The listener is HTTP; with tls set, an HTTPS listener for the domain is added
 # beside it, from a certificate Secret made outside this module (cert-manager,
-# or the customer's own CA).
+# or an internal CA).
 #------------------------------------------------------------------------------
 
 resource "helm_release" "envoy_gateway" {

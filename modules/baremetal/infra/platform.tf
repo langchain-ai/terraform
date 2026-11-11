@@ -1,6 +1,6 @@
 #------------------------------------------------------------------------------
 # The cluster add-ons this module installs, each skippable for a cluster that
-# already has its own: a customer's OpenShift, kubeadm or private cloud ships a
+# already has its own: an OpenShift, kubeadm or private-cloud cluster ships a
 # metrics API, a StorageClass, a load balancer and often a Gateway. Installing
 # ours beside theirs clashes (two local-path provisioners, two MetalLBs on one
 # LAN). Every default installs the add-on; the moved blocks keep each add-on's
@@ -22,7 +22,17 @@ variable "install_local_path" {
 variable "storage_class" {
   type        = string
   default     = ""
-  description = "With install_local_path = false: the cluster's StorageClass for the datastores, ClickHouse, TaskDB and the SmithDB cache."
+  description = "With install_local_path = false: the cluster's StorageClass for the datastores, ClickHouse, TaskDB and the SmithDB cache. Its reclaimPolicy must be Retain: the datastores' volumes outlive a deleted claim only then."
+}
+
+# The given class holds Postgres, Redis and the object store. With reclaimPolicy Delete, as k3s's own
+# local-path and most CSI defaults ship, a deleted claim, a replaced release or a deleted namespace
+# deleted the data with it, while TEARDOWN.md promised the volumes were kept.
+data "kubernetes_storage_class_v1" "given" {
+  count = !var.install_local_path && var.storage_class != "" ? 1 : 0
+  metadata {
+    name = var.storage_class
+  }
 }
 
 variable "install_metallb" {
@@ -49,12 +59,15 @@ variable "existing_gateway" {
 variable "gateway_tls_secret" {
   type        = string
   default     = ""
-  description = "With our Envoy Gateway: a kubernetes.io/tls Secret in the langsmith namespace whose certificate covers langsmith_domain. Adds an HTTPS listener for the domain (the LAN IP stays HTTP). The module makes no certificate: cert-manager, or the customer's CA, writes the Secret. Needs langsmith_domain and langsmith_url_scheme = https."
+  description = "With our Envoy Gateway: a kubernetes.io/tls Secret in the langsmith namespace whose certificate covers langsmith_domain. Adds an HTTPS listener for the domain (the LAN IP stays HTTP). The module makes no certificate: cert-manager, or an internal CA, writes the Secret. Needs langsmith_domain and langsmith_url_scheme = https."
 }
 
 locals {
   # The output's Gateway: ours with its class and LAN IP, or the one given.
   gateway = var.install_envoy_gateway ? module.envoy_gateway[0].gateway : var.existing_gateway
+  # An existing gateway gets no hostless route from this module: on a shared one it would take these
+  # paths from every other host.
+  lan_route = var.install_envoy_gateway && var.langsmith_domain != ""
 }
 
 resource "terraform_data" "platform" {
@@ -69,6 +82,10 @@ resource "terraform_data" "platform" {
     precondition {
       condition     = length(module.values.problems.platform) == 0
       error_message = "Platform: ${join("; ", module.values.problems.platform)}."
+    }
+    precondition {
+      condition     = length(data.kubernetes_storage_class_v1.given) == 0 || data.kubernetes_storage_class_v1.given[0].reclaim_policy == "Retain"
+      error_message = "StorageClass ${var.storage_class} has reclaimPolicy ${join("", data.kubernetes_storage_class_v1.given[*].reclaim_policy)}: a deleted claim would delete the datastore's data. Give storage_class a class with reclaimPolicy Retain (a copy of it with that one field changed), or keep install_local_path = true."
     }
   }
 }

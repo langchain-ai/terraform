@@ -39,7 +39,7 @@ Measured `retained_per_run`, blob storage on:
 
 **Choose `E` deliberately:** at least 3 × the worst ingest backlog age (runs queued past it are dropped without an error),
 at least your longest-running run, and no longer than needed. With the 6 h default, Redis at production rates becomes
-very large: e.g. 2,000 runs/s × 10 KB × 21,600 s ≈ 430 GB, against ~36 GB at 30 minutes.
+large: 2,000 runs/s × 10 KB × 21,600 s ≈ 430 GB, against ~36 GB at 30 minutes.
 
 ## Ingest workers (ingest-queue)
 
@@ -49,7 +49,7 @@ The drain from Redis into SmithDB waits on I/O, so worker count, not CPU, sets i
 workers per pod  = GO_INGESTION_CONCURRENCY_PER_CPU × CPU cores of the NODE the pod runs on
 drain capacity   ≈ workers × 10–25 runs/s     (~25 with small payloads and blob off; plan ~10 with blob on)
 workers needed   ≈ R ÷ 10                     (blob on, with headroom); × 1.5 while dual-writing ClickHouse + SmithDB
-backlog age      = pending runs ÷ drain rate  → keep well below E
+backlog age      = pending runs ÷ drain rate  -> keep well below E
 ```
 
 Prefer KEDA on queue depth over CPU autoscaling for ingest-queue: it sits at low CPU while a backlog grows.
@@ -89,15 +89,15 @@ Measure bytes per trace on a test environment with real traces to narrow the com
 
 ## Worked example
 
-`T` = 100 traces/s, `n` = 5 → `R` = 500 runs/s; agent payloads with blob storage on (~10 KB/run); `E` = 1,800 s;
+`T` = 100 traces/s, `n` = 5 -> `R` = 500 runs/s; agent payloads with blob storage on (~10 KB/run); `E` = 1,800 s;
 20 UI users, 10 API req/s.
 
 | Item | Result |
 |---|---|
-| Redis | 500 × 10 KB × 1,800 s ≈ 9 GB → maxmemory 12 GiB, memory limit 16 GiB, 2 CPU |
-| Ingest workers | 500 ÷ 10 = 50 → 2 ingest-queue pods at 24–32 workers each |
+| Redis | 500 × 10 KB × 1,800 s ≈ 9 GB -> maxmemory 12 GiB, memory limit 16 GiB, 2 CPU |
+| Ingest workers | 500 ÷ 10 = 50 -> 2 ingest-queue pods at 24–32 workers each |
 | platform-backend | 3 pods (production minimum) |
-| Query | 30 req/s ÷ 30 × 1.5 → 2 pods |
+| Query | 30 req/s ÷ 30 × 1.5 -> 2 pods |
 | SmithDB ingestion | 2 pods, memory sized for payloads |
 
 Then check the total against `cluster_nodes`: the budget gate (`make plan`) does this for you.

@@ -1,10 +1,15 @@
 # Teardown
 
-Remove LangSmith first, then the infrastructure. With local-path (the default), datastore volumes use a **Retain** StorageClass, so their data stays
-on the nodes until you delete it by hand; with your own `storage_class`, its reclaim policy decides. That is deliberate: a `terraform destroy` should never be the only copy of a
-decision to lose trace data.
+Remove LangSmith first, then the infrastructure. With local-path (the default), datastore volumes use a **Retain**
+StorageClass, so their data stays on the nodes until you delete it by hand. Your own `storage_class` must be Retain too;
+`make plan` refuses another. A `terraform destroy` is never the only decision behind losing trace data.
 
 ## 1. Back up what you want to keep
+
+A consistent copy needs writes stopped first: SmithDB's metastore and its bucket must describe the same files, and Redis
+holds runs not yet ingested. Scale the platform backend to 0 so nothing new arrives, wait until the ingest queue is
+empty, then scale the ingest queue and SmithDB's ingestion and compaction Deployments to 0 (`kubectl -n langsmith get
+deploy` names them). Take the copies below, then scale each back or carry on with the teardown.
 
 | Data | How |
 |---|---|
@@ -13,6 +18,8 @@ decision to lose trace data.
 | ClickHouse (`clickhouse_source = "in-cluster"`) | finish the migration to SmithDB first, or back up its volume (claim `data-langsmith-clickhouse-0`) |
 | Object storage | copy buckets `smithdb` and `langsmith-blobs` (and `sandbox-juicefs` with Sandboxes on) with any S3 client (`aws s3 sync --endpoint-url ...`) |
 | App secrets | `infra/.secrets.env` (without `API_KEY_SALT` and `JWT_SECRET`, restored keys and logins stop working) |
+| Datastore passwords | the `*-credentials` Secrets in `langsmith-data` (`kubectl get secret -o yaml`). A destroy forgets them and the next apply generates new ones, which a retained data directory refuses. Rebuild by restoring the dumps above into fresh stores; the retained volumes are the last resort, readable only with these old passwords |
+| Secrets you made | every Secret you created in `langsmith` (an external store's, `gateway_tls_secret`): the destroy deletes the namespace and them with it |
 
 ## 2. Uninstall LangSmith
 

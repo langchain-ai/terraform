@@ -51,8 +51,13 @@ output "cloudflare_tunnel" {
     enabled            = var.enable_cloudflare_tunnel
     namespace          = var.enable_cloudflare_tunnel ? module.cloudflared[0].namespace : null
     origin_service_url = var.install_envoy_gateway ? module.envoy_gateway[0].proxy_service.url : null
-    lan_route          = var.langsmith_domain != ""
+    lan_route          = local.lan_route
   }
+}
+
+output "lan_route" {
+  description = "Whether this module's gateway also serves LangSmith on its LAN IP through the hostless langsmith-lan route: with its own Envoy Gateway and a domain. deploy.sh gives the Fleet streams the same no-timeout route there."
+  value       = local.lan_route
 }
 
 output "postgres" {
@@ -91,12 +96,12 @@ output "pods" {
 }
 
 output "datastore_values" {
-  description = "The values charts/datastores is installed with, as YAML, without the passwords and S3 keys (a second values file holds those): what a customer applying the chart with their own Helm or Argo CD starts from."
+  description = "The values charts/datastores is installed with, as YAML, without the passwords and S3 keys (a second values file holds those): what applying the chart with your own Helm or Argo CD starts from."
   value       = yamlencode(module.values.datastore_values)
 }
 
 output "datastore_secrets" {
-  description = "The Secrets LangSmith's namespace must hold before Helm runs, space-separated: the module's, or the customer's for each store they run. deploy.sh checks each."
+  description = "The Secrets LangSmith's namespace must hold before Helm runs, space-separated: the module's, or one created by hand for each external store. deploy.sh checks each."
   value       = join(" ", module.values.datastore_secrets)
 }
 
@@ -111,11 +116,24 @@ output "datastores" {
 }
 
 output "images" {
-  description = "Every image the module runs outside the LangSmith chart, by role: what a registry mirror must carry besides the chart's."
+  description = "Every image the module sets outside the LangSmith chart, by role. A registry mirror also needs the LangSmith chart's images and those the third-party charts pull (third_party_charts): helm template each at its version to list them."
   value       = module.values.images
 }
 
 output "operator_charts" {
   description = "The datastore operators' Helm charts (release, repository, chart, version, namespace), installed before the datastores chart with datastore_runtime = operator."
   value       = module.values.operator_charts
+}
+
+# A mirror carries these charts and every image they pull: the module's images output lists only the
+# images the module sets itself (Dzmitry Dubarau's review of #488).
+output "third_party_charts" {
+  description = "Every third-party Helm chart this apply installs (repository, chart, version), besides the LangSmith chart deploy.sh installs from https://langchain-ai.github.io/helm. An air-gapped install needs each, and every image it pulls, in a mirror; the module cannot point them at one yet (README, Air-gapped installs)."
+  value = merge(
+    var.install_metrics_server ? { metrics_server = { repository = "https://kubernetes-sigs.github.io/metrics-server/", chart = "metrics-server", version = var.metrics_server_chart_version } } : {},
+    var.install_metallb ? { metallb = { repository = "https://metallb.github.io/metallb", chart = "metallb", version = var.metallb_chart_version } } : {},
+    var.install_envoy_gateway ? { envoy_gateway = { repository = "oci://docker.io/envoyproxy", chart = "gateway-helm", version = var.envoy_gateway_chart_version } } : {},
+    module.values.install_keda ? { keda = { repository = "https://kedacore.github.io/charts", chart = "keda", version = var.keda_chart_version } } : {},
+    { for k, c in module.values.operator_charts : "${k}_operator" => { repository = c.repository, chart = c.chart, version = c.version } if var.datastore_runtime == "operator" && length(k == "postgres" ? module.values.postgres_in_chart : module.values.redis_in_chart) > 0 },
+  )
 }

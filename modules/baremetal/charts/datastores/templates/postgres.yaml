@@ -188,6 +188,7 @@ spec:
             capabilities:
               drop: ["ALL"]
 {{- end }}
+{{ include "datastores.pdb" (dict "name" $name "ns" $ns "labels" $labels "selector" $selector) }}
 {{- else }}
 {{- if not $.Values.existingSecrets }}
 ---

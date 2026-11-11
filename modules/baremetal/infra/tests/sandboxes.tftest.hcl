@@ -281,3 +281,83 @@ run "engine_on" {
     error_message = "The budget counts and sizes the Insights pods Engine brings."
   }
 }
+
+# The SmithDB nodes' taint takes the sandbox hosts' approach (Dzmitry Dubarau's review of #488): its own
+# field manager and force, since the kubelet owns the taint list, and no other taint on the node.
+run "a_smithdb_node_with_another_taint_is_refused" {
+  command = plan
+
+  variables {
+    sizing_profile = "dev"
+    cluster_nodes = {
+      worker-1        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      worker-2        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      worker-3        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      smithdb-cache-1 = { cpu = 16, memory_gi = 64, disk_gi = 1000, role = "smithdb-cache" }
+      smithdb-cache-2 = { cpu = 16, memory_gi = 64, disk_gi = 1000, role = "smithdb-cache" }
+      smithdb-comp-1  = { cpu = 8, memory_gi = 32, disk_gi = 200, role = "smithdb-compute" }
+    }
+  }
+
+  override_data {
+    target = data.kubernetes_nodes.smithdb_node[0]
+    values = {
+      nodes = [
+        { metadata = [{ name = "smithdb-cache-1" }], spec = [{ taints = [{ key = "dedicated", value = "gpu", effect = "NoSchedule" }] }] },
+      ]
+    }
+  }
+
+  expect_failures = [kubernetes_node_taint.smithdb_node]
+}
+
+run "a_smithdb_node_taint_has_its_own_manager_and_forces" {
+  command = plan
+
+  variables {
+    sizing_profile = "dev"
+    cluster_nodes = {
+      worker-1        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      worker-2        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      worker-3        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      smithdb-cache-1 = { cpu = 16, memory_gi = 64, disk_gi = 1000, role = "smithdb-cache" }
+      smithdb-cache-2 = { cpu = 16, memory_gi = 64, disk_gi = 1000, role = "smithdb-cache" }
+      smithdb-comp-1  = { cpu = 8, memory_gi = 32, disk_gi = 200, role = "smithdb-compute" }
+    }
+  }
+
+  override_data {
+    target = data.kubernetes_nodes.smithdb_node[0]
+    values = {
+      nodes = [
+        { metadata = [{ name = "smithdb-cache-1" }], spec = [{ taints = [{ key = "smithdb-local/instance-store", value = "true", effect = "NoSchedule" }] }] },
+      ]
+    }
+  }
+
+  assert {
+    condition     = kubernetes_node_taint.smithdb_node["smithdb-cache-1"].force && kubernetes_node_taint.smithdb_node["smithdb-cache-1"].field_manager == "langsmith-smithdb-taint" && kubernetes_labels.smithdb_node["smithdb-cache-1"].field_manager == "langsmith-smithdb-label"
+    error_message = "The SmithDB label and taint each need their own field manager, and the taint needs force, or no plan converges."
+  }
+}
+
+run "a_sandbox_host_cannot_be_a_smithdb_node" {
+  command = plan
+
+  variables {
+    sizing_profile = "dev"
+    cluster_nodes = {
+      worker-1        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      worker-2        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      worker-3        = { cpu = 16, memory_gi = 64, disk_gi = 500 }
+      smithdb-cache-1 = { cpu = 16, memory_gi = 64, disk_gi = 1000, role = "smithdb-cache" }
+      smithdb-cache-2 = { cpu = 16, memory_gi = 64, disk_gi = 1000, role = "smithdb-cache" }
+      smithdb-comp-1  = { cpu = 8, memory_gi = 32, disk_gi = 200, role = "smithdb-compute" }
+    }
+    enable_sandboxes     = true
+    sandbox_hosts        = ["smithdb-cache-1"]
+    sandbox_source_cidrs = ["192.0.2.0/24"]
+  }
+
+  expect_failures = [terraform_data.sandboxes]
+}

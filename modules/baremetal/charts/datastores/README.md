@@ -1,7 +1,7 @@
 # datastores
 
 LangSmith's in-cluster Postgres, Redis and RustFS, the stores a cloud would run as managed services. The bare-metal
-module installs this chart with `helm_release` (`infra/datastores.tf`); a customer who applies their own manifests
+module installs this chart with `helm_release` (`infra/datastores.tf`); anyone applying their own manifests
 installs the same chart with the same values through Helm or Argo CD.
 
 ## Two runtimes, one interface
@@ -20,6 +20,13 @@ What LangSmith reads is the same in both, so nothing downstream changes with the
   the pod the operator labels `redis-role: master`. The operator's own Service, named after the resource
   (`redis-<instance>-replication`), selects replicas too.
 - RustFS at `http://rustfs.<namespace>.svc.cluster.local:9000`.
+- The user, database and password you give. In both runtimes the Postgres user is a superuser, because LangSmith's
+  migrations create extensions ([external Postgres requirements](https://docs.langchain.com/langsmith/self-host-external-postgres#requirements)),
+  and Redis runs `maxmemory-policy noeviction` ([external Redis](https://docs.langchain.com/langsmith/self-host-external-redis)).
+
+Every store that runs as one pod (each StatefulSet) has a PodDisruptionBudget of zero, named for its instance: its
+volume is on one node, so a drain of that node stops and names it instead of taking the store down. The module's
+ARCHITECTURE.md has the drain procedure.
 
 With `replicas` above 1 under the operator runtime, those two Services are what make a failover invisible to LangSmith:
 the Postgres one selects whichever instance CloudNativePG has made primary (the same selector as its `-rw` Service),
@@ -31,9 +38,6 @@ Every object is named for its instance (`postgres-langsmith`, `postgres-smithdb`
 `langsmith.lab/datastore-instance`, so all of them can share one namespace: set `namespace` (the module sets
 `langsmith-data`) and a shared cluster gets one data namespace per environment beside LangSmith's. Left empty, each
 instance goes to its own `namespace`.
-- The user, database and password you give. In both runtimes the Postgres user is a superuser, because LangSmith's
-  migrations create extensions ([external Postgres requirements](https://docs.langchain.com/langsmith/self-host-external-postgres#requirements)),
-  and Redis runs `maxmemory-policy noeviction` ([external Redis](https://docs.langchain.com/langsmith/self-host-external-redis)).
 
 Each namespace gets a default-deny NetworkPolicy, except one in `allowedNamespaces` (the stores in LangSmith's own
 namespace, whose pods nothing here admits), and Pod Security `baseline` (`restricted` when it holds RustFS alone);

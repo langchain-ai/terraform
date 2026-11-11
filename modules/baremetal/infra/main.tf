@@ -26,9 +26,9 @@ module "metrics_server" {
     limits   = { cpu = "500m", memory = "${module.values.addon_pods["metrics-server"].mem_mi * 2}Mi" }
   }
 
-  # Everything that runs a pod waits for the sandbox taint: a sandbox node takes nothing else, and a pod
-  # scheduled there before the taint stays (a datastore binds its volume to that node).
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  # Everything that runs a pod waits for the sandbox and SmithDB taints: those nodes take nothing else,
+  # and a pod scheduled there before the taint stays (a datastore binds its volume to that node).
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 module "local_path" {
@@ -45,7 +45,7 @@ module "local_path" {
     limits   = { cpu = "200m", memory = "${module.values.addon_pods["local-path-provisioner"].mem_mi * 2}Mi" }
   }
 
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 module "metallb" {
@@ -66,7 +66,7 @@ module "metallb" {
     limits   = { cpu = "200m", memory = "128Mi" }
   }
 
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 # Terraform owns the langsmith namespace, so the Gateway (and later the
@@ -92,7 +92,7 @@ resource "kubernetes_namespace_v1" "langsmith" {
     labels = var.enable_sandboxes ? { "pod-security.kubernetes.io/enforce" = "privileged" } : {}
   }
 
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 module "envoy_gateway" {
@@ -117,12 +117,12 @@ module "envoy_gateway" {
   # With a domain, the chart's HTTPRoute matches only that Host; keep the LAN IP
   # serving LangSmith too.
   lan_route = {
-    enabled         = var.langsmith_domain != ""
+    enabled         = local.lan_route
     backend_service = "langsmith-frontend"
     backend_port    = 80
   }
 
-  depends_on = [module.metallb]
+  depends_on = [module.metallb, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 # The pinned IP must come from MetalLB's pool, or the Service stays <pending>.
@@ -152,7 +152,7 @@ module "cloudflared" {
     limits   = { memory = "256Mi" }
   }
 
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 # KEDA, for LangSmith Deployments only: the operator creates a ScaledObject per
@@ -188,7 +188,7 @@ resource "helm_release" "keda" {
     })
   ]
 
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 #------------------------------------------------------------------------------
@@ -212,7 +212,7 @@ resource "kubernetes_secret_v1" "langsmith_postgres" {
   type = "Opaque"
 }
 
-# The customer's metastore, read from their Secret: SmithDB takes one Secret for its metastore and its
+# An external metastore, read from its Secret: SmithDB takes one Secret for its metastore and its
 # object store together (smithdb.config.existingSecretName), so the keys are copied into smithdb-config.
 data "kubernetes_secret_v1" "smithdb_metastore" {
   count = var.smithdb_metastore_source == "external" ? 1 : 0
@@ -236,11 +236,11 @@ locals {
   }
 }
 
-# The customer's object store, its keys read from their Secret into smithdb-config, as the metastore's.
-# Given as inputs instead, the module writes that Secret itself: read from a namespace this same apply
-# creates, a first install stopped until someone made the Secret by hand and applied again.
+# An external object store, its keys read from its Secret into smithdb-config, as the metastore's.
+# With object_store_secret_managed the module writes that Secret itself: read from a namespace this same
+# apply creates, a first install stopped until someone made the Secret by hand and applied again.
 locals {
-  object_store_keys_given = var.object_store_access_key_id != ""
+  object_store_keys_given = var.object_store_source == "external" && var.object_store_secret_managed
 }
 
 data "kubernetes_secret_v1" "object_store" {
@@ -252,7 +252,7 @@ data "kubernetes_secret_v1" "object_store" {
 }
 
 resource "kubernetes_secret_v1" "object_store" {
-  count = var.object_store_source == "external" && local.object_store_keys_given ? 1 : 0
+  count = local.object_store_keys_given ? 1 : 0
   metadata {
     name      = var.object_store_secret
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
@@ -276,7 +276,9 @@ locals {
 # is, rules and all, and the keys need no right to create one that exists. Only a bucket this Job
 # creates gets the blob expiry: without it the blob bucket grows without bound (57 GB in two lab days).
 resource "kubernetes_job_v1" "object_store_bucket" {
-  for_each = var.object_store_source == "external" ? toset(concat([var.object_store_buckets.smithdb], var.enable_blob_storage ? [var.object_store_buckets.blobs] : [])) : toset([])
+  # Keyed by role, not bucket name: a Job's name is at most 63 characters and a bucket's alone can be 63
+  # (Dzmitry Dubarau's review of #488).
+  for_each = var.object_store_source == "external" ? { for role, bucket in var.object_store_buckets : role => bucket if role == "smithdb" || var.enable_blob_storage } : {}
 
   metadata {
     name      = "create-bucket-${each.key}"
@@ -313,7 +315,14 @@ resource "kubernetes_job_v1" "object_store_bucket" {
               echo "bucket $BUCKET exists: left as it is"
               exit 0
             fi
-            aws --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$BUCKET"
+            # us-east-1 takes no LocationConstraint and refuses one; any other region needs it, since
+            # Ceph RGW checks it against its zonegroup (Dzmitry Dubarau's review of #488).
+            if [ "$AWS_DEFAULT_REGION" = "us-east-1" ]; then
+              aws --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$BUCKET"
+            else
+              aws --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$BUCKET" \
+                --create-bucket-configuration "LocationConstraint=$AWS_DEFAULT_REGION"
+            fi
             echo "bucket $BUCKET created"
             if [ -n "$LIFECYCLE" ]; then
               aws --endpoint-url "$S3_ENDPOINT" s3api put-bucket-lifecycle-configuration \
@@ -329,11 +338,11 @@ resource "kubernetes_job_v1" "object_store_bucket" {
           }
           env {
             name  = "BUCKET"
-            value = each.key
+            value = each.value
           }
           env {
             name = "LIFECYCLE"
-            value = each.key == var.object_store_buckets.blobs ? jsonencode({
+            value = each.key == "blobs" ? jsonencode({
               Rules = [
                 { ID = "ttl-short", Status = "Enabled", Filter = { Prefix = "ttl_s/" }, Expiration = { Days = var.blob_storage_ttl_days.short } },
                 { ID = "ttl-long", Status = "Enabled", Filter = { Prefix = "ttl_l/" }, Expiration = { Days = var.blob_storage_ttl_days.long } },
@@ -431,7 +440,7 @@ resource "kubernetes_secret_v1" "langsmith_redis" {
 # database on postgres-langsmith and its own Redis DB on redis-langsmith.
 # The chart reads postgres_connection_url WITH a scheme (unlike the core URL).
 #------------------------------------------------------------------------------
-# With an external Postgres each product's database and Secret are the customer's (postgres_secret).
+# With an external Postgres each product's database and Secret are created outside the module (postgres_secret).
 resource "kubernetes_secret_v1" "standalone_postgres" {
   for_each = var.postgres_source == "in-cluster" ? module.values.standalone_features : {}
 
@@ -447,7 +456,7 @@ resource "kubernetes_secret_v1" "standalone_postgres" {
   depends_on = [helm_release.datastores]
 }
 
-# With an external Redis each product's Redis and Secret are the customer's (redis_secret).
+# With an external Redis each product's Redis and Secret are created outside the module (redis_secret).
 resource "kubernetes_secret_v1" "standalone_redis" {
   for_each = var.redis_source == "in-cluster" ? module.values.standalone_features : {}
 

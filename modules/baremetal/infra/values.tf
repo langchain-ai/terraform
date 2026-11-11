@@ -33,6 +33,7 @@ module "values" {
   enable_standalone_insights        = var.enable_standalone_insights
   enable_standalone_polly           = var.enable_standalone_polly
   enable_usage_telemetry            = var.enable_usage_telemetry
+  common_env                        = var.common_env
   engine_gateway_anthropic_base_url = var.engine_gateway_anthropic_base_url
   engine_gateway_auth_header        = var.engine_gateway_auth_header
   engine_gateway_openai_base_url    = var.engine_gateway_openai_base_url
@@ -61,6 +62,7 @@ module "values" {
   object_store_secret               = var.object_store_secret
   object_store_source               = var.object_store_source
   opstree_redis_image               = var.opstree_redis_image
+  redis_sentinel_image              = var.redis_sentinel_image
   postgres_image                    = var.postgres_image
   postgres_secret                   = var.postgres_secret
   postgres_source                   = var.postgres_source

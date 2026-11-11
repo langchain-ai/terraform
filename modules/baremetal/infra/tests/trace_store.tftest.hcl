@@ -106,7 +106,7 @@ run "backfill_adds_the_job_and_taskdb" {
   }
 }
 
-run "clickhouse_only_customer_runs_no_smithdb" {
+run "clickhouse_only_install_runs_no_smithdb" {
   command = plan
 
   variables {
@@ -118,7 +118,7 @@ run "clickhouse_only_customer_runs_no_smithdb" {
 
   assert {
     condition     = !output.smithdb_helm_values.smithdb.enabled
-    error_message = "A customer before the move has SmithDB off."
+    error_message = "An install before the move has SmithDB off."
   }
 
   assert {

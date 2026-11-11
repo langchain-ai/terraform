@@ -82,7 +82,7 @@ locals {
           }
         } : {},
       )
-      # The customer's Postgres under its own Secret's name (values.yaml names langsmith-postgres).
+      # An external Postgres under its own Secret's name (values.yaml names langsmith-postgres).
       postgres = { external = { existingSecretName = var.postgres_source == "external" ? var.postgres_secret : "langsmith-postgres" } }
       redis    = { external = { existingSecretName = var.redis_source == "external" ? var.redis_secret : "langsmith-redis" } }
       gateway = {
@@ -104,6 +104,7 @@ locals {
     # Same env var as modules/aws: extended usage reporting on every component.
     var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
     local.engine_gateway_env,
+    var.common_env,
   )
 
   #----------------------------------------------------------------------------

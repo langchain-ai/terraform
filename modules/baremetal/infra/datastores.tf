@@ -1,15 +1,15 @@
 #------------------------------------------------------------------------------
 # The in-cluster datastores: one Helm release of the local chart charts/datastores, which runs each
 # store as a plain StatefulSet or through an operator (datastore_runtime). One release and one values
-# document, so the same chart and values can be handed to a customer who applies them with their own
-# Helm or Argo CD (charts/datastores/README.md). A store the customer runs (<store>_source = external)
+# document, so the same chart and values can be applied without this module, with your own
+# Helm or Argo CD (charts/datastores/README.md). An external store (<store>_source = external)
 # is not in the chart.
 #
 # Terraform keeps generating the passwords and S3 keys and passes them in as a second values document,
 # beside the first that holds everything else (the output datastore_values): the chart then renders the
 # Secrets each store reads exactly as the store modules did (names, keys, the Redis password inside
 # redis.conf rather than on a command line), and the connection Secrets in LangSmith's namespace are
-# built from the same passwords. A customer applying the chart keeps the same split: the values in
+# built from the same passwords. Applying the chart without the module keeps the same split: the values in
 # git, the passwords in a values file that is not.
 #------------------------------------------------------------------------------
 
@@ -68,6 +68,12 @@ variable "opstree_redis_image" {
   type        = string
   default     = "quay.io/opstree/redis:v7.4.11"
   description = "Redis image for the OpsTree operator, the same version as redis_image: the operator drives the image's own entrypoint, so the official image does not work under it."
+}
+
+variable "redis_sentinel_image" {
+  type        = string
+  default     = "quay.io/opstree/redis-sentinel:v7.4.11"
+  description = "Sentinel image for the OpsTree operator, the same version as opstree_redis_image. Runs with datastore_runtime = operator and datastore_replicas above 1."
 }
 
 # The sizes, names and chart values are modules/values'; only the generated passwords and keys are
@@ -136,7 +142,7 @@ resource "helm_release" "cnpg" {
     })
   ]
 
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 resource "helm_release" "redis_operator" {
@@ -150,7 +156,7 @@ resource "helm_release" "redis_operator" {
   create_namespace = true
   wait             = true
 
-  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host]
+  depends_on = [terraform_data.budget, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node]
 }
 
 resource "helm_release" "datastores" {
@@ -167,5 +173,5 @@ resource "helm_release" "datastores" {
   values = [yamlencode(module.values.datastore_values), yamlencode(local.datastore_secret_values)]
 
   # The StorageClass is named in the values, not taken from local-path's output: wait for it here.
-  depends_on = [terraform_data.budget, terraform_data.sandboxes, kubernetes_node_taint.sandbox_host, helm_release.cnpg, helm_release.redis_operator, module.local_path]
+  depends_on = [terraform_data.budget, terraform_data.sandboxes, kubernetes_node_taint.sandbox_host, kubernetes_node_taint.smithdb_node, helm_release.cnpg, helm_release.redis_operator, module.local_path]
 }

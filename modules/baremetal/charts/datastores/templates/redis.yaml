@@ -9,7 +9,7 @@ refuse writes (visible errors) instead of silently dropping queued work
 
 The password is in one Secret per instance, redis-<instance>-credentials (`password`, and `auth.conf`,
 its requirepass line), in both runtimes; with existingSecrets the chart renders none and reads the one
-the customer's secret store writes, since a password in values cannot reach Argo CD from git.
+an external secret store writes, since a password in values cannot reach Argo CD from git.
 
 statefulset: the official image. redis.conf (a ConfigMap) includes auth.conf, mounted from the Secret as
 a file: never on the command line, where root on the node could read it in /proc.
@@ -159,6 +159,7 @@ spec:
         name: data
       spec:
         {{- include "datastores.claimSpec" (dict "root" $ "ns" $ns "name" $name "size" $r.volumeSize) | nindent 8 }}
+{{ include "datastores.pdb" (dict "name" $name "ns" $ns "labels" $labels "selector" $selector) }}
 {{- else }}
 ---
 # Included last in the operator's redis.conf, so these lines win over its own (it turns AOF on for any

@@ -52,6 +52,11 @@ run "existing_cluster_gets_none_of_ours" {
     clickhouse_source      = "in-cluster"
   }
 
+  override_data {
+    target = data.kubernetes_storage_class_v1.given[0]
+    values = { reclaim_policy = "Retain" }
+  }
+
   assert {
     condition     = length(module.metrics_server) == 0 && length(module.local_path) == 0 && length(module.metallb) == 0 && length(module.envoy_gateway) == 0
     error_message = "A cluster with its own add-ons gets none of ours."
@@ -78,6 +83,22 @@ run "local_path_off_needs_a_storage_class" {
 
   variables {
     install_local_path = false
+  }
+
+  expect_failures = [terraform_data.platform]
+}
+
+run "a_storage_class_that_deletes_volumes_is_refused" {
+  command = plan
+
+  variables {
+    install_local_path = false
+    storage_class      = "local-path"
+  }
+
+  override_data {
+    target = data.kubernetes_storage_class_v1.given[0]
+    values = { reclaim_policy = "Delete" }
   }
 
   expect_failures = [terraform_data.platform]

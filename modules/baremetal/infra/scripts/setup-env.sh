@@ -13,8 +13,10 @@
 # file backend in _common.sh. deploy.sh copies it into the langsmith-config
 # Kubernetes Secret.
 #
-# Unlike the cloud modules, this is executed, not sourced: Terraform here never
-# consumes the app secrets, so nothing needs exporting into your shell.
+# Unlike the cloud modules, this is executed, not sourced: Terraform here consumes
+# only the object store's keys, which make plan and make apply pass themselves
+# (terraform.sh), so nothing needs exporting into your shell. Run it before the
+# first make apply.
 #
 # Order for each key: value already in the store → keep it (never rotated);
 # else environment variable of the same name → else prompt (or generate).
@@ -146,15 +148,12 @@ if _tfvar_is_true enable_engine; then
   fi
 fi
 
-# Their object store's keys, kept only when the operator has them: passed to Terraform as
-# TF_VAR_object_store_*, the module writes the Secret itself. Never asked for: without them the
-# customer's own Secret is read, as before.
-if [[ "$(_parse_tfvar object_store_source)" == "external" ]]; then
-  for key in OBJECT_STORE_ACCESS_KEY_ID OBJECT_STORE_SECRET_ACCESS_KEY; do
-    if [[ -n "${!key:-}$(_secret_get "$key")" ]]; then
-      _ensure_secret "$key" "" true "" ""
-    fi
-  done
+# An external object store's keys, with object_store_secret_managed: passed to Terraform as TF_VAR_object_store_*
+# by make plan and make apply, the module writes the Secret itself. Without it the Secret created by hand
+# is read and the keys are not kept here.
+if [[ "$(_parse_tfvar object_store_source)" == "external" ]] && _tfvar_is_true object_store_secret_managed; then
+  _ensure_secret OBJECT_STORE_ACCESS_KEY_ID "Your object store's access key ID (input hidden)" true "" ""
+  _ensure_secret OBJECT_STORE_SECRET_ACCESS_KEY "Your object store's secret access key (input hidden)" true "" ""
 fi
 
 # SSO: the identity provider's OIDC client, read by the chart from langsmith-config.
@@ -167,4 +166,4 @@ fi
 _secrets_file_check
 header "Done"
 info "Values are stored, never printed. Back up $SECRETS_FILE with terraform.tfstate."
-action "Next: make init-values"
+action "Next: make init, make plan, make apply"

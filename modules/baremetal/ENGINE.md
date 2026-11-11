@@ -33,7 +33,7 @@ Engine to call a model provider with, so it uses provider API keys, your own LLM
    enable_sandboxes = true
    enable_engine    = true
 
-   # Required when the shared organization has more than one workspace.
+   # Required when the install has more than one shared organization.
    # engine_sandbox_tenant_id = "<workspace-id>"
    ```
 
@@ -42,7 +42,6 @@ Engine to call a model provider with, so it uses provider API keys, your own LLM
    ```bash
    make setup-env      # creates the two Engine keys in infra/.secrets.env
    make apply
-   make init-values
    make deploy
    ```
 
@@ -54,7 +53,7 @@ Engine to call a model provider with, so it uses provider API keys, your own LLM
 |---|---|
 | `make plan`, `make apply` | Refuses Engine without Sandboxes, or without `https` and a domain. Sizes the Insights deployment Engine runs on in the budget, whether or not Insights is on. |
 | `make setup-env` | `ENGINE_ENCRYPTION_KEY` (a Fernet key) and `ENGINE_USAGE_SIGNING_SECRET` (64 hex characters) in `infra/.secrets.env`, made once and kept. With a gateway URL set, it also asks for `ENGINE_GATEWAY_API_KEY`. |
-| `make init-values` | `engine.enabled`, `engine.intelligenceBaseUrl` and, when set, `engine.sandboxTenantId`; with a gateway, its settings on both Engine workloads and `ENGINE_GATEWAY_APIS` in `commonEnv`. |
+| `make deploy` (its `init-values` step) | `engine.enabled`, `engine.intelligenceBaseUrl` and, when set, `engine.sandboxTenantId`; with a gateway, its settings on both Engine workloads and `ENGINE_GATEWAY_APIS` in `commonEnv`. |
 | `make deploy` | The keys `engine_encryption_key` and `engine_usage_signing_secret` in the `langsmith-config` Secret. With a gateway, the `engine-model-gateway` Secret, which both Engine workloads mount. |
 
 The keys never go into Helm values. The chart reads them from `langsmith-config` (`config.existingSecretName`).
@@ -67,7 +66,7 @@ saves this choice. See [Engine model providers](https://docs.langchain.com/langs
 - **Provider API keys.** Add keys for Anthropic, OpenAI or another listed provider on that page, and run **Test
   connection**. Terraform does not change.
 - **Your LLM gateway.** Set the URL of each API it serves, then run `make setup-env` (it asks the gateway's key),
-  `make apply`, `make init-values` and `make deploy`:
+  `make apply` and `make deploy`:
 
   ```hcl
   engine_gateway_anthropic_base_url = "https://<gateway-host>/anthropic"   # Engine calls <url>/v1/messages
@@ -81,16 +80,28 @@ saves this choice. See [Engine model providers](https://docs.langchain.com/langs
   the Model providers page and run **Test connection**. Engine reads the key file at the start of each run: to rotate
   the key, change `ENGINE_GATEWAY_API_KEY` in `infra/.secrets.env` and run `make deploy`, with no restart.
 - **LangSmith Intelligence.** LangChain runs the models. Set
-  `engine_intelligence_base_url = "https://beacon.aws.langchain.com/intelligence"`, run
-  `make init-values && make deploy`, and select LangSmith Intelligence. With your own providers or gateway, keep the
-  default, which only records usage. Air-gapped, set it to `""`.
+  `engine_intelligence_base_url = "https://beacon.aws.langchain.com/intelligence"`, run `make apply` and
+  `make deploy`, and select LangSmith Intelligence.
 
 LangChain bills Engine usage in LSUs with every option.
 
+## What leaves the cluster
+
+Engine reports its usage to LangChain at `engine_intelligence_base_url`, whichever way it runs its models:
+
+| `engine_intelligence_base_url` | Sends | To |
+|---|---|---|
+| `https://beacon.langchain.com/intelligence` (default; your own providers or gateway) | usage metadata only, no trace content | the host LangSmith already reaches for its license |
+| `https://beacon.aws.langchain.com/intelligence` | trace content, to run the models | LangSmith Intelligence |
+| `""` | nothing | (air-gapped) |
+
+Source: [self-host-egress](https://docs.langchain.com/langsmith/self-host-egress#langsmith-intelligence-for-engine).
+A security review will ask which of the three an install uses.
+
 ## Sandbox workspace
 
-Engine's sandboxes belong to one workspace. If the shared organization has one workspace, LangSmith uses it. If it has
-more than one, set `engine_sandbox_tenant_id` to the workspace ID. Use a workspace reserved for Engine: its sandboxes
+Engine's sandboxes belong to one workspace: the oldest active workspace unless `engine_sandbox_tenant_id` names
+another. With more than one shared organization it is required. Use a workspace reserved for Engine: its sandboxes
 count against that workspace's sandbox quotas, and its members can see and stop them.
 
 ## Finish in LangSmith
@@ -118,7 +129,7 @@ Then start an Engine analysis on a project with traces.
 ## Troubleshooting
 
 - **`platform-backend` crash-loops after `make deploy`** with "the LangSmith license does not include Engine access".
-  The license does not have the Engine entitlement. Set `enable_engine = false`, run `make init-values && make
+  The license does not have the Engine entitlement. Set `enable_engine = false`, run `make apply` and `make
   deploy`, then contact LangChain. After LangChain adds the entitlement, the same license key works.
 - **The Engine page says that Engine is not enabled for your organization.** The license and the Helm values include
   Engine, but the page shows only a contact form. Contact LangChain support with your organization ID.
@@ -137,5 +148,5 @@ change the value in `infra/.secrets.env`, run `make deploy`, and restart `platfo
 
 ## Turn off Engine
 
-Set `enable_engine = false` and run `make apply`, `make init-values` and `make deploy`. The keys stay in
+Set `enable_engine = false` and run `make apply` and `make deploy`. The keys stay in
 `infra/.secrets.env`, so turning Engine on again keeps its data readable.

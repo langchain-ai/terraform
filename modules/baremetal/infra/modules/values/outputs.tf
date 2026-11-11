@@ -79,7 +79,7 @@ output "values_files" {
 }
 
 output "datastore_secrets" {
-  description = "The Secrets LangSmith's namespace must hold before Helm runs: the module's, or the customer's for each store they run."
+  description = "The Secrets LangSmith's namespace must hold before Helm runs: the module's, or one created by hand for each external store."
   value       = local.datastore_secrets
 }
 

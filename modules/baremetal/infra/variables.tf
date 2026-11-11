@@ -3,7 +3,7 @@
 # declared node capacity (for the budget gate), sizing, LangSmith features,
 # platform add-ons, the optional Cloudflare Tunnel, pinned images and the
 # LangSmith hostname. Set them in terraform.tfvars; terraform.tfvars.example
-# lists every one with an example value. No secrets here except the tunnel
+# shows the ones a first install sets and most others. No secrets here except the tunnel
 # token, which is marked sensitive and should come from TF_VAR_.
 #------------------------------------------------------------------------------
 
@@ -110,7 +110,7 @@ variable "redis_memory_gi" {
 variable "postgres_source" {
   type        = string
   default     = "in-cluster"
-  description = "in-cluster: the module runs LangSmith's Postgres. external: the customer's own, reached through postgres_secret, which saves the cluster its memory and CPU at a little latency (the same name as the cloud modules' input)."
+  description = "in-cluster: the module runs LangSmith's Postgres. external: one outside the cluster, reached through postgres_secret, which saves the cluster its memory and CPU at a little latency (the same name as the cloud modules' input)."
 
   validation {
     condition     = contains(["in-cluster", "external"], var.postgres_source)
@@ -121,13 +121,13 @@ variable "postgres_source" {
 variable "postgres_secret" {
   type        = string
   default     = "langsmith-postgres"
-  description = "With postgres_source = external: the Secret in LangSmith's namespace the customer creates, key connection_url as user:password@host:port/database (no scheme, the chart's format). Each standalone product (Insights, Polly, Fleet) then needs its own: langsmith-<product>-postgres, key postgres_connection_url, with a scheme."
+  description = "With postgres_source = external: a Secret you create in LangSmith's namespace, key connection_url as user:password@host:port/database (no scheme, the chart's format). Each standalone product (Insights, Polly, Fleet) then needs its own: langsmith-<product>-postgres, key postgres_connection_url, with a scheme."
 }
 
 variable "redis_source" {
   type        = string
   default     = "in-cluster"
-  description = "in-cluster: the module runs LangSmith's Redis. external: the customer's own, reached through redis_secret, with maxmemory-policy noeviction (the same name as the cloud modules' input)."
+  description = "in-cluster: the module runs LangSmith's Redis. external: one outside the cluster, reached through redis_secret, with maxmemory-policy noeviction (the same name as the cloud modules' input)."
 
   validation {
     condition     = contains(["in-cluster", "external"], var.redis_source)
@@ -138,13 +138,13 @@ variable "redis_source" {
 variable "redis_secret" {
   type        = string
   default     = "langsmith-redis"
-  description = "With redis_source = external: the Secret in LangSmith's namespace the customer creates, key connection_url as redis://:password@host:port/0 (with its scheme, the chart's format). Each standalone product then needs its own: langsmith-<product>-redis, key redis_connection_url."
+  description = "With redis_source = external: a Secret you create in LangSmith's namespace, key connection_url as redis://:password@host:port/0 (with its scheme, the chart's format). Each standalone product then needs its own: langsmith-<product>-redis, key redis_connection_url."
 }
 
 variable "smithdb_metastore_source" {
   type        = string
   default     = "in-cluster"
-  description = "in-cluster: the module runs SmithDB's metastore Postgres. external: the customer's dedicated, empty PostgreSQL 18 database, reached through smithdb_metastore_secret."
+  description = "in-cluster: the module runs SmithDB's metastore Postgres. external: a dedicated, empty PostgreSQL 18 database outside the cluster, reached through smithdb_metastore_secret."
 
   validation {
     condition     = contains(["in-cluster", "external"], var.smithdb_metastore_source)
@@ -155,7 +155,7 @@ variable "smithdb_metastore_source" {
 variable "smithdb_metastore_secret" {
   type        = string
   default     = "smithdb-metastore"
-  description = "With smithdb_metastore_source = external: the Secret in LangSmith's namespace the customer creates, keys smithdb_metastore_host, smithdb_metastore_db, smithdb_metastore_user and smithdb_metastore_password. The module copies them into smithdb-config, the one Secret SmithDB reads (its object store's keys are there too)."
+  description = "With smithdb_metastore_source = external: a Secret you create in LangSmith's namespace, keys smithdb_metastore_host, smithdb_metastore_db, smithdb_metastore_user and smithdb_metastore_password. The module copies them into smithdb-config, the one Secret SmithDB reads (its object store's keys are there too)."
 }
 
 variable "smithdb_metastore_port" {
@@ -173,7 +173,7 @@ variable "smithdb_metastore_tls" {
 variable "object_store_source" {
   type        = string
   default     = "in-cluster"
-  description = "in-cluster: the module runs RustFS for SmithDB's bucket and the blob bucket. external: the customer's S3-compatible store, at object_store_endpoint, its keys in object_store_secret. A bucket missing there is created, the blob bucket with its expiry; one that exists is left as it is. With enable_sandboxes, RustFS still runs in the cluster for the sandboxes' JuiceFS bucket alone."
+  description = "in-cluster: the module runs RustFS for SmithDB's bucket and the blob bucket. external: an S3-compatible store outside the cluster, at object_store_endpoint, its keys in object_store_secret. A bucket missing there is created, the blob bucket with its expiry; one that exists is left as it is. With enable_sandboxes, RustFS still runs in the cluster for the sandboxes' JuiceFS bucket alone."
 
   validation {
     condition     = contains(["in-cluster", "external"], var.object_store_source)
@@ -190,7 +190,7 @@ variable "object_store_endpoint" {
 variable "object_store_region" {
   type        = string
   default     = "us-east-1"
-  description = "With object_store_source = external: the region the S3 API expects; most S3-compatible stores take any."
+  description = "With object_store_source = external: the region the S3 API expects. MinIO, RustFS, StorageGRID and ECS take any; Ceph RGW wants its zonegroup's name, and MinIO its MINIO_REGION when set. A bucket the module creates outside us-east-1 is created with it as its LocationConstraint."
 }
 
 variable "object_store_path_style" {
@@ -208,25 +208,40 @@ variable "object_store_buckets" {
 variable "object_store_secret" {
   type        = string
   default     = "object-store"
-  description = "With object_store_source = external: the Secret in LangSmith's namespace holding the store's keys, access_key_id and secret_access_key, which the customer creates unless object_store_access_key_id is given. The module copies them into smithdb-config, the one Secret SmithDB reads; blob storage reads the same keys."
+  description = "With object_store_source = external: the Secret in LangSmith's namespace holding the store's keys, access_key_id and secret_access_key. You create it, or with object_store_secret_managed the module writes it. The module copies them into smithdb-config, the one Secret SmithDB reads; blob storage reads the same keys."
+}
+
+# Who writes object_store_secret is a setting, not whether the keys happen to be in this run's
+# environment: decided by the keys' presence, one apply without TF_VAR_ (a CI pipeline, a plain
+# terraform apply) deleted the Secret the last one wrote, and the bucket Jobs and the next plan failed
+# on it (Dzmitry Dubarau's review of #488).
+variable "object_store_secret_managed" {
+  type        = bool
+  default     = false
+  description = "With object_store_source = external: true, the module writes object_store_secret from object_store_access_key_id and object_store_secret_access_key, which every plan and apply must then be given (make plan and make apply pass them from infra/.secrets.env); a run without them stops instead of deleting the Secret. false, you create the Secret before the first apply and the keys stay out of terraform.tfvars and the environment (they reach state through smithdb-config either way)."
 }
 
 variable "object_store_access_key_id" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "With object_store_source = external: the store's access key. Given, the module writes object_store_secret itself, so a first install needs no Secret made by hand between applies. Prefer TF_VAR_object_store_access_key_id over terraform.tfvars; it is kept in Terraform state."
+  description = "With object_store_secret_managed: the store's access key. Give it as TF_VAR_object_store_access_key_id, never in terraform.tfvars; it is kept in Terraform state."
+
+  validation {
+    condition     = (var.object_store_access_key_id != "") == (var.object_store_source == "external" && var.object_store_secret_managed)
+    error_message = "object_store_access_key_id is given exactly when object_store_source = external and object_store_secret_managed = true. Managed and missing: run make setup-env, or export TF_VAR_object_store_access_key_id. Not managed: unset it and remove OBJECT_STORE_ACCESS_KEY_ID from infra/.secrets.env."
+  }
 }
 
 variable "object_store_secret_access_key" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "With object_store_access_key_id: its secret key. Prefer TF_VAR_object_store_secret_access_key."
+  description = "With object_store_secret_managed: its secret key, as TF_VAR_object_store_secret_access_key."
 
   validation {
-    condition     = (var.object_store_access_key_id == "") == (var.object_store_secret_access_key == "")
-    error_message = "object_store_access_key_id and object_store_secret_access_key are given together or not at all."
+    condition     = (var.object_store_secret_access_key != "") == (var.object_store_source == "external" && var.object_store_secret_managed)
+    error_message = "object_store_secret_access_key is given exactly when object_store_source = external and object_store_secret_managed = true. Managed and missing: run make setup-env, or export TF_VAR_object_store_secret_access_key. Not managed: unset it and remove OBJECT_STORE_SECRET_ACCESS_KEY from infra/.secrets.env."
   }
 }
 
@@ -301,6 +316,14 @@ variable "enable_usage_telemetry" {
   description = "Extended usage telemetry reporting: sets PHONE_HOME_USAGE_REPORTING_ENABLED on every LangSmith component (commonEnv in langsmith-values-overrides.yaml)."
 }
 
+# commonEnv is one list and Helm replaces a list whole: proxy variables set in langsmith-values-local.yaml
+# dropped the usage and Engine gateway entries the module writes.
+variable "common_env" {
+  type        = list(object({ name = string, value = string }))
+  default     = []
+  description = "Environment variables for every LangSmith component, appended to the chart's commonEnv after the module's own: a corporate proxy (HTTP_PROXY, HTTPS_PROXY, NO_PROXY), for instance. Set here, never as commonEnv in langsmith-values-local.yaml, which would replace the whole list."
+}
+
 variable "enable_blob_storage" {
   type        = bool
   default     = true
@@ -321,7 +344,7 @@ variable "blob_storage_min_size_kb" {
 variable "blob_storage_ttl_days" {
   type        = object({ short = number, long = number })
   default     = { short = 14, long = 400 }
-  description = "Days before the blob bucket deletes ttl_s/ (short-lived) and ttl_l/ (long-lived) payloads, as the cloud modules' lifecycle rules do. LangSmith expects the bucket to expire them; match the chart's config.ttl if you change it."
+  description = "Days before the blob bucket deletes ttl_s/ (short-lived) and ttl_l/ (long-lived) payloads, as the cloud modules' lifecycle rules do. LangSmith expects the bucket to expire them; match the chart's config.ttl if you change it. RustFS takes them on every apply. An external store takes them once, when the module creates the bucket: a later change, and a bucket of yours, take the rules by hand (put-bucket-lifecycle-configuration), since writing them replaces every rule the bucket has."
 
   validation {
     condition     = var.blob_storage_ttl_days.short >= 1 && var.blob_storage_ttl_days.long >= var.blob_storage_ttl_days.short
@@ -442,7 +465,7 @@ variable "envoy_gateway_lb_ip" {
 variable "envoy_gateway_route_timeout" {
   type        = string
   default     = "60s"
-  description = "Request timeout on the LangSmith chart's route and the LAN route (Envoy BackendTrafficPolicy); Fleet and Deployments streams and the operator's agent routes have none. Envoy Gateway's default is 15 s, which returns 504 on slow trace reads. Empty string keeps the Envoy default."
+  description = "Request timeout on the LangSmith chart's route and the LAN route (Envoy BackendTrafficPolicy); the stream routes have none. Empty string keeps Envoy's own 15 s. Why: README, Configuration."
 
   validation {
     condition     = var.envoy_gateway_route_timeout == "" || can(regex("^[0-9]+(ms|s|m|h)$", var.envoy_gateway_route_timeout))
@@ -464,7 +487,7 @@ variable "cloudflare_tunnel_token" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "Tunnel token from Zero Trust → Networks → Tunnels. Prefer TF_VAR_cloudflare_tunnel_token over terraform.tfvars. Stored in Terraform state and in Secret cloudflared/cloudflared-token."
+  description = "Tunnel token from Zero Trust -> Networks -> Tunnels. Prefer TF_VAR_cloudflare_tunnel_token over terraform.tfvars. Stored in Terraform state and in Secret cloudflared/cloudflared-token."
 
   validation {
     condition     = !var.enable_cloudflare_tunnel || length(trimspace(var.cloudflare_tunnel_token)) > 0

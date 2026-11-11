@@ -3,7 +3,7 @@ RustFS: S3-compatible object storage (Apache 2.0), standing in for MinIO, whose 
 no longer maintained. It has no operator, so it is this StatefulSet in both runtimes.
 
 Single node, single drive: objects live on one Retain volume at /data. Credentials are files mounted
-from a Secret (RUSTFS_*_KEY_FILE), rustfs-credentials, or the customer's own of that name with
+from a Secret (RUSTFS_*_KEY_FILE), rustfs-credentials, or an existing one of that name with
 existingSecrets: never the image's default rustfsadmin, never in env values or on the command line.
 Runs as the image's non-root user (uid 10001) under the restricted Pod Security level.
 */ -}}
@@ -241,5 +241,6 @@ spec:
         {{- include "datastores.clients" (dict "root" $ "ns" $ns "cidrs" .allowedCidrs) | trim | nindent 8 }}
       ports:
         - { port: 9000, protocol: TCP }
+{{ include "datastores.pdb" (dict "name" "rustfs" "ns" $ns "labels" $labels "selector" $selector) }}
 {{- end }}
 {{- end }}

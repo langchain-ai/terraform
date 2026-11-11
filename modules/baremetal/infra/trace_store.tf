@@ -3,7 +3,7 @@
 #
 # The inputs carry the names the cloud modules use
 # (clickhouse_source, enable_smithdb, smithdb_{ingestion,migration,query}_enabled),
-# so a customer moving between a cloud and bare metal sees one set. The defaults are
+# so a move between a cloud and bare metal keeps one set. The defaults are
 # SmithDB-only: no ClickHouse, no migration.
 #
 # The staged rollout is the one in SMITHDB.md and the SmithDB docs: SmithDB up,
@@ -16,7 +16,7 @@
 variable "clickhouse_source" {
   type        = string
   default     = "off"
-  description = "ClickHouse for the trace store. off: SmithDB-only, the default. in-cluster: the chart's ClickHouse StatefulSet on local-path, where customers on ClickHouse start a SmithDB migration from (dev/POC grade: one pod, no replication). An external ClickHouse is not an input yet."
+  description = "ClickHouse for the trace store. off: SmithDB-only, the default. in-cluster: the chart's ClickHouse StatefulSet on local-path-retain, where an install on ClickHouse starts a SmithDB migration from (dev/POC grade: one pod, no replication). An external ClickHouse is not an input yet."
 
   validation {
     condition     = contains(["off", "in-cluster"], var.clickhouse_source)

@@ -10,13 +10,13 @@ with LangSmith chart 0.17.x (SmithDB 0.17.33); later versions may differ.
 
 ## Beside ClickHouse: dual ingest and migration
 
-The same inputs the cloud modules use (`smithdb_migration_parallelism` as in `modules/azure` and `modules/gcp`; `off` for
-`clickhouse_source` is this module's own value, for its SmithDB-only default), in `infra/terraform.tfvars`. The defaults are SmithDB-only, the
+Set in `infra/terraform.tfvars`, with the cloud modules' names. Two are this module's own: `smithdb_migration_parallelism`,
+and `off` for `clickhouse_source`, its SmithDB-only default. The defaults are SmithDB-only, the
 install this page describes.
 
 | Input | Default | Does |
 |:--|:--|:--|
-| `clickhouse_source` | `off` | `in-cluster`: the chart's ClickHouse StatefulSet on local-path (one pod, no replication: what a customer on ClickHouse starts a migration from, not a production store). Its connection is the `langsmith-clickhouse` Secret Terraform makes, not the chart's default password |
+| `clickhouse_source` | `off` | `in-cluster`: the chart's ClickHouse StatefulSet on local-path-retain (one pod, no replication: where an install on ClickHouse starts a migration from, not a production store). Its connection is the `langsmith-clickhouse` Secret Terraform makes, not the chart's default password |
 | `enable_smithdb` | `true` | SmithDB's services; `false` leaves ClickHouse alone (needs `clickhouse_source = "in-cluster"`) |
 | `smithdb_ingestion_enabled` | `true` | new writes go to SmithDB; with ClickHouse on, to both |
 | `smithdb_migration_enabled` | `false` | the backfill Job and its chart-managed TaskDB (the `smithdb-taskdb` Secret); needs ClickHouse and ingestion |
@@ -27,7 +27,7 @@ Before starting, contact LangChain through the Support Portal, as the install gu
 is one change per stage, each followed by `make apply` and `make deploy`, in the order of the
 [install guide](https://docs.langchain.com/langsmith/self-host-smithdb-install):
 
-1. Customer state: `clickhouse_source = "in-cluster"`, `enable_smithdb = false` and the three gates `false`.
+1. On ClickHouse: `clickhouse_source = "in-cluster"`, `enable_smithdb = false` and the three gates `false`.
 2. SmithDB up: `enable_smithdb = true`. Wait for every smithdb pod and the metastore migration Job.
 3. Dual write: `smithdb_ingestion_enabled = true`. `/api/v1/info` shows `sdb_ingestion_enabled` true.
 4. Backfill: `smithdb_migration_enabled = true`. Wait for the migration Job to report `Complete`; turning it off
@@ -56,11 +56,14 @@ against a real backfill. Plan tests: `infra/tests/trace_store.tftest.hcl`.
 
 ## Tiers in this module
 
-| Profile | Tier | Notes |
-|---|---|---|
-| `minimum`, `lab` | **minimal** | ~1 CPU / 2 GiB requests per component (limits 2 / 4 GiB), `emptyDir` caches (20 / 10 / 10 GiB), one pod each |
-| `dev` | chart `small` | 4–8 CPU / 8–16 GiB per component, per-pod PVC caches (200 / 100 / 100 GiB) |
-| `production`, `production-large` | chart `medium` | per the chart; review CPU vs memory in [SIZING.md](SIZING.md) |
+Each profile's tier is in the README's [Sizing profiles](README.md#sizing-profiles); `smithdb_tier` overrides it.
+Requests per pod (`infra/modules/values/sizing.tf`):
+
+| Tier | query, ingestion, compaction worker | compaction scheduler | cluster manager | Caches (query / ingestion / worker) |
+|---|---|---|---|---|
+| minimal | 1 CPU, 2 GiB each (limits 2, 4 GiB) | 250m, 512 MiB | 100m, 128 MiB | `emptyDir` 20 / 10 / 10 GiB |
+| small (chart) | 4 CPU, 8 GiB; the worker 8 CPU, 16 GiB | 2 CPU, 4 GiB | 250m, 256 MiB | PVC 200 / 100 / 100 GiB |
+| medium (chart) | query 28 CPU, 48 GiB; ingestion and worker 16 CPU, 32 GiB | 4 CPU, 8 GiB | 250m, 256 MiB | PVC 200 / 100 / 100 GiB |
 
 An explicit `resources` block doesn't change cache size: the module sets caches through `deployment.volumes`.
 
@@ -72,11 +75,11 @@ Copy [langsmith-values-local.yaml.example](helm/values/langsmith-values-local.ya
 | Setting | Recommendation | Why |
 |---|---|---|
 | Blob storage | **on** (`enable_blob_storage`, Terraform default) | large run payloads go to object storage instead of Redis: Redis per run drops several times for agent-sized traces |
-| `config.settings.redisRunsExpirySeconds` | set explicitly (e.g. 1800) | the 6 h default needs very large Redis at production rates; too short drops runs when the queue backs up |
+| `config.settings.redisRunsExpirySeconds` | set explicitly (e.g. 1800) | the 6 h default holds 6 h of runs in Redis ([SIZING.md](SIZING.md#redis)); too short drops runs when the queue backs up |
 | `GO_INGESTION_CONCURRENCY_PER_CPU` on ingest-queue | 4 on 6–8 core nodes | workers default to one per **node** core, and the drain waits on I/O, not CPU |
 | `ENABLE_EVALUATE_EXPIRED_EXPERIMENTS=false` on platform-backend | until fixed upstream | on SmithDB-only installs, feedback on recent runs falls back to ClickHouse and fails ingest batches under load |
 | SmithDB ingestion replicas | 2 | spreads each project's writes and removes a single point of failure |
-| Gateway route timeout | 60 s (`envoy_gateway_route_timeout`, Terraform default) | Envoy's 15 s default returns 504 on slow reads |
+| Gateway route timeout | `envoy_gateway_route_timeout` | [README, Configuration](README.md#configuration) |
 | containerd `LimitNOFILE` | 1048576 on every node, then recreate pods | at the default soft limit (1,024) the query disk cache silently fails to build |
 | Redis `hz 50`, `active-expire-effort 5` | set (module default) | with Redis defaults, expired keys pile up under LangSmith's key churn |
 

@@ -8,8 +8,8 @@
 #
 # Usage (from baremetal/):   make deploy
 #
-# Needs: make apply (datastores + their Secrets), make setup-env
-# (infra/.secrets.env), make init-values (helm/values/).
+# Needs: make setup-env (infra/.secrets.env) and make apply (datastores + their Secrets); make deploy
+# runs make init-values (helm/values/) first.
 #
 # 1. Builds the langsmith-config Secret from infra/.secrets.env. Values go to
 #    kubectl on stdin: never on argv, never echoed, never written to disk.
@@ -17,7 +17,7 @@
 #      values.yaml                             base bare-metal config (committed)
 #      langsmith-values-overrides.yaml         hostname, gateway (Terraform output)
 #      langsmith-values-admin.yaml             initial org admin email
-#      langsmith-values-sizing-<profile>.yaml  app sizing
+#      langsmith-values-sizing-<profile>.yaml  app sizing, as the budget gate counted it
 #      langsmith-values-<feature>.yaml         enabled features (same order as modules/gcp), then sso
 #      langsmith-values-smithdb.yaml           SmithDB sizing + wiring (Terraform output)
 #      langsmith-values-local.yaml             optional local experiments (gitignored)
@@ -65,10 +65,13 @@ done
 
 # Always the cluster named in terraform.tfvars, never the current context.
 kube_context="$(_parse_tfvar kube_context)"
+# kubeconfig_path defaults to ~/.kube/config, as the variable does: required here, a terraform.tfvars that
+# left it to its default stopped make deploy.
 kubeconfig="$(_parse_tfvar kubeconfig_path)"
+kubeconfig="${kubeconfig:-~/.kube/config}"
 kubeconfig="${kubeconfig/#\~/$HOME}"
-if [[ -z "$kube_context" || -z "$kubeconfig" ]]; then
-  fail "kube_context and kubeconfig_path must be set in infra/terraform.tfvars"
+if [[ -z "$kube_context" ]]; then
+  fail "kube_context must be set in infra/terraform.tfvars"
   exit 1
 fi
 _kubectl() { kubectl --kubeconfig "$kubeconfig" --context "$kube_context" "$@"; }
@@ -80,7 +83,7 @@ if ! _kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
 fi
 pass "cluster: $kube_context, namespace $NAMESPACE"
 
-# The datastore Secrets come from Terraform, or from the customer for a store they run; the chart
+# The datastore Secrets come from Terraform, or are created by hand for an external store; the chart
 # fails late without them.
 datastore_secrets="$(terraform -chdir="$INFRA_DIR" output -raw datastore_secrets)"
 for secret in $datastore_secrets; do
@@ -194,7 +197,7 @@ header "Values (in order, last wins)"
 
 _require_values() {
   if [[ ! -f "$VALUES_DIR/$1" ]]; then
-    fail "$1 not found — run make init-values"
+    fail "$1 not found: run make deploy, which writes it first (make init-values)"
     exit 1
   fi
   values_args+=(-f "$VALUES_DIR/$1")
@@ -334,20 +337,19 @@ print(host if dns else "-", base if base != "/" else "-", gw.get("name") or "lan
   [[ "${_streams_base:--}" == "-" ]] && _streams_base=""
   # An existing_gateway lives in its own namespace; without it the route attaches to nothing and apply still succeeds.
   [[ "${_streams_gw_ns:--}" == "-" ]] && _streams_gw_ns="$NAMESPACE"
-  _streams_hostnames=""
-  [[ -n "${_streams_host:-}" && "$_streams_host" != "-" ]] && _streams_hostnames="  hostnames:
-  - \"${_streams_host}\""
-  if _kubectl apply -f - >/dev/null <<EOF
+  # _streams_route NAME HOSTNAMES_BLOCK: one no-timeout route for the stream paths.
+  _streams_route() {
+    _kubectl apply -f - >/dev/null <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: langsmith-fleet-streams
+  name: $1
   namespace: ${NAMESPACE}
 spec:
   parentRefs:
   - name: ${_streams_gw:-langsmith-gateway}
     namespace: ${_streams_gw_ns}
-${_streams_hostnames}
+$2
   rules:
   - matches:
     - path:
@@ -365,13 +367,33 @@ ${_streams_hostnames}
     timeouts:
       request: 0s
 EOF
-  then
+  }
+  _streams_ok=true
+  if [[ -n "${_streams_host:-}" && "$_streams_host" != "-" ]]; then
+    _streams_route langsmith-fleet-streams "  hostnames:
+  - \"${_streams_host}\"" || _streams_ok=false
+    # With a domain the gateway also serves its LAN IP through the hostless langsmith-lan route, and a
+    # route bound to the domain never matches a request by IP: streams there hit the route timeout
+    # (Dzmitry Dubarau's review of #488). The same paths without hostnames cover it.
+    # A failed read is unknown, not false: taken as false it deleted the route and printed pass.
+    if ! _lan_route="$(terraform -chdir="$INFRA_DIR" output -raw lan_route 2>/dev/null)"; then
+      warn "terraform output lan_route is missing (run make apply): langsmith-fleet-streams-lan left as it is"
+    elif [[ "$_lan_route" == "true" ]]; then
+      _streams_route langsmith-fleet-streams-lan "" || _streams_ok=false
+    else
+      _kubectl delete httproute langsmith-fleet-streams-lan -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+    fi
+  else
+    _streams_route langsmith-fleet-streams "" || _streams_ok=false
+    _kubectl delete httproute langsmith-fleet-streams-lan -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+  if $_streams_ok; then
     pass "HTTPRoute langsmith-fleet-streams: no request timeout on ${_streams_base}/api/v1/fleet and ${_streams_base}/api-host/v2"
   else
     warn "could not apply HTTPRoute langsmith-fleet-streams; Fleet and Deployments streams keep the chart route's request timeout until it applies: re-run make deploy"
   fi
 else
-  _kubectl delete httproute langsmith-fleet-streams -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+  _kubectl delete httproute langsmith-fleet-streams langsmith-fleet-streams-lan -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
 fi
 
 # ── 4. Rollout ───────────────────────────────────────────────────────────────
@@ -405,7 +427,8 @@ done
 header "Done"
 if [[ "$all_ready" == true ]]; then
   pass "LangSmith is up: $(terraform -chdir="$INFRA_DIR" output -raw langsmith_url)"
-  info "Log in with INITIAL_ORG_ADMIN_EMAIL / INITIAL_ORG_ADMIN_PASSWORD from $SECRETS_FILE"
+  admin_email="$(_parse_tfvar langsmith_admin_email)"
+  info "Log in as ${admin_email:-INITIAL_ORG_ADMIN_EMAIL from $SECRETS_FILE}, with INITIAL_ORG_ADMIN_PASSWORD from $SECRETS_FILE"
 else
   warn "Some components are not ready yet. Look at:"
   action "kubectl --context $kube_context get pods -n $NAMESPACE"

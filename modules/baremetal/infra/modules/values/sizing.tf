@@ -161,10 +161,10 @@ locals {
       lim_mem_mi = max(d.lim_mem_mi, var.datastore_requests[k].mem_mi)
     })
   }
-  # RustFS runs for the in-cluster object store, or, beside the customer's, for the sandboxes' JuiceFS
+  # RustFS runs for the in-cluster object store, or, beside an external one, for the sandboxes' JuiceFS
   # bucket alone: theirs takes SmithDB's segments and the blobs, which grow with every trace.
   rustfs_in_cluster = var.object_store_source == "in-cluster" || var.enable_sandboxes
-  # The stores the customer runs (each <store>_source = external): not built, so not counted.
+  # External stores (each <store>_source = external): not built, so not counted.
   external_stores = toset(compact([
     var.postgres_source == "external" ? "postgres_langsmith" : "",
     var.redis_source == "external" ? "redis_langsmith" : "",
@@ -176,7 +176,7 @@ locals {
     { for k, d in local.datastores_measured : k => d if !contains(local.external_stores, k) },
     var.enable_sandboxes ? { redis_juicefs = local.datastore_size_table.juicefs } : {},
   )
-  # The Secrets LangSmith's namespace must hold before Helm runs: ours, or the customer's for a store
+  # The Secrets LangSmith's namespace must hold before Helm runs: ours, or one created by hand for a store
   # they run (deploy.sh checks each; the chart fails late without them).
   datastore_secrets = concat(
     [var.postgres_source == "external" ? var.postgres_secret : "langsmith-postgres", var.redis_source == "external" ? var.redis_secret : "langsmith-redis", "smithdb-config"],

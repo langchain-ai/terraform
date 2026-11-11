@@ -97,12 +97,18 @@ run "images_and_operator_charts_are_outputs" {
   }
 
   variables {
-    postgres_image     = "mirror.example.com/library/postgres:18.6"
-    cnpg_chart_version = "0.29.9"
+    postgres_image       = "mirror.example.com/library/postgres:18.6"
+    cnpg_chart_version   = "0.29.9"
+    redis_sentinel_image = "mirror.example.com/opstree/redis-sentinel:v7.4.11"
   }
 
   assert {
-    condition     = output.images.postgres == "mirror.example.com/library/postgres:18.6" && output.images.redis_operator == "quay.io/opstree/redis:v7.4.11" && length(output.images) == 9
+    condition     = output.datastore_values.redis.sentinelImage == "mirror.example.com/opstree/redis-sentinel:v7.4.11" && output.images.redis_sentinel == output.datastore_values.redis.sentinelImage
+    error_message = "redis_sentinel_image must reach the chart's redis.sentinelImage, or the Sentinels stay on quay.io whatever a mirror carries."
+  }
+
+  assert {
+    condition     = output.images.postgres == "mirror.example.com/library/postgres:18.6" && output.images.redis_opstree == "quay.io/opstree/redis:v7.4.11" && length(output.images) == 10
     error_message = "Every image the module runs outside the chart is an output, set or pinned."
   }
 

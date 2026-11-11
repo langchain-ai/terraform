@@ -56,10 +56,10 @@ variable "engine_sandbox_tenant_id" {
 variable "engine_intelligence_base_url" {
   type        = string
   default     = "https://beacon.langchain.com/intelligence"
-  description = "Where Engine runs its models: https://beacon.aws.langchain.com/intelligence for LangSmith Intelligence, the default for your own providers, \"\" when air-gapped."
+  description = "Where Engine reports usage and, for LangSmith Intelligence, runs its models. The default, https://beacon.langchain.com/intelligence, is for your own providers or gateway and receives usage metadata only (no trace content); https://beacon.aws.langchain.com/intelligence for LangSmith Intelligence, which receives trace content; \"\" when air-gapped (docs self-host-egress)."
 }
 
-# Engine through the customer's own LLM gateway (docs engine-self-hosted-model-providers, "Use a model
+# Engine through an LLM gateway of your own (docs engine-self-hosted-model-providers, "Use a model
 # gateway"; chart 0.17.31 or later). Set the URL of each API the gateway serves; make setup-env asks its key.
 variable "engine_gateway_anthropic_base_url" {
   type        = string
@@ -156,7 +156,7 @@ resource "kubernetes_node_taint" "sandbox_host" {
   lifecycle {
     precondition {
       condition     = length(lookup(local.sandbox_host_other_taints, each.key, [])) == 0
-      error_message = "Sandbox host ${each.key} carries other taints (${join(", ", lookup(local.sandbox_host_other_taints, each.key, []))}). The sandbox taint replaces the node's whole taint list, and removing it clears the list, so a sandbox host carries no other taint: remove them, or choose another node."
+      error_message = "Sandbox host ${each.key} carries other taints (${join(", ", lookup(local.sandbox_host_other_taints, each.key, []))}). The sandbox taint replaces the node's whole taint list, and removing it clears the list, so a sandbox host carries no other taint: remove them, or choose another node. A node.kubernetes.io taint means the node is cordoned or not ready: uncordon it or wait, then plan again."
     }
   }
 }
