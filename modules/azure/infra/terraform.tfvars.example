@@ -178,9 +178,16 @@ enable_sandboxes = false
 # sandbox_host_vm_size   = "Standard_D8ds_v5"
 # sandbox_host_min_count = 0
 # sandbox_host_max_count = 5
-# sandbox_juicefs_amr_sku                 = "Balanced_B1"
-# sandbox_juicefs_redis_high_availability = true
-# sandbox_juicefs_redis_name              = "" # empty derives from the naming scheme
+# JuiceFS metadata Redis: amr (Azure Managed Redis), in-cluster (a StatefulSet in
+# the LangSmith namespace; use it in Azure Government), or external (your own,
+# sandbox_juicefs_redis_url in secrets.auto.tfvars).
+# sandbox_juicefs_redis_source            = "amr"
+# sandbox_juicefs_amr_sku                 = "Balanced_B1" # amr
+# sandbox_juicefs_redis_high_availability = true          # amr
+# sandbox_juicefs_redis_name              = ""            # amr; empty derives from the naming scheme
+# sandbox_juicefs_redis_storage_gb        = 16            # in-cluster
+# sandbox_juicefs_redis_memory_mb         = 1024          # in-cluster; maxmemory is 80% of it
+# sandbox_juicefs_redis_image             = "" # in-cluster; empty follows langsmith_image_registry
 # sandbox_service_url_base_url            = "" # needs wildcard DNS and TLS
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API, uses Gateway/HTTPRoute; start here)

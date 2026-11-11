@@ -366,16 +366,365 @@ run "sandbox_host_max_below_min_is_rejected" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# The default source is Azure Managed Redis, which Azure Government lacks.
 run "sandboxes_rejected_in_azure_government" {
   command = plan
 
   variables {
     enable_sandboxes  = true
     azure_environment = "usgovernment"
+    location          = "usgovvirginia"
     redis_source      = "in-cluster"
   }
 
   expect_failures = [terraform_data.validate_network]
+}
+
+# sandbox_juicefs_redis_source = in-cluster needs no Azure Managed Redis, so the
+# Government refusal above is for amr alone.
+run "sandboxes_in_azure_government_with_in_cluster_juicefs_redis" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    azure_environment            = "usgovernment"
+    location                     = "usgovvirginia"
+    redis_source                 = "in-cluster"
+    sandbox_juicefs_redis_source = "in-cluster"
+  }
+
+  assert {
+    condition     = length(module.sandbox_juicefs_redis) == 0 && module.k8s_bootstrap.sandbox_juicefs_redis != null
+    error_message = "In Azure Government with an in-cluster JuiceFS Redis, the plan still planned Azure Managed Redis or no in-cluster Redis"
+  }
+  assert {
+    condition     = output.sandbox_juicefs_redis_name == null && output.sandbox_juicefs_redis_source == "in-cluster"
+    error_message = "The outputs still name an Azure Managed Redis, or the source output is not in-cluster"
+  }
+}
+
+run "sandboxes_in_azure_government_with_external_juicefs_redis" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    azure_environment            = "usgovernment"
+    location                     = "usgovvirginia"
+    redis_source                 = "in-cluster"
+    sandbox_juicefs_redis_source = "external"
+    sandbox_juicefs_redis_url    = "rediss://:plan-tests-only@jfs-redis.example.internal:6380/1"
+  }
+
+  assert {
+    condition     = length(module.sandbox_juicefs_redis) == 0 && module.k8s_bootstrap.sandbox_juicefs_redis == null
+    error_message = "An external JuiceFS Redis still planned Azure Managed Redis or the in-cluster Redis"
+  }
+  assert {
+    condition     = nonsensitive(local.sandbox_juicefs_metaurl == var.sandbox_juicefs_redis_url)
+    error_message = "The JuiceFS metaurl is not the external URL as given"
+  }
+}
+
+# The in-cluster Redis's shape is the part that keeps metadata: an append-only
+# file synced every second, noeviction under a maxmemory below the container
+# limit, a password, and a disk kept when the claim goes.
+run "in_cluster_juicefs_redis_persists_and_never_evicts" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+  }
+
+  assert {
+    condition = alltrue([
+      for pair in [["--appendonly", "yes"], ["--appendfsync", "everysec"], ["--maxmemory-policy", "noeviction"], ["--maxmemory", "819mb"], ["--requirepass", "$(REDIS_PASSWORD)"]] :
+      contains(module.k8s_bootstrap.sandbox_juicefs_redis.args, pair[0]) && module.k8s_bootstrap.sandbox_juicefs_redis.args[index(module.k8s_bootstrap.sandbox_juicefs_redis.args, pair[0]) + 1] == pair[1]
+    ])
+    error_message = "The in-cluster JuiceFS Redis arguments are missing AOF, noeviction, maxmemory 819mb or the password: ${jsonencode(module.k8s_bootstrap.sandbox_juicefs_redis.args)}"
+  }
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.reclaim_policy == "Retain" && module.k8s_bootstrap.sandbox_juicefs_redis.storage == "16Gi" && module.k8s_bootstrap.sandbox_juicefs_redis.memory_limit == "1024Mi"
+    error_message = "The in-cluster JuiceFS Redis volume is not a retained 16Gi claim with a 1024Mi limit: ${jsonencode(module.k8s_bootstrap.sandbox_juicefs_redis)}"
+  }
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.claim == "sandbox-juicefs-redis-data"
+    error_message = "The in-cluster JuiceFS Redis does not mount the standalone claim sandbox-juicefs-redis-data, which is what lets the size change in place"
+  }
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "docker.io/redis:7" && module.k8s_bootstrap.sandbox_juicefs_redis.service == local.sandbox_juicefs_redis_service
+    error_message = "The in-cluster JuiceFS Redis image is not the chart's redis:7, or its Service is not the one the metaurl names"
+  }
+  assert {
+    condition     = tolist(module.k8s_bootstrap.sandbox_juicefs_redis_node_ingress.cidrs) == tolist(var.aks_subnet_address_prefix) && tolist(module.k8s_bootstrap.sandbox_juicefs_redis_node_ingress.ports) == tolist(["TCP/6379"])
+    error_message = "The node subnet is not admitted to the in-cluster JuiceFS Redis on 6379"
+  }
+  assert {
+    condition     = length(module.sandbox_juicefs_redis) == 0 && output.sandbox_juicefs_redis_name == null
+    error_message = "An in-cluster JuiceFS Redis still planned Azure Managed Redis"
+  }
+}
+
+run "in_cluster_juicefs_redis_follows_its_sizes_and_image" {
+  command = plan
+
+  variables {
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_source     = "in-cluster"
+    sandbox_juicefs_redis_storage_gb = 64
+    sandbox_juicefs_redis_memory_mb  = 4096
+    sandbox_juicefs_redis_image      = "mirror.example.internal/redis:7"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.storage == "64Gi" && module.k8s_bootstrap.sandbox_juicefs_redis.memory_limit == "4096Mi" && contains(module.k8s_bootstrap.sandbox_juicefs_redis.args, "3276mb") && module.k8s_bootstrap.sandbox_juicefs_redis.image == "mirror.example.internal/redis:7"
+    error_message = "The in-cluster JuiceFS Redis did not take the storage, memory or image given: ${jsonencode(module.k8s_bootstrap.sandbox_juicefs_redis)}"
+  }
+}
+
+# The image follows the LangSmith mirror in the layout init-values.sh writes for
+# the chart's own Redis, so a cluster that pulls only from the mirror pulls this.
+run "in_cluster_juicefs_redis_image_follows_the_langsmith_mirror" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+    langsmith_image_registry     = "nexus.example.com/mirror"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "nexus.example.com/mirror/redis:7"
+    error_message = "The in-cluster JuiceFS Redis image did not follow langsmith_image_registry: ${module.k8s_bootstrap.sandbox_juicefs_redis.image}"
+  }
+}
+
+run "in_cluster_juicefs_redis_image_keeps_the_source_host" {
+  command = plan
+
+  variables {
+    enable_sandboxes                           = true
+    sandbox_juicefs_redis_source               = "in-cluster"
+    langsmith_image_registry                   = "nexus.example.com"
+    langsmith_image_registry_keeps_source_host = true
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "nexus.example.com/docker.io/redis:7"
+    error_message = "With the source host kept, the in-cluster JuiceFS Redis image is not <registry>/docker.io/redis:7: ${module.k8s_bootstrap.sandbox_juicefs_redis.image}"
+  }
+}
+
+run "in_cluster_juicefs_redis_image_override_beats_the_mirror" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+    langsmith_image_registry     = "nexus.example.com"
+    sandbox_juicefs_redis_image  = "other.example.com/redis:7.4"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.image == "other.example.com/redis:7.4"
+    error_message = "sandbox_juicefs_redis_image did not override the mirror default"
+  }
+}
+
+# A StorageClass is cluster-scoped: two deployments on one cluster must not
+# both create the same name.
+run "in_cluster_juicefs_redis_storage_class_is_per_deployment" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+    unique_resource_names        = true
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.storage_class == local.sandbox_juicefs_redis_storage_class && module.k8s_bootstrap.sandbox_juicefs_redis.claim_class == local.sandbox_juicefs_redis_storage_class && local.sandbox_juicefs_redis_storage_class != "sandbox-juicefs-redis-retain" && startswith(local.sandbox_juicefs_redis_storage_class, "sandbox-juicefs-redis-retain-")
+    error_message = "The JuiceFS Redis StorageClass is not suffixed per deployment, or the claim does not use it: ${jsonencode(module.k8s_bootstrap.sandbox_juicefs_redis)}"
+  }
+}
+
+# Redis reads --requirepass at start only; the digest on the pod template is
+# what restarts it when the password changes.
+run "in_cluster_juicefs_redis_restarts_on_a_new_password" {
+  command = plan
+
+  override_resource {
+    target          = random_password.sandbox_juicefs_redis
+    override_during = plan
+    values = {
+      result = "fixture-not-a-real-password"
+    }
+  }
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.sandbox_juicefs_redis.pod_annotations["checksum/password"] == sha256("fixture-not-a-real-password")
+    error_message = "The in-cluster JuiceFS Redis pod template does not carry the password's sha256"
+  }
+  assert {
+    condition     = output.sandbox_juicefs_redis_config_digest == sha256("redis://:fixture-not-a-real-password@sandbox-juicefs-redis.langsmith.svc.cluster.local:6379/1")
+    error_message = "The JuiceFS config digest for the in-cluster Redis is not the sha256 of its URL"
+  }
+}
+
+# deploy.sh puts this digest on sandbox-host, because the chart hashes only the
+# Secret's name.
+run "juicefs_config_digest_for_an_external_redis" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "external"
+    sandbox_juicefs_redis_url    = "rediss://:fixture@redis.example.internal:6380/1"
+  }
+
+  assert {
+    condition     = output.sandbox_juicefs_redis_config_digest == sha256("rediss://:fixture@redis.example.internal:6380/1")
+    error_message = "The JuiceFS config digest is not the sha256 of the external URL"
+  }
+}
+
+run "juicefs_config_digest_absent_for_amr" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+  }
+
+  assert {
+    condition     = output.sandbox_juicefs_redis_config_digest == null
+    error_message = "amr got a JuiceFS config digest, which would restart sandbox-host on existing deployments"
+  }
+}
+
+# The pin holds the source recorded when the flag was turned on; the override
+# stands in for that prior state.
+run "the_redis_guard_refuses_a_source_change" {
+  command = plan
+
+  override_resource {
+    target          = terraform_data.sandbox_juicefs_redis_source_pin
+    override_during = plan
+    values = {
+      output = "amr"
+    }
+  }
+
+  variables {
+    enable_sandboxes                      = true
+    sandbox_juicefs_redis_source          = "in-cluster"
+    sandbox_juicefs_redis_prevent_destroy = true
+  }
+
+  expect_failures = [terraform_data.sandbox_juicefs_redis_source_pin]
+}
+
+run "the_redis_guard_allows_an_unchanged_source" {
+  command = plan
+
+  override_resource {
+    target          = terraform_data.sandbox_juicefs_redis_source_pin
+    override_during = plan
+    values = {
+      output = "in-cluster"
+    }
+  }
+
+  variables {
+    enable_sandboxes                      = true
+    sandbox_juicefs_redis_source          = "in-cluster"
+    sandbox_juicefs_redis_prevent_destroy = true
+  }
+
+  assert {
+    condition     = length(terraform_data.sandbox_juicefs_redis_source_pin) == 1
+    error_message = "The source pin was not planned while the guard is on"
+  }
+}
+
+run "the_redis_guard_off_plans_no_pin" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+  }
+
+  assert {
+    condition     = length(terraform_data.sandbox_juicefs_redis_source_pin) == 0
+    error_message = "The source pin was planned with sandbox_juicefs_redis_prevent_destroy = false"
+  }
+}
+
+run "in_cluster_juicefs_redis_policy_left_to_deploy_on_cilium" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "in-cluster"
+    aks_network_mode             = "overlay"
+  }
+
+  assert {
+    condition     = output.network_policy_engine == "cilium" && module.k8s_bootstrap.sandbox_juicefs_redis_node_ingress == null && module.k8s_bootstrap.sandbox_juicefs_redis != null
+    error_message = "On Cilium the node-subnet policy for the JuiceFS Redis was still planned, or the Redis was not"
+  }
+}
+
+run "amr_juicefs_redis_plans_no_in_cluster_redis" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+  }
+
+  assert {
+    condition     = length(module.sandbox_juicefs_redis) == 1 && module.k8s_bootstrap.sandbox_juicefs_redis == null && module.k8s_bootstrap.sandbox_juicefs_redis_node_ingress == null && output.sandbox_juicefs_redis_source == "amr"
+    error_message = "The default amr source planned an in-cluster Redis or no Azure Managed Redis"
+  }
+}
+
+run "external_juicefs_redis_without_a_url_is_refused" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "external"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "juicefs_redis_url_that_is_not_redis_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "external"
+    sandbox_juicefs_redis_url    = "http://jfs-redis.example.internal:6379"
+  }
+
+  expect_failures = [var.sandbox_juicefs_redis_url]
+}
+
+run "juicefs_redis_source_outside_the_set_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes             = true
+    sandbox_juicefs_redis_source = "memorystore"
+  }
+
+  expect_failures = [var.sandbox_juicefs_redis_source]
 }
 
 run "disabling_sandboxes_is_refused_under_the_redis_guard" {

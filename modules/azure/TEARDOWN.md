@@ -64,7 +64,7 @@ Runs `terraform destroy -auto-approve` from `azure/infra/`.
 - PostgreSQL Flexible Server + configuration + private DNS zone
 - Redis Cache Premium
 - Blob Storage account + container + managed identity + federated credentials
-- With `enable_sandboxes = true`: the sandbox-host node pool, the JuiceFS Azure Managed Redis, the JuiceFS Blob container, and the sandbox-host managed identity
+- With `enable_sandboxes = true`: the sandbox-host node pool, the JuiceFS Redis (Azure Managed Redis, or with `sandbox_juicefs_redis_source = "in-cluster"` the StatefulSet; its disk outlives the claim but is in the cluster's node resource group, so it goes with the cluster), the JuiceFS Blob container, and the sandbox-host managed identity
 - Azure Key Vault (enters soft-delete — see below)
 - VNet + subnets
 - Resource group, unless `create_resource_group = false` attached an existing one
