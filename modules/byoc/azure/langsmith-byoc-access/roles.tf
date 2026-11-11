@@ -42,19 +42,17 @@ locals {
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
   ])
 
-  # Reduced access: full access without the actions that grant access, read
-  # storage keys, or change identities. LangSmith uses them only at creation,
-  # teardown, and some upgrades.
+  # Reduced access: full access without any delete action, and without the
+  # actions that grant access, read storage keys, or change identities.
+  # LangSmith uses them only at creation, teardown, and some upgrades.
   langsmith_byoc_reduced_actions = [
     for action in local.langsmith_byoc_actions : action
-    if !contains(local.langsmith_byoc_reduced_removed_actions, action)
+    if !endswith(action, "/delete") && !contains(local.langsmith_byoc_reduced_removed_actions, action)
   ]
 
   langsmith_byoc_reduced_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/write",
-    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/delete",
-    "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
     "Microsoft.DBforPostgreSQL/flexibleServers/administrators/write",
     "Microsoft.Cache/*/accessPolicyAssignments/write",
     "Microsoft.Storage/storageAccounts/listKeys/action",

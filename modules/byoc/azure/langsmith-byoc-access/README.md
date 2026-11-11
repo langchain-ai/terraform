@@ -156,12 +156,13 @@ With `reduced_access`, LangSmith does not have these permissions:
 | Area | Permissions |
 |---|---|
 | Role assignments | `User Access Administrator` |
+| All resources | Every `*/delete` action |
 | PostgreSQL | `flexibleServers/administrators/write` |
 | Redis | `*/accessPolicyAssignments/write` |
 | Storage | `storageAccounts/listKeys/action` |
-| Managed identities | `userAssignedIdentities/write`, `userAssignedIdentities/delete`, `federatedIdentityCredentials/write`, `federatedIdentityCredentials/delete` |
+| Managed identities | `userAssignedIdentities/write`, `federatedIdentityCredentials/write` |
 
-LangSmith cannot give a principal access to an identity or a data store, and it cannot read storage keys.
+LangSmith cannot delete a resource, give a principal access to an identity or a data store, or read storage keys.
 
 #### Combine with `byo_iam`
 
@@ -173,12 +174,15 @@ data_planes = {
 }
 ```
 
-`byo_iam` already removes `User Access Administrator` and the identity write and delete actions. `reduced_access` also removes the federated identity credential, PostgreSQL administrator, Redis access policy, and storage key actions. LangSmith then cannot change identities, role assignments, federated identity credentials, PostgreSQL administrators, or Redis access policies.
+`byo_iam` already removes `User Access Administrator` and the identity write and delete actions. `reduced_access` also removes all delete actions, and the federated identity credential, PostgreSQL administrator, Redis access policy, and storage key actions. LangSmith then cannot delete resources, or change identities, role assignments, federated identity credentials, PostgreSQL administrators, or Redis access policies.
 
 Set `reduced_access = false` again before you:
 
 - delete or recreate the data plane.
-- apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
+- apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy.
+- apply an upgrade that removes a resource, such as a node pool, a DNS record, or a private endpoint connection.
+
+LangChain tells you when an upgrade needs this.
 
 [`roles.tf`](roles.tf) has the full lists.
 
