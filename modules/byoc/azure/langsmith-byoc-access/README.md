@@ -124,10 +124,11 @@ The module creates these identities. LangSmith expects these names:
 | `langsmith-workload-identity` | Monitoring Data Reader | resource group |
 | `langsmith-deployment-metrics-collector-identity` | Monitoring Metrics Publisher | resource group |
 | LangSmith application | Azure Kubernetes Service RBAC Cluster Admin | resource group |
+| LangSmith application | Managed Identity Operator | `langsmith-aks-identity` |
 
 The blob role is `langsmith-byoc-<key>-blob-<suffix>`. The conditions keep each identity to its own containers.
 
-The last three rows are for [deployment observability](#turn-on-deployment-observability-optional). LangSmith uses them only when observability is on. The workspaces and the data collection rule do not exist yet, so the scope is the resource group. `Log Analytics Reader` includes `*/read`, so the workload identity can read the resources in the resource group.
+The `Log Analytics Reader`, `Monitoring Data Reader`, and `Monitoring Metrics Publisher` rows are for [deployment observability](#turn-on-deployment-observability-optional). LangSmith uses them only when observability is on. The workspaces and the data collection rule do not exist yet, so the scope is the resource group. `Log Analytics Reader` includes `*/read`, so the workload identity can read the resources in the resource group.
 
 With `byo_iam`, LangSmith does not need these permissions:
 
@@ -136,6 +137,7 @@ With `byo_iam`, LangSmith does not need these permissions:
 | `User Access Administrator` | You create the role assignments. |
 | `Microsoft.ManagedIdentity/userAssignedIdentities/write` | You create the identities. |
 | `Microsoft.ManagedIdentity/userAssignedIdentities/delete` | You delete the identities. |
+| `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` | LangSmith can assign only `langsmith-aks-identity`, through `Managed Identity Operator` on that identity. |
 
 LangSmith still creates the federated identity credentials. The AKS OIDC issuer exists only after LangSmith creates the cluster.
 

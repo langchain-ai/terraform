@@ -169,3 +169,15 @@ resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
   principal_type       = "ServicePrincipal"
   description          = var.external_id
 }
+
+# Each AKS cluster update sends the cluster identity again. Azure then checks
+# assign/action on that identity only.
+resource "azurerm_role_assignment" "langsmith_aks_identity_operator" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_user_assigned_identity.data_plane["${each.key}/aks"].id
+  role_definition_name = "Managed Identity Operator"
+  principal_id         = azuread_service_principal.langsmith.object_id
+  principal_type       = "ServicePrincipal"
+  description          = var.external_id
+}
