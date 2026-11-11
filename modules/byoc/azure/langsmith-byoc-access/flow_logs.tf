@@ -1,5 +1,5 @@
-# VNet flow logs for the data planes that set flow_logs. You own the flow log
-# and the storage account. LangSmith gets no access to them.
+# VNet flow logs for each data plane that sets flow_logs. LangSmith has no
+# access to the flow log or the storage account.
 
 locals {
   flow_log_data_planes = {
@@ -16,8 +16,7 @@ data "azurerm_resources" "vnet" {
   type                = "Microsoft.Network/virtualNetworks"
 }
 
-# Azure allows one Network Watcher per region in a subscription, so the
-# region identifies it.
+# A subscription has one Network Watcher in each region.
 data "azurerm_resources" "network_watchers" {
   count = length(local.flow_log_data_planes) > 0 ? 1 : 0
 
