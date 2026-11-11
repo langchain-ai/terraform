@@ -9,8 +9,12 @@ locals {
     "artifactregistry.repositories.setIamPolicy",
     "artifactregistry.repositories.update",
     "cloudsql.instances.create",
+    # The provisioner tags each data plane instance with the managed_by tag below.
+    "cloudsql.instances.createTagBinding",
     "cloudsql.instances.delete",
+    "cloudsql.instances.deleteTagBinding",
     "cloudsql.instances.get",
+    "cloudsql.instances.listTagBindings",
     "cloudsql.instances.update",
     "compute.addresses.create",
     "compute.addresses.createInternal",
@@ -186,8 +190,17 @@ locals {
   name_fenced_roles = {
     CloudSql = {
       title       = "Cloud SQL"
-      expression  = "resource.name.extract(\"/instances/{name}\").startsWith(\"langsmith-\")"
-      permissions = ["cloudsql.instances.create", "cloudsql.instances.delete", "cloudsql.instances.update"]
+      # Tag bindings are checked against their instance too, so the provisioner
+      # can tag only langsmith- instances with the tag that the postgres-setup
+      # Job's Cloud SQL user permissions depend on.
+      expression = "resource.name.extract(\"/instances/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "cloudsql.instances.create",
+        "cloudsql.instances.createTagBinding",
+        "cloudsql.instances.delete",
+        "cloudsql.instances.deleteTagBinding",
+        "cloudsql.instances.update",
+      ]
     }
     Gke = {
       title = "GKE"
@@ -538,7 +551,7 @@ resource "google_service_account_iam_member" "crossplane" {
 resource "google_tags_tag_key" "cluster" {
   parent      = "projects/${var.project_id}"
   short_name  = "managed_by"
-  description = "What manages the resource. LangSmith control planes administer the GKE clusters tagged with their value."
+  description = "What manages the resource. LangSmith control planes administer the GKE clusters and Cloud SQL instances tagged with their value."
 
   depends_on = [google_project_service.apis]
 }
@@ -546,7 +559,7 @@ resource "google_tags_tag_key" "cluster" {
 resource "google_tags_tag_value" "cluster" {
   parent      = google_tags_tag_key.cluster.id
   short_name  = "langsmith"
-  description = "GKE clusters of LangSmith BYOC data planes"
+  description = "GKE clusters and Cloud SQL instances of LangSmith BYOC data planes"
 }
 
 # The provisioner binds the tag value to the clusters it creates.
@@ -676,10 +689,14 @@ locals {
 
   # The postgres-setup Job lists and creates database users and sets the
   # postgres password (gcloud sql users list, create, set-password). IAM
-  # checks of Cloud SQL users carry no instance name, so these permissions
-  # reach every instance in the project. They replace roles/cloudsql.admin,
-  # which could also change, export or delete any instance. The Job reads its
-  # instance through roles/cloudsql.viewer, limited by name above.
+  # checks of Cloud SQL users carry no instance name, but they do match the
+  # instance's tags, so the binding below limits them to instances with the
+  # managed_by: langsmith tag (checked in a test project on 2026-11-11: list,
+  # create of a built-in and an IAM user, and set-password were allowed on a
+  # tagged instance and denied on an untagged one). They replace
+  # roles/cloudsql.admin, which could also change, export or delete any
+  # instance. The Job reads its instance through roles/cloudsql.viewer,
+  # limited by name above.
   postgres_setup_permissions = [
     "cloudsql.users.create",
     "cloudsql.users.list",
@@ -736,6 +753,12 @@ resource "google_project_iam_member" "postgres_setup" {
   project = var.project_id
   role    = google_project_iam_custom_role.postgres_setup[0].name
   member  = "serviceAccount:${google_service_account.byo_iam["langsmith-postgres-setup"].email}"
+
+  condition {
+    title       = "langsmith-data-plane-instances"
+    description = "Cloud SQL instances tagged as LangSmith data plane instances"
+    expression  = "resource.matchTagId(\"${google_tags_tag_value.cluster.parent}\", \"${google_tags_tag_value.cluster.id}\")"
+  }
 }
 
 # External Secrets reads only the data plane secrets, whose IDs start with
