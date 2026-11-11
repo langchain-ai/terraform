@@ -200,7 +200,7 @@ enable_public_eks_cluster = false
 # Node group sizing — controls the EC2 instances that run your pods.
 #
 # Instance type guidance:
-# General-purpose AMD x86 nodes: m6a.2xlarge = 8 vCPU / 32 GiB for LangSmith.
+# General-purpose AWS Graviton ARM nodes: m6g.2xlarge = 8 vCPU / 32 GiB for LangSmith.
 # SmithDB has its own pool below; increase LangSmith capacity for larger profiles.
 # ClickHouse (in-cluster) requires at least 4 vCPU / 16 GiB per node.
 #
@@ -214,7 +214,7 @@ enable_public_eks_cluster = false
 eks_managed_node_groups = {
   default = {
     name           = "node-group-default"
-    instance_types = ["m6a.2xlarge"]
+    instance_types = ["m6g.2xlarge"]
     min_size       = 3
     max_size       = 10
   }
@@ -890,8 +890,8 @@ enable_bedrock_access = false
 
 # ── SmithDB nodes (includes TaskDB) ─────────────────────────────
 # Null instance type/max follow sizing_profile:
-# default/dev/minimum: m6a.4xlarge / 5; production: m6a.8xlarge / 10;
-# production-large: m6a.16xlarge / 10. Caches use chart-default sizes on gp3.
+# default/dev/minimum: m6g.4xlarge / 5; production: m6g.8xlarge / 10;
+# production-large: m6g.16xlarge / 10. Caches use chart-default sizes on gp3.
 # smithdb_node_instance_type = null
 # smithdb_node_min_count     = 2
 # smithdb_node_max_count     = null

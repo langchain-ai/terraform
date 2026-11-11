@@ -1,8 +1,8 @@
 # Dedicated SmithDB nodes, scaled independently by Cluster Autoscaler.
 locals {
   smithdb_node_instance_type = coalesce(var.smithdb_node_instance_type, {
-    minimum    = "m6a.4xlarge", dev = "m6a.4xlarge", default = "m6a.4xlarge",
-    production = "m6a.8xlarge", production-large = "m6a.16xlarge"
+    minimum    = "m6g.4xlarge", dev = "m6g.4xlarge", default = "m6g.4xlarge",
+    production = "m6g.8xlarge", production-large = "m6g.16xlarge"
   }[var.sizing_profile])
   # The Large tier exceeds five nodes' CPU capacity even before migration.
   smithdb_node_default_max_count = contains(["production", "production-large"], var.sizing_profile) ? 10 : 5
@@ -34,7 +34,7 @@ locals {
 
 variable "smithdb_node_instance_type" {
   type        = string
-  description = "SmithDB EC2 instance type. Null selects m6a.4xlarge, m6a.8xlarge, or m6a.16xlarge for Small, production, or production-large."
+  description = "SmithDB EC2 instance type. Null selects m6g.4xlarge, m6g.8xlarge, or m6g.16xlarge for Small, production, or production-large."
   default     = null
 }
 

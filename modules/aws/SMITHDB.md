@@ -37,15 +37,15 @@ SmithDB services and TaskDB use a separate node group. Defaults:
 
 | `sizing_profile` | Instance type | Minimum nodes | Maximum nodes |
 | --- | --- | --- | --- |
-| `default`, `dev`, `minimum` | `m6a.4xlarge` | 2 | 5 |
-| `production` | `m6a.8xlarge` | 2 | 10 |
-| `production-large` | `m6a.16xlarge` | 2 | 10 |
+| `default`, `dev`, `minimum` | `m6g.4xlarge` | 2 | 5 |
+| `production` | `m6g.8xlarge` | 2 | 10 |
+| `production-large` | `m6g.16xlarge` | 2 | 10 |
 
 The sizing profile selects the instance type automatically. QuickStart asks for
 `smithdb_node_min_count` and `smithdb_node_max_count`. Set
 `smithdb_node_instance_type` in `infra/terraform.tfvars` to override the instance
 type. Increase the maximum for additional capacity.
-LangSmith uses its own group, defaulting to `m6a.2xlarge`.
+LangSmith uses its own group, defaulting to `m6g.2xlarge`.
 
 Nodes keep the 100 GiB boot-disk default. `smithdb.resourceTier` sets service
 resources and cache sizes. Caches use gp3

@@ -279,7 +279,7 @@ for sizing in dev production-large; do
   DEFAULT_INFRA="$TMP/smithdb-$sizing-defaults"
   write_fresh_answers "$TMP/$sizing.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false "$sizing_choice"
   run_wizard "SmithDB $sizing defaults complete" "$DEFAULT_INFRA" "$TMP/$sizing.answers" "$TMP/$sizing.log"
-  has_line "LangSmith type is independent for $sizing" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6a.2xlarge"]'
+  has_line "LangSmith type is independent for $sizing" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6g.2xlarge"]'
   has_line "SmithDB type follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = null'
   has_line "SmithDB initial capacity for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
   has_line "SmithDB ceiling follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = $smithdb_max"

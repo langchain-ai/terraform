@@ -551,7 +551,7 @@ else
   fi
 fi
 
-NODE_INSTANCE="$(_existing "instance_types" "m6a.2xlarge")"
+NODE_INSTANCE="$(_existing "instance_types" "m6g.2xlarge")"
 NODE_MIN="$(_existing "min_size" "$([[ "$PROFILE" == "prod" ]] && echo "3" || echo "2")")"
 NODE_MAX="$(_existing "max_size" "$([[ "$PROFILE" == "prod" ]] && echo "10" || echo "5")")"
 

@@ -192,7 +192,7 @@ variable "eks_managed_node_groups" {
   default = {
     default = {
       name           = "node-group-default"
-      instance_types = ["m6a.2xlarge"]
+      instance_types = ["m6g.2xlarge"]
       min_size       = 3
       max_size       = 10
     }
