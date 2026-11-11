@@ -92,6 +92,11 @@ run "default" {
   }
 
   assert {
+    condition     = alltrue([for p in ["cloudsql.instances.createTagBinding", "cloudsql.instances.deleteTagBinding"] : contains(google_project_iam_custom_role.name_fenced["CloudSql"].permissions, p) && !contains(google_project_iam_custom_role.provisioner.permissions, p)]) && contains(google_project_iam_custom_role.provisioner.permissions, "cloudsql.instances.listTagBindings")
+    error_message = "The provisioner can tag only langsmith- Cloud SQL instances."
+  }
+
+  assert {
     condition     = length(google_project_iam_custom_role.project_iam_granter) == 1 && length(google_project_iam_custom_role.service_account_user) == 1 && contains(google_project_iam_custom_role.provisioner.permissions, "iam.serviceAccounts.create")
     error_message = "Without byo_iam, the provisioner keeps its IAM roles."
   }
@@ -146,8 +151,8 @@ run "byo_iam" {
   }
 
   assert {
-    condition     = toset(google_project_iam_custom_role.postgres_setup[0].permissions) == toset(["cloudsql.users.create", "cloudsql.users.list", "cloudsql.users.update"]) && length(google_project_iam_member.postgres_setup[0].condition) == 0
-    error_message = "postgres-setup gets the users-only role, unconditioned."
+    condition     = toset(google_project_iam_custom_role.postgres_setup[0].permissions) == toset(["cloudsql.users.create", "cloudsql.users.list", "cloudsql.users.update"]) && google_project_iam_member.postgres_setup[0].condition[0].expression == "resource.matchTagId(\"tagKeys/111\", \"tagValues/222\")"
+    error_message = "postgres-setup gets the users-only role, on instances with the managed_by tag only."
   }
 
   assert {

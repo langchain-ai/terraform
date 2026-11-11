@@ -92,7 +92,7 @@ The permissions below are in a role per kind, not in `<prefix>Provisioner`. Each
 
 | Role | Permissions | Condition |
 |------|-------------|-----------|
-| `<prefix>NamedCloudSql` | `cloudsql.instances.create`, `delete`, `update` | `resource.name.extract("/instances/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedCloudSql` | `cloudsql.instances.create`, `delete`, `update`, `createTagBinding`, `deleteTagBinding` | `resource.name.extract("/instances/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedGke` | `container.clusters.create`, `delete`, `update`, `createTagBinding`, `deleteTagBinding` (node pool changes are checked against their cluster) | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedForwardingRules` | `compute.forwardingRules.create`, `delete`, `setLabels`, `pscCreate`, `pscDelete`, `pscSetLabels`, `pscUpdate` | `resource.name.extract("/forwardingRules/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedNetworks` | `compute.networks.create`, `delete`, `update`, `updatePolicy`, `use`, `addPeering`, `removePeering`, `updatePeering` | `resource.name.extract("/networks/{name}").startsWith("langsmith-")` |
@@ -110,7 +110,7 @@ The provisioner keeps the `get` and `list` permissions of these kinds, and `comp
 
 Name your own resources of these kinds so they don't start with `langsmith-`, and your own secrets so their IDs don't start with `ls-`.
 
-The only `createTagBinding` permission the module grants is on `langsmith-` GKE clusters, for the cluster tag. A project-wide `createTagBinding` would let the provisioner tag a resource that is not LangSmith's and then change it under a tag condition. Compute Engine checks `createTagBinding` against the resource's numeric ID, so a name condition can't narrow it for networks, subnets, routers or addresses.
+The only `createTagBinding` permissions the module grants are on `langsmith-` GKE clusters and Cloud SQL instances, for the `managed_by: langsmith` tag. A project-wide `createTagBinding` would let the provisioner tag a resource that is not LangSmith's and then change it under a tag condition. Compute Engine checks `createTagBinding` against the resource's numeric ID, so a name condition can't narrow it for networks, subnets, routers or addresses.
 
 #### With `byo_iam`
 
@@ -120,7 +120,7 @@ The provisioner can set the IAM policies of the six data plane service accounts,
 |-------|--------|
 | `langsmith-workload`: `roles/cloudsql.client`, `roles/cloudsql.instanceUser` | Limited to `langsmith-` Cloud SQL instances (`cloudsql.instances.get`, `connect` and IAM database `login`). |
 | `langsmith-workload`, `langsmith-sandbox-host`: `roles/redis.dbConnectionUser` | Limited to `langsmith-` Memorystore for Redis clusters. |
-| `langsmith-postgres-setup` | Instead of `roles/cloudsql.admin`, which the data plane compositions grant without `byo_iam`: `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`) and `roles/cloudsql.viewer` limited to `langsmith-` instances. |
+| `langsmith-postgres-setup` | Instead of `roles/cloudsql.admin`, which the data plane compositions grant without `byo_iam` (also only on tagged instances): `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`) on instances with the `managed_by: langsmith` tag, and `roles/cloudsql.viewer` limited to `langsmith-` instances. IAM checks of Cloud SQL users carry no instance name, but they match the instance's tags. LangSmith binds the tag to each data plane instance, and the provisioner can bind it only to `langsmith-` instances. |
 
 `langsmith-external-secrets` reads only secrets whose IDs start with `ls-`.
 
@@ -133,7 +133,7 @@ The LangSmith control plane installs LangSmith into each data plane cluster thro
 - `roles/container.admin` for `var.crossplane_service_account` has the condition `resource.matchTagId(<key>, <value>)`. It covers the GKE API and the Kubernetes API, through both the DNS-based and the IP-based endpoints, on tagged clusters only.
 - The DNS-based endpoint checks `container.clusters.connect` without the cluster's tags, so `<prefix>ClusterConnect` grants that permission alone, limited to `langsmith-` cluster names. Connecting gives no access inside a cluster.
 
-Don't put this tag on your own clusters, or on the project. Each was checked in a test project: the Kubernetes API of an untagged cluster answered 403 through both endpoints.
+Don't put this tag on your own clusters or Cloud SQL instances, or on the project. Each was checked in a test project: the Kubernetes API of an untagged cluster answered 403 through both endpoints.
 
 #### What names can't limit
 
@@ -142,7 +142,6 @@ These IAM checks carry no resource name, or a name LangSmith doesn't choose, so 
 - **Project role grants.** Without `byo_iam`, the provisioner grants the data plane service accounts their project roles (`<prefix>ProjectIamGranter`). An IAM condition limits which roles it can grant, but not to whom, and the grants are project-wide. So the provisioner can grant itself `roles/cloudsql.admin` or `roles/secretmanager.secretAccessor`, which gets around the Cloud SQL and `ls-` secret limits above. Use [`byo_iam`](#bring-your-own-iam) in a project that holds resources that aren't LangSmith's.
 - **Artifact Registry.** The provisioner can change or delete any repository and set its IAM policy. `langsmith-node` and `langsmith-sandbox-host` can read every repository (`roles/artifactregistry.reader`).
 - **Cloud DNS** managed zones and record sets.
-- **Cloud SQL users.** `langsmith-postgres-setup` can list and create users and set any user's password on any instance; logging in with that password still needs a network path to the instance. The provisioner has no permissions on Cloud SQL databases: the Postgres setup Job creates them over SQL.
 - **Service Directory.** Namespace and service creates carry the name, but service deletes don't.
 - **Private services access** (`servicenetworking`). The provisioner can't reserve a range in a network that isn't LangSmith's, but it can create a private services access connection in any network that already has a reserved range, and delete any network's connection.
 - **Service connection policies in other networks.** Creating a policy checks no permission on its network, so the provisioner can create a `langsmith-` policy in any network in the project. Creating a Memorystore for Redis cluster also checks nothing on its network, so a `langsmith-` cluster can then get endpoints in that network.
@@ -164,7 +163,7 @@ The module then creates these service accounts in the project. LangSmith finds t
 | `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/redis.dbConnectionUser` |
 | `langsmith-external-secrets` | External Secrets Operator | `roles/secretmanager.secretAccessor`, with a condition limiting it to secrets whose IDs start with `ls-` |
 | `langsmith-cert-manager` | cert-manager | None. LangSmith grants `roles/dns.admin` on each data plane's DNS zones. |
-| `langsmith-postgres-setup` | The job that sets up the Cloud SQL databases | `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`), and `roles/cloudsql.viewer` limited to `langsmith-` instances |
+| `langsmith-postgres-setup` | The job that sets up the Cloud SQL databases | `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`) on instances with the `managed_by: langsmith` tag, and `roles/cloudsql.viewer` limited to `langsmith-` instances |
 | `langsmith-node` | GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader` |
 | `langsmith-sandbox-host` | Sandbox GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader`, `roles/redis.dbConnectionUser` |
 
