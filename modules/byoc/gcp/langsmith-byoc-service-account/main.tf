@@ -8,10 +8,6 @@ locals {
     "artifactregistry.repositories.getIamPolicy",
     "artifactregistry.repositories.setIamPolicy",
     "artifactregistry.repositories.update",
-    "cloudsql.databases.create",
-    "cloudsql.databases.delete",
-    "cloudsql.databases.get",
-    "cloudsql.databases.update",
     "cloudsql.instances.create",
     "cloudsql.instances.delete",
     "cloudsql.instances.get",
@@ -177,8 +173,10 @@ locals {
   # langsmith- name was allowed and any other name denied. A condition that
   # uses an attribute the resource does not provide never grants access, so
   # kinds whose IAM checks carry no resource name (Artifact Registry
-  # repositories, Cloud DNS, Cloud SQL databases, Service Directory,
-  # servicenetworking) stay in the provisioner role.
+  # repositories, Cloud DNS, Service Directory, servicenetworking) stay in the
+  # provisioner role. Cloud SQL databases have the same problem, so the
+  # provisioner has no database permissions: the Postgres setup Job creates
+  # the databases over SQL.
   #
   # Creating a subnet or Cloud Router checks compute.networks.updatePolicy on
   # its network, and creating a global address checks compute.networks.use, so
