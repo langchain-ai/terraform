@@ -6,7 +6,7 @@ locals {
   byo_iam_data_planes = { for key, dp in var.data_planes : key => dp if dp.byo_iam }
 
   # LangSmith expects the name langsmith-<short>-identity.
-  byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox"]
+  byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox", "deployment-metrics-collector"]
 
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
@@ -129,6 +129,32 @@ resource "azurerm_role_assignment" "workload_monitoring" {
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Monitoring Reader"
   principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/workload"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Deployment observability. host-backend reads the deployment logs and metrics
+# as the workload identity, and the metrics collector writes metrics as its own
+# identity. The workspaces and the data collection rule do not exist yet, so the
+# scope is the resource group. LangSmith uses them only when observability is on.
+resource "azurerm_role_assignment" "workload_observability" {
+  for_each = merge([
+    for key, dp in local.byo_iam_data_planes : {
+      for role in ["Log Analytics Reader", "Monitoring Data Reader"] : "${key}/${role}" => { data_plane = key, role = role }
+    }
+  ]...)
+
+  scope                = azurerm_resource_group.data_plane[each.value.data_plane].id
+  role_definition_name = each.value.role
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.value.data_plane}/workload"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "metrics_collector_publisher" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_resource_group.data_plane[each.key].id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/deployment-metrics-collector"].principal_id
   principal_type       = "ServicePrincipal"
 }
 
