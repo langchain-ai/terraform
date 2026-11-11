@@ -219,7 +219,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-elbv2` | Application Load Balancers for ingress |
 | `-data` | RDS (Postgres), Secrets Manager, KMS |
 | `-storage` | S3 (trace blobs), ElastiCache (Redis) |
-| `-lambda` | Lambda + EventBridge for periodic jobs |
+| `-lambda` | Lambda + EventBridge for periodic jobs, ECR repositories for deployment builds |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
 The exact statements are in `policies/*.json`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs.

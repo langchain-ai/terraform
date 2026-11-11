@@ -6,9 +6,7 @@
 # while smithdb_migration_enabled = true. See SMITHDB.md#staged-rollout.
 #
 # On GCP, the file sets no migration pod or TaskDB resources. The SmithDB size
-# sets them (langsmith-values-smithdb-sizing.yaml), and Terraform sizes the
-# namespace quota for the same values. Keep parallelism equal to
-# smithdb_migration_parallelism in infra/terraform.tfvars.
+# sets them (langsmith-values-smithdb-sizing.yaml).
 
 smithdb:
   migration:

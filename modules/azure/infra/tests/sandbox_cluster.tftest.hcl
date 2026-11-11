@@ -560,6 +560,29 @@ run "a_disk_encryption_set_is_refused" {
   expect_failures = [terraform_data.sandbox_cluster_guard]
 }
 
+# The sandbox cluster reaches only Azure Managed Redis's private endpoint: an
+# in-cluster Redis is a ClusterIP Service in the LangSmith cluster.
+run "an_in_cluster_juicefs_redis_is_refused" {
+  command = plan
+
+  variables {
+    sandbox_juicefs_redis_source = "in-cluster"
+  }
+
+  expect_failures = [terraform_data.sandbox_cluster_guard]
+}
+
+run "an_external_juicefs_redis_is_refused" {
+  command = plan
+
+  variables {
+    sandbox_juicefs_redis_source = "external"
+    sandbox_juicefs_redis_url    = "rediss://:fixture-not-a-real-secret@redis.example.invalid:6380/0"
+  }
+
+  expect_failures = [terraform_data.sandbox_cluster_guard]
+}
+
 # ── The sandbox-aks module on its own ────────────────────────────────────────
 
 run "sandbox_aks_runs_overlay_with_a_critical_addons_system_pool" {

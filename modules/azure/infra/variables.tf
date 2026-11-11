@@ -1396,7 +1396,7 @@ variable "smithdb_metastore_admin_username" {
 
 variable "smithdb_metastore_admin_password" {
   type        = string
-  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used."
+  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used. Required when enable_smithdb = true and azure_environment = \"usgovernment\", where SmithDB's Entra token scope is the commercial one (LG-913). With SmithDB off, it can stay null in any cloud."
   sensitive   = true
   default     = null
   nullable    = true
@@ -1483,7 +1483,7 @@ variable "smithdb_cache_disk_throughput_mbps" {
 
 variable "enable_sandboxes" {
   type        = bool
-  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Azure Managed Redis for JuiceFS metadata, a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
+  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Redis for JuiceFS metadata (Azure Managed Redis by default; see sandbox_juicefs_redis_source), a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
   default     = false
 }
 
@@ -1540,26 +1540,77 @@ variable "sandbox_juicefs_name" {
 
 variable "sandbox_juicefs_redis_name" {
   type        = string
-  description = "Name for the JuiceFS metadata Redis. Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
+  description = "Name for the JuiceFS metadata Azure Managed Redis (sandbox_juicefs_redis_source = amr). Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
   default     = ""
 }
 
 variable "sandbox_juicefs_amr_sku" {
   type        = string
-  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
+  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis (sandbox_juicefs_redis_source = amr). JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
   default     = "Balanced_B1"
 }
 
 variable "sandbox_juicefs_redis_high_availability" {
   type        = bool
-  description = "Zone-redundant HA for the JuiceFS metadata Redis, plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
+  description = "Zone-redundant HA for the JuiceFS metadata Azure Managed Redis (sandbox_juicefs_redis_source = amr), plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
   default     = true
 }
 
 variable "sandbox_juicefs_redis_prevent_destroy" {
   type        = bool
-  description = "While true, plan refuses enable_sandboxes = false, which would delete the JuiceFS metadata Redis and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes. It does not stop terraform destroy."
+  description = "While true, plan refuses enable_sandboxes = false and any change of sandbox_juicefs_redis_source, both of which delete the JuiceFS metadata Redis in use and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes or changes the source. It does not stop terraform destroy."
   default     = false
+}
+
+variable "sandbox_juicefs_redis_source" {
+  type        = string
+  description = "Where the JuiceFS metadata Redis runs. amr (default): a dedicated Azure Managed Redis, configured by the sandbox_juicefs_amr_sku, _redis_name and _redis_high_availability variables. in-cluster: a dedicated single-replica Redis StatefulSet in the LangSmith namespace, with an append-only file on a Premium SSD volume whose disk is retained when the claim is deleted. Use it where Azure Managed Redis is not offered, such as Azure Government. external: a Redis you run, given by sandbox_juicefs_redis_url. Losing this Redis loses every sandbox filesystem whichever source you pick, so in-cluster and external need their own backups."
+  default     = "amr"
+
+  validation {
+    condition     = contains(["amr", "in-cluster", "external"], var.sandbox_juicefs_redis_source)
+    error_message = "sandbox_juicefs_redis_source must be amr, in-cluster or external."
+  }
+}
+
+variable "sandbox_juicefs_redis_url" {
+  type        = string
+  description = "JuiceFS metadata URL when sandbox_juicefs_redis_source = external, written into the JuiceFS config Secret as is: redis://[:<password>@]<host>:<port>/<db>, or rediss:// for TLS. The Redis must run with maxmemory-policy noeviction and should persist with an append-only file. sandbox-host connects from node IPs, so the Redis must accept the node subnet. Set it in secrets.auto.tfvars or TF_VAR_sandbox_juicefs_redis_url. Ignored for the other sources."
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_url == null || can(regex("^rediss?://[^/]+(/[0-9]+)?$", var.sandbox_juicefs_redis_url))
+    error_message = "sandbox_juicefs_redis_url must be redis://[:<password>@]<host>:<port>[/<db>] or the rediss:// form."
+  }
+}
+
+variable "sandbox_juicefs_redis_storage_gb" {
+  type        = number
+  description = "Size in GB of the in-cluster JuiceFS Redis volume, which holds the append-only file and the snapshots it is rewritten from. Used only with sandbox_juicefs_redis_source = in-cluster. JuiceFS needs about 300 bytes of memory per file, and the files on disk run to a few times the memory in use. Raising it grows the claim and its disk in place on the next apply; Kubernetes cannot shrink a claim, so a lower value fails the apply."
+  default     = 16
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_storage_gb >= 4 && var.sandbox_juicefs_redis_storage_gb <= 1024
+    error_message = "sandbox_juicefs_redis_storage_gb must be between 4 and 1024."
+  }
+}
+
+variable "sandbox_juicefs_redis_memory_mb" {
+  type        = number
+  description = "Memory limit in MiB of the in-cluster JuiceFS Redis container. Redis's maxmemory is set to 80% of it, and with noeviction a full Redis refuses writes rather than dropping metadata, so size it for the file count (about 300 bytes per file: 1024 MiB holds roughly 2.5 million). Used only with sandbox_juicefs_redis_source = in-cluster."
+  default     = 1024
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_memory_mb >= 256
+    error_message = "sandbox_juicefs_redis_memory_mb must be at least 256."
+  }
+}
+
+variable "sandbox_juicefs_redis_image" {
+  type        = string
+  description = "Image of the in-cluster JuiceFS Redis. Empty (default) uses the chart's own Redis image, docker.io/redis:7, through langsmith_image_registry when that is set, in the layout init-values.sh writes for images.redisImage: <registry>/redis:7, or <registry>/docker.io/redis:7 with langsmith_image_registry_keeps_source_host = true. Set it to override. The pod runs as the namespace's default service account, which carries langsmith_image_pull_secret_name when that is set. Used only with sandbox_juicefs_redis_source = in-cluster."
+  default     = ""
 }
 
 variable "sandbox_juicefs_csi_config_secret_name" {
