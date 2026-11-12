@@ -284,6 +284,7 @@ Fields of each `data_planes` entry:
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `egress_firewall` | `bool` | no | `false` | Let LangSmith put an Azure Firewall on the outbound traffic of this data plane. Adds actions to its custom role. LangSmith turns the firewall on. |
+| `byo_vnet` | `object` | no | `null` | Use your VNet: `vnet_id`, `aks_subnet_id` (/22 or larger, with a NAT gateway or a route table), `private_endpoints_subnet_id` (/26 or larger), and `outbound_type` (`NAT_GATEWAY` or `USER_DEFINED_ROUTING`). Needs `byo_iam`. The VNet must be in the subscription and the region of the data plane, and must use the Azure-provided DNS. LangSmith gets a role that reads the VNet and joins its subnets. Send the `byovnet` output as `byovnet` in the create request of the API, without `vpc_cidr`. Do not change it later. |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
@@ -293,12 +294,12 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 | Output | Description |
 |--------|-------------|
 | `azure_entra_tenant_id` | Entra tenant ID of the subscription. |
-| `data_planes` | Map of data plane key to `resource_group_id`, `region`, and `key_vault_name`. |
+| `data_planes` | Map of data plane key to `resource_group_id`, `region`, `key_vault_name`, and `byovnet` (`null` without `byo_vnet`). |
 
 ## Security model
 
 - **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
-- **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. The description of each assignment is the `external_id`.
+- **Role assignments:** on each data plane resource group, and with `byo_vnet` on that VNet, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. The description of each assignment is the `external_id`.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes
