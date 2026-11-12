@@ -1,0 +1,29 @@
+modules/azure/infra/modules/storage/main.tf
+  s_e5b6677aff67da::t_a4a9e9a3ff0b6d 139-141,145-152,154-163,168-175,177-186
+modules/aws/infra/modules/storage/outputs.tf
+  s_e5b6677aff67da::t_bae207c3874c69 17-21
+modules/azure/infra/modules/storage/outputs.tf
+  s_e5b6677aff67da::t_bae207c3874c69 62-66
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_e5b6677aff67da::t_bae207c3874c69 659-689
+modules/aws/infra/modules/storage/main.tf
+  s_e5b6677aff67da::t_a4a9e9a3ff0b6d 61,65-75,79-89,97
+modules/azure/infra/tests/storage_replication.tftest.hcl
+  s_e5b6677aff67da::t_bae207c3874c69 310-342
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b02777b8ee3f1e76e39d252c5bd735ecd41de436",
+  "prompts": {},
+  "sessions": {
+    "s_e5b6677aff67da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2297ad6-723e-430d-a25d-895f4eefd617",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Kiewan Villatel <kiewan@langchain.dev>"
+    }
+  }
+}
