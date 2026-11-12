@@ -73,9 +73,11 @@ each of `regions`:
   `managed_by=langsmith`, so the role can't change the data planes' own
   databases.
 
-The workload role is shared by every data plane in the account, so the subnet
-group grant covers each data plane's subnet group. Name your own RDS instances
-so they don't start with `lg-`.
+The workload role is shared by every data plane in the account, so it can
+create, modify and delete the dedicated deployment instances of every data plane
+in the account, in each data plane's subnet group. It can also tag any `lg-*`
+instance with `langgraph-cloud` and then modify or delete it, so name your own
+RDS instances so they don't start with `lg-`.
 
 Before you set it back to `false`, delete the dedicated deployments on every
 data plane in the account and have LangSmith turn the feature off. The LangSmith
