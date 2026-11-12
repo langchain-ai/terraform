@@ -88,9 +88,6 @@ locals {
         }
       }
   }])
-  # The LangSmith app names dedicated deployment databases lg-<id> and tags them
-  # langgraph-cloud. It can tag any lg-* instance, so the tag doesn't fence off
-  # the data planes' own databases; the Deny on their managed_by tag does.
   dedicated_deployment_database_arns = [for region in sort(tolist(var.regions)) :
     "arn:${local.partition}:rds:${region}:${local.account_id}:db:lg-*"
   ]
