@@ -13,7 +13,7 @@ set -euo pipefail
 
 # Resolve repo root from this script's location (.github/scripts/ -> repo root).
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PROVIDERS=(aws gcp azure ocp)
+PROVIDERS=(aws gcp azure ocp baremetal)
 
 line=""
 for p in "${PROVIDERS[@]}"; do

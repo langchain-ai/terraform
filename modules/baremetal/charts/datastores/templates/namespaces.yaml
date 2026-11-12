@@ -1,0 +1,44 @@
+{{- /*
+Each namespace the enabled stores land in, once, with a default-deny ingress policy: nothing reaches a
+store that its own policy does not admit. With the top-level namespace set every store shares one
+(a shared cluster gets one data namespace per environment), so a namespace holding Postgres
+or Redis is baseline, and one holding RustFS alone restricted, the level each store's pods meet.
+*/ -}}
+{{- $levels := dict }}
+{{- if .Values.rustfs.enabled }}
+{{- $_ := set $levels (include "datastores.ns" (dict "root" $ "ns" .Values.rustfs.namespace)) "restricted" }}
+{{- end }}
+{{- range $store := list .Values.postgres.instances .Values.redis.instances }}
+{{- range $key, $i := $store }}
+{{- if $i.enabled }}
+{{- $_ := set $levels (include "datastores.ns" (dict "root" $ "ns" $i.namespace)) "baseline" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $ns, $level := $levels }}
+{{- if $.Values.createNamespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    pod-security.kubernetes.io/enforce: {{ $level }}
+{{- end }}
+{{- /*
+Not in a namespace the stores' clients share (datastore_namespace = LangSmith's): a deny on every pod there
+cut off every LangSmith pod, since nothing here admits traffic to them (Robin's review of #488). The stores
+there stay isolated by their own policies, which select them.
+*/ -}}
+{{- if not (has $ns $.Values.allowedNamespaces) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+{{- end }}
+{{- end }}

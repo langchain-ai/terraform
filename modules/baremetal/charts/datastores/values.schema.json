@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runtime", "storageClass", "allowedNamespaces", "datastoreLabel", "postgres", "redis", "rustfs"],
+  "properties": {
+    "global": { "type": "object" },
+    "runtime": { "enum": ["statefulset", "operator"] },
+    "storageClass": { "type": "string", "minLength": 1 },
+    "namespace": { "anyOf": [{ "const": "" }, { "$ref": "#/definitions/name" }] },
+    "createNamespaces": { "type": "boolean" },
+    "existingSecrets": { "type": "boolean" },
+    "allowedNamespaces": { "type": "array", "items": { "$ref": "#/definitions/name" } },
+    "datastoreLabel": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } },
+    "operatorNamespaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "postgres": { "$ref": "#/definitions/name" },
+        "redis": { "$ref": "#/definitions/name" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "type": "string", "minLength": 1 },
+        "operatorImage": { "type": "string", "minLength": 1 },
+        "instances": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "langsmith": { "$ref": "#/definitions/postgresInstance" },
+            "smithdb": { "$ref": "#/definitions/postgresInstance" }
+          }
+        }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "type": "string", "minLength": 1 },
+        "operatorImage": { "type": "string", "minLength": 1 },
+        "sentinelImage": { "type": "string", "minLength": 1 },
+        "sentinelResources": { "$ref": "#/definitions/resources" },
+        "instances": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "langsmith": { "$ref": "#/definitions/redisInstance" },
+            "juicefs": { "$ref": "#/definitions/redisInstance" }
+          }
+        }
+      }
+    },
+    "rustfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "namespace": { "$ref": "#/definitions/name" },
+        "image": { "type": "string", "minLength": 1 },
+        "awsCliImage": { "type": "string", "minLength": 1 },
+        "accessKey": { "type": "string" },
+        "secretKey": { "type": "string" },
+        "buckets": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/bucket" } },
+        "ttlBuckets": { "type": "array", "items": { "$ref": "#/definitions/bucket" } },
+        "ttlDays": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["short", "long"],
+          "properties": {
+            "short": { "type": "integer", "minimum": 1 },
+            "long": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "allowedCidrs": { "type": "array", "items": { "type": "string" } },
+        "resources": { "$ref": "#/definitions/resources" },
+        "volumeSize": { "$ref": "#/definitions/size" }
+      }
+    }
+  },
+  "definitions": {
+    "name": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
+    "sqlName": { "type": "string", "pattern": "^[a-z_][a-z0-9_]*$" },
+    "bucket": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" },
+    "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi|Ti)$" },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": { "cpu": { "type": ["string", "number"] }, "memory": { "type": "string" } }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory"],
+          "properties": {
+            "cpu": { "type": ["string", "number"] },
+            "memory": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(Mi|Gi)$" }
+          }
+        }
+      }
+    },
+    "postgresInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "namespace": { "$ref": "#/definitions/name" },
+        "database": { "$ref": "#/definitions/sqlName" },
+        "username": { "$ref": "#/definitions/sqlName" },
+        "password": { "type": "string", "pattern": "^[A-Za-z0-9]*$" },
+        "databases": { "type": "array", "items": { "$ref": "#/definitions/sqlName" } },
+        "maxConnections": { "type": "integer", "minimum": 10 },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "volumeSize": { "$ref": "#/definitions/size" }
+      }
+    },
+    "redisInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "namespace": { "$ref": "#/definitions/name" },
+        "password": { "type": "string", "pattern": "^[A-Za-z0-9]*$" },
+        "persistence": { "enum": ["rdb", "aof"] },
+        "maxmemoryPolicy": { "enum": ["noeviction"] },
+        "allowedCidrs": { "type": "array", "items": { "type": "string" } },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "volumeSize": { "$ref": "#/definitions/size" }
+      }
+    }
+  }
+}
