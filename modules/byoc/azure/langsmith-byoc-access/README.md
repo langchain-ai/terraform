@@ -124,7 +124,7 @@ The module creates these identities. LangSmith expects these names:
 | `langsmith-workload-identity` | Monitoring Data Reader | resource group |
 | `langsmith-deployment-metrics-collector-identity` | Monitoring Metrics Publisher | resource group |
 | LangSmith application | Azure Kubernetes Service RBAC Cluster Admin | resource group |
-| `langsmith-workload-identity` | dedicated deployments role, only with `dedicated_deployments` | resource group |
+| `langsmith-host-backend-identity`, only with `dedicated_deployments` | dedicated deployments role, Log Analytics Reader, Monitoring Data Reader | resource group |
 
 The blob role is `langsmith-byoc-<key>-blob-<suffix>`. The conditions keep each identity to its own containers.
 
@@ -236,7 +236,7 @@ When observability is turned off, LangSmith deletes the rules, the endpoint, the
 Dedicated deployments are production LangGraph deployments on dedicated tiers. Each one gets its own Azure Database for PostgreSQL flexible server in the data plane resource group. For them, LangSmith creates:
 
 - a subnet of the data plane VNet, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`, and a private DNS zone `<name>.postgres.database.azure.com` linked to the VNet. The servers have no public access.
-- for the workload identity, a custom role with `Microsoft.DBforPostgreSQL/flexibleServers/{read,write,delete,restart/action}`, `flexibleServers/configurations/{read,write}` and `Microsoft.Insights/metrics/read` on the resource group, and one with the read and join actions of that subnet and zone, on them only.
+- an identity that only host-backend and the listener use, `langsmith-host-backend-identity`, and for it a custom role with `Microsoft.DBforPostgreSQL/flexibleServers/{read,write,delete,restart/action}`, `flexibleServers/configurations/{read,write}` and `Microsoft.Insights/metrics/read` on the resource group, and one with the read and join actions of that subnet and zone, on them only.
 
 The LangSmith custom role already covers the subnet, the zone and its link, so it gains no actions. The role assignments come from the `User Access Administrator` assignment, so keep `reduced_access = false` while LangSmith turns dedicated deployments on or off.
 
@@ -248,9 +248,9 @@ data_planes = {
 }
 ```
 
-The module then gives the workload identity one custom role, `langsmith-byoc-<key>-deployment-postgres-<suffix>`, with all of the actions above on the resource group, because the subnet and the zone do not exist yet.
+The module then creates `langsmith-host-backend-identity` and gives it one custom role, `langsmith-byoc-<key>-deployment-postgres-<suffix>`, with all of the actions above on the resource group, because the subnet and the zone do not exist yet. host-backend reads deployment logs and metrics as this identity too, so the module also gives it `Log Analytics Reader` and `Monitoring Data Reader` on the resource group.
 
-The PostgreSQL actions apply to every flexible server in the resource group, including the LangSmith application database. host-backend changes only the servers it tagged for a deployment.
+The PostgreSQL actions apply to every flexible server in the resource group, including the LangSmith application database. That is why only host-backend and the listener can use this identity, and host-backend changes only the servers it tagged for a deployment.
 
 ### Turn on flow logs (optional)
 
@@ -305,7 +305,7 @@ Fields of each `data_planes` entry:
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
-| `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, grant the workload identity the role that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
+| `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.

@@ -10,7 +10,7 @@ locals {
 
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
-      for short in local.byo_iam_identity_shorts : "${key}/${short}" => {
+      for short in concat(local.byo_iam_identity_shorts, dp.dedicated_deployments ? ["host-backend"] : []) : "${key}/${short}" => {
         data_plane = key
         short      = short
         tags       = dp.tags
@@ -159,10 +159,12 @@ resource "azurerm_role_assignment" "metrics_collector_publisher" {
 }
 
 # Dedicated deployments. host-backend creates, resizes, and deletes their
-# PostgreSQL servers as the workload identity, and reads their metrics. The
-# servers join a delegated subnet and a private DNS zone that do not exist yet,
-# so the scope is the resource group. Without byo_iam, LangSmith grants the
-# network actions on that subnet and zone only.
+# PostgreSQL servers as its own identity, and reads their metrics. Only
+# host-backend and the listener can use that identity, because the role also
+# reaches the LangSmith application server. The servers join a delegated subnet
+# and a private DNS zone that do not exist yet, so the scope is the resource
+# group. Without byo_iam, LangSmith grants the network actions on that subnet
+# and zone only.
 resource "azurerm_role_definition" "dedicated_deployments" {
   for_each = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments }
 
@@ -188,13 +190,28 @@ resource "azurerm_role_definition" "dedicated_deployments" {
   }
 }
 
-resource "azurerm_role_assignment" "workload_dedicated_deployments" {
+resource "azurerm_role_assignment" "host_backend_dedicated_deployments" {
   for_each = azurerm_role_definition.dedicated_deployments
 
   scope              = azurerm_resource_group.data_plane[each.key].id
   role_definition_id = each.value.role_definition_resource_id
-  principal_id       = azurerm_user_assigned_identity.data_plane["${each.key}/workload"].principal_id
+  principal_id       = azurerm_user_assigned_identity.data_plane["${each.key}/host-backend"].principal_id
   principal_type     = "ServicePrincipal"
+}
+
+# With dedicated deployments, host-backend also reads deployment logs and
+# metrics as its own identity.
+resource "azurerm_role_assignment" "host_backend_observability" {
+  for_each = merge([
+    for key in keys(azurerm_role_definition.dedicated_deployments) : {
+      for role in ["Log Analytics Reader", "Monitoring Data Reader"] : "${key}/${role}" => { data_plane = key, role = role }
+    }
+  ]...)
+
+  scope                = azurerm_resource_group.data_plane[each.value.data_plane].id
+  role_definition_name = each.value.role
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.value.data_plane}/host-backend"].principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 # LangSmith runs the cluster workloads. The cluster does not exist yet, so the

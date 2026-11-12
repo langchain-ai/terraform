@@ -37,9 +37,9 @@ variable "data_planes" {
     # Adds the actions in local.langsmith_byoc_observability_actions.
     deployment_observability = optional(bool, false)
     # Let LangSmith turn on dedicated deployments, each with its own PostgreSQL
-    # flexible server in the resource group. With byo_iam, the module grants
-    # the workload identity the role in identities.tf. Without it, LangSmith
-    # creates that grant itself and this setting changes nothing.
+    # flexible server in the resource group. With byo_iam, the module creates
+    # the host-backend identity and its roles in identities.tf. Without it,
+    # LangSmith creates them itself and this setting changes nothing.
     dedicated_deployments = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
