@@ -1,0 +1,21 @@
+modules/aws/infra/modules/storage/main.tf
+  s_e5b6677aff67da::t_f969d2d0f5a587 56-61
+modules/azure/infra/modules/storage/main.tf
+  s_e5b6677aff67da::t_f969d2d0f5a587 132-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "116c0e7afbfbfacc1f338873341eacb526fd0b18",
+  "prompts": {},
+  "sessions": {
+    "s_e5b6677aff67da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2297ad6-723e-430d-a25d-895f4eefd617",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Kiewan Villatel <kiewan@langchain.dev>"
+    }
+  }
+}
