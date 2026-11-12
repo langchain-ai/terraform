@@ -136,6 +136,17 @@ variable "byoiam_karpenter_controller_policy_arn" {
   }
 }
 
+variable "cmk_service_key_arns" {
+  description = "Optional. Customer-managed KMS key ARN per data plane service: s3, ebs, eks, rds, or elasticache."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for service, arn in var.cmk_service_key_arns : contains(["s3", "ebs", "eks", "rds", "elasticache"], service) && can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Keys must be s3, ebs, eks, rds, or elasticache, and values must be KMS key ARNs."
+  }
+}
+
 variable "allow_self_hosted_migration_permissions" {
   description = "Self-hosted to BYOC migration only. Grants permissions needed for the migration. Enable for the duration of a self-hosted to BYOC migration."
   type        = bool

@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # The providers with a check and plan-tests leg. A new provider goes here.
-PROVIDERS=(aws azure byoc gcp)
+PROVIDERS=(aws azure baremetal byoc gcp)
 
 all=0
 selected=" "

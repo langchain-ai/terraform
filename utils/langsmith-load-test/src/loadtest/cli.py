@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="fail if the local 95th-percentile run time exceeds this limit")
     parser.add_argument("--progress-seconds", type=float, default=defaults.progress_seconds,
                         help="seconds between progress updates; 0 turns them off")
+    parser.add_argument("--feedback-drain-seconds", type=float, default=defaults.feedback_drain_seconds,
+                        help="after the load, how long to wait for feedback still in flight; the rest count as errors")
     parser.add_argument("--json", action="store_true", help="print final results as JSON")
     arguments = vars(parser.parse_args(argv))
     json_output = arguments.pop("json")

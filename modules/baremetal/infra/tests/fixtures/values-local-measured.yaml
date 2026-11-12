@@ -1,0 +1,15 @@
+# Requests sized from a measured load, as a downstream tool writes them into
+# langsmith-values-local.yaml: far under the production profile's, which stay the limits.
+frontend: {deployment: {resources: {requests: {cpu: 50m, memory: 64Mi}}}}
+backend: {deployment: {resources: {requests: {cpu: 50m, memory: 512Mi}}}, autoscaling: {hpa: {minReplicas: 1}}}
+platformBackend: {deployment: {resources: {requests: {cpu: 250m, memory: 256Mi}}}, autoscaling: {hpa: {minReplicas: 1}}}
+ingestQueue: {deployment: {resources: {requests: {cpu: 250m, memory: 256Mi}}}, autoscaling: {hpa: {minReplicas: 1}}}
+queue: {deployment: {resources: {requests: {cpu: 250m, memory: 512Mi}}}, autoscaling: {hpa: {minReplicas: 1}}}
+playground: {deployment: {resources: {requests: {cpu: 50m, memory: 512Mi}}}}
+aceBackend: {deployment: {resources: {requests: {cpu: 50m, memory: 128Mi}}}}
+smithdb:
+  query: {deployment: {resources: {requests: {cpu: 250m, memory: 1Gi}, limits: {cpu: "4", memory: 8Gi}}}}
+  ingestion: {deployment: {resources: {requests: {cpu: 500m, memory: 2Gi}, limits: {cpu: "4", memory: 8Gi}}}}
+  compaction: {deployment: {resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "2", memory: 4Gi}}}}
+  compactionWorker: {deployment: {resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "8", memory: 16Gi}}}}
+  clusterManager: {deployment: {resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 250m, memory: 256Mi}}}}

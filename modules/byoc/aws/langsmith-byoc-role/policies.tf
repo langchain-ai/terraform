@@ -192,3 +192,53 @@ resource "aws_iam_role_policy" "observability" {
     Statement = local.observability_statements
   })
 }
+
+locals {
+  cmk_services = {
+    ebs         = { label = "EBS", via = ["ec2"] }
+    eks         = { label = "EKS", via = ["eks"] }
+    rds         = { label = "RDS", via = ["rds", "secretsmanager"] }
+    elasticache = { label = "ElastiCache", via = ["elasticache"] }
+  }
+  cmk_keys = { for service, arn in var.cmk_service_key_arns : service => arn if contains(keys(local.cmk_services), service) }
+
+  cmk_statements = concat(
+    length(var.cmk_service_key_arns) > 0 ? [{
+      Sid      = "CMKDescribe"
+      Effect   = "Allow"
+      Action   = ["kms:DescribeKey", "kms:GetKeyPolicy"]
+      Resource = sort(distinct(values(var.cmk_service_key_arns)))
+    }] : [],
+    flatten([for service in sort(keys(local.cmk_keys)) : [
+      {
+        Sid       = "CMKUse${local.cmk_services[service].label}"
+        Effect    = "Allow"
+        Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKeyWithoutPlaintext"]
+        Resource  = [local.cmk_keys[service]]
+        Condition = { StringLike = { "kms:ViaService" = [for via in local.cmk_services[service].via : "${via}.*.amazonaws.com"] } }
+      },
+      {
+        Sid      = "CMKGrants${local.cmk_services[service].label}"
+        Effect   = "Allow"
+        Action   = ["kms:CreateGrant", "kms:ListGrants", "kms:RetireGrant"]
+        Resource = [local.cmk_keys[service]]
+        Condition = {
+          StringLike = { "kms:ViaService" = [for via in local.cmk_services[service].via : "${via}.*.amazonaws.com"] }
+          Bool       = { "kms:GrantIsForAWSResource" = "true" }
+        }
+      },
+    ]]),
+  )
+}
+
+resource "aws_iam_role_policy" "cmk" {
+  count = length(local.cmk_statements) > 0 ? 1 : 0
+
+  name = "${var.role_name}-cmk"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.cmk_statements
+  })
+}

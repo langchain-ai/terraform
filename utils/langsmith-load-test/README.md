@@ -72,6 +72,7 @@ Documents contain nested JSON and synthetic text. Two input/output pairs per siz
 | `--feedback-percent` | `50` | Share of traces given synthetic feedback; `0` disables it. |
 | `--data-seed` | Random | Repeatable sample documents; concurrent input/output pairing may vary. |
 | `--progress-seconds` | `10` | Progress interval; `0` disables updates. |
+| `--feedback-drain-seconds` | `60` | After the load, how long to wait for feedback still in flight; what remains counts as feedback errors. |
 | `--latency-limit-seconds` | None | Fail if local p95 run time exceeds this limit. |
 | `--json` | Off | Print the final summary as JSON; logs go to stderr. |
 

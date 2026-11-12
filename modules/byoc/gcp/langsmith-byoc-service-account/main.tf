@@ -360,6 +360,10 @@ locals {
   apis = toset(concat([
     "artifactregistry.googleapis.com",
     "binaryauthorization.googleapis.com",
+    # LangSmith checks the provisioner's access to the project
+    # (resourcemanager.projects.get) before it creates a data plane, and the
+    # module's managed_by tag is a Resource Manager resource.
+    "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
     "container.googleapis.com",
     "dns.googleapis.com",
