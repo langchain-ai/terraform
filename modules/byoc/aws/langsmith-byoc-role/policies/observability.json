@@ -1,0 +1,104 @@
+[
+  {
+    "Sid": "LogsDeploymentLogGroupCreate",
+    "Effect": "Allow",
+    "Action": ["logs:CreateLogGroup", "logs:TagResource"],
+    "Resource": [
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs",
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "LogsDeploymentLogGroupRead",
+    "Effect": "Allow",
+    "Action": ["logs:ListTagsForResource", "logs:ListTagsLogGroup"],
+    "Resource": [
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs",
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs:*"
+    ]
+  },
+  {
+    "Sid": "LogsDescribeLogGroups",
+    "Effect": "Allow",
+    "Action": ["logs:DescribeLogGroups"],
+    "Resource": "arn:aws:logs:*:${account_id}:log-group:*"
+  },
+  {
+    "Sid": "LogsDeploymentLogGroupManage",
+    "Effect": "Allow",
+    "Action": ["logs:PutRetentionPolicy", "logs:TagResource"],
+    "Resource": [
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs",
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "LogsDeploymentLogGroupUntag",
+    "Effect": "Allow",
+    "Action": ["logs:UntagResource"],
+    "Resource": [
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs",
+      "arn:aws:logs:*:${account_id}:log-group:*-smith-deployment-logs:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      },
+      "ForAllValues:StringNotEquals": {
+        "aws:TagKeys": ["managed_by"]
+      }
+    }
+  },
+  {
+    "Sid": "AMPDeploymentMetricsWorkspaceCreate",
+    "Effect": "Allow",
+    "Action": ["aps:CreateWorkspace", "aps:TagResource"],
+    "Resource": "arn:aws:aps:*:${account_id}:workspace/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "AMPDeploymentMetricsWorkspaceManage",
+    "Effect": "Allow",
+    "Action": [
+      "aps:DescribeWorkspace",
+      "aps:DescribeLoggingConfiguration",
+      "aps:ListTagsForResource",
+      "aps:UpdateWorkspaceAlias",
+      "aps:TagResource"
+    ],
+    "Resource": "arn:aws:aps:*:${account_id}:workspace/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "AMPDeploymentMetricsWorkspaceUntag",
+    "Effect": "Allow",
+    "Action": ["aps:UntagResource"],
+    "Resource": "arn:aws:aps:*:${account_id}:workspace/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      },
+      "ForAllValues:StringNotEquals": {
+        "aws:TagKeys": ["managed_by"]
+      }
+    }
+  }
+]

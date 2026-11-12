@@ -222,7 +222,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-lambda` | Lambda + EventBridge for periodic jobs, ECR repositories for deployment builds |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
-The exact statements are in `policies/*.json`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs.
+The exact statements are in `policies/*.json`. An inline `-observability` policy covers the CloudWatch log group and Amazon Managed Prometheus workspace for deployment observability; LangSmith keeps both when observability is turned off, but deletes the roles and Pod Identity associations that ship to them, which needs `allow_delete_permissions = true`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs.
 
 ### Break-glass role
 
