@@ -36,6 +36,11 @@ variable "data_planes" {
     # Analytics workspace and an Azure Monitor workspace in the resource group.
     # Adds the actions in local.langsmith_byoc_observability_actions.
     deployment_observability = optional(bool, false)
+    # Let LangSmith turn on dedicated deployments, each with its own PostgreSQL
+    # flexible server in the resource group. With byo_iam, the module creates
+    # the host-backend identity and its roles in identities.tf. Without it,
+    # LangSmith creates them itself and this setting changes nothing.
+    dedicated_deployments = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
