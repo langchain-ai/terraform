@@ -129,6 +129,12 @@ resource "azurerm_role_assignment" "blob_data_contributor" {
   scope                = azurerm_storage_account.storage_account.id
 }
 
+# The resource used to have count; keep existing state attached to it.
+moved {
+  from = azurerm_storage_management_policy.lifecycle_policy[0]
+  to   = azurerm_storage_management_policy.lifecycle_policy
+}
+
 # Lifecycle management policy — automatic blob deletion based on age and prefix.
 # This keeps storage costs bounded without manual cleanup.
 #

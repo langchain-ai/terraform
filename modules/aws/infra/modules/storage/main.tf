@@ -53,6 +53,12 @@ resource "aws_vpc_endpoint" "s3" {
   route_table_ids   = data.aws_route_tables.vpc.ids
 }
 
+# The resource used to have count; keep existing state attached to it.
+moved {
+  from = aws_s3_bucket_lifecycle_configuration.ttl[0]
+  to   = aws_s3_bucket_lifecycle_configuration.ttl
+}
+
 # Lifecycle management — automatic object deletion by prefix and age.
 # Mirrors Azure Blob TTL pattern: ttl_s/ (short-lived) and ttl_l/ (long-lived).
 #
