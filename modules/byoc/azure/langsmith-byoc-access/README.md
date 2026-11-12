@@ -252,6 +252,8 @@ The module then creates `langsmith-host-backend-identity` and gives it one custo
 
 The PostgreSQL actions apply to every flexible server in the resource group, including the LangSmith application database. That is why only host-backend and the listener can use this identity, and host-backend changes only the servers it tagged for a deployment.
 
+Before you set `dedicated_deployments` back to `false` or remove it, delete the dedicated deployments and have LangSmith turn the feature off. host-backend needs the role to delete their servers, and servers it cannot delete keep running and billing in the resource group.
+
 ### Turn on flow logs (optional)
 
 When the data plane is active, add your storage account. Then run `terraform apply`:
