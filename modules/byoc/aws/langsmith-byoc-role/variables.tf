@@ -80,6 +80,12 @@ variable "allow_delete_permissions" {
   default     = false
 }
 
+variable "allow_retained_data_deletion" {
+  description = "Grant deletion of LangSmith S3 buckets and objects, including governance-locked versions, and remove the object-data deny for those bucket names. Leave false outside LangSmith test accounts."
+  type        = bool
+  default     = false
+}
+
 variable "allow_vpc_creation_permissions" {
   description = "Grant permissions to create and manage the base VPC network. Disable when the customer supplies the VPC, subnets, routing, gateways, endpoints, and flow logs."
   type        = bool
