@@ -184,8 +184,10 @@ locals {
   ])
 
   # With byo_iam, the customer creates and deletes the identities.
+  # identities.tf lets LangSmith assign the AKS identity only.
   langsmith_byoiam_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",
     "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
   ]
 }
