@@ -148,9 +148,9 @@ so LangSmith can check the policy before it creates the data plane. The `s3` key
 needs no grant on this role. If you use the [BYOIAM module](../byoiam/README.md), set the same
 `cmk_service_key_arns` there.
 
-Keep the keys in the data plane account and region. With the default key policy
-statement that enables IAM permissions, the IAM grants above are enough for the
-roles. The `ebs` key policy must also allow the Auto Scaling service-linked role,
+Keep the keys in the data plane region. For a key in the data plane account, with
+the default key policy statement that enables IAM permissions, the IAM grants
+above are enough for the roles. The `ebs` key policy must also allow the Auto Scaling service-linked role,
 and the `s3` key policy must allow VPC flow log delivery:
 
 ```json
@@ -181,9 +181,11 @@ and the `s3` key policy must allow VPC flow log delivery:
 ]
 ```
 
-`AllowVPCFlowLogDelivery` is needed only when LangSmith manages the VPC. A key in
-another account also needs key policy statements for this role and each BYOIAM
-role.
+`AllowVPCFlowLogDelivery` is needed only when LangSmith manages the VPC.
+
+A key in another AWS account also needs key policy statements that allow this
+role and each BYOIAM role. LangSmith cannot read the policy of a key in another
+account, so it checks only that the key exists and is enabled.
 
 If you disable a key or remove these statements, every service that uses it
 stops working. For example, without the `ebs` key new nodes cannot start, and
