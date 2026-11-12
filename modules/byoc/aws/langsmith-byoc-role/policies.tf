@@ -18,6 +18,7 @@ locals {
   kms_statements                        = jsondecode(templatefile("${path.module}/policies/kms.json", local.policy_template_vars))
   lambda_statements                     = jsondecode(templatefile("${path.module}/policies/lambda.json", local.policy_template_vars))
   network_firewall_statements           = jsondecode(templatefile("${path.module}/policies/network_firewall.json", local.policy_template_vars))
+  observability_statements              = jsondecode(templatefile("${path.module}/policies/observability.json", local.policy_template_vars))
   delete_statements                     = jsondecode(templatefile("${path.module}/policies/delete.json", local.policy_template_vars))
   rds_statements                        = jsondecode(templatefile("${path.module}/policies/rds.json", local.policy_template_vars))
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
@@ -177,6 +178,18 @@ resource "aws_iam_role_policy" "byoiam_custom_names" {
   policy = jsonencode({
     Version   = "2012-10-17"
     Statement = local.byoiam_custom_name_statements
+  })
+}
+
+# Inline, because the role is at IAM's default limit of 10 attached managed
+# policies and inline policies don't count toward it.
+resource "aws_iam_role_policy" "observability" {
+  name = "${var.role_name}-observability"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.observability_statements
   })
 }
 
