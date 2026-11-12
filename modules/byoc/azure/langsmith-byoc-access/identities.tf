@@ -1,12 +1,11 @@
-# One set per data plane with byo_iam = true. LangSmith creates only the
-# federated identity credentials, because the AKS OIDC issuer exists only
-# after the cluster.
+# One set for each data plane with byo_iam = true. LangSmith creates only the
+# federated identity credentials, because they need the AKS OIDC issuer.
 
 locals {
   byo_iam_data_planes = { for key, dp in var.data_planes : key => dp if dp.byo_iam }
 
   # LangSmith expects the name langsmith-<short>-identity.
-  byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox", "deployment-metrics-collector"]
+  byo_iam_identity_shorts = ["aks", "kubelet", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox", "deployment-metrics-collector", "deployment-builds"]
 
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
@@ -28,7 +27,7 @@ resource "azurerm_user_assigned_identity" "data_plane" {
   tags                = merge(var.tags, each.value.tags)
 }
 
-# The blob_objects conditions limit this role to the containers of each identity.
+# A condition on each assignment limits this role to some containers.
 resource "azurerm_role_definition" "blob_objects" {
   for_each = local.byo_iam_data_planes
 
@@ -57,6 +56,16 @@ resource "azurerm_role_assignment" "aks_network" {
   principal_type       = "ServicePrincipal"
 }
 
+# AKS gives the kubelet identity to the nodes. The scope is only that identity.
+resource "azurerm_role_assignment" "aks_kubelet_operator" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_user_assigned_identity.data_plane["${each.key}/kubelet"].id
+  role_definition_name = "Managed Identity Operator"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/aks"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # cert-manager writes the DNS records for certificate challenges.
 resource "azurerm_role_assignment" "cert_manager_dns" {
   for_each = local.byo_iam_data_planes
@@ -77,8 +86,8 @@ resource "azurerm_role_assignment" "external_secrets_key_vault" {
   principal_type       = "ServicePrincipal"
 }
 
-# Blob access per identity and container. The storage accounts do not exist
-# yet, so the scope is the resource group and a condition sets the containers.
+# Blob access for each identity. The storage accounts do not exist yet, so the
+# scope is the resource group. A condition sets the containers.
 locals {
   byo_iam_blob_access = {
     workload = { read = ["langsmith"], write = ["langsmith"] }
@@ -132,10 +141,9 @@ resource "azurerm_role_assignment" "workload_monitoring" {
   principal_type       = "ServicePrincipal"
 }
 
-# Deployment observability. host-backend reads the deployment logs and metrics
-# as the workload identity, and the metrics collector writes metrics as its own
-# identity. The workspaces and the data collection rule do not exist yet, so the
-# scope is the resource group. LangSmith uses them only when observability is on.
+# Deployment observability. host-backend reads logs and metrics as the workload
+# identity. The collector writes metrics as its own identity. The workspaces
+# do not exist yet, so the scope is the resource group.
 resource "azurerm_role_assignment" "workload_observability" {
   for_each = merge([
     for key, dp in local.byo_iam_data_planes : {
@@ -155,6 +163,27 @@ resource "azurerm_role_assignment" "metrics_collector_publisher" {
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Monitoring Metrics Publisher"
   principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/deployment-metrics-collector"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Deployment builds. Build Jobs push images as the deployment builds identity.
+# The nodes pull them as the kubelet identity. The registry does not exist yet,
+# so the scope is the resource group.
+resource "azurerm_role_assignment" "deployment_builds_push" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_resource_group.data_plane[each.key].id
+  role_definition_name = "AcrPush"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/deployment-builds"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "kubelet_pull" {
+  for_each = local.byo_iam_data_planes
+
+  scope                = azurerm_resource_group.data_plane[each.key].id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/kubelet"].principal_id
   principal_type       = "ServicePrincipal"
 }
 

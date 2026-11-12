@@ -18,23 +18,20 @@ variable "data_planes" {
   type = map(object({
     location = string
     tags     = optional(map(string), {})
-    # Set to true after the data plane is active. The LangSmith role then
-    # loses the actions that delete the data plane, and the User Access
-    # Administrator assignment goes away. Set it back to false before an
-    # upgrade that adds a role assignment, and before you delete or re-create
+    # Set to true after the data plane is active. The LangSmith role then loses
+    # the delete actions and User Access Administrator. Set it to false before
+    # an upgrade that adds a role assignment, and before you delete or re-create
     # the data plane.
     reduced_access = optional(bool, false)
-    # Create the identities and role assignments yourself. LangSmith gets no
-    # User Access Administrator. Do not change after creation.
+    # You create the identities and role assignments. LangSmith gets no User
+    # Access Administrator. Do not change it after creation.
     byo_iam = optional(bool, false)
-    # Azure AI Foundry resource ID. The workload identity of the data plane
-    # gets Cognitive Services User on it, so Engine can call it without an API
-    # key. Set it after the data plane is active.
+    # Azure AI Foundry resource ID. The workload identity gets Cognitive Services
+    # User on it, so Engine needs no API key. Set it after the data plane is active.
     engine_foundry_resource_id = optional(string)
-    # Let LangSmith turn on deployment observability: Monitoring charts and
-    # searchable log history for LangGraph deployments, kept in a Log
-    # Analytics workspace and an Azure Monitor workspace in the resource group.
-    # Adds the actions in local.langsmith_byoc_observability_actions.
+    # Let LangSmith turn on deployment observability: charts and log history for
+    # LangGraph deployments, in the resource group. Adds the actions in
+    # local.langsmith_byoc_observability_actions.
     deployment_observability = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
@@ -48,9 +45,8 @@ variable "data_planes" {
   }))
   default = {}
 
-  # The key is part of the resource group name (at most 90 characters) and of
-  # the Key Vault name, which allows no consecutive hyphens and must start with
-  # a letter.
+  # The key is part of the resource group name (a maximum of 90 characters) and
+  # of the Key Vault name (no consecutive hyphens, starts with a letter).
   validation {
     condition = alltrue([
       for key in keys(var.data_planes) :
