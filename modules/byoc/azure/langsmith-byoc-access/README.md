@@ -210,9 +210,7 @@ The workload identity gets `Cognitive Services User` on that resource. Engine ca
 
 Deployment observability shows charts and log history for each LangGraph deployment in LangSmith. The data stays in the data plane resource group.
 
-1. Register `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.OperationalInsights`, and `Microsoft.OperationsManagement` (see [Usage](#usage)).
-2. Keep `reduced_access = false`.
-3. Set `deployment_observability = true`. Then run `terraform apply`:
+1. Set `deployment_observability = true`. Then run `terraform apply`:
 
    ```hcl
    data_planes = {
@@ -220,7 +218,7 @@ Deployment observability shows charts and log history for each LangGraph deploym
    }
    ```
 
-4. Ask LangSmith to turn on observability for the data plane.
+2. Ask LangSmith to turn on observability for the data plane.
 
 > **CAUTION:** Before you remove the setting, ask LangSmith to turn off observability or delete the data plane. The role needs its delete actions to remove the rules, the endpoint, and the association.
 
