@@ -33,6 +33,7 @@ module "byoiam" {
 | `smithdb_migration_writer_principal_arns` | Optional. Self-hosted LangSmith roles or users that may assume the SmithDB role during a self-hosted to BYOC migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_kms_key_arns` | Optional. KMS keys of those buckets. The workload role may decrypt objects of those buckets only. |
+| `dedicated_deployments` | Optional. Let LangSmith run dedicated deployments. See [Dedicated deployments](#dedicated-deployments). |
 | `tags` | Customer tags. `managed_by` is reserved and enforced as `customer`. |
 
 ## Provisioning requirements
@@ -48,6 +49,22 @@ access, and trusts Engine service accounts. Engine remains opt-in per data plane
 
 The outputs expose the shared role names and ARNs, Karpenter instance profile
 name, and Karpenter controller policy ARN.
+
+### Dedicated deployments
+
+Each dedicated LangGraph deployment gets its own RDS Postgres instance,
+`lg-<id>`, which LangSmith creates, resizes and deletes in the data plane's
+subnet group. Set `dedicated_deployments = true` and run `terraform apply`
+before LangSmith turns dedicated deployments on for a data plane.
+
+The workload role then gets RDS access to `lg-*` instances in every data plane
+of the account. It can tag any `lg-*` instance and then modify or delete it, so
+don't name your own RDS instances `lg-*`. It can't change instances tagged
+`managed_by=langsmith`.
+
+Before you set it back to `false`, delete the dedicated deployments and have
+LangSmith turn the feature off. Instances LangSmith can't delete keep running
+and billing in your account.
 
 ### Custom names
 

@@ -141,3 +141,9 @@ variable "workload_migration_source_blob_kms_key_arns" {
     error_message = "Provide at most five KMS key ARNs."
   }
 }
+
+variable "dedicated_deployments" {
+  description = "Let LangSmith run dedicated deployments. Grants the workload role RDS access to lg- instances."
+  type        = bool
+  default     = false
+}

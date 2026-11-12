@@ -88,6 +88,58 @@ locals {
         }
       }
   }])
+  dedicated_deployment_database_arns = [for region in sort(tolist(var.regions)) :
+    "arn:${local.partition}:rds:${region}:${local.account_id}:db:lg-*"
+  ]
+  dedicated_deployment_statements = [for statement in [
+    {
+      Sid       = "CreateDedicatedDeploymentDatabases"
+      Effect    = "Allow"
+      Action    = ["rds:CreateDBInstance", "rds:AddTagsToResource"]
+      Resource  = local.dedicated_deployment_database_arns
+      Condition = { Null = { "aws:RequestTag/langgraph-cloud" = "false" } }
+    },
+    {
+      Sid    = "CreateDedicatedDeploymentDatabasesInDataPlane"
+      Effect = "Allow"
+      Action = ["rds:CreateDBInstance"]
+      Resource = flatten([for region in sort(tolist(var.regions)) : [
+        "arn:${local.partition}:rds:${region}:${local.account_id}:subgrp:*-smith-postgres-subnet-group",
+        "arn:${local.partition}:rds:${region}:${local.account_id}:pg:default.postgres*"
+      ]])
+      Condition = {
+        StringEquals = { "rds:DatabaseEngine" = "postgres" }
+        Bool         = { "rds:StorageEncrypted" = "true" }
+      }
+    },
+    {
+      Sid       = "ManageDedicatedDeploymentDatabases"
+      Effect    = "Allow"
+      Action    = ["rds:ModifyDBInstance", "rds:DeleteDBInstance"]
+      Resource  = local.dedicated_deployment_database_arns
+      Condition = { Null = { "aws:ResourceTag/langgraph-cloud" = "false" } }
+    },
+    {
+      Sid      = "DescribeDedicatedDeploymentDatabases"
+      Effect   = "Allow"
+      Action   = ["rds:DescribeDBInstances"]
+      Resource = local.dedicated_deployment_database_arns
+    },
+    {
+      Sid       = "DescribeSecurityGroups"
+      Effect    = "Allow"
+      Action    = ["ec2:DescribeSecurityGroups"]
+      Resource  = ["*"]
+      Condition = local.regional_condition
+    },
+    {
+      Sid       = "DenyLangSmithDatabaseChanges"
+      Effect    = "Deny"
+      Action    = ["rds:AddTagsToResource", "rds:ModifyDBInstance", "rds:DeleteDBInstance"]
+      Resource  = [for region in sort(tolist(var.regions)) : "arn:${local.partition}:rds:${region}:${local.account_id}:db:*"]
+      Condition = { StringEquals = { "aws:ResourceTag/managed_by" = "langsmith" } }
+    }
+  ] : statement if var.dedicated_deployments]
   s3_statements = { for key, permission in local.s3_permissions : key => [
     {
       Sid       = "BucketAccess"
@@ -262,7 +314,7 @@ locals {
           "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/*",
           "arn:${local.partition}:bedrock:*:${local.account_id}:application-inference-profile/*"
         ]
-    }], local.bedrock_assume_role_statements, local.migration_source_blob_statements)
+    }], local.bedrock_assume_role_statements, local.migration_source_blob_statements, local.dedicated_deployment_statements)
     postgres-setup-iam-role = local.setup_statements["postgres-setup-iam-role"]
     smithdb-setup-iam-role  = local.setup_statements["smithdb-setup-iam-role"]
     smithdb-iam-role = concat(local.s3_statements["smithdb-iam-role"], [
