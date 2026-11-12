@@ -782,10 +782,6 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
   }
 }
 
-# The LangSmith app creates, resizes and deletes each dedicated deployment's
-# Cloud SQL instance, which it names lg-<id>. The condition keeps it off every
-# other instance, the data planes' own langsmith- ones included. Without
-# byo_iam, the data plane compositions make the same grant.
 resource "google_project_iam_member" "byo_iam_dedicated_deployments" {
   count = var.byo_iam && var.dedicated_deployments ? 1 : 0
 
