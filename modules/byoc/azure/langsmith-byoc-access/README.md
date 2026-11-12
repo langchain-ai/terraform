@@ -36,6 +36,7 @@ provider "azurerm" {
     "Microsoft.Compute",
     "Microsoft.ContainerRegistry",
     "Microsoft.ContainerService",
+    "Microsoft.DataProtection",
     "Microsoft.DBforPostgreSQL",
     "Microsoft.KeyVault",
     "Microsoft.ManagedIdentity",
