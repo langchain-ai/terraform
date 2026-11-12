@@ -39,6 +39,16 @@ variable "data_planes" {
     # Let LangSmith put an Azure Firewall on the outbound traffic of the data
     # plane. Adds the actions in local.langsmith_byoc_firewall_actions.
     egress_firewall = optional(bool, false)
+    # Use your VNet. LangSmith joins the two subnets and cannot change the
+    # network. Needs byo_iam. Do not change after creation. See network.tf.
+    byo_vnet = optional(object({
+      vnet_id                     = string
+      aks_subnet_id               = string
+      private_endpoints_subnet_id = string
+      # The egress that you attach to the AKS subnet: NAT_GATEWAY, or
+      # USER_DEFINED_ROUTING for a route table with a 0.0.0.0/0 route.
+      outbound_type = optional(string, "NAT_GATEWAY")
+    }))
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
@@ -60,6 +70,21 @@ variable "data_planes" {
       can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+  }
+
+  # flow_logs.tf finds the VNet in the data plane resource group, so it cannot
+  # apply to your VNet.
+  validation {
+    condition = alltrue([
+      for data_plane in values(var.data_planes) : (
+        data_plane.byo_iam && data_plane.flow_logs == null &&
+        can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/virtualNetworks/[^/]+$", data_plane.byo_vnet.vnet_id)) &&
+        startswith(data_plane.byo_vnet.aks_subnet_id, "${data_plane.byo_vnet.vnet_id}/subnets/") &&
+        startswith(data_plane.byo_vnet.private_endpoints_subnet_id, "${data_plane.byo_vnet.vnet_id}/subnets/") &&
+        contains(["NAT_GATEWAY", "USER_DEFINED_ROUTING"], data_plane.byo_vnet.outbound_type)
+      ) if data_plane.byo_vnet != null
+    ])
+    error_message = "byo_vnet needs byo_iam = true and no flow_logs. vnet_id must be a VNet resource ID, the two subnets must be in that VNet, and outbound_type must be NAT_GATEWAY or USER_DEFINED_ROUTING."
   }
 }
 
