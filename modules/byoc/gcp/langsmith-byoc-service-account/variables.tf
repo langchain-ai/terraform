@@ -62,3 +62,9 @@ variable "deployment_observability" {
     error_message = "deployment_observability is not supported with byo_iam."
   }
 }
+
+variable "dedicated_deployments" {
+  description = "Let LangSmith run dedicated deployments, each with a Cloud SQL instance named lg-<id> that the LangSmith app creates, resizes and deletes in this project. With byo_iam, grants langsmith-workload roles/cloudsql.admin on lg- instances only; without byo_iam, LangSmith makes that grant and this changes nothing. Set it before LangSmith turns the feature on for a data plane."
+  type        = bool
+  default     = false
+}

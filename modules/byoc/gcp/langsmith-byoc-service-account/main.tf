@@ -782,6 +782,24 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
   }
 }
 
+# The LangSmith app creates, resizes and deletes each dedicated deployment's
+# Cloud SQL instance, which it names lg-<id>. The condition keeps it off every
+# other instance, the data planes' own langsmith- ones included. Without
+# byo_iam, the data plane compositions make the same grant.
+resource "google_project_iam_member" "byo_iam_dedicated_deployments" {
+  count = var.byo_iam && var.dedicated_deployments ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/cloudsql.admin"
+  member  = "serviceAccount:${google_service_account.byo_iam["langsmith-workload"].email}"
+
+  condition {
+    title       = "langsmith-dedicated-deployment-instances"
+    description = "Cloud SQL instances of LangSmith dedicated deployments"
+    expression  = "resource.name.extract(\"/instances/{name}\").startsWith(\"lg-\")"
+  }
+}
+
 resource "google_project_iam_custom_role" "service_account_iam_manager" {
   count = var.byo_iam ? 1 : 0
 
