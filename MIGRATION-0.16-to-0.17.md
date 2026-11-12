@@ -153,21 +153,18 @@ chart 0.17 rejects, and it sets no cache volume.
 | The GCP overlay names the `/data` volume `local-ssd-storage` | The volume must be named `cache` |
 | `smithdb.migration.deployment` | `smithdb.migration.job`. The chart fails on the old key |
 
-The GCP module now writes the SmithDB tier, resources, HPA minimum replicas, cache
-volumes, and node placement to the generated `langsmith-values-smithdb-sizing.yaml`.
+The GCP module writes the SmithDB tier, HPA minimum replicas, cache settings,
+and node placement to the generated `langsmith-values-smithdb-sizing.yaml`.
 The Cloud SQL Auth Proxy is now the default for a created metastore.
 
 - Check the size. An unset `smithdb_sizing` follows `sizing_profile`.
-  - An existing `production` install resolves to `medium`. Terraform then replaces
-    the cache pool with `n2-standard-32` and 4 Local SSD. The compute pool stays
-    `n2-standard-8`.
-  - An existing `production-large` install resolves to `large`. Terraform then
-    replaces the cache pool with `n2-standard-64` and 8 Local SSD, and the compute
-    pool with `n2-standard-16`. `large` runs 12 SmithDB pods that request about
-    350 vCPU. To avoid this, set `smithdb_sizing = "medium"` or `"small"`.
-  - A `minimum` install resolves to `minimal` and has no SmithDB node pools.
-  - To keep the 0.16 pool (n2-standard-16, 2 Local SSD), set
-    `smithdb_sizing = "small"` and `smithdb_cache_storage = "local-ssd"` in `infra/terraform.tfvars`.
+  - `production` resolves to `medium`; `production-large` resolves to `large`.
+    `minimal` uses the chart's Small resources.
+  - Network cache is now the default, with one general-purpose SmithDB pool
+    and Hyperdisk Balanced volumes. For an existing deployment, follow the
+    [transition steps](modules/gcp/SMITHDB.md#move-an-existing-deployment-to-the-new-pool) before removing the old pools.
+  - To keep local SSD, set `smithdb_cache_storage = "local-ssd"` explicitly.
+    Set `smithdb_sizing = "small"` to keep the 0.16 pool sizes.
 - Check the metastore tier. An unset `smithdb_metastore_tier` now follows the size.
   - For a created metastore, the tier goes from `db-custom-2-8192` to
     `db-custom-4-16384` for `small`, `db-custom-6-32768` for `medium`, and
