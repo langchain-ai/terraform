@@ -58,6 +58,11 @@ variable "data_planes" {
       network_watcher_name                = optional(string)
       network_watcher_resource_group_name = optional(string, "NetworkWatcherRG")
     }))
+    # AKS audit logs in your storage account. Set it after the data plane is
+    # active. Remove it before you delete the data plane. See audit_logs.tf.
+    audit_logs = optional(object({
+      storage_account_id = string
+    }))
     # Time-bound access to the data plane for LangChain engineers. See
     # break_glass.tf.
     break_glass = optional(object({

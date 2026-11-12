@@ -252,6 +252,28 @@ Terraform creates a VNet flow log for the data plane VNet. Azure writes the logs
 
 Remove `flow_logs` before you delete the data plane.
 
+### Turn on audit logs (optional)
+
+When the data plane is active, add your storage account. Then run `terraform apply`:
+
+```hcl
+data_planes = {
+  prod = {
+    location   = "eastus"
+    audit_logs = { storage_account_id = "<storage-account-id>" }
+  }
+}
+```
+
+Terraform creates a diagnostic setting on the AKS cluster of the data plane. Azure writes the `kube-audit-admin` and `guard` logs to your storage account: the Kubernetes API calls without get and list, the Entra ID authentication, and the Azure RBAC checks. LangSmith cannot change the diagnostic setting or the storage account.
+
+- Register `Microsoft.Insights` first (see [Usage](#usage)).
+- The storage account must be in the region of the data plane.
+- If the storage account has a firewall, let trusted Microsoft services through.
+- To delete old logs, add a lifecycle management rule to the storage account.
+
+Remove `audit_logs` before you delete the data plane.
+
 ### Give break glass access (optional)
 
 To let LangChain engineers examine a data plane, set `break_glass`. Then run `terraform apply`:
@@ -276,7 +298,7 @@ Terraform creates time-bound Privileged Identity Management (PIM) assignments on
 
 > **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
 
-1. If `reduced_access = true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
+1. If `reduced_access = true`, set it to `false`. If `flow_logs` or `audit_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
 3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
 4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
@@ -306,6 +328,7 @@ Fields of each `data_planes` entry:
 | `egress_firewall` | `bool` | no | `false` | Let LangSmith put an Azure Firewall on the outbound traffic of this data plane. Adds actions to its custom role. LangSmith turns the firewall on. |
 | `byo_vnet` | `object` | no | `null` | Use your VNet: `vnet_id`, `aks_subnet_id` (/22 or larger, with a NAT gateway or a route table), `private_endpoints_subnet_id` (/26 or larger), and `outbound_type` (`NAT_GATEWAY` or `USER_DEFINED_ROUTING`). Needs `byo_iam`. The VNet must be in the subscription and the region of the data plane, and must use the Azure-provided DNS. LangSmith gets a role that reads the VNet and joins its subnets. Send the `byovnet` output as `byovnet` in the create request of the API, without `vpc_cidr`. Do not change it later. |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
+| `audit_logs` | `object` | no | `null` | AKS audit logs in your storage account: `storage_account_id`. See [Turn on audit logs](#turn-on-audit-logs-optional). |
 | `break_glass` | `object` | no | `null` | Time-bound access for LangChain engineers: `principal_ids`, `until`, and an optional `kubernetes_role` (`Azure Kubernetes Service RBAC Reader`). See [Give break glass access](#give-break-glass-access-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
