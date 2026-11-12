@@ -243,7 +243,7 @@ data_planes = {
 }
 ```
 
-The module then creates `langsmith-host-backend-identity` and its roles on the resource group.
+The module then creates `langsmith-host-backend-identity` and its roles on the resource group. The PostgreSQL role also reaches the LangSmith application database, so only host-backend and the listener can use this identity.
 
 Before you set `dedicated_deployments` back to `false` or remove it, delete the dedicated deployments and have LangSmith turn the feature off. host-backend needs the role to delete their servers, and servers it cannot delete keep running and billing in the resource group.
 
