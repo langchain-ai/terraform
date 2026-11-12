@@ -33,6 +33,7 @@ module "byoiam" {
 | `smithdb_migration_writer_principal_arns` | Optional. Self-hosted LangSmith roles or users that may assume the SmithDB role during a self-hosted to BYOC migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_kms_key_arns` | Optional. KMS keys of those buckets. The workload role may decrypt objects of those buckets only. |
+| `dedicated_deployments` | Optional. Let LangSmith run dedicated deployments. Adds RDS permissions to the workload role. See [Dedicated deployments](#dedicated-deployments). Defaults to `false`. |
 | `tags` | Customer tags. `managed_by` is reserved and enforced as `customer`. |
 
 ## Provisioning requirements
@@ -48,6 +49,38 @@ access, and trusts Engine service accounts. Engine remains opt-in per data plane
 
 The outputs expose the shared role names and ARNs, Karpenter instance profile
 name, and Karpenter controller policy ARN.
+
+### Dedicated deployments
+
+Set `dedicated_deployments = true` and run `terraform apply` before LangSmith
+turns on dedicated deployments for a data plane in the account. Each dedicated
+LangGraph deployment then gets its own RDS Postgres instance, `lg-<id>`, which
+the LangSmith app creates, resizes and deletes in the data plane's region, in
+the data plane's Postgres subnet group.
+
+The setting adds these statements to the workload role's inline policy, for
+each of `regions`:
+
+- Create and tag `lg-*` instances, only with a `langgraph-cloud` tag on the
+  request.
+- Create them only in a `*-smith-postgres-subnet-group` subnet group and with a
+  `default.postgres*` parameter group, with the `postgres` engine and storage
+  encryption.
+- Modify and delete `lg-*` instances tagged `langgraph-cloud`, and describe
+  `lg-*` instances.
+- Describe security groups.
+- Deny tagging, modifying and deleting any instance tagged
+  `managed_by=langsmith`, so the role can't change the data planes' own
+  databases.
+
+The workload role is shared by every data plane in the account, so the subnet
+group grant covers each data plane's subnet group. Name your own RDS instances
+so they don't start with `lg-`.
+
+Before you set it back to `false`, delete the dedicated deployments on every
+data plane in the account and have LangSmith turn the feature off. The LangSmith
+app needs these permissions to delete their instances, and instances it can't
+delete keep running and billing in your account.
 
 ### Custom names
 

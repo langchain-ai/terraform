@@ -141,3 +141,9 @@ variable "workload_migration_source_blob_kms_key_arns" {
     error_message = "Provide at most five KMS key ARNs."
   }
 }
+
+variable "dedicated_deployments" {
+  description = "Let LangSmith run dedicated deployments, each with an RDS Postgres instance named lg-<id> that the LangSmith app creates, resizes and deletes in this account. Grants the workload role RDS access to lg- instances tagged langgraph-cloud. Set it before LangSmith turns the feature on for a data plane."
+  type        = bool
+  default     = false
+}
