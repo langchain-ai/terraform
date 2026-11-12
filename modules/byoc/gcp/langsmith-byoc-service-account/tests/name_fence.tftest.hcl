@@ -202,3 +202,30 @@ run "deployment_observability" {
     error_message = "The provisioner may grant the observability roles but not roles/container.admin."
   }
 }
+
+run "dedicated_deployments" {
+  command = plan
+
+  variables {
+    dedicated_deployments = true
+  }
+
+  assert {
+    condition     = length(google_project_iam_member.byo_iam_dedicated_deployments) == 0 && contains(local.granted_roles, "roles/cloudsql.admin")
+    error_message = "Without byo_iam, the module makes no grant and the provisioner may grant roles/cloudsql.admin."
+  }
+}
+
+run "dedicated_deployments_byo_iam" {
+  command = plan
+
+  variables {
+    byo_iam               = true
+    dedicated_deployments = true
+  }
+
+  assert {
+    condition     = google_project_iam_member.byo_iam_dedicated_deployments[0].role == "roles/cloudsql.admin" && google_project_iam_member.byo_iam_dedicated_deployments[0].condition[0].expression == "resource.name.extract(\"/instances/{name}\").startsWith(\"lg-\")"
+    error_message = "With byo_iam, the workload gets roles/cloudsql.admin on lg- instances only."
+  }
+}

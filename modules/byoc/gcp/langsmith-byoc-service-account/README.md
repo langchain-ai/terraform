@@ -160,7 +160,7 @@ The module then creates these service accounts in the project. LangSmith finds t
 
 | Service account | Used by | Project roles |
 |-----------------|---------|---------------|
-| `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/redis.dbConnectionUser` |
+| `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/redis.dbConnectionUser`; with [dedicated deployments](#dedicated-deployments), `roles/cloudsql.admin` limited to `lg-` instances |
 | `langsmith-external-secrets` | External Secrets Operator | `roles/secretmanager.secretAccessor`, with a condition limiting it to secrets whose IDs start with `ls-` |
 | `langsmith-cert-manager` | cert-manager | None. LangSmith grants `roles/dns.admin` on each data plane's DNS zones. |
 | `langsmith-postgres-setup` | The job that sets up the Cloud SQL databases | `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`) on instances with the `managed_by: langsmith` tag, and `roles/cloudsql.viewer` limited to `langsmith-` instances |
@@ -207,6 +207,17 @@ The setting makes these changes:
 
 Sinks do not support IAM conditions, so the sink permissions apply to every sink in the project: the provisioner could route any of the project's logs to another destination, or change or delete the project's other sinks (not `_Required`). Likewise, the project IAM granter's condition limits only which role is granted, so the provisioner could grant itself `roles/logging.viewAccessor` with no condition and read every log view in the project, including the `_Required` bucket's audit logs, as it already can grant itself `roles/secretmanager.secretAccessor` on every secret. LangSmith grants the role only to the data plane's app service account, with a condition naming its log view. Turn it on only in a project that holds only LangSmith resources.
 
+## Dedicated deployments
+
+Set `dedicated_deployments = true` before LangSmith turns on dedicated deployments for a data plane in the project. Each dedicated LangGraph deployment then gets its own Cloud SQL instance, `lg-<id>`, which the LangSmith app creates, resizes and deletes in the data plane's region, with a private IP on the data plane's VPC through the private services access LangSmith already sets up.
+
+The LangSmith app's service account needs `roles/cloudsql.admin` on those instances, limited to `lg-` names by the condition `resource.name.extract("/instances/{name}").startsWith("lg-")`, so it can't change the data planes' own `langsmith-` instances or yours:
+
+- With `byo_iam`, the module grants it to `langsmith-workload`.
+- Without `byo_iam`, LangSmith grants it to the data plane's app service account, and the setting changes nothing: the project IAM granter already allows `roles/cloudsql.admin`.
+
+Name your own Cloud SQL instances so they don't start with `lg-`. Before you set it back to `false`, have LangSmith delete the dedicated deployments, because their instances can't be deleted without the grant.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -219,6 +230,7 @@ Sinks do not support IAM conditions, so the sink permissions apply to every sink
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
 | `deployment_observability` | Let LangSmith turn on deployment observability. Not with `byo_iam`. See [Deployment observability](#deployment-observability). | `false` |
+| `dedicated_deployments` | Let LangSmith run dedicated deployments. Only changes anything with `byo_iam`. See [Dedicated deployments](#dedicated-deployments). | `false` |
 
 ## Outputs
 
