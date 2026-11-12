@@ -57,10 +57,10 @@ Each dedicated LangGraph deployment gets its own RDS Postgres instance,
 subnet group. Set `dedicated_deployments = true` and run `terraform apply`
 before LangSmith turns dedicated deployments on for a data plane.
 
-The workload role then gets RDS access to encrypted `lg-*` Postgres instances
-tagged `langgraph-cloud`, in every data plane of the account. It can't change
-instances tagged `managed_by=langsmith`. Don't name your own RDS instances
-`lg-*`.
+The workload role then gets RDS access to `lg-*` instances in every data plane
+of the account. It can tag any `lg-*` instance and then modify or delete it, so
+don't name your own RDS instances `lg-*`. It can't change instances tagged
+`managed_by=langsmith`.
 
 Before you set it back to `false`, delete the dedicated deployments and have
 LangSmith turn the feature off. Instances LangSmith can't delete keep running
