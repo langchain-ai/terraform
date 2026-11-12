@@ -187,6 +187,19 @@ A key in another AWS account also needs key policy statements that allow this
 role and each BYOIAM role. LangSmith cannot read the policy of a key in another
 account, so it checks only that the key exists and is enabled.
 
+For an `ebs` key in another account, the key policy statements for the Auto
+Scaling service-linked role are not enough. Allow the data plane account to call
+`kms:CreateGrant` in the key policy, then create a grant for the role from the
+data plane account:
+
+```sh
+aws kms create-grant \
+  --region <region> \
+  --key-id <ebs-key-arn> \
+  --grantee-principal arn:aws:iam::<data-plane-account-id>:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling \
+  --operations Encrypt Decrypt ReEncryptFrom ReEncryptTo GenerateDataKey GenerateDataKeyWithoutPlaintext DescribeKey CreateGrant
+```
+
 If you disable a key or remove these statements, every service that uses it
 stops working. For example, without the `ebs` key new nodes cannot start, and
 without the `rds` key the databases cannot read their data.
