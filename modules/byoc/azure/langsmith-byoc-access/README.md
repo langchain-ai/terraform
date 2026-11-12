@@ -314,6 +314,7 @@ Fields of each `data_planes` entry:
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
 | `deployment_builds` | `bool` | no | `false` | With `byo_iam`, create the identities and roles that deployment builds and `langgraph deploy` need. Set it after the data plane is active. See [Deployment builds](#deployment-builds-optional). |
+| `byo_vnet` | `object` | no | `null` | Use your VNet: `vnet_id`, `aks_subnet_id` (/22 or larger, with a NAT gateway or a route table), `private_endpoints_subnet_id` (/26 or larger), and `outbound_type` (`NAT_GATEWAY` or `USER_DEFINED_ROUTING`). Needs `byo_iam`, and cannot be on with `dedicated_deployments` or `flow_logs`. The VNet must be in the subscription and the region of the data plane. LangSmith links its private DNS zones to the VNet, so custom DNS servers of the VNet must forward them to Azure DNS (`168.63.129.16`). LangSmith gets a role that reads the VNet and joins its subnets. Send the `byovnet` output as `byovnet` in the create request of the API, without `vpc_cidr`. Do not change it later. |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
@@ -323,12 +324,12 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 | Output | Description |
 |--------|-------------|
 | `azure_entra_tenant_id` | Entra tenant ID of the subscription. |
-| `data_planes` | Map of data plane key to `resource_group_id`, `region`, and `key_vault_name`. |
+| `data_planes` | Map of data plane key to `resource_group_id`, `region`, `key_vault_name`, and `byovnet` (`null` without `byo_vnet`). |
 
 ## Security model
 
 - **Service principal:** no Microsoft Graph permissions and no role on the subscription.
-- **Role assignments:** on each data plane resource group only, with the `external_id` as description. The custom role ([`roles.tf`](roles.tf)), and with full access `User Access Administrator`. LangSmith uses it to assign roles to its workload identities, one blob role, and, with CLI builds, two custom roles and `AcrDelete`.
+- **Role assignments:** on each data plane resource group, and with `byo_vnet` on that VNet, with the `external_id` as description. The custom role ([`roles.tf`](roles.tf)), and with full access `User Access Administrator`. LangSmith uses it to assign roles to its workload identities, one blob role, and, with CLI builds, two custom roles and `AcrDelete`.
 - **Key Vault:** Azure RBAC, no public network access, a deny-all network ACL, soft delete for 90 days, and purge protection. Terraform writes nothing into the vault.
 
 ## Operational notes
