@@ -63,7 +63,7 @@ variable "ebs_kms_key_arns" {
 }
 
 variable "cmk_service_key_arns" {
-  description = "Optional. Customer-managed KMS key ARN per data plane service (s3, ebs, eks, rds, elasticache) for new data planes. Several services may share one key. Each role may use only the key of the service it reads through. The key owner must also allow those roles on each key."
+  description = "Optional. Customer-managed KMS key ARN per data plane service: s3, ebs, eks, rds, or elasticache."
   type        = map(string)
   default     = {}
 

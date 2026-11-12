@@ -119,7 +119,6 @@ locals {
     Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = context } }
   }] : statement if length(local.cmk_s3_keys) > 0] }
   cmk_statements = merge(local.cmk_bucket_statements, {
-    # With S3 Bucket Keys the encryption context is the bucket ARN.
     workload-iam-role = concat(local.cmk_bucket_statements["workload-iam-role"], [for statement in [{
       Sid       = "ReadMigrationInventoryKMS"
       Effect    = "Allow"
@@ -140,7 +139,6 @@ locals {
       Sid       = "DecryptSecrets"
       Condition = { StringEquals = local.cmk_via.secretsmanager, StringLike = { "kms:EncryptionContext:SecretARN" = concat(local.application_secret_arns, local.rds_secret_arns) } }
     })] : statement if length(local.cmk_rds_keys) > 0]
-    # EKS envelope encryption of Kubernetes secrets.
     eks-cluster-role = [for statement in [{
       Sid      = "ClusterSecretsKMS"
       Effect   = "Allow"

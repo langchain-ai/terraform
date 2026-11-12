@@ -143,8 +143,9 @@ cmk_service_key_arns = {
 
 The role may use each key only through its own service: EC2 for `ebs`, EKS for
 `eks`, RDS and Secrets Manager for `rds`, and ElastiCache for `elasticache`. It
-may create grants only for AWS resources. The `s3` key needs no grant on this
-role. If you use the [BYOIAM module](../byoiam/README.md), set the same
+may create grants only for AWS resources. It may also read each key's policy,
+so LangSmith can check the policy before it creates the data plane. The `s3` key
+needs no grant on this role. If you use the [BYOIAM module](../byoiam/README.md), set the same
 `cmk_service_key_arns` there.
 
 Keep the keys in the data plane account and region. With the default key policy
@@ -255,7 +256,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
 | `allow_vpc_creation_permissions` | `bool` | no | `true` | Grants base-network management permissions. Set to `false` for a customer-supplied VPC. |
 | `allow_iam_management_permissions` | `bool` | no | `true` | Grants IAM creation, mutation, and deletion permissions. Set to `false` for customer-managed IAM. |
-| `cmk_service_key_arns` | `map(string)` | no | `{}` | Customer-managed KMS key per data plane service (`s3`, `ebs`, `eks`, `rds`, `elasticache`) for new data planes. Adds an inline `-cmk` policy that uses each key only through its own AWS service. |
+| `cmk_service_key_arns` | `map(string)` | no | `{}` | Customer-managed KMS key per data plane service (`s3`, `ebs`, `eks`, `rds`, `elasticache`) for new data planes. |
 | `allow_self_hosted_migration_permissions` | `bool` | no | `false` | Grants VPC peering acceptance and SmithDB role trust updates for a self-hosted to BYOC migration. |
 | `vpc_ids` | `set(string)` | no | `[]` | Customer VPC IDs allowed for tagged workload security-group creation; required when `allow_vpc_creation_permissions = false`. |
 

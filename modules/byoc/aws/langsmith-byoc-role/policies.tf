@@ -181,8 +181,6 @@ resource "aws_iam_role_policy" "byoiam_custom_names" {
 }
 
 locals {
-  # The BYOC role creates encrypted resources through these services. S3
-  # encryption needs no key use by this role.
   cmk_services = {
     ebs         = { label = "EBS", via = ["ec2"] }
     eks         = { label = "EKS", via = ["eks"] }
@@ -192,11 +190,11 @@ locals {
   cmk_keys = { for service, arn in var.cmk_service_key_arns : service => arn if contains(keys(local.cmk_services), service) }
 
   cmk_statements = concat(
-    length(local.cmk_keys) > 0 ? [{
+    length(var.cmk_service_key_arns) > 0 ? [{
       Sid      = "CMKDescribe"
       Effect   = "Allow"
-      Action   = ["kms:DescribeKey"]
-      Resource = sort(distinct(values(local.cmk_keys)))
+      Action   = ["kms:DescribeKey", "kms:GetKeyPolicy"]
+      Resource = sort(distinct(values(var.cmk_service_key_arns)))
     }] : [],
     flatten([for service in sort(keys(local.cmk_keys)) : [
       {
@@ -220,7 +218,6 @@ locals {
   )
 }
 
-# Inline because the role is at IAM's default limit of 10 attached managed policies.
 resource "aws_iam_role_policy" "cmk" {
   count = length(local.cmk_statements) > 0 ? 1 : 0
 
