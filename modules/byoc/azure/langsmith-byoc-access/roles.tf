@@ -183,6 +183,21 @@ locals {
     "Microsoft.Insights/dataCollectionRuleAssociations/delete",
   ])
 
+  # Added with egress_firewall: Azure Firewall, its policy, and the route
+  # table that sends the AKS subnet traffic to the firewall.
+  langsmith_byoc_firewall_actions = [
+    "Microsoft.Network/azureFirewalls/write",
+    "Microsoft.Network/azureFirewalls/delete",
+    "Microsoft.Network/firewallPolicies/write",
+    "Microsoft.Network/firewallPolicies/join/action",
+    "Microsoft.Network/firewallPolicies/delete",
+    "Microsoft.Network/firewallPolicies/ruleCollectionGroups/write",
+    "Microsoft.Network/firewallPolicies/ruleCollectionGroups/delete",
+    "Microsoft.Network/routeTables/write",
+    "Microsoft.Network/routeTables/join/action",
+    "Microsoft.Network/routeTables/delete",
+  ]
+
   # With byo_iam, the customer creates and deletes the identities.
   langsmith_byoiam_removed_actions = [
     "Microsoft.ManagedIdentity/userAssignedIdentities/write",

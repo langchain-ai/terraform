@@ -72,6 +72,7 @@ resource "azurerm_role_definition" "langsmith_byoc" {
       each.value.deployment_observability ? (
         each.value.reduced_access ? local.langsmith_byoc_observability_reduced_actions : local.langsmith_byoc_observability_actions
       ) : [],
+      each.value.egress_firewall ? local.langsmith_byoc_firewall_actions : [],
     )
   }
 }

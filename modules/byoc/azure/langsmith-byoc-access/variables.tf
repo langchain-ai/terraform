@@ -36,6 +36,9 @@ variable "data_planes" {
     # Analytics workspace and an Azure Monitor workspace in the resource group.
     # Adds the actions in local.langsmith_byoc_observability_actions.
     deployment_observability = optional(bool, false)
+    # Let LangSmith put an Azure Firewall on the outbound traffic of the data
+    # plane. Adds the actions in local.langsmith_byoc_firewall_actions.
+    egress_firewall = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
