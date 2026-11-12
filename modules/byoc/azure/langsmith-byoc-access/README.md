@@ -252,6 +252,26 @@ Terraform creates a VNet flow log for the data plane VNet. Azure writes the logs
 
 Remove `flow_logs` before you delete the data plane.
 
+### Give break glass access (optional)
+
+To let LangChain engineers examine a data plane, set `break_glass`. Then run `terraform apply`:
+
+```hcl
+data_planes = {
+  prod = {
+    location    = "eastus"
+    break_glass = { principal_ids = ["<object-id>"], until = "2026-11-12T18:00:00Z" }
+  }
+}
+```
+
+Terraform creates time-bound Privileged Identity Management (PIM) assignments on the resource group for each principal: `Reader`, `Azure Kubernetes Service Cluster User Role`, and `Azure Kubernetes Service RBAC Reader`. The engineers can read the Azure resources and the Kubernetes objects, but not the secrets.
+
+- `principal_ids` are object IDs in your tenant. Invite each engineer as a guest user first.
+- Azure removes the assignments at `until`. PIM rejects a window with less than 5 minutes left. To end the access early, remove `break_glass` and run `terraform apply`.
+- `kubernetes_role` sets a different role in the cluster, for example `Azure Kubernetes Service RBAC Writer`.
+- PIM requires Microsoft Entra ID P2.
+
 ### Remove a data plane
 
 > **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
@@ -286,6 +306,7 @@ Fields of each `data_planes` entry:
 | `egress_firewall` | `bool` | no | `false` | Let LangSmith put an Azure Firewall on the outbound traffic of this data plane. Adds actions to its custom role. LangSmith turns the firewall on. |
 | `byo_vnet` | `object` | no | `null` | Use your VNet: `vnet_id`, `aks_subnet_id` (/22 or larger, with a NAT gateway or a route table), `private_endpoints_subnet_id` (/26 or larger), and `outbound_type` (`NAT_GATEWAY` or `USER_DEFINED_ROUTING`). Needs `byo_iam`. The VNet must be in the subscription and the region of the data plane, and must use the Azure-provided DNS. LangSmith gets a role that reads the VNet and joins its subnets. Send the `byovnet` output as `byovnet` in the create request of the API, without `vpc_cidr`. Do not change it later. |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
+| `break_glass` | `object` | no | `null` | Time-bound access for LangChain engineers: `principal_ids`, `until`, and an optional `kubernetes_role` (`Azure Kubernetes Service RBAC Reader`). See [Give break glass access](#give-break-glass-access-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
 

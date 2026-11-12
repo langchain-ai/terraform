@@ -58,8 +58,24 @@ variable "data_planes" {
       network_watcher_name                = optional(string)
       network_watcher_resource_group_name = optional(string, "NetworkWatcherRG")
     }))
+    # Time-bound access to the data plane for LangChain engineers. See
+    # break_glass.tf.
+    break_glass = optional(object({
+      # Object IDs in your tenant: guest users or a group.
+      principal_ids = list(string)
+      # RFC 3339 time, for example "2026-11-12T18:00:00Z".
+      until           = string
+      kubernetes_role = optional(string, "Azure Kubernetes Service RBAC Reader")
+    }))
   }))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for dp in values(var.data_planes) : dp.break_glass == null || can(timecmp(dp.break_glass.until, "2000-01-01T00:00:00Z"))
+    ])
+    error_message = "break_glass.until must be an RFC 3339 time, for example 2026-11-12T18:00:00Z."
+  }
 
   # The key is part of the resource group name (at most 90 characters) and of
   # the Key Vault name, which allows no consecutive hyphens and must start with
