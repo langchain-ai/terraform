@@ -136,46 +136,54 @@ resource "azurerm_role_assignment" "blob_data_contributor" {
 #                 the user hasn't explicitly kept long-term
 # Rule "extended": delete ttl_l/* blobs after N days (default: 400) — traces
 #                  explicitly marked for long retention (~13 months)
+#
+# The "base" and "extended" rules are skipped when ttl_enabled is false. The
+# redaction-raw rule is not.
 resource "azurerm_storage_management_policy" "lifecycle_policy" {
-  count              = var.ttl_enabled ? 1 : 0
   storage_account_id = azurerm_storage_account.storage_account.id
 
-  rule {
-    name    = "base"
-    enabled = true
-    filters {
-      prefix_match = ["${var.container_name}/ttl_s"]
-      blob_types   = ["blockBlob"]
-    }
-    actions {
-      base_blob {
-        delete_after_days_since_creation_greater_than = var.ttl_short_days
+  dynamic "rule" {
+    for_each = var.ttl_enabled ? [1] : []
+    content {
+      name    = "base"
+      enabled = true
+      filters {
+        prefix_match = ["${var.container_name}/ttl_s"]
+        blob_types   = ["blockBlob"]
       }
-      snapshot {
-        delete_after_days_since_creation_greater_than = var.ttl_short_days
-      }
-      version {
-        delete_after_days_since_creation = var.ttl_short_days
+      actions {
+        base_blob {
+          delete_after_days_since_creation_greater_than = var.ttl_short_days
+        }
+        snapshot {
+          delete_after_days_since_creation_greater_than = var.ttl_short_days
+        }
+        version {
+          delete_after_days_since_creation = var.ttl_short_days
+        }
       }
     }
   }
 
-  rule {
-    name    = "extended"
-    enabled = true
-    filters {
-      prefix_match = ["${var.container_name}/ttl_l"]
-      blob_types   = ["blockBlob"]
-    }
-    actions {
-      base_blob {
-        delete_after_days_since_creation_greater_than = var.ttl_long_days
+  dynamic "rule" {
+    for_each = var.ttl_enabled ? [1] : []
+    content {
+      name    = "extended"
+      enabled = true
+      filters {
+        prefix_match = ["${var.container_name}/ttl_l"]
+        blob_types   = ["blockBlob"]
       }
-      snapshot {
-        delete_after_days_since_creation_greater_than = var.ttl_long_days
-      }
-      version {
-        delete_after_days_since_creation = var.ttl_long_days
+      actions {
+        base_blob {
+          delete_after_days_since_creation_greater_than = var.ttl_long_days
+        }
+        snapshot {
+          delete_after_days_since_creation_greater_than = var.ttl_long_days
+        }
+        version {
+          delete_after_days_since_creation = var.ttl_long_days
+        }
       }
     }
   }

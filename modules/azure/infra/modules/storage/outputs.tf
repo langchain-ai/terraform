@@ -59,3 +59,8 @@ output "identity_ids" {
   description = "User-assigned identities assigned to the account for its customer-managed key; empty under the service-managed key."
   value       = try(azurerm_storage_account.storage_account.identity[0].identity_ids, toset([]))
 }
+
+output "lifecycle_rule_names" {
+  description = "Names of the storage lifecycle policy rules in force."
+  value       = [for r in azurerm_storage_management_policy.lifecycle_policy.rule : r.name]
+}

@@ -58,29 +58,35 @@ resource "aws_vpc_endpoint" "s3" {
 #
 # Rule "base":     delete ttl_s/* objects after N days (default: 14)  — standard traces
 # Rule "extended": delete ttl_l/* objects after N days (default: 400) — long-retention traces
+# Both are skipped when s3_ttl_enabled is false. The redaction-raw rule is not.
 resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
-  count  = var.s3_ttl_enabled ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
 
-  rule {
-    id     = "base"
-    status = "Enabled"
-    filter {
-      prefix = "ttl_s/"
-    }
-    expiration {
-      days = var.s3_ttl_short_days
+  dynamic "rule" {
+    for_each = var.s3_ttl_enabled ? [1] : []
+    content {
+      id     = "base"
+      status = "Enabled"
+      filter {
+        prefix = "ttl_s/"
+      }
+      expiration {
+        days = var.s3_ttl_short_days
+      }
     }
   }
 
-  rule {
-    id     = "extended"
-    status = "Enabled"
-    filter {
-      prefix = "ttl_l/"
-    }
-    expiration {
-      days = var.s3_ttl_long_days
+  dynamic "rule" {
+    for_each = var.s3_ttl_enabled ? [1] : []
+    content {
+      id     = "extended"
+      status = "Enabled"
+      filter {
+        prefix = "ttl_l/"
+      }
+      expiration {
+        days = var.s3_ttl_long_days
+      }
     }
   }
 
@@ -88,7 +94,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
   # projects that redact at ingestion under ttl_1d/ and deletes them once their
   # runs are done. This rule removes any it could not, including the previous
   # versions when versioning is on. S3 expires in whole days, so an object can
-  # live for up to about two days.
+  # live for up to about two days. It does not depend on s3_ttl_enabled.
   rule {
     id     = "redaction-raw"
     status = "Enabled"
