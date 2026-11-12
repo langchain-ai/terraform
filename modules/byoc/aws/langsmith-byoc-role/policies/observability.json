@@ -62,7 +62,18 @@
   {
     "Sid": "AMPDeploymentMetricsWorkspaceCreate",
     "Effect": "Allow",
-    "Action": ["aps:CreateWorkspace", "aps:TagResource"],
+    "Action": ["aps:CreateWorkspace"],
+    "Resource": "*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "AMPDeploymentMetricsWorkspaceTagOnCreate",
+    "Effect": "Allow",
+    "Action": ["aps:TagResource"],
     "Resource": "arn:aws:aps:*:${account_id}:workspace/*",
     "Condition": {
       "StringEquals": {
