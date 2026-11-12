@@ -124,6 +124,86 @@ byoiam_instance_profile_name           = module.byoiam.karpenter_instance_profil
 byoiam_karpenter_controller_policy_arn = module.byoiam.karpenter_controller_policy_arn
 ```
 
+### Customer-managed KMS keys
+
+To encrypt a new data plane with your own KMS keys, set `cmk_service_key_arns`
+to a key ARN for each service: `s3`, `ebs`, `eks`, `rds`, or `elasticache`.
+Several services may share one key. The keys apply only to data planes created
+after you set them. Existing data planes keep their current encryption.
+
+```hcl
+cmk_service_key_arns = {
+  s3          = "arn:aws:kms:us-east-1:111122223333:key/<data-key-id>"
+  rds         = "arn:aws:kms:us-east-1:111122223333:key/<data-key-id>"
+  elasticache = "arn:aws:kms:us-east-1:111122223333:key/<data-key-id>"
+  ebs         = "arn:aws:kms:us-east-1:111122223333:key/<data-key-id>"
+  eks         = "arn:aws:kms:us-east-1:111122223333:key/<infra-key-id>"
+}
+```
+
+The role may use each key only through its own service: EC2 for `ebs`, EKS for
+`eks`, RDS and Secrets Manager for `rds`, and ElastiCache for `elasticache`. It
+may create grants only for AWS resources. It may also read each key's policy,
+so LangSmith can check the policy before it creates the data plane. The `s3` key
+needs no grant on this role. If you use the [BYOIAM module](../byoiam/README.md), set the same
+`cmk_service_key_arns` there.
+
+Keep the keys in the data plane region. For a key in the data plane account, with
+the default key policy statement that enables IAM permissions, the IAM grants
+above are enough for the roles. The `ebs` key policy must also allow the Auto Scaling service-linked role,
+and the `s3` key policy must allow VPC flow log delivery:
+
+```json
+[
+  {
+    "Sid": "AllowAutoScalingEBS",
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::<account-id>:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling" },
+    "Action": ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "AllowAutoScalingEBSGrants",
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::<account-id>:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling" },
+    "Action": "kms:CreateGrant",
+    "Resource": "*",
+    "Condition": { "Bool": { "kms:GrantIsForAWSResource": "true" } }
+  },
+  {
+    "Sid": "AllowVPCFlowLogDelivery",
+    "Effect": "Allow",
+    "Principal": { "Service": "delivery.logs.amazonaws.com" },
+    "Action": ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"],
+    "Resource": "*",
+    "Condition": { "StringEquals": { "aws:SourceAccount": "<account-id>" } }
+  }
+]
+```
+
+`AllowVPCFlowLogDelivery` is needed only when LangSmith manages the VPC.
+
+A key in another AWS account also needs key policy statements that allow this
+role and each BYOIAM role. LangSmith cannot read the policy of a key in another
+account, so it checks only that the key exists and is enabled.
+
+For an `ebs` key in another account, the key policy statements for the Auto
+Scaling service-linked role are not enough. Allow the data plane account to call
+`kms:CreateGrant` in the key policy, then create a grant for the role from the
+data plane account:
+
+```sh
+aws kms create-grant \
+  --region <region> \
+  --key-id <ebs-key-arn> \
+  --grantee-principal arn:aws:iam::<data-plane-account-id>:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling \
+  --operations Encrypt Decrypt ReEncryptFrom ReEncryptTo GenerateDataKey GenerateDataKeyWithoutPlaintext DescribeKey CreateGrant
+```
+
+If you disable a key or remove these statements, every service that uses it
+stops working. For example, without the `ebs` key new nodes cannot start, and
+without the `rds` key the databases cannot read their data.
+
 ### Naming and permissions boundaries
 
 Set `break_glass_role_name` when your naming convention does not allow
@@ -191,6 +271,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
 | `allow_vpc_creation_permissions` | `bool` | no | `true` | Grants base-network management permissions. Set to `false` for a customer-supplied VPC. |
 | `allow_iam_management_permissions` | `bool` | no | `true` | Grants IAM creation, mutation, and deletion permissions. Set to `false` for customer-managed IAM. |
+| `cmk_service_key_arns` | `map(string)` | no | `{}` | Customer-managed KMS key per data plane service (`s3`, `ebs`, `eks`, `rds`, `elasticache`) for new data planes. |
 | `allow_self_hosted_migration_permissions` | `bool` | no | `false` | Grants VPC peering acceptance and SmithDB role trust updates for a self-hosted to BYOC migration. |
 | `vpc_ids` | `set(string)` | no | `[]` | Customer VPC IDs allowed for tagged workload security-group creation; required when `allow_vpc_creation_permissions = false`. |
 
@@ -222,7 +303,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-lambda` | Lambda + EventBridge for periodic jobs, ECR repositories for deployment builds |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
-The exact statements are in `policies/*.json`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs.
+The exact statements are in `policies/*.json`. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs. When `cmk_service_key_arns` is set, an inline `-cmk` policy adds use of each exact key ARN through its own AWS service.
 
 ### Break-glass role
 

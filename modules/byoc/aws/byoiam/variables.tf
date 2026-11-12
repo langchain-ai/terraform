@@ -62,6 +62,17 @@ variable "ebs_kms_key_arns" {
   }
 }
 
+variable "cmk_service_key_arns" {
+  description = "Optional. Customer-managed KMS key ARN per data plane service: s3, ebs, eks, rds, or elasticache."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for service, arn in var.cmk_service_key_arns : contains(["s3", "ebs", "eks", "rds", "elasticache"], service) && can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Keys must be s3, ebs, eks, rds, or elasticache, and values must be KMS key ARNs."
+  }
+}
+
 variable "permissions_boundary_arn" {
   description = "Optional customer IAM permissions boundary applied to all 16 application/infrastructure roles (not AWS service-linked roles)."
   type        = string
