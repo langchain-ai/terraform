@@ -158,13 +158,6 @@ resource "azurerm_role_assignment" "metrics_collector_publisher" {
   principal_type       = "ServicePrincipal"
 }
 
-# Dedicated deployments. host-backend creates, resizes, and deletes their
-# PostgreSQL servers as its own identity, and reads their metrics. Only
-# host-backend and the listener can use that identity, because the role also
-# reaches the LangSmith application server. The servers join a delegated subnet
-# and a private DNS zone that do not exist yet, so the scope is the resource
-# group. Without byo_iam, LangSmith grants the network actions on that subnet
-# and zone only.
 resource "azurerm_role_definition" "dedicated_deployments" {
   for_each = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments }
 
@@ -199,8 +192,6 @@ resource "azurerm_role_assignment" "host_backend_dedicated_deployments" {
   principal_type     = "ServicePrincipal"
 }
 
-# With dedicated deployments, host-backend also reads deployment logs and
-# metrics as its own identity.
 resource "azurerm_role_assignment" "host_backend_observability" {
   for_each = merge([
     for key in keys(azurerm_role_definition.dedicated_deployments) : {

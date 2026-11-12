@@ -233,12 +233,7 @@ When observability is turned off, LangSmith deletes the rules, the endpoint, the
 
 ### Turn on dedicated deployments (optional)
 
-Dedicated deployments are production LangGraph deployments on dedicated tiers. Each one gets its own Azure Database for PostgreSQL flexible server in the data plane resource group. For them, LangSmith creates:
-
-- a subnet of the data plane VNet, delegated to `Microsoft.DBforPostgreSQL/flexibleServers`, and a private DNS zone `<name>.postgres.database.azure.com` linked to the VNet. The servers have no public access.
-- an identity that only host-backend and the listener use, `langsmith-host-backend-identity`, and for it a custom role with `Microsoft.DBforPostgreSQL/flexibleServers/{read,write,delete,restart/action}`, `flexibleServers/configurations/{read,write}` and `Microsoft.Insights/metrics/read` on the resource group, and one with the read and join actions of that subnet and zone, on them only.
-
-The LangSmith custom role already covers the subnet, the zone and its link, so it gains no actions. The role assignments come from the `User Access Administrator` assignment, so keep `reduced_access = false` while LangSmith turns dedicated deployments on or off.
+Each dedicated LangGraph deployment gets its own private Azure Database for PostgreSQL flexible server in the data plane resource group. LangSmith creates the network and the identity that manages the servers. Keep `reduced_access = false` while LangSmith turns dedicated deployments on or off.
 
 With `byo_iam`, set `dedicated_deployments = true` and run `terraform apply` before LangSmith turns them on:
 
@@ -248,9 +243,7 @@ data_planes = {
 }
 ```
 
-The module then creates `langsmith-host-backend-identity` and gives it one custom role, `langsmith-byoc-<key>-deployment-postgres-<suffix>`, with all of the actions above on the resource group, because the subnet and the zone do not exist yet. host-backend reads deployment logs and metrics as this identity too, so the module also gives it `Log Analytics Reader` and `Monitoring Data Reader` on the resource group.
-
-The PostgreSQL actions apply to every flexible server in the resource group, including the LangSmith application database. That is why only host-backend and the listener can use this identity, and host-backend changes only the servers it tagged for a deployment.
+The module then creates `langsmith-host-backend-identity` and its roles on the resource group.
 
 Before you set `dedicated_deployments` back to `false` or remove it, delete the dedicated deployments and have LangSmith turn the feature off. host-backend needs the role to delete their servers, and servers it cannot delete keep running and billing in the resource group.
 
