@@ -158,6 +158,45 @@ resource "azurerm_role_assignment" "metrics_collector_publisher" {
   principal_type       = "ServicePrincipal"
 }
 
+# Dedicated deployments. host-backend creates, resizes, and deletes their
+# PostgreSQL servers as the workload identity, and reads their metrics. The
+# servers join a delegated subnet and a private DNS zone that do not exist yet,
+# so the scope is the resource group. Without byo_iam, LangSmith grants the
+# network actions on that subnet and zone only.
+resource "azurerm_role_definition" "dedicated_deployments" {
+  for_each = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments }
+
+  name              = "langsmith-byoc-${each.key}-deployment-postgres-${random_string.key_vault_suffix[each.key].result}"
+  scope             = azurerm_resource_group.data_plane[each.key].id
+  description       = "Create, configure, resize, delete, and chart the PostgreSQL servers of LangSmith dedicated deployments."
+  assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
+
+  permissions {
+    actions = [
+      "Microsoft.DBforPostgreSQL/flexibleServers/read",
+      "Microsoft.DBforPostgreSQL/flexibleServers/write",
+      "Microsoft.DBforPostgreSQL/flexibleServers/delete",
+      "Microsoft.DBforPostgreSQL/flexibleServers/restart/action",
+      "Microsoft.DBforPostgreSQL/flexibleServers/configurations/read",
+      "Microsoft.DBforPostgreSQL/flexibleServers/configurations/write",
+      "Microsoft.Insights/metrics/read",
+      "Microsoft.Network/virtualNetworks/subnets/read",
+      "Microsoft.Network/virtualNetworks/subnets/join/action",
+      "Microsoft.Network/privateDnsZones/read",
+      "Microsoft.Network/privateDnsZones/join/action",
+    ]
+  }
+}
+
+resource "azurerm_role_assignment" "workload_dedicated_deployments" {
+  for_each = azurerm_role_definition.dedicated_deployments
+
+  scope              = azurerm_resource_group.data_plane[each.key].id
+  role_definition_id = each.value.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.data_plane["${each.key}/workload"].principal_id
+  principal_type     = "ServicePrincipal"
+}
+
 # LangSmith runs the cluster workloads. The cluster does not exist yet, so the
 # scope is the resource group.
 resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
