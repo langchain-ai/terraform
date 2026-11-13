@@ -13,7 +13,7 @@
     ]
   },
   {
-    "Sid": "S3BucketRead",
+    "Sid": "S3BucketManage",
     "Effect": "Allow",
     "Action": [
       "s3:GetBucketLocation",
@@ -34,34 +34,10 @@
       "s3:GetReplicationConfiguration",
       "s3:GetAccelerateConfiguration",
       "s3:GetBucketNotification",
-      "s3:ListBucket"
-    ],
-    "Resource": [
-      "arn:aws:s3:::*-smith-blob",
-      "arn:aws:s3:::*-smith-clickhouse-backups",
-      "arn:aws:s3:::*-smith-vpc-flow-logs",
-      "arn:aws:s3:::*-smith-sandbox-snapshots",
-      "arn:aws:s3:::*-smithdb-blob",
-      "arn:aws:s3:::*-smith-deployment-sources"
-    ]
-  },
-  {
-    "Sid": "S3BucketTag",
-    "Effect": "Allow",
-    "Action": ["s3:PutBucketTagging", "s3:TagResource", "s3:UntagResource"],
-    "Resource": [
-      "arn:aws:s3:::*-smith-blob",
-      "arn:aws:s3:::*-smith-clickhouse-backups",
-      "arn:aws:s3:::*-smith-vpc-flow-logs",
-      "arn:aws:s3:::*-smith-sandbox-snapshots",
-      "arn:aws:s3:::*-smithdb-blob",
-      "arn:aws:s3:::*-smith-deployment-sources"
-    ]
-  },
-  {
-    "Sid": "S3BucketConfig",
-    "Effect": "Allow",
-    "Action": [
+      "s3:ListBucket",
+      "s3:PutBucketTagging",
+      "s3:TagResource",
+      "s3:UntagResource",
       "s3:PutBucketPublicAccessBlock",
       "s3:PutBucketOwnershipControls",
       "s3:PutEncryptionConfiguration",
@@ -77,7 +53,12 @@
       "arn:aws:s3:::*-smith-sandbox-snapshots",
       "arn:aws:s3:::*-smithdb-blob",
       "arn:aws:s3:::*-smith-deployment-sources"
-    ]
+    ],
+    "Condition": {
+      "StringEquals": {
+        "s3:ResourceAccount": "${account_id}"
+      }
+    }
   },
   {
     "Sid": "S3DenyObjectDataAccess",
