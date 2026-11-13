@@ -24,6 +24,13 @@ locals {
     "compute.addresses.setLabels",
     "compute.addresses.use",
     "compute.addresses.useInternal",
+    # The optional deny-by-default egress firewall: a global network firewall
+    # policy, its rules (policy updates) and its association with the VPC.
+    "compute.firewallPolicies.create",
+    "compute.firewallPolicies.delete",
+    "compute.firewallPolicies.get",
+    "compute.firewallPolicies.update",
+    "compute.firewallPolicies.use",
     "compute.forwardingRules.create",
     "compute.forwardingRules.delete",
     "compute.forwardingRules.get",
@@ -48,6 +55,7 @@ locals {
     "compute.networks.delete",
     "compute.networks.get",
     "compute.networks.removePeering",
+    "compute.networks.setFirewallPolicy",
     "compute.networks.update",
     "compute.networks.updatePeering",
     "compute.networks.updatePolicy",
@@ -244,6 +252,7 @@ locals {
         "compute.networks.create",
         "compute.networks.delete",
         "compute.networks.removePeering",
+        "compute.networks.setFirewallPolicy",
         "compute.networks.update",
         "compute.networks.updatePeering",
         "compute.networks.updatePolicy",
@@ -267,6 +276,15 @@ locals {
       title       = "routes"
       expression  = "resource.name.extract(\"/routes/{name}\").startsWith(\"langsmith-\")"
       permissions = ["compute.routes.create", "compute.routes.delete"]
+    }
+    # Global network firewall policies (the egress firewall). Their rules are
+    # policy updates, and associating one with a network checks use on the
+    # policy and compute.networks.setFirewallPolicy on the network, which the
+    # network fence covers.
+    FirewallPolicies = {
+      title       = "firewall policies"
+      expression  = "resource.name.extract(\"/firewallPolicies/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["compute.firewallPolicies.create", "compute.firewallPolicies.delete", "compute.firewallPolicies.update", "compute.firewallPolicies.use"]
     }
     # Cloud Routers, and the Cloud NAT configured on them.
     Routers = {
