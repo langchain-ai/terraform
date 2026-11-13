@@ -198,6 +198,16 @@ resource "terraform_data" "validate_inputs" {
       error_message = "enable_engine requires enable_sandboxes = true. Every Engine run executes in a sandbox, and the chart rejects Engine without Sandboxes."
     }
 
+    precondition {
+      condition     = !local.no_gateway || !var.enable_deployments
+      error_message = "ALB-only mode requires Envoy or Istio for agent deployment endpoints."
+    }
+
+    precondition {
+      condition     = !local.no_gateway || (contains(["acm", "none"], var.tls_certificate_source) && !var.create_cert_manager_irsa)
+      error_message = "No-gateway mode supports ACM TLS termination at the ALB or HTTP-only (none). cert-manager requires a gateway."
+    }
+
     # Two gateway controllers share one ALB target group (all three
     # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
     # gateway_target_port can only describe one of them, so a second controller
@@ -617,6 +627,18 @@ module "alb" {
 # Envoy Gateway: port 10080 (Gateway listener port 80 + 10000 offset, Envoy runs non-root)
 # Istio Gateway: port 80    (istio-ingressgateway listens on 80 directly via NET_BIND_SERVICE)
 # NGINX Ingress:  port 80    (ingress-nginx-controller)
+
+resource "aws_vpc_security_group_ingress_rule" "alb_to_frontend" {
+  count = local.no_gateway ? 1 : 0
+
+  security_group_id            = module.eks.node_security_group_id
+  referenced_security_group_id = module.alb.security_group_id
+  from_port                    = 8080
+  to_port                      = 8080
+  ip_protocol                  = "tcp"
+  description                  = "Allow ALB to reach langsmith-frontend (NGINX) pods"
+  tags                         = local.common_tags
+}
 
 resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
   count = local.enable_envoy_gateway ? 1 : 0

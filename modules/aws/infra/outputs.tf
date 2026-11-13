@@ -498,3 +498,8 @@ NODNS
 }
   EOT
 }
+
+output "frontend_target_group_arn" {
+  description = "Target group bound to the frontend Service by make deploy in no-gateway mode."
+  value       = module.alb.frontend_target_group_arn
+}

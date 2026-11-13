@@ -4,10 +4,10 @@ styleMode shadow
 typeface clean
 
 // ─────────────────────────────────────────────
-// Path 1: ALB-Native (AWS Load Balancer Controller)
+// Path 1: Terraform ALB directly to langsmith-frontend (NGINX)
 // TLS terminates at ALB via ACM certificate
-// ALB is created and owned by Kubernetes Ingress + AWS LBC
-// No NGINX required — AWS LBC manages ALB lifecycle directly
+// ALB, listeners, and target group are owned by Terraform
+// langsmith-frontend (NGINX) routes UI/API requests; no separate gateway is required
 // ─────────────────────────────────────────────
 
 // ─────────────────────────────────────────────
@@ -118,16 +118,16 @@ AWS Account [icon: aws, color: orange] {
 
         // ── langsmith namespace ───────────────
         // All LangSmith workloads in a single namespace
-        // Ingress resource in this namespace is the entrypoint for AWS LBC
+        // TargetGroupBinding registers frontend pod IPs with the Terraform target group
         langsmith [color: purple] {
 
-          // Kubernetes Ingress resource (ingressClass: alb)
-          // AWS LBC watches this and provisions the ALB
-          Ingress Resource [icon: kubernetes, color: blue]
+          // Created by make deploy after the frontend Service exists
+          // AWS LBC maintains target registrations only
+          Frontend TargetGroupBinding [icon: kubernetes, color: blue]
 
           // Core application services
           Core Services [color: blue] {
-            frontend [icon: aws-elastic-kubernetes-service, color: blue]
+            frontend [icon: aws-elastic-kubernetes-service, color: blue, label: "langsmith-frontend (NGINX)"]
             backend [icon: aws-elastic-kubernetes-service, color: blue]
             platformBackend [icon: aws-elastic-kubernetes-service, color: blue]
             aceBackend [icon: aws-elastic-kubernetes-service, color: blue]
@@ -170,16 +170,16 @@ AWS Account [icon: aws, color: orange] {
 // ── Ingress traffic path ──────────────────────
 // Client → Route 53 CNAME → ALB :443 (ACM TLS terminates here)
 // ALB :80 listener auto-redirects to :443
-// ALB forwards :443 → frontend NodePort :80 (HTTP internally)
+// ALB forwards :443 → frontend pod :8080 (HTTP internally)
 Client Browser > Public Hosted Zone: DNS lookup
 Public Hosted Zone > ACM Certificate: cert ARN bound to ALB
 Public Hosted Zone > ALB Internet-Facing: CNAME / A alias
 Client Browser > ALB Internet-Facing: HTTPS :443
-ALB Internet-Facing > frontend: :80 NodePort (TLS terminates at ALB)
+ALB Internet-Facing > frontend: HTTP :8080 (pod IP) (TLS terminates at ALB)
 
-// ── AWS LBC manages the ALB lifecycle ─────────
-AWS LB Controller > Ingress Resource: watches and reconciles
-Ingress Resource > ALB Internet-Facing: provisions / updates ALB
+// ── AWS LBC registers pod IPs ─────────────────
+AWS LB Controller > Frontend TargetGroupBinding: reconciles pod targets
+Frontend TargetGroupBinding > ALB Internet-Facing: registers frontend pod IPs
 
 // ── Frontend → internal service routing ───────
 frontend > backend: /api/*
@@ -246,7 +246,7 @@ legend [position: bottom-right] {
   [color: orange, label: Required egress — beacon.langchain.com]
   [color: purple, label: langsmith Kubernetes namespace]
   [color: green, label: S3 — always via VPC Gateway Endpoint (no NAT cost)]
-  [note: ALB is Kubernetes-native in this path — provisioned by AWS LBC via Ingress resource]
+  [note: ALB is Terraform-managed; AWS LBC maintains frontend pod registration]
   [note: TLS terminates at ALB with ACM certificate — no cert-manager required for ACM path]
-  [note: No split dataplane — Ingress is namespace-scoped to langsmith]
+  [note: Agent deployment endpoints require a gateway]
 }

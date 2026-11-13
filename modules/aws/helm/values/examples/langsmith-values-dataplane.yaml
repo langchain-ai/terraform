@@ -20,7 +20,7 @@
 config:
   langsmithApiKey: "<workspace-api-key>"          # Settings > API Keys
   langsmithWorkspaceId: "<workspace-uuid>"         # Settings > Workspaces > Copy ID
-  # In-cluster service URLs — do not use the external ALB/NLB hostname here.
+  # In-cluster service URLs — do not use the external ALB hostname here.
   # Using in-cluster URLs avoids a network round-trip through the load balancer.
   hostBackendUrl: "http://langsmith-host-backend.langsmith.svc.cluster.local:1985"
   smithBackendUrl: "http://langsmith-platform-backend.langsmith.svc.cluster.local:1986"
