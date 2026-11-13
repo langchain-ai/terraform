@@ -190,12 +190,11 @@ else
   pass "Connection settings stored in the $EXTERNAL_SECRET Secret"
 fi
 
-# Migration pod and TaskDB resources are not in this file: the SmithDB size
-# sets them.
+# Migration pod resources come from the SmithDB size; TaskDB uses chart defaults.
 mkdir -p "$VALUES_DIR"
 {
   echo "# Written by make smithdb-migration-job-start; rerun it to change these answers."
-  echo "# Migration pod and TaskDB resources come from the SmithDB size (langsmith-values-smithdb-sizing.yaml) and the chart defaults."
+  echo "# Migration pod resources come from the SmithDB size and chart defaults; TaskDB uses chart defaults."
   echo "smithdb:"
   echo "  migration:"
   echo "    job:"

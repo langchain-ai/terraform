@@ -104,11 +104,7 @@ locals {
   # not the account's blob URL.
   sandbox_juicefs_bucket = var.enable_sandboxes ? replace(module.blob.blob_endpoint, "/^https://[^.]+\\.blob\\.([^/]+)/?$/", "https://${azurerm_storage_container.sandbox_juicefs[0].name}.$1") : null
 
-  # A StorageClass is cluster-scoped, unlike everything else this module creates
-  # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
-  # the second apply fails on an object the first one owns. Suffix it the same
-  # way as the namespaced resources above.
-  smithdb_cache_storage_class = var.smithdb_cache_storage_class_name != "" ? var.smithdb_cache_storage_class_name : "smithdb-cache-premium-v2${local.name_suffix}${local.uniq_suffix}"
+  smithdb_cache_storage_class = var.smithdb_cache_storage_class_name != "" ? var.smithdb_cache_storage_class_name : "smithdb-cache"
 
   # Max 24 chars, globally unique. Attaching takes the customer's name with no
   # fallback, same as aks_name above.
@@ -319,19 +315,11 @@ locals {
     }
   } : {}
 
-  effective_node_pools = merge(local.sandbox_node_pools, var.additional_node_pools)
+  effective_node_pools = merge(local.sandbox_node_pools, var.additional_node_pools, local.smithdb_node_pools)
 
   # On a pre-existing cluster whose node pools the customer owns, an empty map, so
   # Terraform doesn't attach pools to a cluster it doesn't manage.
   aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
-
-  # Additional pools this module creates that resolve to zones: their own, or
-  # availability_zones when they set none. One of these gives SmithDB zonal
-  # nodes for its Premium SSD v2 cache disks on a cluster whose default pool
-  # was built nonzonal.
-  zonal_node_pools = [
-    for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) > 0
-  ]
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -1024,50 +1012,27 @@ resource "terraform_data" "validate_network" {
       error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, or cost_center."
     }
 
-    # SmithDB caches sit on Premium SSD v2, and in most regions that offer
-    # availability zones a Premium SSD v2 disk only attaches to a zonal VM. An
-    # empty availability_zones asks Azure to place the pool, which can leave the
-    # nodes nonzonal and the cache PVCs unschedulable - a failure that appears
-    # after a clean apply, as SmithDB pods pending on a disk attach error.
-    # default_node_pool[0].zones also carries ignore_changes and applies at
-    # creation, so recovering from it means rebuilding the pool rather than
-    # editing a variable. Refuse at plan time instead. A zonal additional pool
-    # also passes, because it is the non-disruptive way to add zonal nodes to a
-    # cluster built without them; the chart overrides then pin SmithDB there.
+    # Premium SSD v2 cache disks require zonal SmithDB nodes in most regions.
     precondition {
-      condition     = !var.enable_smithdb || length(var.availability_zones) > 0 || length(local.zonal_node_pools) > 0
-      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"], or an additional_node_pools entry with zones set. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+      condition = !var.enable_smithdb ? true : (
+        var.create_cluster || var.existing_cluster_node_pools_managed
+        ? length(local.effective_node_pools["smithdb"].zones != null ? local.effective_node_pools["smithdb"].zones : var.availability_zones) > 0
+        : length(var.smithdb_node_zones != null ? var.smithdb_node_zones : var.availability_zones) > 0
+      )
+      error_message = "SmithDB requires zonal nodes for Premium SSD v2 caches. Set smithdb_node_zones, availability_zones, or additional_node_pools.smithdb.zones to the pool's zones. On an attached cluster, provide zonal nodes with label langsmith-nodepool/smithdb=true."
     }
 
     # SmithDB's single-replica deployments start the new pod before stopping
     # the old one, and the chart exposes no strategy for compaction. On a
     # dedicated pool that cannot grow, the new pod stays Pending after any
-    # values change, including every staged gate flip. The pool is identified by
-    # the name the chart overrides pin to (kubernetes.azure.com/agentpool:
-    # smithdb). ?: rather than || so the index is skipped when the pool is absent.
+    # values change. Keep at least one node for Helm hooks, and room to grow.
     precondition {
       condition = (
         var.enable_smithdb && (var.create_cluster || var.existing_cluster_node_pools_managed) && contains(keys(local.effective_node_pools), "smithdb")
-        ? local.effective_node_pools["smithdb"].max_count > local.effective_node_pools["smithdb"].min_count
+        ? local.effective_node_pools["smithdb"].min_count >= 1 && local.effective_node_pools["smithdb"].max_count > local.effective_node_pools["smithdb"].min_count
         : true
       )
-      error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
-    }
-
-    # On a zoned cluster, a pool that sets zones = [] is regional, and SmithDB's
-    # components carry no nodeSelector by default, so they can land on it, where
-    # a Premium SSD v2 cache volume cannot attach. Refuse that. On a nonzonal
-    # cluster (availability_zones empty) the first SmithDB rule above already
-    # requires a zonal additional pool, and SMITHDB.md pins SmithDB to it; the other
-    # pools are regional by construction there, so this rule stands down. This
-    # reads the requested zones, not the live ones: a pool created regional
-    # before availability_zones reached additional pools passes, and
-    # check.aks_additional_node_pool_zone_drift in the cluster module names it.
-    precondition {
-      condition = !var.enable_smithdb || length(var.availability_zones) == 0 || alltrue([
-        for name, pool in local.aks_managed_node_pools : length(pool.zones != null ? pool.zones : var.availability_zones) > 0
-      ])
-      error_message = "enable_smithdb = true with availability_zones set refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
+      error_message = "The SmithDB pool needs min_count of at least 1 and max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
     }
 
     precondition {
@@ -1934,8 +1899,7 @@ locals {
   smithdb_sizing  = coalesce(var.smithdb_sizing, lookup(local.smithdb_sizing_by_profile, var.sizing_profile, "small"))
   smithdb_minimal = local.smithdb_sizing == "minimal"
 
-  # The chart has the small, medium, and large tiers. minimal uses small with
-  # explicit resources.
+  # Keep minimal as a compatibility alias for the chart's small tier.
   smithdb_resource_tier = local.smithdb_minimal ? "small" : local.smithdb_sizing
 
   # Replicas for each tier, from the SmithDB sizing table in the LangSmith
@@ -1949,23 +1913,12 @@ locals {
   }
   smithdb_replicas = local.smithdb_tier_replicas[local.smithdb_resource_tier]
 
-  smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
-  smithdb_compute_components = ["compaction", "clusterManager"]
+  smithdb_cache_components = ["query", "ingestion", "compactionWorker"]
 
-  # minimal: explicit resources, limits 2x requests. A partial resources block
-  # keeps the chart default for each key that it omits. The chart Job default
-  # has 100Gi of ephemeral-storage, so the Job block sets every key.
-  # The taskdb keeps the chart default resources.
-  smithdb_minimal_resources = {
-    query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
-    ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
-    compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
-    compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
-    clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
-    migration_job = {
-      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
-      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
-    }
+  # Preserve the existing minimal migration Job sizing independently of service tiers.
+  smithdb_minimal_migration_resources = {
+    requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
+    limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
   }
 
   # Default metastore SKU for each size. The docs section "Metastore capacity"
@@ -1997,30 +1950,11 @@ locals {
           autoscaling = { hpa = { minReplicas = local.smithdb_replicas[c] } }
         }
       },
+      local.smithdb_minimal ? { migration = { job = { resources = local.smithdb_minimal_migration_resources } } } : {},
     )
   }
 
-  # minimal: the explicit resources, and one replica for each autoscaled
-  # component.
-  smithdb_values_minimal = {
-    smithdb = merge(
-      { resourceTier = "small" },
-      {
-        for c in local.smithdb_cache_components : c => {
-          deployment  = { resources = local.smithdb_minimal_resources[c] }
-          autoscaling = { hpa = { minReplicas = 1, maxReplicas = 1 } }
-        }
-      },
-      { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
-      { migration = { job = { resources = local.smithdb_minimal_resources.migration_job } } },
-    )
-  }
-
-  # yamlencode per branch: the two objects have different attributes, so ?: on
-  # the objects themselves is a type error.
-  smithdb_helm_values = !var.enable_smithdb ? null : (
-    local.smithdb_minimal ? yamlencode(local.smithdb_values_minimal) : yamlencode(local.smithdb_values_tier)
-  )
+  smithdb_helm_values = var.enable_smithdb ? yamlencode(local.smithdb_values_tier) : null
 }
 
 # ── SmithDB infrastructure (optional) ────────────────────────────────────────
