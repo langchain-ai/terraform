@@ -50,6 +50,7 @@ OPTIONAL_PARAMS=(
   "polly-encryption-key"
   "sandbox-juicefs-redis-auth-token"
   "sandbox-callback-signing-jwk"
+  "sandbox-service-auth-secret"
   "engine-encryption-key"
   "engine-usage-signing-secret"
   "engine-encryption-key-previous"
@@ -60,6 +61,7 @@ STABLE_PARAMS=(
   "langsmith-api-key-salt"
   "langsmith-jwt-secret"
   "sandbox-callback-signing-jwk"
+  "sandbox-service-auth-secret"
   "engine-encryption-key"
   "engine-usage-signing-secret"
 )
@@ -75,6 +77,7 @@ DIFF_SSM_KEYS=(
   "deployments-encryption-key"
   "polly-encryption-key"
   "sandbox-callback-signing-jwk"
+  "sandbox-service-auth-secret"
   "engine-encryption-key"
   "engine-usage-signing-secret"
 )
@@ -88,6 +91,7 @@ DIFF_K8S_KEYS=(
   "deployments_encryption_key"
   "polly_encryption_key"
   "sandbox_callback_signing_jwk"
+  "sandbox_service_auth_secret"
   "engine_encryption_key"
   "engine_usage_signing_secret"
 )
@@ -209,6 +213,11 @@ cmd_set() {
       echo "  Engine cannot decrypt payloads made with the old key. Set engine-encryption-key-previous first (ENGINE.md, Keys)."
     elif [[ "$key" == "engine-usage-signing-secret" ]]; then
       echo "  Engine usage reports fail until every Engine component uses the new value (ENGINE.md, Keys)."
+    elif [[ "$key" == "sandbox-service-auth-secret" ]]; then
+      echo "  Sandboxes fail until LangSmith and the sandbox cluster both use the new value."
+      echo "  Unset TF_VAR_sandbox_service_auth_secret, re-source setup-env.sh, increment"
+      echo "  sandbox_runtime_secret_revision, run make apply and make deploy, then restart"
+      echo "  sandbox-host in the sandbox cluster (README, Secrets)."
     fi
     printf "  Are you sure? [y/N] "
     read -r confirm

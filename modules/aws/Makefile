@@ -159,7 +159,7 @@ smithdb-migration-job-end: ## Remove the migration setup once the Job is Complet
 sso: ## Turn on SSO (OIDC) login after a working password install — one-way
 	$(HELM_DIR)/scripts/sso.sh
 
-uninstall: ## Uninstall LangSmith Helm release
+uninstall: ## Uninstall LangSmith Helm release (the sandbox runtime first with an external runtime)
 	$(HELM_DIR)/scripts/uninstall.sh
 
 clean: ## Remove local generated files (run after make destroy and make purge-secrets)

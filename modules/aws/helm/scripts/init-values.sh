@@ -29,6 +29,8 @@
 #   - values/langsmith-values-engine.yaml        (if Engine is enabled)
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
+#   - values/langsmith-sandbox-values-overrides.yaml (langsmith-sandbox chart, if
+#                                                     sandbox_runtime_source = external)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -59,6 +61,7 @@ _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
 # Envoy still deploys it. Reading the applied state keeps this script in agreement with
@@ -115,6 +118,7 @@ else
 fi
 
 OUT_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
+SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 _first_run="false"
 [[ ! -f "$OUT_FILE" ]] && _first_run="true"
 
@@ -124,6 +128,7 @@ echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
 echo "  sizing_profile         = $_sizing_profile"
+echo "  sandbox_runtime_source = $_sandbox_runtime_source"
 echo ""
 
 # ── Terraform outputs ─────────────────────────────────────────────────────────
@@ -364,6 +369,10 @@ fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_JUICEFS_CACHE_DIRS=""
+SANDBOX_CLUSTER_NAME=""
+SANDBOX_IRSA_ROLE_ARN=""
+SANDBOX_RUNTIME_SECRET_NAME=""
+SANDBOX_SERVICE_ACCOUNT_NAME=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
   # Instance-store NVMe mounts on the sandbox-host nodes, e.g. /mnt/juicefs-cache0.
@@ -376,6 +385,33 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
       SANDBOX_JUICEFS_CACHE_DIRS+="${SANDBOX_JUICEFS_CACHE_DIRS:+ }${_dir}"
     fi
   done
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
+    if [[ -z "$HOSTNAME" ]]; then
+      echo "ERROR: an external sandbox runtime requires a resolvable LangSmith hostname." >&2
+      echo "       Set langsmith_domain or deploy the main ingress once, then re-run init-values." >&2
+      exit 1
+    fi
+    SANDBOX_CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || {
+      echo "ERROR: Could not read sandbox_cluster_name. Is terraform apply complete?" >&2
+      exit 1
+    }
+    SANDBOX_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_irsa_role_arn 2>/dev/null) || {
+      echo "ERROR: Could not read sandbox_irsa_role_arn. Is terraform apply complete?" >&2
+      exit 1
+    }
+    SANDBOX_RUNTIME_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_runtime_secret_name 2>/dev/null) || SANDBOX_RUNTIME_SECRET_NAME="langsmith-sandbox-runtime"
+    # The sandbox IRSA role trusts exactly one ServiceAccount. Read that name
+    # back from Terraform rather than hardcoding it here: the chart defaults
+    # sandboxHost.serviceAccount.name to the sandbox-host fullname, which would
+    # not match the trust policy and would fail IRSA at runtime with a
+    # WebIdentityErr that points nowhere near this file.
+    SANDBOX_SERVICE_ACCOUNT_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_service_account_name 2>/dev/null) || SANDBOX_SERVICE_ACCOUNT_NAME=""
+    if [[ -z "$SANDBOX_SERVICE_ACCOUNT_NAME" ]]; then
+      echo "ERROR: Could not read sandbox_service_account_name. Upgrade the infra module and re-apply;" >&2
+      echo "       without it the generated values cannot be matched to the sandbox IRSA trust policy." >&2
+      exit 1
+    fi
+  fi
 fi
 
 echo "Product addons (from terraform.tfvars):"
@@ -546,7 +582,7 @@ else
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
+  echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
 else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
@@ -856,19 +892,77 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
-  _sandbox_cache_dirs_block=""
-  if [[ -n "$SANDBOX_JUICEFS_CACHE_DIRS" ]]; then
-    _sandbox_cache_dirs_block="
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
+    # The sandbox cluster runs untrusted code, so sandbox service auth uses a
+    # dedicated key in langsmith-config (synced from SSM by apply-eso.sh), never
+    # api_key_salt. Terraform writes the same value into the runtime Secret.
+    _sandbox_config_block="
+sandboxes:
+  enabled: true
+  external:
+    enabled: true${_sandbox_service_url_block}
+  serviceAuth:
+    secretKey: \"sandbox_service_auth_secret\""
+
+    # The runtime chart's own default is /var/cache/juicefs on the root volume.
+    _sandbox_cache_dirs_block=""
+    for _dir in ${SANDBOX_JUICEFS_CACHE_DIRS:-/var/cache/juicefs}; do
+      _sandbox_cache_dirs_block+="
+      - \"${_dir}\""
+    done
+
+    cat > "$SANDBOX_VALUES_FILE" << YAML
+# Auto-generated by init-values.sh for the dedicated sandbox cluster.
+# Terraform writes the runtime Secret (config.existingSecretName) in the
+# sandbox cluster. The keys are the chart defaults, spelled out because the
+# Secret depends on them. Both values match the same keys in langsmith-config;
+# neither is the API key salt.
+config:
+  endpoint: "${_protocol}://${HOSTNAME}/api"
+  existingSecretName: "${SANDBOX_RUNTIME_SECRET_NAME}"
+  callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+serviceAuth:
+  secretKey: "sandbox_service_auth_secret"
+
+# IRSA for sandbox-host and the JuiceFS formatter. The chart annotates the
+# ServiceAccount from this block.
+workloadIdentity:
+  provider: aws
+  aws:
+    roleArn: "${SANDBOX_IRSA_ROLE_ARN}"
+
+juicefs:
+  existingSecretName: "${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}"
+  hostMount:
+    cacheDirs:${_sandbox_cache_dirs_block}
+
+sandboxHost:
+  enabled: true
+  deployment:
+    nodeSelector:
+      sandbox.langsmith.com/host: "true"
+  # serviceAccount.name is the IRSA contract with the sandbox IAM role's OIDC
+  # 'sub' condition (Terraform: sandbox_service_account_name). Do not rename it
+  # here alone — change the tfvar and re-run init-values so both sides move
+  # together, or sandbox-host loses access to the trace bucket.
+  serviceAccount:
+    name: "${SANDBOX_SERVICE_ACCOUNT_NAME}"
+YAML
+    echo "Written: $SANDBOX_VALUES_FILE (cluster: $SANDBOX_CLUSTER_NAME, serviceAccount: $SANDBOX_SERVICE_ACCOUNT_NAME)"
+  else
+    _sandbox_cache_dirs_block=""
+    if [[ -n "$SANDBOX_JUICEFS_CACHE_DIRS" ]]; then
+      _sandbox_cache_dirs_block="
     hostMount:
       cacheDirs:"
-    for _dir in $SANDBOX_JUICEFS_CACHE_DIRS; do
-      _sandbox_cache_dirs_block+="
+      for _dir in $SANDBOX_JUICEFS_CACHE_DIRS; do
+        _sandbox_cache_dirs_block+="
         - \"${_dir}\""
-    done
-  fi
-  # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
-  # under the same ServiceAccount, so the bucket role goes on sandboxHost.
-  _sandbox_config_block="
+      done
+    fi
+    # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
+    # under the same ServiceAccount, so the bucket role goes on sandboxHost.
+    _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
   juicefs:
@@ -880,6 +974,7 @@ sandboxes:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+  fi
 fi
 
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────
