@@ -27,7 +27,7 @@ LangSmith on AWS is deployed in three passes.
 │  Per deployed graph:                                                         │
 │    • api-server, queue, redis, postgres  (operator-managed)                  │
 │                                                                              │
-│  Requires: KEDA (installed in Pass 1 via k8s-bootstrap module)              │
+│  Uses: KEDA, a core component installed in Pass 1 by k8s-bootstrap           │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  Pass 2 — LangSmith Base Platform  (deploy_langsmith = true)                 │
 │                                                                              │
@@ -88,8 +88,9 @@ EKS Cluster (private subnets)
   ├── kube-system namespace
   │     ├── aws-load-balancer-controller
   │     ├── cluster-autoscaler
-  │     ├── ebs-csi-driver
-  │     └── keda
+  │     └── ebs-csi-driver
+  ├── keda namespace
+  │     └── keda (scales queue, ingest-queue, and the SmithDB compaction worker)
   └── langsmith namespace
         ├── backend, frontend, playground, queue, clickhouse
         └── redis (in-cluster) OR ElastiCache ──► private subnet

@@ -53,7 +53,9 @@ resource "kubernetes_secret" "redis" {
 }
 
 # ── KEDA (Kubernetes Event-driven Autoscaling) ───────────────────────────────
-# Required for LangSmith Deployments feature.
+# Core: installed on every install, whatever the feature flags. The LangSmith
+# chart renders KEDA ScaledObjects for its queue services, and the Deployments
+# operator scales agents with KEDA; without the CRDs the Helm deploy fails.
 
 resource "helm_release" "keda" {
   name             = "keda"

@@ -69,3 +69,34 @@ redis:
     enabled: true
     existingSecretName: "langsmith-redis"
     connectionUrlSecretKey: "connection_url"
+
+# Queue autoscaling. Terraform installs KEDA on every install (k8s-bootstrap),
+# and KEDA scales these services on their backlog, CPU, and memory. The ranges
+# fit the medium reads and writes pattern and the SmithDB small tier; a sizing
+# file sets its own ranges.
+#   https://docs.langchain.com/langsmith/self-host-scale
+#   https://docs.langchain.com/langsmith/self-host-smithdb-scale
+# The chart allows one scaler per service, so the compaction worker's HPA is off.
+queue:
+  autoscaling:
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      maxReplicaCount: 10
+
+ingestQueue:
+  autoscaling:
+    keda:
+      enabled: true
+      minReplicaCount: 3
+      maxReplicaCount: 6
+
+smithdb:
+  compactionWorker:
+    autoscaling:
+      hpa:
+        enabled: false
+      keda:
+        enabled: true
+        minReplicaCount: 1
+        maxReplicaCount: 10

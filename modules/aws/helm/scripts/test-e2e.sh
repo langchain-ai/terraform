@@ -19,6 +19,8 @@
 #   6. Gateway API resources are programmed (gateway mode only)
 #   7. HTTPRoutes are accepted for all active deployments
 #   8. All core pods are Running
+#   9. KEDA ScaledObjects are Ready for queue, ingest-queue, and the SmithDB
+#      compaction worker (when SmithDB runs)
 #
 # Usage (from aws/):
 #   make test-e2e
@@ -226,6 +228,22 @@ for _dep in "${_core[@]}"; do
   else
     _run_test "Pod: $_dep ready" fail "readyReplicas=${_ready:-0}"
     _pods_ok=false
+  fi
+done
+
+# ── Test 7: Queue autoscaling ─────────────────────────────────────────────────
+# A ScaledObject that is not Ready leaves its service at a fixed replica count.
+_scaled=("${RELEASE_NAME}-queue" "${RELEASE_NAME}-ingest-queue")
+if kubectl get deployment "${RELEASE_NAME}-smithdb-compaction-worker" -n "$NAMESPACE" >/dev/null 2>&1; then
+  _scaled+=("${RELEASE_NAME}-smithdb-compaction-worker")
+fi
+for _so in "${_scaled[@]}"; do
+  _so_ready=$(kubectl get scaledobject "$_so" -n "$NAMESPACE" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+  if [[ "$_so_ready" == "True" ]]; then
+    _run_test "KEDA: ScaledObject $_so ready" pass
+  else
+    _run_test "KEDA: ScaledObject $_so ready" fail "Ready=${_so_ready:-missing}"
   fi
 done
 

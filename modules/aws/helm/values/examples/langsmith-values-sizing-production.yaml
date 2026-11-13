@@ -1,7 +1,8 @@
 # Production sizing — multi-replica deployments with HPA and KEDA autoscaling.
 #
 # This is the recommended profile for any environment serving real traffic.
-# Uses KEDA for queue workers and HPA for other supported services.
+# Uses KEDA for queue, ingest-queue, and the SmithDB compaction worker, and HPA
+# for other supported services.
 # Resource requests are starting points. Tune to your workload:
 #   kubectl top pods -n langsmith
 #
@@ -261,7 +262,11 @@ smithdb:
           ephemeral-storage: "100Gi"
     autoscaling:
       hpa:
-        minReplicas: 1
+        enabled: false
+      keda:
+        enabled: true
+        minReplicaCount: 1
+        maxReplicaCount: 10
 
   clusterManager:
     deployment:

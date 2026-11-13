@@ -35,12 +35,12 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 ### `langsmith-queue`
 - **What**: Trace ingestion worker — dequeues from Redis, writes to ClickHouse + S3
 - **Depends on**: Redis, ClickHouse, S3
-- **HPA**: 3–10 replicas + KEDA (Redis queue depth) · **IRSA**
+- **KEDA**: 1–10 replicas by default (queue backlog from the `backend` metrics API, CPU, memory) · **IRSA**
 
 ### `langsmith-ingest-queue`
 - **What**: Dedicated high-throughput ingestion worker — parallel to `queue`, handles burst traffic
 - **Depends on**: Redis, S3
-- **HPA**: 3–10 replicas + KEDA (Redis queue depth) · **IRSA**
+- **KEDA**: 3–6 replicas by default (ingest backlog from the `platform-backend` metrics API, CPU, memory) · **IRSA**
 
 ### `langsmith-ace-backend`
 - **What**: Async compute engine — dataset runs, evaluations, background jobs
@@ -127,9 +127,10 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 - **IRSA**: Yes — EC2 EBS permissions
 
 ### KEDA
-- **What**: Kubernetes Event-driven Autoscaling — scales `queue` and `ingest-queue` based on Redis queue depth
-- **Deployed by**: Terraform `k8s-bootstrap` module
-- **Required for**: Pass 3+ (LangGraph Platform prerequisite)
+- **What**: Kubernetes Event-driven Autoscaling — scales `queue`, `ingest-queue`, and the SmithDB compaction worker on their backlog and CPU (and memory for the two queues)
+- **Namespace**: `keda`
+- **Deployed by**: Terraform `k8s-bootstrap` module, on every install
+- **Required for**: every install. The base values and every sizing profile turn it on for those three services, and the Deployments operator also uses it. Sizing profiles set their own replica ranges.
 
 ### cert-manager
 - **What**: Automates TLS certificate issuance and renewal
@@ -147,6 +148,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 - **What**: In-chart trace ingestion/query services used alongside ClickHouse in LangSmith v16
 - **Cloud dependencies**: Dedicated PostgreSQL 18, dedicated S3, and SmithDB-specific IRSA
 - **Scheduling**: Karpenter local-NVMe pool for cache-heavy workloads and a compute pool for support workloads
+- **Autoscaling**: query and ingestion use HPAs; the compaction worker uses KEDA on pending compaction jobs and CPU (1–10 replicas by default)
 - **Network**: Same-region S3 traffic uses the shared Gateway VPC endpoint
 - **Rollout**: Ingestion, migration, and query integration default off and are enabled in separate stages
 

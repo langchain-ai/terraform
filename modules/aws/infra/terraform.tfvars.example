@@ -746,6 +746,9 @@ enable_istio_gateway = false
 # Profiles are based on the LangSmith scale guide:
 #   https://docs.langchain.com/langsmith/self-host-scale
 #
+# Every profile, "default" included, autoscales queue, ingest-queue, and the
+# SmithDB compaction worker with KEDA. Each profile sets its own ranges.
+#
 #   "production"       — Multi-replica with HPA/KEDA autoscaling. Fits the
 #                        Medium/Medium pattern (~20 users, ~100 traces/sec).
 #                        Good starting point for most production deployments.
@@ -757,7 +760,8 @@ enable_istio_gateway = false
 #                        request 1+ CPU per component and 3.5 CPU / 12Gi for
 #                        ClickHouse — without this profile, pods won't schedule
 #                        on small clusters.
-#   "default"          — Chart defaults (no sizing file applied).
+#   "default"          — Chart defaults (no sizing file applied), plus the KEDA
+#                        ranges in the base values.
 sizing_profile = "production"
 
 #------------------------------------------------------------------------------

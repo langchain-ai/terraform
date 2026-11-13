@@ -9,7 +9,11 @@ Four sizing profiles for different deployment scenarios. Each profile has a corr
 | **Production** | Any environment serving real traffic, multi-replica with HPA/KEDA | [`langsmith-values-sizing-production.yaml`](langsmith-values-sizing-production.yaml) |
 | **Production Large** | High-volume (~50 concurrent users, ~1,000 traces/sec), higher baselines | [`langsmith-values-sizing-production-large.yaml`](langsmith-values-sizing-production-large.yaml) |
 
-Dev and production profiles use KEDA for `queue` and `ingestQueue` (queue target: 10), and HPA for other core services. Node autoscaling is configured separately.
+Every profile, and the base values when no profile is set, uses KEDA for `queue` and `ingestQueue` (queue target: 10) and for the SmithDB compaction worker (target: 60 pending jobs per worker). The dev, production, and production-large profiles use HPA for the other core services. Node autoscaling is configured separately.
+
+The dev profile (`queue`) and the minimum profile (`queue` and `ingestQueue`) set `targetMemoryUtilizationPercentage: 150`. Their idle memory is close to the request and does not fall as replicas are added, so the chart's 80% target would keep extra replicas running at idle.
+
+The chart allows one scaler per service. To run the compaction worker on its CPU HPA instead, set `smithdb.compactionWorker.autoscaling.hpa.enabled: true` and `smithdb.compactionWorker.autoscaling.keda.enabled: false`.
 
 `make init-values` preserves existing sizing files; merge template updates manually. When disabling an autoscaler, also set the component's fixed replica count.
 
