@@ -107,6 +107,12 @@ variable "disk_encryption_set_reader_grant" {
   default     = false
 }
 
+variable "additional_disk_encryption_set_ids" {
+  type        = map(string)
+  description = "Disk encryption sets beyond disk_encryption_set_id that StorageClasses name, keyed by lower-case ID. With disk_encryption_set_reader_grant, the cluster identity gets Reader on each. The root builds the map; empty (default) grants nothing more."
+  default     = {}
+}
+
 variable "service_cidr" {
   type        = string
   description = "Service CIDR of the cluster"

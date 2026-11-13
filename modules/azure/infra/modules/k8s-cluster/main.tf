@@ -487,8 +487,17 @@ resource "azurerm_role_assignment" "control_plane_dns_zone_contributor" {
 # is the user-assigned identity when the cluster runs as one, else the
 # system-assigned identity the cluster reports once it exists.
 resource "azurerm_role_assignment" "disk_encryption_set_reader" {
-  count                = var.create_cluster && var.disk_encryption_set_reader_grant ? 1 : 0
+  count                = var.create_cluster && var.disk_encryption_set_reader_grant && var.disk_encryption_set_id != "" ? 1 : 0
   scope                = var.disk_encryption_set_id
+  role_definition_name = "Reader"
+  principal_id         = local.control_plane_user ? local.control_plane_principal_id : azurerm_kubernetes_cluster.main[0].identity[0].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# The same grant on each further set a StorageClass names (one key per store).
+resource "azurerm_role_assignment" "additional_disk_encryption_set_reader" {
+  for_each             = var.create_cluster && var.disk_encryption_set_reader_grant ? var.additional_disk_encryption_set_ids : {}
+  scope                = each.value
   role_definition_name = "Reader"
   principal_id         = local.control_plane_user ? local.control_plane_principal_id : azurerm_kubernetes_cluster.main[0].identity[0].principal_id
   principal_type       = "ServicePrincipal"

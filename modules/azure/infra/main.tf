@@ -1412,8 +1412,9 @@ module "aks" {
   # Customer-managed keys for the node OS disks and the CSI data disks: set
   # only at creation; the Reader grant on the set is the module's only with
   # the flag, the platform team's otherwise.
-  disk_encryption_set_id           = var.aks_disk_encryption_set_id
-  disk_encryption_set_reader_grant = var.aks_disk_encryption_set_reader_grant
+  disk_encryption_set_id             = var.aks_disk_encryption_set_id
+  disk_encryption_set_reader_grant   = var.aks_disk_encryption_set_reader_grant
+  additional_disk_encryption_set_ids = local.additional_disk_encryption_set_ids
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
@@ -2070,7 +2071,70 @@ module "smithdb" {
   blob_private_endpoint_subnet_id = local.storage_private_endpoint_subnet_id
   blob_private_dns_zone_id        = local.blob_private_dns_zone_id
 
+  metastore_customer_managed_key_id          = local.smithdb_metastore_customer_managed_key_id
+  metastore_customer_managed_key_identity_id = local.smithdb_metastore_customer_managed_key_identity_id
+  storage_customer_managed_key_id            = local.smithdb_storage_customer_managed_key_id
+  storage_customer_managed_key_identity_id   = local.smithdb_storage_customer_managed_key_identity_id
+
   tags = local.common_tags
+}
+
+# ── Per-store keys (PRO-190) ─────────────────────────────────────────────────
+# A per-store input wins, else LangSmith's own key. The key and its identity
+# move together, so a store never reads one key with another store's identity.
+locals {
+  smithdb_metastore_own_key                          = var.smithdb_metastore_customer_managed_key_id != ""
+  smithdb_metastore_customer_managed_key_id          = local.smithdb_metastore_own_key ? var.smithdb_metastore_customer_managed_key_id : var.postgres_customer_managed_key_id
+  smithdb_metastore_customer_managed_key_identity_id = local.smithdb_metastore_own_key ? var.smithdb_metastore_customer_managed_key_identity_id : var.postgres_customer_managed_key_identity_id
+  smithdb_storage_own_key                            = var.smithdb_storage_customer_managed_key_id != ""
+  smithdb_storage_customer_managed_key_id            = local.smithdb_storage_own_key ? var.smithdb_storage_customer_managed_key_id : var.storage_customer_managed_key_id
+  smithdb_storage_customer_managed_key_identity_id   = local.smithdb_storage_own_key ? var.smithdb_storage_customer_managed_key_identity_id : var.storage_customer_managed_key_identity_id
+
+  # The StorageClasses name their set explicitly, so a volume's key does not
+  # depend on the cluster default.
+  smithdb_cache_disk_encryption_set_id         = var.smithdb_cache_disk_encryption_set_id != "" ? var.smithdb_cache_disk_encryption_set_id : var.aks_disk_encryption_set_id
+  sandbox_juicefs_redis_disk_encryption_set_id = var.sandbox_juicefs_redis_disk_encryption_set_id != "" ? var.sandbox_juicefs_redis_disk_encryption_set_id : var.aks_disk_encryption_set_id
+
+  # Sets beyond the cluster's that the cluster identity needs Reader on, one
+  # entry per distinct set (IDs compare case-insensitively). The cluster's own
+  # set keeps its existing grant.
+  additional_disk_encryption_set_ids = {
+    for k, ids in {
+      for id in concat(
+        [var.smithdb_cache_disk_encryption_set_id, var.sandbox_juicefs_redis_disk_encryption_set_id],
+        var.aks_additional_disk_encryption_set_ids,
+      ) : lower(id) => id... if id != "" && lower(id) != lower(var.aks_disk_encryption_set_id)
+    } : k => ids[0]
+  }
+}
+
+# The metastore's encryption mode is fixed at creation, and the provider would
+# apply a change by replacing the server, which destroys SmithDB's catalog.
+# Same check as postgres_customer_managed_key_guard: presence only, an absent
+# server and a mocked provider read as null, which passes.
+data "azapi_resource_list" "smithdb_metastore_servers" {
+  count     = var.enable_smithdb ? 1 : 0
+  type      = "Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    servers = "value[?name=='${local.smithdb_name}-metastore'].{id: id, name: name, data_encryption: properties.dataEncryption.type}"
+  }
+}
+
+locals {
+  smithdb_metastore_live_server  = var.enable_smithdb ? try(data.azapi_resource_list.smithdb_metastore_servers[0].output.servers[0], null) : null
+  smithdb_metastore_live_has_key = local.smithdb_metastore_live_server == null ? null : try(local.smithdb_metastore_live_server.data_encryption, "") == "AzureKeyVault"
+}
+
+resource "terraform_data" "smithdb_metastore_customer_managed_key_guard" {
+  input = local.smithdb_metastore_customer_managed_key_id != ""
+
+  lifecycle {
+    precondition {
+      condition     = local.smithdb_metastore_live_has_key == null ? true : local.smithdb_metastore_live_has_key == (local.smithdb_metastore_customer_managed_key_id != "")
+      error_message = "The SmithDB metastore's key resolves to ${local.smithdb_metastore_customer_managed_key_id == "" ? "none" : "a customer-managed key"} (smithdb_metastore_customer_managed_key_id, else postgres_customer_managed_key_id), and the metastore ${local.smithdb_name}-metastore already exists ${local.smithdb_metastore_live_has_key == true ? "with a customer-managed key" : "with the service-managed key"}. The key is fixed at creation, and the provider would apply this by replacing the server and destroying SmithDB's catalog. Revert the value to keep the metastore as it is."
+    }
+  }
 }
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
@@ -2458,15 +2522,16 @@ module "k8s_bootstrap" {
 
   # SmithDB metastore connection. Keeping this Secret in the bootstrap module
   # ensures it uses that module's AKS-configured Kubernetes provider.
-  enable_smithdb                   = var.enable_smithdb
-  smithdb_metastore_host           = var.enable_smithdb ? module.smithdb[0].metastore_host : ""
-  smithdb_metastore_database       = var.enable_smithdb ? module.smithdb[0].metastore_database : ""
-  smithdb_metastore_username       = var.enable_smithdb ? module.smithdb[0].metastore_username : ""
-  smithdb_metastore_password       = var.smithdb_metastore_admin_password
-  smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
-  smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
-  smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
-  tags                             = local.common_tags
+  enable_smithdb                       = var.enable_smithdb
+  smithdb_metastore_host               = var.enable_smithdb ? module.smithdb[0].metastore_host : ""
+  smithdb_metastore_database           = var.enable_smithdb ? module.smithdb[0].metastore_database : ""
+  smithdb_metastore_username           = var.enable_smithdb ? module.smithdb[0].metastore_username : ""
+  smithdb_metastore_password           = var.smithdb_metastore_admin_password
+  smithdb_cache_storage_class_name     = local.smithdb_cache_storage_class
+  smithdb_cache_disk_iops              = var.smithdb_cache_disk_iops
+  smithdb_cache_disk_throughput        = var.smithdb_cache_disk_throughput_mbps
+  smithdb_cache_disk_encryption_set_id = local.smithdb_cache_disk_encryption_set_id
+  tags                                 = local.common_tags
 
   # Sandboxes. No account key: the format Job and sandbox-host reach Blob
   # through workload identity. AMR serves database 0 only; the in-cluster Redis
@@ -2483,14 +2548,15 @@ module "k8s_bootstrap" {
     bucket       = local.sandbox_juicefs_bucket
     "access-key" = module.blob.storage_account_name
   } : {}
-  sandbox_juicefs_config_revision          = var.sandbox_juicefs_csi_config_secret_revision
-  sandbox_juicefs_redis_id                 = local.sandbox_juicefs_redis_id
-  sandbox_juicefs_redis_in_cluster         = local.sandbox_juicefs_redis_in_cluster
-  sandbox_juicefs_redis_password           = local.sandbox_juicefs_redis_in_cluster ? random_password.sandbox_juicefs_redis[0].result : null
-  sandbox_juicefs_redis_image              = local.sandbox_juicefs_redis_image
-  sandbox_juicefs_redis_storage_class_name = local.sandbox_juicefs_redis_storage_class
-  sandbox_juicefs_redis_storage_gb         = var.sandbox_juicefs_redis_storage_gb
-  sandbox_juicefs_redis_memory_mb          = var.sandbox_juicefs_redis_memory_mb
+  sandbox_juicefs_config_revision              = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id                     = local.sandbox_juicefs_redis_id
+  sandbox_juicefs_redis_in_cluster             = local.sandbox_juicefs_redis_in_cluster
+  sandbox_juicefs_redis_password               = local.sandbox_juicefs_redis_in_cluster ? random_password.sandbox_juicefs_redis[0].result : null
+  sandbox_juicefs_redis_image                  = local.sandbox_juicefs_redis_image
+  sandbox_juicefs_redis_storage_class_name     = local.sandbox_juicefs_redis_storage_class
+  sandbox_juicefs_redis_storage_gb             = var.sandbox_juicefs_redis_storage_gb
+  sandbox_juicefs_redis_disk_encryption_set_id = local.sandbox_juicefs_redis_disk_encryption_set_id
+  sandbox_juicefs_redis_memory_mb              = var.sandbox_juicefs_redis_memory_mb
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.

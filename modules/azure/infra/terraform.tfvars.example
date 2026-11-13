@@ -292,6 +292,17 @@ ingress_controller = "envoy-gateway"
 # postgres_geo_backup_customer_managed_key_identity_id = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name-paired>"
 # storage_customer_managed_key_id          = "https://<vault>.vault.azure.net/keys/<name>"
 # storage_customer_managed_key_identity_id = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
+# A key per store (each falls back to the LangSmith pair or the cluster's set
+# above). The metastore takes its key only at creation; a StorageClass change
+# applies to new volumes only. Reader on each further set comes with
+# aks_disk_encryption_set_reader_grant = true.
+# smithdb_metastore_customer_managed_key_id          = "https://<vault>.vault.azure.net/keys/<name>"
+# smithdb_metastore_customer_managed_key_identity_id = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
+# smithdb_storage_customer_managed_key_id            = "https://<vault>.vault.azure.net/keys/<name>"
+# smithdb_storage_customer_managed_key_identity_id   = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
+# smithdb_cache_disk_encryption_set_id               = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>"
+# sandbox_juicefs_redis_disk_encryption_set_id       = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>"
+# aks_additional_disk_encryption_set_ids             = ["/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>"]
 
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions

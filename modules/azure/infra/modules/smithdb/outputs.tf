@@ -67,3 +67,31 @@ output "storage_allowed_copy_scope" {
   description = "Which accounts copy operations into the SmithDB account may source from; null means any."
   value       = azurerm_storage_account.smithdb.allowed_copy_scope
 }
+
+output "metastore_customer_managed_key" {
+  description = "The metastore's customer_managed_key block as configured (key_vault_key_id, primary_user_assigned_identity_id); null under the service-managed key."
+  value = one([for k in azurerm_postgresql_flexible_server.metastore.customer_managed_key : {
+    key_vault_key_id                  = k.key_vault_key_id
+    primary_user_assigned_identity_id = k.primary_user_assigned_identity_id
+  }])
+}
+
+output "metastore_identity_ids" {
+  description = "User-assigned identities assigned to the metastore for its customer-managed key; empty under the service-managed key."
+  value       = try(azurerm_postgresql_flexible_server.metastore.identity[0].identity_ids, toset([]))
+}
+
+output "storage_customer_managed_key" {
+  description = "The SmithDB storage account's customer_managed_key block as configured (key_vault_key_id, user_assigned_identity_id); null under the service-managed key."
+  # The two fields by name, as in the blob module: the whole block also carries
+  # the deprecated managed_hsm_key_id, which warns on every plan when read.
+  value = one([for k in azurerm_storage_account.smithdb.customer_managed_key : {
+    key_vault_key_id          = k.key_vault_key_id
+    user_assigned_identity_id = k.user_assigned_identity_id
+  }])
+}
+
+output "storage_identity_ids" {
+  description = "User-assigned identities assigned to the SmithDB storage account for its customer-managed key; empty under the service-managed key."
+  value       = try(azurerm_storage_account.smithdb.identity[0].identity_ids, toset([]))
+}

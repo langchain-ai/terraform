@@ -39,6 +39,25 @@ resource "azurerm_postgresql_flexible_server" "metastore" {
   backup_retention_days         = var.metastore_backup_retention_days
   tags                          = merge(var.tags, { module = "smithdb" })
 
+  # Customer-managed key, set only at creation: the server reads the key as a
+  # user-assigned identity it carries. The root resolves the per-store inputs
+  # against LangSmith's own and validates the pair.
+  dynamic "identity" {
+    for_each = var.metastore_customer_managed_key_identity_id != "" ? [1] : []
+    content {
+      type         = "UserAssigned"
+      identity_ids = [var.metastore_customer_managed_key_identity_id]
+    }
+  }
+
+  dynamic "customer_managed_key" {
+    for_each = var.metastore_customer_managed_key_id != "" ? [1] : []
+    content {
+      key_vault_key_id                  = var.metastore_customer_managed_key_id
+      primary_user_assigned_identity_id = var.metastore_customer_managed_key_identity_id
+    }
+  }
+
   authentication {
     active_directory_auth_enabled = local.use_entra_auth
     password_auth_enabled         = !local.use_entra_auth
@@ -98,6 +117,25 @@ resource "azurerm_storage_account" "smithdb" {
   shared_access_key_enabled       = var.shared_access_key_enabled
   allowed_copy_scope              = var.allowed_copy_scope
   tags                            = merge(var.tags, { module = "smithdb" })
+
+  # Customer-managed key: the account reads it as a user-assigned identity it
+  # carries. Azure takes the block on an existing account, so it may arrive
+  # after creation.
+  dynamic "identity" {
+    for_each = var.storage_customer_managed_key_identity_id != "" ? [1] : []
+    content {
+      type         = "UserAssigned"
+      identity_ids = [var.storage_customer_managed_key_identity_id]
+    }
+  }
+
+  dynamic "customer_managed_key" {
+    for_each = var.storage_customer_managed_key_id != "" ? [1] : []
+    content {
+      key_vault_key_id          = var.storage_customer_managed_key_id
+      user_assigned_identity_id = var.storage_customer_managed_key_identity_id
+    }
+  }
 
   # With a Private Endpoint there is no public listener to filter, so the rules
   # below stop applying. They stay declared: turning the endpoint back off must
