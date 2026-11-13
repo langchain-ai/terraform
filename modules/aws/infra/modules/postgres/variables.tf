@@ -12,7 +12,7 @@ variable "db_name" {
 variable "instance_type" {
   type        = string
   description = "Instance type"
-  default     = "db.t3.large" # 2 vCPU and 8 GB of memory
+  default     = "db.m6g.large" # 2 vCPU and 8 GB of memory
 }
 
 variable "storage_gb" {

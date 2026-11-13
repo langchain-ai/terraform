@@ -299,7 +299,7 @@ callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configure
 add-on with one ENIConfig per AZ and holds node group creation for two minutes
 after the cluster is active, so the add-on is configured before the first
 nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
-into that add-on. When `enable_smithdb = true`, it also sets Karpenter's
+into that add-on. With `smithdb_transition_mode = true`, it also sets Karpenter's
 `settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
 node's primary ENI.
 
@@ -1098,7 +1098,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
-| `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
+| `postgres_instance_type` | `db.m6g.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
 | `postgres_max_storage_gb` | `100` | no | Maximum RDS storage in GB (autoscaling) |
 | `postgres_username` | `langsmith` | no | RDS database username |
@@ -1157,15 +1157,16 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `false` | no | Provision SmithDB PostgreSQL, S3, IRSA, a managed node group, and EBS caches. QuickStart enables SmithDB and ingestion by default. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
-| `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
-| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
-| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
+| `smithdb_node_instance_type` | `null` | no | SmithDB instance type; defaults follow `sizing_profile`. See [SMITHDB.md](SMITHDB.md) |
+| `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes, including TaskDB |
+| `smithdb_node_max_count` | `null` | no | Maximum nodes: 5 for Small, 10 for production profiles |
+| `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |
+| `smithdb_transition_mode` | `false` | no | Retain Karpenter during an existing deployment's transition. See [SMITHDB.md](SMITHDB.md#existing-karpenter-deployments) |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |

@@ -102,6 +102,10 @@ locals {
     for k, v in merge(var.eks_managed_node_groups, var.extra_eks_managed_node_groups) : k => merge(
       local.v20_node_group_defaults,
       var.eks_managed_node_group_defaults,
+      # The m6g defaults require an ARM AMI; other instance families keep their defaults.
+      length(v.instance_types) > 0 && alltrue([for instance_type in v.instance_types : startswith(instance_type, "m6g.")]) ? {
+        ami_type = "AL2023_ARM_64_STANDARD"
+      } : {},
       { for attr, value in v : attr => value if !(attr == "capacity_type" && value == null) },
       {
         # Drop null maps instead of merging {}. merge() with an empty object

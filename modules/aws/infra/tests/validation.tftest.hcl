@@ -18,6 +18,24 @@ mock_provider "kubectl" {}
 mock_provider "random" {}
 mock_provider "time" {}
 
+run "transition_requires_smithdb" {
+  command = plan
+  variables {
+    enable_smithdb          = false
+    smithdb_transition_mode = true
+  }
+  expect_failures = [var.smithdb_transition_mode]
+}
+
+run "smithdb_capacity_requires_headroom" {
+  command = plan
+  variables {
+    smithdb_node_min_count = 2
+    smithdb_node_max_count = 2
+  }
+  expect_failures = [var.smithdb_node_max_count]
+}
+
 variables {
   name_prefix         = "plantest"
   postgres_password   = "fixture-not-a-real-secret-Aa1"
