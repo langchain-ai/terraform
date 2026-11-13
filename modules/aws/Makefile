@@ -16,7 +16,7 @@
 .PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
         init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end sso uninstall clean deploy-all \
-        test-e2e test-permutations test-parallel \
+        test-e2e test-values test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
 INFRA_DIR := infra
@@ -167,6 +167,9 @@ clean: ## Remove local generated files (run after make destroy and make purge-se
 
 test-e2e: ## Run E2E gateway tests (ALB or Envoy Gateway)
 	$(HELM_DIR)/scripts/test-e2e.sh
+
+test-values: ## Render the Helm values for every sizing profile and check queue autoscaling (needs helm)
+	$(HELM_DIR)/scripts/test-values.sh
 
 test-permutations: ## Run permutation tests sequentially on current cluster (ARGS="1 2 5" for subset)
 	$(INFRA_DIR)/scripts/test-permutations.sh $(ARGS)
