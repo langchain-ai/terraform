@@ -19,7 +19,7 @@ With `enable_smithdb = true`, the infrastructure pass creates:
 - two GKE node pools that autoscale from zero, cache and compute (none for
   `minimal`);
 - a Hyperdisk Balanced StorageClass in `network-disk` mode (not for `minimal`);
-- the `smithdb-metastore` and `smithdb-taskdb` Kubernetes Secrets;
+- the `smithdb-metastore` Kubernetes Secret;
 - the output `smithdb_helm_values`, which `make init-values` writes to
   `helm/values/langsmith-values-smithdb-sizing.yaml`.
 
@@ -74,8 +74,6 @@ The component rows are per replica, as CPU / memory / cache size:
 | `compaction` | 500m / 1Gi | 2 / 4Gi | 4 / 8Gi | 8 / 16Gi |
 | `clusterManager` | 250m / 256Mi | 250m / 256Mi | 250m / 256Mi | 2 / 2Gi |
 | Sum at these replicas (pods) | 3.75 / 7.25Gi (5) | 18.25 / 36.25Gi (5) | 64.25 / 120.25Gi (5) | 346 / 718Gi (12) |
-| Backfill Job (CPU / memory / ephemeral) | 1 / 4Gi / 10Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi |
-| Backfill taskdb, requests; limits | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi |
 | Cache HPA `maxReplicas` | 1 | 10 (chart default) | 10 (chart default) | 10 (chart default) |
 | Cache pool, `local-ssd` (boot disk) | not allowed | n2-standard-16, 2 LSSD (100 GB) | n2-standard-32, 4 LSSD (100 GB) | n2-standard-64, 8 LSSD (100 GB) |
 | Cache pool, `network-disk` (boot disk) | no pool; `standard-rwo` | c3-standard-22 (300 GB) | c3-standard-44 (300 GB) | c3-standard-88 (300 GB) |
@@ -94,11 +92,6 @@ The component rows are per replica, as CPU / memory / cache size:
 - `minimal` values are requests, and its limits are 2x. `minimal` runs on the
   general node pool, so that pool must have room for it. Use `minimal` only for
   development and test.
-- The taskdb row is the chart default for each size. The module sets no taskdb
-  resources.
-- A backfill on a test cluster ran with the `minimal` resources of the five
-  components and of the backfill Job. The taskdb had the chart default
-  resources.
 - The metastore row is for a created metastore
   (`smithdb_metastore_source = "create"`). The docs values come from the
   section "Metastore capacity" in
@@ -119,8 +112,7 @@ The component rows are per replica, as CPU / memory / cache size:
 
 `large` runs 10 cache pods. On `n2-standard-64` (`local-ssd`), each `ingestion`
 pod uses one node, and each other node holds two 28 CPU pods. That is about 6
-cache nodes, plus 1 node for the backfill Job. On `c3-standard-88`
-(`network-disk`), it is about 4 cache nodes, plus 1 for the backfill Job. The
+cache nodes. On `c3-standard-88` (`network-disk`), it is about 4 cache nodes. The
 compute pool needs 1 node. `smithdb_instance_store_max_nodes` (default 3) is per
 zone, so 3 zones give a maximum of 9 cache nodes. If you set
 `smithdb_node_locations` to one zone, set `smithdb_instance_store_max_nodes` to
@@ -146,8 +138,7 @@ size change. Terraform does not check that a pinned value fits the size:
   `smithdb_instance_store_local_ssd_count = 0` for them.
 
 Terraform rejects `local-ssd` when the cache pool has no Local SSD: a count of 0
-on a type that does not end in `lssd`. It also rejects `network-disk` with the
-backfill when the boot disk is below 300 GB, because the Job requests 100Gi.
+on a type that does not end in `lssd`.
 
 A change of the machine type, the Local SSD count, or the cache mode replaces
 the node pool, and each cache starts empty. Object storage keeps the data.
@@ -268,41 +259,24 @@ later file wins:
    Your edits go here. Helm replaces lists, so write a complete `volumes` list.
 3. `langsmith-values-smithdb-overrides.yaml`: generated with the bucket,
    Workload Identity, metastore mapping, Auth Proxy, and gates.
-4. `langsmith-values-smithdb-migration.yaml`: written by
-   `make smithdb-migration-job-start` with the TaskDB source and the migration
-   pod count. `deploy.sh` loads it only while `smithdb_migration_enabled = true`.
-   `helm/values/examples/langsmith-values-smithdb-migration.yaml` shows the
-   layout.
 
 `deploy.sh` stops before Helm in these cases:
 
 - A SmithDB values file is missing. `deploy.sh` tells you to run
   `init-values.sh`.
-- The overlay has the chart 0.16 values `local-ssd-storage` or
-  `smithdb.migration.deployment`. `deploy.sh` names each value.
-- `smithdb_migration_enabled = true`, and
-  `langsmith-values-smithdb-migration.yaml` is missing. `deploy.sh` tells you
-  to run `make smithdb-migration-job-start`.
-- The migration gate in `langsmith-values-smithdb-overrides.yaml` is not equal
-  to `smithdb_migration_enabled`. `deploy.sh` tells you to run
-  `make init-values`.
-- The backfill Job differs from the render. `deploy.sh` names the Job and the
-  differences, and prints the `kubectl delete job` command.
+- The overlay has the chart 0.16 volume name `local-ssd-storage`.
+  `deploy.sh` names the value.
 
 ## Staged rollout
 
 Keep ClickHouse enabled in every stage. Set the gates in
-`infra/terraform.tfvars`, and run `make deploy-all` after each stage. The
-backfill is the one stage with its own make targets. They set
-`smithdb_migration_enabled` for you.
+`infra/terraform.tfvars`, and run `make deploy-all` after each stage.
 
-| Stage | How | ingestion / migration / query |
+| Stage | How | ingestion / query |
 |---|---|---|
-| Off | The defaults | false / false / false |
-| Dual write | Set `smithdb_ingestion_enabled = true` | true / false / false |
-| Backfill | `make smithdb-migration-job-start` | true / true / false |
-| End of backfill | `make smithdb-migration-job-end` | true / false / false |
-| Cutover | Set `smithdb_query_enabled = true` | true / false / true |
+| Off | The defaults | false / false |
+| Dual write | Set `smithdb_ingestion_enabled = true` | true / false |
+| Cutover | Set `smithdb_query_enabled = true` | true / true |
 
 `smithdb_ingestion_enabled` defaults to `false`, so a chart upgrade does not
 start dual write. `make quickstart` writes `true` for a new install.
@@ -311,86 +285,15 @@ start dual write. `make quickstart` writes `true` for a new install.
 ClickHouse. The query Deployment serves the mutations path, so it must be
 healthy. Confirm that segments arrive in the bucket.
 
-2) Backfill, to copy the ClickHouse history:
+Historical backfill is customer-managed, including Helm values, TaskDB, and
+source-storage permissions. Follow the
+[SmithDB migration guide](https://docs.langchain.com/langsmith/self-host-smithdb-migrate)
+before switching queries.
 
-```sh
-make smithdb-migration-job-start
-make deploy-all
-```
-
-`make smithdb-migration-job-start` asks about TaskDB and about the size of the
-migration:
-
-- TaskDB is a temporary Postgres that holds the task state. A chart-managed
-  TaskDB runs on the compute pool (the general pool for `minimal`) and uses the
-  `smithdb-taskdb` Secret that Terraform creates. An external TaskDB is a
-  Postgres that you supply. The script writes its connection settings to the
-  `smithdb-taskdb-external` Secret. Do not use the LangSmith Postgres or the
-  SmithDB metastore.
-- For the size, the script asks for the number of historical runs and the
-  target days. It suggests a migration pod count from the docs formula (runs /
-  5,000,000 / days / 8 vCPU per pod), plus 50%, with a maximum of 20. For
-  `minimal`, it suggests 1.
-
-The script writes `helm/values/langsmith-values-smithdb-migration.yaml`. It
-sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`.
-`make apply` then grants the read access in
-[Backfill access](#backfill-access-to-the-traces-bucket). `make deploy` starts
-the migration Job on the cache pool.
-
-A backfill that an earlier module version started has no
-`langsmith-values-smithdb-migration.yaml`, so `deploy.sh` stops. Run
-`make smithdb-migration-job-start` once, choose the chart-managed TaskDB and 1
-pod, then run `make deploy-all`. The Job pod template does not change, so the
-Job continues.
-
-- Time window. An empty `smithdb_migration_start_time` keeps the chart default
-  window. On chart 0.17.0-rc.42, the default window is 400 days, and the
-  migration Job log shows the window. To copy all history, set
-  `smithdb_migration_start_time` in `infra/terraform.tfvars` to a time before
-  the oldest trace, before `make deploy-all`.
-- Pod count. Each migration pod requests 8 vCPU, 32 GiB, and 100 GiB of
-  ephemeral storage on the cache pool. If the pool cannot add the nodes, raise
-  `smithdb_instance_store_max_nodes`. Above about 20 pods, raise the TaskDB
-  resources instead of adding pods. For `minimal`, each pod requests 1 vCPU,
-  4 GiB, and 10 GiB on the general pool.
-- Resources. The SmithDB size sets the migration pod and TaskDB resources.
-  The migration values file does not set resources. See
-  [OOMKilled migration pods](#oomkilled-migration-pods).
-- Duration. On a test cluster, about 10,000 rows took about 2 hours, with more
-  than 30 minutes near 95%. That plateau is not a stall. A task whose window
-  includes the last hour stays `pending` by design. For in-cluster ClickHouse,
-  see [Slow backfill on in-cluster ClickHouse](#slow-backfill-on-in-cluster-clickhouse).
-- Progress. With a chart-managed TaskDB, read the TaskDB table
-  `migration_jobs`. The backfill is complete when every row has `promoted_at`.
-  Do not use the percent or the pod phase.
-
-```sh
-kubectl exec -n langsmith langsmith-smithdb-taskdb-postgres-0 -c taskdb-postgres -- \
-  psql -U postgres -d smithdb_migration -A -t \
-  -c 'SELECT count(*), count(migrated_at), count(validated_at), count(promoted_at) FROM migration_jobs'
-```
-
-3) End of backfill. When every `migration_jobs` row has `promoted_at` and the
-migration Job is `Complete`:
-
-```sh
-make smithdb-migration-job-end
-make deploy-all
-```
-
-`make smithdb-migration-job-end` checks that the Job is `Complete`. When the Job
-is not `Complete`, or is not found, it asks before it continues. The chart
-deletes a finished Job after 7 days. The script sets
-`smithdb_migration_enabled = false` and deletes the `smithdb-taskdb-external`
-Secret. The deploy removes the migration Job and the chart-managed TaskDB, with
-its PVC and task state. An external TaskDB Postgres is not deleted. On a test
-cluster, an early cutover showed fewer runs than ClickHouse.
-
-4) Cutover. Set `smithdb_query_enabled = true`, then run `make deploy-all`.
+2) Cutover. Set `smithdb_query_enabled = true`, then run `make deploy-all`.
 Reads move to SmithDB.
 
-5) Rollback. Set `smithdb_query_enabled = false` to move reads back to
+3) Rollback. Set `smithdb_query_enabled = false` to move reads back to
 ClickHouse, which has all the data. Set `smithdb_ingestion_enabled = false` to
 stop the writes to SmithDB. SmithDB then misses the traces written while it is
 off, so run a backfill before the next cutover.
@@ -413,30 +316,9 @@ gcloud storage ls "gs://$(terraform -chdir=infra output -raw smithdb_object_stor
 - `network-disk`: one `<pod>-cache` PVC for each cache pod, on
   `smithdb-cache<suffix>`. `minimal`: the same, on `standard-rwo`.
 
-## Backfill access to the traces bucket
-
-The backfill reads the large run payloads that LangSmith keeps in the traces
-bucket. The migration Job follows `config.blobStorage.engine`, so a GCS engine renders
-`SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE: gcs` with no credential fields,
-and the Job uses Workload Identity. `modules/smithdb` grants the SmithDB service
-account `roles/storage.objectViewer` on the traces bucket while
-`smithdb_migration_enabled = true`. Do not use a GCS HMAC key: it puts a static
-credential into Terraform state and a Kubernetes Secret.
-
-When this access fails, the Job is `Running`, the pod is `2/2 Running`, and
-progress stays at 0%. Check the task state:
-
-```sh
-POD=$(kubectl get pod -n langsmith -l job-name=langsmith-smithdb-migration -o jsonpath='{.items[0].metadata.name}')
-kubectl exec -n langsmith "$POD" -c migration -- ./smithdb migrate --self-hosted diagnose status
-kubectl exec -n langsmith "$POD" -c migration -- ./smithdb migrate --self-hosted diagnose failures
-# Failures are non-retryable. After you correct the access, reset them:
-kubectl exec -n langsmith "$POD" -c migration -- ./smithdb migrate --self-hosted diagnose retry-failed --all --yes
-```
-
 ## Upgrade from chart 0.16
 
-Do steps 1 to 4 before `make apply`. With the upgrade path in
+Do steps 1 to 3 before `make apply`. With the upgrade path in
 `MIGRATION-0.16-to-0.17.md`, do them before its step 3. Its steps 3 to 5 then
 run `make apply`, `make init-values`, and `make deploy`.
 
@@ -482,15 +364,9 @@ delete the file. The next `make init-values` creates it again. Then put back
 only the edits that do not set `nodeSelector`, `tolerations`, `volumes`,
 `volumeMounts`, or `resources`.
 
-4) Delete a completed backfill Job. The chart keeps a finished Job for 7 days,
-and a chart upgrade changes its pod template. See
-[Immutable migration Job](#immutable-migration-job).
-
-5) Run `make apply`, `make init-values`, and `make deploy`. For a release
+4) Run `make apply`, `make init-values`, and `make deploy`. For a release
 candidate, use `CHART_VERSION=0.17.0-rc.N make deploy`. Then do the checks in
-[Verification](#verification). If `smithdb_migration_enabled = true`, run
-`make smithdb-migration-job-start` before `make deploy`. See
-[Staged rollout](#staged-rollout), step 2.
+[Verification](#verification).
 
 ### Direct Helm upgrades
 
@@ -511,63 +387,6 @@ A rename of the volume on `query` only is not enough: `ingestion` and
 `compactionWorker` then get PVCs on the default class, with no error.
 
 ## Troubleshooting
-
-### taskdb Pending on a zonal PVC
-
-The taskdb PVC is a zonal disk. The taskdb stays `Pending` with `volume node
-affinity conflict` when the compute pool cannot add a node in that zone. A PVC
-from chart 0.16 can be in any zone of the general pool.
-
-```sh
-kubectl get pvc -n langsmith | grep taskdb-postgres
-kubectl describe pv <VOLUME> | grep -A4 'Node Affinity'
-```
-
-Add that zone to `smithdb_node_locations`, or increase
-`smithdb_compute_max_nodes`, then run `make apply`.
-
-### Immutable migration Job
-
-`helm upgrade` fails with `field is immutable`. A Job's pod template cannot
-change, and a chart version change (the `helm.sh/chart` label), a values change,
-or a new proxy image changes it. `deploy.sh` finds the difference first and prints:
-
-```sh
-kubectl delete job langsmith-smithdb-migration -n langsmith --cascade=foreground --wait=true
-```
-
-The taskdb keeps the task state, so a new Job continues the backfill.
-
-### OOMKilled migration pods
-
-Very large traces can make a migration pod run out of memory. Add the
-resources to `helm/values/langsmith-values-smithdb.yaml`, and keep requests
-equal to limits:
-
-```yaml
-smithdb:
-  migration:
-    job:
-      resources:
-        requests: {cpu: "8", memory: "48Gi", ephemeral-storage: "100Gi"}
-        limits: {cpu: "8", memory: "48Gi", ephemeral-storage: "100Gi"}
-```
-
-Keep TaskDB and its PVC. Delete only the failed migration Job, then run
-`make deploy`. The new Job continues from the progress in TaskDB.
-
-### Slow backfill on in-cluster ClickHouse
-
-The migration Job logs `ClickHouse telemetry degraded; reducing migration
-concurrency`, with an error about `system.asynchronous_metric_log`. The
-in-cluster ClickHouse does not have that table. The Job then runs with
-`crawl_limit: 1`, and tasks can stay unclaimed for a long time. On a test
-cluster with chart 0.17.0-rc.42, 2 tasks stayed unclaimed for 57 minutes.
-No module variable changes this behavior.
-
-```sh
-kubectl logs job/langsmith-smithdb-migration -n langsmith | grep 'telemetry degraded'
-```
 
 ### UnknownIssuer
 
@@ -627,5 +446,5 @@ gcloud container node-pools create smithdb-lssd \
 - Set `smithdb_bucket_kms_key` to use CMEK. The module grants the Cloud Storage
   service agent `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key.
 - Do not put object-store credentials in Helm values. Pods use Workload Identity.
-- Terraform writes the metastore and taskdb passwords only into Kubernetes
-  Secrets. They are not root outputs.
+- Terraform writes the metastore password only into a Kubernetes
+  Secret. It is not a root output.

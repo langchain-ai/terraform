@@ -92,7 +92,7 @@ cd terraform/gcp
 
 **Sandboxes and JuiceFS (chart 0.16 releases):** Chart 0.16 ships the JuiceFS CSI driver in the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods. Chart 0.17 has no CSI driver: sandbox-host mounts JuiceFS itself, so these steps find no claims or mount pods and change nothing.
 
-**In-cluster data disks:** In-cluster ClickHouse, Postgres, and Redis keep their data on StatefulSet claims: `data-langsmith-clickhouse-*`, `data-langsmith-postgres-*`, and `data-langsmith-redis-*`. The in-cluster Postgres and Redis of the Fleet, Insights, and Polly add-ons have claims too, for example `data-langsmith-standalone-polly-redis-0`. The GCE PD CSI driver provisions each Persistent Disk, so Terraform does not track the disks. `helm uninstall` does not delete these claims. The uninstall script keeps the claims by default to support a clean Helm reinstall. During a SmithDB backfill, the taskdb has a claim too (`data-langsmith-smithdb-taskdb-postgres-*`). The chart deletes the taskdb claim with its StatefulSet. The script deletes the taskdb claim if the claim is still there. For Postgres and Redis, the script deletes only the chart claims of the release in `RELEASE_NAME`. The claims of another release in the namespace do not match, for example the claims of `langsmith-dev` when `RELEASE_NAME` is `langsmith`. When the release name is longer than 13 characters, the chart can shorten the add-on claim names. The script does not delete a claim with a shortened name, so check for `pvc-*` disks in A8.
+**In-cluster data disks:** In-cluster ClickHouse, Postgres, and Redis keep their data on StatefulSet claims: `data-langsmith-clickhouse-*`, `data-langsmith-postgres-*`, and `data-langsmith-redis-*`. The in-cluster Postgres and Redis of the Fleet, Insights, and Polly add-ons have claims too, for example `data-langsmith-standalone-polly-redis-0`. The GCE PD CSI driver provisions each Persistent Disk, so Terraform does not track the disks. `helm uninstall` does not delete these claims. The uninstall script keeps the claims by default to support a clean Helm reinstall. For Postgres and Redis, the script deletes only the chart claims of the release in `RELEASE_NAME`. The claims of another release in the namespace do not match, for example the claims of `langsmith-dev` when `RELEASE_NAME` is `langsmith`. When the release name is longer than 13 characters, the chart can shorten the add-on claim names. The script does not delete a claim with a shortened name, so check for `pvc-*` disks in A8.
 
 For full infrastructure teardown, delete the claims during uninstall. The CSI driver can then reclaim the disks before Terraform destroys GKE:
 
@@ -506,14 +506,14 @@ kubectl delete deployments,services,pods,jobs,statefulsets,replicasets \
 kubectl delete deployments,pods \
   -l "langsmith.dev/managed-by=operator" -n langsmith --ignore-not-found --timeout=120s
 
-# 6. In-cluster data PVCs (ClickHouse, Postgres, Redis, add-on Postgres and Redis,
-#    SmithDB taskdb) — reclaims the GCE PDs while CSI is alive. DATA IS DELETED.
+# 6. In-cluster data PVCs (ClickHouse, Postgres, Redis, add-on Postgres and Redis)
+#    — reclaims the GCE PDs while CSI is alive. DATA IS DELETED.
 kubectl delete pvc -n langsmith -l app.kubernetes.io/component=clickhouse --ignore-not-found --timeout=120s
 while IFS= read -r _obj; do
   [[ -z "$_obj" ]] && continue
   kubectl delete "$_obj" -n langsmith --timeout=120s
 done < <(kubectl get pvc -n langsmith -o name 2>/dev/null \
-  | grep -Ei 'clickhouse|/data-langsmith-((standalone-(fleet|insights|polly)|smithdb-taskdb)-)?(postgres|redis)-[0-9]+$' \
+  | grep -Ei 'clickhouse|/data-langsmith-(standalone-(fleet|insights|polly)-)?(postgres|redis)-[0-9]+$' \
   || true)
 
 # 7. Remaining bootstrap releases. Delete the Gateway first, so that GKE deletes

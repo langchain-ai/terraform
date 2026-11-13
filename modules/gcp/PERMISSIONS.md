@@ -134,7 +134,6 @@ The deployment creates the following service accounts and grants. Project-level 
 | `roles/container.defaultNodeServiceAccount`, `roles/monitoring.metricWriter`, `roles/stackdriver.resourceMetadata.writer` | Project | Sandbox node service account | `enable_sandboxes = true` |
 | `roles/storage.objectAdmin` | SmithDB bucket | SmithDB service account | `enable_smithdb = true` |
 | `roles/iam.workloadIdentityUser` | SmithDB service account | The SmithDB Kubernetes service account | `enable_smithdb = true` |
-| `roles/storage.objectViewer` | LangSmith bucket | SmithDB service account | `smithdb_migration_enabled = true` |
 | `roles/cloudsql.client` | Project | SmithDB service account | `smithdb_metastore_use_auth_proxy = true` |
 | `roles/cloudkms.cryptoKeyEncrypterDecrypter` | KMS key | Cloud Storage service agent | `smithdb_bucket_kms_key` is set |
 

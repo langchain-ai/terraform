@@ -992,13 +992,13 @@ resource "azapi_update_resource" "byo_aks_subnet_endpoints" {
 resource "terraform_data" "validate_network" {
   lifecycle {
     precondition {
-      condition     = var.enable_smithdb || (!var.smithdb_ingestion_enabled && !var.smithdb_migration_enabled && !var.smithdb_query_enabled)
+      condition     = var.enable_smithdb || (!var.smithdb_ingestion_enabled && !var.smithdb_query_enabled)
       error_message = "SmithDB integration gates require enable_smithdb = true."
     }
 
     precondition {
-      condition     = var.smithdb_ingestion_enabled || (!var.smithdb_migration_enabled && !var.smithdb_query_enabled)
-      error_message = "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true."
+      condition     = var.smithdb_ingestion_enabled || !var.smithdb_query_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
 
     # Azure allows 0.25 MB/s of throughput per provisioned IOPS, so the two
@@ -1952,20 +1952,13 @@ locals {
   smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
   smithdb_compute_components = ["compaction", "clusterManager"]
 
-  # minimal: explicit resources, limits 2x requests. A partial resources block
-  # keeps the chart default for each key that it omits. The chart Job default
-  # has 100Gi of ephemeral-storage, so the Job block sets every key.
-  # The taskdb keeps the chart default resources.
+  # minimal: explicit resources, limits 2x requests.
   smithdb_minimal_resources = {
     query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
     clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
-    migration_job = {
-      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
-      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
-    }
   }
 
   # Default metastore SKU for each size. The docs section "Metastore capacity"
@@ -2012,7 +2005,6 @@ locals {
         }
       },
       { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
-      { migration = { job = { resources = local.smithdb_minimal_resources.migration_job } } },
     )
   }
 
@@ -2294,55 +2286,6 @@ module "blob" {
   # A subnet ID is a plain string and creates no dependency, so the firewall rule
   # has to be told to wait for the endpoint that makes it valid.
   depends_on = [azapi_update_resource.byo_aks_subnet_endpoints]
-}
-
-# The historical backfill is the one SmithDB workload that reads outside its own
-# object store: it pulls the run payloads LangSmith offloaded to the trace-blob
-# account and rewrites them into SmithDB's format. Without this grant the job
-# plans its tasks and then fails every one on a 403 from the source account.
-# Reader rather than Contributor because it only reads there; it writes to the
-# SmithDB account, which modules/smithdb grants separately.
-#
-# Migration-gated so a steady-state install leaves the identity able to reach
-# nothing but its own account, matching the objectViewer binding in
-# modules/gcp/infra/modules/smithdb/iam.tf. enable_smithdb is in the condition
-# because this lives in the root module and indexes module.smithdb[0]: on the
-# migration flag alone, enable_smithdb = false would hit "Invalid index" instead
-# of the readable message in terraform_data.validate_network.
-resource "azurerm_role_assignment" "smithdb_trace_blob_reader" {
-  count = var.enable_smithdb && var.smithdb_migration_enabled ? 1 : 0
-
-  scope                = module.blob.storage_account_id
-  role_definition_name = "Storage Blob Data Reader"
-  principal_id         = module.smithdb[0].workload_identity_principal_id
-  principal_type       = "ServicePrincipal"
-}
-
-# Azure takes up to 10 minutes to make a blob data-plane grant effective, and the
-# backfill Job is started by hand after this apply returns. Started too early it
-# fails every task on a 403 from the source account, which is the same symptom as
-# the grant above being absent. Hold the apply open instead: the delay is spent
-# once, with an explanation, rather than in a failure that reads as a defect.
-# Same approach as time_sleep.wait_for_rbac in modules/keyvault and
-# time_sleep.agic_identity_propagation in modules/k8s-cluster.
-#
-# Nothing reads this resource. Blocking the apply is the entire effect, so it is
-# not an unused resource to remove. triggers re-runs the delay when the grant is
-# replaced rather than created, which happens if the trace-blob account is
-# rebuilt and the scope moves with it.
-#
-# 300s against a 10-minute ceiling is deliberate: it covers the common case
-# without stalling every migration apply for the worst one. SMITHDB.md keeps the
-# verify-then-retry step, because this shortens the race and does not remove it.
-resource "time_sleep" "smithdb_trace_blob_reader_propagation" {
-  count = var.enable_smithdb && var.smithdb_migration_enabled ? 1 : 0
-
-  create_duration = "300s"
-  depends_on      = [azurerm_role_assignment.smithdb_trace_blob_reader]
-
-  triggers = {
-    role_assignment_id = azurerm_role_assignment.smithdb_trace_blob_reader[0].id
-  }
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────

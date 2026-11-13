@@ -7,14 +7,12 @@
 # Full deploy (helm):      make deploy-all
 # Manage secrets:          make keyvault
 # Where am I?              make status
-# SmithDB migration:       make smithdb-migration-job-start / smithdb-migration-job-end, then apply, init-values, deploy
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
 .PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-chart-image-keys setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
-        smithdb-migration-job-start smithdb-migration-job-end \
         clean clean-force
 
 INFRA_DIR := infra
@@ -158,14 +156,6 @@ deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + addons + 
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
-
-# ── SmithDB ───────────────────────────────────────────────────────────────────
-
-smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
-	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
-
-smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
-	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

@@ -995,7 +995,7 @@ variable "enable_smithdb" {
 # --- Staged rollout gates ---------------------------------------------------
 # SmithDB services deploy fully detached from LangSmith. Each gate is a separate
 # validated stage: stand the services up, confirm they reach the metastore and
-# the bucket, then enable ingestion, then optionally backfill, then move reads.
+# the bucket, then enable ingestion, then move reads.
 # Keep ClickHouse enabled throughout.
 variable "smithdb_ingestion_enabled" {
   type        = bool
@@ -1003,28 +1003,10 @@ variable "smithdb_ingestion_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_enabled" {
-  type        = bool
-  description = "Enable the historical ClickHouse-to-SmithDB migration integration. Requires smithdb_ingestion_enabled. make smithdb-migration-job-start sets it to true, and make smithdb-migration-job-end sets it to false. With a chart-managed TaskDB, the chart also starts an in-chart TaskDB Postgres for migration task state."
-  default     = false
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Serve LangSmith UI and API reads from SmithDB. Requires smithdb_ingestion_enabled, and any historical migration you need, to be validated first."
   default     = false
-}
-
-variable "smithdb_migration_start_time" {
-  type        = string
-  description = "Backfill start time (smithdb.migration.startTime), RFC 3339, for example 2026-01-01T00:00:00Z. Empty keeps the chart default window; see SMITHDB.md#staged-rollout."
-  default     = ""
-  nullable    = false
-
-  validation {
-    condition     = var.smithdb_migration_start_time == "" || can(formatdate("YYYY", var.smithdb_migration_start_time))
-    error_message = "smithdb_migration_start_time must be empty or an RFC 3339 timestamp, for example 2026-01-01T00:00:00Z."
-  }
 }
 
 # --- Sizing -------------------------------------------------------------------
@@ -1237,7 +1219,7 @@ variable "smithdb_instance_store_local_ssd_count" {
 
 variable "smithdb_instance_store_disk_size" {
   type        = number
-  description = "Boot disk size in GB for cache pool nodes. Null gives 100 for local-ssd and 300 for network-disk, where the backfill Job takes its 100Gi of ephemeral storage from the boot disk. network-disk with the backfill requires at least 300."
+  description = "Boot disk size in GB for cache pool nodes. Null gives 100 for local-ssd and 300 for network-disk."
   default     = null
 }
 
@@ -1255,7 +1237,7 @@ variable "smithdb_instance_store_max_nodes" {
 
 variable "smithdb_compute_machine_type" {
   type        = string
-  description = "Machine type for the SmithDB compute pool (compaction, clusterManager, backfill taskdb). Null takes the default for the size."
+  description = "Machine type for the SmithDB compute pool (compaction, clusterManager). Null takes the default for the size."
   default     = null
 }
 

@@ -1364,12 +1364,6 @@ variable "smithdb_ingestion_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_enabled" {
-  type        = bool
-  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled. make smithdb-migration-job-start sets it to true, and make smithdb-migration-job-end sets it to false."
-  default     = false
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."

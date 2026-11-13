@@ -179,7 +179,7 @@ The Cloud SQL Auth Proxy is now the default for a created metastore.
 
 Then do the other steps in
 [Upgrade from chart 0.16](modules/gcp/SMITHDB.md#upgrade-from-chart-016): the
-metastore TLS values, the overlay, and the backfill Job. That section also covers
+metastore TLS values and the overlay. That section also covers
 a direct `helm upgrade`.
 
 ## 4) Secret Manager access on GCP
