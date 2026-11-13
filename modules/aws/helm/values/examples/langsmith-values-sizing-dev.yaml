@@ -106,6 +106,9 @@ queue:
       enabled: true
       minReplicaCount: 1
       maxReplicaCount: 5
+      # Idle memory is close to the request and does not fall as replicas are
+      # added, so the chart's 80% target would hold extra replicas at idle.
+      targetMemoryUtilizationPercentage: 150
 
 ingestQueue:
   deployment:
