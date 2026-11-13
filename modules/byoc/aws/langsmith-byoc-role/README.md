@@ -299,7 +299,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-eks` | EKS cluster, node groups, add-ons |
 | `-elbv2` | Application Load Balancers for ingress |
 | `-data` | RDS (Postgres), Secrets Manager, KMS |
-| `-storage` | S3 (trace blobs), ElastiCache (Redis) |
+| `-storage` | S3 (trace blobs, `langgraph deploy` sources), ElastiCache (Redis) |
 | `-lambda` | Lambda + EventBridge for periodic jobs, ECR repositories for deployment builds |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 

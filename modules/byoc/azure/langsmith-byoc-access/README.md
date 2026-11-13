@@ -275,7 +275,7 @@ Remove `flow_logs` before you delete the data plane.
 
 1. If `reduced_access = true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
-3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
+3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry, and with CLI builds, the storage account `langgraph deploy` uploads sources to. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
 4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
 5. Remove the entry from `data_planes`. Run `terraform apply`.
 
