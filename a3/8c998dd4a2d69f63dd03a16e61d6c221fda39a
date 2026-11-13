@@ -1,0 +1,19 @@
+modules/byoc/aws/byoiam/README.md
+  s_9525a9b352049f::t_d2c946cb261b0b 60-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a38c998dd4a2d69f63dd03a16e61d6c221fda39a",
+  "prompts": {},
+  "sessions": {
+    "s_9525a9b352049f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "11f53079-bca0-4140-ad92-26f52b6473da",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}
