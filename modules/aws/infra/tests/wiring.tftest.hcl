@@ -656,3 +656,34 @@ run "in_cluster_fleet_storage_plans_no_shared_credentials" {
     error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
   }
 }
+
+run "redaction_raw_lifecycle_rule_survives_ttl_disabled" {
+  command = plan
+
+  variables {
+    s3_ttl_enabled = false
+  }
+
+  assert {
+    condition     = contains(module.storage.lifecycle_rule_ids, "redaction-raw")
+    error_message = "the ttl_1d/ backstop rule is missing when s3_ttl_enabled = false"
+  }
+
+  assert {
+    condition     = !contains(module.storage.lifecycle_rule_ids, "base") && !contains(module.storage.lifecycle_rule_ids, "extended")
+    error_message = "s3_ttl_enabled = false still created the ttl_s/ and ttl_l/ rules"
+  }
+}
+
+run "all_lifecycle_rules_present_when_ttl_enabled" {
+  command = plan
+
+  variables {
+    s3_ttl_enabled = true
+  }
+
+  assert {
+    condition     = toset(module.storage.lifecycle_rule_ids) == toset(["base", "extended", "redaction-raw"])
+    error_message = "s3_ttl_enabled = true did not produce the base, extended and redaction-raw rules"
+  }
+}

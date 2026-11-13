@@ -307,3 +307,36 @@ run "lrs_to_gzrs_on_an_existing_account_is_refused" {
 
   expect_failures = [terraform_data.storage_replication_guard]
 }
+
+# ── Lifecycle policy ─────────────────────────────────────────────────────────
+
+run "redaction_raw_lifecycle_rule_survives_ttl_disabled" {
+  command = plan
+
+  variables {
+    blob_ttl_enabled = false
+  }
+
+  assert {
+    condition     = contains(module.blob.lifecycle_rule_names, "redaction-raw")
+    error_message = "the ttl_1d/ backstop rule is missing when blob_ttl_enabled = false"
+  }
+
+  assert {
+    condition     = !contains(module.blob.lifecycle_rule_names, "base") && !contains(module.blob.lifecycle_rule_names, "extended")
+    error_message = "blob_ttl_enabled = false still created the ttl_s/ and ttl_l/ rules"
+  }
+}
+
+run "all_lifecycle_rules_present_when_ttl_enabled" {
+  command = plan
+
+  variables {
+    blob_ttl_enabled = true
+  }
+
+  assert {
+    condition     = toset(module.blob.lifecycle_rule_names) == toset(["base", "extended", "redaction-raw"])
+    error_message = "blob_ttl_enabled = true did not produce the base, extended and redaction-raw rules"
+  }
+}
