@@ -1,0 +1,51 @@
+# modules/azure-private — worked configuration.
+# The module is always BYO + hardened: existing RG + VNet, private API server,
+# CNI Overlay+Cilium, UDR egress, internal NGINX, Private-Endpoint Postgres/Redis.
+#
+# Pre-create BEFORE apply:
+#   • Resource group (region is inherited from it).
+#   • VNet + subnets:
+#       - AKS subnet: route table 0.0.0.0/0 -> firewall/NVA private IP (UDR),
+#         Microsoft.Storage + Microsoft.KeyVault service endpoints.
+#       - Postgres subnet: regular subnet with a spare IP for the private endpoint
+#         (NOT delegated).
+#       - Redis subnet: regular subnet for the private endpoint.
+#       - Jumpbox subnet: a normal subnet (e.g. "jumpbox") for the bastion jumpbox VM
+#         this module always provisions as the in-VNet apply host.
+#   • Firewall rules permitting required AKS egress
+#     (https://learn.microsoft.com/azure/aks/limit-egress-traffic).
+#   • Run terraform apply from a host inside/peered to the VNet that resolves the
+#     private DNS zone (the provisioned bastion, or a self-hosted runner).
+
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+identifier          = "-prod"
+resource_group_name = "my-existing-rg"
+
+vnet_id            = "/subscriptions/.../virtualNetworks/my-vnet"
+aks_subnet_id      = "/subscriptions/.../virtualNetworks/my-vnet/subnets/aks"
+postgres_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/privatelink"
+redis_subnet_id    = "/subscriptions/.../virtualNetworks/my-vnet/subnets/privatelink"
+bastion_subnet_id  = "/subscriptions/.../virtualNetworks/my-vnet/subnets/jumpbox"
+
+aks_pod_cidr       = "10.244.0.0/16"  # must not overlap the VNet / service CIDR / peered ranges
+aks_service_cidr   = "10.0.64.0/20"
+aks_dns_service_ip = "10.0.64.10"
+
+# API-server private DNS: "" => System (AKS-managed). "None" => BYO DNS (needs
+# aks_private_cluster_public_fqdn_enabled = true). Or a custom zone resource ID.
+aks_private_dns_zone_id                 = ""
+aks_private_cluster_public_fqdn_enabled = false
+
+# Control-plane identity: module-created user-assigned + Network Contributor on the
+# VNet (recommended). For a custom API-server private DNS zone, set
+# aks_create_cluster_identity = false and bring a pre-granted identity:
+#   aks_cluster_identity_id = "/subscriptions/.../userAssignedIdentities/my-aks-identity"
+aks_create_cluster_identity = true
+
+bastion_admin_ssh_public_key = "ssh-ed25519 AAAA..."
+
+# Secrets — supply via TF_VAR_* env vars in real use; placeholders here.
+postgres_admin_password = "CHANGE-ME"
+langsmith_license_key   = "CHANGE-ME"
+langsmith_api_key_salt  = "CHANGE-ME"
+langsmith_jwt_secret    = "CHANGE-ME"

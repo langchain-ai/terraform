@@ -1,0 +1,25 @@
+#cloud-config
+# Jumpbox bootstrap: install the tools needed to run azure-private from inside
+# the spoke VNet (az / terraform / kubectl / helm).
+package_update: true
+packages:
+  - curl
+  - unzip
+  - git
+  - apt-transport-https
+  - ca-certificates
+  - gnupg
+  - lsb-release
+runcmd:
+  # Azure CLI
+  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+  # Terraform (HashiCorp apt repo)
+  - wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
+  - apt-get update && apt-get install -y terraform
+  # kubectl
+  - curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+  - chmod +x /usr/local/bin/kubectl
+  # Helm
+  - curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+final_message: "Jumpbox ready. Run 'az login', clone the repo, and apply modules/azure-private from here."
