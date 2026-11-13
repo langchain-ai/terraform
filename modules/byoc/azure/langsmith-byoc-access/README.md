@@ -181,6 +181,23 @@ Set `reduced_access = false` again before you:
 - delete or recreate the data plane.
 - apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
 
+#### Give time-bound access for an upgrade
+
+For an upgrade, you can give LangSmith the removed access for a short time instead. Keep `reduced_access = true`, set `elevated_until`, and run `terraform apply`:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", reduced_access = true, elevated_until = "2026-11-12T18:00:00Z" }
+}
+```
+
+The module creates time-bound Privileged Identity Management (PIM) assignments for the LangSmith application on the resource group:
+
+- `langsmith-byoc-<key>-elevated-<suffix>`: the actions that `reduced_access` removes.
+- `User Access Administrator`, only without `byo_iam`.
+
+Azure removes the assignments at `elevated_until`. Set it at least 1 hour after the apply: PIM rejects a window with less than 5 minutes left. To end the access early, set an earlier time or remove `elevated_until`, and run `terraform apply`. PIM requires Microsoft Entra ID P2.
+
 [`roles.tf`](roles.tf) has the full lists.
 
 ### Let Engine use Azure AI Foundry (optional)
@@ -298,6 +315,7 @@ Fields of each `data_planes` entry:
 | `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
+| `elevated_until` | `string` | no | `null` | With `reduced_access`, give LangSmith the removed access until this RFC 3339 time. See [Give time-bound access for an upgrade](#give-time-bound-access-for-an-upgrade). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
