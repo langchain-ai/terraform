@@ -90,6 +90,8 @@ cd terraform/gcp
 ./helm/scripts/uninstall.sh
 ```
 
+**Separate sandbox cluster:** with `sandbox_runtime_source = "external"`, the script first removes the `langsmith-sandbox` release from the sandbox cluster (`$PREFIX-sbox-gke`) and waits for `sandbox-host` to stop, then removes the LangSmith release. Without Terraform outputs it cannot find that cluster: uninstall the runtime there yourself first (`helm uninstall langsmith-sandbox -n langsmith-sandbox --wait`). `terraform destroy` then removes the sandbox cluster, its firewall rules and the JuiceFS bucket (the bucket only when empty, unless `storage_force_destroy = true`).
+
 **Sandboxes and JuiceFS (chart 0.16 releases):** Chart 0.16 ships the JuiceFS CSI driver in the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods. Chart 0.17 has no CSI driver: sandbox-host mounts JuiceFS itself, so these steps find no claims or mount pods and change nothing.
 
 **In-cluster data disks:** In-cluster ClickHouse, Postgres, and Redis keep their data on StatefulSet claims: `data-langsmith-clickhouse-*`, `data-langsmith-postgres-*`, and `data-langsmith-redis-*`. The in-cluster Postgres and Redis of the Fleet, Insights, and Polly add-ons have claims too, for example `data-langsmith-standalone-polly-redis-0`. The GCE PD CSI driver provisions each Persistent Disk, so Terraform does not track the disks. `helm uninstall` does not delete these claims. The uninstall script keeps the claims by default to support a clean Helm reinstall. During a SmithDB backfill, the taskdb has a claim too (`data-langsmith-smithdb-taskdb-postgres-*`). The chart deletes the taskdb claim with its StatefulSet. The script deletes the taskdb claim if the claim is still there. For Postgres and Redis, the script deletes only the chart claims of the release in `RELEASE_NAME`. The claims of another release in the namespace do not match, for example the claims of `langsmith-dev` when `RELEASE_NAME` is `langsmith`. When the release name is longer than 13 characters, the chart can shorten the add-on claim names. The script does not delete a claim with a shortened name, so check for `pvc-*` disks in A8.
@@ -299,6 +301,7 @@ gcloud secrets delete "langsmith-${PREFIX}-jwt-secret" --project "$PROJECT_ID" -
 gcloud secrets delete "langsmith-${PREFIX}-api-key-salt" --project "$PROJECT_ID" --quiet
 gcloud secrets delete "langsmith-${PREFIX}-admin-password" --project "$PROJECT_ID" --quiet
 gcloud secrets delete "langsmith-${PREFIX}-sandbox-callback-signing-jwk" --project "$PROJECT_ID" --quiet 2>/dev/null || true
+gcloud secrets delete "langsmith-${PREFIX}-sandbox-service-auth-secret" --project "$PROJECT_ID" --quiet 2>/dev/null || true
 gcloud secrets delete "langsmith-${PREFIX}-deployments-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
 gcloud secrets delete "langsmith-${PREFIX}-agent-builder-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
 gcloud secrets delete "langsmith-${PREFIX}-insights-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
@@ -337,9 +340,9 @@ gcloud compute networks list --project "$PROJECT_ID" --filter="name~$PREFIX"
 gcloud compute firewall-rules list --project "$PROJECT_ID" --filter="network~$PREFIX-vpc" \
   --format="table(name,network.basename())"
 
-# Service accounts (WI uses name_prefix only; sandbox-node and SmithDB use PREFIX)
+# Service accounts (WI uses name_prefix only; sandbox and SmithDB ones use PREFIX)
 gcloud iam service-accounts list --project "$PROJECT_ID" \
-  --filter="email~$NAME_PREFIX-langsmith OR email~$PREFIX-sbox-node OR email~$PREFIX-smithdb-sa"
+  --filter="email~$NAME_PREFIX-langsmith OR email~$PREFIX-sbox-node OR email~$PREFIX-sbox-sys OR email~$PREFIX-smithdb-sa"
 
 # Secret Manager (scoped to this stack)
 gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith-$PREFIX-"
@@ -403,6 +406,9 @@ have no `-<suffix>` (for example Cloud SQL is `$PREFIX-pg`).
 | SmithDB metastore | `$PREFIX-smithdb-pg` or `$PREFIX-smithdb-pg-<suffix>` | if enabled |
 | Workload Identity SA | `<name_prefix>-langsmith` | no — **`name_prefix` only, no `environment`** |
 | Sandbox-host node SA | `$PREFIX-sbox-node` | no — only when `enable_sandboxes=true` |
+| Sandbox GKE cluster | `$PREFIX-sbox-gke` | no — only with `sandbox_runtime_source = "external"` |
+| Sandbox cluster system node SA | `$PREFIX-sbox-sys` | no — only with an external sandbox runtime |
+| JuiceFS bucket | `$PROJECT_ID-$PREFIX-jfs` or `...-jfs-<suffix>` | if enabled; only with an external sandbox runtime |
 | SmithDB SA | `$PREFIX-smithdb-sa` | no — only when `enable_smithdb=true` |
 | Secret Manager (`setup-env.sh`) | `langsmith-$PREFIX-<key>` | no |
 | Secret Manager (`secrets` module) | `$PREFIX-langsmith` | no |
@@ -762,6 +768,10 @@ gcloud iam service-accounts delete "$NAME_PREFIX-langsmith@$PROJECT_ID.iam.gserv
 gcloud iam service-accounts delete "$PREFIX-sbox-node@$PROJECT_ID.iam.gserviceaccount.com" \
   --project "$PROJECT_ID" --quiet 2>/dev/null || true
 
+# Sandbox cluster system pool (sandbox_runtime_source = "external")
+gcloud iam service-accounts delete "$PREFIX-sbox-sys@$PROJECT_ID.iam.gserviceaccount.com" \
+  --project "$PROJECT_ID" --quiet 2>/dev/null || true
+
 # SmithDB (enable_smithdb=true)
 gcloud iam service-accounts delete "$PREFIX-smithdb-sa@$PROJECT_ID.iam.gserviceaccount.com" \
   --project "$PROJECT_ID" --quiet 2>/dev/null || true
@@ -930,6 +940,7 @@ chk "Disks (named)" gcloud compute disks list --project "$PROJECT_ID" --filter="
 chk "Disks (pvc-*)" gcloud compute disks list --project "$PROJECT_ID" --filter="name~^pvc-" --format="value(name)"
 chk "IAM SA (WI)" gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$NAME_PREFIX-langsmith" --format="value(email)"
 chk "IAM SA (sandbox node)" gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX-sbox-node" --format="value(email)"
+chk "IAM SA (sandbox system)" gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX-sbox-sys" --format="value(email)"
 chk "IAM SA (SmithDB)" gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX-smithdb-sa" --format="value(email)"
 chk "IAM bindings (deleted principals)" gcloud projects get-iam-policy "$PROJECT_ID" --flatten="bindings[].members" --filter="bindings.members~^deleted:" --format="value(bindings.members,bindings.role)"
 chk "Secrets"   gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith-$PREFIX- OR name=$PREFIX-langsmith" --format="value(name)"

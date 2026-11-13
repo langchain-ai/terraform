@@ -179,6 +179,17 @@ variable "network_policy_provider" {
   }
 }
 
+variable "master_ipv4_cidr_block" {
+  description = "/28 range for the private cluster's control plane. Every private cluster in a VPC needs its own range, and changing it replaces the cluster."
+  type        = string
+  default     = "172.17.0.0/28"
+
+  validation {
+    condition     = can(cidrhost(var.master_ipv4_cidr_block, 0)) && endswith(var.master_ipv4_cidr_block, "/28")
+    error_message = "master_ipv4_cidr_block must be a /28 CIDR, for example 172.17.0.0/28."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Protection
 #------------------------------------------------------------------------------
