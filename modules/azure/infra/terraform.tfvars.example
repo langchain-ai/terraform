@@ -295,7 +295,8 @@ ingress_controller = "envoy-gateway"
 # A key per store (each falls back to the LangSmith pair or the cluster's set
 # above). The metastore takes its key only at creation; a StorageClass change
 # applies to new volumes only. Reader on each further set comes with
-# aks_disk_encryption_set_reader_grant = true.
+# aks_additional_disk_encryption_set_reader_grant = true.
+# aks_additional_disk_encryption_set_reader_grant    = false
 # smithdb_metastore_customer_managed_key_id          = "https://<vault>.vault.azure.net/keys/<name>"
 # smithdb_metastore_customer_managed_key_identity_id = "/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
 # smithdb_storage_customer_managed_key_id            = "https://<vault>.vault.azure.net/keys/<name>"

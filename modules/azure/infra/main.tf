@@ -1412,9 +1412,10 @@ module "aks" {
   # Customer-managed keys for the node OS disks and the CSI data disks: set
   # only at creation; the Reader grant on the set is the module's only with
   # the flag, the platform team's otherwise.
-  disk_encryption_set_id             = var.aks_disk_encryption_set_id
-  disk_encryption_set_reader_grant   = var.aks_disk_encryption_set_reader_grant
-  additional_disk_encryption_set_ids = local.additional_disk_encryption_set_ids
+  disk_encryption_set_id                      = var.aks_disk_encryption_set_id
+  disk_encryption_set_reader_grant            = var.aks_disk_encryption_set_reader_grant
+  additional_disk_encryption_set_ids          = local.additional_disk_encryption_set_ids
+  additional_disk_encryption_set_reader_grant = var.aks_additional_disk_encryption_set_reader_grant
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod

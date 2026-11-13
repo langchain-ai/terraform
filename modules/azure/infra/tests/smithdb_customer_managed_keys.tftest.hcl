@@ -153,7 +153,8 @@ run "per_store_keys_and_sets_win_and_get_one_grant_each" {
       "/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/DES-SMITHDB",
       "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-cluster",
     ]
-    aks_disk_encryption_set_reader_grant = true
+    aks_disk_encryption_set_reader_grant            = true
+    aks_additional_disk_encryption_set_reader_grant = true
   }
 
   assert {
@@ -191,16 +192,16 @@ run "further_sets_get_no_grant_without_the_flag" {
 
   assert {
     condition     = length(module.aks.additional_disk_encryption_set_reader_scopes) == 0 && module.aks.disk_encryption_set_reader_scope == null
-    error_message = "Without aks_disk_encryption_set_reader_grant no Reader assignment should be planned"
+    error_message = "Without aks_additional_disk_encryption_set_reader_grant no Reader assignment should be planned"
   }
 }
 
-run "the_grant_needs_only_a_further_set" {
+run "the_further_grant_needs_only_a_further_set" {
   command = plan
 
   variables {
-    aks_additional_disk_encryption_set_ids = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-clickhouse"]
-    aks_disk_encryption_set_reader_grant   = true
+    aks_additional_disk_encryption_set_ids          = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-clickhouse"]
+    aks_additional_disk_encryption_set_reader_grant = true
   }
 
   assert {
@@ -286,12 +287,28 @@ run "refuses_a_further_set_that_is_not_a_set" {
   expect_failures = [var.aks_additional_disk_encryption_set_ids]
 }
 
-run "refuses_the_grant_with_no_set" {
+run "the_cluster_grant_leaves_owner_granted_further_sets_alone" {
   command = plan
 
   variables {
+    aks_disk_encryption_set_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-cluster"
     aks_disk_encryption_set_reader_grant = true
+    enable_smithdb                       = true
+    smithdb_cache_disk_encryption_set_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-smithdb"
   }
 
-  expect_failures = [var.aks_disk_encryption_set_reader_grant]
+  assert {
+    condition     = module.aks.disk_encryption_set_reader_scope != null && length(module.aks.additional_disk_encryption_set_reader_scopes) == 0
+    error_message = "The cluster set's grant should not grant the per-store sets, got ${jsonencode(module.aks.additional_disk_encryption_set_reader_scopes)}"
+  }
+}
+
+run "refuses_the_further_grant_with_no_further_set" {
+  command = plan
+
+  variables {
+    aks_additional_disk_encryption_set_reader_grant = true
+  }
+
+  expect_failures = [var.aks_additional_disk_encryption_set_reader_grant]
 }

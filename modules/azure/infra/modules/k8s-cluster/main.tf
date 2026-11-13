@@ -496,7 +496,7 @@ resource "azurerm_role_assignment" "disk_encryption_set_reader" {
 
 # The same grant on each further set a StorageClass names (one key per store).
 resource "azurerm_role_assignment" "additional_disk_encryption_set_reader" {
-  for_each             = var.create_cluster && var.disk_encryption_set_reader_grant ? var.additional_disk_encryption_set_ids : {}
+  for_each             = var.create_cluster && var.additional_disk_encryption_set_reader_grant ? var.additional_disk_encryption_set_ids : {}
   scope                = each.value
   role_definition_name = "Reader"
   principal_id         = local.control_plane_user ? local.control_plane_principal_id : azurerm_kubernetes_cluster.main[0].identity[0].principal_id

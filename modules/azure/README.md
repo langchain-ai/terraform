@@ -1940,11 +1940,13 @@ there, and every variable takes the ID the platform team returns.
   `aks_disk_encryption_set_id` and is written as `diskEncryptionSetID` on the
   class. Kubernetes refuses parameter changes, so a change replaces the class
   and applies to new volumes only. The cluster identity needs Reader on every
-  set a class names: with `aks_disk_encryption_set_reader_grant = true` the
-  module grants it on each distinct set, and on each entry of
+  set a class names: with `aks_additional_disk_encryption_set_reader_grant = true`
+  the module grants it on each distinct set, and on each entry of
   `aks_additional_disk_encryption_set_ids`, a list for sets that StorageClasses
   outside the module name, such as the in-cluster databases'. Revoking one
-  store's key then makes only that store's data unreadable.
+  store's key then makes only that store's data unreadable. The flag is separate from
+  `aks_disk_encryption_set_reader_grant`, so the cluster's set can be granted
+  in Terraform while each store's owner grants Reader on its own set.
 
 A versionless key URL follows the key's newest version. Each identity holds Key
 Vault Crypto Service Encryption User on its vault before the apply. `make

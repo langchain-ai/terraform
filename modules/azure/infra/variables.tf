@@ -2003,12 +2003,23 @@ variable "aks_disk_encryption_set_id" {
 
 variable "aks_disk_encryption_set_reader_grant" {
   type        = bool
-  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Leave it false when that grant already exists: true would create the same assignment again, and the apply fails with RoleAssignmentExists. With true, the module also grants Reader on each distinct set in smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id and aks_additional_disk_encryption_set_ids. Requires at least one of those sets or aks_disk_encryption_set_id."
+  description = "Whether the module assigns the Reader role on aks_disk_encryption_set_id to the cluster identity, which the Azure Disk CSI driver needs before it can create an encrypted data disk. true needs the identity running apply to hold roleAssignments/write on the set's scope, usually the platform team's resource group, so the default is false and the platform team grants Reader after the apply that creates the cluster and before the first persistent volume. Leave it false when that grant already exists: true would create the same assignment again, and the apply fails with RoleAssignmentExists. Requires aks_disk_encryption_set_id."
   default     = false
 
   validation {
-    condition     = !var.aks_disk_encryption_set_reader_grant || var.aks_disk_encryption_set_id != "" || var.smithdb_cache_disk_encryption_set_id != "" || var.sandbox_juicefs_redis_disk_encryption_set_id != "" || length(var.aks_additional_disk_encryption_set_ids) > 0
-    error_message = "aks_disk_encryption_set_reader_grant = true needs a disk encryption set to grant Reader on: aks_disk_encryption_set_id, smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id or aks_additional_disk_encryption_set_ids."
+    condition     = !var.aks_disk_encryption_set_reader_grant || var.aks_disk_encryption_set_id != ""
+    error_message = "aks_disk_encryption_set_reader_grant = true needs aks_disk_encryption_set_id: there is no set to grant Reader on."
+  }
+}
+
+variable "aks_additional_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether the module assigns the Reader role to the cluster identity on each distinct further disk encryption set: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id and aks_additional_disk_encryption_set_ids, excluding aks_disk_encryption_set_id (which aks_disk_encryption_set_reader_grant covers). Separate from that flag so a deployment can grant the cluster's set in Terraform and leave per-store sets to their owners, or the reverse. true needs roleAssignments/write on each set's scope; leave it false when the owners grant Reader themselves, or the apply fails with RoleAssignmentExists. Requires at least one further set."
+  default     = false
+
+  validation {
+    condition     = !var.aks_additional_disk_encryption_set_reader_grant || var.smithdb_cache_disk_encryption_set_id != "" || var.sandbox_juicefs_redis_disk_encryption_set_id != "" || length(var.aks_additional_disk_encryption_set_ids) > 0
+    error_message = "aks_additional_disk_encryption_set_reader_grant = true needs a further disk encryption set to grant Reader on: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id or aks_additional_disk_encryption_set_ids."
   }
 }
 
@@ -2190,7 +2201,7 @@ variable "smithdb_storage_customer_managed_key_identity_id" {
 
 variable "smithdb_cache_disk_encryption_set_id" {
   type        = string
-  description = "Resource ID of the disk encryption set for SmithDB's cache volumes, written as diskEncryptionSetID on the SmithDB cache StorageClass. Empty (default) uses aks_disk_encryption_set_id, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; existing cache volumes keep their key until their pods are recreated. The cluster identity needs Reader on the set (aks_disk_encryption_set_reader_grant, or a grant made by the set's owner), and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault."
+  description = "Resource ID of the disk encryption set for SmithDB's cache volumes, written as diskEncryptionSetID on the SmithDB cache StorageClass. Empty (default) uses aks_disk_encryption_set_id, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; existing cache volumes keep their key until their pods are recreated. The cluster identity needs Reader on the set (aks_additional_disk_encryption_set_reader_grant, or a grant made by the set's owner), and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault."
   default     = ""
 
   validation {
@@ -2222,7 +2233,7 @@ variable "sandbox_juicefs_redis_disk_encryption_set_id" {
 
 variable "aks_additional_disk_encryption_set_ids" {
   type        = list(string)
-  description = "Resource IDs of further disk encryption sets that StorageClasses outside this module name (for example in-cluster databases or agent deployment databases, one key per store). The module only grants the cluster identity Reader on each, with aks_disk_encryption_set_reader_grant = true, so the Azure Disk CSI driver can create their volumes; it sets no StorageClass for them. Empty (default) grants nothing more."
+  description = "Resource IDs of further disk encryption sets that StorageClasses outside this module name (for example in-cluster databases or agent deployment databases, one key per store). The module only grants the cluster identity Reader on each, with aks_additional_disk_encryption_set_reader_grant = true, so the Azure Disk CSI driver can create their volumes; it sets no StorageClass for them. Empty (default) grants nothing more."
   default     = []
 
   validation {

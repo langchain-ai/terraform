@@ -495,3 +495,9 @@ variable "subnet_route_table_id" {
   description = "Resource ID of the route table on subnet_id, empty when it has none. Read only with control_plane_identity = \"user\" and control_plane_identity_manage_grants = false, as a scope the identity must hold a role on."
   default     = ""
 }
+
+variable "additional_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether to assign Reader on each set in additional_disk_encryption_set_ids to the cluster identity."
+  default     = false
+}
