@@ -1929,7 +1929,10 @@ there, and every variable takes the ID the platform team returns.
   `storage_customer_managed_key_id` for the account), so one key per kind still
   covers SmithDB. The metastore takes its key only at creation, like the
   LangSmith server, and plan refuses adding or removing one on an existing
-  metastore. The metastore has no geo-redundant backup, so it takes no geo pair.
+  metastore. An existing metastore on the service-managed key does not take
+  LangSmith's key by fallback: it keeps its key, and plan warns
+  (`check.smithdb_metastore_keeps_service_managed_key`). The metastore has no
+  geo-redundant backup, so it takes no geo pair.
 - **A key per store.** Set the per-store pairs above, and give a StorageClass
   its own disk encryption set: `smithdb_cache_disk_encryption_set_id` for
   SmithDB's cache volumes and `sandbox_juicefs_redis_disk_encryption_set_id`

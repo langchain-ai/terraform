@@ -105,6 +105,31 @@ run "smithdb_falls_back_to_langsmith_keys_and_the_cluster_set" {
   }
 }
 
+run "an_existing_unkeyed_metastore_keeps_the_service_managed_key" {
+  command = plan
+
+  variables {
+    enable_smithdb                            = true
+    postgres_customer_managed_key_id          = "https://kv-langsmith.vault.azure.net/keys/postgres"
+    postgres_customer_managed_key_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-postgres"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.smithdb_metastore_servers[0]
+    values = {
+      output = { servers = [{ id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.DBforPostgreSQL/flexibleServers/x-metastore", name = "x-metastore", data_encryption = "SystemManaged" }] }
+    }
+  }
+
+  # The fallback is skipped, so the guard passes and the plan warns instead.
+  expect_failures = [check.smithdb_metastore_keeps_service_managed_key]
+
+  assert {
+    condition     = module.smithdb[0].metastore_customer_managed_key == null
+    error_message = "An existing unkeyed metastore should keep the service-managed key, got ${jsonencode(module.smithdb[0].metastore_customer_managed_key)}"
+  }
+}
+
 run "per_store_keys_and_sets_win_and_get_one_grant_each" {
   command = plan
 

@@ -2083,9 +2083,15 @@ module "smithdb" {
 # A per-store input wins, else LangSmith's own key. The key and its identity
 # move together, so a store never reads one key with another store's identity.
 locals {
+  # A metastore that already runs on the service-managed key keeps it rather
+  # than taking LangSmith's key by fallback: the key is fixed at creation, so
+  # following the fallback would replace the server. Only its own input moves
+  # it, and the guard below refuses that. check.smithdb_metastore_keeps_service_managed_key
+  # says so at plan.
   smithdb_metastore_own_key                          = var.smithdb_metastore_customer_managed_key_id != ""
-  smithdb_metastore_customer_managed_key_id          = local.smithdb_metastore_own_key ? var.smithdb_metastore_customer_managed_key_id : var.postgres_customer_managed_key_id
-  smithdb_metastore_customer_managed_key_identity_id = local.smithdb_metastore_own_key ? var.smithdb_metastore_customer_managed_key_identity_id : var.postgres_customer_managed_key_identity_id
+  smithdb_metastore_skips_fallback                   = !local.smithdb_metastore_own_key && local.smithdb_metastore_live_has_key == false
+  smithdb_metastore_customer_managed_key_id          = local.smithdb_metastore_own_key ? var.smithdb_metastore_customer_managed_key_id : (local.smithdb_metastore_skips_fallback ? "" : var.postgres_customer_managed_key_id)
+  smithdb_metastore_customer_managed_key_identity_id = local.smithdb_metastore_own_key ? var.smithdb_metastore_customer_managed_key_identity_id : (local.smithdb_metastore_skips_fallback ? "" : var.postgres_customer_managed_key_identity_id)
   smithdb_storage_own_key                            = var.smithdb_storage_customer_managed_key_id != ""
   smithdb_storage_customer_managed_key_id            = local.smithdb_storage_own_key ? var.smithdb_storage_customer_managed_key_id : var.storage_customer_managed_key_id
   smithdb_storage_customer_managed_key_identity_id   = local.smithdb_storage_own_key ? var.smithdb_storage_customer_managed_key_identity_id : var.storage_customer_managed_key_identity_id
@@ -2124,6 +2130,13 @@ data "azapi_resource_list" "smithdb_metastore_servers" {
 locals {
   smithdb_metastore_live_server  = var.enable_smithdb ? try(data.azapi_resource_list.smithdb_metastore_servers[0].output.servers[0], null) : null
   smithdb_metastore_live_has_key = local.smithdb_metastore_live_server == null ? null : try(local.smithdb_metastore_live_server.data_encryption, "") == "AzureKeyVault"
+}
+
+check "smithdb_metastore_keeps_service_managed_key" {
+  assert {
+    condition     = !(local.smithdb_metastore_skips_fallback && var.postgres_customer_managed_key_id != "")
+    error_message = "The SmithDB metastore ${local.smithdb_name}-metastore already exists with the service-managed key, so it does not take postgres_customer_managed_key_id. A metastore's key is fixed at creation; to put it under a customer-managed key, recreate it with smithdb_metastore_customer_managed_key_id set."
+  }
 }
 
 resource "terraform_data" "smithdb_metastore_customer_managed_key_guard" {
