@@ -279,6 +279,43 @@ make quickdeploy-auto     # same, non-interactive (auto-approves all prompts)
 
 Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tfvars` existing before proceeding.
 
+### Queue autoscaling checks
+
+Every install scales `queue`, `ingest-queue`, and, with SmithDB, the compaction worker with KEDA. After `make deploy`:
+
+```bash
+kubectl get scaledobjects -n langsmith   # READY True for each of them
+kubectl get hpa -n langsmith             # KEDA owns these HPAs; TARGETS must show values, not <unknown>
+make test-e2e                            # Test 7 fails when one of them is not Ready
+```
+
+To check a scale-up under a queued load, send a burst of traces and watch `ingest-queue` grow above its minimum. KEDA adds about one replica for each 10 pending items in a queue.
+
+```python
+# burst.py: needs LANGSMITH_TRACING=true, LANGSMITH_ENDPOINT=<LangSmith URL>/api/v1,
+# and LANGSMITH_API_KEY in the environment.
+from concurrent.futures import ThreadPoolExecutor
+
+from langsmith import traceable
+from langsmith.run_trees import get_cached_client
+
+
+@traceable(name="keda-burst")
+def step(i: int) -> int:
+    return i
+
+
+with ThreadPoolExecutor(max_workers=32) as pool:
+    list(pool.map(step, range(20_000)))
+get_cached_client().flush()
+```
+
+```bash
+kubectl get hpa langsmith-ingest-queue -n langsmith -w
+```
+
+Scale-down waits 30 minutes after the backlog clears (the chart's 1800 s stabilization window).
+
 ---
 
 ## Known Issues & Fixes — Pass 2 (Helm)
