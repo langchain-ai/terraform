@@ -183,6 +183,23 @@ Set `reduced_access = false` again before you:
 
 [`roles.tf`](roles.tf) has the full lists.
 
+### Protect resources from deletion (optional)
+
+We do not recommend this option for most data planes. Upgrades that remove or replace a resource stop until you turn it off.
+
+When the data plane is active, set `deletion_protection = true`. Then run `terraform apply`. The LangSmith role loses every `*/delete` action, so LangSmith cannot delete a resource in the data plane resource group. You can use it with or without `reduced_access` and `byo_iam`:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", deletion_protection = true }
+}
+```
+
+LangSmith can still upgrade, scale, and repair the data plane. Set `deletion_protection = false` again before you:
+
+- delete or recreate the data plane.
+- apply an upgrade that removes or replaces a resource, such as a node pool, a DNS record, or a private endpoint connection. LangChain tells you when an upgrade needs this.
+
 ### Let Engine use Azure AI Foundry (optional)
 
 When the data plane is active, add the Foundry resource ID. Then run `terraform apply`:
@@ -273,7 +290,7 @@ Remove `flow_logs` before you delete the data plane.
 
 > **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
 
-1. If `reduced_access = true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
+1. If `reduced_access` or `deletion_protection` is `true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
 3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
 4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
@@ -297,6 +314,7 @@ Fields of each `data_planes` entry:
 | `location` | `string` | yes | - | Azure region of the data plane. |
 | `tags` | `map(string)` | no | `{}` | Tags for this data plane. They override the module `tags`. |
 | `reduced_access` | `bool` | no | `false` | Reduced LangSmith access after the data plane is active. See [Reduce access after deployment](#reduce-access-after-deployment). |
+| `deletion_protection` | `bool` | no | `false` | Optional. Remove every delete action from the LangSmith role after the data plane is active. See [Protect resources from deletion](#protect-resources-from-deletion-optional). |
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
