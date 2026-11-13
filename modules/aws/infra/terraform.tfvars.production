@@ -29,10 +29,10 @@ cost_center = "engineering"
 create_vpc = true
 
 #------------------------------------------------------------------------------
-# EKS — private API endpoint (kubectl requires VPN or bastion)
+# EKS — public API endpoint with configurable CIDR restrictions
 #------------------------------------------------------------------------------
-enable_public_eks_cluster = false
-eks_cluster_version       = "1.34"
+eks_cluster_version = "1.34"
+# Use eks_public_access_cidrs to restrict access to your team's egress IPs.
 
 # Production node group — 6 nodes min so all pods schedule immediately.
 # m5.4xlarge required for in-cluster ClickHouse (16 vCPU, 64 GB).
@@ -84,17 +84,3 @@ langsmith_domain       = "langsmith.example.com"   # ← change to your domain
 s3_ttl_enabled    = true
 s3_ttl_short_days = 14
 s3_ttl_long_days  = 400    # ~13 months
-
-#------------------------------------------------------------------------------
-# Security add-ons — recommended for production
-#------------------------------------------------------------------------------
-alb_access_logs_enabled = true
-
-# Enable CloudTrail ONLY if your org doesn't already have an account-level trail.
-# Check: aws cloudtrail describe-trails --query 'trailList[*].Name'
-create_cloudtrail             = false
-cloudtrail_multi_region       = true
-cloudtrail_log_retention_days = 365
-
-# WAF — OWASP Top 10, IP reputation, known bad inputs. ~$8-10/mo.
-create_waf = true

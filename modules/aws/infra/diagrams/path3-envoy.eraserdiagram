@@ -133,7 +133,6 @@ VPC [icon: aws-vpc, color: blue] {
 // ── AWS platform services (outside VPC) ──────────────────────
 SSMParameterStore [icon: aws-systems-manager, color: green]
 SecretsManager [icon: aws-systems-manager, color: green]
-CloudTrail [icon: aws-cloudtrail, color: gray]
 
 // ============================================================
 // CONNECTIONS
@@ -187,9 +186,6 @@ HostBackend > RDSPostgres: Postgres (agent state)
 
 // NAT for outbound (image pulls, external APIs)
 NATGateway --> Internet: outbound egress
-
-// Audit logging
-CloudTrail --> EKSCluster: API audit log stream
 
 // ============================================================
 // LEGEND

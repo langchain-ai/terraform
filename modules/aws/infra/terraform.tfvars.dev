@@ -31,8 +31,7 @@ create_vpc = true
 #------------------------------------------------------------------------------
 # EKS — public API for easy kubectl access from your laptop
 #------------------------------------------------------------------------------
-enable_public_eks_cluster = true
-eks_cluster_version       = "1.34"
+eks_cluster_version = "1.34"
 
 # Smaller node group for dev — 3 nodes, autoscales to 6.
 eks_managed_node_groups = {
@@ -80,10 +79,3 @@ tls_certificate_source = "none"
 s3_ttl_enabled    = true
 s3_ttl_short_days = 7      # shorter retention for dev
 s3_ttl_long_days  = 90
-
-#------------------------------------------------------------------------------
-# Security add-ons — all off for dev
-#------------------------------------------------------------------------------
-# alb_access_logs_enabled = false
-# create_cloudtrail       = false
-# create_waf              = false

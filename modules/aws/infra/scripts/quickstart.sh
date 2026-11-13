@@ -381,7 +381,7 @@ fi
 
 _profile_options=(
   "Dev / POC — smaller-scale defaults for development, evaluation, and testing"
-  "Production — production-oriented defaults and security questions"
+  "Production — larger-scale defaults and safer retention"
 )
 if [[ -n "$_profile_arg" ]]; then
   _ask_choice "$_profile_arg" "$_profile_default" "$(_numbered_prompt "1.1" "Which setup preset should QuickStart use?")" "${_profile_options[@]}"
@@ -486,7 +486,7 @@ if [[ "$CREATE_VPC" == "false" && "$UPDATE_MODE" != "true" ]]; then
   VPC_CIDR="$_REPLY"
   _ask_required "$(_numbered_prompt "3.4" "Private subnet IDs" " — comma-separated")" "$(_existing "private_subnets" "")"
   PRIVATE_SUBNETS="$_REPLY"
-  _ask "$(_numbered_prompt "3.5" "Public subnet IDs" " — comma-separated, blank = use an internal ALB")" "$(_existing "public_subnets" "")"
+  _ask_required "$(_numbered_prompt "3.5" "Public subnet IDs" " — comma-separated")" "$(_existing "public_subnets" "")"
   PUBLIC_SUBNETS="$_REPLY"
 fi
 
@@ -494,11 +494,7 @@ if [[ "$CREATE_VPC" == "false" && "$UPDATE_MODE" == "true" ]]; then
   [[ -n "$VPC_ID" ]] || { _ask_required "$(_numbered_prompt "3.2" "VPC ID")" ""; VPC_ID="$_REPLY"; }
   [[ -n "$VPC_CIDR" ]] || { _ask_required "$(_numbered_prompt "3.3" "VPC CIDR block")" ""; VPC_CIDR="$_REPLY"; }
   [[ -n "$PRIVATE_SUBNETS" ]] || { _ask_required "$(_numbered_prompt "3.4" "Private subnet IDs" " — comma-separated")" ""; PRIVATE_SUBNETS="$_REPLY"; }
-fi
-
-if [[ "$CREATE_VPC" == "false" && -z "$PUBLIC_SUBNETS" ]]; then
-  ALB_SCHEME="internal"
-  printf '\n  %sNo public subnets — alb_scheme will be set to "internal"%s\n' "$DIM" "$RESET"
+  [[ -n "$PUBLIC_SUBNETS" ]] || { _ask_required "$(_numbered_prompt "3.5" "Public subnet IDs" " — comma-separated")" ""; PUBLIC_SUBNETS="$_REPLY"; }
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -511,35 +507,15 @@ echo ""
 _ask "$(_choice_arg "eks_cluster_version")" "$(_numbered_prompt "4.1" "EKS Kubernetes version")" "$(_existing "eks_cluster_version" "1.34")"
 EKS_VERSION="$_REPLY"
 
-_existing_eks_public=$(_existing "enable_public_eks_cluster" "true")
-_existing_eks_public_cidrs=$(_existing "eks_public_access_cidrs" "0.0.0.0/0")
-EKS_PUBLIC="$_existing_eks_public"; EKS_PUBLIC_CIDRS="$_existing_eks_public_cidrs"; CREATE_BASTION="false"
+EKS_PUBLIC_CIDRS="$(_existing "eks_public_access_cidrs" "0.0.0.0/0")"
 
 if [[ "$PROFILE" == "prod" ]]; then
-  _eks_access_default=1; [[ "$_existing_eks_public" == "false" ]] && _eks_access_default=2
-  _ask_choice "$(_choice_arg "enable_public_eks_cluster")" "$_eks_access_default" "$(_numbered_prompt "4.2" "EKS API endpoint access:")" \
-    "Public — accessible from the internet (restrict with CIDRs)" \
-    "Private — accessible only from within the VPC (bastion recommended)"
-  if [[ "$_CHOICE" == "2" ]]; then
-    EKS_PUBLIC="false"
-    if [[ "$UPDATE_MODE" == "true" && "$_existing_eks_public" == "false" ]]; then
-      CREATE_BASTION="$(_existing "create_bastion" "false")"
-    else
-      CREATE_BASTION="true"
-      printf "\n  $(_dim "Bastion will be created for private cluster access via SSM.")\n"
-    fi
-  else
-    EKS_PUBLIC="true"
-    echo ""
-    _ask "$(_choice_arg "eks_public_access_cidrs")" "$(_numbered_prompt "4.3" "Restrict EKS API to specific CIDRs?" " — comma-separated")" "$(_existing "eks_public_access_cidrs" "0.0.0.0/0")"
-    EKS_PUBLIC_CIDRS="$_REPLY"
-  fi
+  _ask "$(_choice_arg "eks_public_access_cidrs")" "$(_numbered_prompt "4.2" "Restrict EKS API to specific CIDRs?" " — comma-separated")" "$EKS_PUBLIC_CIDRS"
+  EKS_PUBLIC_CIDRS="$_REPLY"
+elif [[ "$UPDATE_MODE" == "true" ]]; then
+  printf "  $(_dim "Dev profile: keeping the current EKS API CIDRs.")\n"
 else
-  if [[ "$UPDATE_MODE" == "true" ]]; then
-    printf "  $(_dim "Dev profile: keeping the current EKS API endpoint access and CIDRs.")\n"
-  else
-    printf "  $(_dim "Dev profile: EKS API endpoint will be public.")\n"
-  fi
+  printf "  $(_dim "Dev profile: EKS API endpoint will be public.")\n"
 fi
 
 NODE_INSTANCE="$(_existing "instance_types" "$([[ "$PROFILE" == "prod" ]] && echo "m5.4xlarge" || echo "m5.2xlarge")")"
@@ -547,11 +523,11 @@ NODE_MIN="$(_existing "min_size" "$([[ "$PROFILE" == "prod" ]] && echo "3" || ec
 NODE_MAX="$(_existing "max_size" "$([[ "$PROFILE" == "prod" ]] && echo "10" || echo "5")")"
 
 echo ""
-_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "Node group instance type")" "$NODE_INSTANCE"
+_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.3" "Node group instance type")" "$NODE_INSTANCE"
 NODE_INSTANCE="$_REPLY"
-_ask_int "$(_choice_arg "min_size")" "$(_numbered_prompt "4.5" "Node group min size")" "$NODE_MIN"
+_ask_int "$(_choice_arg "min_size")" "$(_numbered_prompt "4.4" "Node group min size")" "$NODE_MIN"
 NODE_MIN="$_REPLY"
-_ask_int "$(_choice_arg "max_size")" "$(_numbered_prompt "4.6" "Node group max size")" "$NODE_MAX"
+_ask_int "$(_choice_arg "max_size")" "$(_numbered_prompt "4.5" "Node group max size")" "$NODE_MAX"
 NODE_MAX="$_REPLY"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -720,13 +696,12 @@ if [[ "$GATEWAY_MODE" == "nginx" ]]; then
   printf "  ${DIM}TLS terminates at the ALB using ACM.${RESET}\n"
 fi
 
-# For Istio: brief note. No input is needed because the gateway service is ClusterIP and the ALB in front of it decides whether it is public or internal.
+# Istio uses a ClusterIP service behind the internet-facing ALB.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
   echo ""
   printf "  ${DIM}Istio: ALB → TargetGroupBinding → istio-ingressgateway pods → LangSmith.${RESET}\n"
   printf "  ${DIM}Terraform installs the gateway chart with service.type=ClusterIP, so it${RESET}\n"
-  printf "  ${DIM}provisions no NLB of its own. alb_scheme is what makes this public or${RESET}\n"
-  printf "  ${DIM}internal (asked below on the prod profile; dev stays internet-facing).${RESET}\n"
+  printf "  ${DIM}provisions no NLB of its own. The internet-facing ALB handles external traffic.${RESET}\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -931,60 +906,14 @@ if [[ "$TLS_SOURCE" == "none" && "$PROFILE" == "prod" ]]; then
   _yellow "WARNING"; printf ": Running production without TLS is not recommended.\n"
 fi
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 10. Security & Access
-# ═══════════════════════════════════════════════════════════════════════════
-
-_section "10. Security & Access"
-echo ""
-
-if [[ -z "${ALB_SCHEME:-}" ]]; then
-  ALB_SCHEME="internet-facing"
-  [[ "$PROFILE" == "dev" ]] && ALB_SCHEME="$(_existing "alb_scheme" "internet-facing")"
-fi
-ALB_LOGS="$(_existing "alb_access_logs_enabled" "false")"
-CREATE_CLOUDTRAIL="$(_existing "create_cloudtrail" "false")"
-CREATE_WAF="$(_existing "create_waf" "false")"
-CREATE_FIREWALL="$(_existing "create_firewall" "false")"
 # No SSO question: `make sso` turns it on after checking its prerequisites, so keep the existing value instead of dropping it.
 ENABLE_SSO_OIDC="$(_existing "enable_sso_oidc" "false")"
-[[ "$CREATE_VPC" == "false" ]] && CREATE_FIREWALL="false"
-
-if [[ "$PROFILE" == "prod" ]]; then
-  if [[ "${ALB_SCHEME:-}" == "internal" ]]; then
-    printf "  %s ${DIM}(selected: yes)${RESET} — required because there are no public subnets\n" "$(_numbered_prompt "10.1" "Use an internal ALB?")"
-  elif _ask_yn "$(_choice_arg "alb_scheme")" "$(_numbered_prompt "10.1" "Use an internal ALB?" " — private subnets only")" "$([[ "$(_existing "alb_scheme" "internet-facing")" == "internal" ]] && echo "y" || echo "n")"; then
-    ALB_SCHEME="internal"
-  fi
-
-  echo ""
-  _ask_yn "$(_choice_arg "alb_access_logs_enabled")" "$(_numbered_prompt "10.2" "Enable ALB access logs?")" "$([[ "$(_existing "alb_access_logs_enabled" "false")" == "true" ]] && echo "y" || echo "n")" && ALB_LOGS="true" || ALB_LOGS="false"
-  echo ""
-  _ask_yn "$(_choice_arg "create_cloudtrail")" "$(_numbered_prompt "10.3" "Create CloudTrail?" " — skip if an organization-level trail exists")" "$([[ "$(_existing "create_cloudtrail" "false")" == "true" ]] && echo "y" || echo "n")" && CREATE_CLOUDTRAIL="true" || CREATE_CLOUDTRAIL="false"
-  echo ""
-  _ask_yn "$(_choice_arg "create_waf")" "$(_numbered_prompt "10.4" "Enable WAF on the ALB?" " — ~\$10/month")" "$([[ "$(_existing "create_waf" "false")" == "true" ]] && echo "y" || echo "n")" && CREATE_WAF="true" || CREATE_WAF="false"
-  echo ""
-  if [[ "$CREATE_VPC" == "true" ]]; then
-    _ask_yn "$(_choice_arg "create_firewall")" "$(_numbered_prompt "10.5" "Enable AWS Network Firewall?" " — FQDN egress filtering, ~\$0.40/hour")" "$([[ "$(_existing "create_firewall" "false")" == "true" ]] && echo "y" || echo "n")" && CREATE_FIREWALL="true" || CREATE_FIREWALL="false"
-  else
-    printf "  %s ${DIM}(unavailable: requires a Terraform-managed VPC)${RESET}\n" "$(_numbered_prompt "10.5" "AWS Network Firewall")"
-  fi
-  echo ""
-  if [[ "${CREATE_BASTION:-false}" != "true" ]]; then
-    _ask_yn "$(_choice_arg "create_bastion")" "$(_numbered_prompt "10.6" "Create a bastion host?")" "$([[ "$(_existing "create_bastion" "false")" == "true" ]] && echo "y" || echo "n")" && CREATE_BASTION="true" || CREATE_BASTION="${CREATE_BASTION:-false}"
-  else
-    printf "  %s ${DIM}(selected: yes)${RESET} — used for private EKS access\n" "$(_numbered_prompt "10.6" "Create a bastion host?")"
-  fi
-else
-  CREATE_BASTION="$(_existing "create_bastion" "false")"
-  printf "  $(_dim "Dev profile: security add-ons skipped. Edit terraform.tfvars to enable.")\n"
-fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 11. S3 Data Retention
+# 10. S3 Data Retention
 # ═══════════════════════════════════════════════════════════════════════════
 
-_section "11. S3 Data Retention"
+_section "10. S3 Data Retention"
 echo ""
 
 S3_TTL="$(_existing "s3_ttl_enabled" "true")"
@@ -992,8 +921,8 @@ S3_SHORT="$(_existing "s3_ttl_short_days" "14")"
 S3_LONG="$(_existing "s3_ttl_long_days" "400")"
 
 if [[ "$PROFILE" == "prod" ]]; then
-  _ask_int "$(_choice_arg "s3_ttl_short_days")" "$(_numbered_prompt "11.1" "S3 short-lived trace TTL (days)")" "$S3_SHORT"; S3_SHORT="$_REPLY"
-  _ask_int "$(_choice_arg "s3_ttl_long_days")" "$(_numbered_prompt "11.2" "S3 long-lived trace TTL (days)")" "$S3_LONG"; S3_LONG="$_REPLY"
+  _ask_int "$(_choice_arg "s3_ttl_short_days")" "$(_numbered_prompt "10.1" "S3 short-lived trace TTL (days)")" "$S3_SHORT"; S3_SHORT="$_REPLY"
+  _ask_int "$(_choice_arg "s3_ttl_long_days")" "$(_numbered_prompt "10.2" "S3 long-lived trace TTL (days)")" "$S3_LONG"; S3_LONG="$_REPLY"
 elif [[ "$UPDATE_MODE" == "true" ]]; then
   printf "  $(_dim "Keeping the current S3 expiry setting and TTL values.")\n"
 else
@@ -1001,10 +930,10 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 12. LangSmith Pod Sizing
+# 11. LangSmith Pod Sizing
 # ═══════════════════════════════════════════════════════════════════════════
 
-_section "12. LangSmith Pod Sizing"
+_section "11. LangSmith Pod Sizing"
 
 echo ""
 printf "  ${DIM}This saved setting controls resource requests, replica counts, and HPA/KEDA autoscaling for LangSmith pods.${RESET}\n"
@@ -1041,7 +970,7 @@ if [[ "$UPDATE_MODE" == "true" ]]; then
   fi
 fi
 
-_ask_choice "$_size_arg" "$_size_default" --recommended "$_size_recommended" "$(_numbered_prompt "12.1" "LangSmith pod sizing:")" "${_size_options[@]}"
+_ask_choice "$_size_arg" "$_size_default" --recommended "$_size_recommended" "$(_numbered_prompt "11.1" "LangSmith pod sizing:")" "${_size_options[@]}"
 
 case "$((_CHOICE - _size_offset))" in
   0) SIZING="${_ex_sizing:-default}" ;;
@@ -1052,10 +981,10 @@ case "$((_CHOICE - _size_offset))" in
 esac
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 13. Add-on Features
+# 12. Add-on Features
 # ═══════════════════════════════════════════════════════════════════════════
 
-_section "13. Add-on Features"
+_section "12. Add-on Features"
 
 echo ""
 printf "  ${DIM}Optional add-ons — each requires the matching license entitlement.${RESET}\n"
@@ -1137,17 +1066,17 @@ _select_feature_storage() {
   [[ "$selected" == "external" ]]
 }
 
-_ask_yn "$(_choice_arg "enable_deployments")" "$(_numbered_prompt "13.1" "Enable LangSmith Deployments?" " — listener + operator + host-backend")" \
+_ask_yn "$(_choice_arg "enable_deployments")" "$(_numbered_prompt "12.1" "Enable LangSmith Deployments?" " — listener + operator + host-backend")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_DEPLOYMENTS="true" || ENABLE_DEPLOYMENTS="false"
 
 echo ""
-_ask_yn "$(_choice_arg "enable_fleet")" "$(_numbered_prompt "13.2" "Enable Fleet?" " — no-code agents; includes host-backend")" \
+_ask_yn "$(_choice_arg "enable_fleet")" "$(_numbered_prompt "12.2" "Enable Fleet?" " — no-code agents; includes host-backend")" \
   "$([[ "$_ex_fleet" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_FLEET="true" || ENABLE_FLEET="false"
 
 if [[ "$ENABLE_FLEET" == "true" ]]; then
-  if _select_feature_storage "Fleet" "$_ex_fleet" "$_ex_fleet_external" "fleet_storage" "13.3"; then
+  if _select_feature_storage "Fleet" "$_ex_fleet" "$_ex_fleet_external" "fleet_storage" "12.3"; then
     FLEET_STORAGE="external"
   else
     FLEET_STORAGE="in-cluster"
@@ -1155,7 +1084,7 @@ if [[ "$ENABLE_FLEET" == "true" ]]; then
 fi
 
 echo ""
-_ask_yn "$(_choice_arg "enable_polly" "enable_standalone_polly")" "$(_numbered_prompt "13.4" "Enable LangSmith Chat (formerly Polly)?" " — chat for traces, threads, prompts, and experiments")" \
+_ask_yn "$(_choice_arg "enable_polly" "enable_standalone_polly")" "$(_numbered_prompt "12.4" "Enable LangSmith Chat (formerly Polly)?" " — chat for traces, threads, prompts, and experiments")" \
   "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_POLLY="true" || ENABLE_POLLY="false"
 
@@ -1167,7 +1096,7 @@ fi
 # Existing features keep their storage model.
 # Newly enabled features follow the selected storage location; external storage requires both services to be external.
 if [[ "$ENABLE_POLLY" == "true" ]]; then
-  if _select_feature_storage "LangSmith Chat" "$_ex_polly_storage_guard" "$_ex_polly_external" "polly_storage" "13.5"; then
+  if _select_feature_storage "LangSmith Chat" "$_ex_polly_storage_guard" "$_ex_polly_external" "polly_storage" "12.5"; then
     POLLY_STORAGE="external"
     ENABLE_STANDALONE_POLLY="true"
   else
@@ -1176,7 +1105,7 @@ if [[ "$ENABLE_POLLY" == "true" ]]; then
 fi
 
 echo ""
-_ask_yn "$(_choice_arg "enable_insights" "enable_standalone_insights")" "$(_numbered_prompt "13.6" "Enable Insights?" " — AI-powered trace analysis for patterns and failure modes")" \
+_ask_yn "$(_choice_arg "enable_insights" "enable_standalone_insights")" "$(_numbered_prompt "12.6" "Enable Insights?" " — AI-powered trace analysis for patterns and failure modes")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
 
@@ -1186,7 +1115,7 @@ if [[ "$UPDATE_MODE" == "true" && "$_ex_insights" == "true" && "$ENABLE_INSIGHTS
 fi
 
 if [[ "$ENABLE_INSIGHTS" == "true" ]]; then
-  if _select_feature_storage "Insights" "$_ex_insights_storage_guard" "$_ex_insights_external" "insights_storage" "13.7"; then
+  if _select_feature_storage "Insights" "$_ex_insights_storage_guard" "$_ex_insights_external" "insights_storage" "12.7"; then
     INSIGHTS_STORAGE="external"
     ENABLE_STANDALONE_INSIGHTS="true"
   else
@@ -1199,7 +1128,7 @@ printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a
 printf "  ${DIM}external Redis instance for JuiceFS metadata. They also require a Linux${RESET}\n"
 printf "  ${DIM}KVM-compatible host. The matching Sandbox image is selected during deployment.${RESET}\n"
 echo ""
-if _ask_yn "$(_choice_arg "enable_sandboxes")" "$(_numbered_prompt "13.8" "Enable LangSmith Sandboxes?")" \
+if _ask_yn "$(_choice_arg "enable_sandboxes")" "$(_numbered_prompt "12.8" "Enable LangSmith Sandboxes?")" \
   "$([[ "$_ex_sandboxes" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SANDBOXES="true"
 fi
@@ -1239,13 +1168,8 @@ _show_summary() {
 
   _summary_section "4. EKS Cluster"
   _summary_row "Kubernetes version:" "$EKS_VERSION"
-  local eks_api_summary="public"
-  if [[ "$EKS_PUBLIC" != "true" ]]; then
-    eks_api_summary="private"
-    [[ "$CREATE_BASTION" == "true" ]] && eks_api_summary="private + bastion"
-  fi
-  _summary_row "EKS API:" "$eks_api_summary"
-  [[ "$EKS_PUBLIC" == "true" && -n "$EKS_PUBLIC_CIDRS" ]] && _summary_row "EKS public CIDRs:" "$EKS_PUBLIC_CIDRS"
+  _summary_row "EKS API:" "public"
+  [[ -n "$EKS_PUBLIC_CIDRS" ]] && _summary_row "EKS public CIDRs:" "$EKS_PUBLIC_CIDRS"
   _summary_row "Node instance type:" "$NODE_INSTANCE"
   _summary_row "Node minimum:" "$NODE_MIN"
   _summary_row "Node maximum:" "$NODE_MAX"
@@ -1286,24 +1210,15 @@ _show_summary() {
       "$([[ "$DNS_CREATE_ZONE" == "true" ]] && echo "Terraform-managed ($DOMAIN)" || echo "existing ($DNS_EXISTING_ZONE_ID)")"
   fi
 
-  _summary_section "10. Security & Access"
-  _summary_row "ALB scheme:" "$ALB_SCHEME"
-  _summary_bool_row "ALB access logs:" "$ALB_LOGS"
-  _summary_bool_row "CloudTrail:" "$CREATE_CLOUDTRAIL"
-  _summary_bool_row "WAF:" "$CREATE_WAF"
-  _summary_bool_row "Network Firewall:" "$CREATE_FIREWALL"
-  _summary_bool_row "Bastion:" "$CREATE_BASTION"
-  _summary_bool_row "SSO login:" "$ENABLE_SSO_OIDC"
-
-  _summary_section "11. S3 Data Retention"
+  _summary_section "10. S3 Data Retention"
   _summary_bool_row "S3 TTL:" "$S3_TTL"
   _summary_row "Short-lived trace TTL:" "${S3_SHORT} days"
   _summary_row "Long-lived trace TTL:" "${S3_LONG} days"
 
-  _summary_section "12. LangSmith Pod Sizing"
+  _summary_section "11. LangSmith Pod Sizing"
   _summary_row "Pod sizing:" "$SIZING"
 
-  _summary_section "13. Add-on Features"
+  _summary_section "12. Add-on Features"
   _summary_bool_row "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
   _summary_bool_row "Fleet:" "$ENABLE_FLEET"
   [[ "$ENABLE_FLEET" == "true" ]] && _summary_row "Fleet storage:" "$FLEET_STORAGE"
@@ -1383,8 +1298,7 @@ cat >> "$OUTPUT" << TFVARS
 #------------------------------------------------------------------------------
 # EKS
 #------------------------------------------------------------------------------
-eks_cluster_version       = "${EKS_VERSION}"
-enable_public_eks_cluster = ${EKS_PUBLIC}
+eks_cluster_version = "${EKS_VERSION}"
 TFVARS
 
 [[ -n "$EKS_PUBLIC_CIDRS" ]] && echo "eks_public_access_cidrs = $(_tf_list "$EKS_PUBLIC_CIDRS")" >> "$OUTPUT"
@@ -1494,15 +1408,9 @@ fi
 cat >> "$OUTPUT" << TFVARS
 
 #------------------------------------------------------------------------------
-# Security & Access
+# SSO
 #------------------------------------------------------------------------------
-alb_scheme              = "${ALB_SCHEME}"
-alb_access_logs_enabled = ${ALB_LOGS}
-create_cloudtrail       = ${CREATE_CLOUDTRAIL}
-create_waf              = ${CREATE_WAF}
-create_firewall         = ${CREATE_FIREWALL}
-create_bastion          = ${CREATE_BASTION}
-enable_sso_oidc         = ${ENABLE_SSO_OIDC}
+enable_sso_oidc = ${ENABLE_SSO_OIDC}
 
 #------------------------------------------------------------------------------
 # S3 Data Retention

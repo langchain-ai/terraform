@@ -108,19 +108,16 @@ run "cert_manager_irsa_without_an_email_is_rejected" {
 
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
-# Two bring-your-own-VPC rules have no run here: create_vpc = false with none of
-# the VPC inputs, and create_vpc = false with create_firewall = true. Terraform
-# keeps planning past an expected failure, so each run reaches the configuration
-# the precondition exists to prevent and fails there instead, on a null VPC ID
-# and on module.vpc[0] against an empty tuple. A precondition is testable this
-# way only when the configuration it rejects still evaluates.
+# create_vpc = false with none of the VPC inputs has no run here. Terraform
+# keeps planning past an expected failure and fails on a null VPC ID instead.
+# A precondition is testable this way only when the configuration it rejects
+# still evaluates.
 
 run "byo_vpc_serving_the_internet_without_public_subnets_is_rejected" {
   command = plan
 
   variables {
     create_vpc      = false
-    alb_scheme      = "internet-facing"
     vpc_id          = "vpc-00000000000000001"
     vpc_cidr_block  = "10.0.0.0/16"
     private_subnets = ["subnet-00000000000000001", "subnet-00000000000000002"]

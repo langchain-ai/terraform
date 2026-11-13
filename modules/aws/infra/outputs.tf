@@ -141,29 +141,6 @@ output "vpc_cidr_block" {
 }
 
 #------------------------------------------------------------------------------
-# Network Firewall (populated only when create_firewall = true)
-#------------------------------------------------------------------------------
-output "firewall_enabled" {
-  description = "Whether AWS Network Firewall egress filtering is active"
-  value       = var.create_firewall
-}
-
-output "firewall_arn" {
-  description = "ARN of the AWS Network Firewall (null when create_firewall = false)"
-  value       = var.create_firewall ? module.firewall[0].firewall_arn : null
-}
-
-output "firewall_endpoint_id" {
-  description = "VPC endpoint ID of the firewall. Private route tables send 0.0.0.0/0 here (null when create_firewall = false)."
-  value       = var.create_firewall ? module.firewall[0].firewall_endpoint_id : null
-}
-
-output "firewall_allowed_fqdns" {
-  description = "Domains permitted for outbound internet traffic through the firewall"
-  value       = var.create_firewall ? var.firewall_allowed_fqdns : []
-}
-
-#------------------------------------------------------------------------------
 # IAM / IRSA
 #------------------------------------------------------------------------------
 output "langsmith_irsa_role_arn" {
@@ -230,11 +207,6 @@ output "alb_arn" {
   value       = module.alb.alb_arn
 }
 
-output "alb_scheme" {
-  description = "ALB scheme: internet-facing or internal"
-  value       = var.alb_scheme
-}
-
 output "alb_dns_name" {
   description = "ALB DNS hostname — use as config.hostname in Helm values"
   value       = module.alb.alb_dns_name
@@ -248,29 +220,6 @@ output "alb_security_group_id" {
 output "langsmith_url" {
   description = "LangSmith application URL. Uses custom domain if langsmith_domain is set, otherwise falls back to the ALB DNS name."
   value       = var.tls_certificate_source == "none" ? "http://${module.alb.alb_dns_name}" : (var.langsmith_domain != "" ? "https://${var.langsmith_domain}" : "https://${module.alb.alb_dns_name}")
-}
-
-#------------------------------------------------------------------------------
-# Bastion
-#------------------------------------------------------------------------------
-output "bastion_instance_id" {
-  description = "EC2 instance ID of the bastion host (null if bastion not created)"
-  value       = var.create_bastion ? module.bastion[0].instance_id : null
-}
-
-output "bastion_public_ip" {
-  description = "Public IP of the bastion host (null if bastion not created)"
-  value       = var.create_bastion ? module.bastion[0].public_ip : null
-}
-
-output "bastion_ssm_command" {
-  description = "AWS CLI command to start an SSM session to the bastion"
-  value       = var.create_bastion ? module.bastion[0].ssm_start_session_command : null
-}
-
-output "bastion_security_group_id" {
-  description = "Security group ID attached to the bastion (null if bastion not created)"
-  value       = var.create_bastion ? module.bastion[0].security_group_id : null
 }
 
 #------------------------------------------------------------------------------
@@ -390,8 +339,6 @@ output "resource_summary" {
     namespace        = var.langsmith_namespace
     tls              = var.tls_certificate_source
     alb              = module.alb.alb_dns_name
-    bastion          = var.create_bastion ? module.bastion[0].instance_id : "not created"
-    firewall         = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
     deployments      = var.enable_deployments
     fleet            = var.enable_fleet
     fleet_storage    = var.enable_fleet ? var.fleet_storage : "not enabled"
@@ -422,7 +369,7 @@ output "next_steps" {
     - Redis:        ${var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"}
     - S3 Bucket:    ${local.bucket_name}
     - ALB:          ${module.alb.alb_dns_name}
-    - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (${var.dns_create_zone ? "new" : "existing"} Route 53 zone + ACM)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}
+    - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (${var.dns_create_zone ? "new" : "existing"} Route 53 zone + ACM)" : ""}
 
     Next Steps:
 
