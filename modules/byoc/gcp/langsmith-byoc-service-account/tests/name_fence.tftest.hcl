@@ -33,7 +33,7 @@ run "default" {
   }
 
   assert {
-    condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
+    condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routes", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
     error_message = "One fenced role per kind."
   }
 
@@ -50,7 +50,7 @@ run "default" {
   assert {
     condition = alltrue([for p in [
       "compute.networks.create", "compute.networks.use", "compute.subnetworks.create", "compute.subnetworks.use",
-      "compute.routers.create", "compute.addresses.create", "compute.addresses.createInternal", "compute.addresses.use",
+      "compute.routes.create", "compute.routes.delete", "compute.routers.create", "compute.addresses.create", "compute.addresses.createInternal", "compute.addresses.use",
       "compute.addresses.useInternal", "compute.globalAddresses.create", "compute.globalAddresses.createInternal",
       "compute.globalAddresses.delete", "compute.globalAddresses.deleteInternal", "compute.globalAddresses.setLabels",
       "compute.forwardingRules.pscCreate", "networkconnectivity.serviceConnectionPolicies.create",
@@ -60,7 +60,7 @@ run "default" {
 
   assert {
     condition = alltrue([for p in [
-      "compute.networks.get", "compute.routers.use", "compute.globalAddresses.use", "compute.globalAddresses.get",
+      "compute.networks.get", "compute.routes.get", "compute.routers.use", "compute.globalAddresses.use", "compute.globalAddresses.get",
       "compute.globalAddresses.list", "servicenetworking.services.addPeering", "artifactregistry.repositories.update",
     ] : contains(google_project_iam_custom_role.provisioner.permissions, p)])
     error_message = "Unfenceable and read permissions stay in the provisioner role."
@@ -115,7 +115,7 @@ run "byo_iam" {
   }
 
   assert {
-    condition     = !contains(google_project_iam_custom_role.provisioner.permissions, "iam.serviceAccounts.create") && !contains(google_project_iam_custom_role.provisioner.permissions, "storage.buckets.delete") && length(google_project_iam_member.name_fenced) == 11
+    condition     = !contains(google_project_iam_custom_role.provisioner.permissions, "iam.serviceAccounts.create") && !contains(google_project_iam_custom_role.provisioner.permissions, "storage.buckets.delete") && length(google_project_iam_member.name_fenced) == 12
     error_message = "byo_iam and the fence both apply."
   }
 
