@@ -21,6 +21,7 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 4. Terraform `>= 1.11.0`, the AzureRM provider `>= 4.42.0, < 5.0.0`, and the AzureAD provider `~> 3.0`.
 5. The client ID of the LangSmith multi-tenant app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`.
 6. The external ID from **Settings > Data Planes** in the LangSmith UI. LangSmith compares it with the description of each role assignment to verify that you own the subscription.
+7. Optional: the `EncryptionAtHost` feature on that subscription. LangSmith can then encrypt the temp and cache disks of the AKS nodes at the host. Run `az feature register --namespace Microsoft.Compute --name EncryptionAtHost`, wait for the state `Registered`, run `az provider register --namespace Microsoft.Compute`, then ask LangSmith to turn on host encryption.
 
 ## Usage
 
