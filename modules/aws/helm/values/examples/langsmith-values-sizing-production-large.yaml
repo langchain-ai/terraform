@@ -269,7 +269,11 @@ smithdb:
             sizeLimit: "300Gi"
     autoscaling:
       hpa:
-        minReplicas: 4
+        enabled: false
+      keda:
+        enabled: true
+        minReplicaCount: 4
+        maxReplicaCount: 10
 
   clusterManager:
     deployment:

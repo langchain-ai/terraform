@@ -5,6 +5,7 @@
 # Single-replica, rock-bottom requests for the core services, sized from
 # kubectl-top measurements on an idle cluster. Fleet, Chat, and Insights
 # service resources come from their add-on overlays and require extra capacity.
+# KEDA scales queue and ingest-queue between 1 and 2 replicas.
 #
 # WILL break under any meaningful traffic. OOM kills, timeouts, and degraded
 # UX are expected and acceptable. Do not file bugs against this profile.
@@ -74,6 +75,11 @@ queue:
       limits:
         cpu: "1"
         memory: "1536Mi"
+  autoscaling:
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      maxReplicaCount: 2
 
 ingestQueue:
   deployment:
@@ -85,6 +91,11 @@ ingestQueue:
       limits:
         cpu: "250m"
         memory: "256Mi"
+  autoscaling:
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      maxReplicaCount: 2
 
 aceBackend:
   deployment:
@@ -229,7 +240,11 @@ smithdb:
           ephemeral-storage: "100Gi"
     autoscaling:
       hpa:
-        minReplicas: 1
+        enabled: false
+      keda:
+        enabled: true
+        minReplicaCount: 1
+        maxReplicaCount: 10
 
   clusterManager:
     deployment:

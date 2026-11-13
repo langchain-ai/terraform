@@ -20,11 +20,11 @@ CHART_REPO="https://langchain-ai.github.io/helm"
 #   fixed:N       no autoscaler; the Deployment runs N replicas
 # Columns: profile, queue, ingest-queue, compaction worker.
 EXPECTED="
-default          fixed:1    fixed:3    hpa:1:10
-minimum          fixed:1    fixed:1    hpa:1:10
-dev              keda:1:5   keda:1:5   hpa:1:10
-production       keda:3:10  keda:3:10  hpa:1:10
-production-large keda:6:24  keda:6:24  hpa:4:10
+default          keda:1:10  keda:3:6   keda:1:10
+minimum          keda:1:2   keda:1:2   keda:1:10
+dev              keda:1:5   keda:1:5   keda:1:10
+production       keda:3:10  keda:3:10  keda:1:10
+production-large keda:6:24  keda:6:24  keda:4:10
 "
 
 command -v helm >/dev/null 2>&1 || { echo "ERROR: helm is not installed" >&2; exit 2; }
