@@ -15,7 +15,7 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 
 | Pass | Layer | What's added |
 |------|-------|-------------|
-| 1 | GCP Infrastructure | VPC, GKE, Cloud SQL, Memorystore, GCS, K8s bootstrap, cert-manager, KEDA, Envoy Gateway |
+| 1 | GCP Infrastructure | VPC, GKE, Cloud SQL, Memorystore, GCS, K8s bootstrap, KEDA, GKE Gateway (or Envoy Gateway), cert-manager (only for `tls_certificate_source = "cert-manager"`) |
 | 2 | LangSmith Base | frontend, backend, platform-backend, queue, ace-backend, clickhouse, playground |
 | 3 | LangSmith Deployments | host-backend, listener, operator + per-deployment pods |
 | 4 | Agent Builder | fleet-tool-server, fleet-trigger-server (agent-builder-tool-server/trigger-server on chart < 0.15) + deep-agent LGP |
@@ -32,10 +32,11 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | postgres | `modules/postgres/` | Cloud SQL PostgreSQL instance, HA standby replica, private IP, deletion protection |
 | redis | `modules/redis/` | Memorystore Redis Standard HA tier, private IP within VPC |
 | storage | `modules/storage/` | GCS bucket with lifecycle rules for `ttl_s/` (14 days) and `ttl_l/` (400 days) prefixes |
-| k8s-bootstrap | `modules/k8s-bootstrap/` | `langsmith` namespace, K8s secrets for Postgres and Redis URLs, cert-manager Helm release, KEDA Helm release |
-| ingress | `modules/ingress/` | Envoy Gateway Helm release, GatewayClass, HTTPRoute, optional HTTPS Gateway listener |
+| k8s-bootstrap | `modules/k8s-bootstrap/` | `langsmith` namespace, K8s secrets for Postgres and Redis URLs, cert-manager Helm release and Certificate (when a TLS source needs it), KEDA Helm release |
+| ingress | `modules/ingress/` | GKE Gateway (default) or Envoy Gateway Helm release, GatewayClass, HTTPS listener and HTTP-to-HTTPS redirect when TLS is on |
 | iam | `modules/iam/` | GCP service accounts and Workload Identity IAM bindings for GCS access (wired by default) |
-| dns | `modules/dns/` | Cloud DNS managed zone and managed cert (optional via `enable_dns_module`) |
+| dns | `modules/dns/` | Cloud DNS managed zone (optional via `enable_dns_module`) |
+| certificate-manager | `modules/certificate-manager/` | Google-managed certificate, certificate map, and DNS authorization for the GKE Gateway (`tls_certificate_source = "google-managed"`) |
 | secrets | `modules/secrets/` | Secret Manager secret bundle (optional via `enable_secret_manager_module`) |
 
 ---
@@ -54,10 +55,10 @@ GKE Cluster
 │   ├── frontend / backend / platform-backend / queue / ace-backend
 │   ├── clickhouse   (in-cluster)
 │   ├── postgres     (in-cluster)
-│   └── redis        (in-cluster)
-├── cert-manager
-├── keda
-└── envoy-gateway-system
+│   ├── redis        (in-cluster)
+│   └── Gateway      (GKE Gateway; envoy-gateway-system with ingress_type = "envoy")
+├── cert-manager (only for tls_certificate_source = "cert-manager")
+└── keda
 
 GCS Bucket  (trace payloads — always external)
 ```
@@ -82,10 +83,10 @@ VPC
 GKE Cluster
 ├── langsmith namespace
 │   ├── frontend / backend / platform-backend / queue / ace-backend
-│   └── clickhouse (in-cluster)
-├── cert-manager
-├── keda
-└── envoy-gateway-system
+│   ├── clickhouse (in-cluster)
+│   └── Gateway    (GKE Gateway; envoy-gateway-system with ingress_type = "envoy")
+├── cert-manager (only for tls_certificate_source = "cert-manager")
+└── keda
 
 GCS Bucket  (Workload Identity — no static HMAC keys for GCS SA auth)
 ```
@@ -181,8 +182,12 @@ LangSmith itself is **not** deployed by Terraform — it is deployed in Pass 2 v
 ```
 Internet (HTTPS :443)
   ↓
-Envoy Gateway  (envoy-gateway-system namespace, external LoadBalancer IP)
-  │  TLS terminated — cert-manager + Let's Encrypt or existing certificate
+GKE Gateway  (langsmith namespace, global external Application Load Balancer,
+  │           reserved static IP)
+  │  TLS terminated at the load balancer, with a Google-managed certificate or
+  │  from a Secret (existing or cert-manager). With ingress_type = "envoy",
+  │  Envoy Gateway in envoy-gateway-system terminates TLS from a Secret instead.
+  │  HTTP :80 redirects to HTTPS.
   │
   ├── /                     → frontend:80
   ├── /api/*                → backend:1984
@@ -222,9 +227,9 @@ kubectl get nodes -o wide
 # All LangSmith pods
 kubectl get pods -n langsmith
 
-# Envoy Gateway
-kubectl get pods -n envoy-gateway-system
-kubectl get svc -n envoy-gateway-system
+# Gateway (GKE Gateway; with ingress_type = "envoy", use -n envoy-gateway-system)
+kubectl get gateway -n langsmith
+kubectl get httproute -n langsmith
 
 # cert-manager
 kubectl get pods -n cert-manager

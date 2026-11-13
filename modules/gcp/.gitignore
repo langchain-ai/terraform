@@ -31,7 +31,9 @@ infra/.admin_email
 infra/modules/**/external-ip.txt
 infra/modules/**/gateway-class.yaml
 infra/modules/**/gateway.yaml
+infra/modules/**/gke-gateway.yaml
 infra/modules/**/reference-grant.yaml
+infra/modules/**/https-redirect.yaml
 infra/modules/**/certificate.yaml
 infra/modules/**/letsencrypt-issuer.yaml
 
