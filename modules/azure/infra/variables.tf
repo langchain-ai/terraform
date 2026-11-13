@@ -2012,6 +2012,17 @@ variable "aks_disk_encryption_set_reader_grant" {
   }
 }
 
+variable "aks_additional_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether the module assigns the Reader role to the cluster identity on each distinct further disk encryption set: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id and aks_additional_disk_encryption_set_ids, excluding aks_disk_encryption_set_id (which aks_disk_encryption_set_reader_grant covers). Separate from that flag so a deployment can grant the cluster's set in Terraform and leave per-store sets to their owners, or the reverse. true needs roleAssignments/write on each set's scope; leave it false when the owners grant Reader themselves, or the apply fails with RoleAssignmentExists. Requires at least one further set."
+  default     = false
+
+  validation {
+    condition     = !var.aks_additional_disk_encryption_set_reader_grant || var.smithdb_cache_disk_encryption_set_id != "" || var.sandbox_juicefs_redis_disk_encryption_set_id != "" || length(var.aks_additional_disk_encryption_set_ids) > 0
+    error_message = "aks_additional_disk_encryption_set_reader_grant = true needs a further disk encryption set to grant Reader on: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id or aks_additional_disk_encryption_set_ids."
+  }
+}
+
 variable "postgres_customer_managed_key_id" {
   type        = string
   description = "URL of the key the PostgreSQL Flexible Server encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL follows the key's newest version). The key's vault has soft delete and purge protection on, and postgres_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Set only when the server is created: the provider would apply a change by replacing the server and destroying its data, so on an existing server plan refuses adding or removing the key (moving to another key or version is allowed). Move an existing server by a point-in-time restore to a new server created with the key and the state steps in README \"Customer-managed keys\". Refused unless postgres_source = \"external\". Empty (default) keeps the service-managed key."
@@ -2116,6 +2127,118 @@ variable "storage_customer_managed_key_identity_id" {
   validation {
     condition     = var.storage_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.storage_customer_managed_key_identity_id))
     error_message = "storage_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+# ── SmithDB and per-store keys (PRO-190) ─────────────────────────────────────
+# Each store can take its own key, so one store's data can be made unreadable by
+# revoking its key without touching the others. Empty inputs fall back to
+# LangSmith's own keys and the cluster's disk encryption set.
+
+variable "smithdb_metastore_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the SmithDB metastore (PostgreSQL Flexible Server) encrypts with (https://<vault host>/keys/<name>, with or without a version). Empty (default) uses postgres_customer_managed_key_id and its identity, else the service-managed key. Set only when the metastore is created: the provider would apply a change by replacing the server and destroying SmithDB's catalog, so on an existing metastore plan refuses adding or removing the key (moving to another key or version is allowed). The key's vault has soft delete and purge protection on, and smithdb_metastore_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Needs enable_smithdb."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.smithdb_metastore_customer_managed_key_id))
+    error_message = "smithdb_metastore_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.smithdb_metastore_customer_managed_key_id == "") == (var.smithdb_metastore_customer_managed_key_identity_id == "")
+    error_message = "smithdb_metastore_customer_managed_key_id and smithdb_metastore_customer_managed_key_identity_id are set together or not at all: the metastore reads the key as that identity."
+  }
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_id == "" || var.enable_smithdb
+    error_message = "smithdb_metastore_customer_managed_key_id is set with enable_smithdb = false, so there is no metastore to encrypt. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "smithdb_metastore_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>) the SmithDB metastore reads smithdb_metastore_customer_managed_key_id with. It must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with smithdb_metastore_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.smithdb_metastore_customer_managed_key_identity_id))
+    error_message = "smithdb_metastore_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "smithdb_storage_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the SmithDB storage account encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL enables automatic rotation). Empty (default) uses storage_customer_managed_key_id and its identity, else the service-managed key. Azure accepts the switch on an existing account. The key's vault has soft delete and purge protection on, and smithdb_storage_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Needs enable_smithdb."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.smithdb_storage_customer_managed_key_id))
+    error_message = "smithdb_storage_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.smithdb_storage_customer_managed_key_id == "") == (var.smithdb_storage_customer_managed_key_identity_id == "")
+    error_message = "smithdb_storage_customer_managed_key_id and smithdb_storage_customer_managed_key_identity_id are set together or not at all: the account reads the key as that identity."
+  }
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_id == "" || var.enable_smithdb
+    error_message = "smithdb_storage_customer_managed_key_id is set with enable_smithdb = false, so there is no SmithDB storage account to encrypt. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "smithdb_storage_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity the SmithDB storage account reads smithdb_storage_customer_managed_key_id with. It must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with smithdb_storage_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.smithdb_storage_customer_managed_key_identity_id))
+    error_message = "smithdb_storage_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "smithdb_cache_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set for SmithDB's cache volumes, written as diskEncryptionSetID on the SmithDB cache StorageClass. Empty (default) uses aks_disk_encryption_set_id, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; existing cache volumes keep their key until their pods are recreated. The cluster identity needs Reader on the set (aks_additional_disk_encryption_set_reader_grant, or a grant made by the set's owner), and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_cache_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.smithdb_cache_disk_encryption_set_id))
+    error_message = "smithdb_cache_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  validation {
+    condition     = var.smithdb_cache_disk_encryption_set_id == "" || var.enable_smithdb
+    error_message = "smithdb_cache_disk_encryption_set_id is set with enable_smithdb = false, so there is no SmithDB cache StorageClass. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "sandbox_juicefs_redis_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set for the in-cluster JuiceFS Redis volume, written as diskEncryptionSetID on its StorageClass. Empty (default) uses aks_disk_encryption_set_id, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; the existing volume keeps its key. The cluster identity needs Reader on the set, and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault. Takes effect with sandbox_juicefs_redis_source = \"in-cluster\"."
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.sandbox_juicefs_redis_disk_encryption_set_id))
+    error_message = "sandbox_juicefs_redis_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_disk_encryption_set_id == "" || (var.enable_sandboxes && var.sandbox_juicefs_redis_source == "in-cluster")
+    error_message = "sandbox_juicefs_redis_disk_encryption_set_id is set, but the module runs no JuiceFS Redis in the cluster (it needs enable_sandboxes = true and sandbox_juicefs_redis_source = \"in-cluster\"). Remove it."
+  }
+}
+
+variable "aks_additional_disk_encryption_set_ids" {
+  type        = list(string)
+  description = "Resource IDs of further disk encryption sets that StorageClasses outside this module name (for example in-cluster databases or agent deployment databases, one key per store). The module only grants the cluster identity Reader on each, with aks_additional_disk_encryption_set_reader_grant = true, so the Azure Disk CSI driver can create their volumes; it sets no StorageClass for them. Empty (default) grants nothing more."
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.aks_additional_disk_encryption_set_ids : can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", id))])
+    error_message = "Each entry of aks_additional_disk_encryption_set_ids must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
   }
 }
 

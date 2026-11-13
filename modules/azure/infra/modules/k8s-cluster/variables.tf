@@ -107,6 +107,12 @@ variable "disk_encryption_set_reader_grant" {
   default     = false
 }
 
+variable "additional_disk_encryption_set_ids" {
+  type        = map(string)
+  description = "Disk encryption sets beyond disk_encryption_set_id that StorageClasses name, keyed by lower-case ID. With disk_encryption_set_reader_grant, the cluster identity gets Reader on each. The root builds the map; empty (default) grants nothing more."
+  default     = {}
+}
+
 variable "service_cidr" {
   type        = string
   description = "Service CIDR of the cluster"
@@ -488,4 +494,10 @@ variable "subnet_route_table_id" {
   type        = string
   description = "Resource ID of the route table on subnet_id, empty when it has none. Read only with control_plane_identity = \"user\" and control_plane_identity_manage_grants = false, as a scope the identity must hold a role on."
   default     = ""
+}
+
+variable "additional_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether to assign Reader on each set in additional_disk_encryption_set_ids to the cluster identity."
+  default     = false
 }
