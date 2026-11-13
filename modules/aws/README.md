@@ -135,7 +135,7 @@ aws/
 │       ├── eks/            ← EKS cluster, managed node groups, IRSA role, GP3 storage class
 │       ├── postgres/       ← RDS PostgreSQL, subnet group, security group, IAM auth
 │       ├── redis/          ← ElastiCache Redis, subnet group, security group, auth token
-│       ├── storage/        ← S3 bucket, VPC Gateway Endpoint, bucket policy, TTL lifecycle
+│       ├── storage/        ← Platform S3 bucket, VPC Gateway Endpoint, bucket policy, TTL lifecycle (platform bucket only)
 │       ├── alb/            ← Application Load Balancer, security group, ACM integration
 │       ├── k8s-bootstrap/  ← Namespace, KEDA, cert-manager, ESO Helm release
 │       ├── bastion/        ← EC2 bastion host for private cluster access (optional)
@@ -1113,7 +1113,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
+| `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL on the platform bucket. The SmithDB bucket never gets lifecycle rules. See [SMITHDB.md](SMITHDB.md#blob-storage) |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
 | `s3_kms_key_arn` | `""` | no | KMS CMK ARN for S3 encryption (empty = SSE-S3) |
@@ -1157,7 +1157,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
