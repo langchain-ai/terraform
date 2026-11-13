@@ -74,10 +74,7 @@
     "Sid": "AMPDeploymentMetricsWorkspaceTagOnCreate",
     "Effect": "Allow",
     "Action": ["aps:TagResource"],
-    "Resource": [
-      "arn:aws:aps:*:${account_id}:/workspaces",
-      "arn:aws:aps:*:${account_id}:workspace/*"
-    ],
+    "Resource": "arn:aws:aps:*:${account_id}:/workspaces",
     "Condition": {
       "StringEquals": {
         "aws:RequestTag/managed_by": "langsmith"
