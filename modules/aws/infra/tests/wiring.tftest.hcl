@@ -66,6 +66,31 @@ run "optional_modules_absent_when_flags_are_false" {
   }
 }
 
+# ── Core components ──────────────────────────────────────────────────────────
+# The chart's queue ScaledObjects need KEDA on every install, so no feature
+# flag may gate it.
+
+run "keda_is_planned_with_every_feature_flag_off" {
+  command = plan
+
+  variables {
+    enable_deployments         = false
+    enable_engine              = false
+    enable_fleet               = false
+    enable_insights            = false
+    enable_polly               = false
+    enable_standalone_insights = false
+    enable_standalone_polly    = false
+    enable_sandboxes           = false
+    enable_smithdb             = false
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.keda_release_name == "keda"
+    error_message = "KEDA was not planned with every feature flag off; the chart's queue ScaledObjects need it on every install"
+  }
+}
+
 # ── Optional modules, one flag at a time ─────────────────────────────────────
 # Every run flips exactly one flag, so a run that also plans a sibling module
 # means two gates read the same variable.
