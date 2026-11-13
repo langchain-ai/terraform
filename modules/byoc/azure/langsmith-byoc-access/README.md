@@ -4,7 +4,7 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 
 | Resource | Count | Purpose |
 |----------|-------|---------|
-| Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. The app gets no Microsoft Graph permissions. |
+| Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. The app gets no Microsoft Graph permissions. The module creates it, or adopts it if it already exists. |
 | Resource group `langsmith-byoc-<key>` | One per data plane | LangSmith deploys the data plane into this resource group. |
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the secret that LangSmith writes. No public network access. |
 | Custom role `langsmith-byoc-<key>-<suffix>` | One per data plane | The actions that LangSmith needs in that resource group. `reduced_access` selects full or reduced actions. The role can only be assigned in that resource group. |
@@ -17,10 +17,36 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 
 1. An Azure subscription for the LangSmith data planes.
 2. Azure credentials with the `Owner` role on that subscription. The module creates custom roles and role assignments, and the provider registers resource providers.
-3. An Entra ID role that can create and update a service principal for a multi-tenant app, for example `Cloud Application Administrator`.
+3. Permission to create or update the LangSmith service principal in Entra ID. The module writes to the service principal when it creates it and when it adopts an existing one. Either the person who applies the module holds an Entra ID role that can create and update a service principal for a multi-tenant app, for example `Cloud Application Administrator`, or an Entra admin creates the service principal first and makes that person an owner of it. See [Split the Entra and subscription roles](#split-the-entra-and-subscription-roles-optional).
 4. Terraform `>= 1.11.0`, the AzureRM provider `>= 4.42.0, < 5.0.0`, and the AzureAD provider `~> 3.0`.
 5. The client ID of the LangSmith multi-tenant app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`.
 6. The external ID from **Settings > Data Planes** in the LangSmith UI. LangSmith compares it with the description of each role assignment to verify that you own the subscription.
+
+## Split the Entra and subscription roles (optional)
+
+Skip this section if the person who applies the module holds both the `Owner` role on the subscription and an Entra ID role such as `Cloud Application Administrator`.
+
+Otherwise, an Entra admin prepares the service principal once per tenant. The admin creates it and adds the person who applies the module as an owner:
+
+```bash
+az ad sp create --id 5b0a74cb-9f37-4797-b557-c15d7be80d3b
+
+SP_ID=$(az ad sp show --id 5b0a74cb-9f37-4797-b557-c15d7be80d3b --query id -o tsv)
+OWNER_ID="<object ID of the person who applies the module>"
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/owners/\$ref" \
+  --body "{\"@odata.id\": \"https://graph.microsoft.com/v1.0/directoryObjects/$OWNER_ID\"}"
+```
+
+The owner then applies the module with the `Owner` role on the subscription and no Entra ID role. The module finds the service principal by `langsmith_app_client_id` and adopts it, so you do not pass its object ID. Adopting it writes the module's settings to it, for example its tags and whether it is enabled. That write is why the person who applies the module must own the service principal.
+
+If the first apply fails at the service principal, for example because the owner was not added yet, Terraform marks the service principal as tainted. Fix the permission, then run this before you apply again, with your module name in place of `<name>`:
+
+```bash
+terraform untaint 'module.<name>.azuread_service_principal.langsmith'
+```
+
+Without it, the next apply replaces the service principal. If the person who applies can delete it, Terraform deletes it and then creates a new one, which needs the Entra ID role. An owner without the role is left with no service principal, and a holder of the role gets one with a new object ID.
 
 ## Usage
 
@@ -314,14 +340,15 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 
 ## Security model
 
-- **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
+- **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription. If it already exists, from an earlier admin consent or because an Entra admin created it, the module adopts it.
 - **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. The description of each assignment is the `external_id`.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes
 
 - Run `terraform apply` with credentials in the **target** tenant and subscription.
-- When you remove this module, Terraform deletes the service principal and all role assignments. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
+- When you remove this module, Terraform deletes all role assignments and tries to delete the service principal. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
+- The delete of the service principal succeeds for a holder of an Entra ID role such as `Cloud Application Administrator` and for an owner of the service principal. For anyone else, Terraform skips it without an error and the service principal stays in the tenant. An Entra admin deletes it if it is no longer needed.
 - The tenant has only one LangSmith service principal. If you use this module in more than one root module of the same tenant, a destroy of one root module deletes the service principal for all of them.
 
 ## License
