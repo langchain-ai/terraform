@@ -179,7 +179,7 @@ data_planes = {
 Set `reduced_access = false` again before you:
 
 - delete or recreate the data plane.
-- let LangSmith turn CLI builds on or off. LangSmith creates and deletes custom roles and role assignments for them, so keep `reduced_access = false` while it does. You can set it to `true` again afterwards.
+- let LangSmith turn CLI builds on or off. LangSmith creates and deletes a managed identity, its federated identity credentials, custom roles and role assignments for them, so keep `reduced_access = false` while it does. You can set it to `true` again afterwards.
 - apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
 
 [`roles.tf`](roles.tf) has the full lists.
