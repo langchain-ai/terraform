@@ -1623,7 +1623,7 @@ CASES = [
         "name": "clickhouse_host with Terraform's own Secret passes",
         "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
         "kube_ctx": "platform-aks",
-        "ch_secret": {"metadata": {"name": "langsmith-clickhouse",
+        "ch_object": {"metadata": {"name": "langsmith-clickhouse",
                                    "labels": {"app.kubernetes.io/managed-by": "terraform"}}},
         "expect": ["[✓] langsmith/langsmith-clickhouse on 'platform-aks' is Terraform's"],
     },
@@ -1631,7 +1631,7 @@ CASES = [
         "name": "clickhouse_host with an init-values Secret fails and prints the import",
         "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
         "kube_ctx": "platform-aks",
-        "ch_secret": {"metadata": {"name": "langsmith-clickhouse"}},
+        "ch_object": {"metadata": {"name": "langsmith-clickhouse"}},
         "expect": ["[✗] langsmith/langsmith-clickhouse already exists on 'platform-aks' and was not written by Terraform",
                    "terraform import 'module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]' langsmith/langsmith-clickhouse"],
     },
@@ -1639,7 +1639,7 @@ CASES = [
         "name": "clickhouse_host with a Forbidden read warns instead of passing",
         "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
         "kube_ctx": "platform-aks",
-        "ch_secret_error": 'Error from server (Forbidden): secrets "langsmith-clickhouse" is forbidden: User cannot get resource "secrets" in API group "" in the namespace "langsmith"',
+        "ch_object_error": 'Error from server (Forbidden): secrets "langsmith-clickhouse" is forbidden: User cannot get resource "secrets" in API group "" in the namespace "langsmith"',
         "expect": ["[!] Could not read langsmith/langsmith-clickhouse on 'platform-aks' (Error from server (Forbidden)"],
     },
     {
@@ -1860,8 +1860,8 @@ def build_case(case, index):
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
     if "nodes" in case:
         (fixture / "nodes.json").write_text(json.dumps({"items": case["nodes"]}))
-    if "ch_secret" in case:
-        (fixture / "ch_secret.json").write_text(json.dumps(case["ch_secret"]))
+    if "ch_object" in case:
+        (fixture / "ch_object.json").write_text(json.dumps(case["ch_object"]))
     if "auto_tfvars" in case:
         (infra / "zz-extra.auto.tfvars").write_text(case["auto_tfvars"])
     for key, name in (
@@ -1879,7 +1879,7 @@ def build_case(case, index):
     for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment",
                 "kube_ctx", "subnet_route_table", "dig_soa",
                 "des_location", "kv_purge_protection", "identity_principal",
-                "ch_secret_error"):
+                "ch_object_error"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
