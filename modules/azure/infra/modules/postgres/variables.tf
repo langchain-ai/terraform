@@ -99,6 +99,12 @@ variable "standby_availability_zone" {
   default     = ""
 }
 
+variable "high_availability_mode" {
+  type        = string
+  description = "The high_availability block's mode when HA is on: ZoneRedundant or SameZone."
+  default     = "ZoneRedundant"
+}
+
 variable "geo_redundant_backup_enabled" {
   type        = bool
   description = "Enable geo-redundant backups. Requires paired Azure region support."

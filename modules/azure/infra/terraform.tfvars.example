@@ -49,8 +49,21 @@ postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexibl
 redis_source      = "external"    # "external" = Azure Managed Redis
 clickhouse_source = "in-cluster"  # "in-cluster" = chart-managed StatefulSet (dev/POC)
                                   # "external"   = LangChain Managed ClickHouse, Altinity,
-                                  #                or any reachable ClickHouse. init-values.sh
-                                  #                prompts for the connection details.
+                                  #                or any reachable ClickHouse. With the
+                                  #                clickhouse_* lines below, make apply writes
+                                  #                the connection secret; without clickhouse_host,
+                                  #                init-values.sh prompts for the details.
+# External ClickHouse connection (clickhouse_source = "external"). The password goes
+# in secrets.auto.tfvars as clickhouse_password. clickhouse_cluster names the cluster
+# a replicated ClickHouse's migrations create tables ON CLUSTER in; set it before the
+# first deploy, it cannot be added to a standalone schema later.
+# clickhouse_host        = "ch-repl-replicated.langsmith-data.svc"
+# clickhouse_http_port   = 8123
+# clickhouse_native_port = 9000
+# clickhouse_user        = "default"
+# clickhouse_database    = "default"
+# clickhouse_tls         = false
+# clickhouse_cluster     = "replicated"
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 postgres_admin_username      = "langsmith"
@@ -431,6 +444,7 @@ sizing_profile = "production"
 # the database. Pin zones only when your VM and database sizes are offered in
 # all of them — README.md "Multi-AZ Support" has the az vm list-skus check.
 # postgres_high_availability           = true             # Postgres standby in another zone
+# postgres_high_availability_mode      = "ZoneRedundant"  # "SameZone" where the region offers no zone-redundant HA (usgovvirginia); takes no standby zone
 # availability_zones                   = ["1", "2", "3"]  # pin every AKS node pool; a pool sets its own zones in additional_node_pools
 # postgres_standby_availability_zone   = "2"              # pin the standby; needs pinned zones
 # postgres_geo_redundant_backup        = true             # geo-redundant backups

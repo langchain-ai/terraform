@@ -1871,6 +1871,7 @@ module "postgres" {
   # 1.14 and would error on the very input it is meant to handle.
   availability_zone            = length(var.availability_zones) > 0 ? var.availability_zones[0] : ""
   high_availability            = var.postgres_high_availability
+  high_availability_mode       = var.postgres_high_availability_mode
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
@@ -2511,6 +2512,17 @@ module "k8s_bootstrap" {
   redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
   redis_cluster_node_uris = var.redis_source == "external" ? module.redis[0].cluster_node_uris : ""
   redis_cluster_password  = var.redis_source == "external" ? module.redis[0].cluster_password : ""
+
+  # External ClickHouse — the connection Secret, when clickhouse_host is set;
+  # otherwise init-values.sh prompts for it. The cluster name goes to the values.
+  use_external_clickhouse = var.clickhouse_source == "external"
+  clickhouse_host         = var.clickhouse_host
+  clickhouse_http_port    = var.clickhouse_http_port
+  clickhouse_native_port  = var.clickhouse_native_port
+  clickhouse_user         = var.clickhouse_user
+  clickhouse_password     = var.clickhouse_password
+  clickhouse_database     = var.clickhouse_database
+  clickhouse_tls          = var.clickhouse_tls
 
   # Standalone Fleet — creates the langsmith-fleet-postgres secret pointing at the
   # dedicated langsmith_fleet database. No fleet Redis secret: Fleet uses the chart's
