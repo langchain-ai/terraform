@@ -15,6 +15,8 @@
 #   _set_tfvar <key> <value>        — Set one key in terraform.tfvars, editing only its line
 #   _confirm <prompt>               — Yes/no prompt that defaults to no
 #   _tf_out <name>                  — Read one terraform output, or return 1
+#   _external_sandbox_runtime     — Return 0 for sandbox_runtime_source = external
+#   _sandbox_kubeconfig <file>      — Write the sandbox cluster's credentials to <file>
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
 #   _langsmith_images_block         — images: block for values-overrides.yaml from a mirror
@@ -161,6 +163,28 @@ _aks_get_credentials() {
     --overwrite-existing ${flags[@]+"${flags[@]}"}
 }
 
+# ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
+# Returns 0 when enable_sandboxes = true and sandbox_runtime_source =
+# "external" in terraform.tfvars.
+_external_sandbox_runtime() {
+  _tfvar_is_true "enable_sandboxes" || return 1
+  [[ "$(_parse_tfvar sandbox_runtime_source || true)" == "external" ]]
+}
+
+# Credentials for the dedicated sandbox cluster, written to the file named by $1
+# rather than ~/.kube/config, so the current context stays on the LangSmith
+# cluster and no command meant for one cluster reaches the other. Callers point
+# KUBECONFIG at the file. Returns 1 when the outputs or the fetch fail.
+_sandbox_kubeconfig() {
+  local file="$1" cluster rg flags=()
+  cluster=$(_tf_out sandbox_cluster_name) || return 1
+  rg=$(_tf_out sandbox_cluster_resource_group_name) || return 1
+  [[ "$(_tf_out sandbox_kubeconfig_public_fqdn || true)" == "true" ]] && flags=(--public-fqdn)
+  az aks get-credentials --name "$cluster" --resource-group "$rg" \
+    --file "$file" --overwrite-existing ${flags[@]+"${flags[@]}"} >/dev/null || return 1
+  KUBECONFIG="$file" _aks_kubelogin_convert "$cluster" "$rg"
+}
+
 # ── Entra ID sign-in for kubectl and Helm ───────────────────────────────────
 # On a cluster with Entra ID integration, `az aks get-credentials` writes a
 # kubeconfig whose user signs in interactively. Convert it to reuse the caller's
@@ -281,7 +305,7 @@ _validate_license_key() {
 # enable_sso_oidc is the exception: it is baked into the generated auth block
 # (basicAuth off, oauth on), so a flip after init-values would deploy the old
 # login path.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count sandbox_runtime_source sandbox_namespace sandbox_service_account_name sandbox_runtime_secret_name enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
 # The chart line deploy.sh installs when neither CHART_VERSION in the
 # environment nor langsmith_helm_chart_version in terraform.tfvars names one:

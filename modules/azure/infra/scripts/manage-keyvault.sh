@@ -46,12 +46,17 @@ OPTIONAL_SECRETS=(
   "langsmith-oauth-client-id"
   "langsmith-oauth-client-secret"
   "langsmith-oauth-issuer-url"
+  "langsmith-sandbox-callback-signing-jwk"
+  "langsmith-sandbox-service-auth-secret"
 )
 
-# Stable secrets — changing them breaks active sessions/API keys
+# Stable secrets — changing them breaks active sessions/API keys, or running
+# sandboxes' callbacks and the calls to their hosts
 STABLE_SECRETS=(
   "langsmith-api-key-salt"
   "langsmith-jwt-secret"
+  "langsmith-sandbox-callback-signing-jwk"
+  "langsmith-sandbox-service-auth-secret"
 )
 
 # KV secret name → K8s secret data key (for diff subcommand)
@@ -67,6 +72,8 @@ DIFF_KV_KEYS=(
   "langsmith-oauth-client-id"
   "langsmith-oauth-client-secret"
   "langsmith-oauth-issuer-url"
+  "langsmith-sandbox-callback-signing-jwk"
+  "langsmith-sandbox-service-auth-secret"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -80,6 +87,8 @@ DIFF_K8S_KEYS=(
   "oauth_client_id"
   "oauth_client_secret"
   "oauth_issuer_url"
+  "sandbox_callback_signing_jwk"
+  "sandbox_service_auth_secret"
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -182,6 +191,11 @@ cmd_set() {
       echo "  Changing this invalidates ALL existing API keys."
     elif [[ "$key" == "langsmith-jwt-secret" ]]; then
       echo "  Changing this invalidates ALL active user sessions."
+    elif [[ "$key" == "langsmith-sandbox-callback-signing-jwk" ]]; then
+      echo "  Changing this drops the callbacks of running sandboxes."
+    elif [[ "$key" == "langsmith-sandbox-service-auth-secret" ]]; then
+      echo "  Changing this cuts LangSmith off from the sandbox hosts until"
+      echo "  make k8s-secrets has written it to both clusters and both restart."
     fi
     printf "  Are you sure? [y/N] "
     read -r confirm
