@@ -53,6 +53,11 @@ locals {
     "compute.networks.updatePolicy",
     "compute.networks.use",
     "compute.regionOperations.get",
+    # Routes that keep Google API traffic on private.googleapis.com when the
+    # data plane VPC imports a default route, for example from a peered hub.
+    "compute.routes.create",
+    "compute.routes.delete",
+    "compute.routes.get",
     "compute.routers.create",
     "compute.routers.delete",
     "compute.routers.get",
@@ -182,7 +187,9 @@ locals {
   # provisioner has no database permissions: the Postgres setup Job creates
   # the databases over SQL.
   #
-  # Creating a subnet or Cloud Router checks compute.networks.updatePolicy on
+  # Routes were checked the same way on 2026-11-13.
+  #
+  # Creating a subnet, route or Cloud Router checks compute.networks.updatePolicy on
   # its network, and creating a global address checks compute.networks.use, so
   # the network fence also keeps the provisioner from adding them to a network
   # that is not LangSmith's. The use permissions are checked against the
@@ -253,6 +260,13 @@ locals {
         "compute.subnetworks.update",
         "compute.subnetworks.use",
       ]
+    }
+    # Creating a route also checks compute.networks.updatePolicy on its
+    # network, so the network fence keeps routes out of other networks too.
+    Routes = {
+      title       = "routes"
+      expression  = "resource.name.extract(\"/routes/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["compute.routes.create", "compute.routes.delete"]
     }
     # Cloud Routers, and the Cloud NAT configured on them.
     Routers = {
