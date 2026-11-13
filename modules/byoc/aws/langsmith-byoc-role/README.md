@@ -303,7 +303,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-lambda` | Lambda + EventBridge for periodic jobs, ECR repositories for deployment builds |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
-The exact statements are in `policies/*.json`. An inline `-observability` policy covers the CloudWatch log group and Amazon Managed Prometheus workspace for deployment observability; LangSmith keeps both, and the roles and Pod Identity associations that ship to them, when observability is turned off. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs. When `cmk_service_key_arns` is set, an inline `-cmk` policy adds use of each exact key ARN through its own AWS service.
+The exact statements are in `policies/*.json`. An inline `-observability` policy covers the CloudWatch log group and Amazon Managed Prometheus workspace for deployment observability; LangSmith keeps both, and the roles and Pod Identity associations that ship to them, when observability is turned off. With CLI builds, LangSmith creates the `<name>-smith-deployment-sources` bucket for `langgraph deploy` sources, the `<name>-push-smith-workload-iam-role` push role, and an ECR repository `lsd/<deployment>/local` for each deployment. It deletes a deployment's repository with the deployment, and keeps the bucket when CLI builds are turned off. When BYOIAM custom names are set, an inline `-byoiam` policy adds read and pass grants on those exact ARNs. When `cmk_service_key_arns` is set, an inline `-cmk` policy adds use of each exact key ARN through its own AWS service.
 
 ### Break-glass role
 
