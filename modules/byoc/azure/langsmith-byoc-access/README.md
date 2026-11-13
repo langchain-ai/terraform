@@ -40,6 +40,14 @@ az rest --method POST \
 
 The owner then applies the module with the `Owner` role on the subscription and no Entra ID role. The module finds the service principal by `langsmith_app_client_id` and adopts it, so you do not pass its object ID. Adopting it writes the module's settings to it, for example its tags and whether it is enabled. That write is why the person who applies the module must own the service principal.
 
+If the first apply fails at the service principal, for example because the owner was not added yet, Terraform marks the service principal as tainted. Fix the permission, then run this before you apply again, with your module name in place of `<name>`:
+
+```bash
+terraform untaint 'module.<name>.azuread_service_principal.langsmith'
+```
+
+Without it, the next apply replaces the service principal. If the person who applies can delete it, Terraform deletes it and then creates a new one, which needs the Entra ID role. An owner without the role is left with no service principal, and a holder of the role gets one with a new object ID.
+
 ## Usage
 
 ```hcl
