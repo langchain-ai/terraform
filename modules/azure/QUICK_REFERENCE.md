@@ -241,7 +241,7 @@ aks_sku_tier                = "Standard"  # uptime SLA; Free has none
 dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
 
-# Option B — HTTPS via Let's Encrypt HTTP-01 (envoy-gateway, nginx, istio only — validated ✅)
+# Option B — HTTPS via Let's Encrypt HTTP-01 (envoy-gateway, istio only — validated ✅)
 # tls_certificate_source = "letsencrypt"
 # letsencrypt_email      = "you@example.com"
 
@@ -297,7 +297,6 @@ kubectl logs <pod-name> -n langsmith --previous --tail=50
 # Ingress / TLS
 kubectl get gateway,httproute -n langsmith                   # envoy-gateway (default)
 kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway
-kubectl get svc ingress-nginx-controller -n ingress-nginx    # nginx
 kubectl get ingress -n langsmith                             # Ingress-based controllers
 kubectl get certificate -n langsmith
 
@@ -365,9 +364,9 @@ langsmith-standalone-polly-queue-xxxxx             1/1     Running     0        
 
 > **Roll frontend after first Polly enable.** The `langsmith-polly-config` ConfigMap carrying `VITE_POLLY_DEPLOYMENT_URL` is written once Polly registers. The frontend loads it via `envFrom` at pod start, so a frontend pod that was already running shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
 
-> **Uninstall BEFORE `terraform destroy`.** The Azure Load Balancer in front of the ingress controller blocks VNet deletion. Run `make uninstall` first. For `envoy-gateway`, it deletes the Gateway, which removes the proxy LB service and its IP. For `nginx`, also run `helm uninstall ingress-nginx -n ingress-nginx --wait`.
+> **Uninstall BEFORE `terraform destroy`.** The Azure Load Balancer in front of the ingress controller blocks VNet deletion. Run `make uninstall` first. For `envoy-gateway`, it deletes the Gateway, which removes the proxy LB service and its IP.
 
-> **DNS label works for envoy-gateway, nginx, istio, and istio-addon.** `dns_label` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to whichever LB service your ingress controller creates. For `envoy-gateway`, the EnvoyProxy `langsmith-proxy` lists the annotation, so the proxy service has it from creation. No custom domain needed — `<label>.<region>.cloudapp.azure.com` resolves immediately. For AGIC, `dns_label` is applied directly to the AGW public IP resource — the FQDN is available via `terraform output agw_public_ip_fqdn` after apply.
+> **DNS label works for envoy-gateway, istio, and istio-addon.** `dns_label` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to whichever LB service your ingress controller creates. For `envoy-gateway`, the EnvoyProxy `langsmith-proxy` lists the annotation, so the proxy service has it from creation. No custom domain needed — `<label>.<region>.cloudapp.azure.com` resolves immediately. For AGIC, `dns_label` is applied directly to the AGW public IP resource — the FQDN is available via `terraform output agw_public_ip_fqdn` after apply.
 
 > **AGIC requires a dedicated `/24` subnet.** Terraform creates it automatically (`10.0.96.0/24`) when `ingress_controller = "agic"`. Application Gateway v2 requires an exclusive subnet — no pods, VMs, or other resources. The subnet is managed by the networking module; no manual creation needed.
 
