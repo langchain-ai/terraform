@@ -1,0 +1,35 @@
+modules/aws/helm/values/examples/langsmith-values-sizing-production-large.yaml
+  s_11927f0fe0774e::t_97cd02c390de9b 272-276
+modules/aws/helm/values/examples/langsmith-values-sizing-production.yaml
+  s_11927f0fe0774e::t_40888efde82fcd 4-5
+  s_11927f0fe0774e::t_48709c54e576bd 265-269
+modules/aws/helm/scripts/test-values.sh
+  s_11927f0fe0774e::t_870b6d277fc4dc 23-27
+modules/aws/helm/scripts/test-e2e.sh
+  s_11927f0fe0774e::t_a71ac5126b40cb 22-23
+  s_11927f0fe0774e::t_c39909615ca22b 234-249
+modules/aws/helm/values/examples/langsmith-values-sizing-dev.yaml
+  s_11927f0fe0774e::t_7662a2cb679a4a 278-282
+modules/aws/helm/values/examples/langsmith-values-sizing-minimum.yaml
+  s_11927f0fe0774e::t_22a276c581483c 243-247
+  s_11927f0fe0774e::t_c8611a68153638 78-82,94-98
+  s_11927f0fe0774e::t_7533dd6464afc8 8
+modules/aws/helm/values/examples/langsmith-values.yaml
+  s_11927f0fe0774e::t_8166d753aa129f 72-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2699d512398bf97048e6348dfbaeb288094317d",
+  "prompts": {},
+  "sessions": {
+    "s_11927f0fe0774e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e673146f-2a9b-479d-9c99-b60439d997f3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
