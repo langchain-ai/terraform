@@ -16,8 +16,8 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 ## Prerequisites
 
 1. An Azure subscription for the LangSmith data planes.
-2. Azure credentials with the `Owner` role on that subscription. The module creates custom roles and role assignments, and the provider registers resource providers.
-3. An Entra ID role that can create and update a service principal for a multi-tenant app, for example `Cloud Application Administrator`.
+2. Azure credentials with permission to create resource groups, Key Vaults, custom roles, and role assignments, and to register resource providers in that subscription.
+3. Permission to create service principals in Entra ID. The module needs it only to create the LangSmith service principal, once per tenant. If no one has both permissions, someone with this permission can create the service principal first with `az ad sp create --id 5b0a74cb-9f37-4797-b557-c15d7be80d3b`. The person who applies the module then imports it before the first `terraform apply`: `terraform import module.langsmith_byoc_access.azuread_service_principal.langsmith /servicePrincipals/<object-id>`.
 4. Terraform `>= 1.11.0`, the AzureRM provider `>= 4.42.0, < 5.0.0`, and the AzureAD provider `~> 3.0`.
 5. The client ID of the LangSmith multi-tenant app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`.
 6. The external ID from **Settings > Data Planes** in the LangSmith UI. LangSmith compares it with the description of each role assignment to verify that you own the subscription.
