@@ -146,20 +146,30 @@ locals {
       for statement in statements : statement if length(statement.Action) > 0
     ]
   }
+  role_policy_documents = {
+    for name, statements in local.role_policies : name => jsonencode({
+      Version   = "2012-10-17"
+      Statement = statements
+    })
+  }
 }
 
 resource "aws_iam_policy" "this" {
-  for_each = local.role_policies
+  for_each = local.role_policy_documents
 
   name = "${var.role_name}-${each.key}"
   path = "/"
 
-  policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = each.value
-  })
+  policy = each.value
 
   tags = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = length(each.value) <= 6144
+      error_message = "The ${each.key} policy exceeds IAM's 6,144-character managed-policy limit. Move statements to another policy."
+    }
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "this" {

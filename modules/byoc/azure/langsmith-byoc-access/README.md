@@ -179,6 +179,7 @@ data_planes = {
 Set `reduced_access = false` again before you:
 
 - delete or recreate the data plane.
+- let LangSmith turn CLI builds on or off. LangSmith creates and deletes a managed identity, its federated identity credentials, custom roles and role assignments for them, so keep `reduced_access = false` while it does. You can set it to `true` again afterwards.
 - apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
 
 [`roles.tf`](roles.tf) has the full lists.
@@ -275,7 +276,7 @@ Remove `flow_logs` before you delete the data plane.
 
 1. If `reduced_access = true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
-3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
+3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry, and with CLI builds, the storage account `langgraph deploy` uploads sources to. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
 4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
 5. Remove the entry from `data_planes`. Run `terraform apply`.
 
@@ -315,7 +316,7 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 ## Security model
 
 - **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
-- **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. The description of each assignment is the `external_id`.
+- **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. With CLI builds, it also creates two custom roles, one for registry push tokens and one for signing source upload URLs, and assigns them and `AcrDelete` to its own identity. The description of each assignment is the `external_id`.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes
