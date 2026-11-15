@@ -63,6 +63,13 @@ export TF_VAR_smithdb_metastore_admin_password='<strong-random-password>'
 terraform -chdir=infra apply
 ```
 
+In Azure Government (`azure_environment = "usgovernment"`) the password is
+required, and plan stops without it. SmithDB requests its Entra token for the
+commercial Azure scope, `https://ossrdbms-aad.database.windows.net/.default`,
+which a Government Flexible Server does not accept, so every Entra login to the
+metastore fails (LG-913). The rule lifts once SmithDB reads the token scope for
+the cloud it runs in.
+
 The metastore Secret is created in the LangSmith namespace before Helm runs. In
 Entra mode it contains only the host, database, and username; the chart sets
 `iamAuthProvider: azure`. Object-store access also uses Azure Workload Identity,

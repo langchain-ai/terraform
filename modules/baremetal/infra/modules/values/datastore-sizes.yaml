@@ -1,0 +1,58 @@
+# The datastores this module builds, sized per sizing_profile: requests (cpu_m millicores, mem_mi MiB),
+# limits (lim_cpu_m, lim_mem_mi) and the volume (storage_gi). Numbers, so the products' increments below
+# can be added; the module renders them back to Kubernetes quantities. Data, read with yamldecode as the
+# app's sizing files are, so a tool that sizes a store outside this module reads the same table.
+#
+# Shared instances (one per role):
+#   postgres_langsmith  one database and role per product: langsmith, polly, insights, fleet
+#   redis_langsmith     one logical DB per product (standalone Redis, not Cluster)
+#   postgres_smithdb    SmithDB metastore only
+#   rustfs_smithdb      SmithDB trace data (RustFS, S3-compatible)
+# production* start from the chart's own in-cluster defaults; tune after measuring real load.
+profiles:
+  minimum:
+    postgres_langsmith: { cpu_m: 100, mem_mi: 256, lim_cpu_m: 1000, lim_mem_mi: 1024, storage_gi: 5 }
+    postgres_smithdb: { cpu_m: 100, mem_mi: 256, lim_cpu_m: 1000, lim_mem_mi: 1024, storage_gi: 5 }
+    redis_langsmith: { cpu_m: 50, mem_mi: 128, lim_cpu_m: 500, lim_mem_mi: 512, storage_gi: 1 }
+    rustfs_smithdb: { cpu_m: 100, mem_mi: 256, lim_cpu_m: 1000, lim_mem_mi: 1024, storage_gi: 20 }
+  # dev takes lab's table.
+  lab: &lab
+    postgres_langsmith: { cpu_m: 500, mem_mi: 1024, lim_cpu_m: 2000, lim_mem_mi: 2048, storage_gi: 10 }
+    postgres_smithdb: { cpu_m: 500, mem_mi: 1024, lim_cpu_m: 2000, lim_mem_mi: 2048, storage_gi: 10 }
+    # Redis buffers every trace payload until ingest-queue moves it to SmithDB. The 1Gi limit (768 MB
+    # maxmemory, noeviction) filled at 50 traces/s of ~1-2 MiB traces; at noeviction even dequeue and
+    # lease writes fail, so it can't drain (measured under load). 4Gi -> 3 GiB maxmemory. storage_gi
+    # stays 2: volumeClaimTemplates are immutable, and local-path does not enforce it.
+    # CPU limit 2 (measured under load): Redis was throttled in 25% of periods at 1 CPU; every drain
+    # step (asynq Lua, run hashes, leases) goes through it.
+    redis_langsmith: { cpu_m: 250, mem_mi: 1024, lim_cpu_m: 2000, lim_mem_mi: 4096, storage_gi: 2 }
+    # CPU limit 4 (request stays 250m): S3 PUTs are CPU-bound (checksums, hashing). With a 1-CPU limit
+    # the warp benchmark throttled RustFS in 27% of CFS periods (88.6 MiB/s, 734 ms/PUT). Limits don't
+    # count in the budget; only requests do.
+    # Memory 2Gi -> 6Gi (measured under load): RustFS was OOMKilled 9x at 2Gi under ~70-80 traces/s of
+    # SmithDB flushes; each kill fails SmithDB PUTs ("Flush failed ... Failed to shutdown
+    # VortexMultiWriter").
+    rustfs_smithdb: { cpu_m: 250, mem_mi: 1024, lim_cpu_m: 4000, lim_mem_mi: 6144, storage_gi: 80 }
+  dev: *lab
+  production:
+    postgres_langsmith: { cpu_m: 2000, mem_mi: 8192, lim_cpu_m: 4000, lim_mem_mi: 16384, storage_gi: 50 }
+    postgres_smithdb: { cpu_m: 1000, mem_mi: 4096, lim_cpu_m: 2000, lim_mem_mi: 8192, storage_gi: 20 }
+    redis_langsmith: { cpu_m: 2000, mem_mi: 4096, lim_cpu_m: 4000, lim_mem_mi: 8192, storage_gi: 8 }
+    # Memory limit 6Gi, as lab's (measured under load): at 4Gi RustFS reached 4094 MiB at 60 traces/s,
+    # stopped answering its probes and restarted, and SmithDB's flushes failed.
+    rustfs_smithdb: { cpu_m: 1000, mem_mi: 2048, lim_cpu_m: 2000, lim_mem_mi: 6144, storage_gi: 200 }
+  production-large:
+    postgres_langsmith: { cpu_m: 4000, mem_mi: 16384, lim_cpu_m: 8000, lim_mem_mi: 32768, storage_gi: 100 }
+    postgres_smithdb: { cpu_m: 2000, mem_mi: 8192, lim_cpu_m: 4000, lim_mem_mi: 16384, storage_gi: 50 }
+    redis_langsmith: { cpu_m: 2000, mem_mi: 4096, lim_cpu_m: 4000, lim_mem_mi: 8192, storage_gi: 16 }
+    rustfs_smithdb: { cpu_m: 2000, mem_mi: 4096, lim_cpu_m: 4000, lim_mem_mi: 8192, storage_gi: 500 }
+
+# What each extra product (Polly, Insights, Fleet) adds to the shared Postgres and Redis, by feature
+# class: slim for minimum and lab, full for the rest.
+shared_increment:
+  slim: { postgres: { cpu_m: 250, mem_mi: 512, storage_gi: 5 }, redis: { cpu_m: 0, mem_mi: 128 } }
+  full: { postgres: { cpu_m: 500, mem_mi: 1024, storage_gi: 10 }, redis: { cpu_m: 0, mem_mi: 512 } }
+
+# The sandboxes' JuiceFS metadata Redis, in every profile. Its 256Mi is a floor, unmeasured: size it from
+# the first sandbox load test.
+juicefs: { cpu_m: 100, mem_mi: 256, lim_cpu_m: 1000, lim_mem_mi: 1024, storage_gi: 5 }

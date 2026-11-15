@@ -36,7 +36,7 @@ variable "enable_apis" {
 }
 
 variable "custom_role_id_prefix" {
-  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager)."
+  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser, ServiceAccountIamManager, ClusterConnect, Named<kind> roles such as NamedCloudSql and NamedNetworks, and with byo_iam PostgresSetup)."
   type        = string
   default     = "langsmithByoc"
 
@@ -47,7 +47,24 @@ variable "custom_role_id_prefix" {
 }
 
 variable "byo_iam" {
-  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Set it before you create data planes in the project."
+  description = "Bring your own IAM. The module then creates the data plane service accounts and their project role grants, and the provisioner gets no service account admin and no project IAM writes. Recommended when the project also holds resources that are not LangSmith's: without it, the provisioner can grant itself project-wide Cloud SQL and Secret Manager roles, which get around the name limits. Set it before you create data planes in the project."
+  type        = bool
+  default     = false
+}
+
+variable "deployment_observability" {
+  description = "Let LangSmith turn on deployment observability: Monitoring charts and searchable log history for LangGraph deployments, kept in this project. Adds the Cloud Logging and Monitoring APIs, the provisioner's log bucket and sink permissions, and roles/logging.viewAccessor and roles/monitoring.viewer for the LangSmith app. Set it before LangSmith turns the feature on for a data plane, and keep it until LangSmith turns it off or deletes every such data plane. Not supported with byo_iam."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !(var.deployment_observability && var.byo_iam)
+    error_message = "deployment_observability is not supported with byo_iam."
+  }
+}
+
+variable "dedicated_deployments" {
+  description = "Let LangSmith run dedicated deployments, each with a Cloud SQL instance named lg-<id> that the LangSmith app creates, resizes and deletes in this project. With byo_iam, grants langsmith-workload roles/cloudsql.admin on lg- instances only; without byo_iam, LangSmith makes that grant and this changes nothing. Set it before LangSmith turns the feature on for a data plane."
   type        = bool
   default     = false
 }
