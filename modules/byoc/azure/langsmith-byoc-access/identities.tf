@@ -10,7 +10,7 @@ locals {
 
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
-      for short in local.byo_iam_identity_shorts : "${key}/${short}" => {
+      for short in concat(local.byo_iam_identity_shorts, dp.dedicated_deployments ? ["host-backend"] : []) : "${key}/${short}" => {
         data_plane = key
         short      = short
         tags       = dp.tags
@@ -155,6 +155,53 @@ resource "azurerm_role_assignment" "metrics_collector_publisher" {
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Monitoring Metrics Publisher"
   principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/deployment-metrics-collector"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_definition" "dedicated_deployments" {
+  for_each = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments }
+
+  name              = "langsmith-byoc-${each.key}-deployment-postgres-${random_string.key_vault_suffix[each.key].result}"
+  scope             = azurerm_resource_group.data_plane[each.key].id
+  description       = "Create, configure, resize, delete, and chart the PostgreSQL servers of LangSmith dedicated deployments."
+  assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
+
+  permissions {
+    actions = [
+      "Microsoft.DBforPostgreSQL/flexibleServers/read",
+      "Microsoft.DBforPostgreSQL/flexibleServers/write",
+      "Microsoft.DBforPostgreSQL/flexibleServers/delete",
+      "Microsoft.DBforPostgreSQL/flexibleServers/restart/action",
+      "Microsoft.DBforPostgreSQL/flexibleServers/configurations/read",
+      "Microsoft.DBforPostgreSQL/flexibleServers/configurations/write",
+      "Microsoft.Insights/metrics/read",
+      "Microsoft.Network/virtualNetworks/subnets/read",
+      "Microsoft.Network/virtualNetworks/subnets/join/action",
+      "Microsoft.Network/privateDnsZones/read",
+      "Microsoft.Network/privateDnsZones/join/action",
+    ]
+  }
+}
+
+resource "azurerm_role_assignment" "host_backend_dedicated_deployments" {
+  for_each = azurerm_role_definition.dedicated_deployments
+
+  scope              = azurerm_resource_group.data_plane[each.key].id
+  role_definition_id = each.value.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.data_plane["${each.key}/host-backend"].principal_id
+  principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "host_backend_observability" {
+  for_each = merge([
+    for key in keys(azurerm_role_definition.dedicated_deployments) : {
+      for role in ["Log Analytics Reader", "Monitoring Data Reader"] : "${key}/${role}" => { data_plane = key, role = role }
+    }
+  ]...)
+
+  scope                = azurerm_resource_group.data_plane[each.value.data_plane].id
+  role_definition_name = each.value.role
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.value.data_plane}/host-backend"].principal_id
   principal_type       = "ServicePrincipal"
 }
 

@@ -33,7 +33,7 @@ run "default" {
   }
 
   assert {
-    condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
+    condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routes", "FirewallPolicies", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
     error_message = "One fenced role per kind."
   }
 
@@ -50,17 +50,18 @@ run "default" {
   assert {
     condition = alltrue([for p in [
       "compute.networks.create", "compute.networks.use", "compute.subnetworks.create", "compute.subnetworks.use",
-      "compute.routers.create", "compute.addresses.create", "compute.addresses.createInternal", "compute.addresses.use",
+      "compute.routes.create", "compute.routes.delete", "compute.routers.create", "compute.addresses.create", "compute.addresses.createInternal", "compute.addresses.use",
       "compute.addresses.useInternal", "compute.globalAddresses.create", "compute.globalAddresses.createInternal",
       "compute.globalAddresses.delete", "compute.globalAddresses.deleteInternal", "compute.globalAddresses.setLabels",
       "compute.forwardingRules.pscCreate", "networkconnectivity.serviceConnectionPolicies.create",
+      "compute.firewallPolicies.create", "compute.firewallPolicies.update", "compute.firewallPolicies.use", "compute.networks.setFirewallPolicy",
     ] : !contains(google_project_iam_custom_role.provisioner.permissions, p)])
     error_message = "Network creates and use permissions are fenced."
   }
 
   assert {
     condition = alltrue([for p in [
-      "compute.networks.get", "compute.routers.use", "compute.globalAddresses.use", "compute.globalAddresses.get",
+      "compute.networks.get", "compute.routes.get", "compute.firewallPolicies.get", "compute.routers.use", "compute.globalAddresses.use", "compute.globalAddresses.get",
       "compute.globalAddresses.list", "servicenetworking.services.addPeering", "artifactregistry.repositories.update",
     ] : contains(google_project_iam_custom_role.provisioner.permissions, p)])
     error_message = "Unfenceable and read permissions stay in the provisioner role."
@@ -115,7 +116,7 @@ run "byo_iam" {
   }
 
   assert {
-    condition     = !contains(google_project_iam_custom_role.provisioner.permissions, "iam.serviceAccounts.create") && !contains(google_project_iam_custom_role.provisioner.permissions, "storage.buckets.delete") && length(google_project_iam_member.name_fenced) == 11
+    condition     = !contains(google_project_iam_custom_role.provisioner.permissions, "iam.serviceAccounts.create") && !contains(google_project_iam_custom_role.provisioner.permissions, "storage.buckets.delete") && length(google_project_iam_member.name_fenced) == 13
     error_message = "byo_iam and the fence both apply."
   }
 
@@ -200,5 +201,32 @@ run "deployment_observability" {
   assert {
     condition     = contains(local.granted_roles, "roles/logging.viewAccessor") && !contains(local.granted_roles, "roles/container.admin")
     error_message = "The provisioner may grant the observability roles but not roles/container.admin."
+  }
+}
+
+run "dedicated_deployments" {
+  command = plan
+
+  variables {
+    dedicated_deployments = true
+  }
+
+  assert {
+    condition     = length(google_project_iam_member.byo_iam_dedicated_deployments) == 0 && contains(local.granted_roles, "roles/cloudsql.admin")
+    error_message = "Without byo_iam, the module makes no grant and the provisioner may grant roles/cloudsql.admin."
+  }
+}
+
+run "dedicated_deployments_byo_iam" {
+  command = plan
+
+  variables {
+    byo_iam               = true
+    dedicated_deployments = true
+  }
+
+  assert {
+    condition     = google_project_iam_member.byo_iam_dedicated_deployments[0].role == "roles/cloudsql.admin" && google_project_iam_member.byo_iam_dedicated_deployments[0].condition[0].expression == "resource.name.extract(\"/instances/{name}\").startsWith(\"lg-\")"
+    error_message = "With byo_iam, the workload gets roles/cloudsql.admin on lg- instances only."
   }
 }

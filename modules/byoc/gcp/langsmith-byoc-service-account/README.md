@@ -67,7 +67,7 @@ Every customer's provisioner trusts the same LangSmith Crossplane service accoun
 
 By default, the provisioner holds custom roles, not predefined admin roles:
 
-- **`<prefix>Provisioner`**: the permissions for creating, updating and deleting data plane resources. These are the VPC, subnets, Cloud NAT, the Private Service Connect endpoint, GKE, Cloud SQL, Memorystore, Cloud Storage, Cloud DNS, Secret Manager, the Artifact Registry repository for in-cluster deployment builds and the data plane service accounts. It also has the list and get permissions that teardown needs to confirm deletions. The list comes from provisioning and tearing down data planes with nothing more. The create, change and delete permissions of the kinds that IAM checks by name are in the `<prefix>Named<kind>` roles instead.
+- **`<prefix>Provisioner`**: the permissions for creating, updating and deleting data plane resources. These are the VPC, subnets, routes, Cloud NAT, the optional egress firewall policy, the Private Service Connect endpoint, GKE, Cloud SQL, Memorystore, Cloud Storage, Cloud DNS, Secret Manager, the Artifact Registry repository for in-cluster deployment builds and the data plane service accounts. It also has the list and get permissions that teardown needs to confirm deletions. The list comes from provisioning and tearing down data planes with nothing more. The create, change and delete permissions of the kinds that IAM checks by name are in the `<prefix>Named<kind>` roles instead.
 - **`<prefix>ProjectIamGranter`**: reads and sets the project IAM policy. The binding has an IAM condition so the provisioner can only add or remove grants of the project roles the data planes use: `artifactregistry.reader`, `cloudsql.admin`, `cloudsql.client`, `cloudsql.instanceUser`, `container.defaultNodeServiceAccount`, `redis.dbConnectionUser` and `secretmanager.secretAccessor`. Data plane workloads get narrower grants: External Secrets' `secretmanager.secretAccessor` has a condition limiting it to the data plane's own secrets, and cert-manager gets `dns.admin` on the data plane's DNS zones only (through the zones' IAM policies), never on the project.
 - **`<prefix>ServiceAccountUser`**: `iam.serviceAccounts.actAs`, so GKE nodes and workloads can run as the data plane service accounts. IAM checks on a service account carry only its numeric unique ID, and the provisioner creates these accounts, so no condition can single them out and this binding is unconditional.
 - **`<prefix>Named<kind>`**: one role per kind of data plane resource, bound with a condition on the resource name. See [Limit changes to data plane names](#limit-changes-to-data-plane-names).
@@ -95,8 +95,10 @@ The permissions below are in a role per kind, not in `<prefix>Provisioner`. Each
 | `<prefix>NamedCloudSql` | `cloudsql.instances.create`, `delete`, `update`, `createTagBinding`, `deleteTagBinding` | `resource.name.extract("/instances/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedGke` | `container.clusters.create`, `delete`, `update`, `createTagBinding`, `deleteTagBinding` (node pool changes are checked against their cluster) | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedForwardingRules` | `compute.forwardingRules.create`, `delete`, `setLabels`, `pscCreate`, `pscDelete`, `pscSetLabels`, `pscUpdate` | `resource.name.extract("/forwardingRules/{name}").startsWith("langsmith-")` |
-| `<prefix>NamedNetworks` | `compute.networks.create`, `delete`, `update`, `updatePolicy`, `use`, `addPeering`, `removePeering`, `updatePeering` | `resource.name.extract("/networks/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedNetworks` | `compute.networks.create`, `delete`, `update`, `updatePolicy`, `use`, `addPeering`, `removePeering`, `updatePeering`, `setFirewallPolicy` | `resource.name.extract("/networks/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedSubnetworks` | `compute.subnetworks.create`, `delete`, `update`, `use`, `setPrivateIpGoogleAccess` | `resource.name.extract("/subnetworks/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedRoutes` | `compute.routes.create`, `delete` (routes that keep Google API traffic on private.googleapis.com) | `resource.name.extract("/routes/{name}").startsWith("langsmith-")` |
+| `<prefix>NamedFirewallPolicies` | `compute.firewallPolicies.create`, `delete`, `update`, `use` (the optional deny-by-default egress firewall: a global network firewall policy and its rules, attached to the data plane VPC) | `resource.name.extract("/firewallPolicies/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedRouters` | `compute.routers.create`, `delete`, `update` (Cloud NAT is configured on the router) | `resource.name.extract("/routers/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedAddresses` | `compute.addresses.create`, `createInternal`, `delete`, `deleteInternal`, `setLabels`, `use`, `useInternal`; `compute.globalAddresses.create`, `createInternal`, `delete`, `deleteInternal`, `setLabels` (the private services access range) | `resource.name.extract("/addresses/{name}").startsWith("langsmith-")` |
 | `<prefix>NamedRedisClusters` | `redis.clusters.create`, `delete`, `update` | `resource.name.extract("/clusters/{name}").startsWith("langsmith-")` |
@@ -104,7 +106,7 @@ The permissions below are in a role per kind, not in `<prefix>Provisioner`. Each
 | `<prefix>NamedStorage` | `storage.buckets.create`, `delete`, `update`, `setIamPolicy`; `storage.managedFolders.create`, `delete`, `setIamPolicy`; `storage.objects.delete` | `resource.name.startsWith("projects/_/buckets/langsmith-")` |
 | `<prefix>NamedSecretManager` | `secretmanager.secrets.create`, `delete`; `secretmanager.versions.add` | `resource.name.extract("/secrets/{name}").startsWith("ls-")` |
 
-Each permission was checked in a test project: a `langsmith-` name was allowed and any other name denied. Resources inside a network are fenced by the network too. Creating a subnet or a Cloud Router checks `compute.networks.updatePolicy` on its network, and reserving a global address (the private services access range) checks `compute.networks.use`. So the provisioner can't add subnets, routers, Cloud NAT or ranges to a network that isn't LangSmith's. The `use` permissions are checked against the subnet, address or network that a new resource refers to.
+Each permission was checked in a test project: a `langsmith-` name was allowed and any other name denied. The firewall policy fence has not been checked that way yet. Resources inside a network are fenced by the network too. Creating a subnet, a route or a Cloud Router checks `compute.networks.updatePolicy` on its network, and reserving a global address (the private services access range) checks `compute.networks.use`. So the provisioner can't add subnets, routes, routers, Cloud NAT or ranges to a network that isn't LangSmith's. The `use` permissions are checked against the subnet, address or network that a new resource refers to.
 
 The provisioner keeps the `get` and `list` permissions of these kinds, and `compute.routers.use` and `compute.globalAddresses.use`, unconditioned.
 
@@ -160,7 +162,7 @@ The module then creates these service accounts in the project. LangSmith finds t
 
 | Service account | Used by | Project roles |
 |-----------------|---------|---------------|
-| `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/redis.dbConnectionUser` |
+| `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/redis.dbConnectionUser`; with [dedicated deployments](#dedicated-deployments), `roles/cloudsql.admin` limited to `lg-` instances |
 | `langsmith-external-secrets` | External Secrets Operator | `roles/secretmanager.secretAccessor`, with a condition limiting it to secrets whose IDs start with `ls-` |
 | `langsmith-cert-manager` | cert-manager | None. LangSmith grants `roles/dns.admin` on each data plane's DNS zones. |
 | `langsmith-postgres-setup` | The job that sets up the Cloud SQL databases | `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`) on instances with the `managed_by: langsmith` tag, and `roles/cloudsql.viewer` limited to `langsmith-` instances |
@@ -207,6 +209,17 @@ The setting makes these changes:
 
 Sinks do not support IAM conditions, so the sink permissions apply to every sink in the project: the provisioner could route any of the project's logs to another destination, or change or delete the project's other sinks (not `_Required`). Likewise, the project IAM granter's condition limits only which role is granted, so the provisioner could grant itself `roles/logging.viewAccessor` with no condition and read every log view in the project, including the `_Required` bucket's audit logs, as it already can grant itself `roles/secretmanager.secretAccessor` on every secret. LangSmith grants the role only to the data plane's app service account, with a condition naming its log view. Turn it on only in a project that holds only LangSmith resources.
 
+## Dedicated deployments
+
+Set `dedicated_deployments = true` before LangSmith turns on dedicated deployments for a data plane in the project. Each dedicated LangGraph deployment then gets its own Cloud SQL instance, `lg-<id>`, which the LangSmith app creates, resizes and deletes in the data plane's region, with a private IP on the data plane's VPC through the private services access LangSmith already sets up.
+
+The LangSmith app's service account needs `roles/cloudsql.admin` on those instances, limited to `lg-` names by the condition `resource.name.extract("/instances/{name}").startsWith("lg-")`, so it can't change the data planes' own `langsmith-` instances or yours:
+
+- With `byo_iam`, the module grants it to `langsmith-workload`.
+- Without `byo_iam`, LangSmith grants it to the data plane's app service account, and the setting changes nothing: the project IAM granter already allows `roles/cloudsql.admin`.
+
+Name your own Cloud SQL instances so they don't start with `lg-`. Before you set it back to `false`, have LangSmith delete the dedicated deployments, because their instances can't be deleted without the grant.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -219,6 +232,7 @@ Sinks do not support IAM conditions, so the sink permissions apply to every sink
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
 | `deployment_observability` | Let LangSmith turn on deployment observability. Not with `byo_iam`. See [Deployment observability](#deployment-observability). | `false` |
+| `dedicated_deployments` | Let LangSmith run dedicated deployments. Only changes anything with `byo_iam`. See [Dedicated deployments](#dedicated-deployments). | `false` |
 
 ## Outputs
 

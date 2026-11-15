@@ -124,10 +124,11 @@ The module creates these identities. LangSmith expects these names:
 | `langsmith-workload-identity` | Monitoring Data Reader | resource group |
 | `langsmith-deployment-metrics-collector-identity` | Monitoring Metrics Publisher | resource group |
 | LangSmith application | Azure Kubernetes Service RBAC Cluster Admin | resource group |
+| `langsmith-host-backend-identity`, only with `dedicated_deployments` | dedicated deployments role, Log Analytics Reader, Monitoring Data Reader | resource group |
 
 The blob role is `langsmith-byoc-<key>-blob-<suffix>`. The conditions keep each identity to its own containers.
 
-The last three rows are for [deployment observability](#turn-on-deployment-observability-optional). LangSmith uses them only when observability is on. The workspaces and the data collection rule do not exist yet, so the scope is the resource group. `Log Analytics Reader` includes `*/read`, so the workload identity can read the resources in the resource group.
+The last row is for [dedicated deployments](#turn-on-dedicated-deployments-optional). The `Log Analytics Reader`, `Monitoring Data Reader` and `Monitoring Metrics Publisher` rows are for [deployment observability](#turn-on-deployment-observability-optional). LangSmith uses them only when observability is on. The workspaces and the data collection rule do not exist yet, so the scope is the resource group. `Log Analytics Reader` includes `*/read`, so the workload identity can read the resources in the resource group.
 
 With `byo_iam`, LangSmith does not need these permissions:
 
@@ -178,6 +179,7 @@ data_planes = {
 Set `reduced_access = false` again before you:
 
 - delete or recreate the data plane.
+- let LangSmith turn CLI builds on or off. LangSmith creates and deletes a managed identity, its federated identity credentials, custom roles and role assignments for them, so keep `reduced_access = false` while it does. You can set it to `true` again afterwards.
 - apply an upgrade that adds or changes an identity, or adds a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when an upgrade needs this.
 
 [`roles.tf`](roles.tf) has the full lists.
@@ -230,6 +232,22 @@ The role assignments for the collector and the workload identity come from the `
 
 When observability is turned off, LangSmith deletes the rules, the endpoint, the collector and its identity, and the role assignments. With `byo_iam`, it keeps your identity and role assignments. It keeps both workspaces with their data, and the Container Insights add-on, which collects nothing without its rule. The role cannot delete either workspace.
 
+### Turn on dedicated deployments (optional)
+
+Each dedicated LangGraph deployment gets its own private Azure Database for PostgreSQL flexible server in the data plane resource group. LangSmith creates the network and the identity that manages the servers. Keep `reduced_access = false` while LangSmith turns dedicated deployments on or off.
+
+With `byo_iam`, set `dedicated_deployments = true` and run `terraform apply` before LangSmith turns them on:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", byo_iam = true, dedicated_deployments = true }
+}
+```
+
+The module then creates `langsmith-host-backend-identity` and its roles on the resource group. The PostgreSQL role also reaches the LangSmith application database, so only host-backend and the listener can use this identity.
+
+Before you set `dedicated_deployments` back to `false` or remove it, delete the dedicated deployments and have LangSmith turn the feature off. host-backend needs the role to delete their servers, and servers it cannot delete keep running and billing in the resource group.
+
 ### Turn on flow logs (optional)
 
 When the data plane is active, add your storage account. Then run `terraform apply`:
@@ -258,7 +276,7 @@ Remove `flow_logs` before you delete the data plane.
 
 1. If `reduced_access = true`, set it to `false`. If `flow_logs` is set, remove it. Run `terraform apply`. Wait 5 minutes.
 2. Delete the data plane in LangSmith.
-3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
+3. LangSmith keeps the resource group, the Key Vault, and the trace and SmithDB storage accounts. With deployment builds, it also keeps the container registry, and with CLI builds, the storage account `langgraph deploy` uploads sources to. With deployment observability, it also keeps the Log Analytics and Azure Monitor workspaces. A new data plane with the same name uses them again.
 4. When you do not need the data, delete the storage accounts, the registry and the workspaces. Deleting the Azure Monitor workspace also deletes its managed resource group.
 5. Remove the entry from `data_planes`. Run `terraform apply`.
 
@@ -283,6 +301,7 @@ Fields of each `data_planes` entry:
 | `byo_iam` | `bool` | no | `false` | Create the data plane identities and their role assignments yourself. See [Bring your own identities](#bring-your-own-identities-optional). |
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
+| `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
@@ -297,7 +316,7 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 ## Security model
 
 - **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
-- **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. The description of each assignment is the `external_id`.
+- **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. With CLI builds, it also creates two custom roles, one for registry push tokens and one for signing source upload URLs, and assigns them and `AcrDelete` to its own identity. The description of each assignment is the `external_id`.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes
