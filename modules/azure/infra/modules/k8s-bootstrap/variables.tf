@@ -303,6 +303,43 @@ variable "sandbox_juicefs_redis_id" {
   default     = null
 }
 
+variable "sandbox_juicefs_redis_in_cluster" {
+  type        = bool
+  description = "Run the JuiceFS metadata Redis in the LangSmith namespace: a single-replica StatefulSet with an append-only file on a retained Premium SSD volume, its Service, its password Secret, and, where the policy engine is not Cilium, a NetworkPolicy admitting the node subnet on 6379."
+  default     = false
+}
+
+variable "sandbox_juicefs_redis_password" {
+  type        = string
+  description = "requirepass of the in-cluster JuiceFS Redis."
+  sensitive   = true
+  default     = null
+}
+
+variable "sandbox_juicefs_redis_image" {
+  type        = string
+  description = "Image of the in-cluster JuiceFS Redis."
+  default     = "docker.io/redis:7"
+}
+
+variable "sandbox_juicefs_redis_storage_class_name" {
+  type        = string
+  description = "Name of the cluster-scoped StorageClass for the in-cluster JuiceFS Redis volume."
+  default     = "sandbox-juicefs-redis-retain"
+}
+
+variable "sandbox_juicefs_redis_storage_gb" {
+  type        = number
+  description = "Size in GB of the in-cluster JuiceFS Redis volume."
+  default     = 16
+}
+
+variable "sandbox_juicefs_redis_memory_mb" {
+  type        = number
+  description = "Memory limit in MiB of the in-cluster JuiceFS Redis container; maxmemory is 80% of it."
+  default     = 1024
+}
+
 variable "platform_backend_component" {
   type        = string
   description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. Selects the pods the node subnet may reach when sandboxes are on."

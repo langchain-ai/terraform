@@ -1,0 +1,4 @@
+# Set by Terraform (modules/metallb/main.tf).
+gatewayIP: ""
+addresses: []
+l2NodeSelector: {}
