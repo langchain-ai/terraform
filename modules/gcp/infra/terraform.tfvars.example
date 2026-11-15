@@ -567,6 +567,7 @@ sizing_profile = "production"
 #------------------------------------------------------------------------------
 owner       = "platform-team"  # Team or individual responsible
 cost_center = "engineering"    # For billing attribution
+# product   = "langsmith"      # Applied as the product label when set
 
 # Additional custom labels
 labels = {

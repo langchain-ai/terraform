@@ -84,6 +84,7 @@ write_fresh_answers() {
     printf '\n'                    # Region
     printf '\n'                    # Owner
     printf '\n'                    # Cost center
+    printf '\n'                    # Product
     printf '%s\n' "admin@example.com" # Initial org admin email
     printf '\n'                    # Create VPC: yes
     printf '\n'                    # EKS version
@@ -130,6 +131,7 @@ write_update_defaults() {
     printf '\n' # Deployment profile
     printf '\n' # Owner
     printf '\n' # Cost center
+    printf '\n' # Product
     printf '\n' # Initial org admin email
     printf '\n' # EKS version
     printf '\n' # Node instance type

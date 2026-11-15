@@ -754,6 +754,12 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "product" {
+  type        = string
+  description = "Product label. Applied as the product tag when non-empty."
+  default     = ""
+}
+
 variable "tags" {
   type        = map(string)
   description = "Additional tags to apply to all resources."
