@@ -1,0 +1,16 @@
+# What the module writes with a standalone product and Sandboxes on; the passwords are placeholders.
+runtime: statefulset
+postgres:
+  instances:
+    langsmith: { password: ciPassword, databases: [langsmith_polly] }
+    smithdb: { password: ciPassword }
+redis:
+  instances:
+    langsmith: { password: ciPassword }
+    juicefs: { enabled: true, password: ciPassword, allowedCidrs: [192.0.2.0/24] }
+rustfs:
+  accessKey: ciAccessKey
+  secretKey: ciSecretKey
+  buckets: [smithdb, langsmith-blobs, sandbox-juicefs]
+  ttlBuckets: [langsmith-blobs]
+  allowedCidrs: [192.0.2.0/24]
