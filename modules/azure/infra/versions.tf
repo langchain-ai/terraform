@@ -32,6 +32,11 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.0"
     }
+    # The in-cluster JuiceFS Redis's password (sandbox_juicefs_redis_source).
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
     # Required by the keyvault module for RBAC propagation wait
     time = {
       source  = "hashicorp/time"

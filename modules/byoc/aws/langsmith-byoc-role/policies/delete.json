@@ -411,6 +411,7 @@
             "*.eks.amazonaws.com",
             "*.smith.langchain.com",
             "*.aws.langchain-byoc.com",
+            "*.byoc.aws.smithbox.dev",
             "beacon.*.langchain.com"
           ]
         }

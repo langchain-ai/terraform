@@ -4,6 +4,15 @@ Terraform modules for deploying **LangSmith Self-Hosted** on AWS, Azure, GCP, an
 
 LangSmith is LangChain's observability, evaluation, and prompt-engineering platform. This repository packages the cloud foundation (network / cluster / database / cache / object storage / secrets / DNS) and the Helm deployment of the LangSmith application as reusable, production-ready Terraform.
 
+> [!NOTE]
+> **Self-hosted modules are under active development.**
+> Expect breaking changes and rough edges.
+> We're not accepting GitHub issues or external contributions for these self-hosted modules at this time.
+> You're welcome to explore and fork these modules, but correctness, stability, and compatibility are not guaranteed.
+>
+> For self-hosted bugs and feature requests, use the [customer support channels](#support) below instead of GitHub issues.
+> Review and test changes in your environment before applying them to production.
+
 ## Who this is for
 
 Enterprise customers running LangSmith in their own cloud account or OpenShift cluster. If you are evaluating Self-Hosted or standing up a production deployment, start here.
@@ -22,6 +31,16 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 The AWS, Azure, and GCP directories are self-contained deployments with a `Makefile`, an `infra/` Terraform layout, Helm values, and provider-specific operator scripts. The OpenShift preview follows its own layout. See [`modules/README.md`](modules/README.md) for the differences between providers.
 
 For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byoc/README.md) for the customer-side IAM role and AWS VPC reference modules.
+
+## Reference examples
+
+Worked examples of one way to run LangSmith outside the supported providers.
+LangChain supports the LangSmith application under your agreement, not the
+infrastructure these examples add.
+
+| Example | Guide | Cluster | Status |
+|---|---|---|---|
+| Self-managed Kubernetes | [`modules/baremetal/`](modules/baremetal/README.md) | an existing cluster (tested on kubeadm and k3s) | Example |
 
 ## What you get
 
@@ -128,7 +147,7 @@ git fetch --tags
 git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"
 ```
 
-Report an issue against the line you are running. Fixes land on `main` first and are
+Report bugs through the [support channels](#support), including the chart line you are running. Fixes land on `main` first and are
 backported to a maintenance branch where they apply cleanly; values-schema changes tied to
 the newer chart are not backported, because the older chart ignores the affected keys rather
 than rejecting them and would deploy a half-configured release.
@@ -156,7 +175,7 @@ The per-release history is published in [GitHub Releases](https://github.com/lan
 - **Enterprise customers:** start at [enterprise-hub.langchain.com](https://enterprise-hub.langchain.com/) — the front door for onboarding, education, professional services, and support.
 - **Customers with a LangChain support agreement:** open a ticket through your usual support channel.
 - **General questions:** contact your LangChain account team.
-- **Bugs and feature requests for these modules:** open an issue on this repository.
+- **Bugs and feature requests for these modules:** use the customer support channels above. We're not accepting GitHub issues or external contributions for these self-hosted modules at this time.
 
 ## History
 
