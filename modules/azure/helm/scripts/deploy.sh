@@ -973,6 +973,15 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
   VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
+
+  # The chart hashes only the name of an existing JuiceFS Secret, so a new Redis
+  # password or URL would reach the Secret and leave sandbox-host on the old
+  # one. Terraform's digest of the metaurl (in-cluster and external sources)
+  # goes on the pod template, and a change rolls sandbox-host.
+  if _juicefs_config_digest=$(_tf_out sandbox_juicefs_redis_config_digest); then
+    VALUES_ARGS+=(--set-string "sandboxes.sandboxHost.deployment.podAnnotations.checksum/juicefs-redis=$_juicefs_config_digest")
+    echo "Sandboxes: sandbox-host restarts when the JuiceFS Redis URL changes (digest ${_juicefs_config_digest:0:12})"
+  fi
 fi
 
 # sandbox-host runs on the host network, so it calls platform-backend from a node
@@ -1014,6 +1023,41 @@ elif [[ "$_policy_engine" == "cilium" ]]; then
 elif [[ -z "$_policy_engine" && "$_enable_sandboxes" == "true" ]]; then
   warn "Terraform has no network_policy_engine output yet. On a Cilium cluster, sandbox-host cannot reach platform-backend until it does."
   action "Run: make apply, then make deploy"
+fi
+
+# The in-cluster JuiceFS Redis (sandbox_juicefs_redis_source = in-cluster) is
+# reached by sandbox-host from a node IP too, so on Cilium it needs the same
+# entity rule on 6379. Terraform writes the NPM twin.
+_juicefs_redis_source=$(_tf_out sandbox_juicefs_redis_source) || _juicefs_redis_source=""
+if [[ "$_policy_engine" == "cilium" && "$_enable_sandboxes" == "true" && "$_juicefs_redis_source" == "in-cluster" ]]; then
+  if ! kubectl apply -f - >/dev/null <<EOF
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-nodes-to-sandbox-redis
+  namespace: ${NAMESPACE}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: sandbox-juicefs-redis
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: "6379"
+              protocol: TCP
+EOF
+  then
+    fail "Could not apply the CiliumNetworkPolicy that admits sandbox-host to the JuiceFS Redis"
+    exit 1
+  fi
+  pass "CiliumNetworkPolicy allow-nodes-to-sandbox-redis applied (sandbox-host to the JuiceFS Redis :6379)"
+elif [[ "$_policy_engine" == "cilium" ]]; then
+  if ! kubectl delete ciliumnetworkpolicy allow-nodes-to-sandbox-redis -n "$NAMESPACE" --ignore-not-found >/dev/null; then
+    warn "Could not delete CiliumNetworkPolicy allow-nodes-to-sandbox-redis; the nodes can still reach :6379 on the JuiceFS Redis"
+  fi
 fi
 
 # With langsmith_image_registry_keeps_source_host = false, init-values.sh wrote

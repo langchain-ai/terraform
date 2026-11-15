@@ -1,0 +1,15 @@
+# The operator runtime with replicas, so the Sentinels and the Database resources render too, every
+# store in one namespace as the module installs them (the statefulset file keeps one namespace each).
+runtime: operator
+namespace: langsmith-data
+postgres:
+  instances:
+    langsmith: { password: ciPassword, databases: [langsmith_polly], replicas: 2 }
+    smithdb: { password: ciPassword }
+redis:
+  instances:
+    langsmith: { password: ciPassword, replicas: 3 }
+    juicefs: { enabled: true, password: ciPassword, allowedCidrs: [192.0.2.0/24] }
+rustfs:
+  accessKey: ciAccessKey
+  secretKey: ciSecretKey
