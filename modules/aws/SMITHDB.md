@@ -43,7 +43,9 @@ ElastiCache Redis. The platform bucket's TTL rules match only the `ttl_s/` and
 `ttl_l/` prefixes, so they do not touch Sandbox data. Keep `sandbox_juicefs_name`
 away from those two prefixes. The application deletes Sandbox data, not S3: a
 stopped sandbox is deleted by a server-side sweep after `delete_after_stop_seconds`,
-typically 14 days by default and at most 30. Snapshots are kept until someone
+typically 14 days by default and at most 30 days when set. Setting it to `0`
+turns off automatic deletion, and a sandbox with `idle_ttl_seconds = 0` never
+stops, so its data stays until you delete it. Snapshots are kept until someone
 deletes them. See [Sandbox SDK usage](https://docs.langchain.com/langsmith/sandbox-sdk).
 The module sets no size limit on Sandbox storage: the bucket grows with use.
 
