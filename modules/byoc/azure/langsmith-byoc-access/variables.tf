@@ -4,7 +4,7 @@ variable "langsmith_app_client_id" {
 }
 
 variable "create_service_principal" {
-  description = "true: create or update the LangSmith service principal (needs Entra ID permission). false: only read it, after an Entra admin ran `az ad sp create`. To change from true to false, first run terraform state rm on azuread_service_principal.langsmith[0], or Terraform deletes it."
+  description = "true: create or update the LangSmith service principal (needs Entra ID permission). false: only read it, after an Entra admin ran `az ad sp create`. Do not change from true to false later, or Terraform deletes it."
   type        = bool
   default     = true
 }

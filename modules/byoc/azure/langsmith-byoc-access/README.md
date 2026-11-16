@@ -289,7 +289,7 @@ Remove `flow_logs` before you delete the data plane.
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
-| `create_service_principal` | `bool` | no | `true` | `true`: create or update the service principal (needs Entra ID permission). `false`: only read it. To change an existing setup from `true` to `false`, first run `terraform state rm 'module.<name>.azuread_service_principal.langsmith[0]'`. Otherwise Terraform deletes it. |
+| `create_service_principal` | `bool` | no | `true` | `true`: create or update the service principal (needs Entra ID permission). `false`: only read it. Do not change from `true` to `false` later, or Terraform deletes it. |
 | `data_planes` | `map(object)` | no | `{}` | One entry per data plane. The key is the data plane name. See the fields below. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
