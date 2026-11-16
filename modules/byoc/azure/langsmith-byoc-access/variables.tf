@@ -3,6 +3,12 @@ variable "langsmith_app_client_id" {
   type        = string
 }
 
+variable "create_service_principal" {
+  description = "Create the LangSmith service principal, or adopt and update an existing one. This needs an Entra ID role that can create service principals. Set to false if an Entra admin already created it with `az ad sp create --id <langsmith_app_client_id>`: the module then only reads it, and needs no Entra ID role. Set this on the first apply. Do not change it from true to false later, or Terraform deletes the service principal."
+  type        = bool
+  default     = true
+}
+
 variable "external_id" {
   description = "External ID from Settings > Data Planes in the LangSmith UI. The module writes it as the description of each LangSmith role assignment. LangSmith reads it to verify that you own the subscription."
   type        = string

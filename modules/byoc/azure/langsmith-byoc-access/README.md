@@ -4,7 +4,7 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 
 | Resource | Count | Purpose |
 |----------|-------|---------|
-| Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. The app gets no Microsoft Graph permissions. |
+| Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. The app gets no Microsoft Graph permissions. With `create_service_principal = false`, the module only reads it. |
 | Resource group `langsmith-byoc-<key>` | One per data plane | LangSmith deploys the data plane into this resource group. |
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the secret that LangSmith writes. No public network access. |
 | Custom role `langsmith-byoc-<key>-<suffix>` | One per data plane | The actions that LangSmith needs in that resource group. `reduced_access` selects full or reduced actions. The role can only be assigned in that resource group. |
@@ -17,7 +17,13 @@ Gives the LangSmith control plane access to **your Azure subscription**, so that
 
 1. An Azure subscription for the LangSmith data planes.
 2. Azure credentials with permission to create resource groups, Key Vaults, custom roles, and role assignments, and to register resource providers in that subscription.
-3. Permission to create service principals in Entra ID. The module needs it only to create the LangSmith service principal, once per tenant. If no one has both permissions, someone with this permission can create the service principal first with `az ad sp create --id 5b0a74cb-9f37-4797-b557-c15d7be80d3b`. The person who applies the module then imports it before the first `terraform apply`: `terraform import module.langsmith_byoc_access.azuread_service_principal.langsmith /servicePrincipals/<object-id>`.
+3. Permission to create service principals in Entra ID, once per tenant. If the person who applies the module does not have it, someone with this permission creates the LangSmith service principal first:
+
+   ```bash
+   az ad sp create --id 5b0a74cb-9f37-4797-b557-c15d7be80d3b
+   ```
+
+   Then set `create_service_principal = false`. The module only reads the service principal, and the person who applies it needs no Entra ID permission. Set it before the first `terraform apply`.
 4. Terraform `>= 1.11.0`, the AzureRM provider `>= 4.42.0, < 5.0.0`, and the AzureAD provider `~> 3.0`.
 5. The client ID of the LangSmith multi-tenant app: `5b0a74cb-9f37-4797-b557-c15d7be80d3b`.
 6. The external ID from **Settings > Data Planes** in the LangSmith UI. LangSmith compares it with the description of each role assignment to verify that you own the subscription.
@@ -288,6 +294,7 @@ Remove `flow_logs` before you delete the data plane.
 |----------|------|----------|---------|-------------|
 | `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
 | `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
+| `create_service_principal` | `bool` | no | `true` | `true`: create the LangSmith service principal, or adopt and update an existing one. Needs permission to create service principals in Entra ID. `false`: only read a service principal that already exists. Do not change an existing setup from `true` to `false`, or Terraform deletes the service principal. |
 | `data_planes` | `map(object)` | no | `{}` | One entry per data plane. The key is the data plane name. See the fields below. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
@@ -315,15 +322,15 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 
 ## Security model
 
-- **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription.
+- **Service principal:** the consent step. No Microsoft Graph permissions and no role on the subscription. With `create_service_principal = false`, Terraform never writes to Entra ID.
 - **Role assignments:** on each data plane resource group, and nothing else. The LangSmith custom role ([`roles.tf`](roles.tf) lists the full and the reduced actions). With full access, also `User Access Administrator`, because the data plane creates role assignments for its workload identities and one custom blob role. With CLI builds, it also creates two custom roles, one for registry push tokens and one for signing source upload URLs, and assigns them and `AcrDelete` to its own identity. The description of each assignment is the `external_id`.
 - **Key Vault:** Azure RBAC authorization, no public network access, a network ACL that denies all traffic with no bypass, soft delete for 90 days, and purge protection. A random suffix in the name lets a new data plane get a new vault name. Terraform writes nothing into the vault.
 
 ## Operational notes
 
 - Run `terraform apply` with credentials in the **target** tenant and subscription.
-- When you remove this module, Terraform deletes the service principal and all role assignments. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
-- The tenant has only one LangSmith service principal. If you use this module in more than one root module of the same tenant, a destroy of one root module deletes the service principal for all of them.
+- When you remove this module, Terraform deletes all role assignments, and the service principal if `create_service_principal` is `true`. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
+- The tenant has only one LangSmith service principal. If you use this module in more than one root module of the same tenant, set `create_service_principal = true` in one of them only, and `false` in the others. A destroy of the root module with `true` deletes the service principal for all of them.
 
 ## License
 
