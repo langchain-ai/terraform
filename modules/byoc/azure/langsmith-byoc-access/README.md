@@ -16,8 +16,8 @@ Gives the LangSmith control plane access to deploy BYOC data planes in **your Az
 ## Prerequisites
 
 1. An Azure subscription.
-2. Permission to create resource groups, Key Vaults, custom roles, and role assignments, and to register resource providers in the subscription.
-3. Permission to create service principals in Entra ID, once per tenant. If the person in step 2 does not have it, an Entra admin runs this first:
+2. `Owner`, or `Contributor` and `User Access Administrator`, on the subscription. Use subscription scope, because the module creates the resource groups. `Role Based Access Control Administrator` is not sufficient, because it cannot create custom roles.
+3. An Entra ID role that can create service principals, for example `Cloud Application Administrator`, once per tenant. If the person in step 2 does not have it, an Entra admin runs this first:
 
    ```bash
    az ad sp create --id 5b0a74cb-9f37-4797-b557-c15d7be80d3b
