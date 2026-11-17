@@ -230,6 +230,8 @@ The build Jobs run as the Kubernetes service account `langsmith/lsd-build`, whic
 
 The provisioner role already has the Artifact Registry permissions the repositories need, and `enable_apis` already enables `artifactregistry.googleapis.com`. All data planes in the project share `langsmith-deployment-builds`, so a build in one data plane can push to another data plane's build repository in the same project.
 
+CLI builds (`langgraph deploy --remote`) need nothing more. LangSmith creates a sources bucket for each data plane, `langsmith-<hash>-sources`, which deletes sources after a day, and grants the LangSmith app's service account (`langsmith-workload` with `byo_iam`) `roles/storage.objectCreator` and `roles/storage.objectViewer` on that bucket only, within the provisioner's existing `langsmith-` bucket permissions.
+
 Before you set it back to `false`, have LangSmith turn builds off for every data plane in the project.
 
 ## Inputs
