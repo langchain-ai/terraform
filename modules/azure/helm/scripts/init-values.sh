@@ -531,21 +531,7 @@ fi
 # whether or not the insights add-on is on. The chart reads every connection field
 # (host, ports, user, password, db, tls) from the secret, so the values file only
 # carries the pointer to it.
-if [[ "$_clickhouse_source" == "external" ]]; then
-  _clickhouse_block='clickhouse:
-  external:
-    enabled: true
-    existingSecretName: "langsmith-clickhouse"'
-  # clickhouse_cluster is a value, not a Secret key: the chart passes it to the
-  # pods as CLICKHOUSE_CLUSTER and the first migration creates tables ON CLUSTER.
-  _clickhouse_cluster=$(_parse_tfvar "clickhouse_cluster") || _clickhouse_cluster=""
-  if [[ -n "$_clickhouse_cluster" ]]; then
-    _clickhouse_block+="
-    cluster: \"${_clickhouse_cluster}\""
-  fi
-else
-  _clickhouse_block='# clickhouse: in-cluster (managed by Helm chart)'
-fi
+_clickhouse_block=$(_clickhouse_values_block "$_clickhouse_source")
 
 if [[ -n "$STORAGE_BLOB_ENDPOINT" ]]; then
   _blob_endpoint_line="    azureStorageServiceUrlOverride: \"${STORAGE_BLOB_ENDPOINT}\""

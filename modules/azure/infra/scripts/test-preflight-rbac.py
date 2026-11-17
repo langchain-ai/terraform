@@ -1636,6 +1636,29 @@ CASES = [
                    "terraform import 'module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]' langsmith/langsmith-clickhouse"],
     },
     {
+        "name": "an imported init-values Secret passes and prints no delete",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "ch_secret": {"metadata": {"name": "langsmith-clickhouse"}},
+        "tfstate_ch_secret": True,
+        "expect": ["[✓] langsmith/langsmith-clickhouse on 'platform-aks' is in Terraform state at module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0] (imported)"],
+        "reject": ["kubectl delete secret", "[✗] langsmith/langsmith-clickhouse"],
+    },
+    {
+        "name": "clickhouse_host set only in TF_VAR_ is seen",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "env": {"TF_VAR_clickhouse_host": "ch.data.internal"},
+        "kube_ctx": "platform-aks",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks'"],
+    },
+    {
+        "name": "an empty TF_VAR_clickhouse_host overrides the tfvars host and skips the check",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "env": {"TF_VAR_clickhouse_host": ""},
+        "kube_ctx": "platform-aks",
+        "reject": ["External ClickHouse Secret"],
+    },
+    {
         "name": "clickhouse_host with a Forbidden read warns instead of passing",
         "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
         "kube_ctx": "platform-aks",
@@ -1884,7 +1907,7 @@ def build_case(case, index):
 
     # Preflight reads the local state file when no backend is initialized, which
     # is the state a customer running `make preflight` before `make init` is in.
-    if "tfstate_names" in case or "tfstate_dns_labels" in case:
+    if "tfstate_names" in case or "tfstate_dns_labels" in case or "tfstate_ch_secret" in case:
         resources = [
             {"type": "stub", "instances": [{"attributes": {"name": value}}]}
             for value in case.get("tfstate_names", [])
@@ -1892,7 +1915,11 @@ def build_case(case, index):
             {"type": "azurerm_public_ip",
              "instances": [{"attributes": {"domain_name_label": value}}]}
             for value in case.get("tfstate_dns_labels", [])
-        ]
+        ] + ([
+            {"module": "module.k8s_bootstrap", "mode": "managed",
+             "type": "kubernetes_secret_v1", "name": "clickhouse",
+             "instances": [{"index_key": 0, "attributes": {}}]}
+        ] if case.get("tfstate_ch_secret") else [])
         (infra / "terraform.tfstate").write_text(
             json.dumps({"version": 4, "resources": resources})
         )
