@@ -179,6 +179,11 @@ locals {
     coalesce(one(data.azurerm_subnet.sandbox_ingress_lb_subnet[*].address_prefixes), []),
   ))
 
+  # The Blob private endpoints' subnet when it is not the AKS subnet, for the
+  # sandbox NSG's 443 allow to the JuiceFS container. In the AKS subnet, the
+  # default, the ingress allow above already covers them.
+  sandbox_blob_endpoint_prefixes = coalesce(one(data.azurerm_subnet.sandbox_blob_endpoint_subnet[*].address_prefixes), [])
+
   # The sandbox subnet's prefixes, read back from a supplied subnet or the ones
   # Terraform is about to carve, for the capacity check below.
   sandbox_subnet_prefixes = local.byo_sandbox_subnet ? coalesce(one(data.azurerm_subnet.byo_sandbox_subnet[*].address_prefixes), []) : var.sandbox_subnet_address_prefix
@@ -662,10 +667,11 @@ module "vnet" {
 
   # The dedicated sandbox cluster's subnet and its NSG (external runtime only).
   # Its NSG admits sandbox-host's port from aks_source_prefixes above.
-  create_sandbox_subnet         = local.create_sandbox_subnet
-  sandbox_subnet_address_prefix = var.sandbox_subnet_address_prefix
-  sandbox_pod_cidr              = var.aks_pod_cidr
-  sandbox_ingress_prefixes      = local.sandbox_ingress_prefixes
+  create_sandbox_subnet          = local.create_sandbox_subnet
+  sandbox_subnet_address_prefix  = var.sandbox_subnet_address_prefix
+  sandbox_pod_cidr               = var.aks_pod_cidr
+  sandbox_ingress_prefixes       = local.sandbox_ingress_prefixes
+  sandbox_blob_endpoint_prefixes = local.sandbox_blob_endpoint_prefixes
 
   tags = local.common_tags
 }
@@ -728,6 +734,17 @@ data "azurerm_subnet" "sandbox_ingress_lb_subnet" {
   name                 = split("/", var.ingress_load_balancer_subnet_id)[10]
   virtual_network_name = split("/", var.ingress_load_balancer_subnet_id)[8]
   resource_group_name  = split("/", var.ingress_load_balancer_subnet_id)[4]
+}
+
+# With storage_private_endpoint_enabled the Blob accounts have no public
+# endpoint, so sandbox nodes reach the JuiceFS container through its private
+# endpoint. When that sits in a subnet of its own, the sandbox subnet's NSG
+# allows 443 to it there, so read its prefixes.
+data "azurerm_subnet" "sandbox_blob_endpoint_subnet" {
+  count                = local.external_sandbox_runtime && var.storage_private_endpoint_enabled && var.storage_private_endpoint_subnet_id != "" && lower(var.storage_private_endpoint_subnet_id) != lower(var.aks_subnet_id) ? 1 : 0
+  name                 = split("/", var.storage_private_endpoint_subnet_id)[10]
+  virtual_network_name = split("/", var.storage_private_endpoint_subnet_id)[8]
+  resource_group_name  = split("/", var.storage_private_endpoint_subnet_id)[4]
 }
 
 data "azurerm_subnet" "byo_sandbox_subnet" {

@@ -127,6 +127,12 @@ variable "sandbox_ingress_prefixes" {
   default     = []
 }
 
+variable "sandbox_blob_endpoint_prefixes" {
+  type        = list(string)
+  description = "Prefixes of the Blob private endpoints' subnet when it is not the AKS node subnet. The sandbox NSG lets sandbox nodes reach them on 443 for the JuiceFS container. Empty adds no rule."
+  default     = []
+}
+
 variable "sandbox_pod_cidr" {
   type        = string
   description = "Overlay pod range of the sandbox cluster. Its NSG admits the range alongside the subnet, because overlay pod traffic between nodes is not encapsulated and the subnet NSG sees pod addresses."

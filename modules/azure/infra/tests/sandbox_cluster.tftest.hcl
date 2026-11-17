@@ -283,6 +283,46 @@ run "an_internal_load_balancer_subnet_is_reachable_from_sandbox_nodes" {
   }
 }
 
+# Without a public endpoint, JuiceFS reaches its Blob container through the
+# private endpoint, which sandbox nodes may reach on 443 only in a subnet the
+# NSG allows.
+run "a_blob_private_endpoint_subnet_is_reachable_from_sandbox_nodes" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled   = true
+    storage_private_endpoint_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/langsmith-rg/providers/Microsoft.Network/virtualNetworks/langsmith-vnet/subnets/endpoints"
+  }
+
+  override_data {
+    target = data.azurerm_subnet.sandbox_blob_endpoint_subnet
+    values = {
+      address_prefixes = ["10.0.50.0/24"]
+    }
+  }
+
+  assert {
+    condition = length([
+      for r in module.vnet.sandbox_nsg_rules : r
+      if r.direction == "Outbound" && r.access == "Allow" && r.destination_port_range == "443" && toset(r.destination_address_prefixes) == toset(["10.0.50.0/24"]) && r.priority < 4096
+    ]) == 1
+    error_message = "Sandbox nodes cannot reach a Blob private endpoint in its own subnet"
+  }
+}
+
+run "a_blob_private_endpoint_in_the_aks_subnet_adds_no_rule" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled = true
+  }
+
+  assert {
+    condition     = length(data.azurerm_subnet.sandbox_blob_endpoint_subnet) == 0 && length([for r in module.vnet.sandbox_nsg_rules : r if r.name == "allow-blob-private-endpoint-out"]) == 0
+    error_message = "A Blob private endpoint in the AKS subnet, which the ingress allow covers, still added a rule"
+  }
+}
+
 run "in_cluster_runtime_plans_no_sandbox_cluster" {
   command = plan
 

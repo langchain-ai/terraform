@@ -1154,6 +1154,9 @@ never shares a node or a cluster with LangSmith. The LangSmith cluster runs the 
 Redis, the Blob container and the `sandbox-host` identity are the same as with the in-cluster runtime. This Terraform is one
 way to meet the requirements in the LangSmith docs for a separate sandbox cluster; the charts work without it.
 
+This mode does not yet work in Azure Government or with customer-managed disk keys (`aks_disk_encryption_set_id`); plan
+refuses both. **Not supported yet** below lists these gaps and the others.
+
 **What Terraform creates**
 
 - **Cluster:** `<base>-sbox-aks<suffix>` in the same resource group and VNet. It has a `system` pool for the add-ons AKS
@@ -1171,12 +1174,15 @@ way to meet the requirements in the LangSmith docs for a separate sandbox cluste
   - It admits all traffic from the sandbox subnet and its pod range.
   - It denies the rest of the VNet.
   - Port 19190 carries plain HTTP with sandbox secrets, commands and files, so it stays inside the VNet.
-- **NSG on that subnet, outbound,** closed to the rest of the VNet apart from the LangSmith ingress and the JuiceFS
-  Redis:
+- **NSG on that subnet, outbound,** closed to the rest of the VNet apart from the LangSmith ingress and JuiceFS's Redis
+  and Blob:
   - It allows the sandbox subnet and its pod range, and the platform address `168.63.129.16` (DNS and the node agent).
   - It allows TCP 80 and 443 to the LangSmith ingress: the AKS node subnet, plus `ingress_load_balancer_subnet_id`
     when an internal load balancer has a subnet of its own.
   - It allows TCP 10000 to the AKS node subnet, where the JuiceFS Redis private endpoint sits.
+  - With `storage_private_endpoint_enabled = true` and a `storage_private_endpoint_subnet_id` other than the AKS node
+    subnet, it allows TCP 443 to that subnet. The Blob accounts then have no public endpoint, so JuiceFS reaches its
+    container through the private endpoint there. In the AKS node subnet, the default, the 443 allow above covers it.
   - It denies the rest of the VNet. Internet egress stays open: sandboxes need it.
   - The 80, 443 and 10000 allows cover whole subnets. Whatever else listens there on those ports (node-subnet pods,
     and private endpoints such as Key Vault, Blob or LangSmith's own Redis) is reachable from a sandbox node, though it

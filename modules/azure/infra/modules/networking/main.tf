@@ -355,12 +355,14 @@ resource "azurerm_subnet" "subnet_sandbox" {
 # their own subnet and pod range, the platform address 168.63.129.16 (DNS and
 # the node agent), TCP 80 and 443 for the LangSmith ingress
 # (sandbox_ingress_prefixes: where its load balancer frontend can sit), and TCP
-# 10000 for the JuiceFS Redis private endpoint in the AKS subnet; the rest of
-# the VNet is denied. The 80, 443 and 10000 allows cover whole subnets, so
-# whatever else listens there on those ports (node-subnet pods, and private
-# endpoints such as Key Vault, Blob or LangSmith's own Redis) is reachable from
-# a sandbox node, though it still needs its credentials. Internet egress, Blob
-# through its service endpoint among it, stays open: sandboxes need it. The
+# 10000 for the JuiceFS Redis private endpoint in the AKS subnet, and TCP 443
+# to the Blob private endpoints' subnet when it is not the AKS subnet
+# (sandbox_blob_endpoint_prefixes); the rest of the VNet is denied. The 80, 443
+# and 10000 allows cover whole subnets, so whatever else listens there on those
+# ports (node-subnet pods, and private endpoints such as Key Vault, Blob or
+# LangSmith's own Redis) is reachable from a sandbox node, though it still needs
+# its credentials. Internet egress, Blob through its service endpoint among it,
+# stays open: sandboxes need it. The
 # deny names the VirtualNetwork tag, which also covers the prefixes of routes on
 # the subnet's route table; this subnet has none (a routed egress path needs a
 # supplied sandbox_subnet_id), so the deny cannot catch internet traffic.
@@ -469,6 +471,23 @@ resource "azurerm_network_security_group" "sandbox" {
     destination_port_range       = "10000"
     source_address_prefix        = "*"
     destination_address_prefixes = var.aks_source_prefixes
+  }
+
+  # Without a public endpoint, JuiceFS reaches its Blob container through the
+  # private endpoint. In the AKS subnet the ingress allow above covers it.
+  dynamic "security_rule" {
+    for_each = length(var.sandbox_blob_endpoint_prefixes) > 0 ? [1] : []
+    content {
+      name                         = "allow-blob-private-endpoint-out"
+      priority                     = 140
+      direction                    = "Outbound"
+      access                       = "Allow"
+      protocol                     = "Tcp"
+      source_port_range            = "*"
+      destination_port_range       = "443"
+      source_address_prefix        = "*"
+      destination_address_prefixes = var.sandbox_blob_endpoint_prefixes
+    }
   }
 
   security_rule {
