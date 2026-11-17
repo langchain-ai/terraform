@@ -185,6 +185,8 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
       DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
     },
     length(var.tags) > 0 ? { tags = join(",", [for k, v in var.tags : "${k}=${v}"]) } : {},
+    # The set the root resolves (per-store, else the cluster's); empty omits it.
+    var.smithdb_cache_disk_encryption_set_id != "" ? { diskEncryptionSetID = var.smithdb_cache_disk_encryption_set_id } : {},
   )
 }
 
@@ -549,9 +551,13 @@ resource "kubernetes_storage_class_v1" "sandbox_juicefs_redis" {
   reclaim_policy         = "Retain"
   volume_binding_mode    = "WaitForFirstConsumer"
   allow_volume_expansion = true
-  parameters = {
-    skuName = "Premium_LRS"
-  }
+  # The set the root resolves (per-store, else the cluster's); empty omits it.
+  # Kubernetes refuses parameter updates, so a change replaces the class and
+  # applies to new volumes only.
+  parameters = merge(
+    { skuName = "Premium_LRS" },
+    var.sandbox_juicefs_redis_disk_encryption_set_id != "" ? { diskEncryptionSetID = var.sandbox_juicefs_redis_disk_encryption_set_id } : {},
+  )
 }
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_redis" {

@@ -9,8 +9,12 @@ locals {
     "artifactregistry.repositories.setIamPolicy",
     "artifactregistry.repositories.update",
     "cloudsql.instances.create",
+    # The provisioner tags each data plane instance with the managed_by tag below.
+    "cloudsql.instances.createTagBinding",
     "cloudsql.instances.delete",
+    "cloudsql.instances.deleteTagBinding",
     "cloudsql.instances.get",
+    "cloudsql.instances.listTagBindings",
     "cloudsql.instances.update",
     "compute.addresses.create",
     "compute.addresses.createInternal",
@@ -20,6 +24,13 @@ locals {
     "compute.addresses.setLabels",
     "compute.addresses.use",
     "compute.addresses.useInternal",
+    # The optional deny-by-default egress firewall: a global network firewall
+    # policy, its rules (policy updates) and its association with the VPC.
+    "compute.firewallPolicies.create",
+    "compute.firewallPolicies.delete",
+    "compute.firewallPolicies.get",
+    "compute.firewallPolicies.update",
+    "compute.firewallPolicies.use",
     "compute.forwardingRules.create",
     "compute.forwardingRules.delete",
     "compute.forwardingRules.get",
@@ -44,11 +55,17 @@ locals {
     "compute.networks.delete",
     "compute.networks.get",
     "compute.networks.removePeering",
+    "compute.networks.setFirewallPolicy",
     "compute.networks.update",
     "compute.networks.updatePeering",
     "compute.networks.updatePolicy",
     "compute.networks.use",
     "compute.regionOperations.get",
+    # Routes that keep Google API traffic on private.googleapis.com when the
+    # data plane VPC imports a default route, for example from a peered hub.
+    "compute.routes.create",
+    "compute.routes.delete",
+    "compute.routes.get",
     "compute.routers.create",
     "compute.routers.delete",
     "compute.routers.get",
@@ -178,16 +195,27 @@ locals {
   # provisioner has no database permissions: the Postgres setup Job creates
   # the databases over SQL.
   #
-  # Creating a subnet or Cloud Router checks compute.networks.updatePolicy on
+  # Routes were checked the same way on 2026-11-13.
+  #
+  # Creating a subnet, route or Cloud Router checks compute.networks.updatePolicy on
   # its network, and creating a global address checks compute.networks.use, so
   # the network fence also keeps the provisioner from adding them to a network
   # that is not LangSmith's. The use permissions are checked against the
   # subnet, address or network that a new resource refers to.
   name_fenced_roles = {
     CloudSql = {
-      title       = "Cloud SQL"
-      expression  = "resource.name.extract(\"/instances/{name}\").startsWith(\"langsmith-\")"
-      permissions = ["cloudsql.instances.create", "cloudsql.instances.delete", "cloudsql.instances.update"]
+      title = "Cloud SQL"
+      # Tag bindings are checked against their instance too, so the provisioner
+      # can tag only langsmith- instances with the tag that the postgres-setup
+      # Job's Cloud SQL user permissions depend on.
+      expression = "resource.name.extract(\"/instances/{name}\").startsWith(\"langsmith-\")"
+      permissions = [
+        "cloudsql.instances.create",
+        "cloudsql.instances.createTagBinding",
+        "cloudsql.instances.delete",
+        "cloudsql.instances.deleteTagBinding",
+        "cloudsql.instances.update",
+      ]
     }
     Gke = {
       title = "GKE"
@@ -224,6 +252,7 @@ locals {
         "compute.networks.create",
         "compute.networks.delete",
         "compute.networks.removePeering",
+        "compute.networks.setFirewallPolicy",
         "compute.networks.update",
         "compute.networks.updatePeering",
         "compute.networks.updatePolicy",
@@ -240,6 +269,22 @@ locals {
         "compute.subnetworks.update",
         "compute.subnetworks.use",
       ]
+    }
+    # Creating a route also checks compute.networks.updatePolicy on its
+    # network, so the network fence keeps routes out of other networks too.
+    Routes = {
+      title       = "routes"
+      expression  = "resource.name.extract(\"/routes/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["compute.routes.create", "compute.routes.delete"]
+    }
+    # Global network firewall policies (the egress firewall). Their rules are
+    # policy updates, and associating one with a network checks use on the
+    # policy and compute.networks.setFirewallPolicy on the network, which the
+    # network fence covers.
+    FirewallPolicies = {
+      title       = "firewall policies"
+      expression  = "resource.name.extract(\"/firewallPolicies/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["compute.firewallPolicies.create", "compute.firewallPolicies.delete", "compute.firewallPolicies.update", "compute.firewallPolicies.use"]
     }
     # Cloud Routers, and the Cloud NAT configured on them.
     Routers = {
@@ -347,6 +392,10 @@ locals {
   apis = toset(concat([
     "artifactregistry.googleapis.com",
     "binaryauthorization.googleapis.com",
+    # LangSmith checks the provisioner's access to the project
+    # (resourcemanager.projects.get) before it creates a data plane, and the
+    # module's managed_by tag is a Resource Manager resource.
+    "cloudresourcemanager.googleapis.com",
     "compute.googleapis.com",
     "container.googleapis.com",
     "dns.googleapis.com",
@@ -538,7 +587,7 @@ resource "google_service_account_iam_member" "crossplane" {
 resource "google_tags_tag_key" "cluster" {
   parent      = "projects/${var.project_id}"
   short_name  = "managed_by"
-  description = "What manages the resource. LangSmith control planes administer the GKE clusters tagged with their value."
+  description = "What manages the resource. LangSmith control planes administer the GKE clusters and Cloud SQL instances tagged with their value."
 
   depends_on = [google_project_service.apis]
 }
@@ -546,7 +595,7 @@ resource "google_tags_tag_key" "cluster" {
 resource "google_tags_tag_value" "cluster" {
   parent      = google_tags_tag_key.cluster.id
   short_name  = "langsmith"
-  description = "GKE clusters of LangSmith BYOC data planes"
+  description = "GKE clusters and Cloud SQL instances of LangSmith BYOC data planes"
 }
 
 # The provisioner binds the tag value to the clusters it creates.
@@ -676,10 +725,14 @@ locals {
 
   # The postgres-setup Job lists and creates database users and sets the
   # postgres password (gcloud sql users list, create, set-password). IAM
-  # checks of Cloud SQL users carry no instance name, so these permissions
-  # reach every instance in the project. They replace roles/cloudsql.admin,
-  # which could also change, export or delete any instance. The Job reads its
-  # instance through roles/cloudsql.viewer, limited by name above.
+  # checks of Cloud SQL users carry no instance name, but they do match the
+  # instance's tags, so the binding below limits them to instances with the
+  # managed_by: langsmith tag (checked in a test project on 2026-11-11: list,
+  # create of a built-in and an IAM user, and set-password were allowed on a
+  # tagged instance and denied on an untagged one). They replace
+  # roles/cloudsql.admin, which could also change, export or delete any
+  # instance. The Job reads its instance through roles/cloudsql.viewer,
+  # limited by name above.
   postgres_setup_permissions = [
     "cloudsql.users.create",
     "cloudsql.users.list",
@@ -736,6 +789,12 @@ resource "google_project_iam_member" "postgres_setup" {
   project = var.project_id
   role    = google_project_iam_custom_role.postgres_setup[0].name
   member  = "serviceAccount:${google_service_account.byo_iam["langsmith-postgres-setup"].email}"
+
+  condition {
+    title       = "langsmith-data-plane-instances"
+    description = "Cloud SQL instances tagged as LangSmith data plane instances"
+    expression  = "resource.matchTagId(\"${google_tags_tag_value.cluster.parent}\", \"${google_tags_tag_value.cluster.id}\")"
+  }
 }
 
 # External Secrets reads only the data plane secrets, whose IDs start with
@@ -752,6 +811,20 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
     title       = "langsmith-data-plane-secrets"
     description = "LangSmith data plane secrets"
     expression  = "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
+  }
+}
+
+resource "google_project_iam_member" "byo_iam_dedicated_deployments" {
+  count = var.byo_iam && var.dedicated_deployments ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/cloudsql.admin"
+  member  = "serviceAccount:${google_service_account.byo_iam["langsmith-workload"].email}"
+
+  condition {
+    title       = "langsmith-dedicated-deployment-instances"
+    description = "Cloud SQL instances of LangSmith dedicated deployments"
+    expression  = "resource.name.extract(\"/instances/{name}\").startsWith(\"lg-\")"
   }
 }
 
