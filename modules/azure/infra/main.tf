@@ -969,6 +969,15 @@ resource "terraform_data" "validate_network" {
       error_message = "enable_smithdb = true refuses an additional_node_pools entry that resolves to no zones, and these set zones = []:${join(", ", [for name, pool in local.aks_managed_node_pools : name if length(pool.zones != null ? pool.zones : var.availability_zones) == 0])}. SmithDB components carry no nodeSelector by default, so a regional pool can receive them, and a Premium SSD v2 cache volume cannot attach to a nonzonal VM in most regions that offer availability zones. Give the pool zones, or remove it while SmithDB is on."
     }
 
+    # SmithDB requests its Entra token for the metastore with the commercial
+    # scope, https://ossrdbms-aad.database.windows.net/.default, which an Azure
+    # Government Flexible Server does not accept (LG-913). Only the password
+    # path works there until the product reads the cloud's scope.
+    precondition {
+      condition     = !(var.enable_smithdb && var.azure_environment == "usgovernment" && nonsensitive(var.smithdb_metastore_admin_password == null))
+      error_message = "enable_smithdb = true in Azure Government needs smithdb_metastore_admin_password. Without it the SmithDB metastore uses Microsoft Entra authentication, and SmithDB requests its PostgreSQL token for the commercial Azure scope, so every login fails (LG-913). Set TF_VAR_smithdb_metastore_admin_password to a strong password to use password authentication."
+    }
+
     # A Private Endpoint removes the public listener that storage_allowed_ips
     # writes rules for, so the allowlist stops granting anything. Say so at plan
     # time rather than leaving an operator to believe a CI runner still reaches

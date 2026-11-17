@@ -299,6 +299,9 @@ Resource Group
 By default the metastore authenticates through Microsoft Entra ID using that same
 identity, so there is no static database password. Supplying
 `TF_VAR_smithdb_metastore_admin_password` selects password authentication instead.
+In Azure Government, with `enable_smithdb = true`, the password is required and plan
+refuses Entra: SmithDB requests its token for the commercial scope there (LG-913; see
+[SMITHDB.md](SMITHDB.md)).
 Object-store access always uses Workload Identity, so no storage key or SAS token
 reaches Kubernetes or Terraform outputs.
 
