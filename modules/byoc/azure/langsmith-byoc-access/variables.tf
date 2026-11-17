@@ -53,6 +53,12 @@ variable "data_planes" {
     # deployment_builds.tf; set it after the data plane is active. Without
     # byo_iam, LangSmith creates them itself and this setting changes nothing.
     deployment_builds = optional(bool, false)
+    # Let LangSmith turn on CLI builds (langgraph deploy), which push to the
+    # deployment builds registry and upload sources to a storage account in
+    # the resource group. Requires deployment_builds. With byo_iam, the module
+    # creates the host-backend identity and its CLI build roles in
+    # deployment_builds.tf. Without byo_iam, this setting changes nothing.
+    cli_builds = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
@@ -74,6 +80,11 @@ variable "data_planes" {
       can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+  }
+
+  validation {
+    condition     = alltrue([for dp in values(var.data_planes) : dp.deployment_builds if dp.cli_builds])
+    error_message = "cli_builds requires deployment_builds: CLI builds push to the deployment builds registry."
   }
 }
 
