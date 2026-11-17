@@ -116,7 +116,7 @@ The only `createTagBinding` permissions the module grants are on `langsmith-` GK
 
 #### With `byo_iam`
 
-The provisioner can set the IAM policies of the six data plane service accounts, so it can act as any of them. So with `byo_iam`, the module also limits these grants by name:
+The provisioner can set the IAM policies of the data plane service accounts, so it can act as any of them. So with `byo_iam`, the module also limits these grants by name:
 
 | Grant | Change |
 |-------|--------|
@@ -168,24 +168,23 @@ The module then creates these service accounts in the project. LangSmith finds t
 | `langsmith-postgres-setup` | The job that sets up the Cloud SQL databases | `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`) on instances with the `managed_by: langsmith` tag, and `roles/cloudsql.viewer` limited to `langsmith-` instances |
 | `langsmith-node` | GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader` |
 | `langsmith-sandbox-host` | Sandbox GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader`, `roles/redis.dbConnectionUser` |
+| `langsmith-deployment-builds` | In-cluster deployment build Jobs. Only with [deployment builds](#deployment-builds). | None. LangSmith grants `roles/artifactregistry.writer` on each data plane's build repository. |
 
 Name any secrets of your own in the project so their IDs don't start with `ls-`. Otherwise External Secrets can read them.
 
 The Cloud SQL and Redis grants above are limited to `langsmith-` resources by name. See [With `byo_iam`](#with-byo_iam).
-
-In-cluster deployment builds are not supported with `byo_iam`. They run as a build service account that the provisioner creates for each data plane.
 
 Deployment observability is not supported with `byo_iam` either. LangSmith would read logs and metrics as `langsmith-workload` before it could confirm that account's grants.
 
 In this mode, the provisioner gets:
 
 - **`<prefix>Provisioner`** without `iam.serviceAccounts.create`, `delete`, `update` and `setIamPolicy`. It keeps `get`, `list` and `getIamPolicy`.
-- **`<prefix>ServiceAccountIamManager`**: `iam.serviceAccounts.getIamPolicy` and `iam.serviceAccounts.setIamPolicy`, bound on each of the six service accounts, not on the project.
+- **`<prefix>ServiceAccountIamManager`**: `iam.serviceAccounts.getIamPolicy` and `iam.serviceAccounts.setIamPolicy`, bound on each of the service accounts above, not on the project.
 - **`roles/iam.serviceAccountUser`**, bound on `langsmith-node` and `langsmith-sandbox-host` only. GKE node pools run as them.
 
-The module does not create `<prefix>ProjectIamGranter` or `<prefix>ServiceAccountUser`. So the provisioner cannot create, update or delete service accounts and cannot change the project IAM policy. It can set IAM policies on these six accounts only, and act as `langsmith-node` and `langsmith-sandbox-host` only. It can still read the other service accounts in the project and their IAM policies.
+The module does not create `<prefix>ProjectIamGranter` or `<prefix>ServiceAccountUser`. So the provisioner cannot create, update or delete service accounts and cannot change the project IAM policy. It can set IAM policies on these accounts only, and act as `langsmith-node` and `langsmith-sandbox-host` only. It can still read the other service accounts in the project and their IAM policies.
 
-LangSmith still creates the Workload Identity bindings on these accounts, the Token Creator grant of `langsmith-workload` on itself, and the `roles/dns.admin` grants for `langsmith-cert-manager` on the data plane DNS zones. The Workload Identity bindings need the project's workload identity pool, which exists only after LangSmith creates the first GKE cluster. That is why the provisioner can set the IAM policies of the six accounts. Through them, it can let an identity, itself included, act as any of the six and use their project roles. Those roles are limited by name, except as listed under [What names can't limit](#what-names-cant-limit).
+LangSmith still creates the Workload Identity bindings on these accounts, the Token Creator grant of `langsmith-workload` on itself, and the `roles/dns.admin` grants for `langsmith-cert-manager` on the data plane DNS zones. The Workload Identity bindings need the project's workload identity pool, which exists only after LangSmith creates the first GKE cluster. That is why the provisioner can set the IAM policies of these accounts. Through them, it can let an identity, itself included, act as any of them and use their project roles. Those roles are limited by name, except as listed under [What names can't limit](#what-names-cant-limit).
 
 Create the data plane with `byoiam_enabled` set to `true`.
 
@@ -220,6 +219,19 @@ The LangSmith app's service account needs `roles/cloudsql.admin` on those instan
 
 Name your own Cloud SQL instances so they don't start with `lg-`. Before you set it back to `false`, have LangSmith delete the dedicated deployments, because their instances can't be deleted without the grant.
 
+## Deployment builds
+
+Set `deployment_builds = true` before LangSmith turns on in-cluster deployment builds for a data plane in the project. LangSmith then builds GitHub-source LangGraph deployments in the data plane's GKE cluster and pushes their images to an Artifact Registry repository, `langsmith-<hash>-deployment-builds`, that it creates for each data plane in the data plane's region. The repository is kept, with its images, if builds are turned off.
+
+The build Jobs run as the Kubernetes service account `langsmith/lsd-build`, which acts as a build service account through Workload Identity:
+
+- With `byo_iam`, the module creates the build service account `langsmith-deployment-builds`, with no project roles, and binds `<prefix>ServiceAccountIamManager` on it for the provisioner. LangSmith then grants it `roles/artifactregistry.writer` on each data plane's build repository only, and `roles/iam.workloadIdentityUser` to `<project>.svc.id.goog[langsmith/lsd-build]` only. LangSmith makes those two grants, like the other Workload Identity bindings, because the repositories and the workload identity pool exist only after it creates the data plane. Builds stay off until both grants are in place.
+- Without `byo_iam`, LangSmith creates a build service account for each data plane, and the setting changes nothing.
+
+The provisioner role already has the Artifact Registry permissions the repositories need, and `enable_apis` already enables `artifactregistry.googleapis.com`. All data planes in the project share `langsmith-deployment-builds`, so a build in one data plane can push to another data plane's build repository in the same project.
+
+Before you set it back to `false`, have LangSmith turn builds off for every data plane in the project.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -233,6 +245,7 @@ Name your own Cloud SQL instances so they don't start with `lg-`. Before you set
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
 | `deployment_observability` | Let LangSmith turn on deployment observability. Not with `byo_iam`. See [Deployment observability](#deployment-observability). | `false` |
 | `dedicated_deployments` | Let LangSmith run dedicated deployments. Only changes anything with `byo_iam`. See [Dedicated deployments](#dedicated-deployments). | `false` |
+| `deployment_builds` | Let LangSmith turn on in-cluster deployment builds. Only changes anything with `byo_iam`. See [Deployment builds](#deployment-builds). | `false` |
 
 ## Outputs
 

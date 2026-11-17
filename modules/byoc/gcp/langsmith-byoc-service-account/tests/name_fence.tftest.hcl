@@ -165,6 +165,11 @@ run "byo_iam" {
     condition     = google_project_iam_member.byo_iam_external_secrets[0].condition[0].expression == "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
     error_message = "External Secrets stays limited to ls- secrets."
   }
+
+  assert {
+    condition     = !contains(keys(google_service_account.byo_iam), "langsmith-deployment-builds")
+    error_message = "No build service account without deployment_builds."
+  }
 }
 
 run "role_ids_fit_with_longest_prefix" {
@@ -228,5 +233,47 @@ run "dedicated_deployments_byo_iam" {
   assert {
     condition     = google_project_iam_member.byo_iam_dedicated_deployments[0].role == "roles/cloudsql.admin" && google_project_iam_member.byo_iam_dedicated_deployments[0].condition[0].expression == "resource.name.extract(\"/instances/{name}\").startsWith(\"lg-\")"
     error_message = "With byo_iam, the workload gets roles/cloudsql.admin on lg- instances only."
+  }
+}
+
+run "deployment_builds" {
+  command = plan
+
+  variables {
+    deployment_builds = true
+  }
+
+  assert {
+    condition     = length(google_service_account.byo_iam) == 0
+    error_message = "Without byo_iam, LangSmith creates the build service account."
+  }
+}
+
+run "deployment_builds_byo_iam" {
+  command = plan
+
+  variables {
+    byo_iam           = true
+    deployment_builds = true
+  }
+
+  assert {
+    condition     = google_service_account.byo_iam["langsmith-deployment-builds"].account_id == "langsmith-deployment-builds" && length(google_service_account.byo_iam) == 7
+    error_message = "With byo_iam, the module creates langsmith-deployment-builds next to the other six accounts."
+  }
+
+  assert {
+    condition     = length([for k in keys(google_project_iam_member.byo_iam) : k if startswith(k, "langsmith-deployment-builds/")]) == 0
+    error_message = "The build service account gets no project roles."
+  }
+
+  assert {
+    condition     = contains(keys(google_service_account_iam_member.byo_iam_iam_manager), "langsmith-deployment-builds") && !contains(keys(google_service_account_iam_member.byo_iam_service_account_user), "langsmith-deployment-builds")
+    error_message = "The provisioner may set the build service account's IAM policy for its repository writer and Workload Identity grants, but not act as it."
+  }
+
+  assert {
+    condition     = alltrue([for p in ["artifactregistry.repositories.create", "artifactregistry.repositories.setIamPolicy"] : contains(google_project_iam_custom_role.provisioner.permissions, p)]) && contains(keys(google_project_service.apis), "artifactregistry.googleapis.com")
+    error_message = "The provisioner can create the build repositories and grant on them."
   }
 }

@@ -661,7 +661,7 @@ resource "google_project_iam_member" "crossplane_cluster_connect" {
 # ---------------------------------------------------------------------------
 
 locals {
-  byo_iam_service_accounts = var.byo_iam ? {
+  byo_iam_base_service_accounts = var.byo_iam ? {
     "langsmith-workload" = {
       display_name = "LangSmith workload"
       description  = "LangSmith application workloads in the data plane GKE clusters"
@@ -704,6 +704,19 @@ locals {
       act_as       = true
     }
   } : {}
+
+  # LangSmith creates each data plane's Artifact Registry repository and
+  # grants this account roles/artifactregistry.writer on that repository only.
+  byo_iam_deployment_builds_service_account = var.byo_iam && var.deployment_builds ? {
+    "langsmith-deployment-builds" = {
+      display_name = "LangSmith deployment builds"
+      description  = "In-cluster deployment build Jobs in the data plane GKE clusters"
+      roles        = []
+      act_as       = false
+    }
+  } : {}
+
+  byo_iam_service_accounts = merge(local.byo_iam_base_service_accounts, local.byo_iam_deployment_builds_service_account)
 
   # Keyed "<account ID>/<role>".
   byo_iam_project_roles = merge([
