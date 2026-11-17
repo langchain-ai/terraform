@@ -2429,22 +2429,23 @@ fi
 # exists'. Terraform labels the Secret it writes, so a Secret without the label
 # is init-values.sh's, and the fix is an import, not a delete.
 #
-# The inputs are read the way Terraform resolves them: TF_VAR_<key>, then
-# *.auto.tfvars (the last in lexical order wins), then terraform.tfvars, because
-# a host set in the environment or an auto file is just as real to apply. An
+# The inputs are read the way Terraform resolves them: *.auto.tfvars (the last
+# in lexical order wins), then terraform.tfvars, then TF_VAR_<key>, because a
+# host set in an auto file or the environment is just as real to apply. An
 # unlabeled Secret whose address is already in state was imported and takes the
 # label at the next apply, so it passes. The check runs only against the cluster apply
 # targets, and only a confirmed absence passes: a Forbidden, an unreachable API
 # server or a timeout is inconclusive and says so, since apply would still stop.
 _tfvar_any() {
   local _f _val _env="TF_VAR_$1"
-  # TF_VAR_<key> wins over every file, an empty value included: Terraform takes
-  # an empty TF_VAR_clickhouse_host as the value "", so the check is skipped.
-  if [ -n "${!_env+set}" ]; then printf '%s\n' "${!_env}"; return 0; fi
   for _f in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
     _val=$(TFVARS="$_f" _tfvar "$1" 2>/dev/null) && { printf '%s\n' "$_val"; return 0; }
   done
-  _tfvar "$1"
+  _tfvar "$1" && return 0
+  # TF_VAR_<key> ranks below every file in Terraform's precedence, so it counts
+  # only when no file sets the key; an empty value is then a real "".
+  if [ -n "${!_env+set}" ]; then printf '%s\n' "${!_env}"; return 0; fi
+  return 1
 }
 CH_SOURCE_ANY=$(_tfvar_any clickhouse_source || echo "in-cluster")
 CH_HOST=$(_tfvar_any clickhouse_host || echo "")
