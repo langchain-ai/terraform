@@ -153,3 +153,9 @@ variable "deployment_builds" {
   type        = bool
   default     = false
 }
+
+variable "cli_builds" {
+  description = "Let LangSmith take langgraph deploy images and sources. Requires deployment_builds. Creates the byoc-push-smith-workload-iam-role push role and grants the workload role ECR repository management on lsd/* and access to the deployment source buckets."
+  type        = bool
+  default     = false
+}

@@ -140,21 +140,23 @@ locals {
       Condition = { StringEquals = { "aws:ResourceTag/managed_by" = "langsmith" } }
     }
   ] : statement if var.dedicated_deployments]
+  ecr_authentication_statement = {
+    Sid       = "ECRAuthentication"
+    Effect    = "Allow"
+    Action    = ["ecr:GetAuthorizationToken"]
+    Resource  = ["*"]
+    Condition = local.regional_condition
+  }
+  ecr_push_actions = [
+    "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage",
+    "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload"
+  ]
   deployment_build_statements = [for statement in [
-    {
-      Sid       = "ECRAuthentication"
-      Effect    = "Allow"
-      Action    = ["ecr:GetAuthorizationToken"]
-      Resource  = ["*"]
-      Condition = local.regional_condition
-    },
+    local.ecr_authentication_statement,
     {
       Sid    = "PushDeploymentBuilds"
       Effect = "Allow"
-      Action = [
-        "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage",
-        "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload"
-      ]
+      Action = local.ecr_push_actions
       Resource = [for region in sort(tolist(var.regions)) :
         "arn:${local.partition}:ecr:${region}:${local.account_id}:repository/*-smith-deployment-builds"
       ]
@@ -169,6 +171,40 @@ locals {
       ]])
     }
   ] : statement if var.deployment_builds]
+  cli_source_bucket_arn = "arn:${local.partition}:s3:::*-smith-deployment-sources"
+  cli_build_statements = [for statement in [
+    {
+      Sid    = "ManageCLIBuildRepositories"
+      Effect = "Allow"
+      Action = [
+        "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:DescribeRepositories", "ecr:PutLifecyclePolicy",
+        "ecr:TagResource", "ecr:ListTagsForResource", "ecr:BatchDeleteImage"
+      ]
+      Resource = [for region in sort(tolist(var.regions)) : "arn:${local.partition}:ecr:${region}:${local.account_id}:repository/lsd/*"]
+    },
+    {
+      Sid      = "AssumeCLIPushRole"
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole", "sts:TagSession"]
+      Resource = ["arn:${local.partition}:iam::${local.account_id}:role/${local.cli_push_role_name}"]
+    },
+    {
+      Sid       = "ReadWriteCLISources"
+      Effect    = "Allow"
+      Action    = ["s3:PutObject", "s3:GetObject"]
+      Resource  = ["${local.cli_source_bucket_arn}/*"]
+      Condition = local.s3_condition
+    }
+  ] : statement if var.cli_builds]
+  cli_push_statements = [
+    local.ecr_authentication_statement,
+    {
+      Sid      = "PushCLIImages"
+      Effect   = "Allow"
+      Action   = local.ecr_push_actions
+      Resource = [for region in sort(tolist(var.regions)) : "arn:${local.partition}:ecr:${region}:${local.account_id}:repository/lsd/*/local"]
+    }
+  ]
   s3_statements = { for key, permission in local.s3_permissions : key => [
     {
       Sid       = "BucketAccess"
@@ -231,7 +267,13 @@ locals {
       Action    = ["kms:Decrypt"]
       Resource  = local.cmk_s3_keys
       Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = ["arn:${local.partition}:s3:::*-smithdb-blob", "arn:${local.partition}:s3:::*-smithdb-blob/byoc-migration/*"] } }
-    }] : statement if length(local.cmk_s3_keys) > 0])
+      }] : statement if length(local.cmk_s3_keys) > 0], [for statement in [{
+      Sid       = "CLISourcesKMS"
+      Effect    = "Allow"
+      Action    = ["kms:GenerateDataKey", "kms:Decrypt"]
+      Resource  = local.cmk_s3_keys
+      Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = [local.cli_source_bucket_arn, "${local.cli_source_bucket_arn}/*"] } }
+    }] : statement if length(local.cmk_s3_keys) > 0 && var.cli_builds])
     smithdb-iam-role = concat(local.cmk_bucket_statements["smithdb-iam-role"], [for statement in [{
       Sid       = "ReadLangsmithBlobKMS"
       Effect    = "Allow"
@@ -343,7 +385,7 @@ locals {
           "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/*",
           "arn:${local.partition}:bedrock:*:${local.account_id}:application-inference-profile/*"
         ]
-    }], local.bedrock_assume_role_statements, local.migration_source_blob_statements, local.dedicated_deployment_statements)
+    }], local.bedrock_assume_role_statements, local.migration_source_blob_statements, local.dedicated_deployment_statements, local.cli_build_statements)
     postgres-setup-iam-role = local.setup_statements["postgres-setup-iam-role"]
     smithdb-setup-iam-role  = local.setup_statements["smithdb-setup-iam-role"]
     smithdb-iam-role = concat(local.s3_statements["smithdb-iam-role"], [
@@ -502,6 +544,13 @@ resource "aws_iam_role_policy" "this" {
       error_message = "Inline role policy exceeds IAM's 10,240-character aggregate limit. Reduce configured resource patterns/regions or split the IAM installation."
     }
   }
+}
+
+resource "aws_iam_role_policy" "cli_push" {
+  count  = var.cli_builds ? 1 : 0
+  name   = "langsmith-byoc"
+  role   = aws_iam_role.cli_push[0].name
+  policy = jsonencode({ Version = "2012-10-17", Statement = local.cli_push_statements })
 }
 
 resource "aws_iam_policy" "karpenter" {

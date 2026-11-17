@@ -26,6 +26,8 @@ locals {
     var.deployment_builds ? { deployment-build-iam-role = { name = "byoc-build-smith-workload-iam-role", service = "pods.eks.amazonaws.com" } } : {}
   )
   role_arns = { for key, role in local.roles : key => "arn:${local.partition}:iam::${local.account_id}:role/${role.name}" }
+  # LangSmith observes the CLI push role by this name.
+  cli_push_role_name = "byoc-push-smith-workload-iam-role"
 
   pod_identities = {
     ebs-csi-role              = { namespace = "kube-system", service_accounts = ["ebs-csi-controller-sa"] }
@@ -109,6 +111,34 @@ resource "aws_iam_role" "this" {
     precondition {
       condition     = length(distinct([for role in local.roles : role.name])) == length(local.roles)
       error_message = "Every BYOIAM role needs a distinct name; check role_names against the default names."
+    }
+  }
+}
+
+resource "aws_iam_role" "cli_push" {
+  count                = var.cli_builds ? 1 : 0
+  name                 = local.cli_push_role_name
+  path                 = "/"
+  description          = "Customer-owned shared LangSmith BYOC cli-push-role"
+  permissions_boundary = var.permissions_boundary_arn
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = aws_iam_role.this["workload-iam-role"].arn }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+      Condition = {
+        StringEquals = { "aws:PrincipalTag/kubernetes-namespace" = "langsmith" }
+        StringLike   = { "aws:PrincipalTag/kubernetes-service-account" = "*-langsmith-host-backend" }
+      }
+    }]
+  })
+  tags = local.tags
+
+  lifecycle {
+    precondition {
+      condition     = var.deployment_builds
+      error_message = "cli_builds requires deployment_builds."
     }
   }
 }

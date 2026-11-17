@@ -35,6 +35,7 @@ module "byoiam" {
 | `workload_migration_source_blob_kms_key_arns` | Optional. KMS keys of those buckets. The workload role may decrypt objects of those buckets only. |
 | `dedicated_deployments` | Optional. Let LangSmith run dedicated deployments. See [Dedicated deployments](#dedicated-deployments). |
 | `deployment_builds` | Optional. Let LangSmith build GitHub deployments in the cluster. See [Deployment builds](#deployment-builds). |
+| `cli_builds` | Optional. Let LangSmith take `langgraph deploy` images and sources. Requires `deployment_builds`. See [CLI builds](#cli-builds). |
 | `tags` | Customer tags. `managed_by` is reserved and enforced as `customer`. |
 
 ## Provisioning requirements
@@ -83,6 +84,23 @@ repository and Pod Identity association, and finds the role by this name, so
 `role_names` can't rename it.
 
 Before you set it back to `false`, have LangSmith turn deployment builds off.
+
+### CLI builds
+
+`langgraph deploy` either pushes an image it built locally to a deployment's
+`lsd/<deployment>/local` ECR repository, or uploads its source for an
+in-cluster build. Set `deployment_builds = true` and `cli_builds = true` and
+run `terraform apply` before LangSmith turns CLI builds on for a data plane.
+
+This creates the push role `byoc-push-smith-workload-iam-role`. Only
+host-backend, through the workload role, can assume it, and it can push to
+`lsd/*/local` repositories only; LangSmith narrows each push token to one
+deployment's repository. The workload role then gets ECR repository
+management on `lsd/*` and object read and write in the
+`<data plane>-smith-deployment-sources` buckets, which LangSmith creates, in
+every data plane of the account. Don't name your own ECR repositories `lsd/*`.
+
+Before you set it back to `false`, have LangSmith turn CLI builds off.
 
 ### Custom names
 
