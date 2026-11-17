@@ -147,3 +147,9 @@ variable "dedicated_deployments" {
   type        = bool
   default     = false
 }
+
+variable "deployment_builds" {
+  description = "Let LangSmith build GitHub deployments in the cluster. Creates the byoc-build-smith-workload-iam-role build role for the lsd-build service account."
+  type        = bool
+  default     = false
+}

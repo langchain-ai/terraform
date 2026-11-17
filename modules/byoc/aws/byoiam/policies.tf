@@ -140,6 +140,35 @@ locals {
       Condition = { StringEquals = { "aws:ResourceTag/managed_by" = "langsmith" } }
     }
   ] : statement if var.dedicated_deployments]
+  deployment_build_statements = [for statement in [
+    {
+      Sid       = "ECRAuthentication"
+      Effect    = "Allow"
+      Action    = ["ecr:GetAuthorizationToken"]
+      Resource  = ["*"]
+      Condition = local.regional_condition
+    },
+    {
+      Sid    = "PushDeploymentBuilds"
+      Effect = "Allow"
+      Action = [
+        "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage",
+        "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload"
+      ]
+      Resource = [for region in sort(tolist(var.regions)) :
+        "arn:${local.partition}:ecr:${region}:${local.account_id}:repository/*-smith-deployment-builds"
+      ]
+    },
+    {
+      Sid    = "PullLangGraphBaseImages"
+      Effect = "Allow"
+      Action = ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"]
+      Resource = flatten([for region in sort(tolist(var.regions)) : [
+        "arn:${local.partition}:ecr:${region}:${local.artifact_account_id}:repository/byoc-langchain/langgraph-api*",
+        "arn:${local.partition}:ecr:${region}:${local.artifact_account_id}:repository/byoc-langchain/langgraphjs-api*"
+      ]])
+    }
+  ] : statement if var.deployment_builds]
   s3_statements = { for key, permission in local.s3_permissions : key => [
     {
       Sid       = "BucketAccess"
@@ -377,7 +406,8 @@ locals {
         "arn:${local.partition}:elasticache:${region}:${local.account_id}:user:*-smith-juicefs-redis-user"
       ]])
     }])
-    playground-iam-role = local.bedrock_assume_role_statements
+    playground-iam-role       = local.bedrock_assume_role_statements
+    deployment-build-iam-role = local.deployment_build_statements
     privatelink-lambda-role = [
       {
         Sid    = "ManageEKSAPITargets"

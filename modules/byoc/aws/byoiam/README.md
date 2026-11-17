@@ -34,6 +34,7 @@ module "byoiam" {
 | `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_kms_key_arns` | Optional. KMS keys of those buckets. The workload role may decrypt objects of those buckets only. |
 | `dedicated_deployments` | Optional. Let LangSmith run dedicated deployments. See [Dedicated deployments](#dedicated-deployments). |
+| `deployment_builds` | Optional. Let LangSmith build GitHub deployments in the cluster. See [Deployment builds](#deployment-builds). |
 | `tags` | Customer tags. `managed_by` is reserved and enforced as `customer`. |
 
 ## Provisioning requirements
@@ -65,6 +66,23 @@ don't name your own RDS instances `lg-*`. It can't change instances tagged
 Before you set it back to `false`, delete the dedicated deployments and have
 LangSmith turn the feature off. Instances LangSmith can't delete keep running
 and billing in your account.
+
+### Deployment builds
+
+LangSmith builds images for GitHub-source deployments in the cluster, as Jobs
+under the `langsmith/lsd-build` service account. Set `deployment_builds = true`
+and run `terraform apply` before LangSmith turns deployment builds on for a
+data plane.
+
+This creates the build role `byoc-build-smith-workload-iam-role`. Only EKS Pod
+Identity for `langsmith/lsd-build` on `*-smith-eks` clusters can assume it. It
+can push to and pull from the `<data plane>-smith-deployment-builds` ECR
+repositories of every data plane in the account, and pull the LangGraph base
+images from LangSmith's registry. LangSmith creates each data plane's
+repository and Pod Identity association, and finds the role by this name, so
+`role_names` can't rename it.
+
+Before you set it back to `false`, have LangSmith turn deployment builds off.
 
 ### Custom names
 

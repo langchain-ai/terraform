@@ -20,7 +20,11 @@ locals {
     juicefs-csi-iam-role              = { name = "byoc-smith-juicefs-csi-iam-role", service = "pods.eks.amazonaws.com" }
     playground-iam-role               = { name = "byoc-playground-smith-workload-iam-role", service = "pods.eks.amazonaws.com" }
   }
-  roles     = { for key, role in local.default_roles : key => merge(role, { name = lookup(var.role_names, key, role.name) }) }
+  # LangSmith observes the build role by its default name, so role_names can't rename it.
+  roles = merge(
+    { for key, role in local.default_roles : key => merge(role, { name = lookup(var.role_names, key, role.name) }) },
+    var.deployment_builds ? { deployment-build-iam-role = { name = "byoc-build-smith-workload-iam-role", service = "pods.eks.amazonaws.com" } } : {}
+  )
   role_arns = { for key, role in local.roles : key => "arn:${local.partition}:iam::${local.account_id}:role/${role.name}" }
 
   pod_identities = {
@@ -42,6 +46,7 @@ locals {
     clickhouse-backup-iam-role = { namespace = "langsmith", service_accounts = ["langsmith-clickhouse"] }
     juicefs-csi-iam-role       = { namespace = "sandbox", service_accounts = ["sandbox-host"] }
     playground-iam-role        = { namespace = "langsmith", service_accounts = ["*-langsmith-playground"] }
+    deployment-build-iam-role  = { namespace = "langsmith", service_accounts = ["lsd-build"] }
   }
 
   node_policy_names = ["AmazonEKSWorkerNodePolicy", "AmazonEKS_CNI_Policy", "AmazonEC2ContainerRegistryReadOnly", "AmazonSSMManagedInstanceCore"]
@@ -98,7 +103,7 @@ resource "aws_iam_role" "this" {
   })
   # langsmith-byoc-role participates in EKS access-entry authorization. local.tags
   # enforces customer ownership to keep IAM outside the provisioner's write scope.
-  tags = merge(local.tags, contains(["eks-node-role", "karpenter-node-role", "workload-iam-role", "privatelink-lambda-role"], each.key) ? { "langsmith-byoc-role" = "true" } : {})
+  tags = merge(local.tags, contains(["eks-node-role", "karpenter-node-role", "workload-iam-role", "privatelink-lambda-role", "deployment-build-iam-role"], each.key) ? { "langsmith-byoc-role" = "true" } : {})
 
   lifecycle {
     precondition {
