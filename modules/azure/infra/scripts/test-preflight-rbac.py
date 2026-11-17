@@ -1652,8 +1652,15 @@ CASES = [
         "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks'"],
     },
     {
-        "name": "an empty TF_VAR_clickhouse_host overrides the tfvars host and skips the check",
+        "name": "terraform.tfvars outranks TF_VAR_clickhouse_host, as in Terraform",
         "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "env": {"TF_VAR_clickhouse_host": ""},
+        "kube_ctx": "platform-aks",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks'"],
+    },
+    {
+        "name": "an empty TF_VAR_clickhouse_host with no file setting it skips the check",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
         "env": {"TF_VAR_clickhouse_host": ""},
         "kube_ctx": "platform-aks",
         "reject": ["External ClickHouse Secret"],
