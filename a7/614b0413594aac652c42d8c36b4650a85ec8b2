@@ -1,0 +1,23 @@
+modules/byoc/azure/langsmith-byoc-access/tests/deployment_builds.tftest.hcl
+  s_08bd3e548e1070::t_8edd89bbd99a5e 15,17
+  s_08bd3e548e1070::t_7d73b7f041f5c1 92-95
+modules/byoc/azure/langsmith-byoc-access/deployment_builds.tf
+  s_08bd3e548e1070::t_280960dcc7e552 51,55
+  s_08bd3e548e1070::t_e1236bb32366c2 28-31,34-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7614b0413594aac652c42d8c36b4650a85ec8b2",
+  "prompts": {},
+  "sessions": {
+    "s_08bd3e548e1070": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3f79e94c-c172-4104-a2de-c241e7d5e6f5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}
