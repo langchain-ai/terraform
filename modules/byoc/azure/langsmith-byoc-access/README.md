@@ -30,6 +30,19 @@ Gives the LangSmith control plane access to deploy BYOC data planes in **your Az
 ## Usage
 
 ```hcl
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.42"
+    }
+    azuread = {
+      source  = "hashicorp/azuread"
+      version = "~> 3.0"
+    }
+  }
+}
+
 provider "azurerm" {
   subscription_id = "<subscription-id>"
   features {}
@@ -57,7 +70,8 @@ provider "azurerm" {
 provider "azuread" {}
 
 variable "external_id" {
-  type = string
+  description = "External ID from Settings > Data Planes in the LangSmith UI."
+  type        = string
 }
 
 module "langsmith_byoc_access" {
@@ -74,6 +88,12 @@ module "langsmith_byoc_access" {
 output "langsmith_byoc_access" {
   value = module.langsmith_byoc_access
 }
+```
+
+Set `external_id` in the `terraform.tfvars` file of your root module to the value from **Settings > Data Planes**:
+
+```hcl
+external_id = "<external-id-copied-from-langsmith>"
 ```
 
 Keep the Terraform state in remote storage.
