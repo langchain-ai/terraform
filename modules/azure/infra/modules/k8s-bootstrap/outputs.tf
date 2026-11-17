@@ -133,3 +133,11 @@ output "sandbox_juicefs_redis_node_ingress" {
     }
   ])
 }
+
+output "storage_class_disk_encryption_set_ids" {
+  description = "diskEncryptionSetID on the SmithDB cache and JuiceFS Redis StorageClasses, null where the class is absent or names no set."
+  value = {
+    smithdb_cache         = try(kubernetes_storage_class_v1.smithdb_cache[0].parameters["diskEncryptionSetID"], null)
+    sandbox_juicefs_redis = try(kubernetes_storage_class_v1.sandbox_juicefs_redis[0].parameters["diskEncryptionSetID"], null)
+  }
+}

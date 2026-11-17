@@ -73,3 +73,25 @@ variable "allowed_copy_scope" {
   type    = string
   default = "AAD"
 }
+
+# Customer-managed keys, resolved by the root (per-store input, else
+# LangSmith's own). Empty means the service-managed key.
+variable "metastore_customer_managed_key_id" {
+  type    = string
+  default = ""
+}
+
+variable "metastore_customer_managed_key_identity_id" {
+  type    = string
+  default = ""
+}
+
+variable "storage_customer_managed_key_id" {
+  type    = string
+  default = ""
+}
+
+variable "storage_customer_managed_key_identity_id" {
+  type    = string
+  default = ""
+}
