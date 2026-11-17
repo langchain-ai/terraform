@@ -55,6 +55,11 @@ run "external_with_a_host_writes_the_secret" {
     condition     = module.k8s_bootstrap.clickhouse_secret_labels["app.kubernetes.io/managed-by"] == "terraform"
     error_message = "The Secret Terraform writes should carry app.kubernetes.io/managed-by = terraform, the label preflight.sh reads to tell it from one init-values.sh created"
   }
+
+  assert {
+    condition     = output.clickhouse_cluster == "replicated"
+    error_message = "The clickhouse_cluster output is what init-values.sh writes as clickhouse.external.cluster, got ${coalesce(output.clickhouse_cluster, "null")}"
+  }
 }
 
 run "external_without_a_host_leaves_the_secret_to_init_values" {
@@ -67,6 +72,11 @@ run "external_without_a_host_leaves_the_secret_to_init_values" {
   assert {
     condition     = output.clickhouse_secret_name == null
     error_message = "Without clickhouse_host the Secret is init-values.sh's; Terraform should write none"
+  }
+
+  assert {
+    condition     = output.clickhouse_cluster == null
+    error_message = "Without clickhouse_cluster the output should be null, so init-values.sh writes no cluster"
   }
 }
 

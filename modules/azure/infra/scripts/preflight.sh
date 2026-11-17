@@ -2402,17 +2402,23 @@ fi
 # exists'. Terraform labels the Secret it writes, so a Secret without the label
 # is init-values.sh's, and the fix is an import, not a delete.
 #
-# The inputs are read the way Terraform resolves them, *.auto.tfvars (the last
-# in lexical order wins) before terraform.tfvars, because a host set in an auto
-# file is just as real to apply. The check runs only against the cluster apply
+# The inputs are read the way Terraform resolves them: *.auto.tfvars (the last
+# in lexical order wins), then terraform.tfvars, then TF_VAR_<key>, because a
+# host set in an auto file or the environment is just as real to apply. An
+# unlabeled Secret whose address is already in state was imported and takes the
+# label at the next apply, so it passes. The check runs only against the cluster apply
 # targets, and only a confirmed absence passes: a Forbidden, an unreachable API
 # server or a timeout is inconclusive and says so, since apply would still stop.
 _tfvar_any() {
-  local _f _val
+  local _f _val _env="TF_VAR_$1"
   for _f in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
     _val=$(TFVARS="$_f" _tfvar "$1" 2>/dev/null) && { printf '%s\n' "$_val"; return 0; }
   done
-  _tfvar "$1"
+  _tfvar "$1" && return 0
+  # TF_VAR_<key> ranks below every file in Terraform's precedence, so it counts
+  # only when no file sets the key; an empty value is then a real "".
+  if [ -n "${!_env+set}" ]; then printf '%s\n' "${!_env}"; return 0; fi
+  return 1
 }
 CH_SOURCE_ANY=$(_tfvar_any clickhouse_source || echo "in-cluster")
 CH_HOST=$(_tfvar_any clickhouse_host || echo "")
@@ -2455,8 +2461,28 @@ except Exception:
     labels = {}
 print("TERRAFORM" if labels.get("app.kubernetes.io/managed-by") == "terraform" else "FOREIGN")
 ' 2>/dev/null || echo "FOREIGN")
+      # An imported Secret is in state but keeps its old labels until apply.
+      CH_STATE_JSON="${STATE_JSON:-}"
+      [ -n "$CH_STATE_JSON" ] || CH_STATE_JSON=$(terraform -chdir="$INFRA_DIR" state pull </dev/null 2>/dev/null || true)
+      if [ -z "$CH_STATE_JSON" ] && [ -f "${INFRA_DIR}/terraform.tfstate" ]; then
+        CH_STATE_JSON=$(cat "${INFRA_DIR}/terraform.tfstate")
+      fi
+      CH_SECRET_IN_STATE=$(printf '%s' "$CH_STATE_JSON" | python3 -c '
+import json, sys
+try:
+    state = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for r in state.get("resources", []):
+    if (r.get("module") == "module.k8s_bootstrap" and r.get("mode", "managed") == "managed"
+            and r.get("type") == "kubernetes_secret_v1" and r.get("name") == "clickhouse"
+            and any(i.get("index_key") == 0 for i in r.get("instances", []))):
+        print("YES")
+' 2>/dev/null || true)
       if [ "$CH_SECRET_OWNER" = "TERRAFORM" ]; then
         pass "${LS_NS}/langsmith-clickhouse on '${KUBE_CTX}' is Terraform's (app.kubernetes.io/managed-by = terraform) — apply updates it in place"
+      elif [ "$CH_SECRET_IN_STATE" = "YES" ]; then
+        pass "${LS_NS}/langsmith-clickhouse on '${KUBE_CTX}' is in Terraform state at ${CH_SECRET_ADDR} (imported) — apply adds the managed-by label and rewrites it from the clickhouse_* variables"
       else
         fail "${LS_NS}/langsmith-clickhouse already exists on '${KUBE_CTX}' and was not written by Terraform (init-values.sh created it before clickhouse_host was set). The kubernetes provider does not adopt existing objects, so apply would stop with 'secrets \"langsmith-clickhouse\" already exists'. Adopt it, then apply rewrites it from the clickhouse_* variables: terraform import '${CH_SECRET_ADDR}' ${LS_NS}/langsmith-clickhouse   Deleting it and applying also works but drops the connection until apply finishes: kubectl delete secret langsmith-clickhouse -n ${LS_NS}"
       fi

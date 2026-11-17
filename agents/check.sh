@@ -3,11 +3,11 @@
 # .github/workflows/checks.yaml, and run locally before handing back:
 #   bash agents/check.sh                    # every root, plus every script
 #   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
-#   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
+#   bash agents/check.sh --scripts          # shellcheck and AWS/GCP secret tests
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
-# state) and tflint with the provider's pinned ruleset. Scripts are linted
-# repo-wide rather than per root, so naming a directory checks terraform only.
+# state) and tflint with the provider's pinned ruleset. Script checks run
+# repo-wide, including the isolated AWS/GCP secret tests; a directory checks HCL only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
@@ -50,6 +50,12 @@ lint_scripts() {
     | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY")
 }
 
+check_scripts() {
+  lint_scripts || return $?
+  bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
+  bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
+}
+
 # Print the terraform roots at or beneath one repo-relative directory. Roots are
 # discovered rather than listed so a new one cannot be silently missed, and so a
 # CI leg can scope itself to modules/<provider> without carrying a second copy
@@ -73,7 +79,7 @@ EOF
 }
 
 case "${1:-}" in
-  --scripts) lint_scripts; exit $? ;;
+  --scripts) check_scripts; exit $? ;;
 esac
 
 lint_all=0
@@ -112,7 +118,7 @@ done
 if ! command -v terraform >/dev/null 2>&1; then
   echo "   (terraform not installed, skipping validate and tflint)"
   if [ "$lint_all" -eq 1 ]; then
-    lint_scripts; exit $?
+    check_scripts; exit $?
   fi
   exit 0
 fi
@@ -174,7 +180,7 @@ for rel in "${roots[@]}"; do
 done
 
 if [ "$lint_all" -eq 1 ]; then
-  lint_scripts || fail $?
+  check_scripts || fail $?
 fi
 
 exit "$status"

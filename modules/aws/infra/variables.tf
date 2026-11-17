@@ -254,10 +254,13 @@ variable "postgres_password" {
     Password for the postgres database. Required when postgres_source = 'external'.
     Set via TF_VAR_postgres_password env var.
 
-    When using setup-env.sh: auto-generated on first run (openssl rand -hex 32) and stored
-    in SSM Parameter Store (/langsmith/{base_name}/postgres-password). On subsequent runs,
-    the value is read from SSM. Local .pg_password files are only a bootstrap fallback when
-    SSM is unreachable. To rotate, update SSM and run terraform apply -target=module.postgres.
+    When using setup-env.sh: reuse SSM (/langsmith/{base_name}/postgres-password).
+    Existing SSM values replace shell values. If the parameter is confirmed missing,
+    use the shell value or generate a password (openssl rand -hex 32), then persist
+    it in SSM before exporting it. Read/write failures stop setup. If a legacy
+    .pg_password path exists without its SSM parameter, stop for explicit recovery.
+    Local password backups are never read, created, or refreshed.
+    Intentional password rotation requires a separate SSM update and database change.
 
     RDS forbids '/', '@', double quote, single quote, and space. Connection URLs percent-encode
     the password so other reserved URI characters still parse.

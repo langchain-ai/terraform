@@ -791,7 +791,6 @@ variable "clickhouse_tls" {
   default     = true
 }
 
-# tflint-ignore: terraform_unused_declarations
 variable "clickhouse_cluster" {
   type        = string
   description = "Name of the ClickHouse cluster (the cluster in the server's remote_servers, for example the Altinity operator's cluster name) that LangSmith's migrations create tables ON CLUSTER in, written as clickhouse.external.cluster. Set it before the first deploy against a replicated ClickHouse: the first migration decides whether tables are Replicated*MergeTree, and a standalone schema cannot be converted later. Empty (default) creates standalone tables. Applies with clickhouse_source = \"external\", whether or not Terraform writes the Secret."
