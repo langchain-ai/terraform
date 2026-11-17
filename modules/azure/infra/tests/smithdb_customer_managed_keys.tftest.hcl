@@ -1,8 +1,8 @@
 # Per-store customer-managed keys (PRO-190): SmithDB's metastore and storage
 # account take their own key, or LangSmith's when theirs is empty; the SmithDB
-# cache and JuiceFS Redis StorageClasses name their own disk encryption set, or
-# the cluster's; the cluster identity gets Reader on each further set, once per
-# distinct set. Refusal runs break one input each: a bad key URL, a bad
+# cache and JuiceFS Redis StorageClasses name their own disk encryption set, and
+# none when it is empty or the cluster's; the cluster identity gets Reader on
+# each further set, once per distinct set. Refusal runs break one input each: a bad key URL, a bad
 # identity ID, a key without its identity, a per-store key without SmithDB, a
 # bad set ID, a set for a class the module does not create, and the Reader
 # grant with no set at all.
@@ -95,8 +95,8 @@ run "smithdb_falls_back_to_langsmith_keys_and_the_cluster_set" {
   }
 
   assert {
-    condition     = module.k8s_bootstrap.storage_class_disk_encryption_set_ids.smithdb_cache == "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-cluster"
-    error_message = "The cache StorageClass should name the cluster's set, got ${jsonencode(module.k8s_bootstrap.storage_class_disk_encryption_set_ids.smithdb_cache)}"
+    condition     = module.k8s_bootstrap.storage_class_disk_encryption_set_ids.smithdb_cache == null
+    error_message = "The cache StorageClass should name no set and take the cluster's by default, so classes that already exist are not replaced, got ${jsonencode(module.k8s_bootstrap.storage_class_disk_encryption_set_ids.smithdb_cache)}"
   }
 
   assert {
@@ -311,4 +311,24 @@ run "refuses_the_further_grant_with_no_further_set" {
   }
 
   expect_failures = [var.aks_additional_disk_encryption_set_reader_grant]
+}
+
+run "a_per_store_set_equal_to_the_cluster_set_is_not_written" {
+  command = plan
+
+  variables {
+    enable_smithdb                       = true
+    aks_disk_encryption_set_id           = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-cluster"
+    smithdb_cache_disk_encryption_set_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/PLATFORM-RG/providers/Microsoft.Compute/diskEncryptionSets/des-cluster"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.storage_class_disk_encryption_set_ids.smithdb_cache == null
+    error_message = "A cache set equal to the cluster's (IDs compare case-insensitively) should leave the class on the cluster default, got ${jsonencode(module.k8s_bootstrap.storage_class_disk_encryption_set_ids.smithdb_cache)}"
+  }
+
+  assert {
+    condition     = length(module.aks.additional_disk_encryption_set_reader_scopes) == 0
+    error_message = "The cluster's set is not a further set, so no further Reader assignment should be planned"
+  }
 }

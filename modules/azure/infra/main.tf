@@ -2097,10 +2097,12 @@ locals {
   smithdb_storage_customer_managed_key_id            = local.smithdb_storage_own_key ? var.smithdb_storage_customer_managed_key_id : var.storage_customer_managed_key_id
   smithdb_storage_customer_managed_key_identity_id   = local.smithdb_storage_own_key ? var.smithdb_storage_customer_managed_key_identity_id : var.storage_customer_managed_key_identity_id
 
-  # The StorageClasses name their set explicitly, so a volume's key does not
-  # depend on the cluster default.
-  smithdb_cache_disk_encryption_set_id         = var.smithdb_cache_disk_encryption_set_id != "" ? var.smithdb_cache_disk_encryption_set_id : var.aks_disk_encryption_set_id
-  sandbox_juicefs_redis_disk_encryption_set_id = var.sandbox_juicefs_redis_disk_encryption_set_id != "" ? var.sandbox_juicefs_redis_disk_encryption_set_id : var.aks_disk_encryption_set_id
+  # A StorageClass names a set only when it differs from the cluster's. The
+  # Azure Disk CSI driver already encrypts new data disks with the set the
+  # cluster was created with, and naming that set on the class would replace
+  # classes that already exist without changing any disk's key.
+  smithdb_cache_disk_encryption_set_id         = var.smithdb_cache_disk_encryption_set_id != "" && lower(var.smithdb_cache_disk_encryption_set_id) != lower(var.aks_disk_encryption_set_id) ? var.smithdb_cache_disk_encryption_set_id : ""
+  sandbox_juicefs_redis_disk_encryption_set_id = var.sandbox_juicefs_redis_disk_encryption_set_id != "" && lower(var.sandbox_juicefs_redis_disk_encryption_set_id) != lower(var.aks_disk_encryption_set_id) ? var.sandbox_juicefs_redis_disk_encryption_set_id : ""
 
   # Sets beyond the cluster's that the cluster identity needs Reader on, one
   # entry per distinct set (IDs compare case-insensitively). The cluster's own

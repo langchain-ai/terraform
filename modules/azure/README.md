@@ -1936,12 +1936,15 @@ there, and every variable takes the ID the platform team returns.
 - **A key per store.** Set the per-store pairs above, and give a StorageClass
   its own disk encryption set: `smithdb_cache_disk_encryption_set_id` for
   SmithDB's cache volumes and `sandbox_juicefs_redis_disk_encryption_set_id`
-  for the in-cluster JuiceFS Redis volume. Each falls back to
-  `aks_disk_encryption_set_id` and is written as `diskEncryptionSetID` on the
-  class. Kubernetes refuses parameter changes, so a change replaces the class
-  and applies to new volumes only. The cluster identity needs Reader on every
-  set a class names: with `aks_additional_disk_encryption_set_reader_grant = true`
-  the module grants it on each distinct set, and on each entry of
+  for the in-cluster JuiceFS Redis volume. Each is written as
+  `diskEncryptionSetID` on the class only when it differs from
+  `aks_disk_encryption_set_id`. Empty, or the cluster's own set, leaves the
+  parameter off, and new volumes take the cluster's set, which the Azure Disk
+  CSI driver applies by default. Kubernetes refuses parameter changes, so a
+  change replaces the class and applies to new volumes only. The cluster
+  identity needs Reader on every set a class names: with
+  `aks_additional_disk_encryption_set_reader_grant = true` the module grants it
+  on each distinct set, on a cluster it creates or an attached one, and on each entry of
   `aks_additional_disk_encryption_set_ids`, a list for sets that StorageClasses
   outside the module name, such as the in-cluster databases'. Revoking one
   store's key then makes only that store's data unreadable. The flag is separate from

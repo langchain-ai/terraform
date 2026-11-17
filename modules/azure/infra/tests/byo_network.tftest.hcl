@@ -1036,3 +1036,43 @@ run "an_attached_cluster_skips_the_custom_ca_file_checks" {
     error_message = "An attached cluster should set no custom CA trust certificates and run no file check, whatever the list names"
   }
 }
+
+# The per-store sets are not fixed at cluster creation, so an attached cluster
+# takes their Reader grant too, on the identity the cluster reports.
+run "an_attached_cluster_gets_reader_on_the_further_sets" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      identity            = [{ type = "SystemAssigned", principal_id = "11111111-1111-1111-1111-111111111111", tenant_id = "00000000-0000-0000-0000-000000000000", identity_ids = [] }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                                  = false
+    existing_cluster_name                           = "platform-aks"
+    existing_cluster_resource_group_name            = "platform-aks-rg"
+    aks_subnet_id                                   = "${var.vnet_id}/subnets/aks"
+    aks_additional_disk_encryption_set_ids          = ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-rg/providers/Microsoft.Compute/diskEncryptionSets/des-clickhouse"]
+    aks_additional_disk_encryption_set_reader_grant = true
+  }
+
+  assert {
+    condition     = length(module.aks.additional_disk_encryption_set_reader_scopes) == 1
+    error_message = "An attached cluster should get Reader on the further set, got ${jsonencode(module.aks.additional_disk_encryption_set_reader_scopes)}"
+  }
+}

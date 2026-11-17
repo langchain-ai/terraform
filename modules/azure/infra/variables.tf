@@ -2014,7 +2014,7 @@ variable "aks_disk_encryption_set_reader_grant" {
 
 variable "aks_additional_disk_encryption_set_reader_grant" {
   type        = bool
-  description = "Whether the module assigns the Reader role to the cluster identity on each distinct further disk encryption set: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id and aks_additional_disk_encryption_set_ids, excluding aks_disk_encryption_set_id (which aks_disk_encryption_set_reader_grant covers). Separate from that flag so a deployment can grant the cluster's set in Terraform and leave per-store sets to their owners, or the reverse. true needs roleAssignments/write on each set's scope; leave it false when the owners grant Reader themselves, or the apply fails with RoleAssignmentExists. Requires at least one further set."
+  description = "Whether the module assigns the Reader role to the cluster identity on each distinct further disk encryption set: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id and aks_additional_disk_encryption_set_ids, excluding aks_disk_encryption_set_id (which aks_disk_encryption_set_reader_grant covers). Works on an attached cluster too (create_cluster = false), granting the identity the cluster reports. Separate from that flag so a deployment can grant the cluster's set in Terraform and leave per-store sets to their owners, or the reverse. true needs roleAssignments/write on each set's scope; leave it false when the owners grant Reader themselves, or the apply fails with RoleAssignmentExists. Requires at least one further set."
   default     = false
 
   validation {
@@ -2201,7 +2201,7 @@ variable "smithdb_storage_customer_managed_key_identity_id" {
 
 variable "smithdb_cache_disk_encryption_set_id" {
   type        = string
-  description = "Resource ID of the disk encryption set for SmithDB's cache volumes, written as diskEncryptionSetID on the SmithDB cache StorageClass. Empty (default) uses aks_disk_encryption_set_id, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; existing cache volumes keep their key until their pods are recreated. The cluster identity needs Reader on the set (aks_additional_disk_encryption_set_reader_grant, or a grant made by the set's owner), and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault."
+  description = "Resource ID of the disk encryption set for SmithDB's cache volumes, written as diskEncryptionSetID on the SmithDB cache StorageClass. Empty (default), or the same set as aks_disk_encryption_set_id, writes no parameter: new volumes then take the cluster's set, which the Azure Disk CSI driver applies by default, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; existing cache volumes keep their key until their pods are recreated. The cluster identity needs Reader on the set (aks_additional_disk_encryption_set_reader_grant, or a grant made by the set's owner), and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault."
   default     = ""
 
   validation {
@@ -2217,7 +2217,7 @@ variable "smithdb_cache_disk_encryption_set_id" {
 
 variable "sandbox_juicefs_redis_disk_encryption_set_id" {
   type        = string
-  description = "Resource ID of the disk encryption set for the in-cluster JuiceFS Redis volume, written as diskEncryptionSetID on its StorageClass. Empty (default) uses aks_disk_encryption_set_id, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; the existing volume keeps its key. The cluster identity needs Reader on the set, and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault. Takes effect with sandbox_juicefs_redis_source = \"in-cluster\"."
+  description = "Resource ID of the disk encryption set for the in-cluster JuiceFS Redis volume, written as diskEncryptionSetID on its StorageClass. Empty (default), or the same set as aks_disk_encryption_set_id, writes no parameter: new volumes then take the cluster's set, which the Azure Disk CSI driver applies by default, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; the existing volume keeps its key. The cluster identity needs Reader on the set, and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault. Takes effect with sandbox_juicefs_redis_source = \"in-cluster\"."
   default     = ""
 
   validation {

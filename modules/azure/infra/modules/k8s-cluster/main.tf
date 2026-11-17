@@ -495,12 +495,21 @@ resource "azurerm_role_assignment" "disk_encryption_set_reader" {
 }
 
 # The same grant on each further set a StorageClass names (one key per store).
+# Unlike the cluster's own set, these are not fixed at creation, so an attached
+# cluster takes them too: the grant goes to the identity it reports.
 resource "azurerm_role_assignment" "additional_disk_encryption_set_reader" {
-  for_each             = var.create_cluster && var.additional_disk_encryption_set_reader_grant ? var.additional_disk_encryption_set_ids : {}
+  for_each             = var.additional_disk_encryption_set_reader_grant ? var.additional_disk_encryption_set_ids : {}
   scope                = each.value
   role_definition_name = "Reader"
-  principal_id         = local.control_plane_user ? local.control_plane_principal_id : azurerm_kubernetes_cluster.main[0].identity[0].principal_id
+  principal_id         = local.cluster_identity_principal_id
   principal_type       = "ServicePrincipal"
+
+  lifecycle {
+    precondition {
+      condition     = local.cluster_identity_principal_id != null
+      error_message = "The cluster identity's principal ID could not be read, so Reader on the further disk encryption sets cannot be granted. On an attached cluster, check that the cluster reports a managed identity, or leave aks_additional_disk_encryption_set_reader_grant false and have each set's owner grant Reader."
+    }
+  }
 }
 
 # AKS documents up to 60 minutes for a grant to its identity to take effect,
