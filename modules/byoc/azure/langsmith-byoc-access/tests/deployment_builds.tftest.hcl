@@ -12,9 +12,9 @@ mock_provider "azurerm" {
       resources = [{ name = "dp-smith-aks" }]
     }
   }
-  mock_data "azurerm_kubernetes_cluster" {
+  mock_data "azurerm_user_assigned_identity" {
     defaults = {
-      kubelet_identity = [{ object_id = "55555555-5555-5555-5555-555555555555" }]
+      principal_id = "55555555-5555-5555-5555-555555555555"
     }
   }
   mock_resource "azurerm_resource_group" {
@@ -89,8 +89,10 @@ run "byo_iam_with_builds" {
   }
 
   assert {
-    condition     = data.azurerm_resources.deployment_builds_cluster["prod"].resource_group_name == "langsmith-byoc-prod"
-    error_message = "The module looks up the kubelet identity of the cluster in the data plane resource group."
+    condition = [data.azurerm_resources.deployment_builds_cluster["prod"].resource_group_name, data.azurerm_user_assigned_identity.deployment_builds_kubelet["prod"].name, data.azurerm_user_assigned_identity.deployment_builds_kubelet["prod"].resource_group_name] == [
+      "langsmith-byoc-prod", "dp-smith-aks-agentpool", "dp-smith-aks-nodes",
+    ]
+    error_message = "The module finds the cluster in the data plane resource group and reads its kubelet identity from the node resource group."
   }
 
   assert {

@@ -25,11 +25,14 @@ data "azurerm_resources" "deployment_builds_cluster" {
   }
 }
 
-data "azurerm_kubernetes_cluster" "deployment_builds" {
+# LangSmith names the node resource group <cluster>-nodes and leaves the
+# kubelet identity to AKS, which names it <cluster>-agentpool. Reading the
+# identity, not the cluster, keeps cluster credentials out of the state.
+data "azurerm_user_assigned_identity" "deployment_builds_kubelet" {
   for_each = data.azurerm_resources.deployment_builds_cluster
 
-  name                = each.value.resources[0].name
-  resource_group_name = each.value.resource_group_name
+  name                = "${each.value.resources[0].name}-agentpool"
+  resource_group_name = "${each.value.resources[0].name}-nodes"
 }
 
 # LangSmith creates the registry and the source storage account when builds
@@ -45,11 +48,11 @@ resource "azurerm_role_assignment" "deployment_builds_push" {
 }
 
 resource "azurerm_role_assignment" "deployment_builds_kubelet_pull" {
-  for_each = data.azurerm_kubernetes_cluster.deployment_builds
+  for_each = data.azurerm_user_assigned_identity.deployment_builds_kubelet
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "AcrPull"
-  principal_id         = each.value.kubelet_identity[0].object_id
+  principal_id         = each.value.principal_id
   principal_type       = "ServicePrincipal"
 }
 
