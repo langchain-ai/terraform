@@ -130,6 +130,8 @@ The module creates these identities. LangSmith expects these names:
 | `langsmith-deployment-metrics-collector-identity` | Monitoring Metrics Publisher | resource group |
 | LangSmith application | Azure Kubernetes Service RBAC Cluster Admin | resource group |
 | `langsmith-host-backend-identity`, only with `dedicated_deployments` | dedicated deployments role, Log Analytics Reader, Monitoring Data Reader | resource group |
+| `langsmith-deployment-builds-identity`, only with `deployment_builds` | AcrPush | resource group |
+| AKS kubelet identity, only with `deployment_builds` | AcrPull | resource group |
 
 The blob role is `langsmith-byoc-<key>-blob-<suffix>`. Its conditions keep each identity to its own containers.
 
@@ -182,7 +184,7 @@ data_planes = {
 Set `reduced_access = false` again, and run `terraform apply`, before:
 
 - you delete or recreate the data plane.
-- LangSmith turns CLI builds, deployment observability, or dedicated deployments on or off.
+- LangSmith turns deployment builds, CLI builds, deployment observability, or dedicated deployments on or off.
 - an upgrade that adds an identity, a role assignment, a federated identity credential, a PostgreSQL administrator, or a Redis access policy. LangChain tells you when.
 
 You can set it to `true` again afterwards. [`roles.tf`](roles.tf) has the full lists.
@@ -249,6 +251,24 @@ The module then creates `langsmith-host-backend-identity` and its roles on the r
 
 Before you set `dedicated_deployments` back to `false`, delete the dedicated deployments and have LangSmith turn the feature off. Otherwise their servers stay and you pay for them.
 
+### Turn on deployment builds (optional)
+
+Deployment builds build the images of GitHub-source LangGraph deployments in the cluster and push them to a container registry in the data plane resource group. Register `Microsoft.ContainerRegistry` first (see [Usage](#usage)).
+
+With `byo_iam`, set `deployment_builds = true` and run `terraform apply` after the data plane is active and before LangSmith turns builds on:
+
+```hcl
+data_planes = {
+  prod = { location = "eastus", byo_iam = true, deployment_builds = true }
+}
+```
+
+The module then creates `langsmith-deployment-builds-identity` with `AcrPush`, and gives the AKS kubelet identity `AcrPull`, so the nodes can pull the built images. AKS creates the kubelet identity with the cluster, so the apply fails until the data plane is active. The registry does not exist yet, so the scope of both roles is the resource group. The deployment builds registry is the only registry in it.
+
+LangSmith creates the registry and the federated identity credential. The credential trusts only the `langsmith/lsd-build` service account on the data plane cluster, which runs the build Jobs. If `reduced_access = true`, set it to `false` while LangSmith turns builds on.
+
+LangSmith keeps the registry and its images when builds are turned off. Before you set `deployment_builds` back to `false`, have LangSmith turn builds off. CLI builds are not available with `byo_iam`.
+
 ### Turn on flow logs (optional)
 
 When the data plane is active, add your storage account. Then run `terraform apply`:
@@ -304,6 +324,7 @@ Fields of each `data_planes` entry:
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
+| `deployment_builds` | `bool` | no | `false` | With `byo_iam`, create `langsmith-deployment-builds-identity` and the registry roles that deployment builds need. Set it after the data plane is active. See [Turn on deployment builds](#turn-on-deployment-builds-optional). |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.

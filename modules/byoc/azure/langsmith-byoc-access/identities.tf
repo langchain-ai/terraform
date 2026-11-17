@@ -10,7 +10,7 @@ locals {
 
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
-      for short in concat(local.byo_iam_identity_shorts, dp.dedicated_deployments ? ["host-backend"] : []) : "${key}/${short}" => {
+      for short in concat(local.byo_iam_identity_shorts, dp.dedicated_deployments ? ["host-backend"] : [], dp.deployment_builds ? ["deployment-builds"] : []) : "${key}/${short}" => {
         data_plane = key
         short      = short
         tags       = dp.tags

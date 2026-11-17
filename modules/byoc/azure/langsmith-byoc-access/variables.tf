@@ -47,6 +47,12 @@ variable "data_planes" {
     # the host-backend identity and its roles in identities.tf. Without it,
     # LangSmith creates them itself and this setting changes nothing.
     dedicated_deployments = optional(bool, false)
+    # Let LangSmith turn on in-cluster deployment builds, which push images to
+    # a container registry in the resource group. With byo_iam, the module
+    # creates the build identity and the registry grants in
+    # deployment_builds.tf; set it after the data plane is active. Without
+    # byo_iam, LangSmith creates them itself and this setting changes nothing.
+    deployment_builds = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
