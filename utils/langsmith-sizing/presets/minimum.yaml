@@ -1,0 +1,23 @@
+why: "The modules' minimum profile: cost parking, idle standby, CI smoke tests, single-user demos."
+inputs:
+  users: 1
+  peak_traces_per_second: 1
+  traces_per_second: 0.3
+  runs_per_trace: 10
+  postgres: external
+  redis: external
+  smithdb_metastore: external
+  object_store: external
+  trace_store: smithdb
+  survives_node_loss: false
+notes:
+  users: "One person at a time, as the profile describes."
+  peak_traces_per_second: "A trace a second at most: a demo or a smoke test."
+  traces_per_second: "The busiest rate over the default peak factor of 3, rounded down."
+  runs_per_trace: "The model's default of 10 runs a trace, stated so the plan does not move if the default does."
+  trace_store: "SmithDB alone: ClickHouse is the deprecated store and is sized only while a migration runs."
+  redis: "A managed Redis, as the module's profile assumes."
+  postgres: "A managed Postgres, as the module's profile assumes."
+  smithdb_metastore: "A managed Postgres of its own, sized by the SmithDB tier."
+  object_store: "A bucket, as the module's profile assumes."
+  survives_node_loss: "A single failure domain is accepted for this load."

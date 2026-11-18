@@ -1,20 +1,21 @@
 [project]
 name = "langsmith-load-test"
 version = "0.1.0"
-description = "Synthetic trace ingestion load testing for LangSmith."
+description = "Verify a LangSmith sizing plan: send the load it was sized for, read it back, and measure lag and loss."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "langchain==1.4.2",
-    "langchain-core==1.6.4",
-    "langgraph==1.2.14",
     "langsmith==0.14.0",
+    "langsmith-sizing",
     "python-dotenv==1.2.3",
     "structlog==26.1.0",
 ]
 
 [project.scripts]
 load-test = "loadtest.cli:main"
+
+[tool.uv.sources]
+langsmith-sizing = { path = "../langsmith-sizing", editable = true }
 
 [build-system]
 requires = ["hatchling==1.32.4"]
@@ -26,3 +27,11 @@ packages = ["src/loadtest"]
 [tool.uv]
 # Older uv versions trust the compromised eMudhra CA chain during package downloads.
 required-version = ">=0.13.4"
+
+[dependency-groups]
+# The same pins as langsmith-sizing's dev group; CI runs the gates with `--group dev`.
+dev = [
+    "ruff==0.17.3",
+    "mypy==2.4.1",
+    "types-PyYAML==6.0.12.20261030",
+]

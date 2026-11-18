@@ -1,0 +1,84 @@
+"""A plan against a load test's results: one verdict per promise, never a guess.
+
+The plan (`size`) says what load the install was sized for and what to watch; the results
+(utils/langsmith-load-test, schema "langsmith-load-results/1") say what a test measured. A verdict is
+"pass", "fail", "not measured" or, for a server-side reading the results carry, "observed": the load test sees what a client sees, so the plan's server-side
+watch items are "not measured by the load test" unless the results carry the reading themselves
+(`metrics`, keyed by watch item id). Nothing is inferred for a thing nobody measured.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+PASS, FAIL, NOT_MEASURED, OBSERVED = "pass", "fail", "not measured", "observed"
+NOT_MEASURED_NOTE = "not measured by the load test"
+OPEN_LOOP = "open-loop"
+TARGETS = {
+    "stored_within_seconds_p99": "a run sent is readable within the target for 99% of runs",
+    "trace_load_seconds_p99": "loading a trace returns within the target for 99% of reads",
+}
+
+
+def _verdict(item: str, passed: bool | None, detail: str) -> dict[str, Any]:
+    return {"item": item, "verdict": NOT_MEASURED if passed is None else PASS if passed else FAIL, "detail": detail}
+
+
+def _rate(plan: dict[str, Any], results: dict[str, Any]) -> dict[str, Any]:
+    peak = plan["rates"]["peak_traces_per_second"]
+    write = results["write"]
+    if write["mode"] != OPEN_LOOP:
+        return _verdict("write-rate", None, f"the run was {write['mode']}, which offers no fixed rate to set against the plan's peak of {peak:g} traces/s")
+    # Judged on the rate held after the ramp, which offers half the target on average; a run over
+    # the whole window failed a test that held its rate. A window of d seconds offers rate x d
+    # starts, give or take the one at its edge, so one start short is still the rate.
+    steady, duration = write.get("steady_traces_per_second"), results.get("settings", {}).get("duration_seconds")
+    if steady is None or not duration:
+        achieved = write["achieved_traces_per_second"]
+        return _verdict("write-rate", achieved >= peak, f"achieved {achieved:g} traces/s over the whole run, ramp included, against the plan's peak of {peak:g}")
+    return _verdict("write-rate", steady * duration + 1 >= peak * duration, f"held {steady:g} traces/s after the ramp against the plan's peak of {peak:g}")
+
+
+def _target(name: str, entry: dict[str, Any]) -> dict[str, Any]:
+    if "observed_seconds" in entry:
+        seen = entry["observed_seconds"]
+        detail = f"{entry['observed']} {'not measured' if seen is None else f'{seen:g} s'} against {entry['target_seconds']:g} s"
+    else:
+        detail = f"{TARGETS.get(name, name)}"
+    return _verdict(name, entry["passed"], detail)
+
+
+def _missing(entry: dict[str, Any]) -> dict[str, Any]:
+    missing = entry["missing"]
+    return _verdict("no_missing_runs", entry["passed"], "the stored count could not be read" if missing is None else f"{missing} runs sent and not stored")
+
+
+def _watch(item: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
+    if item["id"] not in metrics:
+        return _verdict(f"watch:{item['id']}", None, f"{item['metric']}: {NOT_MEASURED_NOTE}")
+    threshold = item["threshold"]
+    limit = f", threshold {threshold['value']:g} {threshold['unit']}" if isinstance(threshold, dict) else ""
+    # No pass or fail: which side of a threshold is the alarm depends on the metric, and the plan does not say.
+    return {"item": f"watch:{item['id']}", "verdict": OBSERVED, "detail": f"{item['metric']}: the results carry {metrics[item['id']]}{limit}"}
+
+
+def compare(plan: dict[str, Any], results: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every verdict, in order: the rate, the results' targets, then each of the plan's watch items."""
+    targets = results["targets"]
+    out = [_rate(plan, results)]
+    out += [_target(name, targets[name]) for name in TARGETS]
+    out.append(_missing(targets["no_missing_runs"]))
+    metrics = results.get("metrics", {})
+    out += [_watch(item, metrics) for item in plan["watch"]]
+    return out
+
+
+def failed(verdicts: list[dict[str, Any]]) -> bool:
+    return any(v["verdict"] == FAIL for v in verdicts)
+
+
+def render(verdicts: list[dict[str, Any]]) -> str:
+    lines = [f"{v['verdict'].upper():<12} {v['item']}: {v['detail']}" for v in verdicts]
+    count = {k: sum(v["verdict"] == k for v in verdicts) for k in (PASS, FAIL, NOT_MEASURED, OBSERVED)}
+    lines.append(f"{count[PASS]} pass, {count[FAIL]} fail, {count[NOT_MEASURED]} not measured, {count[OBSERVED]} observed")
+    return "\n".join(lines)

@@ -1,0 +1,19 @@
+# The plans docs/fields.md is generated from (src/langsmith_sizing/schema_doc.py): each is the flags
+# of one representative install, chosen so that every field any plan can carry appears in one of
+# them. A new kind of plan that adds a field belongs here.
+- name: stores outside the cluster
+  inputs: {users: 10, traces_per_second: 5, peak_traces_per_second: 15, postgres: external, postgres_memory_gib: 16, redis: external}
+- name: stores in the cluster, SmithDB pool given
+  inputs: {users: 10, traces_per_second: 5, peak_traces_per_second: 15, object_store: in-cluster, smithdb_metastore: statefulset, smithdb_node: [32, 128], smithdb_topology: cluster}
+- name: operators that survive a node loss
+  inputs: {users: 20, traces_per_second: 20, postgres: operator, redis: operator, smithdb_metastore: operator, survives_node_loss: true}
+- name: dual ClickHouse as an operator, history backfilled
+  inputs: {users: 10, traces_per_second: 5, peak_traces_per_second: 15, backfill_runs: 100000000, backfill_days: 1, trace_store: dual, clickhouse: operator, redis: operator}
+- name: dual-replicated ClickHouse outside the cluster, dedicated pool
+  inputs: {users: 10, traces_per_second: 5, trace_store: dual-replicated, clickhouse: external, datastores_on: dedicated, redis: operator}
+- name: one node, one run size
+  inputs: {users: 1, traces_per_second: 0.1, app_node: [4, 8], single_run_kib: [4, 4]}
+- name: past every band
+  inputs: {users: 500, traces_per_second: 3000, peak_traces_per_second: 9000, object_store: in-cluster, trace_store: dual, app_node: [4, 8], datastore_node: [4, 8], datastores_on: dedicated, clickhouse: statefulset}
+- name: past the managed Redis shard cap
+  inputs: {users: 500, traces_per_second: 40000, peak_traces_per_second: 90000, redis: external}

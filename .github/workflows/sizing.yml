@@ -1,0 +1,120 @@
+name: Sizing
+
+# The sizing package and the load test that verifies its plans. Both are Python, outside the
+# Terraform and shell checks in checks.yaml, so they get their own workflow and their own paths.
+
+on:
+  pull_request:
+    paths:
+      - "utils/langsmith-sizing/**"
+      - "utils/langsmith-load-test/**"
+      - ".github/workflows/sizing.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "utils/langsmith-sizing/**"
+      - "utils/langsmith-load-test/**"
+      - ".github/workflows/sizing.yml"
+  # Weekly, with no change to the repository: the docs the model cites move on their own.
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sizing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sizing:
+    name: sizing
+    # The scheduled run exists for the citations job below; the rest would repeat the last push.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: utils/langsmith-sizing
+    env:
+      # Sizing reads the chart through helm. Without this a missing helm skips every chart test
+      # and the job goes green having tested nothing.
+      LANGSMITH_SIZING_REQUIRE_HELM: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          # The package's pyproject.toml requires uv 0.13.4 or later.
+          version: "0.13.5"
+
+      - name: Install helm
+        uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.3.1
+
+      - name: Ruff
+        run: uv run --group dev ruff check src tests
+
+      - name: Mypy
+        run: uv run --group dev mypy --strict src
+
+      - name: Tests
+        run: uv run python -m unittest discover -s tests
+
+      # Every chart in charts.yaml: a parameter that restates a chart value is a second source for
+      # the number, and a release candidate can change a default under it.
+      - name: Parameters against every planned chart
+        run: uv run langsmith-sizing check-params
+
+      - name: Citations at the pinned docs commit
+        run: uv run langsmith-sizing check-citations
+
+  load-test:
+    name: load test
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: utils/langsmith-load-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.5"
+
+      - name: Ruff
+        run: uv run --group dev ruff check src tests
+
+      - name: Mypy
+        run: uv run --group dev mypy --strict -p loadtest
+
+      # Offline: the tests need no LangSmith instance.
+      - name: Tests
+        run: uv run python -m unittest discover -s tests
+
+  citations:
+    name: citations at docs main
+    # Only on the schedule: a PR must not fail because the docs moved after it was written.
+    # A failure here means a cited quote changed upstream and the package needs a new commit.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: utils/langsmith-sizing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.5"
+
+      - name: Citations against the docs' main branch
+        run: uv run langsmith-sizing check-citations --ref main

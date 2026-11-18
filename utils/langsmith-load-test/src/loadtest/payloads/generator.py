@@ -1,51 +1,43 @@
-"""Prepare reusable JSON documents and sample from the configured size mix."""
+"""Draw a run's size from the profile's mix and generate its input and output text."""
 
 import random
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .json_documents import build_document, json_size_bytes
-from .sizes import PAYLOAD_SIZES
+from loadtest.draw import weighted_choice
+
+from .english_text import generate_text
+
+KIB = 1024
 
 
 @dataclass(frozen=True)
-class TracePayload:
+class RunPayload:
+    size_name: str
     inputs: dict[str, Any]
     outputs: dict[str, Any]
-    size_name: str
     input_bytes: int
+    output_bytes: int
 
 
 class PayloadGenerator:
-    """Prepare the cache first, then share it between the runner and fake model."""
+    """Every run gets fresh text: a reused document would compress far better than real traces."""
 
-    def __init__(self, seed: int | None = None) -> None:
+    def __init__(self, mix: Mapping[str, float], sizes_kib: Mapping[str, tuple[float, float]], seed: int | None = None) -> None:
+        self.mix = dict(mix)
+        self.sizes_kib = dict(sizes_kib)
         self.random_source = random.Random(seed)
-        self.cached_payloads: dict[str, list[TracePayload]] = {}
-        self.next_indexes: dict[str, int] = {}
         self.lock = threading.Lock()
 
-    def prepare(self) -> None:
-        # Two document pairs per size keep memory bounded during long tests.
-        for size in PAYLOAD_SIZES:
-            documents = []
-            for _ in range(2):
-                inputs = build_document(
-                    self.random_source.randint(size.min_bytes, size.max_bytes), self.random_source,
-                )
-                outputs = build_document(
-                    self.random_source.randint(size.min_bytes, size.max_bytes), self.random_source,
-                )
-                documents.append(TracePayload(inputs, outputs, size.name, json_size_bytes(inputs)))
-            self.cached_payloads[size.name] = documents
-            self.next_indexes[size.name] = 0
-
-    def next_payload(self) -> TracePayload:
-        # Model replies run in worker threads while inputs are drawn on the event loop.
+    def next_run(self) -> RunPayload:
+        # Only the draw is serialized; the text, the expensive part, is built from a private
+        # generator so worker threads generate in parallel (the order of draws still varies).
         with self.lock:
-            size = self.random_source.choices(PAYLOAD_SIZES, weights=[size.weight for size in PAYLOAD_SIZES])[0]
-            index = self.next_indexes[size.name]
-            self.next_indexes[size.name] = index + 1
-            documents = self.cached_payloads[size.name]
-            return documents[index % len(documents)]
+            size_name = weighted_choice(self.mix, self.random_source)
+            text_source = random.Random(self.random_source.getrandbits(64))
+        in_kib, out_kib = self.sizes_kib[size_name]
+        input_text = generate_text(int(in_kib * KIB), text_source)
+        output_text = generate_text(int(out_kib * KIB), text_source)
+        return RunPayload(size_name, {"input": input_text}, {"output": output_text}, len(input_text), len(output_text))
