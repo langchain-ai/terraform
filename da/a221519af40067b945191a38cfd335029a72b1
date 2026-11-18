@@ -1,0 +1,42 @@
+modules/azure/infra/modules/storage/outputs.tf
+  s_e5b6677aff67da::t_05ac92d0d47305 65
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_e5b6677aff67da::t_bce5dfb357b712 660,668-669
+modules/aws/README.md
+  s_e5b6677aff67da::t_6fb374d09c2708 1116
+modules/aws/infra/modules/storage/main.tf
+  s_e5b6677aff67da::t_0525f46d1f3388 66,69-76,80-87
+  s_e5b6677aff67da::t_e074c17c81c2a4 61-64
+  s_e5b6677aff67da::t_e62cd26014e073 95
+modules/azure/infra/tests/storage_replication.tftest.hcl
+  s_e5b6677aff67da::t_a9c7268999b8e0 313,321-322
+modules/aws/infra/variables.tf
+  s_e5b6677aff67da::t_7356f7b51cdecc 599
+modules/azure/infra/variables.tf
+  s_e5b6677aff67da::t_d976d8c4241271 800
+modules/aws/infra/modules/storage/outputs.tf
+  s_e5b6677aff67da::t_dfaf048b9a9482 20
+modules/azure/infra/modules/storage/variables.tf
+  s_e5b6677aff67da::t_487499a558aa85 23
+modules/azure/infra/modules/storage/main.tf
+  s_e5b6677aff67da::t_1382855220ad82 139-140,142-143
+  s_e5b6677aff67da::t_0525f46d1f3388 145,148-160,162-163,168-177,179-183
+modules/aws/infra/modules/storage/variables.tf
+  s_e5b6677aff67da::t_82f8b884881d48 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "daa221519af40067b945191a38cfd335029a72b1",
+  "prompts": {},
+  "sessions": {
+    "s_e5b6677aff67da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2297ad6-723e-430d-a25d-895f4eefd617",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Kiewan Villatel <kiewan@langchain.dev>"
+    }
+  }
+}
