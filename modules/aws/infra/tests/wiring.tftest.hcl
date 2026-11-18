@@ -429,6 +429,36 @@ run "a_certificate_arn_plans_no_dns" {
   }
 }
 
+# ── Long-running streams under Envoy Gateway ─────────────────────────────────
+# Envoy Gateway is the default controller, so a domain alone plans the
+# supplemental route that lifts the 15s timeout. The playground, experiment
+# and prompt-canvas prefixes must be on it, not only Fleet's.
+
+run "envoy_gateway_streams_route_carries_the_playground_prefixes" {
+  command = plan
+
+  variables {
+    langsmith_domain = "plan-tests.example.com"
+  }
+
+  assert {
+    condition     = length(kubectl_manifest.fleet_stream_httproute) == 1
+    error_message = "Envoy Gateway with a domain did not plan the langsmith-fleet-streams route"
+  }
+  assert {
+    condition = alltrue([
+      for p in [
+        "/api/v1/playground",
+        "/api/v1/platform/datasets",
+        "/api/v1/platform/public",
+        "/api/v1/prompts/canvas",
+        "/api/v1/platform/prompt-canvas",
+      ] : contains([for m in yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].matches : m.path.value], p)
+    ])
+    error_message = "langsmith-fleet-streams is missing a playground, experiment or prompt-canvas prefix"
+  }
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 run "create_vpc_false_plans_no_vpc" {
