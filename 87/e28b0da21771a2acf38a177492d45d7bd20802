@@ -1,0 +1,28 @@
+modules/byoc/azure/langsmith-byoc-access/variables.tf
+  s_08bd3e548e1070::t_f586a4ba5ff4ec 50-55
+modules/byoc/azure/langsmith-byoc-access/deployment_builds.tf
+  s_08bd3e548e1070::t_4f75a10477ee5f 1-6
+  s_08bd3e548e1070::t_2628c6039fbb2b 62,93,104
+modules/byoc/azure/langsmith-byoc-access/identities.tf
+  s_08bd3e548e1070::t_10a5cb5a6401c1 13
+modules/byoc/azure/langsmith-byoc-access/README.md
+  s_08bd3e548e1070::t_b9098141a39471 132,136-137,257,259,316
+modules/byoc/azure/langsmith-byoc-access/tests/deployment_builds.tftest.hcl
+  s_08bd3e548e1070::t_da368c9c3523ce 63-64,68-69,79-80,128-147,149,151,154-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "87e28b0da21771a2acf38a177492d45d7bd20802",
+  "prompts": {},
+  "sessions": {
+    "s_08bd3e548e1070": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3f79e94c-c172-4104-a2de-c241e7d5e6f5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}
