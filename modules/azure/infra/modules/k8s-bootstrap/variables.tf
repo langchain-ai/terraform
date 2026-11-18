@@ -444,3 +444,15 @@ variable "clickhouse_tls" {
   description = "Whether the connection to the external ClickHouse uses TLS."
   default     = true
 }
+
+variable "smithdb_cache_disk_encryption_set_id" {
+  type        = string
+  description = "Disk encryption set for the SmithDB cache StorageClass (diskEncryptionSetID), resolved by the root; empty omits the parameter."
+  default     = ""
+}
+
+variable "sandbox_juicefs_redis_disk_encryption_set_id" {
+  type        = string
+  description = "Disk encryption set for the JuiceFS Redis StorageClass (diskEncryptionSetID), resolved by the root; empty omits the parameter."
+  default     = ""
+}

@@ -143,3 +143,11 @@ output "clickhouse_secret_labels" {
   description = "Labels on the external ClickHouse Secret Terraform writes; preflight.sh reads app.kubernetes.io/managed-by to tell it from a Secret init-values.sh created. Null when Terraform writes no Secret."
   value       = var.use_external_clickhouse && var.clickhouse_host != "" ? kubernetes_secret_v1.clickhouse[0].metadata[0].labels : null
 }
+
+output "storage_class_disk_encryption_set_ids" {
+  description = "diskEncryptionSetID on the SmithDB cache and JuiceFS Redis StorageClasses, null where the class is absent or names no set."
+  value = {
+    smithdb_cache         = try(kubernetes_storage_class_v1.smithdb_cache[0].parameters["diskEncryptionSetID"], null)
+    sandbox_juicefs_redis = try(kubernetes_storage_class_v1.sandbox_juicefs_redis[0].parameters["diskEncryptionSetID"], null)
+  }
+}
