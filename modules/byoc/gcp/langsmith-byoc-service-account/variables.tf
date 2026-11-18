@@ -68,3 +68,9 @@ variable "dedicated_deployments" {
   type        = bool
   default     = false
 }
+
+variable "deployment_builds" {
+  description = "Let LangSmith run in-cluster deployment builds. With byo_iam, creates the langsmith-deployment-builds service account. See the README."
+  type        = bool
+  default     = false
+}
