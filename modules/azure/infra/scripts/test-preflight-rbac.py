@@ -1595,6 +1595,97 @@ CASES = [
         "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 1900m / 5039Mi"],
     },
     {
+        "name": "external ClickHouse without clickhouse_host never looks for the Secret",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "kube_ctx": "platform-aks",
+        "reject_calls": ["kubectl get secret"],
+    },
+    {
+        "name": "clickhouse_host on a first install: no Secret, Terraform writes it",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks' — Terraform writes it from clickhouse_host"],
+    },
+    {
+        "name": "clickhouse_host on the cluster Terraform names passes the context check",
+        "tfvars_extra": 'clickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "langsmith-aks-dev-admin",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'langsmith-aks-dev-admin' — Terraform writes it from clickhouse_host"],
+    },
+    {
+        "name": "clickhouse_host set only in an auto.tfvars file is seen",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "auto_tfvars": 'clickhouse_host = "ch.data.internal"\n',
+        "kube_ctx": "platform-aks",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks'"],
+    },
+    {
+        "name": "clickhouse_host with Terraform's own Secret passes",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "ch_object": {"metadata": {"name": "langsmith-clickhouse",
+                                   "labels": {"app.kubernetes.io/managed-by": "terraform"}}},
+        "expect": ["[✓] langsmith/langsmith-clickhouse on 'platform-aks' is Terraform's"],
+    },
+    {
+        "name": "clickhouse_host with an init-values Secret fails and prints the import",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "ch_object": {"metadata": {"name": "langsmith-clickhouse"}},
+        "expect": ["[✗] langsmith/langsmith-clickhouse already exists on 'platform-aks' and was not written by Terraform",
+                   "terraform import 'module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]' langsmith/langsmith-clickhouse"],
+    },
+    {
+        "name": "an imported init-values Secret passes and prints no delete",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "ch_object": {"metadata": {"name": "langsmith-clickhouse"}},
+        "tfstate_ch_secret": True,
+        "expect": ["[✓] langsmith/langsmith-clickhouse on 'platform-aks' is in Terraform state at module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0] (imported)"],
+        "reject": ["kubectl delete secret", "[✗] langsmith/langsmith-clickhouse"],
+    },
+    {
+        "name": "clickhouse_host set only in TF_VAR_ is seen",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "env": {"TF_VAR_clickhouse_host": "ch.data.internal"},
+        "kube_ctx": "platform-aks",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks'"],
+    },
+    {
+        "name": "terraform.tfvars outranks TF_VAR_clickhouse_host, as in Terraform",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "env": {"TF_VAR_clickhouse_host": ""},
+        "kube_ctx": "platform-aks",
+        "expect": ["[✓] No langsmith-clickhouse Secret in langsmith on 'platform-aks'"],
+    },
+    {
+        "name": "an empty TF_VAR_clickhouse_host with no file setting it skips the check",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "env": {"TF_VAR_clickhouse_host": ""},
+        "kube_ctx": "platform-aks",
+        "reject": ["External ClickHouse Secret"],
+    },
+    {
+        "name": "clickhouse_host with a Forbidden read warns instead of passing",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "platform-aks",
+        "ch_object_error": 'Error from server (Forbidden): secrets "langsmith-clickhouse" is forbidden: User cannot get resource "secrets" in API group "" in the namespace "langsmith"',
+        "expect": ["[!] Could not read langsmith/langsmith-clickhouse on 'platform-aks' (Error from server (Forbidden)"],
+    },
+    {
+        "name": "clickhouse_host with the kubectl context on another cluster warns and does not read",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "kube_ctx": "some-other-aks",
+        "expect": ["[!] kubectl context is 'some-other-aks', not 'platform-aks', so the langsmith-clickhouse Secret check did not run"],
+        "reject_calls": ["kubectl get secret"],
+    },
+    {
+        "name": "clickhouse_host with no kubectl context warns instead of guessing",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"\nclickhouse_host = "ch.data.internal"',
+        "expect": ["[!] No kubectl context — if this is an existing install, point kubectl at 'platform-aks' and re-run"],
+        "reject_calls": ["kubectl get secret"],
+    },
+    {
         "name": "a kubectl context on another cluster skips the ClickHouse capacity check",
         "tfvars_extra": ATTACHED,
         "ca_all": ALL_GOOD,
@@ -1799,6 +1890,10 @@ def build_case(case, index):
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
     if "nodes" in case:
         (fixture / "nodes.json").write_text(json.dumps({"items": case["nodes"]}))
+    if "ch_object" in case:
+        (fixture / "ch_object.json").write_text(json.dumps(case["ch_object"]))
+    if "auto_tfvars" in case:
+        (infra / "zz-extra.auto.tfvars").write_text(case["auto_tfvars"])
     for key, name in (
         ("role_assignments", "role_assignments.json"),
         ("direct_assignments", "direct_assignments.json"),
@@ -1813,13 +1908,14 @@ def build_case(case, index):
         )
     for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment",
                 "kube_ctx", "subnet_route_table", "dig_soa",
-                "des_location", "kv_purge_protection", "identity_principal"):
+                "des_location", "kv_purge_protection", "identity_principal",
+                "ch_object_error"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
     # Preflight reads the local state file when no backend is initialized, which
     # is the state a customer running `make preflight` before `make init` is in.
-    if "tfstate_names" in case or "tfstate_dns_labels" in case:
+    if "tfstate_names" in case or "tfstate_dns_labels" in case or "tfstate_ch_secret" in case:
         resources = [
             {"type": "stub", "instances": [{"attributes": {"name": value}}]}
             for value in case.get("tfstate_names", [])
@@ -1827,7 +1923,11 @@ def build_case(case, index):
             {"type": "azurerm_public_ip",
              "instances": [{"attributes": {"domain_name_label": value}}]}
             for value in case.get("tfstate_dns_labels", [])
-        ]
+        ] + ([
+            {"module": "module.k8s_bootstrap", "mode": "managed",
+             "type": "kubernetes_secret_v1", "name": "clickhouse",
+             "instances": [{"index_key": 0, "attributes": {}}]}
+        ] if case.get("tfstate_ch_secret") else [])
         (infra / "terraform.tfstate").write_text(
             json.dumps({"version": 4, "resources": resources})
         )
