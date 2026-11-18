@@ -279,7 +279,7 @@ Remove `flow_logs` before you delete the data plane.
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `location` | `string` | yes | - | Region of the resource group that holds the LangSmith managed identity. |
-| `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. A lowercase UUID. |
+| `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Letters, digits, `.`, `_`, and `-`. |
 | `langsmith_issuer` | `string` | no | `https://azure.api.smith.langchain.com` | OIDC issuer of the LangSmith control plane. |
 | `data_planes` | `map(object)` | no | `{}` | One entry per data plane. The key is the data plane name. See the fields below. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |

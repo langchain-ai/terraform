@@ -14,8 +14,8 @@ variable "external_id" {
   type        = string
 
   validation {
-    condition     = can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.external_id))
-    error_message = "external_id must be the lowercase UUID from Settings > Data Planes in the LangSmith UI."
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", var.external_id))
+    error_message = "external_id must be the value from Settings > Data Planes in the LangSmith UI: letters, digits, '.', '_', and '-'."
   }
 }
 
