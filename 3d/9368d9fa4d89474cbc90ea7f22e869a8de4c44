@@ -1,0 +1,19 @@
+modules/byoc/aws/langsmith-byoc-role/policies/s3.json
+  s_9929d82d7a093b::t_f5f5fcff778e2d 16,37-40,56-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3d9368d9fa4d89474cbc90ea7f22e869a8de4c44",
+  "prompts": {},
+  "sessions": {
+    "s_9929d82d7a093b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eea50cb2-d32f-4abf-98b0-ea2c15e7cc89",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}

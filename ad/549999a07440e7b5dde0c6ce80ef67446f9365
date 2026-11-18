@@ -1,0 +1,36 @@
+modules/byoc/aws/byoiam/roles.tf
+  s_08bd3e548e1070::t_313aecc912cea4 29
+  s_08bd3e548e1070::t_fc4da6abc40670 30
+  s_08bd3e548e1070::t_5ecf6de48475f5 118-145
+modules/byoc/aws/byoiam/variables.tf
+  s_08bd3e548e1070::t_f09d7db4e5bde9 156-161
+modules/byoc/aws/byoiam/README.md
+  s_08bd3e548e1070::t_e7863ab0c93778 38
+  s_08bd3e548e1070::t_cb91e087a689fa 88-104
+modules/byoc/aws/byoiam/policies.tf
+  s_08bd3e548e1070::t_6ba29e689cc940 549-554
+  s_08bd3e548e1070::t_77ad5828a90e3a 270-275
+  s_08bd3e548e1070::t_1e16f54c00758f 174-207
+  s_08bd3e548e1070::t_bf2ab144e70672 143-153,155,159
+  s_08bd3e548e1070::t_02d0464e63628d 276,388,555
+modules/byoc/aws/byoiam/tests/deployment_builds.tftest.hcl
+  s_08bd3e548e1070::t_7840d85b86d892 16-17,19-22,36-40,90-142
+  s_08bd3e548e1070::t_ed268c37689718 18
+  s_08bd3e548e1070::t_4cdf040fd4b466 89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad549999a07440e7b5dde0c6ce80ef67446f9365",
+  "prompts": {},
+  "sessions": {
+    "s_08bd3e548e1070": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3f79e94c-c172-4104-a2de-c241e7d5e6f5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}

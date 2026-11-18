@@ -1,0 +1,35 @@
+modules/aws/ARCHITECTURE.md
+  s_11927f0fe0774e::t_2fd0e15ec1e474 30
+  s_11927f0fe0774e::t_3a5a3a1b2367ad 91-93
+modules/aws/TEST_CYCLE.md
+  s_11927f0fe0774e::t_b3a20685c91b73 282-318
+modules/aws/SERVICES.md
+  s_11927f0fe0774e::t_194fdadb323f04 43
+  s_11927f0fe0774e::t_0bbd5d2674bf95 130-133
+  s_11927f0fe0774e::t_3f0129af98bb94 151
+  s_11927f0fe0774e::t_2cbaefa98f70aa 38
+modules/aws/helm/values/examples/SIZING.md
+  s_11927f0fe0774e::t_d9dfa334918960 12
+  s_11927f0fe0774e::t_eba0473f5de57f 13-14
+modules/aws/README.md
+  s_11927f0fe0774e::t_5fab16b3041fdb 456
+modules/aws/infra/terraform.tfvars.example
+  s_11927f0fe0774e::t_182a99b3db8fc0 763-764
+  s_11927f0fe0774e::t_8553ad71e6f14b 749-751
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "007f37bea47a5e417e70a5d86aab0320af286e4e",
+  "prompts": {},
+  "sessions": {
+    "s_11927f0fe0774e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e673146f-2a9b-479d-9c99-b60439d997f3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

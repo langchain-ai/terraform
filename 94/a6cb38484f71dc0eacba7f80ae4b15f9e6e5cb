@@ -1,0 +1,19 @@
+modules/byoc/azure/langsmith-byoc-access/README.md
+  s_68d56e3cd2a755::t_0c2ce02f05825e 236,246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94a6cb38484f71dc0eacba7f80ae4b15f9e6e5cb",
+  "prompts": {},
+  "sessions": {
+    "s_68d56e3cd2a755": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "79047698-e814-47c0-9737-3a842f939484",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}

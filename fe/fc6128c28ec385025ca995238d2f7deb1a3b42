@@ -1,0 +1,39 @@
+modules/byoc/azure/langsmith-byoc-access/variables.tf
+  s_08bd3e548e1070::t_da6476340a8192 56-61
+  s_08bd3e548e1070::t_3275bb1d1cfc9f 84-88
+modules/byoc/azure/langsmith-byoc-access/deployment_builds.tf
+  s_08bd3e548e1070::t_78b9ac5ad36e9d 1-5,9,35-37,55-141
+modules/byoc/azure/langsmith-byoc-access/tests/deployment_builds.tftest.hcl
+  s_08bd3e548e1070::t_8c4d97d7a86fd1 130-132
+  s_08bd3e548e1070::t_d7913b0357129b 127-129
+  s_08bd3e548e1070::t_6eb028dd1bdf0d 133-135
+  s_958ef17655bf7c::t_c42b70644ab12a 95-126,136-149
+modules/byoc/azure/langsmith-byoc-access/README.md
+  s_08bd3e548e1070::t_bbc3f1c29f3af4 132-133,136-137,273-296,354
+modules/byoc/azure/langsmith-byoc-access/identities.tf
+  s_08bd3e548e1070::t_9063e849edbbed 11-14,17,201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fefc6128c28ec385025ca995238d2f7deb1a3b42",
+  "prompts": {},
+  "sessions": {
+    "s_08bd3e548e1070": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3f79e94c-c172-4104-a2de-c241e7d5e6f5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    },
+    "s_958ef17655bf7c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a6316daeed6496eee",
+        "model": "unknown"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}
