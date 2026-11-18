@@ -797,7 +797,7 @@ variable "redis_location" {
 
 variable "blob_ttl_enabled" {
   type        = bool
-  description = "Enable TTL for the blob container"
+  description = "Enable TTL for the blob container: lifecycle rules for trace blobs (ttl_s/, ttl_l/) and the raw values kept for redaction rules (ttl_1d/). When false, the module creates no management policy: you manage all lifecycle rules yourself, including a 1-day expiry on ttl_1d/."
   default     = true
 }
 

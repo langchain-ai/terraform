@@ -58,6 +58,10 @@ resource "aws_vpc_endpoint" "s3" {
 #
 # Rule "base":     delete ttl_s/* objects after N days (default: 14)  — standard traces
 # Rule "extended": delete ttl_l/* objects after N days (default: 400) — long-retention traces
+# Rule "redaction-raw": delete ttl_1d/* objects after 1 day — raw values kept for redaction rules
+#
+# The module creates no lifecycle configuration when s3_ttl_enabled is false. A bucket
+# has one, so you then manage all lifecycle rules yourself, including ttl_1d/.
 resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
   count  = var.s3_ttl_enabled ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
@@ -81,6 +85,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
     }
     expiration {
       days = var.s3_ttl_long_days
+    }
+  }
+
+  # Backstop for redaction rules: LangSmith writes the unredacted large fields of
+  # projects that redact at ingestion under ttl_1d/ and deletes them once their
+  # runs are done. This rule removes any it could not, including the previous
+  # versions when versioning is on. S3 expires in whole days, so an object can
+  # live for up to about two days.
+  rule {
+    id     = "redaction-raw"
+    status = "Enabled"
+    filter {
+      prefix = "ttl_1d/"
+    }
+    expiration {
+      days = 1
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
     }
   }
 }
