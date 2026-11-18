@@ -17,3 +17,7 @@
   inputs: {users: 500, traces_per_second: 3000, peak_traces_per_second: 9000, object_store: in-cluster, trace_store: dual, app_node: [4, 8], datastore_node: [4, 8], datastores_on: dedicated, clickhouse: statefulset}
 - name: past the managed Redis shard cap
   inputs: {users: 500, traces_per_second: 40000, peak_traces_per_second: 90000, redis: external}
+- name: every product, the gateway and sandboxes sized
+  inputs: {users: 10, traces_per_second: 5, peak_traces_per_second: 15, products: [traces, agent_server, fleet, insights, polly, engine, gateway, sandboxes], agent_deployments: 2, agent_load: mm, gateway_streams: 300, sandboxes: 40, sandbox_node: [32, 128]}
+- name: products that must survive a node loss, sandboxes bound by memory
+  inputs: {users: 10, traces_per_second: 5, products: [traces, fleet, sandboxes], survives_node_loss: true, sandboxes: 20, sandbox_vcpu: 0.5, sandbox_memory_gib: 16}

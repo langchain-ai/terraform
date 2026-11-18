@@ -16,9 +16,25 @@ from typing import Any
 from langsmith_sizing import PLANNED_CHARTS, citations, params, plan, presets, values
 from langsmith_sizing import chart as chart_mod
 from langsmith_sizing.chart import SMITHDB_RENDERABLE, cpu, gib, merge
+from langsmith_sizing.model import products
 from tests.helpers import CHART, chart_at, chart_or_skip, needs_helm
 
 CHARTS = PLANNED_CHARTS
+
+
+def _switches(node: Any, path: str, product: str, out: dict[str, str]) -> None:
+    for k, v in (node or {}).items():
+        here = f"{path}.{k}" if path else k
+        if k == "enabled":
+            out[here] = product
+        elif isinstance(v, dict):
+            _switches(v, here, product, out)
+
+
+PRODUCT_SWITCHES: dict[str, str] = {}
+"""Each product's `enabled` key, dotted, to the product it switches."""
+for _name, _spec in products.catalog().items():
+    _switches(_spec.get("enable"), "", _name, PRODUCT_SWITCHES)
 NEXT = CHARTS[1]
 SCENARIOS: dict[str, tuple[str, dict[str, Any]]] = {
     **{name: (name, {}) for name in presets.names()},
@@ -159,12 +175,28 @@ class Render:
             have = [(e["name"], e["value"], {pod["env"].get(e["name"]) for pod in self.pods.values()}) for e in value]
             bad = [(n, v, seen) for n, v, seen in have if v not in seen]
             return None if not bad else f"not in any pod's environment: {bad}"
+        if path in PRODUCT_SWITCHES and value is False:
+            return self.switched_off(PRODUCT_SWITCHES[path])
         if path == "smithdb.resourceTier":
             topology = self.p["values"]["smithdb"].get("topology")
             alone = self.chart.pods({"smithdb": merge(SMITHDB_RENDERABLE, {"resourceTier": value} | ({"topology": topology} if topology else {}))})
             name = next(iter(self.p["smithdb"]["components"]))
             return None if alone[name]["requests"] == self.pods[name]["requests"] else f"{name} does not render the {value} tier's requests"
         return NotImplemented
+
+    def switched_off(self, product: str) -> str | None:
+        """A product's switch set false is shown by the render when on renders its pods and off none.
+        The renderer's own stand-ins already turn Insights and Chat off, so taking the key out of the
+        overlay proves nothing here; turning the product on does."""
+        cat = products.catalog()
+        def owned(overlay: dict[str, Any]) -> list[str]:
+            return sorted(products.rendered_pods(self.chart.render(overlay), [product], cat))
+        with_needs, _ = products.chosen([product], cat)
+        on = merge(merge(self.p["values"], products.values(with_needs, cat, params.values(params.load()), values.placeholder)), products.renderable(with_needs, cat))
+        if not owned(on):
+            return f"{product} on renders none of its pods"
+        left = owned(merge(self.p["values"], self.p["products"]["render"]))
+        return None if not left else f"{product} is off and still renders {left}"
 
     def verdict(self, path: str, value: Any, overlay: dict[str, Any] | None = None) -> str | None:
         """None when the key is shown by the render. A key no check claims is shown if taking it out

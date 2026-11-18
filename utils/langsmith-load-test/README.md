@@ -11,6 +11,22 @@ load test, compare. That package writes the load profile this tool reads (payloa
 feedback, read rate and read mix, targets), so the load exists once, in its `params.yaml`. The load test
 needs neither `helm` nor a chart.
 
+## With make
+
+```bash
+make setup                 # once
+cp .env.example .env       # then set the endpoint, API key, project and LANGSMITH_TRACING=true
+make smoke                 # 10 traces in 30 s: confirm they appear in the project
+make run NAME=acme         # the load ../langsmith-sizing planned for acme; results saved beside its plan
+```
+
+Then in `../langsmith-sizing`, `make compare NAME=acme` judges the results against the plan. `make run`
+takes `PROFILE=<load-profile.json>` instead of `NAME=`, and `DURATION=`, `RAMP=`, `PEAK=1` and `ARGS=`.
+The run prints a header, a progress line every `--progress-seconds`, and the results as tables: what was
+sent and stored, each read class's latency, send-to-readable lag, and one verdict per target. The results
+record the LangSmith app version the install reports, so `compare` can say whether it is the one the plan
+was sized for. `make check` runs the gates CI runs.
+
 ## Set up
 
 You need Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13.4 or later, and

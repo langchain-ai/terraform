@@ -14,5 +14,4 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 _CHARTS = yaml.safe_load((ROOT / "charts.yaml").read_text())
-DEFAULT_CHART: str = str(_CHARTS["default"])
 PLANNED_CHARTS: tuple[str, ...] = tuple(str(v) for v in _CHARTS["planned"])

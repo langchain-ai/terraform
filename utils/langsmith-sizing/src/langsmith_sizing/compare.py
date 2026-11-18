@@ -62,10 +62,21 @@ def _watch(item: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
     return {"item": f"watch:{item['id']}", "verdict": OBSERVED, "detail": f"{item['metric']}: the results carry {metrics[item['id']]}{limit}"}
 
 
+def _app(plan: dict[str, Any], results: dict[str, Any]) -> dict[str, Any]:
+    """The install's LangSmith release against the one the planned chart deploys. A difference is
+    observed, not failed: images are often pinned apart from the chart, and the plan says which it read."""
+    want, have = plan.get("app_version"), (results.get("server") or {}).get("app_version")
+    if not have:
+        return _verdict("app-version", None, f"the install's version was not read; the plan's chart {plan['chart']} deploys {want}")
+    if have == want:
+        return _verdict("app-version", True, f"the install runs LangSmith {have}, what chart {plan['chart']} deploys")
+    return {"item": "app-version", "verdict": OBSERVED, "detail": f"the install runs LangSmith {have}; the plan read chart {plan['chart']}, which deploys {want}: size again with the chart that ships {have}"}
+
+
 def compare(plan: dict[str, Any], results: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every verdict, in order: the rate, the results' targets, then each of the plan's watch items."""
+    """Every verdict, in order: the app version, the rate, the results' targets, then each of the plan's watch items."""
     targets = results["targets"]
-    out = [_rate(plan, results)]
+    out = [_app(plan, results), _rate(plan, results)]
     out += [_target(name, targets[name]) for name in TARGETS]
     out.append(_missing(targets["no_missing_runs"]))
     metrics = results.get("metrics", {})

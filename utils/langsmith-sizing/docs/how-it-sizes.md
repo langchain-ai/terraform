@@ -119,6 +119,38 @@ branch, so a docs change shows up as a failing check before anyone quotes a stal
 | `smithdb.cache_volume` | `self-host-smithdb-infrastructure.mdx` | {min_iops: 7000, min_mib_per_second: 1000} |
 | `smithdb.backfill` | `self-host-smithdb-migrate.mdx` | {runs_per_vcpu_day: 5000000} |
 | `smithdb.backfill_pod_memory` | `self-host-smithdb-migrate.mdx` | {min_memory_gib: 32} |
+| `agent_server.load_levels` | `agent-server-scale.mdx` | {low: 5, medium: 50, high: 500, unit: requests/s a deployment} |
+| `agent_server.api_servers` | `agent-server-scale.mdx` | {cpu: 1, memory_gib: 2, replicas: {ll: 1, lh: 6, hl: 10, mm: 3, hh: 15}} |
+| `agent_server.queue_workers` | `agent-server-scale.mdx` | {cpu: 1, memory_gib: 2, replicas: {ll: 1, lh: 10, hl: 1, mm: 5, hh: 10}} |
+| `agent_server.n_jobs_per_worker` | `agent-server-scale.mdx` | {ll: 10, lh: 50, hl: 10, mm: 10, hh: 50} |
+| `agent_server.redis` | `agent-server-scale.mdx` | {cpu: 1, memory_gib: 2} |
+| `agent_server.postgres` | `agent-server-scale.mdx` | {cpu: {ll: 2, lh: 4, hl: 4, mm: 4, hh: 8}, memory_gib: {ll: 8, lh: 16, hl: 16, mm: 16, hh: 32}} |
+| `agent_server.limit_default` | `data-plane.mdx` | {limit_over_request: 2} |
+| `agent_server.requires` | `enable-self-hosted-agent-server.mdx` | {requires: [KEDA, an ingress with config.hostname]} |
+| `gateway.streams_per_replica` | `llm-gateway-self-hosted.mdx` | {streams: 100} |
+| `gateway.stores` | `llm-gateway-self-hosted.mdx` | {stores: [postgres, redis]} |
+| `engine.requires_sandboxes` | `engine-self-hosted.mdx` | {requires: [sandboxes]} |
+| `engine.shares_insights` | `engine-self-hosted.mdx` | {shares: insights} |
+| `fleet.own_stores` | `enable-self-hosted-fleet.mdx` | {postgres: own, redis: own} |
+| `insights_chat.keys` | `self-host-insights-chat.mdx` | {key: Fernet} |
+| `sandboxes.hosts` | `self-host-sandbox-scaling.mdx` | {formula: ceil(committed_vcpu / (host_vcpu * target)) + headroom} |
+| `sandboxes.target` | `self-host-sandbox-scaling.mdx` | {pct: 70} |
+| `sandboxes.headroom` | `self-host-sandbox-scaling.mdx` | {hosts: 1} |
+| `sandboxes.min_hosts` | `self-host-sandbox-scaling.mdx` | {hosts: 2} |
+| `sandboxes.memory` | `self-host-sandbox-scaling.mdx` | {memory_gib_each: 2} |
+| `sandboxes.cpu_only` | `self-host-sandbox-scaling.mdx` | {signal: committed vCPU} |
+| `sandboxes.host_memory` | `self-host-sandbox-scaling.mdx` | {rule: host memory request covers its guests} |
+| `sandboxes.cache` | `enable-self-hosted-sandboxes.mdx` | {cache_gib: 50} |
+| `sandboxes.juicefs_redis` | `enable-self-hosted-sandboxes.mdx` | {maxmemory_policy: noeviction} |
+| `sandboxes.nodes` | `enable-self-hosted-sandboxes.mdx` | {requires: [dedicated KVM nodes]} |
+| `sandboxes.node_arch` | `enable-self-hosted-sandboxes.mdx` | {requires: [x86-64]} |
+| `sandboxes.node_cgroup` | `enable-self-hosted-sandboxes.mdx` | {requires: [cgroup v2 with the cpu controller]} |
+| `sandboxes.node_devices` | `enable-self-hosted-sandboxes.mdx` | {requires: [/dev/net/tun, /dev/fuse]} |
+| `sandboxes.node_nftables` | `enable-self-hosted-sandboxes.mdx` | {requires: [nftables]} |
+| `sandboxes.one_host_per_node` | `self-host-sandbox-architecture.mdx` | {host_pods_per_node: 1} |
+| `sandboxes.privileged` | `self-host-sandbox-architecture.mdx` | {requires: [privileged pods]} |
+| `sandboxes.node_label` | `enable-self-hosted-sandboxes.mdx` | {label: sandbox.langsmith.com/host=true} |
+| `gateway.tested_requests` | `llm-gateway-self-hosted.mdx` | {cpu: 1, memory_gib: 1} |
 <!-- /generated:citations -->
 
 ## The formulas, stage by stage
@@ -149,9 +181,10 @@ huge traces is still a large write rate.
 <!-- generated:regimes -->
 | Regime (tested in this order) | Holds when | Turns on | Unmeasured |
 |:--|:--|:--|:--|
-| `beyond-tested` | peak at or above 10,000 runs/s | autoscalers: on, splits: on, redis_cluster: on, queue_partitions: on, separate_node_pools: on, ceilings_above_chart_default: on, warn_beyond_tested: on, watch_object_store_request_rate: on, payloads_in_redis_when_offload_throttled: on |  |
+| `beyond-tested` | everything else | autoscalers: on, splits: on, redis_cluster: on, queue_partitions: on, separate_node_pools: on, ceilings_above_chart_default: on, scale_out: on, warn_beyond_tested: on, watch_object_store_request_rate: on, payloads_in_redis_when_offload_throttled: on |  |
+| `scale-out` | peak at or above 10,000 runs/s | autoscalers: on, splits: on, redis_cluster: on, queue_partitions: on, separate_node_pools: on, ceilings_above_chart_default: on, scale_out: on, watch_object_store_request_rate: on, payloads_in_redis_when_offload_throttled: on |  |
 | `large` | peak at or above 1,000 runs/s | autoscalers: on, splits: on, redis_cluster: on, queue_partitions: on, separate_node_pools: on, ceilings_above_chart_default: on |  |
-| `extra-lite` | peak at or below 5 traces/s, survives_node_loss is off | autoscalers: off, serving_replicas: 1, clickhouse: off, smithdb_tier: small, smithdb_unified: on, stores_in_cluster: on, one_node: on, short_retention: on, tracing_only: on, hook_jobs_set_node_peak: on |  |
+| `extra-lite` | peak at or below 5 traces/s, survives_node_loss is off | autoscalers: off, serving_replicas: 1, clickhouse: off, smithdb_tier: small, smithdb_unified: on, stores_in_cluster: on, one_node: on, short_retention: on, tracing_only: on, hook_jobs_set_node_peak: on, requests_from_measured: on |  |
 | `lite` | peak at or below 15 traces/s | autoscalers: on, nodes: 2, smallest_managed_stores: on, smithdb_tier: small, smithdb_unified: on | yes |
 | `standard` | everything else | autoscalers: on |  |
 <!-- /generated:regimes -->
@@ -309,6 +342,81 @@ pod memory  = at least 32 GiB, whatever the CPU                (the docs' practi
 The backfill runs beside the serving pods until it finishes and is sized apart from the tier, and only
 when you give `--backfill-runs` and `--backfill-days`. `model/smithdb.py: backfill`.
 
+### 13. Products beside tracing
+
+An install can run Agent Server, Fleet, Insights, Chat (Polly), Engine, the LLM gateway and Sandboxes
+beside tracing (`--products`, `PRODUCTS=`, or the wizard's Products question). What each turns on in the
+chart, what it requires and what the cluster must have for it is data, in [`products.yaml`](../products.yaml).
+Choosing one brings what it requires: Engine brings Sandboxes, as the chart itself refuses Engine without
+them. Every product not chosen is switched off in `values.yaml`, because Insights and Chat are on in the
+chart by default and would otherwise run pods no plan counted.
+
+Each product's pods are read from a render of the chart with the product on, at the version planned, so a
+chart that resizes one (the gateway asks 0.1 vCPU on 0.17 and 1 vCPU on 0.18) is followed without an edit.
+Three things the chart cannot say are sized here:
+
+```
+unsized pods       Fleet's, Insights' and Chat's API server, queue, Postgres and Redis ship with
+                   resources: {}; params products.pods gives each a request (Dzmitry Dubarau's
+                   calculator estimates), limit = request x 2, and the values apply them
+Agent Server       the operator creates each deployment's pods at run time, so no render shows them:
+                   per deployment, the docs' table at its load column (ll, lh, hl, mm, hh):
+                   api servers and queue workers of 1 vCPU, 2 GiB, Postgres 2 to 8 vCPU, Redis 1 vCPU,
+                   2 GiB; times the deployments. The plan gives the resource_spec to set on each.
+gateway replicas   ceil(concurrent streams / 100 streams a replica), the docs' measured figure;
+                   the autoscaler's ceiling is raised to at least that
+sandbox hosts      hosts = ceil(committed vCPU / (node vCPU x target)) + headroom   (the docs' formula)
+                   the same in guest memory, taking the larger, never below the docs' 2
+                   target and headroom are the chart's autoscaler settings (70%, 1 host)
+                   one host pod a node, so the sandbox pool's nodes are its hosts
+                   the host pod's memory request is the chart's plus its share of guest memory
+```
+
+Every product pod is counted in the application pool, except the sandbox hosts, which get a KVM pool of
+their own (`--sandbox-node`, default 16x64, the smallest host in the docs' scaling table). Sandboxes add a
+dedicated JuiceFS metadata Redis to `stores.json`. Each product's needs of the cluster (KEDA and an
+ingress for Agent Server; x86-64 KVM nodes, cgroup v2, `/dev/net/tun`, `/dev/fuse`, nftables and a cache
+disk for Sandboxes) are listed in the plan with the docs citation for each. `model/products.py`.
+
+Worked example, `--products all --agent-deployments 3 --agent-load mm --gateway-streams 400 --sandboxes 100`
+at 0.18: three deployments of 3 API servers and 5 queue workers each; 4 gateway replicas; 100 one-vCPU
+sandboxes on 16 vCPU hosts at 70% is ceil(100 / 11.2) + 1 = 10 hosts.
+
+### 14. Past the tiers: scale-out
+
+The docs' SmithDB tiers stop at large and the scale guide at 1,000 traces a second. From the large band's
+top (10,000 runs/s) to the 202,700 runs/s a LangChain load test held, the `scale-out` regime scales each
+component with the run rate at what that test measured (params `scale_out.measured`, Ben Nagengast):
+
+```
+ingest-queue vCPU   = runs/s / 1,000 x 21 x (curve at 128 KB / curve at this mix)   7-vCPU pods
+API vCPU            = runs/s / 1,000 x (2.9 offloaded .. 5.0 with payloads in Redis)
+SmithDB ingestion   = ceil(runs/s / 4,600)        pods of the large tier's size
+compaction workers  = ceil(runs/s / 10,000)
+Postgres            = about 1 connection a pod in use; max_connections 2.6x that, PgBouncer in front
+```
+
+`cases/scale-test.yaml` holds what ran at 19.6k, 47.1k, 114.6k and 202.7k runs/s, and a test holds every
+plan to at least 0.9x and at most 1.6x of it. The calculator's own figures stay under `regime_adjusted`.
+Past about 100,000 runs/s the test's object store throttled reads of offloaded payloads, so the plan warns
+(`offload-throttled`) to keep payloads in Redis; one busy project's runs concentrate on the same ingestion
+pods (`ingestion-hot-project`). `model/scaleout.py`.
+
+At 200,000 runs/s with the test's settings, the plan gives 4,200 ingest vCPU, 1,000 API vCPU, 44 SmithDB
+ingestion pods, 21 compaction workers and 236 Redis shards; the test ran 4,235, 1,020, 44, 20 needed and 240.
+
+### 15. Extra-lite on what the pods use
+
+On one node the floor was the chart's requests and the docs' managed-store sizes, not what runs: 17 vCPU and
+63 GiB at 0.18. In the extra-lite regime each pod asks what a lab run measured it to use at the plan's load
+(params `lite.measured`): idle cores plus cores a run/s or a reader, x 1.5, and memory at its peak x 1.5.
+Redis asks its payload's memory without the scale guide's 8 GiB floor. That brings extra-lite at 0.18 to
+about 10 vCPU and 37 GiB, one 16 vCPU, 64 GiB node with the hook Jobs; what still keeps it off an 8x32 node
+is unmeasured: the unified SmithDB pod at the chart's 4 vCPU and 16 GiB, the in-cluster object store at its
+peak from a far heavier run, and six hours of runs held in Redis at the chart's expiry.
+`--no-requests-from-measured` (`requests_from_measured: false`) sizes at the chart's requests instead.
+`model/lite.py`.
+
 ## Every parameter
 
 The model's own constants. The full entry for each, with its reason and the evidence behind it, is in
@@ -374,7 +482,7 @@ self-hosted installs and never named.
 | `load.heavy_window_days` | 30 | days | field | Reed Bender |
 | `slo.stored_within_seconds` | {p99: 30} | s from send to readable | field | Ben Nagengast |
 | `slo.trace_load_seconds` | {p99: 5} | s | field | Ben Nagengast |
-| `regimes` | (a table: see params.yaml) | regime bands, first match wins: peak_band_min (peak runs/s at or above that SmithDB band's upper edge), peak_traces_per_second_max (the busiest rate at or below; the low regimes' figures are busiest rates), requires (input facts that must hold: one replica cannot survive a node's loss) | decision | Reed Bender |
+| `regimes` | (a table: see params.yaml) | regime bands, first match wins: peak_runs_per_second_above (peak runs/s strictly above), peak_band_min (peak runs/s at or above that SmithDB band's upper edge), peak_traces_per_second_max (the busiest rate at or below; the low regimes' figures are busiest rates), requires (input facts that must hold: one replica cannot survive a node's loss) | decision | Reed Bender |
 | `scale.signals` | (a table: see params.yaml) | signal -> the autoscaling field that expresses it (null: none does) | decision | Reed Bender |
 | `scale.fallback` | {mechanism: hpa, signal: cpu} | mechanism and signal | decision | Reed Bender |
 | `scale.workloads` | (a table: see params.yaml) | workload -> chart values key, where the plan sizes it, recommended mechanism and signals | decision | Reed Bender |
@@ -397,12 +505,46 @@ self-hosted installs and never named.
 | `datastores.object_store_pod` | (a table: see params.yaml) | vCPU and GiB, by SmithDB tier | lab | Reed Bender |
 | `datastores.object_store_measured_traces_per_second` | 80 | traces/s | lab | Reed Bender |
 | `smithdb.metastore_disk_gib` | 50 | GiB | decision | Dzmitry Dubarau |
+| `products.pods` | (a table: see params.yaml) | vCPU, GiB requested a pod | decision | Dzmitry Dubarau |
+| `products.limit_over_request` | 2 | x | decision | Reed Bender |
+| `agent_server.load_default` | ll | read/write column of the docs' Agent Server table | decision | Reed Bender |
+| `sandboxes.concurrent_default` | 10 | sandboxes running at once | decision | Reed Bender |
+| `sandboxes.vcpu_each` | 1 | vCPU a sandbox | decision | Reed Bender |
+| `pools.sandbox_node` | {cpu: 16, memory_gib: 64} | vCPU, GiB per node | decision | Reed Bender |
+| `sandboxes.juicefs_redis` | {cpu: 2, memory_gib: 5} | vCPU, GiB | decision | Dzmitry Dubarau |
+| `scale_out.measured` | (a table: see params.yaml) | requested vCPU per 1,000 runs/s; runs/s per pod or partition; connections per pod; runs/s | load-test | Ben Nagengast |
+| `lite.measured` | (a table: see params.yaml) | cores idle (base) and per unit of work (offered or processed runs/s, concurrent readers); GiB a pod; headroom x | lab | Reed Bender |
 <!-- /generated:params -->
+
+## Where the public docs are stale or disagree
+
+The model cites the docs as canon, so where they are stale or contradict each other it says which reading
+it takes. To revisit with the docs team; none of these changes a citation until the docs do.
+
+| Point | What the docs say | Where it disagrees | The model reads |
+|:--|:--|:--|:--|
+| The scale guide's top configuration | 1,000 traces/s, 24 ingest replicas, 26 GiB Redis | framed for an older release; installs past it run far more | it as published, and `beyond-published` past it |
+| SmithDB tiers | "not throughput limits", Small to Large | nothing above Large; field installs past it are sized by measurement | `beyond-tiers` past the large band |
+| Redis run expiry | an example of 3,600 s | the chart's default is 21,600 s; other pages and modules give other values | the chart's value at the version planned |
+| A delayed backlog | "delayed rather than dropped" | a run waiting longer than the Redis expiry is dropped | the expiry as the limit (`backlog_tolerance_hours`) |
+| Redis sizing | no formula, no `maxmemory-policy` guidance | an eviction loses a run silently | its own formula, and `noeviction` |
+| Queue partitions | default 1 | the whole queue then sits on one shard of a Redis cluster | partitions from the run rate when a cluster is needed |
+| Autoscaling triggers | KEDA named for ingest-queue and queue only | what each scaler reads is not documented | the chart's templates ([autoscaling.md](autoscaling.md)) |
+| Insights and Chat | each its own deployment with its own stores | the Insights and Engine pages say Insights and Engine share one | the newer pages and the chart's render |
+| Engine air-gapped | the image-mirroring page says it cannot run | the Engine pages say it can from chart 0.17.0 with your own model providers | the Engine pages |
+| Architecture diagram | shows ClickHouse | SmithDB is the trace store for a new install | SmithDB |
+| Valkey | supported version 8 | newer versions run in the field | the docs' version |
 
 ## What the model does not do
 
-- It sizes tracing only. Agent Server, Fleet, Insights, Polly and the gateway are not modeled, and an input
-  asking for another product is refused rather than guessed.
+- Past 202,700 runs/s, the highest rate a load test held, nothing is measured (`beyond-tested`), and one
+  managed Redis cluster caps near 250 shards. The scale-out rates are from one synthetic test: 128 KB a run,
+  no read load, the top rate held four minutes. SmithDB query pods past the tiers are not measured.
+- Extra-lite's requests come from a lab run on several nodes; no whole install has been measured on one
+  node, and the unified SmithDB pod keeps the chart's request.
+- The products beside tracing have no load inputs of their own except Agent Server's deployments and
+  load, the gateway's streams and the sandboxes'. Fleet's, Insights' and Chat's pods run at fixed sizes:
+  the chart ships none, and the requests here are estimates no load test has read.
 - It names vCPU and GiB, never an instance type or a price: picking the instance is provisioning.
 - Past about 300 traces a second, where the payload measurements stop, every figure is extrapolated and
   the plan warns `beyond-tested`.

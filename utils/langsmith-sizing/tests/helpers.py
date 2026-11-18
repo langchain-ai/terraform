@@ -10,10 +10,10 @@ from collections.abc import Callable
 from functools import cache
 from typing import Any, TypeVar
 
-from langsmith_sizing import DEFAULT_CHART, chart, citations, inputs, params, plan
+from langsmith_sizing import PLANNED_CHARTS, chart, citations, inputs, params, plan
 from langsmith_sizing.model import payload
 
-CHART = DEFAULT_CHART
+CHART = PLANNED_CHARTS[0]
 P = params.values(params.load())
 CITED = citations.load()
 REQUIRE_HELM = "LANGSMITH_SIZING_REQUIRE_HELM"

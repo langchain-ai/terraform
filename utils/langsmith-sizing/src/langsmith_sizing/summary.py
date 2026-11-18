@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-STORES = ("postgres", "redis", "smithdb_metastore", "object_storage", "clickhouse")
+STORES = ("postgres", "redis", "smithdb_metastore", "object_storage", "clickhouse", "sandboxes_juicefs_redis")
 STATES = ("floor", "sized", "ceiling")
 DOCS = {
     "how it sizes": "docs/how-it-sizes.md",
@@ -49,8 +49,11 @@ def _facts(body: Mapping[str, Any]) -> list[tuple[str, str]]:
     r, s, i = body["rates"], body["smithdb"], body["inputs"]
     acting = [w["id"] for w in body["warnings"] if w["severity"] != "info"]
     alert = [("Act on first", ", ".join(acting) + " (Before you deploy, below)")] if acting else []
+    pr = body["products"]
+    extra = [pr["labels"][p] for p in pr["on"] if p != "traces"]
     return alert + [
-        ("Chart", str(body["chart"])),
+        ("Chart", f"{body['chart']} (deploys LangSmith {body['app_version']})"),
+        ("Products", "Tracing" + (", " + ", ".join(extra) if extra else " only")),
         ("Regime", f"{body['regime']['id']}: {body['regime']['why']}"),
         ("Load", f"{n(i['users'])} users, {n(r['traces_per_second'])} traces/s average, {n(r['peak_traces_per_second'])} at peak ({n(r['runs_per_second_peak'])} runs/s)"),
         ("Retention", f"{n(i['retention_days'])} days base, {n(i['extended_retention_days'])} extended"),
@@ -122,6 +125,8 @@ def _spec(spec: Mapping[str, Any]) -> str:
     if "smithdb" in inst:
         rules = ", ".join(f"{r['prefix']} {n(r['expire_days'])} d" for r in inst["langsmith"]["lifecycle_rules"])
         return f"SmithDB {n(inst['smithdb']['tb'])} TB, LangSmith {n(inst['langsmith']['tb'])} TB (expire {rules})"
+    if "dedicated" in inst:
+        return f"{_shape(inst['vcpu'], inst['memory_gib'])}, {inst['maxmemory_policy']}, its own: never shared"
     if "shards" in inst:
         return f"{inst['shards']} x {n(inst['memory_gib_per_shard'])} GiB, {inst['vcpu_per_shard']:g} vCPU a shard, {inst['maxmemory_policy']}"
     text = f"{_shape(inst['vcpu'], inst['memory_gib'])}, {n(inst['disk_gib'])} GiB disk"
@@ -169,8 +174,42 @@ def _warnings(body: Mapping[str, Any]) -> Table | None:
     return Table("Before you deploy", ("level", "id", "what"), rows, "", "warn" if any(w["severity"] != "info" for w in acting) else "info")
 
 
+FROM = {"chart": "the chart", "docs": "the docs' table", "params": "params.yaml (chart has none)"}
+
+
+def _products(body: Mapping[str, Any]) -> list[Table]:
+    """The products beside tracing: their pods, then what each needs of the cluster."""
+    pr = body["products"]
+    if pr["on"] == ["traces"]:
+        return []
+    labels = pr["labels"]
+    rows = []
+    for name, x in pr["pods"].items():
+        span = str(x["replicas"]) if x["min"] == x["max"] else f"{x['min']} to {x['max']}"
+        rows.append((labels[x["product"]], name, span, _shape(x["requests"]["cpu"], x["requests"]["memory_gib"]), FROM[x["from"]]))
+    notes = []
+    if pr["added"]:
+        notes.append("Added because another needs it: " + ", ".join(f"{labels[a]} (for {labels[b]})" for a, b in pr["added"].items()) + ".")
+    if "agent_server" in pr:
+        a = pr["agent_server"]
+        each = ", ".join(f"{k} {v['replicas']} x {_shape(v['cpu'], v['memory_gib'])}" for k, v in a["each"].items())
+        notes.append(f"Agent Server: {a['deployments']} deployments at the docs' {a['load']} column; the operator creates their pods, so give each one this resource_spec: {each}, N_JOBS_PER_WORKER {a['n_jobs_per_worker']}.")
+    if "sandboxes" in pr:
+        s = pr["sandboxes"]
+        notes.append(f"Sandboxes: {n(s['concurrent'])} at once x ({n(s['vcpu_each'])} vCPU, {n(s['memory_gib_each'])} GiB) = {n(s['committed_vcpu'])} vCPU, {n(s['guest_memory_gib'])} GiB; {s['hosts']} hosts on {n(s['node']['cpu'])}x{n(s['node']['memory_gib'])} KVM nodes, set by {s['by']}"
+                     + (" (the chart's autoscaler counts CPU only and would stop short of it)" if s["cpu_autoscaler_short"] else "") + ".")
+    if "gateway" in pr:
+        g = pr["gateway"]
+        notes.append(f"LLM gateway: {n(g['streams'])} streams need {g['replicas_needed']} replicas at the docs' streams a replica; its autoscaler's ceiling is set to at least that.")
+    out = [Table("Products", ("product", "workload", "replicas", "requests a pod", "sized from"), rows, " ".join(notes))]
+    need_rows = [(labels[p], x["what"]) for p, needs in pr["needs"].items() for x in needs]
+    if need_rows:
+        out.append(Table("What the products need", ("product", "the cluster must have"), need_rows, "Each is cited from the public docs (plan.json products.needs names the citation in citations.yaml)."))
+    return out
+
+
 def sections(body: Mapping[str, Any]) -> View:
-    tables = [_capacity(body), _pools(body), _workloads(body), _stores(body)]
+    tables = [_capacity(body), _pools(body), _workloads(body), *_products(body), _stores(body)]
     if (w := _warnings(body)) is not None:
         tables.append(w)
     tables.append(_watch(body))

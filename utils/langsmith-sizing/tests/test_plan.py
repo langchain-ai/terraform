@@ -212,7 +212,7 @@ class Refusals(unittest.TestCase):
             ({"traces_per_second": 1, "traces_per_month": 5}, "give exactly one of traces_per_second and traces_per_month"),
             ({"trace_store": "x"}, "trace_store is one of smithdb, dual, dual-replicated"),
             ({"redis": "x"}, "redis is one of external, statefulset, operator"),
-            ({"products": ("traces", "agents")}, "products: only traces is sized so far"),
+            ({"products": ("traces", "agents")}, "products: no agents"),
             ({"users": -1}, "users and traces cannot be negative"),
             ({"app_node": (0, 32)}, "a node shape is"),
         ):

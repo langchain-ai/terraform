@@ -27,7 +27,9 @@ class Regimes(unittest.TestCase):
         self.assertEqual(bands(15.01, edge["medium"] - 1), "standard")
         self.assertEqual(bands(15.01, edge["medium"]), "large")
         self.assertEqual(bands(15.01, edge["large"] - 1), "large")
-        self.assertEqual(bands(15.01, edge["large"]), "beyond-tested")
+        self.assertEqual(bands(15.01, edge["large"]), "scale-out")
+        self.assertEqual(bands(15.01, P["regimes"][0]["peak_runs_per_second_above"]), "scale-out")
+        self.assertEqual(bands(15.01, P["regimes"][0]["peak_runs_per_second_above"] + 1), "beyond-tested")
         # one replica cannot survive a node's loss: that install is never extra-lite
         self.assertEqual(bands(1, 1, survives=True), "lite")
 
@@ -60,7 +62,8 @@ class InThePlan(unittest.TestCase):
         # the low regimes are read on the busiest rate, as their figures are
         got = {t: size(users=2, traces_per_second=t / 3, peak_traces_per_second=t)["regime"]["id"] for t in (3, 15, 50, 150)}
         self.assertEqual(got, {3: "extra-lite", 15: "lite", 50: "standard", 150: "large"})
-        self.assertEqual(size(users=200, traces_per_second=5000)["regime"]["id"], "beyond-tested")
+        self.assertEqual(size(users=200, traces_per_second=5000)["regime"]["id"], "scale-out")
+        self.assertEqual(size(users=200, traces_per_second=21000)["regime"]["id"], "beyond-tested")
         self.assertTrue(size(users=2, traces_per_second=3, peak_traces_per_second=10)["regime"]["observe"])
 
 

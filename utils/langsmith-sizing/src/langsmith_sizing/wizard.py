@@ -21,9 +21,10 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from langsmith_sizing import DEFAULT_CHART, citations, deploy, inputs, params, plan, presets, profile, summary, ui
 from langsmith_sizing import chart as chart_mod
+from langsmith_sizing import citations, deploy, inputs, params, plan, presets, profile, summary, ui
 from langsmith_sizing import values as values_mod
+from langsmith_sizing.model import products as products_mod
 from langsmith_sizing.units import KILO
 
 PLACEMENTS = (
@@ -59,6 +60,16 @@ def _any_in_cluster(a: Mapping[str, Any]) -> bool:
     return any(_value(a, k) in IN_CLUSTER or (k == "postgres" and _value(a, k) is None) for k in stores) or _value(a, "object_store") == "in-cluster"
 
 
+CATALOG = products_mod.catalog()
+
+
+def _runs(name: str) -> Callable[[Mapping[str, Any]], bool]:
+    """Asked only when the product runs, chosen or required by one chosen (Engine brings Sandboxes)."""
+    def check(a: Mapping[str, Any]) -> bool:
+        return name in products_mod.chosen(list(a.get("products") or ()), CATALOG)[0]
+    return check
+
+
 def _dedicated(a: Mapping[str, Any]) -> bool:
     return bool(_any_in_cluster(a) and _value(a, "datastores_on") == "dedicated")
 
@@ -77,7 +88,14 @@ class Question:
 REQUIRED = ("users", "traces_per_second")
 """The inputs nothing defaults: a preset or the person gives them."""
 
-LOAD, INSTALL, STORES, NODES = "Load", "Install", "Data stores", "Nodes"
+LOAD, INSTALL, PRODUCTS, STORES, NODES = "Load", "Install", "Products", "Data stores", "Nodes"
+AGENT_LOADS = (
+    ("ll", "low reads, low writes: about 5 requests a second each"),
+    ("lh", "low writes, high reads: about 500 reads a second"),
+    ("hl", "high writes, low reads: about 500 writes a second"),
+    ("mm", "medium both: about 50 a second each"),
+    ("hh", "high both: about 500 a second each"),
+)
 QUESTIONS = (
     Question("users", "float", "People looking at traces at the same time, at the busiest hour", LOAD),
     Question("traces_per_second", "rate", "Average traces a second, or a month's count as 20M/month", LOAD),
@@ -90,6 +108,15 @@ QUESTIONS = (
         ("dual-replicated", "the same, with a 3-node ClickHouse"),
     )),
     Question("survives_node_loss", "bool", "Must it keep serving when a node is lost (yes: at least two of every pod, three of each operator-run store)", INSTALL),
+    Question("products", "multi", "What runs besides tracing: numbers or names, comma separated; Enter for tracing only", PRODUCTS,
+             tuple((n, f"{s['label']}" + (f", brings {', '.join(r for r in s['requires'] if r != 'traces')}" if [r for r in s["requires"] if r != "traces"] else "")) for n, s in CATALOG.items() if n != "traces")),
+    Question("agent_deployments", "int", "Agent Server deployments the operator will run", PRODUCTS, when=_runs("agent_server")),
+    Question("agent_load", "choice", "Each deployment's load, as the docs' Agent Server table", PRODUCTS, AGENT_LOADS, when=_runs("agent_server")),
+    Question("gateway_streams", "float", "LLM gateway: concurrent streams at the busiest time; Enter keeps the chart's autoscaler", PRODUCTS, when=_runs("gateway")),
+    Question("sandboxes", "float", "Sandboxes running at once at the busiest time", PRODUCTS, when=_runs("sandboxes")),
+    Question("sandbox_vcpu", "float", "vCPU each sandbox is given", PRODUCTS, when=_runs("sandboxes")),
+    Question("sandbox_memory_gib", "float", "GiB each sandbox is given", PRODUCTS, when=_runs("sandboxes")),
+    Question("sandbox_node", "shape", "Your KVM node for sandboxes, as vCPUxGiB (x86-64 with /dev/kvm; one host a node)", PRODUCTS, when=_runs("sandboxes")),
     Question("postgres", "choice", "LangSmith's Postgres", STORES, PLACEMENTS),
     Question("redis", "choice", "Redis, the queue every run passes through", STORES, PLACEMENTS),
     Question("smithdb_metastore", "choice", "SmithDB's metastore, a Postgres 18 of its own", STORES, PLACEMENTS),
@@ -130,6 +157,17 @@ def parse(q: Question, text: str) -> Any:
         return number(text)
     if q.kind == "float":
         return number(text)
+    if q.kind == "int":
+        return int(number(text))
+    if q.kind == "multi":
+        names = [c[0] for c in q.choices]
+        if text.lower() in ("none", "traces"):
+            return ("traces",)
+        picked = [names[int(t) - 1] if t.isdigit() and 1 <= int(t) <= len(names) else t.replace("-", "_") for t in (x.strip() for x in text.split(",")) if t]
+        bad = [t for t in picked if t not in names]
+        if bad:
+            raise ValueError(f"numbers or names from the list; not {', '.join(bad)}")
+        return tuple(dict.fromkeys(["traces", *picked]))
     if q.kind == "bool":
         if text.lower() in ("y", "yes", "true"):
             return True
@@ -164,6 +202,8 @@ def plain(source: str) -> str:
 
 
 def show_value(value: Any) -> str:
+    if isinstance(value, (tuple, list)) and value and isinstance(value[0], str):
+        return ", ".join(v for v in value if v != "traces") or "tracing only"
     if isinstance(value, (tuple, list)):
         return f"{value[0]:g}x{value[1]:g}"
     return "yes" if value is True else "no" if value is False else f"{value:g}" if isinstance(value, float) else str(value)
@@ -185,6 +225,15 @@ def defaults(answers: Mapping[str, Any], preset: presets.Preset | None, chart: c
         if f.name in ("redis", "smithdb_metastore", "object_store", "clickhouse", "datastores_on", "trace_store", "survives_node_loss") and f.name not in out:
             out[f.name] = (f.default, "the model's default")
     out["postgres"] = ("statefulset", "the model's default")
+    pv = params.values(p)
+    out["products"] = (("traces",), "tracing only")
+    out["agent_deployments"] = (1, "the model's default")
+    out["agent_load"] = (pv["agent_server.load_default"], "param:agent_server.load_default")
+    out["gateway_streams"] = ("the chart's autoscaler", "chart:agentGateway.autoscaling")
+    out["sandboxes"] = (pv["sandboxes.concurrent_default"], "param:sandboxes.concurrent_default")
+    out["sandbox_vcpu"] = (pv["sandboxes.vcpu_each"], "param:sandboxes.vcpu_each")
+    out["sandbox_memory_gib"] = (citations.load()["sandboxes.memory"]["memory_gib_each"], "the docs' example, self-host-sandbox-scaling")
+    out["sandbox_node"] = ((pv["pools.sandbox_node"]["cpu"], pv["pools.sandbox_node"]["memory_gib"]), "param:pools.sandbox_node")
     for name, param in (("app_node", "pools.app_node"), ("smithdb_node", "pools.smithdb_node"), ("datastore_node", "pools.app_node")):
         value = params.values(p)[param]
         if param == "pools.smithdb_node":
@@ -313,7 +362,7 @@ def run(
     """Ask what is not given, size, show the plan, save the folder."""
     saved_file = out / INPUTS_FILE
     preset = presets.load(preset_name) if preset_name else presets.load(str(saved_file)) if saved_file.is_file() else None
-    chart_version = chart_version or (preset.chart if preset and preset.chart else DEFAULT_CHART)
+    chart_version = chart_mod.resolve(chart_version) if chart_version else preset.chart if preset and preset.chart else chart_mod.resolve(None)
     if yes and preset is None and "users" not in given:
         raise ValueError(f"nothing to size: give PRESET= or USERS= with a rate, or size {out.name} once with make wizard NAME={out.name}")
     ui.banner(f"LangSmith sizing: {out.name}", f"chart {chart_version}, saving to {out}/" + ("" if yes else "\nEnter keeps the default shown. Ctrl-C stops; nothing is written until you confirm."))

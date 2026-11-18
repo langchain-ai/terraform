@@ -23,6 +23,11 @@ def _holds(regime: Mapping[str, Any], tps: float, peak: float, bands: Mapping[st
         if peak_tps > ptop:
             return None
         why.append(f"a peak of {round(peak_tps, 1):g} traces/s is at or below {ptop:g}")
+    above = regime.get("peak_runs_per_second_above")
+    if above is not None:
+        if peak <= above:
+            return None
+        why.append(f"peak {round(peak, 1):g} runs/s is above {above:g}, the highest a load test held")
     band = regime.get("peak_band_min")
     if band is not None:
         if peak < bands[band]:

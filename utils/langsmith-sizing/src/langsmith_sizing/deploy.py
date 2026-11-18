@@ -14,8 +14,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from langsmith_sizing import values as values_mod
-from langsmith_sizing.chart import Chart, gib, hook_jobs
+from langsmith_sizing.chart import Chart, gib, hook_jobs, merge
 from langsmith_sizing.model import datastores as ds
+from langsmith_sizing.model import lite
 from langsmith_sizing.model import totals as tot
 from langsmith_sizing.model.watch import _warn
 
@@ -42,15 +43,24 @@ def _shape(given: tuple[float, float] | None, default: Mapping[str, float], para
 
 
 def _stores(body: dict[str, Any], r: Mapping[str, Any], p: Mapping[str, Any], cited: Any, chart: Chart, pods: Mapping[str, Any], node: Mapping[str, float]) -> None:
-    """Each store's placement and spec."""
+    """Each store's placement and spec. In the extra-lite regime an in-cluster store asks what it was
+    measured to use (params lite.measured), not the managed service's size."""
     st, survives, counts = body["stores"], r["survives_node_loss"], p["datastores.operator_instances"]
     docs = cited["scale.postgres"]
+    lm = p["lite.measured"] if body["regime"]["requests_from_measured"] else None
+
+    def measured(store: str, spec: dict[str, Any]) -> dict[str, Any]:
+        if lm is None or "per_instance" not in spec:
+            return spec
+        rq = lite.request(lm["stores"][store], runs_per_second=body["rates"]["runs_per_second_peak"], readers=r["users"], headroom=lm["headroom"], min_cpu=lm["min_cpu"])
+        one = spec["per_instance"]
+        return spec | {"per_instance": one | {"requests": rq, "limits": lite.at_least(one["limits"], rq)}}
 
     pg, place = st["postgres"], r["postgres"]
     pg["placement"] = place
     pg["spec"] = (
         ds.external(ds.postgres_instance(docs, r["postgres_memory_gib"], pg["max_connections"], pg["budget"])) if place == "external"
-        else ds.in_cluster(place, ds.postgres_pod(pods["postgres"]["requests"], pods["postgres"]["limits"], docs), ds.instances(place, survives, counts))
+        else measured("postgres", ds.in_cluster(place, ds.postgres_pod(pods["postgres"]["requests"], pods["postgres"]["limits"], docs), ds.instances(place, survives, counts)))
     )
 
     rd, place = st["redis"], r["redis"]
@@ -69,13 +79,13 @@ def _stores(body: dict[str, Any], r: Mapping[str, Any], p: Mapping[str, Any], ci
     st["smithdb_metastore"] = {
         "placement": place, "tier": tier, "postgres_min_major_version": body["smithdb"]["metastore"]["postgres_min_major_version"],
         "spec": ds.external(ds.metastore_instance(row, disk)) if place == "external"
-        else ds.in_cluster(place, ds.metastore_pod(row, disk, p["datastores.limit_factor"]), ds.instances(place, survives, counts)),
+        else measured("smithdb_metastore", ds.in_cluster(place, ds.metastore_pod(row, disk, p["datastores.limit_factor"]), ds.instances(place, survives, counts))),
     }
 
     obj = st["object_storage"]
     obj["placement"] = r["object_store"]
     buckets = ds.bucket_instance(obj, r["blob_storage"], r["retention_days"], obj["extended_days"], obj["extended_share"])
-    obj["spec"] = ds.external(buckets) if r["object_store"] == "external" else ds.in_cluster("in-cluster", ds.object_store_pod(p["datastores.object_store_pod"][tier], obj["total_tb"]), 1) | {"buckets": buckets}
+    obj["spec"] = ds.external(buckets) if r["object_store"] == "external" else measured("object_store", ds.in_cluster("in-cluster", ds.object_store_pod(p["datastores.object_store_pod"][tier], obj["total_tb"]), 1)) | {"buckets": buckets}
 
     ch = st["clickhouse"]
     if ch:
@@ -114,6 +124,8 @@ def _entries(body: Mapping[str, Any], dbs: Mapping[str, Any], adjust: Any, datas
     for n, c in body["smithdb"]["components"].items():
         e = adjust(c)
         out.append(_entry(n if unified else f"smithdb-{n}", "smithdb", e, e["cache_gib"]))
+    for n, x in body["products"]["pods"].items():
+        out.append(_entry(n, x.get("pool", "app"), x))
     pool = "app" if datastores_on == "app" else "datastores"
     for n, d in dbs.items():
         out.append({"name": n, "pool": pool, "requests": d["requests"], "limits": d["limits"], "volume_gib": d["volume_gib"], "replicas": dict.fromkeys(("min", "sized", "max"), d["count"])})
@@ -166,11 +178,28 @@ def assemble(body: dict[str, Any], *, p: Mapping[str, Any], cited: Any, chart: C
     model = _entries(body, dbs, _model, r["datastores_on"])
     applied = _entries(body, dbs, dict, r["datastores_on"])
     floors = {"app": p["pools.app_min_nodes"], "smithdb": p["pools.smithdb_min_nodes"], "datastores": max(p["pools.datastores_min_nodes"], *(d["count"] for d in dbs.values()), 0)}
-    pools = _pools(model, applied, floors, {"app": (app_node, app_from), "smithdb": (sdb_node, sdb_from), "datastores": (ds_node, ds_from)}, overhead)
+    nodes = {"app": (app_node, app_from), "smithdb": (sdb_node, sdb_from), "datastores": (ds_node, ds_from)}
+    sandboxes = body["products"].get("sandboxes")
+    if sandboxes:
+        nodes["sandboxes"] = (sandboxes["node"], sandboxes["node_from"])
+        floors["sandboxes"] = sandboxes["min_hosts"]
+    pools = _pools(model, applied, floors, nodes, overhead)
+    if sandboxes:
+        # One host pod a node (pod anti-affinity): the pool is as many nodes as hosts, whatever they ask.
+        sb = pools["sandboxes"]
+        sb["nodes"], sb["min_nodes"] = sandboxes["hosts"], sandboxes["min_hosts"]
+        for phase, n in (("floor", sandboxes["min_hosts"]), ("sized", sandboxes["hosts"]), ("ceiling", sandboxes["hosts"])):
+            sb["applied"][phase]["nodes"] = n
+        sb["one_pod_a_node"] = True
+        juicefs = p["sandboxes.juicefs_redis"]
+        body["stores"]["sandboxes_juicefs_redis"] = {"placement": "external", "spec": {"placement": "external", "instance": {
+            "vcpu": juicefs["cpu"], "memory_gib": juicefs["memory_gib"], "maxmemory_policy": cited["sandboxes.juicefs_redis"]["maxmemory_policy"], "dedicated": True}}}
+        prov("stores.sandboxes_juicefs_redis", "param:sandboxes.juicefs_redis", "docs:sandboxes.juicefs_redis")
 
     summary = tot.totals([e for e in model if e["name"] not in dbs], [e for e in model if e["name"] in dbs], overhead)
     sums = {name: tot.pod_sum(applied, which) for name, which in tot.PHASES.items()}
-    jobs = hook_jobs(chart.render(values))
+    # The products' keys and URLs are <placeholders> in the values; their stand-ins let the chart render.
+    jobs = hook_jobs(chart.render(merge(values, body["products"]["render"])))
     body["totals"] = summary | {
         "nodes": pools["app"]["nodes"], "min_nodes": pools["app"]["min_nodes"], "volume_gib": tot.pod_sum(model, "sized")["volume_gib"],
         "applied": sums, "hooks": {"base": "ceiling", "jobs": jobs, "peak": tot.hook_peak(jobs, sums["ceiling"])},

@@ -14,7 +14,10 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 |:--|:--|:--|:--|
 | `schema` | number | version | the schema number: it changes only when a field's name, place or meaning does |
 | `chart` | string | - | the chart version the plan was read from |
+| `app_version` | string | - | the LangSmith release the chart deploys (its Chart.yaml appVersion), which is the images' tag; the chart version is `chart` |
 | `inputs` | object | - | every input after defaults and clamping; provenance.inputs.<name> says where each came from |
+| `inputs.agent_deployments` | number | deployments | Agent Server deployments the operator runs; 1 when not given |
+| `inputs.agent_load` | string | - | each Agent Server deployment's read then write load as the docs' table column: ll, lh, hl, mm or hh |
 | `inputs.app_node` | list or null | vCPU, then GiB | the application pool's node shape when given, else null (the default is in params.yaml) |
 | `inputs.app_node[]` | number | vCPU, then GiB | one of the two figures of the shape |
 | `inputs.backfill_days` | number or null | days | the days the backfill should take; null with backfill_runs |
@@ -27,6 +30,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `inputs.datastores_on` | string | - | app (in-cluster stores share the application pool) or dedicated |
 | `inputs.extended_retention_days` | number | days | extended retention |
 | `inputs.extended_share_pct` | number | % | share of runs upgraded to extended retention |
+| `inputs.gateway_streams` | number or null | streams | concurrent LLM gateway streams at the busiest time; null keeps the chart's autoscaler |
 | `inputs.object_store` | string | - | external (a bucket) or in-cluster |
 | `inputs.offload_threshold_kib` | number | KiB | a field at or above this size is offloaded |
 | `inputs.payload_mix` | object | - | share of runs by payload size |
@@ -37,11 +41,19 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `inputs.peak_traces_per_second` | number or null | traces/s | the busiest hour's rate when given; null means the average times peak_factor |
 | `inputs.postgres` | string | - | where LangSmith's Postgres runs: external, statefulset or operator |
 | `inputs.postgres_memory_gib` | number or null | GiB | memory of the external Postgres instance when given; null takes the scale guide's |
+| `inputs.products` | list | - | what runs: tracing, and each product chosen besides it (products.yaml) |
+| `inputs.products[]` | string | - | a product: traces, agent_server, fleet, insights, polly, engine, gateway or sandboxes |
 | `inputs.redis` | string | - | where Redis runs: external, statefulset or operator |
 | `inputs.redis_expiry_seconds` | number | seconds | how long Redis keeps a run payload |
 | `inputs.redis_expiry_tuned` | boolean | - | whether Redis active expiry is tuned (hz 50, active-expire-effort 5); untuned adds headroom |
+| `inputs.requests_from_measured` | null | - | pods ask what they were measured to use (params lite.measured) rather than the chart's and the managed stores' sizes; null leaves it to the regime |
 | `inputs.retention_days` | number | days | base retention of a trace |
 | `inputs.runs_per_trace` | number | runs | runs in one trace |
+| `inputs.sandbox_memory_gib` | number or null | GiB | guest memory a sandbox; null takes the docs' figure (products.sandboxes.memory_gib_each holds the one used) |
+| `inputs.sandbox_node` | list or null | - | the KVM node the sandbox pool is counted in, (vCPU, GiB); null takes params pools.sandbox_node |
+| `inputs.sandbox_node[]` | number | vCPU, GiB | the node's vCPU, then its GiB |
+| `inputs.sandbox_vcpu` | number | vCPU | committed vCPU a sandbox |
+| `inputs.sandboxes` | number | sandboxes | sandboxes running at once at the busiest time |
 | `inputs.single_run_kib` | list or null | KiB | one run size [input, output] in place of the mix, else null |
 | `inputs.single_run_kib[]` | number | KiB | the input size, then the output size |
 | `inputs.smithdb_metastore` | string | - | where the SmithDB metastore's Postgres runs: external, statefulset or operator |
@@ -115,10 +127,16 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `workloads.<workload>.limits.memory_gib` | number | GiB | limits memory |
 | `workloads.<workload>.max` | number | pods | the autoscaler's ceiling, reported and never reserved in the totals |
 | `workloads.<workload>.min` | number | pods | the autoscaler's floor |
-| `workloads.<workload>.regime_adjusted` | object | - | present when the regime fixed the replicas: what the model sized before it did |
+| `workloads.<workload>.regime_adjusted` | object | - | present when the regime changed the replicas or requests: what the model sized before it did |
+| `workloads.<workload>.regime_adjusted.limits` | object | - | the model's own per pod limits |
+| `workloads.<workload>.regime_adjusted.limits.cpu` | number | vCPU | limits CPU |
+| `workloads.<workload>.regime_adjusted.limits.memory_gib` | number | GiB | limits memory |
 | `workloads.<workload>.regime_adjusted.max` | number | pods | the model's own max |
 | `workloads.<workload>.regime_adjusted.min` | number | pods | the model's own min |
 | `workloads.<workload>.regime_adjusted.replicas` | number | pods | the model's own replicas |
+| `workloads.<workload>.regime_adjusted.requests` | object | - | the model's own per pod requests |
+| `workloads.<workload>.regime_adjusted.requests.cpu` | number | vCPU | requests CPU |
+| `workloads.<workload>.regime_adjusted.requests.memory_gib` | number | GiB | requests memory |
 | `workloads.<workload>.replicas` | number | pods | the replicas the plan sizes, which the chart values apply (the regime's count when it fixed them) |
 | `workloads.<workload>.requests` | object | - | per pod requests |
 | `workloads.<workload>.requests.cpu` | number | vCPU | requests CPU |
@@ -159,10 +177,16 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `smithdb.components.<component>.limits.memory_gib` | number | GiB | limits memory |
 | `smithdb.components.<component>.max` | number | pods | the autoscaler's ceiling, reported and never reserved in the totals |
 | `smithdb.components.<component>.min` | number | pods | the autoscaler's floor |
-| `smithdb.components.<component>.regime_adjusted` | object | - | present when the regime fixed the replicas: what the model sized before it did |
+| `smithdb.components.<component>.regime_adjusted` | object | - | present when the regime changed the replicas or requests: what the model sized before it did |
+| `smithdb.components.<component>.regime_adjusted.limits` | object | - | the model's own per pod limits |
+| `smithdb.components.<component>.regime_adjusted.limits.cpu` | number | vCPU | limits CPU |
+| `smithdb.components.<component>.regime_adjusted.limits.memory_gib` | number | GiB | limits memory |
 | `smithdb.components.<component>.regime_adjusted.max` | number | pods | the model's own max |
 | `smithdb.components.<component>.regime_adjusted.min` | number | pods | the model's own min |
 | `smithdb.components.<component>.regime_adjusted.replicas` | number | pods | the model's own replicas |
+| `smithdb.components.<component>.regime_adjusted.requests` | object | - | the model's own per pod requests |
+| `smithdb.components.<component>.regime_adjusted.requests.cpu` | number | vCPU | requests CPU |
+| `smithdb.components.<component>.regime_adjusted.requests.memory_gib` | number | GiB | requests memory |
 | `smithdb.components.<component>.replicas` | number | pods | the replicas the plan sizes, which the chart values apply (the regime's count when it fixed them) |
 | `smithdb.components.<component>.requests` | object | - | per pod requests |
 | `smithdb.components.<component>.requests.cpu` | number | vCPU | requests CPU |
@@ -208,6 +232,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `stores.<store>.spec.instance` | object | - | external only: the one instance to provision |
 | `stores.<store>.spec.instance.cluster` | boolean | - | Redis runs as a cluster (more than one shard) |
 | `stores.<store>.spec.instance.connection_budget` | number | connections | connections the pods may use |
+| `stores.<store>.spec.instance.dedicated` | boolean | - | true when the instance may not be shared with anything else |
 | `stores.<store>.spec.instance.disk_autoexpand` | boolean | - | the disk should grow on demand |
 | `stores.<store>.spec.instance.disk_gib` | number | GiB | disk |
 | `stores.<store>.spec.instance.langsmith` | object | - | object storage: the LangSmith bucket to create; null when blob storage is off |
@@ -270,6 +295,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `stores.postgres.api_pods` | number | pods | platform-backend and backend pods |
 | `stores.postgres.budget` | number | connections | the share of max_connections the pods may use |
 | `stores.postgres.connections` | number | connections | what the pods open |
+| `stores.postgres.connections_in_use` | number | connections | present in scale-out: the connections measured in use, beside the pools' count in connections |
 | `stores.postgres.in_cluster` | object or null | - | the chart's StatefulSet figures when Postgres runs as one, else null |
 | `stores.postgres.in_cluster.requests` | object | - | the pod's requests |
 | `stores.postgres.in_cluster.requests.cpu` | number | vCPU | CPU request |
@@ -277,6 +303,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `stores.postgres.in_cluster.storage_gib` | number | GiB | disk the scale guide gives |
 | `stores.postgres.max_connections` | number | connections | the instance's max_connections, assumed |
 | `stores.postgres.max_connections_from` | string | - | instance memory or image default |
+| `stores.postgres.max_connections_needed` | number | connections | present in scale-out: max_connections to set, with PgBouncer in front |
 | `stores.postgres.queue_pods` | number | pods | queue and ingest-queue pods |
 | `stores.redis` | object | - | Redis memory, shards and queue partitions |
 | `stores.redis.alarm_gib` | number | GiB | used memory at which to alarm: a share of maxmemory |
@@ -298,16 +325,90 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `stores.redis.over_shard_cap` | boolean | - | the shards pass the managed cap |
 | `stores.redis.payload_gi` | number | GiB | memory to hold every run's payload for the full expiry at the peak rate, with headroom |
 | `stores.redis.queue_partitions` | number | partitions | ingest queue partitions; 1 on a single node |
+| `stores.sandboxes_juicefs_redis` | object | - | the dedicated Redis that holds JuiceFS metadata for sandboxes; present when sandboxes run |
 | `stores.smithdb_metastore` | object | - | the SmithDB metastore's Postgres |
 | `stores.smithdb_metastore.postgres_min_major_version` | number | major version | the oldest PostgreSQL major version to provision |
 | `stores.smithdb_metastore.tier` | string | - | the SmithDB tier it is sized for |
 | `regime` | object | - | the load band the install is in and what it turns on |
 | `regime.about` | string | - | what the regime means |
 | `regime.id` | string | - | extra-lite, lite, standard, large or beyond-tested |
+| `regime.measured` | object | - | present in scale-out and beyond-tested: the figures a load test's measured rates gave (params scale_out.measured) |
+| `regime.measured.api_cores` | number | vCPU | requested API (platform-backend) vCPU at the peak |
+| `regime.measured.compaction_workers` | number | pods | SmithDB compaction workers at the measured runs/s a worker |
+| `regime.measured.ingest_cores` | number | vCPU | requested ingest-queue vCPU at the peak |
+| `regime.measured.postgres` | object | - | Postgres connections at the measured rate of about one a pod |
+| `regime.measured.postgres.in_use` | number | connections | connections in use across the pods |
+| `regime.measured.postgres.max_connections_needed` | number | connections | max_connections to set, at the test's ratio of configured to used |
+| `regime.measured.smithdb_ingestion_pods` | number | pods | SmithDB ingestion pods at the measured runs/s a pod |
 | `regime.observe` | boolean | - | the regime is unmeasured: treat every figure as something to observe |
+| `regime.requests_from_measured` | boolean | - | whether this plan's pods ask what they were measured to use: the input, else the regime (extra-lite) |
 | `regime.turns_on` | object | - | the switches the regime sets; the keys are those of the regime in params.yaml |
 | `regime.turns_on.<switch>` | boolean or number or string | count for serving_replicas and nodes, else none | one switch: true or false, or a count |
 | `regime.why` | string | - | the edge that put the load in this regime |
+| `products` | object | - | what runs besides tracing, each product's pods and what it needs |
+| `products.added` | object | - | each product that runs only because another requires it, with the one that did (Engine adds sandboxes) |
+| `products.agent_server` | object | - | Agent Server's deployments, sized by the docs' table; the operator creates their pods at run time |
+| `products.agent_server.deployments` | number | deployments | how many |
+| `products.agent_server.each` | object | - | one deployment's pods, to enter as its resource_spec |
+| `products.agent_server.each.<pod>` | object | - | api-server, queue, postgres or redis |
+| `products.agent_server.each.<pod>.cpu` | number | vCPU | requested a pod |
+| `products.agent_server.each.<pod>.memory_gib` | number | GiB | requested a pod |
+| `products.agent_server.each.<pod>.replicas` | number | pods | replicas a deployment |
+| `products.agent_server.load` | string | - | the table column each deployment is sized at |
+| `products.agent_server.n_jobs_per_worker` | number | jobs | N_JOBS_PER_WORKER the table gives that column |
+| `products.gateway` | object | - | the LLM gateway's replicas for the streams given |
+| `products.gateway.replicas_needed` | number | pods | streams over the docs' streams a replica, rounded up; the autoscaler's ceiling is at least this |
+| `products.gateway.streams` | number | streams | concurrent streams at the busiest time |
+| `products.gateway.streams_per_replica` | number | streams | what the docs measured one replica to carry |
+| `products.gateway.tested_requests` | object | - | the requests the docs measured it at |
+| `products.gateway.tested_requests.cpu` | number | vCPU | tested request |
+| `products.gateway.tested_requests.memory_gib` | number | GiB | tested request |
+| `products.labels` | object | - | each running product's name as a person knows it |
+| `products.labels.<product>` | string | - | the name |
+| `products.needs` | object | - | what each product needs of the cluster, beyond pods |
+| `products.needs.<product>` | list | - | the product's needs |
+| `products.needs.<product>[]` | object | - | one need |
+| `products.needs.<product>[].cite` | string | - | the citation in citations.yaml that says so |
+| `products.needs.<product>[].what` | string | - | what the cluster must have |
+| `products.on` | list | - | the products that run, chosen and required, in catalog order |
+| `products.on[]` | string | - | a product |
+| `products.pods` | object | - | every pod the products add, by workload name, counted in the pools and totals |
+| `products.pods.<workload>` | object | - | one workload |
+| `products.pods.<workload>.from` | string | - | where its size comes from: chart (a render with the product on), docs (Agent Server's table) or params (products.pods, where the chart sets no resources) |
+| `products.pods.<workload>.kind` | string | - | Deployment or StatefulSet as rendered, or per deployment for an Agent Server deployment's pods |
+| `products.pods.<workload>.limits` | object | - | per pod limits |
+| `products.pods.<workload>.limits.cpu` | number | vCPU | limits CPU |
+| `products.pods.<workload>.limits.memory_gib` | number | GiB | limits memory |
+| `products.pods.<workload>.max` | number | pods | the ceiling: its autoscaler's maximum, else its replicas |
+| `products.pods.<workload>.min` | number | pods | the floor: its autoscaler's minimum, else its replicas |
+| `products.pods.<workload>.pool` | string | - | present when it runs off the application pool: sandboxes for the sandbox host |
+| `products.pods.<workload>.product` | string | - | the product it belongs to |
+| `products.pods.<workload>.replicas` | number | pods | the replicas the plan counts |
+| `products.pods.<workload>.requests` | object | - | per pod requests |
+| `products.pods.<workload>.requests.cpu` | number | vCPU | requests CPU |
+| `products.pods.<workload>.requests.memory_gib` | number | GiB | requests memory |
+| `products.render` | object | - | stand-ins for the products' keys and URLs that let the chart render; never in values.yaml |
+| `products.sandboxes` | object | - | the sandbox hosts the load needs, by the docs' formula |
+| `products.sandboxes.by` | string | - | cpu or memory: which bound set the hosts |
+| `products.sandboxes.committed_vcpu` | number | vCPU | concurrent x vCPU each |
+| `products.sandboxes.concurrent` | number | sandboxes | running at once |
+| `products.sandboxes.cpu_autoscaler_short` | boolean | - | true when memory needs more hosts than CPU: the chart's autoscaler counts CPU only and would stop short |
+| `products.sandboxes.guest_memory_gib` | number | GiB | concurrent x GiB each |
+| `products.sandboxes.guest_memory_gib_a_host` | number | GiB | guest memory on a busy host, added to the host pod's memory request |
+| `products.sandboxes.headroom` | number | hosts | spare hosts the autoscaler keeps, from the chart |
+| `products.sandboxes.host_pod` | object | - | the sandbox host pod's request the values set |
+| `products.sandboxes.host_pod.cpu` | number | vCPU | the chart's request |
+| `products.sandboxes.host_pod.memory_gib` | number | GiB | the chart's request plus guest memory a host |
+| `products.sandboxes.hosts` | number | hosts | ceil(committed vCPU / (node vCPU x target)) + headroom, or the same in memory when larger, never below min_hosts |
+| `products.sandboxes.memory_gib_each` | number | GiB | guest memory a sandbox |
+| `products.sandboxes.min_hosts` | number | hosts | the docs' floor so a rollout keeps a ready host |
+| `products.sandboxes.node` | object | - | the KVM node shape |
+| `products.sandboxes.node.cpu` | number | vCPU | a node |
+| `products.sandboxes.node.memory_gib` | number | GiB | a node |
+| `products.sandboxes.node_from` | string | - | input, or the param it came from |
+| `products.sandboxes.target` | number | fraction | the host autoscaler's target utilization, from the chart |
+| `products.sandboxes.vcpu_each` | number | vCPU | committed a sandbox |
+| `products.values` | object | - | the values that switch each product on or off and size its unsized pods; merged into values |
 | `scale` | object | - | per autoscaled workload: the trigger recommended, what the chart supports and what the values apply |
 | `scale.<workload>` | object | - | one workload |
 | `scale.<workload>.above_chart_default` | boolean | - | the applied ceiling is above the chart's default |
@@ -402,14 +503,31 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `warnings[clickhouse-does-not-fit-node].figures` | object | - | the figures of this warning |
 | `warnings[clickhouse-does-not-fit-node].figures.node_cpu` | number | vCPU | the smallest shape one pod fits |
 | `warnings[clickhouse-does-not-fit-node].figures.node_mem_gib` | number | GiB | memory of that shape |
+| `warnings[gateway-below-tested].figures` | object | - | the gateway's requests on this chart, beside the ones the docs measured streams at |
+| `warnings[gateway-below-tested].figures.requests` | object | - | this chart's gateway request |
+| `warnings[gateway-below-tested].figures.requests.cpu` | number | vCPU | requested |
+| `warnings[gateway-below-tested].figures.requests.memory_gib` | number | GiB | requested |
+| `warnings[gateway-below-tested].figures.tested` | object | - | the docs' tested request |
+| `warnings[gateway-below-tested].figures.tested.cpu` | number | vCPU | tested |
+| `warnings[gateway-below-tested].figures.tested.memory_gib` | number | GiB | tested |
+| `warnings[ingestion-hot-project].figures` | object | - | the ingestion pods planned |
+| `warnings[ingestion-hot-project].figures.pods` | number | pods | SmithDB ingestion pods |
 | `warnings[object-store-unmeasured].figures` | object | - | no figures |
+| `warnings[offload-throttled].figures` | object | - | where offloading payloads stopped holding |
+| `warnings[offload-throttled].figures.ceiling` | number | runs/s | the run rate past which the test's object store throttled offloaded reads |
 | `warnings[pod-does-not-fit-node].figures` | object | - | the figures of this warning |
 | `warnings[pod-does-not-fit-node].figures.pod` | string | - | the largest pod |
 | `warnings[pod-does-not-fit-node].figures.pool` | string | - | the pool |
+| `warnings[postgres-connections-at-scale].figures` | object | - | Postgres connections at this many pods |
+| `warnings[postgres-connections-at-scale].figures.in_use` | number | connections | in use |
+| `warnings[postgres-connections-at-scale].figures.max_connections_needed` | number | connections | max_connections to set |
 | `warnings[postgres-connections].figures` | object | - | the figures of this warning |
 | `warnings[postgres-connections].figures.budget` | number | connections | the budget |
 | `warnings[postgres-connections].figures.connections` | number | connections | what the pods open |
 | `warnings[postgres-connections].figures.max_connections` | number | connections | the instance's max_connections |
+| `warnings[products-single-replica].figures` | object | - | the products' Deployments that run one replica |
+| `warnings[products-single-replica].figures.pods` | list | - | their workload names |
+| `warnings[products-single-replica].figures.pods[]` | string | - | a workload |
 | `warnings[redis-needs-cluster].figures` | object | - | the figures of this warning |
 | `warnings[redis-needs-cluster].figures.memory_gi` | number | GiB | memory Redis needs |
 | `warnings[redis-needs-cluster].figures.shards` | number | shards | shards the peak needs |
@@ -417,6 +535,8 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `warnings[redis-over-shard-cap].figures` | object | - | the figures of this warning |
 | `warnings[redis-over-shard-cap].figures.cap` | number | shards | the managed cap |
 | `warnings[redis-over-shard-cap].figures.shards` | number | shards | shards the peak needs |
+| `warnings[sandboxes-memory-bound].figures` | object | - | the hosts memory needs |
+| `warnings[sandboxes-memory-bound].figures.hosts` | number | hosts | the floor the values set on the host autoscaler |
 | `warnings[single-node-hook-peak].figures` | object | - | the figures of this warning |
 | `warnings[single-node-hook-peak].figures.requests_cpu` | number | vCPU | everything plus the largest hook Job |
 | `warnings[single-node-hook-peak].figures.requests_mem_gib` | number | GiB | the same in memory |
@@ -542,6 +662,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `pools.<pool>.node_from` | string | - | input or the param that gave the shape |
 | `pools.<pool>.node_mem_gib` | number | GiB | memory of that shape |
 | `pools.<pool>.nodes` | number | nodes | nodes at the sized replicas |
+| `pools.<pool>.one_pod_a_node` | boolean | - | present on the sandbox pool: one host pod a node, so its nodes are its hosts, not a sum of requests |
 | `pools.<pool>.pods` | list | - | the pods counted in the pool |
 | `pools.<pool>.pods[]` | string | - | a pod's name |
 | `pools.<pool>.present` | boolean | - | always true: a pool with no pods is absent |
@@ -599,6 +720,7 @@ The same fields as the plan's `stores`, `dbs` and `warnings`, written for provis
 | `stores.<store>.spec.instance` | object | - | external only: the one instance to provision |
 | `stores.<store>.spec.instance.cluster` | boolean | - | Redis runs as a cluster (more than one shard) |
 | `stores.<store>.spec.instance.connection_budget` | number | connections | connections the pods may use |
+| `stores.<store>.spec.instance.dedicated` | boolean | - | true when the instance may not be shared with anything else |
 | `stores.<store>.spec.instance.disk_autoexpand` | boolean | - | the disk should grow on demand |
 | `stores.<store>.spec.instance.disk_gib` | number | GiB | disk |
 | `stores.<store>.spec.instance.langsmith` | object | - | object storage: the LangSmith bucket to create; null when blob storage is off |
@@ -635,6 +757,7 @@ The same fields as the plan's `stores`, `dbs` and `warnings`, written for provis
 | `stores.object_storage` | object | - | the SmithDB and LangSmith buckets |
 | `stores.postgres` | object | - | Postgres connections against its budget |
 | `stores.redis` | object | - | Redis memory, shards and queue partitions |
+| `stores.sandboxes_juicefs_redis` | object | - | the dedicated Redis that holds JuiceFS metadata for sandboxes; present when sandboxes run |
 | `stores.smithdb_metastore` | object | - | the SmithDB metastore's Postgres |
 | `smithdb_cache_volume` | object | - | the StorageClass every SmithDB cache volume needs, as smithdb.cache_volume |
 | `smithdb_cache_volume.min_iops` | number | IOPS | per volume, at least |
@@ -662,6 +785,9 @@ The same fields as the plan's `stores`, `dbs` and `warnings`, written for provis
 | `warnings[clickhouse-does-not-fit-node].figures.node_cpu` | number | vCPU | the smallest shape one pod fits |
 | `warnings[clickhouse-does-not-fit-node].figures.node_mem_gib` | number | GiB | memory of that shape |
 | `warnings[object-store-unmeasured].figures` | object | - | no figures |
+| `warnings[postgres-connections-at-scale].figures` | object | - | Postgres connections at this many pods |
+| `warnings[postgres-connections-at-scale].figures.in_use` | number | connections | in use |
+| `warnings[postgres-connections-at-scale].figures.max_connections_needed` | number | connections | max_connections to set |
 | `warnings[postgres-connections].figures` | object | - | the figures of this warning |
 | `warnings[postgres-connections].figures.budget` | number | connections | the budget |
 | `warnings[postgres-connections].figures.connections` | number | connections | what the pods open |

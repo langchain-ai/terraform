@@ -26,6 +26,8 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "schema": ("", "langsmith-load-results/1; it changes only when a field's name, place or meaning does"),
     "test_id": ("", "the unique id in every run's metadata; the stored count filters on it"),
     "project": ("", "the LangSmith project the run wrote to"),
+    "server": ("", "what the install said about itself"),
+    "server.app_version": ("", "the LangSmith release it serves (its /info version), the images' version, not the chart's; null when tracing was off or the read failed"),
     "started_at": ("", "when the load started, ISO 8601 UTC"),
     "ended_at": ("", "when the load and the stored count finished, ISO 8601 UTC"),
     "profile": ("", OPAQUE["profile"]),

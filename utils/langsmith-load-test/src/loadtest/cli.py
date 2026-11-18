@@ -18,8 +18,11 @@ import structlog
 from dotenv import load_dotenv
 from langsmith import Client
 from langsmith.utils import tracing_is_enabled
+from langsmith_sizing import ui
+from langsmith_sizing.summary import Table
 from loadtest.profile import Profile, ProfileError, from_file, from_params
 from loadtest.runner import LoadSettings, build_report, run_load_test
+from rich.console import Console
 
 SETUP_ERROR = 2
 
@@ -131,21 +134,23 @@ def main(argv: list[str] | None = None) -> int:
     project_name = os.getenv("LANGSMITH_PROJECT") or "load-test"
     _configure_logging()
     logger = structlog.get_logger("loadtest.load_test")
+    if json_output:
+        # stdout carries the results document alone; everything a person reads goes to stderr
+        ui.console = Console(theme=ui.THEME, stderr=True, highlight=False)
     mode = f"open loop at {settings.traces_per_second:g} traces/s" if settings.traces_per_second else f"closed loop, {settings.users} users"
-    logger.info(
-        f"Load test started: {mode}   Duration: {settings.duration_seconds:g}s   Ramp: {settings.ramp_up_seconds:g}s   "
-        f"Run limit: {settings.run_limit if settings.run_limit is not None else 'none'}   "
-        f"Reads: {f'{settings.reads_per_second:g}/s' if settings.read else 'off'}"
-    )
+    ui.banner("LangSmith load test", f"{os.getenv('LANGSMITH_ENDPOINT', '(no endpoint: local only)')}\n{mode}, {settings.duration_seconds:g} s after a {settings.ramp_up_seconds:g} s ramp; "
+              f"reads {f'{settings.reads_per_second:g}/s' if settings.read else 'off'}; run limit {settings.run_limit if settings.run_limit is not None else 'none'}"
+              + (f"\nprofile {profile_path}" if profile_path else ""))
     upload_errors: SimpleQueue[Exception] = SimpleQueue()
 
     def report_progress(traces: int, errors: int, elapsed_seconds: float) -> None:
         errors += upload_errors.qsize()
-        log = logger.warning if errors else logger.info
-        log(f"Progress after {elapsed_seconds:.0f}s: Traces: {traces:,}   Errors: {errors:,}   Rate: {traces / elapsed_seconds:.2f} traces/s")
+        line = f"{elapsed_seconds:>6.0f} s   {traces:>10,} traces   {traces / elapsed_seconds:>8.2f} traces/s   {errors:,} errors"
+        (ui.warn if errors else ui.note)(line)
 
     client = None
     project_id = None
+    app_version = None
     try:
         if tracing_enabled:
             client = Client(
@@ -154,9 +159,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             project = client.create_project(project_name=project_name, upsert=True)
             project_id = project.id
-            logger.info(f"Project: {project_name}   Workspace: {project.tenant_id}")
+            app_version = _app_version(client)
+            ui.note(f"project {project_name}, workspace {project.tenant_id}, LangSmith {app_version or 'version not read'}")
         else:
-            logger.info("Tracing disabled: payloads are generated locally and nothing is uploaded")
+            ui.note("tracing is off: payloads are generated locally and nothing is uploaded")
         outcome = asyncio.run(run_load_test(settings, profile, client, project_name, project_id, report_progress))
     except Exception as error:  # noqa: BLE001 - turn setup and flush failures into CLI errors
         logger.error(f"Load test failed: Reason: {' '.join(str(error).splitlines())}")
@@ -167,15 +173,24 @@ def main(argv: list[str] | None = None) -> int:
 
     upload_count = upload_errors.qsize()
     first_upload_error = str(upload_errors.get()) if upload_count else None
-    report = build_report(outcome, settings, profile, project_name, tracing_enabled, upload_count, first_upload_error)
+    report = build_report(outcome, settings, profile, project_name, tracing_enabled, upload_count, first_upload_error, app_version)
     _emit(report, results_path, json_output)
-    (logger.info if report["passed"] else logger.error)(f"Load test {'passed' if report['passed'] else 'FAILED'}")
     return 0 if report["passed"] else 1
+
+
+def _app_version(client: Client) -> str | None:
+    """The LangSmith release the install serves. A failed read is unknown, never a version: compare
+    then says the version was not measured instead of judging it."""
+    try:
+        return str(client.info.version) or None
+    except Exception:  # noqa: BLE001 - an older or locked-down /info must not stop the run
+        return None
 
 
 def _emit(report: dict[str, Any], results_path: Path | None, json_output: bool) -> None:
     if results_path is not None:
         results_path.write_text(json.dumps(report, indent=2) + "\n")
+        ui.note(f"results written to {results_path}")
     if json_output:
         json.dump(report, sys.stdout, indent=2)
         sys.stdout.write("\n")
@@ -187,24 +202,47 @@ def _fmt(value: object) -> str:
     return "n/a" if value is None else f"{value:.3f}" if isinstance(value, float) else str(value)
 
 
+def _s(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f} s"
+
+
+VERDICT = {None: "not measured", True: "pass", False: "fail"}
+
+
 def print_summary(report: dict[str, Any]) -> None:
-    write, lag, stored = report["write"], report["lag"], report["stored"]
-    print(f"write    {write['mode']}: {_fmt(write['achieved_traces_per_second'])} traces/s achieved"
-          f" (target {_fmt(write['target_traces_per_second'])}), {write['traces_sent']} traces, {write['runs_sent']} runs,"
-          f" {write['run_errors']} errors, {write['dropped_starts']} dropped starts,"
-          f" schedule lag p99 {_fmt(write['schedule_lag_seconds']['p99'])} s")
-    print(f"feedback {report['feedback']['sent']} sent, {report['feedback']['errors']} errors")
-    for name, entry in report["reads"]["classes"].items():
-        print(f"read     {name:<14} n={entry['count']} errors={entry['errors']} skipped={entry['skipped']}"
-              f" p50={_fmt(entry['p50_seconds'])} p95={_fmt(entry['p95_seconds'])} p99={_fmt(entry['p99_seconds'])} s ({entry['component']})")
-    print(f"lag      {lag['readable']}/{lag['sampled']} readable, {lag['never_readable']} never readable,"
-          f" p50 {_fmt(lag['p50_seconds'])} p95 {_fmt(lag['p95_seconds'])} p99 {_fmt(lag['p99_seconds'])} max {_fmt(lag['max_seconds'])} s")
-    print(f"stored   runs sent {stored['runs_sent']}, stored {_fmt(stored['runs_stored'])}, missing {_fmt(stored['missing_runs'])}"
-          f"{' (' + stored['error'] + ')' if stored['error'] else ''}")
-    for name, entry in report["targets"].items():
-        print(f"target   {name:<26} {'not measured' if entry['passed'] is None else 'pass' if entry['passed'] else 'FAIL'}")
+    """The results as the sizing package draws a plan: facts, then a table each for reads, lag and the targets."""
+    write, lag, stored, fb = report["write"], report["lag"], report["stored"], report["feedback"]
+    target = write["target_traces_per_second"]
+    held = write.get("steady_traces_per_second")
+    ui.facts([
+        ("Install", f"LangSmith {(report.get('server') or {}).get('app_version') or 'version not read'}, project {report['project']}"),
+        ("Write", f"{write['mode']}: {_fmt(write['achieved_traces_per_second'])} traces/s over the run" + (f", {_fmt(held)} held after the ramp" if held is not None else "") + (f", target {target:g}" if target else "")),
+        ("Sent", f"{write['traces_sent']:,} traces, {write['runs_sent']:,} runs, {fb['sent']:,} feedback"),
+        ("Errors", f"{write['run_errors']} runs, {fb['errors']} feedback, {report['errors']['upload']} uploads, {report['errors']['reads']} reads; {write['dropped_starts']} starts dropped"),
+        ("Stored", f"{stored['runs_stored'] if stored['runs_stored'] is not None else 'not read'} of {stored['runs_sent']:,} runs" + (f", {stored['missing_runs']} missing" if stored["missing_runs"] else "") + (f" ({stored['error']})" if stored["error"] else "")),
+        ("Schedule lag", f"p99 {_s(write['schedule_lag_seconds']['p99'])}: how late starts were against the rate"),
+    ], f"Load test {report['test_id']}")
+    classes = report["reads"]["classes"]
+    if classes:
+        rows = [(name, str(e["count"]), str(e["errors"]), str(e["skipped"]), _s(e["p50_seconds"]), _s(e["p95_seconds"]), _s(e["p99_seconds"]), e["component"]) for name, e in classes.items()]
+        ui.table(Table("Reads", ("class", "n", "errors", "skipped", "p50", "p95", "p99", "served by"), rows))
+    ui.table(Table("Send to readable", ("readable", "never readable", "p50", "p95", "p99", "max"),
+                   [(f"{lag['readable']} of {lag['sampled']}", str(lag["never_readable"]), _s(lag["p50_seconds"]), _s(lag["p95_seconds"]), _s(lag["p99_seconds"]), _s(lag["max_seconds"]))],
+                   f"A {lag['sample_share']:g} share of traces polled until readable, up to {lag['deadline_seconds']:g} s."))
+    ui.heading("Targets")
+    ui.verdicts([{"item": name, "verdict": VERDICT[e["passed"]], "detail": _target_detail(e)} for name, e in report["targets"].items()])
     if write["first_error"]:
-        print(f"first error: {write['first_error']}")
+        ui.warn(f"first error: {write['first_error']}")
+    (ui.ok if report["passed"] else ui.error)("the run passed" if report["passed"] else "the run FAILED")
+    ui.console.print()
+
+
+def _target_detail(entry: dict[str, Any]) -> str:
+    if "observed_seconds" in entry:
+        return f"{entry['observed']} {_s(entry['observed_seconds'])} against {entry['target_seconds']:g} s"
+    if "missing" in entry:
+        return "the stored count could not be read" if entry["missing"] is None else f"{entry['missing']} runs sent and not stored"
+    return "set with --latency-limit-seconds" if entry["passed"] is None else "p95 time to hand a trace to the SDK"
 
 
 if __name__ == "__main__":

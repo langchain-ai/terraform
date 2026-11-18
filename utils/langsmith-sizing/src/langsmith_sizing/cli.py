@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from langsmith_sizing import (
-    DEFAULT_CHART,
     PLANNED_CHARTS,
     chart,
     citations,
@@ -26,6 +25,7 @@ from langsmith_sizing import (
     values,
     wizard,
 )
+from langsmith_sizing.model import products
 
 
 def _check_citations(a: argparse.Namespace) -> int:
@@ -38,15 +38,16 @@ def _check_citations(a: argparse.Namespace) -> int:
 
 def _check_params(a: argparse.Namespace) -> int:
     loaded = params.load()
-    problems = [f"{v}: {p}" for v in ([a.chart] if a.chart else PLANNED_CHARTS) for p in params.shadowed(loaded, chart.Chart(v))]
+    versions = [chart.resolve(a.chart)] if a.chart else list(PLANNED_CHARTS)
+    problems = [f"{v}: {p}" for v in versions for p in params.shadowed(loaded, chart.Chart(v))]
     for p in problems:
         print(p)
-    print(f"params: {len(loaded)} ok at {', '.join([a.chart] if a.chart else PLANNED_CHARTS)}" if not problems else f"params: {len(problems)} shadow the chart")
+    print(f"params: {len(loaded)} ok at {', '.join(versions)}" if not problems else f"params: {len(problems)} shadow the chart")
     return 1 if problems else 0
 
 
 def _chart_info(a: argparse.Namespace) -> int:
-    c = chart.Chart(a.chart)
+    c = chart.Chart(chart.resolve(a.chart))
     keys = a.key or ["smithdb.resourceTier", "config.settings.redisRunsExpirySeconds"]
     print(json.dumps({k: c.at(k) for k in keys}, indent=2))
     return 0
@@ -58,21 +59,23 @@ def _flags(a: argparse.Namespace) -> dict[str, Any]:
         "peak_traces_per_second": a.peak_traces_per_second, "runs_per_trace": a.runs_per_trace, "retention_days": a.retention_days,
         "postgres": a.postgres, "redis": a.redis, "smithdb_metastore": a.smithdb_metastore, "object_store": a.object_store, "clickhouse": a.clickhouse,
         "datastores_on": a.datastores_on, "app_node": a.app_node, "smithdb_node": a.smithdb_node, "datastore_node": a.datastore_node,
-        "trace_store": a.trace_store, "survives_node_loss": a.survives_node_loss,
+        "trace_store": a.trace_store, "survives_node_loss": a.survives_node_loss, "requests_from_measured": a.requests_from_measured,
         "backfill_runs": a.backfill_runs, "backfill_days": a.backfill_days,
         "smithdb_tier": a.smithdb_tier, "smithdb_topology": a.smithdb_topology,
+        "products": a.products, "agent_deployments": a.agent_deployments, "agent_load": a.agent_load, "gateway_streams": a.gateway_streams,
+        "sandboxes": a.sandboxes, "sandbox_vcpu": a.sandbox_vcpu, "sandbox_memory_gib": a.sandbox_memory_gib, "sandbox_node": a.sandbox_node,
     }
 
 
 def _chart(a: argparse.Namespace) -> str:
-    """The chart a command sizes on: the flag, else the one a saved sizing was made on, else charts.yaml's default."""
+    """The chart a command sizes on: the flag, else the one a saved sizing was made on, else the newest release."""
     if a.chart:
-        return str(a.chart)
+        return chart.resolve(a.chart)
     if a.preset and presets.is_file(a.preset):
         saved = presets.load(a.preset).chart
         if saved:
             return saved
-    return DEFAULT_CHART
+    return chart.resolve(None)
 
 
 def _inputs(a: argparse.Namespace) -> inputs.Inputs:
@@ -177,6 +180,7 @@ def _compare(a: argparse.Namespace) -> int:
 
 def _profile_report(a: argparse.Namespace) -> int:
     root = Path(a.root) if a.root else profile_report.REPO
+    a.chart = chart.resolve(a.chart)
     c, p, cited = chart.Chart(a.chart), params.load(), citations.load()
     plans = {n: plan.size(presets.load(n).to_inputs(a.chart), c, p, cited) for n in profile_report.PROFILES}
     print(profile_report.report(a.chart, plans, root))
@@ -191,8 +195,18 @@ def _shape(text: str) -> tuple[float, float]:
     return float(cpu), float(mem)
 
 
+def _products(text: str) -> tuple[str, ...]:
+    """A comma list of products besides tracing, or `all`; tracing always runs."""
+    names = list(products.catalog())
+    picked = names if text.strip() == "all" else [n.strip().replace("-", "_") for n in text.split(",") if n.strip()]
+    unknown = [n for n in picked if n not in names]
+    if unknown:
+        raise argparse.ArgumentTypeError(f"no product {', '.join(unknown)}; the products are {', '.join(names)}")
+    return tuple(dict.fromkeys(["traces", *picked]))
+
+
 def _size_flags(s: argparse.ArgumentParser) -> None:
-    s.add_argument("--chart", metavar="X.Y.Z", help="the chart version (default: a saved sizing's, else charts.yaml's default)")
+    s.add_argument("--chart", metavar="VERSION", help="an exact version (0.17.60), a line (0.18: its newest) or latest (the default; a saved sizing keeps its own)")
     s.add_argument("--preset", metavar="NAME|FILE", help=f"start from a named load ({', '.join(presets.names())}) or a saved sizing's inputs.yaml; a flag below replaces its value")
     s.add_argument("--users", type=float, help="concurrent frontend users at the busiest time")
     s.add_argument("--traces-per-second", type=float)
@@ -208,8 +222,17 @@ def _size_flags(s: argparse.ArgumentParser) -> None:
         s.add_argument(f"--{flag}", type=_shape, metavar="CPUxGIB", help="the node shape the pool is counted in")
     s.add_argument("--trace-store", choices=inputs.TRACE_STORES)
     s.add_argument("--survives-node-loss", action=argparse.BooleanOptionalAction)
+    s.add_argument("--requests-from-measured", action=argparse.BooleanOptionalAction, help="pods ask what they were measured to use; default the regime's (on in extra-lite)")
     s.add_argument("--smithdb-tier", choices=("small", "medium", "large"), help="SmithDB's tier; default the load's (the regime's for a low one)")
     s.add_argument("--smithdb-topology", choices=("cluster", "unified"), help="SmithDB's layout; unified needs a chart with smithdb.topology")
+    s.add_argument("--products", type=_products, metavar="LIST", help="what runs besides tracing, comma separated or all: agent_server, fleet, insights, polly, engine, gateway, sandboxes (Engine brings Sandboxes)")
+    s.add_argument("--agent-deployments", type=int, help="Agent Server: how many deployments (default 1)")
+    s.add_argument("--agent-load", choices=products.LOADS, help="Agent Server: each deployment's read then write load, l(ow) m(edium) h(igh), as the docs' table (default ll)")
+    s.add_argument("--gateway-streams", type=float, help="LLM gateway: concurrent streams at the busiest time")
+    s.add_argument("--sandboxes", type=float, help="Sandboxes: how many run at once at the busiest time")
+    s.add_argument("--sandbox-vcpu", type=float, help="Sandboxes: vCPU each (default 1)")
+    s.add_argument("--sandbox-memory-gib", type=float, help="Sandboxes: GiB each (default the docs' 2)")
+    s.add_argument("--sandbox-node", type=_shape, metavar="CPUxGIB", help="Sandboxes: the KVM node, one host a node")
     s.add_argument("--backfill-runs", type=float, help="ClickHouse history to copy into SmithDB, in runs (with --backfill-days)")
     s.add_argument("--backfill-days", type=float, help="the days the backfill should take")
 
@@ -221,10 +244,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--ref", help="a docs commit or branch to check against (default: the pinned commit)")
     s.set_defaults(run=_check_citations)
     s = sub.add_parser("check-params", help="load params.yaml and refuse an entry without its evidence")
-    s.add_argument("--chart", metavar="X.Y.Z", help="fail a parameter that gives a chart setting the value the chart already has; default every planned chart in charts.yaml")
+    s.add_argument("--chart", metavar="VERSION", help="fail a parameter that gives a chart setting the value the chart already has; default every planned chart in charts.yaml")
     s.set_defaults(run=_check_params)
     s = sub.add_parser("chart-info", help="print chart values at a version (pulls the chart once)")
-    s.add_argument("--chart", required=True, metavar="X.Y.Z")
+    s.add_argument("--chart", metavar="VERSION", help="exact, a line, or latest (default)")
     s.add_argument("--key", action="append", help="a dotted values key; repeatable")
     s.set_defaults(run=_chart_info)
     s = sub.add_parser("size", help="size an install from its load and print the plan as JSON")
@@ -262,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--save", metavar="verdicts.json", help="also write the verdicts here")
     s.set_defaults(run=_compare)
     s = sub.add_parser("profile-report", help="set each preset's plan beside the modules' hand-written sizing profiles (read-only)")
-    s.add_argument("--chart", required=True, metavar="X.Y.Z")
+    s.add_argument("--chart", metavar="VERSION", help="exact, a line, or latest (default)")
     s.add_argument("--root", metavar="DIR", help="the Terraform repository root (default: the one holding this package)")
     s.set_defaults(run=_profile_report)
     a = p.parse_args(argv)

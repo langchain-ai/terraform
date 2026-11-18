@@ -120,6 +120,28 @@ The folder holds everything the next steps need:
 elsewhere. A value you give replaces the preset's, the saved answer or the default; every flag is in
 [docs/reference.md](docs/reference.md).
 
+### Products beside tracing
+
+Add what else the install runs. Each product's pods are read from the chart with it switched on, and what
+the cluster must have for it is listed with the docs page that says so:
+
+```bash
+make plan NAME=acme PRESET=production PRODUCTS=agent_server,fleet,engine ARGS="--agent-deployments 3 --agent-load mm --sandboxes 50 --sandbox-node 32x128"
+```
+
+| Product | `PRODUCTS=` | What the plan adds |
+|:--|:--|:--|
+| Agent Server | `agent_server` | the control plane pods, and each deployment's API servers, queue workers, Postgres and Redis from the docs' table (`--agent-deployments`, `--agent-load`) |
+| Fleet | `fleet` | its tool and trigger servers, and its own API server, queue, Postgres and Redis |
+| Insights | `insights` | its API server, queue, Postgres and Redis |
+| Chat (Polly) | `polly` | its API server, queue, Postgres and Redis |
+| Engine | `engine` | Sandboxes; it runs in Insights' deployment |
+| LLM gateway | `gateway` | the gateway, with replicas for `--gateway-streams` |
+| Sandboxes | `sandboxes` | a KVM node pool counted in hosts (`--sandboxes`, `--sandbox-vcpu`, `--sandbox-memory-gib`, `--sandbox-node`) and a dedicated JuiceFS Redis |
+
+`PRODUCTS=all` turns everything on. Every product not chosen is switched off in `values.yaml`: Insights
+and Chat are on in the chart by default. How each is sized: [docs/how-it-sizes.md](docs/how-it-sizes.md#13-products-beside-tracing).
+
 ## Deploy it
 
 1. Provision each store marked `external` in `stores.json`, to its spec.
@@ -154,11 +176,28 @@ figure came from, runs `make plan`, and explains each number from its source in 
 
 ## Chart versions
 
-[`charts.yaml`](charts.yaml) is the one place a chart version is written. The default is 0.17.56, the
-release customers install today; the tests and `make params` also run against 0.18.0-rc.79, a release
-candidate whose `smithdb.topology` can run SmithDB as one unified pod. Choose `CHART=` (or `--chart`) as
-the chart your install runs: every default in the plan is read from it. The first run of a version pulls
-the chart into `~/.cache/langsmith-sizing` (`LANGSMITH_SIZING_CACHE` moves it).
+Two versions are easy to confuse. The **chart version** (0.17.60, 0.18.0-rc.82) is the Helm chart's own:
+what `helm upgrade --version` takes and what `CHART=` names. The **app version** (0.17.2026111800,
+0.18.29rc1) is the LangSmith release the chart deploys: its `appVersion`, the images' tag, and what a
+running install reports at `/api/info`. `helm search repo langchain/langsmith --versions` lists both. A
+chart pins one app version, but an install can override image tags, so the two can drift apart. The plan
+records both (`chart`, `app_version`); the load test reads the install's app version, and `compare` sets it
+against the plan's, so a plan sized on one release and tested on another says so.
+
+Every default in a plan is read from the chart at the version planned, so give the chart your install runs:
+
+| `CHART=` | Sizes on |
+|:--|:--|
+| unset, or `latest` | the newest release in the chart repository (0.17.60 at this writing) |
+| a line, `0.18` | the newest of that line: its newest release, else its newest release candidate |
+| exact, `0.17.56` | that version, without reading the repository's index |
+
+A saved sizing keeps the chart it was made on, so `make plan NAME=acme` sizes it again on the same chart;
+`CHART=latest` moves it. Both lines size the same way; on 0.18 and later a load one pod carries runs SmithDB
+as a single unified pod (`smithdb.topology`). [`charts.yaml`](charts.yaml) lists the versions CI renders
+(0.17.60 and 0.18.0-rc.82); a plan on any other says so in an info warning, and `make params CHART=<version>`
+checks it. The first run of a version pulls the chart into `~/.cache/langsmith-sizing`
+(`LANGSMITH_SIZING_CACHE` moves it), and the index is read at most once a day.
 
 ## How it is proven, and its limits
 
@@ -179,9 +218,9 @@ the chart into `~/.cache/langsmith-sizing` (`LANGSMITH_SIZING_CACHE` moves it).
 - **Open questions are tests.** Three of the six presets' questions are written to the answer the preset's
   name promises and marked `expectedFailure`, so fixing one fails the suite until the marker goes.
 
-Only tracing is sized: Agent Server, Fleet, Insights, Polly and the gateway are not modeled. A plan says
-vCPU and GiB, never an instance type or a price. Past about 300 traces a second, where the payload
-measurements stop, the plan warns `beyond-tested`. 0.18.0-rc.79 is a release candidate.
+A plan says vCPU and GiB, never an instance type or a price. Past about 300 traces a second, where the
+payload measurements stop, the plan warns `beyond-tested`. Fleet's, Insights' and Chat's own pods are
+sized from estimates, since the chart ships no resources for them; no load test has read them yet.
 
 ## Maintaining it
 

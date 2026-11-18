@@ -28,6 +28,10 @@ from. Nothing but users and a rate is required; every other input has a default 
 | `survives_node_loss` | Must it keep serving when a node is lost? | Ask; if they have not said, record your choice in its note as a guess. "Single zone is fine" is about zones, not nodes. |
 | `postgres`, `redis`, `smithdb_metastore` | Managed (RDS, Cloud SQL, ElastiCache, Memorystore, Azure) or in the cluster? | `external` for managed or their own; `statefulset` for the chart's; `operator` for an operator. |
 | `object_store` | A bucket, or storage inside the cluster? | `external` for S3, GCS, Azure Blob or any S3 API; `in-cluster` otherwise. |
+| `products` | Besides tracing, do they run Agent Server deployments, Fleet, Insights, Chat, Engine, the LLM gateway or Sandboxes? | A list: `agent_server`, `fleet`, `insights`, `polly`, `engine`, `gateway`, `sandboxes`. Engine brings Sandboxes. Leave out what they do not run: it is switched off. |
+| `agent_deployments`, `agent_load` | How many agent deployments, and how busy is each? | The load is the docs' Agent Server table column, read then write: `ll` (about 5 requests a second each), `mm` (50), `hh` (500), or the mixed `lh`, `hl`. |
+| `gateway_streams` | How many concurrent LLM streams through the gateway at peak? | Leave out when unknown: the chart's autoscaler stays. |
+| `sandboxes`, `sandbox_vcpu`, `sandbox_memory_gib`, `sandbox_node` | How many sandboxes run at once at peak, how big is each, on which KVM node? | Hosts are counted from these; the node must be x86-64 with `/dev/kvm` (a `.metal` or nested-virtualization type). |
 | `app_node`, `smithdb_node` | Which machine or instance type? | vCPU x GiB, for example `[8, 32]`. Look the type up on the provider's page (WebFetch) or ask; never recall it. One type for the whole cluster goes in both. |
 
 Cloud or self-hosted changes only the placements and the node shapes. The tool sizes the same pods
@@ -43,7 +47,7 @@ A sizing is a folder, `out/<name>/` (gitignored). Write `out/<name>/inputs.yaml`
 
 ```yaml
 why: "<who it is for and what they run, one sentence>"
-chart: 0.17.56            # omit to take charts.yaml's default
+chart: 0.17.60            # exact, a line such as 0.18 (its newest), or omit for the newest release
 inputs:
   users: 20
   traces_per_month: 50000000
@@ -57,6 +61,9 @@ notes:                    # one per input: where the figure came from, in the pe
   postgres: "RDS, their standard."
   survives_node_loss: "Production."
 ```
+
+Pin `chart` to what the customer runs or will run. A line (`0.18`) or no chart resolves to the newest
+in the chart repository when first sized, and the saved file then holds that exact version.
 
 `make plan` keeps your `why` and each note whose value did not change, so the file stays the record of who
 said what. Or start from a preset (`make presets`): `make plan NAME=<name> PRESET=production USERS=30`.
@@ -80,7 +87,9 @@ Read `summary.md` first, then `plan.json` for any figure asked about. Every figu
 | What to monitor, at what threshold | `plan.json watch`, `docs/monitoring.md` |
 | What a field means | `docs/fields.md` |
 | What the published guide says | the citation in `citations.yaml`; the live pages are docs.langchain.com `langsmith/self-host-scale` and `langsmith/self-host-smithdb-scale` |
-| A chart default | `make chart KEY=<dotted.key>` |
+| A chart default | `make chart KEY=<dotted.key>` (`CHART=` for a version) |
+| What a product adds and needs | the Products and What the products need tables; `plan.json products`; `products.yaml` |
+| Agent Server per deployment | `plan.json products.agent_server.each`: the resource_spec to set on each deployment |
 
 Read the top box first. An `Act on first` line names warnings to resolve before anything else. The most
 common is `DOES NOT FIT` under Node pools: one pod asks for more than a node of that shape has. Re-plan

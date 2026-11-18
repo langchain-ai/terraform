@@ -9,6 +9,7 @@ from typing import Any
 from langsmith_sizing import cli, compare
 
 PLAN = {
+    "chart": "0.17.60", "app_version": "0.17.2026111800",
     "rates": {"peak_traces_per_second": 100},
     "watch": [
         {"id": "redis-memory", "metric": "used_memory", "threshold": {"value": 70, "unit": "% of maxmemory", "from": "param:redis.alarm_pct"}},
@@ -20,6 +21,7 @@ PLAN = {
 def results(achieved: float = 104.0, lag: float | None = 12.0, read: float | None = 2.0, missing: int | None = 0, mode: str = "open-loop", **extra: Any) -> dict[str, Any]:
     ok = lambda seen, target: None if seen is None else seen <= target  # noqa: E731
     return {
+        "server": {"app_version": "0.17.2026111800"},
         "write": {"mode": mode, "target_traces_per_second": 100, "achieved_traces_per_second": achieved},
         "targets": {
             "stored_within_seconds_p99": {"target_seconds": 30, "observed": "lag_p99", "observed_seconds": lag, "passed": ok(lag, 30)},
@@ -35,11 +37,19 @@ def by_item(verdicts: list[dict[str, Any]]) -> dict[str, str]:
 
 
 class Compare(unittest.TestCase):
+    def test_the_installs_version_is_set_against_the_one_the_planned_chart_deploys(self) -> None:
+        self.assertEqual(by_item(compare.compare(PLAN, results()))["app-version"], "pass")
+        other = compare.compare(PLAN, results(server={"app_version": "0.17.2026100100"}))
+        self.assertEqual(by_item(other)["app-version"], "observed")
+        self.assertIn("size again with the chart that ships 0.17.2026100100", next(v["detail"] for v in other if v["item"] == "app-version"))
+        unread = compare.compare(PLAN, results(server={"app_version": None}))
+        self.assertEqual(by_item(unread)["app-version"], "not measured")
+
     def test_a_run_that_met_everything_passes_and_leaves_the_server_unmeasured(self) -> None:
         v = compare.compare(PLAN, results())
         self.assertEqual(
             by_item(v),
-            {"write-rate": "pass", "stored_within_seconds_p99": "pass", "trace_load_seconds_p99": "pass", "no_missing_runs": "pass",
+            {"app-version": "pass", "write-rate": "pass", "stored_within_seconds_p99": "pass", "trace_load_seconds_p99": "pass", "no_missing_runs": "pass",
              "watch:redis-memory": "not measured", "watch:metastore-flush": "not measured"},
         )
         self.assertFalse(compare.failed(v))
@@ -93,7 +103,7 @@ class Compare(unittest.TestCase):
 
     def test_the_summary_counts_each_verdict(self) -> None:
         last = compare.render(compare.compare(PLAN, results(missing=1))).splitlines()[-1]
-        self.assertEqual(last, "3 pass, 1 fail, 2 not measured, 0 observed")
+        self.assertEqual(last, "4 pass, 1 fail, 2 not measured, 0 observed")
 
 
 class Command(unittest.TestCase):

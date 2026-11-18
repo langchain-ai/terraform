@@ -6,7 +6,8 @@
 NAME  ?= $(PRESET)
 ROOT  ?= out
 OUT   ?= $(ROOT)/$(NAME)
-# Unset, the chart is the one a saved sizing was made on, else charts.yaml's default.
+# An exact version (0.17.60), a line (0.18, its newest) or latest. Unset: a saved sizing's own chart,
+# else the newest release in the chart repository. charts.yaml lists the versions CI renders.
 CHART ?=
 # Inputs, as the CLI takes them: PRESET alone, or USERS with TRACES_PER_SECOND; a variable given
 # replaces the preset's or the saved sizing's value. ARGS carries any other flag, ARGS="--redis operator".
@@ -17,6 +18,8 @@ TRACES_PER_MONTH ?=
 PEAK_TRACES_PER_SECOND ?=
 RUNS_PER_TRACE ?=
 RETENTION_DAYS ?=
+# What runs besides tracing, comma separated or all: agent_server, fleet, insights, polly, engine, gateway, sandboxes.
+PRODUCTS ?=
 ARGS ?=
 # The load test: seconds to run and ramp. PEAK=1 sends the plan's peak rate instead of its average.
 DURATION ?= 600
@@ -26,7 +29,7 @@ LOGS := $(ROOT)/.logs
 
 SIZING := uv run --quiet langsmith-sizing
 LOADTEST := uv run --quiet --directory ../langsmith-load-test load-test
-INPUTS := $(if $(CHART),--chart $(CHART)) $(if $(PRESET),--preset $(PRESET)) $(if $(USERS),--users $(USERS)) $(if $(TRACES_PER_SECOND),--traces-per-second $(TRACES_PER_SECOND)) $(if $(TRACES_PER_MONTH),--traces-per-month $(TRACES_PER_MONTH)) $(if $(PEAK_TRACES_PER_SECOND),--peak-traces-per-second $(PEAK_TRACES_PER_SECOND)) $(if $(RUNS_PER_TRACE),--runs-per-trace $(RUNS_PER_TRACE)) $(if $(RETENTION_DAYS),--retention-days $(RETENTION_DAYS)) $(ARGS)
+INPUTS := $(if $(CHART),--chart $(CHART)) $(if $(PRESET),--preset $(PRESET)) $(if $(USERS),--users $(USERS)) $(if $(TRACES_PER_SECOND),--traces-per-second $(TRACES_PER_SECOND)) $(if $(TRACES_PER_MONTH),--traces-per-month $(TRACES_PER_MONTH)) $(if $(PEAK_TRACES_PER_SECOND),--peak-traces-per-second $(PEAK_TRACES_PER_SECOND)) $(if $(RUNS_PER_TRACE),--runs-per-trace $(RUNS_PER_TRACE)) $(if $(RETENTION_DAYS),--retention-days $(RETENTION_DAYS)) $(if $(PRODUCTS),--products $(PRODUCTS)) $(ARGS)
 
 # One line a gate: its name, then ok or FAILED with the tail of its log. A gate's output goes to
 # $(LOGS)/<gate>.log, never to the screen, unless it failed. No pipe: one through tail would hide a
@@ -58,7 +61,7 @@ help: ## this screen
 	@printf '             $(C)make compare NAME=acme$(X)                $(D)one verdict per promise the plan makes$(X)\n\n'
 	@printf '$(B)Targets$(X)\n'
 	@awk -F':.*## ' '/^[a-z-]+:.*## /{printf "  $(C)%-18s$(X) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\n$(B)Inputs$(X)  $(D)NAME= PRESET= USERS= TRACES_PER_SECOND= TRACES_PER_MONTH= PEAK_TRACES_PER_SECOND= RUNS_PER_TRACE= RETENTION_DAYS= CHART= ARGS="--redis operator ..." OUT=<folder>$(X)\n'
+	@printf '\n$(B)Inputs$(X)  $(D)NAME= PRESET= USERS= TRACES_PER_SECOND= TRACES_PER_MONTH= PEAK_TRACES_PER_SECOND= RUNS_PER_TRACE= RETENTION_DAYS= PRODUCTS= CHART= ARGS="--redis operator ..." OUT=<folder>$(X)\n'
 	@printf '$(B)Docs$(X)    $(D)README.md, docs/how-it-sizes.md, docs/autoscaling.md, docs/monitoring.md$(X)\n\n'
 
 setup: ## install the package and the load test (needs uv; helm reads the chart)
@@ -84,8 +87,8 @@ list: ## every saved sizing under ROOT
 presets: ## the named loads a sizing can start from
 	@$(SIZING) presets
 
-chart: ## chart values at CHART (KEY=a.dotted.key, repeatable as ARGS="--key ...")
-	@$(SIZING) chart-info --chart $(or $(CHART),$(shell sed -n 's/^default: //p' charts.yaml)) $(if $(KEY),--key $(KEY)) $(ARGS)
+chart: ## chart values at CHART, default the newest release (KEY=a.dotted.key, repeatable as ARGS="--key ...")
+	@$(SIZING) chart-info $(if $(CHART),--chart $(CHART)) $(if $(KEY),--key $(KEY)) $(ARGS)
 
 # Never run against an instance you do not own: it writes traces and feedback to the project in .env.
 # The load test reads LANGSMITH_ENDPOINT, LANGSMITH_API_KEY and LANGSMITH_PROJECT from its own .env.
@@ -119,8 +122,8 @@ types: ## mypy --strict
 test: ## the package's tests
 	LANGSMITH_SIZING_REQUIRE_HELM=1 uv run python -m unittest discover -s tests
 # Both chart lines the package plans for: a release candidate can change a default under a parameter.
-params: ## check-params against every chart in charts.yaml
-	uv run langsmith-sizing check-params
+params: ## check-params against every chart in charts.yaml, or CHART=
+	uv run langsmith-sizing check-params $(if $(CHART),--chart $(CHART))
 citations: ## check-citations at the pinned docs commit
 	uv run langsmith-sizing check-citations
 load-test-check: ## the load test's ruff, mypy --strict and offline tests
@@ -139,4 +142,4 @@ figures: ## redraw each figure whose data changed (needs Chrome, FONTS= the bran
 	uv run python -m langsmith_sizing.figures $(if $(FONTS),--fonts $(FONTS)) $(if $(LOGOS),--logos $(LOGOS)) $(if $(DRAFT),--draft)
 
 report: ## the module profiles' presets beside the modules' hand-written profiles
-	@$(SIZING) profile-report --chart $(or $(CHART),$(shell sed -n 's/^default: //p' charts.yaml))
+	@$(SIZING) profile-report $(if $(CHART),--chart $(CHART))

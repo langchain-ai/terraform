@@ -327,6 +327,7 @@ def _regimes(p: Mapping[str, Any], cited: citations.Cited) -> str:
     order = sorted(
         p["regimes"],
         key=lambda r: (
+            r.get("peak_runs_per_second_above") is not None,
             r.get("peak_band_min") is not None,
             bands.get(r.get("peak_band_min"), 0),
             r.get("peak_traces_per_second_max") is None,
@@ -337,12 +338,17 @@ def _regimes(p: Mapping[str, Any], cited: citations.Cited) -> str:
     def edge(r: Mapping[str, Any]) -> tuple[str, str]:
         if "peak_traces_per_second_max" in r:
             return f"Peak up to {r['peak_traces_per_second_max']:g} traces/s", ""
+        if "peak_runs_per_second_above" in r:
+            runs = r["peak_runs_per_second_above"]
+            return f"Peak above {runs:,} runs/s", "the highest rate a load test held"
         if "peak_band_min" in r:
             runs = bands[r["peak_band_min"]]
             return f"Peak from {runs:,} runs/s", f"{runs / rpt:,.0f} traces/s at {rpt:g} runs a trace"
         return "Everything between", ""
 
     def smithdb(t: Mapping[str, Any], r: Mapping[str, Any]) -> str:
+        if t.get("scale_out"):
+            return "SmithDB large, its ingestion and compaction scaled with the run rate a load test measured"
         if t.get("smithdb_tier"):
             return f"SmithDB {t['smithdb_tier']}, scaled out; one unified pod on 0.18 where one pod carries the load"
         return (
@@ -366,7 +372,7 @@ def _regimes(p: Mapping[str, Any], cited: citations.Cited) -> str:
             else ""
         )
         note += (
-            '<div class="k" style="color:var(--warn);margin-top:10px">Past any load test here</div>'
+            '<div class="k" style="color:var(--warn);margin-top:10px">Past any load test</div>'
             if t.get("warn_beyond_tested")
             else ""
         )

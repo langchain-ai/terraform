@@ -8,6 +8,7 @@ dependencies = [
     "langsmith==0.14.0",
     "langsmith-sizing",
     "python-dotenv==1.2.3",
+    "rich==15.0.0",
     "structlog==26.1.0",
 ]
 

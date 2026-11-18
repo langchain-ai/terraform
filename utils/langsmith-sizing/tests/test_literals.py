@@ -16,6 +16,7 @@ IDENTITY = {0, 1, 0.5}
 UNITS = SRC / "units.py"
 PLUMBING = {
     ("chart.py", 300): "seconds helm may take before the call is abandoned",
+    ("chart.py", 30): "seconds the chart index fetch may take",
     ("chart.py", 500): "characters of helm's stderr shown in an error",
     ("citations.py", 30): "seconds a docs fetch may take",
     ("citations.py", 12): "characters of a commit shown in a problem line",

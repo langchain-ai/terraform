@@ -32,7 +32,8 @@ with [rich](https://github.com/Textualize/rich): plain text when piped or when `
 
 `wizard`, `plan`, `size`, `values`, `stores` and `load-profile` take the same inputs: `--preset NAME`, a
 saved sizing's `--preset DIR/inputs.yaml`, or `--users` with a rate (`--traces-per-second` or
-`--traces-per-month`). `--chart X.Y.Z` defaults to a saved sizing's chart, else `charts.yaml`'s default.
+`--traces-per-month`). `--chart` takes an exact version, a line (`0.18`, its newest) or `latest`, and defaults
+to a saved sizing's chart, else the newest release in the chart repository.
 `wizard` and `plan` start from `DIR/inputs.yaml` when it exists and no preset is given. Any flag replaces the preset's value (a traces
 flag replaces its average, and leaves the preset's peak where it was: overriding a preset's rate means
 giving its peak too, and a peak below the average is refused).
@@ -50,6 +51,10 @@ giving its peak too, and a peak below the average is refused).
 | `--datastores-on` | `app` (in-cluster stores share the application pool) or `dedicated` |
 | `--app-node`, `--smithdb-node`, `--datastore-node` | the node shape the pool is counted in, as `8x32` (vCPU x GiB) |
 | `--smithdb-tier`, `--smithdb-topology` | SmithDB's tier (`small`, `medium`, `large`) and layout (`cluster`, or `unified` on a chart with `smithdb.topology`); default the load's, and the regime's for a low one |
+| `--products` | what runs besides tracing, comma separated or `all`: `agent_server`, `fleet`, `insights`, `polly`, `engine`, `gateway`, `sandboxes`; a product brings what it requires |
+| `--agent-deployments`, `--agent-load` | Agent Server: how many deployments, and each one's read then write load as the docs' table column (`ll`, `lh`, `hl`, `mm`, `hh`) |
+| `--gateway-streams` | LLM gateway: concurrent streams at the busiest time |
+| `--sandboxes`, `--sandbox-vcpu`, `--sandbox-memory-gib`, `--sandbox-node` | Sandboxes: how many run at once, each one's size, and the KVM node (one host a node) |
 | `--backfill-runs`, `--backfill-days` | ClickHouse history to copy into SmithDB, and the days to copy it in; both or neither |
 
 ### The sizing folder
@@ -216,6 +221,12 @@ are the numbers its message cites; which keys each id carries is in [fields.md](
 | `clickhouse-does-not-fit-node` | action | one ClickHouse pod does not fit its node |
 | `single-node-hook-peak` | action | everything plus the largest hook Job does not fit the one node |
 | `ceilings-above-chart-default` | info | autoscaler ceilings above the chart's default |
+| `gateway-below-tested` | action | the chart's LLM gateway asks less than the docs measured its streams a replica at |
+| `sandboxes-memory-bound` | action | memory, not CPU, sets the sandbox hosts; the values hold them as the autoscaler's floor |
+| `postgres-connections-at-scale` | action | past the tiers, the connections the pods hold and the max_connections to set, with PgBouncer |
+| `offload-throttled` | action | past the rate where offloaded payloads throttled the load test's object store, payloads still offloaded |
+| `ingestion-hot-project` | info | one busy project's runs land on the same SmithDB ingestion pods; larger-memory nodes, not more pods |
+| `products-single-replica` | info | a product's Deployments run one replica on an install that must survive a node loss |
 | `chart-ask:<workload>` | info | the chart cannot express the recommended trigger; the message says what was applied instead |
 
 #### Provenance

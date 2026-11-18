@@ -1,5 +1,5 @@
-# The chart versions this package plans for, and the only place they are written. `default` is what
-# a command uses without --chart; every version in `planned` is rendered by the tests and checked by
-# `make params`. A new chart line goes here, then `make check` says what it changed.
-default: 0.17.56
-planned: [0.17.56, 0.18.0-rc.79]
+# The chart versions CI renders: every test and `make params` runs against each, so a parameter that
+# would shadow a chart default, or a default a release changed, fails here before a plan uses it. A
+# command without --chart takes the newest release in the chart repository instead (chart.resolve),
+# and a plan on a chart outside this list says so. Add a new line's version here, then `make check`.
+planned: [0.17.60, 0.18.0-rc.82]

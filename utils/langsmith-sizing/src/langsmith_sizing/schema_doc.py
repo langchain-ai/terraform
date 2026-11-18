@@ -33,12 +33,13 @@ WILD = {
     "configure.splits": "<split>", "configure.go": "<workload>", "scale.<workload>.chart_supports.signals": "<signal>",
     "provenance": "<path>", "regime.turns_on": "<switch>", "configure.inputs_to_change": "<input>",
     "warnings[ceilings-above-chart-default].figures.ceilings": "<workload>",
+    "products.labels": "<product>", "products.needs": "<product>", "products.pods": "<workload>", "products.added": "<product>", "products.agent_server.each": "<pod>",
     "read.mix": "<class>", "write.payload.mix": "<size>", "write.payload.sizes_kib": "<size>",
 }
 """Maps whose keys are data (a workload's name, a signal): their children are walked under a placeholder."""
-OPAQUE = {"values", "configure.values", "configure.redis.values", "scale.<workload>.applied.values"}
+OPAQUE = {"values", "configure.values", "configure.redis.values", "scale.<workload>.applied.values", "products.values", "products.render"}
 """Chart values: the chart owns their shape, not this reference."""
-POOLS = {"app", "smithdb", "datastores"}
+POOLS = {"app", "smithdb", "datastores", "sandboxes"}
 """The pools that share one shape; `single_node` has its own."""
 STORE_FIELDS = re.compile(r"^stores\.[a-z_]+\.(placement|spec)(?=\.|$)")
 """A store's placement and spec have one shape whichever store they belong to; its figures do not."""

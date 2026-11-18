@@ -13,9 +13,9 @@ import copy
 from functools import cache
 from typing import Any
 
-from langsmith_sizing import DEFAULT_CHART, citations, inputs, params, profile
+from langsmith_sizing import PLANNED_CHARTS, citations, inputs, params, profile
 
-CHART_VERSION = DEFAULT_CHART
+CHART_VERSION = PLANNED_CHARTS[0]
 CHART_VALUES = {
     "config.blobStorage.minBlobStorageSizeKb": 20.0,
     "config.ttl.ttl_period_seconds.shortlived": 1209600.0,

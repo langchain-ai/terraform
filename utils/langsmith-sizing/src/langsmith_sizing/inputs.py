@@ -16,7 +16,6 @@ from langsmith_sizing.units import PERCENT, SECONDS_PER_DAY
 
 TRACE_STORES = ("smithdb", "dual", "dual-replicated")
 """SmithDB alone, or SmithDB beside the deprecated ClickHouse as one instance or a 3-node cluster."""
-PRODUCTS = ("traces",)
 PLACEMENTS = ("external", "statefulset", "operator")
 """Where a data store runs: a managed or self-run instance outside the chart, the chart's own
 StatefulSet, or a Kubernetes operator's instances."""
@@ -71,7 +70,22 @@ class Inputs:
     smithdb_topology: str | None = None
     """cluster or unified; None takes the chart's default, and the chart must have the key."""
     products: tuple[str, ...] = ("traces",)
+    """What runs besides tracing (products.yaml): agent_server, fleet, insights, polly, engine, gateway,
+    sandboxes. A product brings what it requires (Engine brings Sandboxes)."""
+    agent_deployments: int | None = None
+    agent_load: str | None = None
+    """Agent Server: deployments, and each one's read then write load as the docs' table column (ll, lh, hl, mm, hh)."""
+    gateway_streams: float | None = None
+    """LLM gateway: concurrent streams at the busiest time; None keeps the chart's autoscaler."""
+    sandboxes: float | None = None
+    sandbox_vcpu: float | None = None
+    sandbox_memory_gib: float | None = None
+    sandbox_node: tuple[float, float] | None = None
+    """Sandboxes: how many run at once, each one's vCPU and GiB, and the KVM node they run on."""
     survives_node_loss: bool = False
+    requests_from_measured: bool | None = None
+    """Pods ask what they were measured to use (params lite.measured) rather than the chart's and the
+    managed stores' sizes; None leaves it to the regime (extra-lite turns it on)."""
     backfill_runs: float | None = None
     backfill_days: float | None = None
     """ClickHouse history to copy into SmithDB, in runs, and the days to copy it in; both or neither."""
@@ -98,12 +112,13 @@ def validate(i: Inputs) -> None:
         raise ValueError(f"object_store is one of {', '.join(OBJECT_PLACEMENTS)}")
     if i.datastores_on not in DATASTORES_ON:
         raise ValueError(f"datastores_on is one of {', '.join(DATASTORES_ON)}")
-    for shape in (i.app_node, i.smithdb_node, i.datastore_node):
+    for shape in (i.app_node, i.smithdb_node, i.datastore_node, i.sandbox_node):
         if shape is not None and (len(shape) != len(NODE_SHAPE) or min(shape) <= 0):
             raise ValueError("a node shape is (vCPU, GiB), both above zero")
     _validate_backfill(i.backfill_runs, i.backfill_days)
-    if tuple(i.products) != PRODUCTS:
-        raise ValueError(f"products: only {', '.join(PRODUCTS)} is sized so far")
+    for name in ("agent_deployments", "gateway_streams", "sandboxes", "sandbox_vcpu", "sandbox_memory_gib"):
+        if (getattr(i, name) or 0) < 0:
+            raise ValueError(f"{name} cannot be negative")
 
 
 def resolve(i: Inputs, chart: Chart, p: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -147,7 +162,15 @@ def resolve(i: Inputs, chart: Chart, p: dict[str, Any]) -> tuple[dict[str, Any],
     out["extended_share_pct"] = clamp(share, {"min": 0, "max": PERCENT}, p["retention.extended_share_default_pct"])
     pick("redis_expiry_seconds", i.redis_expiry_seconds, chart.number("config.settings.redisRunsExpirySeconds"), "chart:config.settings.redisRunsExpirySeconds")
     pick("redis_expiry_tuned", i.redis_expiry_tuned, p["defaults.redis_expiry_tuned"], "param:defaults.redis_expiry_tuned")
-    for name in ("redis", "smithdb_metastore", "object_store", "clickhouse", "datastores_on", "postgres_memory_gib", "trace_store", "smithdb_tier", "smithdb_topology", "survives_node_loss", "app_node", "smithdb_node", "datastore_node", "backfill_runs", "backfill_days"):
+    out["products"], src["products"] = tuple(i.products), "input:products"
+    pick("agent_deployments", i.agent_deployments, 1, "input:default")
+    pick("agent_load", i.agent_load, p["agent_server.load_default"], "param:agent_server.load_default")
+    out["gateway_streams"], src["gateway_streams"] = i.gateway_streams, "input:gateway_streams"
+    pick("sandboxes", i.sandboxes, p["sandboxes.concurrent_default"], "param:sandboxes.concurrent_default")
+    pick("sandbox_vcpu", i.sandbox_vcpu, p["sandboxes.vcpu_each"], "param:sandboxes.vcpu_each")
+    pick("sandbox_memory_gib", i.sandbox_memory_gib, None, "docs:sandboxes.memory")
+    out["sandbox_node"], src["sandbox_node"] = i.sandbox_node, "input:sandbox_node"
+    for name in ("requests_from_measured", "redis", "smithdb_metastore", "object_store", "clickhouse", "datastores_on", "postgres_memory_gib", "trace_store", "smithdb_tier", "smithdb_topology", "survives_node_loss", "app_node", "smithdb_node", "datastore_node", "backfill_runs", "backfill_days"):
         out[name], src[name] = getattr(i, name), f"input:{name}"
     out["postgres"] = i.postgres or ("external" if i.postgres_memory_gib is not None else "statefulset")
     src["postgres"] = "input:postgres" if i.postgres else "input:postgres_memory_gib" if i.postgres_memory_gib is not None else "input:default"

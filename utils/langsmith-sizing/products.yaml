@@ -1,0 +1,102 @@
+# The products a LangSmith install can run besides tracing, as the chart turns them on. No number lives
+# here: a pod the chart sizes is read from its render at the version planned, a figure the docs publish
+# is cited (citations.yaml), and the model's own figures are in params.yaml.
+#
+# Each product:
+#   label      the name a person knows it by
+#   requires   products it cannot run without; choosing it chooses them (Engine chooses Sandboxes)
+#   enable     the values that turn it on; a product not chosen gets its `enabled` set false, since
+#              Insights and Chat are on in the chart by default
+#   fill       values only the person can give (keys, URLs, hostnames), listed as `# fill:` lines
+#   render     placeholders that let `helm template` render it, never written to values.yaml
+#   pods       name prefixes of the rendered Deployments and StatefulSets that belong to it
+#   unsized    a values prefix whose pods the chart ships with resources: {}; params products.pods sizes them
+#   unsized_pods  the rendered workloads it sizes, so the plan says their size is the model's, not the chart's
+#   needs      what the cluster must have, each with the citation that says so
+schema: 1
+products:
+  traces:
+    label: Tracing
+    requires: []
+    enable: {}
+  agent_server:
+    label: Agent Server (deployments)
+    requires: [traces]
+    enable: {config: {deployment: {enabled: true}}}
+    fill: [config.hostname]
+    render: {config: {hostname: ls.example.com}, ingress: {enabled: true}}
+    pods: [langsmith-host-backend, langsmith-listener, langsmith-operator]
+    needs:
+      - {what: "KEDA in the cluster: each deployment's queue scales on it", cite: agent_server.requires}
+      - {what: "an ingress, Gateway or Istio gateway with config.hostname: every deployment is served behind it", cite: agent_server.requires}
+  fleet:
+    label: Fleet
+    requires: [traces]
+    enable: {fleet: {enabled: true}}
+    fill: [fleet.encryptionKey]
+    render: {fleet: {encryptionKey: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=}}
+    pods: [langsmith-fleet-, langsmith-standalone-fleet-]
+    unsized: fleet
+    unsized_pods: [langsmith-standalone-fleet-]
+    needs:
+      - {what: "its own Postgres and Redis, which the chart runs in the cluster", cite: fleet.own_stores}
+  insights:
+    label: Insights
+    requires: [traces]
+    enable: {insights: {enabled: true}}
+    fill: [insights.encryptionKey]
+    render: {insights: {encryptionKey: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=}}
+    pods: [langsmith-standalone-insights-]
+    unsized: engineInsightsAgent
+    unsized_pods: [langsmith-standalone-insights-]
+    needs:
+      - {what: "a Fernet key of its own, and access to a model", cite: insights_chat.keys}
+  polly:
+    label: Chat (Polly)
+    requires: [traces]
+    enable: {polly: {enabled: true}}
+    fill: [polly.encryptionKey]
+    render: {polly: {encryptionKey: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=}}
+    pods: [langsmith-standalone-polly-]
+    unsized: polly
+    unsized_pods: [langsmith-standalone-polly-]
+    needs:
+      - {what: "a Fernet key of its own, and access to a model", cite: insights_chat.keys}
+  engine:
+    label: Engine
+    requires: [traces, sandboxes]
+    enable: {engine: {enabled: true}}
+    fill: [engine.encryptionKey, engine.usageSigningSecret, config.hostname]
+    render: {config: {hostname: ls.example.com}, engine: {encryptionKey: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=, usageSigningSecret: 0123456789abcdef0123456789abcdef}}
+    pods: [langsmith-standalone-insights-]
+    unsized: engineInsightsAgent
+    unsized_pods: [langsmith-standalone-insights-]
+    needs:
+      - {what: "Sandboxes, chosen with it", cite: engine.requires_sandboxes}
+      - {what: "an externally reachable config.hostname, and egress to LangSmith Intelligence unless air-gapped", cite: engine.requires_sandboxes}
+      - {what: "nothing of its own to size: it runs in Insights' deployment", cite: engine.shares_insights}
+  gateway:
+    label: LLM gateway
+    requires: [traces]
+    enable: {agentGateway: {enabled: true}}
+    pods: [langsmith-agent-gateway]
+    needs:
+      - {what: "LangSmith's own Postgres and Redis, which it shares", cite: gateway.stores}
+  sandboxes:
+    label: Sandboxes
+    requires: [traces]
+    enable: {sandboxes: {enabled: true, sandboxHost: {deployment: {nodeSelector: {"sandbox.langsmith.com/host": "true"}}}}}
+    fill: [sandboxes.callbackSigningJwk, sandboxes.juicefs.redis.metaURL, sandboxes.juicefs.bucket, images.sandboxHostImage.repository, images.sandboxHostImage.tag]
+    render:
+      sandboxes: {callbackSigningJwk: placeholder, juicefs: {redis: {metaURL: "redis://r:6379/1"}, name: sbx-vol, bucket: "https://b.s3.us-west-2.amazonaws.com", storage: s3}}
+      images: {sandboxHostImage: {repository: x/sandbox-host, tag: "1"}}
+    pods: [langsmith-sandbox-host]
+    needs:
+      - {what: "dedicated x86-64 nodes with KVM at /dev/kvm, one host pod a node, privileged", cite: sandboxes.nodes}
+      - {what: "x86-64 (amd64) nodes: the runtime does not run on Arm", cite: sandboxes.node_arch}
+      - {what: "cgroup v2 with the cpu controller", cite: sandboxes.node_cgroup}
+      - {what: "/dev/net/tun and /dev/fuse on each node", cite: sandboxes.node_devices}
+      - {what: "iptables with the nftables backend", cite: sandboxes.node_nftables}
+      - {what: "nodes labelled sandbox.langsmith.com/host=true", cite: sandboxes.node_label}
+      - {what: "a dedicated Redis for JuiceFS metadata with maxmemory-policy noeviction, and a bucket", cite: sandboxes.juicefs_redis}
+      - {what: "a local JuiceFS cache disk on each node, 50 GiB by default", cite: sandboxes.cache}

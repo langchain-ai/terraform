@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -19,7 +23,7 @@ from typing import Any
 
 import yaml
 
-from langsmith_sizing.units import GIB, KIB, KILO, MIB, TIB
+from langsmith_sizing.units import GIB, KIB, KILO, MIB, SECONDS_PER_DAY, TIB
 
 REPO = "https://langchain-ai.github.io/helm"
 CACHE = Path(os.environ.get("LANGSMITH_SIZING_CACHE", Path.home() / ".cache" / "langsmith-sizing"))
@@ -87,6 +91,71 @@ def _helm(*args: str) -> str:
     return p.stdout
 
 
+INDEX = CACHE / "index.yaml"
+LATEST = "latest"
+_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
+_LINE = re.compile(r"^\d+\.\d+$")
+
+
+def _read_index() -> str:
+    """The repository's index, fetched at most once a day; offline, the last one fetched."""
+    fresh = INDEX.exists() and time.time() - INDEX.stat().st_mtime < SECONDS_PER_DAY
+    if not fresh:
+        try:
+            with urllib.request.urlopen(f"{REPO}/index.yaml", timeout=30) as r:
+                text: str = r.read().decode()
+            INDEX.parent.mkdir(parents=True, exist_ok=True)
+            INDEX.write_text(text)
+            return text
+        except (urllib.error.URLError, TimeoutError) as err:
+            if not INDEX.exists():
+                raise ChartError(f"cannot read the chart index at {REPO} ({err}) and none is cached: give an exact --chart") from err
+    return INDEX.read_text()
+
+
+def _order(version: str) -> tuple[int, int, int, int, int]:
+    """Semantic order: a release after its candidates, candidates by their number."""
+    m = _VERSION.match(version)
+    if not m:
+        return (-1, -1, -1, -1, -1)
+    major, minor, patch, pre = m.groups()
+    n = re.search(r"(\d+)$", pre or "")
+    return (int(major), int(minor), int(patch), 0 if pre else 1, int(n.group(1)) if n else 0)
+
+
+def is_release(version: str) -> bool:
+    """A release, not a candidate: no pre-release part after the patch number."""
+    m = _VERSION.match(version)
+    return bool(m and m.group("pre") is None)
+
+
+def published(index_text: str | None = None) -> list[str]:
+    """Every langsmith chart version the repository publishes, newest first."""
+    doc = yaml.safe_load(index_text if index_text is not None else _read_index())
+    return sorted({str(e["version"]) for e in doc["entries"]["langsmith"]}, key=_order, reverse=True)
+
+
+def resolve(spec: str | None, index_text: str | None = None) -> str:
+    """The chart version a spec names. None or "latest": the newest release. A line such as "0.18":
+    its newest release, else its newest candidate, so a line with only candidates still resolves.
+    An exact version is itself, unchecked against the index, so a pinned plan never needs the network."""
+    if spec and _VERSION.match(spec):
+        return spec
+    versions = published(index_text)
+    if spec in (None, "", LATEST):
+        releases = [v for v in versions if is_release(v)]
+        if not releases:
+            raise ChartError("the chart index has no release")
+        return releases[0]
+    if not _LINE.match(spec):
+        raise ChartError(f"--chart {spec}: give an exact version (0.17.60), a line (0.18) or latest")
+    line = [v for v in versions if v.startswith(spec + ".")]
+    if not line:
+        raise ChartError(f"no langsmith chart in line {spec}; the newest is {versions[0]}")
+    releases = [v for v in line if is_release(v)]
+    return (releases or line)[0]
+
+
 def pull(version: str) -> Path:
     """The chart's directory at version, pulled into the cache on first use."""
     dest = CACHE / "charts" / version
@@ -104,6 +173,12 @@ class Chart:
     @cached_property
     def path(self) -> Path:
         return pull(self.version)
+
+    @cached_property
+    def app_version(self) -> str:
+        """The LangSmith release the chart deploys (Chart.yaml appVersion): the images' version, not the chart's."""
+        meta = yaml.safe_load((self.path / "Chart.yaml").read_text())
+        return str(meta.get("appVersion", ""))
 
     @cached_property
     def values(self) -> dict[str, Any]:

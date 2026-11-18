@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from langsmith_sizing.chart import Chart
+from langsmith_sizing.chart import Chart, merge
 from langsmith_sizing.units import KIB, KILO
 
 PLACEHOLDER = re.compile(r"^<[^<>]+>$")
@@ -45,9 +45,12 @@ def resources(requests: Mapping[str, float], limits: Mapping[str, float]) -> dic
     return {k: {"cpu": cpu_quantity(v["cpu"]), "memory": memory_quantity(v["memory_gib"])} for k, v in (("requests", requests), ("limits", limits))}
 
 
-def _ph(what: str) -> str:
+def placeholder(what: str) -> str:
     """A value to fill in. No colon: the chart reads some values back as YAML, where `a: b` is a mapping."""
     return f"<{what}>"
+
+
+_ph = placeholder
 
 
 def placeholders(values: Any, path: str = "") -> list[str]:
@@ -146,4 +149,6 @@ def overlay(body: Mapping[str, Any], chart: Chart, keys: Mapping[str, str]) -> d
     for path, value in body["configure"]["values"].items():
         _set(values, path, value)
     _stores(body, values, chart)
-    return values
+    # Every product switched on or off: Insights and Chat are on in the chart by default, and an
+    # install that set their keys ran eight pods no plan had counted.
+    return merge(values, body["products"]["values"])

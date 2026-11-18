@@ -113,4 +113,6 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `targets.trace_load_seconds_p99.observed_seconds` | number or null | seconds | the observed 99th percentile; null without reads |
 | `targets.trace_load_seconds_p99.passed` | boolean or null | - | true, false, or null when not measured |
 | `targets.trace_load_seconds_p99.target_seconds` | number | seconds | the target |
+| `server` | object | - | what the install said about itself |
+| `server.app_version` | null | - | the LangSmith release it serves (its /info version), the images' version, not the chart's; null when tracing was off or the read failed |
 | `passed` | boolean | - | every measured target met, nothing missing, and no run, feedback, upload, read or stored-count error |

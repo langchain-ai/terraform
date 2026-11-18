@@ -11,15 +11,29 @@ what to watch (`watch`) and what is already wrong or unproven (`warnings`).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
-from langsmith_sizing import deploy
+from langsmith_sizing import PLANNED_CHARTS, deploy
 from langsmith_sizing import inputs as inputs_mod
-from langsmith_sizing.chart import SMITHDB_RENDERABLE, Chart, ChartError, gib, merge
-from langsmith_sizing.model import configure, load, payload, regime, scale, services, smithdb, stores, watch
+from langsmith_sizing.chart import SMITHDB_RENDERABLE, Chart, ChartError, cpu, gib, merge
+from langsmith_sizing.model import (
+    configure,
+    lite,
+    load,
+    payload,
+    products,
+    regime,
+    scale,
+    scaleout,
+    services,
+    smithdb,
+    stores,
+    watch,
+)
 from langsmith_sizing.params import Param, values
-from langsmith_sizing.values import resources
+from langsmith_sizing.values import cpu_quantity, memory_quantity, placeholder, resources
 
 SCHEMA = 1
 
@@ -122,22 +136,49 @@ def size(inputs: inputs_mod.Inputs, chart: Chart, params: dict[str, Param], cite
     c.prov("regime", "param:regimes", "param:smithdb.peak_runs_bands", "derived:rates", "input:survives_node_loss")
     sdb, pods = _smithdb(c, rates, reg["turns_on"])
     ingest, workloads = _workloads(c, rates, profile, pay, pods)
+    reg["requests_from_measured"] = bool(reg["turns_on"].get("requests_from_measured")) if r["requests_from_measured"] is None else r["requests_from_measured"]
+    if reg["requests_from_measured"]:
+        lm = p["lite.measured"]
+        for name, rule in lm["workloads"].items():
+            if name in workloads:
+                rq = lite.request(rule, runs_per_second=rates["runs_per_second_peak"], readers=r["users"], headroom=lm["headroom"], min_cpu=lm["min_cpu"])
+                workloads[name] = workloads[name] | {"requests": rq, "limits": lite.at_least(workloads[name]["limits"], rq)}
+                c.prov.extend(f"workloads.{name}", "param:lite.measured")
     if r["survives_node_loss"]:
         n = int(p["availability.min_replicas"])
         workloads = {k: _ha(v, n) for k, v in workloads.items()}
         sdb["components"] = {k: _ha(v, n) for k, v in sdb["components"].items()}
         for path in [f"workloads.{k}" for k in workloads] + ["smithdb"]:
             c.prov.extend(path, "param:availability.min_replicas")
-    out_stores = {
-        "object_storage": _object_storage(c, rates, pay), "redis": _redis(c, rates, profile, pay, pods),
+    measured = None
+    if reg["turns_on"].get("scale_out"):
+        m = p["scale_out.measured"]
+        measured = scaleout.apply(
+            peak=rates["runs_per_second_peak"], avg=rates["runs_per_second_avg"], workloads=workloads, components=sdb["components"], ingest=ingest,
+            inline_share=pay["inline_share"], m=m, curve=p["ingest.runs_per_core_points"], keda_factor=p["keda.max_factor"],
+            floor=int(p["availability.min_replicas"]) if r["survives_node_loss"] else 1,
+        )
+        for path in ("workloads.ingest-queue", "workloads.platform-backend", "smithdb"):
+            c.prov.extend(path, "param:scale_out.measured", "param:ingest.runs_per_core_points")
+    out_stores: dict[str, Any] = {
+        "object_storage": _object_storage(c, rates, pay), "redis": _redis(c, rates, profile, pay, pods, floor=not reg["requests_from_measured"]),
         "postgres": _postgres(c, workloads, pods), "clickhouse": _clickhouse(c, profile),
     }
+    if measured:
+        pg = out_stores["postgres"]
+        pods_total = sum(w["replicas"] for w in workloads.values())
+        measured["postgres"] = scaleout.postgres(pods_total, p["scale_out.measured"])
+        pg["connections_in_use"] = measured["postgres"]["in_use"]
+        pg["max_connections_needed"] = measured["postgres"]["max_connections_needed"]
+        c.prov.extend("stores.postgres", "param:scale_out.measured")
+        reg["measured"] = measured
     body: dict[str, Any] = {
-        "schema": SCHEMA, "chart": chart.version,
+        "schema": SCHEMA, "chart": chart.version, "app_version": chart.app_version,
         "inputs": {k: v for k, v in r.items() if k not in ("payload_mix", "single_run_kib")} | {"payload_mix": r["payload_mix"], "single_run_kib": r["single_run_kib"]},
         "rates": rates,
         "guide": {k: profile[k] for k in ("fe", "pb", "iq", "be", "min_fe", "min_pb", "min_iq", "min_be", "redis_gi")},
         "payload": pay, "ingest": ingest, "workloads": workloads, "smithdb": sdb, "stores": out_stores, "regime": reg,
+        "products": _products(c),
     }
     _operate(body, r, p, chart, c.prov, pods)
     wkeys = {s["sized_as"].split(".", 1)[1]: s["values_key"] for s in p["scale.workloads"].values() if s["sized_as"].startswith("workloads.")} | CHART_VALUES_KEY
@@ -147,6 +188,97 @@ def size(inputs: inputs_mod.Inputs, chart: Chart, params: dict[str, Param], cite
 
 GUIDE_IDS = [f"docs:scale.{k}" for k in ("replicas.frontend", "replicas.platform_backend", "replicas.ingest_queue", "replicas.backend", "redis_gib", "clickhouse", "clickhouse_setup")]
 """The scale guide's figures the application replicas are read from."""
+
+
+def _products(c: _Ctx) -> dict[str, Any]:
+    """What runs besides tracing, each product's pods read from a render with it on, and what it needs."""
+    cat = products.catalog()
+    on, added = products.chosen(c.r["products"], cat)
+    vals = products.values(on, cat, c.p, placeholder)
+    out: dict[str, Any] = {
+        "on": on, "added": added, "labels": {n: cat[n]["label"] for n in on},
+        "needs": {n: cat[n]["needs"] for n in on if cat[n].get("needs")}, "render": products.renderable(on, cat),
+    }
+    c.prov("products", "input:products", "derived:products.yaml", "chart:render")
+    if "gateway" in on and c.r["gateway_streams"]:
+        need = math.ceil(c.r["gateway_streams"] / c.cited["gateway.streams_per_replica"]["streams"])
+        auto = c.chart.at("agentGateway.autoscaling") or {}
+        vals = merge(vals, {"agentGateway": {"autoscaling": {"enabled": True, "maxReplicas": max(int(auto.get("maxReplicas", 1)), need)}}})
+        out["gateway"] = {"streams": c.r["gateway_streams"], "replicas_needed": need, "streams_per_replica": c.cited["gateway.streams_per_replica"]["streams"], "tested_requests": c.cited["gateway.tested_requests"]}
+        c.prov("products.gateway", "input:gateway_streams", "docs:gateway.streams_per_replica", "chart:agentGateway.autoscaling")
+    if "sandboxes" in on:
+        given = c.r["sandbox_node"]
+        node = {"cpu": given[0], "memory_gib": given[1]} if given else dict(c.p["pools.sandbox_node"])
+        mem = c.r["sandbox_memory_gib"] or c.cited["sandboxes.memory"]["memory_gib_each"]
+        sb = products.sandbox_hosts(c.r["sandboxes"], c.r["sandbox_vcpu"], mem, node, c.chart, c.cited)
+        base = (c.chart.at("sandboxes.sandboxHost.deployment.resources") or {}).get("requests", {})
+        host = {"cpu": cpu(base.get("cpu", 0)), "memory_gib": gib(base.get("memory", 0)) + sb["guest_memory_gib_a_host"]}
+        vals = merge(vals, {"sandboxes": {"sandboxHost": {
+            # memory-bound: the chart's autoscaler counts CPU only, so its floor holds the hosts memory needs
+            "autoscaling": {"enabled": True, "minReplicas": sb["hosts"] if sb["cpu_autoscaler_short"] else sb["min_hosts"], "maxReplicas": sb["hosts"]},
+            "deployment": {"resources": {"requests": {"cpu": cpu_quantity(host["cpu"]), "memory": memory_quantity(host["memory_gib"])}}},
+        }}})
+        out["sandboxes"] = sb | {"node": node, "node_from": "input" if given else "param:pools.sandbox_node", "host_pod": host}
+        c.prov("products.sandboxes", "input:sandboxes", "param:sandboxes.concurrent_default", "param:sandboxes.vcpu_each", "docs:sandboxes.memory", "docs:sandboxes.hosts", "docs:sandboxes.min_hosts", "docs:sandboxes.host_memory", "chart:sandboxes.sandboxHost.autoscaling", "param:pools.sandbox_node", "param:sandboxes.juicefs_redis")
+    pods = products.rendered_pods(c.chart.render(merge(vals, out["render"])), on, cat)
+    if "sandboxes" in on:
+        host_pod = next(n for n, x in pods.items() if x["product"] == "sandboxes")
+        sb = out["sandboxes"]
+        pods[host_pod].update(replicas=sb["hosts"], min=sb["hosts"] if sb["cpu_autoscaler_short"] else sb["min_hosts"], max=sb["hosts"], pool="sandboxes")
+    if "agent_server" in on:
+        agents = products.agent_server(int(c.r["agent_deployments"]), c.r["agent_load"], c.cited)
+        pods |= agents.pop("pods")
+        out["agent_server"] = agents
+        c.prov("products.agent_server", "input:agent_deployments", "param:agent_server.load_default", "docs:agent_server.api_servers", "docs:agent_server.queue_workers", "docs:agent_server.postgres", "docs:agent_server.redis", "docs:agent_server.limit_default")
+    if any(cat[n].get("unsized") for n in on):
+        c.prov.extend("products", "param:products.pods", "param:products.limit_over_request")
+    out["pods"], out["values"] = pods, vals
+    return out
+
+
+def _scale_out_warnings(body: dict[str, Any], p: dict[str, Any]) -> list[dict[str, Any]]:
+    """What bound the load test past the tiers, said where a plan reaches it."""
+    measured = body["regime"].get("measured")
+    if not measured:
+        return []
+    m, out = p["scale_out.measured"], []
+    pg = measured["postgres"]
+    out.append(watch._warn("postgres-connections-at-scale", "action", (
+        f"about {pg['in_use']:,} Postgres connections in use at this many pods (one a pod in the load test, where a default of about 800 ran out near 730 pods): "
+        f"set max_connections to at least {pg['max_connections_needed']:,} and put PgBouncer in front"), **pg))
+    peak = body["rates"]["runs_per_second_peak"]
+    if peak > m["offload_ceiling_runs_per_second"] and body["payload"]["inline_share"] < 1:
+        out.append(watch._warn("offload-throttled", "action", (
+            f"past about {m['offload_ceiling_runs_per_second']:,} runs/s the load test's object store throttled reads of offloaded payloads (429s near 300,000 requests/s): "
+            "keep payloads in Redis (config.blobStorage.minBlobStorageSizeKb above the run size) and size Redis with them inline"), ceiling=m["offload_ceiling_runs_per_second"]))
+    if "smithdb_ingestion_pods" in measured:
+        out.append(watch._warn("ingestion-hot-project", "info", (
+            "one busy project's runs land on the same ingestion pods: in the load test the busiest reached 162 of 165 GiB and four were OOM-killed at 200k runs/s; "
+            "more pods do not spread one project, larger-memory nodes do"), pods=measured["smithdb_ingestion_pods"]))
+    return out
+
+
+def _product_warnings(body: dict[str, Any]) -> list[dict[str, Any]]:
+    pr, out = body["products"], []
+    gw = pr.get("gateway")
+    if gw:
+        pod = next(x for x in pr["pods"].values() if x["product"] == "gateway")
+        tested = gw["tested_requests"]
+        if pod["requests"]["cpu"] < tested["cpu"] or pod["requests"]["memory_gib"] < tested["memory_gib"]:
+            out.append(watch._warn("gateway-below-tested", "action", (
+                f"the docs measured {gw['streams_per_replica']:g} streams a replica at {tested['cpu']:g} vCPU, {tested['memory_gib']:g} GiB; this chart's gateway asks "
+                f"{pod['requests']['cpu']:g} vCPU, {pod['requests']['memory_gib']:g} GiB: give agentGateway.deployment.resources the tested requests or expect fewer streams a replica"),
+                requests=pod["requests"], tested=tested))
+    sb = pr.get("sandboxes")
+    if sb and sb["cpu_autoscaler_short"]:
+        out.append(watch._warn("sandboxes-memory-bound", "action", (
+            f"memory sets the sandbox hosts ({sb['hosts']}), but the chart's autoscaler counts committed CPU only and would run fewer: "
+            "the values set its minimum to the hosts, so it never goes below them"), hosts=sb["hosts"]))
+    if body["inputs"]["survives_node_loss"] and pr["on"] != ["traces"]:
+        single = sorted(n for n, x in pr["pods"].items() if x["max"] == 1 and x.get("kind") == "Deployment")
+        if single:
+            out.append(watch._warn("products-single-replica", "info", f"the products' pods run one replica, so a node loss stops them until rescheduled: {', '.join(single)}", pods=single))
+    return out
 
 
 def _rates(c: _Ctx) -> dict[str, Any]:
@@ -295,12 +427,13 @@ def _object_storage(c: _Ctx, rates: dict[str, Any], pay: dict[str, Any]) -> dict
     )
 
 
-def _redis(c: _Ctx, rates: dict[str, Any], profile: dict[str, Any], pay: dict[str, Any], pods: dict[str, Any]) -> dict[str, Any]:
+def _redis(c: _Ctx, rates: dict[str, Any], profile: dict[str, Any], pay: dict[str, Any], pods: dict[str, Any], floor: bool = True) -> dict[str, Any]:
+    """Redis sized on its payload, with the scale guide's figure as a floor unless the regime sizes from measured use."""
     r, p = c.r, c.p
     peak = rates["runs_per_second_peak"]
     headroom = stores.redis_headroom(p["headroom.redis"], r["redis_expiry_tuned"], p["headroom.redis_untuned_expiry"])
     rbytes = stores.redis_bytes(peak, pay["blend"]["redis_kb"], r["redis_expiry_seconds"], headroom)
-    sizing = stores.redis_sizing(profile["redis_gi"], stores.bytes_to_gib(rbytes))
+    sizing = stores.redis_sizing(profile["redis_gi"] if floor else 1, stores.bytes_to_gib(rbytes))
     shards = stores.redis_shards_for_cpu(peak, pay["inline_share"], p["redis.runs_per_shard"])
     cluster = r["redis"] == "external" and stores.redis_needs_cluster(sizing["gi"], shards, p["redis.single_node_max_gb"])
     c.prov("stores.redis", "derived:payload", "derived:rates", "param:headroom.redis", "param:headroom.redis_untuned_expiry", "param:redis.runs_per_shard", "param:redis.alarm_pct", "param:redis.queue_partitions", "param:redis.single_node_max_gb", "param:redis.cluster_shard_cap", "param:redis.expiry_retry_hours", "docs:scale.redis_gib", "chart:config.settings.redisRunsExpirySeconds", "chart:redis.statefulSet.resources")
@@ -319,8 +452,10 @@ def _redis(c: _Ctx, rates: dict[str, Any], profile: dict[str, Any], pay: dict[st
 
 def _postgres(c: _Ctx, workloads: dict[str, Any], pods: dict[str, Any]) -> dict[str, Any]:
     r, p, cited = c.r, c.p, c.cited
-    api_pods = workloads["platform-backend"]["replicas"] + workloads["backend"]["replicas"]
-    queue_pods = workloads["queue"]["replicas"] + workloads["ingest-queue"]["replicas"]
+    # the model's own replicas, as the calculator counts them; scale-out sets the connections it measured apart
+    n = {k: (w.get("regime_adjusted") or w)["replicas"] for k, w in workloads.items()}
+    api_pods = n["platform-backend"] + n["backend"]
+    queue_pods = n["queue"] + n["ingest-queue"]
     memory = r["postgres_memory_gib"] if r["postgres_memory_gib"] is not None or r["postgres"] != "external" else cited["scale.postgres"]["memory_gb"]
     max_conn = stores.postgres_max_connections(memory, in_cluster=p["postgres.max_connections_in_cluster"], bytes_per_connection=p["postgres.bytes_per_connection"], cap=p["postgres.max_connections_cap"])
     in_cluster = pods["postgres"] if r["postgres"] == "statefulset" else None
@@ -410,5 +545,9 @@ def _operate(body: dict[str, Any], r: dict[str, Any], p: dict[str, Any], chart: 
 
     body["watch"] = watch.items(p["watch.items"], [*p["watch.metrics_smithdb"]["critical"], *p["watch.metrics_smithdb"]["all_only"], *p["watch.metrics_other"]], resolve=resolve, topology=sdb["topology"], scale=body["scale"])
     prov("watch", "param:watch.items", "param:watch.metrics_smithdb", "param:watch.metrics_other", "param:redis.alarm_pct", "chart:ingestQueue.autoscaling.keda.queueTargetSize", "chart:smithdb.compactionWorker.autoscaling.keda.pendingJobsThreshold", "derived:scale")
-    body["warnings"] = watch.plan_warnings(rates=rates, smithdb=sdb, stores=body["stores"], scale=body["scale"], p=p)
+    body["warnings"] = watch.plan_warnings(rates=rates, smithdb=sdb, stores=body["stores"], scale=body["scale"], p=p) + _product_warnings(body) + _scale_out_warnings(body, p)
+    if body["chart"] not in PLANNED_CHARTS:
+        body["warnings"].append({"id": "chart-not-checked", "severity": "info", "figures": {"planned": list(PLANNED_CHARTS)}, "message": (
+            f"chart {body['chart']} is read for every default, but the tests render {', '.join(PLANNED_CHARTS)}: "
+            f"make params CHART={body['chart']} checks no parameter restates one of its defaults")})
     prov("warnings", "param:postgres.connection_budget", "param:redis.single_node_max_gb", "param:redis.cluster_shard_cap", "param:payload.tested_traces_per_second", "derived:rates", "derived:smithdb", "derived:stores", "derived:scale")

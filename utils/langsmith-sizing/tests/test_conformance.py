@@ -3,7 +3,8 @@
 The expected numbers in cases/calculator-<commit>.json were computed by the sizing calculator's own
 compute(), run unchanged; nothing here derives them from this package, so a porting error cannot
 agree with itself. Two fields are compared on purpose no further, each for the reason beside it.
-Totals, pools, in-cluster database rows and the ClickHouse node fit are compared too. Where a regime departs from the model (extra-lite's single replicas), the model's own figures are
+Totals, pools, in-cluster database rows and the ClickHouse node fit are compared too. Extra-lite's
+requests from measured use are turned off here, the input that lets a person do the same. Where a regime departs from the model (extra-lite's single replicas), the model's own figures are
 read from `regime_adjusted`; where it runs SmithDB on a smaller tier than the calculator's band, the case is
 sized again with the model's tier given, which a regime keeps. Both departures are tested in test_operate.
 """
@@ -136,7 +137,9 @@ def _same(field: str, want: Any, got: Any, abs_tol: float = 0.0) -> bool:
 
 
 def _inputs(s: dict[str, Any], chart_version: str) -> inputs.Inputs:
-    kw: dict[str, Any] = dict(users=s["users"], traces_per_second=s["traces"], trace_store=STORE[s["ch"]], redis=REDIS[s["redis"]], retention_days=s["ttl"], postgres_memory_gib=s["postgres_memory_gib"])
+    # The calculator sizes every pod at the chart's and the managed stores' requests; extra-lite's
+    # measured requests are a departure tested in test_operate, so the port is compared without them.
+    kw: dict[str, Any] = dict(users=s["users"], traces_per_second=s["traces"], trace_store=STORE[s["ch"]], redis=REDIS[s["redis"]], retention_days=s["ttl"], postgres_memory_gib=s["postgres_memory_gib"], requests_from_measured=False)
     kw |= {k2: s[k1] for k1, k2 in INPUTS if k1 in s}
     if s.get("blob") is False:
         kw["blob_storage"] = False

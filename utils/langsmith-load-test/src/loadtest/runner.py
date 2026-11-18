@@ -252,7 +252,7 @@ async def run_load_test(
 
 def build_report(
     outcome: LoadOutcome, settings: LoadSettings, profile: Profile, project_name: str, tracing_enabled: bool,
-    upload_errors: int, first_upload_error: str | None,
+    upload_errors: int, first_upload_error: str | None, app_version: str | None = None,
 ) -> dict[str, Any]:
     write = outcome.write
     send = summarize(write.send_latencies_seconds)
@@ -266,6 +266,7 @@ def build_report(
     missing_runs = None if stored.runs is None else max(0, write.runs_sent - stored.runs)
     missing_traces = None if stored.traces is None else max(0, write.traces_sent - stored.traces)
     return results.assemble(
+        server={"app_version": app_version},
         profile=profile.document, settings=dataclasses.asdict(settings), test_id=outcome.test_id, project=project_name,
         started_at=outcome.started_at.isoformat(), ended_at=outcome.ended_at.isoformat(),
         write={

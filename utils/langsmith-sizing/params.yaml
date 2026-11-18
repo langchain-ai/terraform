@@ -468,9 +468,13 @@ params:
   regimes:
     value:
       - id: beyond-tested
+        peak_runs_per_second_above: 202700
+        about: "Peak past the highest rate a load test held (202,700 runs/s): everything scale-out turns on, plus a warning, because no load test covers it. One managed Redis cluster caps near 250 shards and the payloads must stay in Redis. Object-store request rate becomes a limit, and payloads stay in Redis rather than offloaded once offload is throttled."
+        turns_on: {autoscalers: true, splits: true, redis_cluster: true, queue_partitions: true, separate_node_pools: true, ceilings_above_chart_default: true, scale_out: true, warn_beyond_tested: true, watch_object_store_request_rate: true, payloads_in_redis_when_offload_throttled: true}
+      - id: scale-out
         peak_band_min: large
-        about: "Peak past the last SmithDB band: everything large turns on, plus a warning, because no load test here covers it. Object-store request rate becomes a limit, and payloads stay in Redis rather than offloaded once offload is throttled."
-        turns_on: {autoscalers: true, splits: true, redis_cluster: true, queue_partitions: true, separate_node_pools: true, ceilings_above_chart_default: true, warn_beyond_tested: true, watch_object_store_request_rate: true, payloads_in_redis_when_offload_throttled: true}
+        about: "Peak from the large SmithDB band's top up to the 202,700 runs/s a load test held: the docs' tiers stop, so ingest-queue, the API, SmithDB ingestion and compaction scale with the run rate at the rates that test measured (params scale_out.measured), the queue gets the partitions it ran, and the plan says what bound it: Postgres connections, the object store's request rate, one project's memory on an ingestion pod."
+        turns_on: {autoscalers: true, splits: true, redis_cluster: true, queue_partitions: true, separate_node_pools: true, ceilings_above_chart_default: true, scale_out: true, watch_object_store_request_rate: true, payloads_in_redis_when_offload_throttled: true}
       - id: large
         peak_band_min: medium
         about: "Peak in the large SmithDB band: dedicated stats-query and mutations, a Redis cluster with queue partitions, separate node pools, autoscaler ceilings above the chart's."
@@ -479,7 +483,7 @@ params:
         peak_traces_per_second_max: 5
         requires: {survives_node_loss: false}
         about: "A few traces a second, tracing only: ClickHouse off, every serving pod at one replica, autoscalers off, the stores in the cluster on one node, short retention, SmithDB small, and unified (one pod) where the chart has smithdb.topology and one pod carries the load. Helm's hook Jobs run beside the pods and set the peak on a small node."
-        turns_on: {autoscalers: false, serving_replicas: 1, clickhouse: false, smithdb_tier: small, smithdb_unified: true, stores_in_cluster: true, one_node: true, short_retention: true, tracing_only: true, hook_jobs_set_node_peak: true}
+        turns_on: {autoscalers: false, serving_replicas: 1, clickhouse: false, smithdb_tier: small, smithdb_unified: true, stores_in_cluster: true, one_node: true, short_retention: true, tracing_only: true, hook_jobs_set_node_peak: true, requests_from_measured: true}
       - id: lite
         peak_traces_per_second_max: 15
         unmeasured: true
@@ -488,7 +492,7 @@ params:
       - id: standard
         about: "Between lite and the large band: the scale guide's configurations, autoscalers on, the dedicated SmithDB services only where the tier asks for them."
         turns_on: {autoscalers: true}
-    unit: "regime bands, first match wins: peak_band_min (peak runs/s at or above that SmithDB band's upper edge), peak_traces_per_second_max (the busiest rate at or below; the low regimes' figures are busiest rates), requires (input facts that must hold: one replica cannot survive a node's loss)"
+    unit: "regime bands, first match wins: peak_runs_per_second_above (peak runs/s strictly above), peak_band_min (peak runs/s at or above that SmithDB band's upper edge), peak_traces_per_second_max (the busiest rate at or below; the low regimes' figures are busiest rates), requires (input facts that must hold: one replica cannot survive a node's loss)"
     why: "Which regime an install is in decides what to switch on, so each is data: a band by the model's own SmithDB edges (smithdb.peak_runs_bands) or by average traces/s, and the switches it turns on. Large and beyond-tested are tested first because a few traces a second with huge traces is still a large write rate. Where the scale guide's Medium (up to 100 traces/s) and the SmithDB large band overlap, the larger regime wins."
     source: {kind: decision, ref: "2026-11-16 internal sizing discussion; the beyond-tested figures are a LangChain load test at 200,000 runs/s that needed about 240 Redis shards, 32 partitions, about 600 ingest workers, 44 SmithDB ingestion pods and about 510 API pods"}
     by: Reed Bender
@@ -694,3 +698,104 @@ params:
     source: {kind: decision, ref: "terraform modules aws smithdb_metastore_allocated_storage and gcp smithdb_metastore_disk_size, both 50 (PS calculator SMITHDB_METASTORE.storageGi)"}
     by: Dzmitry Dubarau
     since: 2026-11-13
+  # Products beyond tracing (products.yaml says what each turns on in the chart). A pod the chart
+  # sizes is read from its render; these are only what neither the chart nor the docs give.
+  products.pods:
+    value:
+      fleet: {apiServer: {cpu: 0.5, memory_gib: 1}, queue: {cpu: 2, memory_gib: 4}, postgres: {cpu: 0.5, memory_gib: 1}, redis: {cpu: 0.25, memory_gib: 0.5}}
+      engineInsightsAgent: {apiServer: {cpu: 0.5, memory_gib: 1}, queue: {cpu: 2, memory_gib: 4}, postgres: {cpu: 0.5, memory_gib: 1}, redis: {cpu: 0.25, memory_gib: 0.5}}
+      polly: {apiServer: {cpu: 0.5, memory_gib: 1}, queue: {cpu: 2, memory_gib: 4}, postgres: {cpu: 0.5, memory_gib: 1}, redis: {cpu: 0.25, memory_gib: 0.5}}
+    unit: "vCPU, GiB requested a pod"
+    chart_has_no_key: "the chart ships resources: {} for these pods, so it has no figure to read; the values set these requests so what runs is what was counted"
+    why: "Requests for the add-on pods the chart leaves unsized: Fleet's, Insights and Engine's shared deployment, and Chat's (Polly's) own API server, queue, Postgres and Redis. Without a request a pod reserves nothing and a plan would count nothing for it."
+    source: {kind: decision, ref: "PS sizing calculator data/services.json, labelled estimates where the chart sets no resources; the docs publish no figure for them"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  products.limit_over_request:
+    value: 2
+    unit: x
+    chart_has_no_key: "the chart sets no limit for the pods products.pods sizes"
+    why: "The limit of a pod this package gives a request to, as a multiple of the request: the docs' own default for an Agent Server pod with no limit (citation agent_server.limit_default), applied to the other unsized add-on pods alike."
+    source: {kind: decision, ref: "docs data-plane.mdx: a limit defaults to 2x the request"}
+    by: Reed Bender
+    since: 2026-11-18
+  agent_server.load_default:
+    value: ll
+    unit: "read/write column of the docs' Agent Server table"
+    chart_has_no_key: "a load assumption for each deployment; the operator sizes deployments from their own resource_spec"
+    why: "A deployment's read and write load when the person does not say: the docs table's default column, about 5 requests a second each way."
+    source: {kind: decision, ref: "agent-server-scale.mdx, the column marked (default)"}
+    by: Reed Bender
+    since: 2026-11-18
+  sandboxes.concurrent_default:
+    value: 10
+    unit: sandboxes running at once
+    chart_has_no_key: "a load assumption; the chart sizes hosts, not how many sandboxes run"
+    why: "Sandboxes running at the busiest time when the person does not say: a small starting pool; the host count follows the real figure, so ask for it."
+    source: {kind: decision, ref: "no published default; a starting point to replace"}
+    by: Reed Bender
+    since: 2026-11-18
+  sandboxes.vcpu_each:
+    value: 1
+    unit: vCPU a sandbox
+    chart_has_no_key: "a sandbox's size is set by whoever creates it, not by the chart"
+    why: "Committed vCPU a sandbox when the person does not say: one whole core. Hosts are counted from committed vCPU, so this figure sets the pool."
+    source: {kind: decision, ref: "no published default; the docs count hosts from committed vCPU (citation sandboxes.hosts)"}
+    by: Reed Bender
+    since: 2026-11-18
+  pools.sandbox_node:
+    value: {cpu: 16, memory_gib: 64}
+    unit: "vCPU, GiB per node"
+    why: "The KVM node the sandbox pool is counted in, one host pod a node. Replace it with the install's own through the sandbox_node input; a bare-metal or .metal node, or one with nested virtualization."
+    chart_has_no_key: "the chart selects sandbox nodes by label; it has no node shape"
+    source: {kind: decision, ref: "the smallest host in the docs' sandbox scaling table (16, 32 and 64 vCPU hosts)"}
+    by: Reed Bender
+    since: 2026-11-18
+  sandboxes.juicefs_redis:
+    value: {cpu: 2, memory_gib: 5}
+    unit: "vCPU, GiB"
+    chart_has_no_key: "the chart takes the JuiceFS metadata Redis by URL; it does not run or size it"
+    why: "The dedicated Redis that holds JuiceFS metadata for the sandboxes' filesystem; it cannot be shared and must use noeviction (citation sandboxes.juicefs_redis)."
+    source: {kind: decision, ref: "PS sizing calculator externalServices.ts, from the Terraform module's sandbox JuiceFS Redis default"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  scale_out.measured:
+    value:
+      ingest_cores_per_1k_runs: 21
+      ingest_reference_kib: 128
+      ingest_pod: {cpu: 7, memory_gib: 6}
+      ingest_pod_limit: {cpu: 8, memory_gib: 8}
+      api_cores_per_1k_runs: {offloaded: 2.9, inline: 5.0}
+      smithdb_ingestion_runs_per_pod: 4600
+      compaction_runs_per_worker: 10000
+      postgres_connections_per_pod: 1.0
+      postgres_max_connections_over_used: 2.6
+      offload_ceiling_runs_per_second: 100000
+    unit: "requested vCPU per 1,000 runs/s; runs/s per pod or partition; connections per pod; runs/s"
+    chart_has_no_key: "how a component scales past the docs' tiers; the chart's tiers stop at large"
+    why: "Past the large tier the docs publish nothing, so each component scales with the run rate at what a load test measured. Ingest workers held 19.6k to 202.7k runs/s at about 21 requested vCPU a 1,000 runs/s (run at about half their request) at 128 KB a run; other run sizes follow the ingest curve's ratio. The API took 2.9 vCPU a 1,000 runs/s with payloads offloaded and up to 5.0 with them in Redis; SmithDB ingestion 4,600 to 6,000 runs/s a 46-vCPU pod (the lowest is used); compaction kept up with 2 workers to 115k and needed about 20 at 200k. The queue ran 4, 8 and 32 partitions at 50k, 115k and 200k, the first two at about 12,000 runs/s a partition (redis.queue_partitions) and the last with headroom, so partitions stay redis.queue_partitions'. About one Postgres connection a pod was in use, 1,140 at 200k, against 3,000 configured; a default of about 800 ran out near 730 pods. Offloaded payloads at 20 KB threw the object store's 429s near 100k runs/s, so the test kept payloads in Redis above it."
+    source: {kind: load-test, ref: "LangChain engineering load test on GKE, chart 0.17.48, 2026-11: held 19.6k, 47.1k, 114.6k and 202.7k runs/s, about 128 KB a run, 20 runs a trace, no read load; a sandbox cluster, the top rate held 4 minutes"}
+    by: Ben Nagengast
+    since: 2026-11-09
+  lite.measured:
+    value:
+      headroom: 1.5
+      min_cpu: 0.05
+      workloads:
+        platform-backend: {work: offered, base: 0.003, per_unit: 0.0045, memory_gib: 0.5}
+        ingest-queue: {work: processed, base: 0.025, per_unit: 0.035, memory_gib: 1.1}
+        queue: {work: processed, base: 0.082, per_unit: 0.0058, memory_gib: 1.6}
+        frontend: {work: readers, base: 0.001, per_unit: 0.0214, memory_gib: 0.1}
+        backend: {work: readers, base: 0.013, per_unit: 0.0012, memory_gib: 0.95}
+        playground: {work: fixed, base: 0.005, per_unit: 0, memory_gib: 0.9}
+        ace-backend: {work: fixed, base: 0.001, per_unit: 0, memory_gib: 0.1}
+      stores:
+        postgres: {work: processed, base: 0.005, per_unit: 0.00015, memory_gib: 0.85}
+        smithdb_metastore: {work: processed, base: 0.031, per_unit: 0.0021, memory_gib: 0.3}
+        object_store: {work: processed, base: 0.025, per_unit: 0.02, memory_gib: 7.2}
+    unit: "cores idle (base) and per unit of work (offered or processed runs/s, concurrent readers); GiB a pod; headroom x"
+    chart_has_no_key: "what a pod uses at a small load; the chart's requests are sized for its default tier and the docs' for managed services"
+    why: "On one node the chart's requests and the docs' managed-store sizes, not what runs, set the floor: 17 vCPU and 63 GiB where a lab install used 1.6 of 8.4 cores requested at 3.9 traces/s, Postgres asked 11 GiB and used 0.4, and Redis 14.4 and used 0.02. In the extra-lite regime each pod asks what it was measured to use at the plan's load, CPU x headroom and memory at its sampled peak x 1.5, never below min_cpu; Redis asks its payload's memory without the scale guide's 8 GiB floor. SmithDB keeps the chart's tier: one unified SmithDB pod has not been measured at this load."
+    source: {kind: lab, ref: "bare-metal lab runs at 3 runs a trace and about 180 KiB a run, 5 s samples over ten minutes, 2026-10-31 and 2026-11-01 (the bootstrap's spec/capacity.yaml rules); the object store's memory is its peak at 93 traces/s"}
+    by: Reed Bender
+    since: 2026-11-18

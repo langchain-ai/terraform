@@ -235,11 +235,11 @@ class Outputs(unittest.TestCase):
             self.saved = (out / "inputs.yaml").read_text() if out.exists() else ""
         return code, asked, shown.getvalue()
 
-    # preset production: users, average, peak, runs, retention, trace store, node loss, 4 stores, 2 nodes, confirm.
+    # preset production: users, average, peak, runs, retention, trace store, node loss, products, 4 stores, 2 nodes, confirm.
     # Every store is external, so where in-cluster stores run, and their node, are not asked.
-    PRODUCTION = ["25", "33", "100", "", "", "1", "yes", "external", "external", "external", "external", "", "", "y"]
-    # no preset: the picker, users, average, peak, runs, retention, trace store, node loss, 4 stores, where, 2 nodes, confirm
-    SCRATCH = ["none", "5", "3", "10", "", "", "smithdb", "no", "statefulset", "statefulset", "statefulset", "external", "app", "", "", "y"]
+    PRODUCTION = ["25", "33", "100", "", "", "1", "yes", "", "external", "external", "external", "external", "", "", "y"]
+    # no preset: the picker, users, average, peak, runs, retention, trace store, node loss, products, 4 stores, where, 2 nodes, confirm
+    SCRATCH = ["none", "5", "3", "10", "", "", "smithdb", "no", "", "statefulset", "statefulset", "statefulset", "external", "app", "", "", "y"]
 
     def test_the_wizard_asks_each_input_with_its_default_and_source_and_saves_the_folder(self) -> None:
         code, asked, _ = self.scripted(self.PRODUCTION, preset="production")
@@ -253,6 +253,17 @@ class Outputs(unittest.TestCase):
         self.assertRegex(days, r"default +14 +the chart's default, config.ttl.ttl_period_seconds.shortlived")
         self.assertEqual(self.plan["inputs"]["users"], 25)
         self.assertEqual(self.plan["inputs"]["trace_store"], "smithdb")
+
+    def test_products_are_asked_by_number_and_bring_their_own_questions(self) -> None:
+        names = [n for n in wizard.CATALOG if n != "traces"]
+        engine = str(names.index("engine") + 1)
+        # Engine brings Sandboxes, so the four sandbox questions follow it: how many, vCPU, GiB, node
+        answers = self.SCRATCH[:8] + [engine, "30", "", "4", ""] + self.SCRATCH[9:]
+        _, asked, _ = self.scripted(answers, given={})
+        self.assertTrue(any("sandbox_node" in a for a in asked))
+        self.assertEqual(self.plan["products"]["on"], [n for n in wizard.CATALOG if n in ("traces", "engine", "sandboxes")])
+        self.assertEqual(self.plan["products"]["sandboxes"]["concurrent"], 30)
+        self.assertIn("products:", self.saved)
 
     def test_a_months_count_is_taken_as_the_average(self) -> None:
         answers = self.SCRATCH[:2] + ["3M/month"] + self.SCRATCH[3:]
@@ -301,7 +312,7 @@ class Outputs(unittest.TestCase):
 
     def test_a_choice_takes_its_number(self) -> None:
         answers = list(self.SCRATCH)
-        answers[9] = "3"  # redis: the third placement
+        answers[10] = "3"  # redis: the third placement
         self.scripted(answers, given={})
         self.assertEqual(self.plan["inputs"]["redis"], "operator")
 

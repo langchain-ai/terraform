@@ -54,6 +54,7 @@ def assemble(
     *, profile: dict[str, Any], settings: dict[str, Any], test_id: str, project: str, started_at: str, ended_at: str,
     write: dict[str, Any], feedback: dict[str, Any], reads: dict[str, Any], lag: dict[str, Any],
     stored: dict[str, Any], targets: dict[str, float], upload_errors: int, latency_limit_passed: bool | None,
+    server: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     verdicts = target_verdicts(targets, lag, reads["classes"], stored["missing_runs"])
     verdicts["send_latency_limit"] = {"passed": latency_limit_passed}
@@ -66,5 +67,6 @@ def assemble(
         "schema": SCHEMA, "test_id": test_id, "project": project, "started_at": started_at, "ended_at": ended_at,
         "profile": profile, "settings": settings, "write": write, "feedback": feedback, "reads": reads, "lag": lag,
         "stored": stored, "errors": {"upload": upload_errors, "reads": read_errors}, "targets": verdicts,
+        "server": server or {"app_version": None},
         "passed": not failed,
     }

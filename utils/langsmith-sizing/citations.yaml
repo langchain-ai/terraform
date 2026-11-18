@@ -2,7 +2,7 @@
 # check-citations` fails when a quote is no longer in its file at the commit below; with `--ref main`
 # it says whether the docs moved since. Update the commit only after re-reading every citation.
 repo: langchain-ai/docs
-commit: f4af8d0f21ad9b5b535b370c8658aa409e637b1b
+commit: 96a94d110402cbda3f5dcf0ae40c94470c77026f
 citations:
   scale.read_anchors:
     file: src/langsmith/self-host-scale.mdx
@@ -125,3 +125,134 @@ citations:
     file: src/langsmith/self-host-smithdb-migrate.mdx
     quote: treat 32 GiB as a practical minimum rather than a function of CPU
     values: {min_memory_gib: 32}
+  # Add-ons beyond tracing. Each one's pods are read from the chart where it sets resources; these are
+  # the figures the docs publish for what the chart does not render (Agent Server's per-deployment
+  # pods, the operator creates them) or does not decide (how many sandbox hosts, gateway replicas).
+  agent_server.load_levels:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: "- Low means approximately 5 requests per second - Medium means approximately 50 requests per second - High means approximately 500 requests per second"
+    values: {low: 5, medium: 50, high: 500, unit: requests/s a deployment}
+  agent_server.api_servers:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **API servers**<br />(1 CPU, 2Gi per server) | 1 (default) | 6 | 10 | 3 | 15 |'
+    values: {cpu: 1, memory_gib: 2, replicas: {ll: 1, lh: 6, hl: 10, mm: 3, hh: 15}}
+  agent_server.queue_workers:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **Queue workers**<br />(1 CPU, 2Gi per worker) | 1 (default) | 10 | 1 (default) | 5 | 10 |'
+    values: {cpu: 1, memory_gib: 2, replicas: {ll: 1, lh: 10, hl: 1, mm: 5, hh: 10}}
+  agent_server.n_jobs_per_worker:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **`N_JOBS_PER_WORKER`** | 10 (default) | 50 | 10 | 10 | 50 |'
+    values: {ll: 10, lh: 50, hl: 10, mm: 10, hh: 50}
+  agent_server.redis:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **Redis resources** | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) |'
+    values: {cpu: 1, memory_gib: 2}
+  agent_server.postgres:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **Postgres resources** | 2 CPU<br />8 Gi (default) | 4 CPU<br />16 Gi memory | 4 CPU<br />16 Gi | 4 CPU<br />16 Gi memory | 8 CPU<br />32 Gi memory |'
+    values: {cpu: {ll: 2, lh: 4, hl: 4, mm: 4, hh: 8}, memory_gib: {ll: 8, lh: 16, hl: 16, mm: 16, hh: 32}}
+  agent_server.limit_default:
+    file: src/langsmith/data-plane.mdx
+    quote: "If you omit the limit, it defaults to 2x the request, so lowering the request also lowers the scaling target."
+    values: {limit_over_request: 2}
+  agent_server.requires:
+    file: src/langsmith/enable-self-hosted-agent-server.mdx
+    quote: "KEDA automatically scales the deployment system based on queue size."
+    values: {requires: [KEDA, an ingress with config.hostname]}
+  gateway.streams_per_replica:
+    file: src/langsmith/llm-gateway-self-hosted.mdx
+    quote: "With the default resources, each replica handled ~100 concurrent streams on N2 instances or similar in testing, with prompts from ~40 to ~7,500 tokens."
+    values: {streams: 100}
+  gateway.stores:
+    file: src/langsmith/llm-gateway-self-hosted.mdx
+    quote: "The `agent-gateway` service requires access to Postgres and Redis, and network access to other LangSmith pods, similar to `backend` and `platform-backend`."
+    values: {stores: [postgres, redis]}
+  engine.requires_sandboxes:
+    file: src/langsmith/engine-self-hosted.mdx
+    quote: "Engine is disabled by default. It requires [Sandboxes](/langsmith/enable-self-hosted-sandboxes), a connection to [LangSmith Intelligence](#allow-egress-to-langsmith-intelligence) unless your installation is [air-gapped](#air-gapped-installations), an externally reachable [`config.hostname`](#verify-your-hostname-is-externally-reachable), and [Engine's keys](#generate-engines-keys)."
+    values: {requires: [sandboxes]}
+  engine.shares_insights:
+    file: src/langsmith/engine-self-hosted.mdx
+    quote: "Engine and [Insights](/langsmith/self-host-insights-chat) run from the same image and share one deployment."
+    values: {shares: insights}
+  fleet.own_stores:
+    file: src/langsmith/enable-self-hosted-fleet.mdx
+    quote: "Fleet uses dedicated PostgreSQL and Redis instances by default."
+    values: {postgres: own, redis: own}
+  insights_chat.keys:
+    file: src/langsmith/self-host-insights-chat.mdx
+    quote: "Each feature requires its own Fernet encryption key and model access."
+    values: {key: Fernet}
+  sandboxes.hosts:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "desired hosts = ceil(committed vCPU / (host vCPU × target fraction)) + headroom hosts"
+    values: {formula: "ceil(committed_vcpu / (host_vcpu * target)) + headroom"}
+  sandboxes.target:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: '| `targetUtilizationPercent` | `70` |'
+    values: {pct: 70}
+  sandboxes.headroom:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: '| `headroomHosts` | `1` |'
+    values: {hosts: 1}
+  sandboxes.min_hosts:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: '| `minReplicas` | `1` | Use at least `2` to avoid zero ready hosts during a normal rollout. |'
+    values: {hosts: 2}
+  sandboxes.memory:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "500 sandboxes configured with 2 GiB each request 1,000 GiB of guest memory, before host and filesystem overhead."
+    values: {memory_gib_each: 2}
+  sandboxes.cpu_only:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "Host autoscaling uses committed CPU, not memory pressure."
+    values: {signal: committed vCPU}
+  sandboxes.host_memory:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "The host pod's memory request must reflect the workloads it contains."
+    values: {rule: host memory request covers its guests}
+  sandboxes.cache:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "which defaults to `/var/cache/juicefs` with a 50 GiB cache size."
+    values: {cache_gib: 50}
+  sandboxes.juicefs_redis:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "For the Redis metadata store, we recommend setting `maxmemory-policy` to `noeviction`."
+    values: {maxmemory_policy: noeviction}
+  sandboxes.nodes:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "Your cluster must include dedicated nodes that can run nested workloads with Linux KVM available at `/dev/kvm`."
+    values: {requires: [dedicated KVM nodes]}
+  sandboxes.node_arch:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **CPU architecture**: x86-64 (`amd64`). The sandbox runtime does not run on Arm nodes."
+    values: {requires: [x86-64]}
+  sandboxes.node_cgroup:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **cgroup v2**: The unified cgroup hierarchy with the `cpu` controller available."
+    values: {requires: [cgroup v2 with the cpu controller]}
+  sandboxes.node_devices:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **TUN/TAP and FUSE**: `/dev/net/tun` for sandbox network interfaces and `/dev/fuse` for the JuiceFS mount."
+    values: {requires: [/dev/net/tun, /dev/fuse]}
+  sandboxes.node_nftables:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **nftables**: Kernel support for `iptables` with the nftables backend."
+    values: {requires: [nftables]}
+  sandboxes.one_host_per_node:
+    file: src/langsmith/self-host-sandbox-architecture.mdx
+    quote: "The host Deployment uses required pod anti-affinity to place at most one host pod on each node."
+    values: {host_pods_per_node: 1}
+  sandboxes.privileged:
+    file: src/langsmith/self-host-sandbox-architecture.mdx
+    quote: "Host pods require privileged access for virtualization, networking, and mounts."
+    values: {requires: [privileged pods]}
+  sandboxes.node_label:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: 'sandbox.langsmith.com/host: "true"'
+    values: {label: sandbox.langsmith.com/host=true}
+  gateway.tested_requests:
+    file: src/langsmith/llm-gateway-self-hosted.mdx
+    quote: "  #     requests: { cpu: 1, memory: 1Gi }"
+    values: {cpu: 1, memory_gib: 1}
