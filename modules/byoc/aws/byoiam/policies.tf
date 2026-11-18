@@ -195,7 +195,7 @@ locals {
       Resource  = ["${local.cli_source_bucket_arn}/*"]
       Condition = local.s3_condition
     }
-  ] : statement if var.cli_builds]
+  ] : statement if var.deployment_builds]
   cli_push_statements = [
     local.ecr_authentication_statement,
     {
@@ -273,7 +273,7 @@ locals {
       Action    = ["kms:GenerateDataKey", "kms:Decrypt"]
       Resource  = local.cmk_s3_keys
       Condition = { StringEquals = local.cmk_via.s3, StringLike = { "kms:EncryptionContext:aws:s3:arn" = [local.cli_source_bucket_arn, "${local.cli_source_bucket_arn}/*"] } }
-    }] : statement if length(local.cmk_s3_keys) > 0 && var.cli_builds])
+    }] : statement if length(local.cmk_s3_keys) > 0 && var.deployment_builds])
     smithdb-iam-role = concat(local.cmk_bucket_statements["smithdb-iam-role"], [for statement in [{
       Sid       = "ReadLangsmithBlobKMS"
       Effect    = "Allow"
@@ -547,7 +547,7 @@ resource "aws_iam_role_policy" "this" {
 }
 
 resource "aws_iam_role_policy" "cli_push" {
-  count  = var.cli_builds ? 1 : 0
+  count  = var.deployment_builds ? 1 : 0
   name   = "langsmith-byoc"
   role   = aws_iam_role.cli_push[0].name
   policy = jsonencode({ Version = "2012-10-17", Statement = local.cli_push_statements })

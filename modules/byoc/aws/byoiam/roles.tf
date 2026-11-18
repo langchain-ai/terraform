@@ -116,7 +116,7 @@ resource "aws_iam_role" "this" {
 }
 
 resource "aws_iam_role" "cli_push" {
-  count                = var.cli_builds ? 1 : 0
+  count                = var.deployment_builds ? 1 : 0
   name                 = local.cli_push_role_name
   path                 = "/"
   description          = "Customer-owned shared LangSmith BYOC cli-push-role"
@@ -134,13 +134,6 @@ resource "aws_iam_role" "cli_push" {
     }]
   })
   tags = local.tags
-
-  lifecycle {
-    precondition {
-      condition     = var.deployment_builds
-      error_message = "cli_builds requires deployment_builds."
-    }
-  }
 }
 
 resource "aws_iam_role_policy_attachment" "managed" {

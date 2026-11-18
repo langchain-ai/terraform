@@ -149,13 +149,7 @@ variable "dedicated_deployments" {
 }
 
 variable "deployment_builds" {
-  description = "Let LangSmith build GitHub deployments in the cluster. Creates the byoc-build-smith-workload-iam-role build role for the lsd-build service account."
-  type        = bool
-  default     = false
-}
-
-variable "cli_builds" {
-  description = "Let LangSmith take langgraph deploy images and sources. Requires deployment_builds. Creates the byoc-push-smith-workload-iam-role push role and grants the workload role ECR repository management on lsd/* and access to the deployment source buckets."
+  description = "Let LangSmith build GitHub deployments and langgraph deploy images in the cluster. Creates the byoc-build-smith-workload-iam-role build role and the byoc-push-smith-workload-iam-role push role, and grants the workload role ECR repository management on lsd/* and access to the deployment source buckets."
   type        = bool
   default     = false
 }

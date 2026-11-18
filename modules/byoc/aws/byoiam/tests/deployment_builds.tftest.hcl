@@ -30,13 +30,15 @@ run "default" {
   command = plan
 
   assert {
-    condition     = !contains(keys(aws_iam_role.this), "deployment-build-iam-role") && !contains(keys(aws_iam_role_policy.this), "deployment-build-iam-role")
-    error_message = "Without deployment_builds, there is no build role."
-  }
-
-  assert {
-    condition     = length(aws_iam_role.cli_push) == 0 && !strcontains(aws_iam_role_policy.this["workload-iam-role"].policy, "lsd/")
-    error_message = "Without cli_builds, there is no push role and no lsd/ grant."
+    condition = alltrue([
+      !contains(keys(aws_iam_role.this), "deployment-build-iam-role"),
+      !contains(keys(aws_iam_role_policy.this), "deployment-build-iam-role"),
+      length(aws_iam_role.cli_push) == 0,
+      length(aws_iam_role_policy.cli_push) == 0,
+      !strcontains(aws_iam_role_policy.this["workload-iam-role"].policy, "lsd/"),
+      !strcontains(aws_iam_role_policy.this["workload-iam-role"].policy, "smith-deployment-sources"),
+    ])
+    error_message = "Without deployment_builds, there is no build role, push role, or lsd/ or source bucket grant."
   }
 }
 
@@ -44,7 +46,8 @@ run "deployment_builds" {
   command = plan
 
   variables {
-    deployment_builds = true
+    deployment_builds    = true
+    cmk_service_key_arns = { s3 = "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-1111-1111-111111111111" }
   }
 
   assert {
@@ -85,26 +88,6 @@ run "deployment_builds" {
     condition     = !contains(keys(output.role_names), "deployment-build-iam-role")
     error_message = "role_names lists only the names LangSmith takes at data plane creation."
   }
-}
-
-run "cli_builds_requires_deployment_builds" {
-  command = plan
-
-  variables {
-    cli_builds = true
-  }
-
-  expect_failures = [aws_iam_role.cli_push]
-}
-
-run "cli_builds" {
-  command = plan
-
-  variables {
-    deployment_builds    = true
-    cli_builds           = true
-    cmk_service_key_arns = { s3 = "arn:aws:kms:us-east-1:123456789012:key/11111111-1111-1111-1111-111111111111" }
-  }
 
   assert {
     condition = jsondecode(aws_iam_role.cli_push[0].assume_role_policy).Statement == [{
@@ -137,6 +120,6 @@ run "cli_builds" {
       ReadWriteCLISources = [["s3:PutObject", "s3:GetObject"], ["arn:aws:s3:::*-smith-deployment-sources/*"]]
       CLISourcesKMS       = [["kms:GenerateDataKey", "kms:Decrypt"], ["arn:aws:kms:us-east-1:123456789012:key/11111111-1111-1111-1111-111111111111"]]
     }
-    error_message = "The workload role gets the composition's CLI build grant: lsd/* repositories, the push role, and source objects and their key."
+    error_message = "The workload role may manage lsd/* repositories, assume the push role, and read and write source objects with their key."
   }
 }
