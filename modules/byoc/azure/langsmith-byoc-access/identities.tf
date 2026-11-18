@@ -10,7 +10,7 @@ locals {
 
   # host-backend manages dedicated deployment databases and CLI build push
   # tokens as its own identity.
-  host_backend_data_planes = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments || dp.cli_builds }
+  host_backend_data_planes = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments || dp.deployment_builds }
 
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {

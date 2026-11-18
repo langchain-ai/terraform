@@ -1,12 +1,12 @@
-# Deployment builds and CLI builds on a data plane with byo_iam = true.
-# LangSmith creates the registry, the CLI build source storage account, and
-# the federated identity credentials; the build identity's trusts only the
-# langsmith/lsd-build service account. The module creates the identities, the
-# roles, and the grants, which LangSmith cannot.
+# Deployment builds, from GitHub and from langgraph deploy, on a data plane
+# with byo_iam = true. LangSmith creates the registry, the CLI build source
+# storage account, and the federated identity credentials; the build
+# identity's credential trusts only the langsmith/lsd-build service account.
+# The module creates the identities, the roles, and the grants, which
+# LangSmith cannot.
 
 locals {
   deployment_builds_data_planes = { for key, dp in local.byo_iam_data_planes : key => dp if dp.deployment_builds }
-  cli_builds_data_planes        = { for key, dp in local.byo_iam_data_planes : key => dp if dp.cli_builds }
 }
 
 # AKS creates the kubelet identity with the cluster, so the data plane must be
@@ -59,7 +59,7 @@ resource "azurerm_role_assignment" "deployment_builds_kubelet_pull" {
 # host-backend mints each CLI deployment's repository-scoped push token in the
 # registry, and deletes its images with the deployment.
 resource "azurerm_role_definition" "cli_builds_registry" {
-  for_each = local.cli_builds_data_planes
+  for_each = local.deployment_builds_data_planes
 
   name              = "langsmith-byoc-${each.key}-cli-builds-acr-${random_string.key_vault_suffix[each.key].result}"
   scope             = azurerm_resource_group.data_plane[each.key].id
@@ -90,7 +90,7 @@ resource "azurerm_role_assignment" "cli_builds_registry" {
 }
 
 resource "azurerm_role_assignment" "cli_builds_image_delete" {
-  for_each = local.cli_builds_data_planes
+  for_each = local.deployment_builds_data_planes
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "AcrDelete"
@@ -101,7 +101,7 @@ resource "azurerm_role_assignment" "cli_builds_image_delete" {
 # host-backend signs user delegation URLs for the CLI's source uploads and the
 # build Job's downloads. A signed URL never grants more than its signer.
 resource "azurerm_role_definition" "cli_builds_sources" {
-  for_each = local.cli_builds_data_planes
+  for_each = local.deployment_builds_data_planes
 
   name              = "langsmith-byoc-${each.key}-cli-builds-source-${random_string.key_vault_suffix[each.key].result}"
   scope             = azurerm_resource_group.data_plane[each.key].id

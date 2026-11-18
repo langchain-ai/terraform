@@ -129,12 +129,12 @@ The module creates these identities. LangSmith expects these names:
 | `langsmith-workload-identity` | Monitoring Data Reader | resource group |
 | `langsmith-deployment-metrics-collector-identity` | Monitoring Metrics Publisher | resource group |
 | LangSmith application | Azure Kubernetes Service RBAC Cluster Admin | resource group |
-| `langsmith-host-backend-identity`, only with `dedicated_deployments` or `cli_builds` | Log Analytics Reader, Monitoring Data Reader | resource group |
+| `langsmith-host-backend-identity`, only with `dedicated_deployments` or `deployment_builds` | Log Analytics Reader, Monitoring Data Reader | resource group |
 | `langsmith-host-backend-identity`, only with `dedicated_deployments` | dedicated deployments role | resource group |
 | `langsmith-deployment-builds-identity`, only with `deployment_builds` | AcrPush | resource group |
 | AKS kubelet identity, only with `deployment_builds` | AcrPull | resource group |
-| `langsmith-host-backend-identity`, only with `cli_builds` | CLI build registry role, AcrDelete | resource group |
-| `langsmith-host-backend-identity`, only with `cli_builds` | CLI build source role, container `source` | resource group, with a condition |
+| `langsmith-host-backend-identity`, only with `deployment_builds` | CLI build registry role, AcrDelete | resource group |
+| `langsmith-host-backend-identity`, only with `deployment_builds` | CLI build source role, container `source` | resource group, with a condition |
 
 The blob role is `langsmith-byoc-<key>-blob-<suffix>`. Its conditions keep each identity to its own containers.
 
@@ -254,46 +254,9 @@ The module then creates `langsmith-host-backend-identity` and its roles on the r
 
 Before you set `dedicated_deployments` back to `false`, delete the dedicated deployments and have LangSmith turn the feature off. Otherwise their servers stay and you pay for them.
 
-### Turn on deployment builds (optional)
+### Deployment builds (optional)
 
-Deployment builds build the images of GitHub-source LangGraph deployments in the cluster and push them to a container registry in the data plane resource group. Register `Microsoft.ContainerRegistry` first (see [Usage](#usage)).
-
-With `byo_iam`, set `deployment_builds = true` and run `terraform apply` after the data plane is active and before LangSmith turns builds on:
-
-```hcl
-data_planes = {
-  prod = { location = "eastus", byo_iam = true, deployment_builds = true }
-}
-```
-
-The module then creates `langsmith-deployment-builds-identity` with `AcrPush`, and gives the AKS kubelet identity `AcrPull`, so the nodes can pull the built images. AKS creates the kubelet identity with the cluster, so the apply fails until the data plane is active. The registry does not exist yet, so the scope of both roles is the resource group. The deployment builds registry is the only registry in it.
-
-LangSmith creates the registry and the federated identity credential. The credential trusts only the `langsmith/lsd-build` service account on the data plane cluster, which runs the build Jobs. If `reduced_access = true`, set it to `false` while LangSmith turns builds on.
-
-LangSmith keeps the registry and its images when builds are turned off. Before you set `deployment_builds` back to `false`, have LangSmith turn builds off.
-
-### Turn on CLI builds (optional)
-
-CLI builds let `langgraph deploy` push images that it builds locally to the deployment builds registry, or upload the source for a build in the cluster. They need [deployment builds](#turn-on-deployment-builds-optional).
-
-With `byo_iam`, also set `cli_builds = true` and run `terraform apply` before LangSmith turns CLI builds on:
-
-```hcl
-data_planes = {
-  prod = { location = "eastus", byo_iam = true, deployment_builds = true, cli_builds = true }
-}
-```
-
-The module then creates `langsmith-host-backend-identity`, if `dedicated_deployments` has not, and gives it, on the resource group:
-
-- `langsmith-byoc-<key>-cli-builds-acr-<suffix>`: read, write, and delete the registry scope maps and tokens, so host-backend can mint one repository-scoped push token per deployment.
-- `AcrDelete`, to delete the images of a deleted deployment.
-- `langsmith-byoc-<key>-cli-builds-source-<suffix>`: get a user delegation key, and read, write, and add blobs. A condition keeps the blob actions to the `source` container, so the identity cannot reach the trace, SmithDB, or sandbox data.
-- `Log Analytics Reader` and `Monitoring Data Reader`, for deployment observability.
-
-LangSmith creates the source storage account, with shared keys off and public network access on because the CLI uploads from your users' machines; every request needs a URL that host-backend signs. Sources expire after a day. LangSmith also creates the federated identity credential, which trusts only the host-backend and listener service accounts.
-
-LangSmith keeps the storage account when CLI builds are turned off. Before you set `cli_builds` back to `false`, have LangSmith turn CLI builds off.
+With `byo_iam`, `deployment_builds = true` lets LangSmith build GitHub deployments and `langgraph deploy` images in the cluster. The module creates `langsmith-deployment-builds-identity` and `langsmith-host-backend-identity`, the registry and source storage roles, and their assignments, all on the data plane resource group. Apply it after the data plane is active and before LangSmith turns builds on, with `reduced_access = false` until builds are rolled out. Before you set it back to `false`, have LangSmith turn builds off.
 
 ### Turn on flow logs (optional)
 
@@ -350,8 +313,7 @@ Fields of each `data_planes` entry:
 | `engine_foundry_resource_id` | `string` | no | `null` | Azure AI Foundry resource ID that Engine can call. See [Let Engine use Azure AI Foundry](#let-engine-use-azure-ai-foundry-optional). |
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
-| `deployment_builds` | `bool` | no | `false` | With `byo_iam`, create `langsmith-deployment-builds-identity` and the registry roles that deployment builds need. Set it after the data plane is active. See [Turn on deployment builds](#turn-on-deployment-builds-optional). |
-| `cli_builds` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and the roles that CLI builds need. Requires `deployment_builds`. See [Turn on CLI builds](#turn-on-cli-builds-optional). |
+| `deployment_builds` | `bool` | no | `false` | With `byo_iam`, create the identities and roles that deployment builds and `langgraph deploy` need. Set it after the data plane is active. See [Deployment builds](#deployment-builds-optional). |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.

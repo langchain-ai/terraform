@@ -60,13 +60,13 @@ run "byo_iam_without_builds" {
   }
 
   assert {
-    condition     = !contains(keys(azurerm_user_assigned_identity.data_plane), "prod/deployment-builds")
-    error_message = "Without deployment_builds, the module creates no build identity."
+    condition     = length([for key in keys(azurerm_user_assigned_identity.data_plane) : key if contains(["prod/deployment-builds", "prod/host-backend"], key)]) == 0
+    error_message = "Without deployment_builds or dedicated_deployments, the module creates no build or host-backend identity."
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.deployment_builds_push) + length(azurerm_role_assignment.deployment_builds_kubelet_pull) + length(data.azurerm_resources.deployment_builds_cluster) == 0
-    error_message = "Without deployment_builds, the module reads no cluster and grants nothing on the registry."
+    condition     = length(azurerm_role_assignment.deployment_builds_push) + length(azurerm_role_assignment.deployment_builds_kubelet_pull) + length(data.azurerm_resources.deployment_builds_cluster) + length(azurerm_role_definition.cli_builds_registry) + length(azurerm_role_definition.cli_builds_sources) + length(azurerm_role_assignment.cli_builds_image_delete) + length(azurerm_role_assignment.host_backend_observability) == 0
+    error_message = "Without deployment_builds, the module reads no cluster and creates no build roles or grants."
   }
 }
 
@@ -76,8 +76,8 @@ run "byo_iam_with_builds" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.data_plane["prod/deployment-builds"].name == "langsmith-deployment-builds-identity"
-    error_message = "The build identity has the name that LangSmith observes."
+    condition     = [azurerm_user_assigned_identity.data_plane["prod/deployment-builds"].name, azurerm_user_assigned_identity.data_plane["prod/host-backend"].name] == ["langsmith-deployment-builds-identity", "langsmith-host-backend-identity"]
+    error_message = "Deployment builds create the build and host-backend identities with the names that LangSmith observes."
   }
 
   assert {
@@ -93,22 +93,6 @@ run "byo_iam_with_builds" {
       "langsmith-byoc-prod", "dp-smith-aks-agentpool", "dp-smith-aks-nodes",
     ]
     error_message = "The module finds the cluster in the data plane resource group and reads its kubelet identity from the node resource group."
-  }
-
-  assert {
-    condition     = !contains(keys(azurerm_user_assigned_identity.data_plane), "prod/host-backend") && length(azurerm_role_definition.cli_builds_registry) + length(azurerm_role_definition.cli_builds_sources) + length(azurerm_role_assignment.cli_builds_image_delete) == 0
-    error_message = "Without cli_builds, the module creates no host-backend identity and no CLI build roles."
-  }
-}
-
-run "byo_iam_with_cli_builds" {
-  variables {
-    data_planes = { prod = { location = "eastus", byo_iam = true, deployment_builds = true, cli_builds = true } }
-  }
-
-  assert {
-    condition     = azurerm_user_assigned_identity.data_plane["prod/host-backend"].name == "langsmith-host-backend-identity"
-    error_message = "CLI builds create the host-backend identity that LangSmith observes."
   }
 
   assert {
@@ -141,14 +125,41 @@ run "byo_iam_with_cli_builds" {
   }
 }
 
-run "cli_builds_without_deployment_builds" {
-  command = plan
-
+run "byo_iam_with_dedicated_deployments_only" {
   variables {
-    data_planes = { prod = { location = "eastus", byo_iam = true, cli_builds = true } }
+    data_planes = { prod = { location = "eastus", byo_iam = true, dedicated_deployments = true } }
   }
 
-  expect_failures = [var.data_planes]
+  assert {
+    condition     = contains(keys(azurerm_user_assigned_identity.data_plane), "prod/host-backend") && !contains(keys(azurerm_user_assigned_identity.data_plane), "prod/deployment-builds")
+    error_message = "Dedicated deployments create the host-backend identity without the build identity."
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.host_backend_dedicated_deployments) == 1 && length(azurerm_role_assignment.host_backend_observability) == 2
+    error_message = "Dedicated deployments grant the host-backend identity its dedicated role and observability readers."
+  }
+
+  assert {
+    condition     = length(azurerm_role_definition.cli_builds_registry) + length(azurerm_role_definition.cli_builds_sources) + length(azurerm_role_assignment.cli_builds_image_delete) + length(azurerm_role_assignment.deployment_builds_push) == 0
+    error_message = "Without deployment_builds, the host-backend identity gets no build roles."
+  }
+}
+
+run "byo_iam_with_dedicated_deployments_and_builds" {
+  variables {
+    data_planes = { prod = { location = "eastus", byo_iam = true, dedicated_deployments = true, deployment_builds = true } }
+  }
+
+  assert {
+    condition     = alltrue([for grant in [azurerm_role_assignment.host_backend_dedicated_deployments["prod"], azurerm_role_assignment.cli_builds_registry["prod"]] : grant.principal_id == azurerm_user_assigned_identity.data_plane["prod/host-backend"].principal_id])
+    error_message = "Dedicated deployments and builds share one host-backend identity."
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.host_backend_dedicated_deployments) + length(azurerm_role_assignment.cli_builds_registry) + length(azurerm_role_assignment.cli_builds_image_delete) + length(azurerm_role_assignment.cli_builds_sources) == 4 && length(azurerm_role_assignment.host_backend_observability) == 2
+    error_message = "The shared host-backend identity gets the dedicated and build roles, and one set of observability readers."
+  }
 }
 
 run "builds_without_byo_iam" {
