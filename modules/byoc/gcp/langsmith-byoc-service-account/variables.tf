@@ -70,7 +70,7 @@ variable "dedicated_deployments" {
 }
 
 variable "deployment_builds" {
-  description = "Let LangSmith turn on in-cluster deployment builds, which build GitHub-source LangGraph deployments in the data plane cluster. With byo_iam, creates the build service account langsmith-deployment-builds with no project roles; LangSmith grants it roles/artifactregistry.writer on each data plane's build repository only and binds it to the langsmith/lsd-build Kubernetes service account. Without byo_iam, LangSmith creates the build service account and this changes nothing. Set it before LangSmith turns the feature on for a data plane."
+  description = "Let LangSmith run in-cluster deployment builds. With byo_iam, creates the langsmith-deployment-builds service account. See the README."
   type        = bool
   default     = false
 }

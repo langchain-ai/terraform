@@ -221,18 +221,7 @@ Name your own Cloud SQL instances so they don't start with `lg-`. Before you set
 
 ## Deployment builds
 
-Set `deployment_builds = true` before LangSmith turns on in-cluster deployment builds for a data plane in the project. LangSmith then builds GitHub-source LangGraph deployments in the data plane's GKE cluster and pushes their images to an Artifact Registry repository, `langsmith-<hash>-deployment-builds`, that it creates for each data plane in the data plane's region. The repository is kept, with its images, if builds are turned off.
-
-The build Jobs run as the Kubernetes service account `langsmith/lsd-build`, which acts as a build service account through Workload Identity:
-
-- With `byo_iam`, the module creates the build service account `langsmith-deployment-builds`, with no project roles, and binds `<prefix>ServiceAccountIamManager` on it for the provisioner. LangSmith then grants it `roles/artifactregistry.writer` on each data plane's build repository only, and `roles/iam.workloadIdentityUser` to `<project>.svc.id.goog[langsmith/lsd-build]` only. LangSmith makes those two grants, like the other Workload Identity bindings, because the repositories and the workload identity pool exist only after it creates the data plane. Builds stay off until both grants are in place.
-- Without `byo_iam`, LangSmith creates a build service account for each data plane, and the setting changes nothing.
-
-The provisioner role already has the Artifact Registry permissions the repositories need, and `enable_apis` already enables `artifactregistry.googleapis.com`. All data planes in the project share `langsmith-deployment-builds`, so a build in one data plane can push to another data plane's build repository in the same project.
-
-CLI builds (`langgraph deploy --remote`) need nothing more. LangSmith creates a sources bucket for each data plane, `langsmith-<hash>-sources`, which deletes sources after a day, and grants the LangSmith app's service account (`langsmith-workload` with `byo_iam`) `roles/storage.objectCreator` and `roles/storage.objectViewer` on that bucket only, within the provisioner's existing `langsmith-` bucket permissions.
-
-Before you set it back to `false`, have LangSmith turn builds off for every data plane in the project.
+`deployment_builds = true` lets LangSmith build GitHub deployments and `langgraph deploy` sources in the data plane cluster. With `byo_iam`, it creates the `langsmith-deployment-builds` service account with no project roles and lets the provisioner manage that account's IAM, so LangSmith can grant it `roles/artifactregistry.writer` on each data plane's own build repository only; without `byo_iam`, it changes nothing. CLI builds need nothing extra. Apply it before LangSmith turns builds on, and have LangSmith turn them off before you set it back to `false`.
 
 ## Inputs
 
