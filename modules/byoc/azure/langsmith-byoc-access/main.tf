@@ -1,37 +1,35 @@
 data "azurerm_client_config" "current" {}
 
-# Consent step: the service principal of the LangSmith multi-tenant app in
-# this tenant. The app needs no Microsoft Graph permissions; its only access is
-# the role assignments in data_planes.tf and identities.tf.
+# The LangSmith identity: a user-assigned managed identity in your
+# subscription. LangSmith signs in as it with a token from its OIDC issuer.
+# The federated credential accepts only tokens with the subject
+# byoc:<external_id>, so no other LangSmith organization can use it. Creating
+# it needs Azure RBAC on the subscription only, no Entra ID role.
 #
-# create_service_principal = true: the module creates the service principal.
-# use_existing adopts one that a previous admin consent already created, but
-# still writes to it, so the caller needs an Entra ID role either way.
-resource "azuread_service_principal" "langsmith" {
-  count = var.create_service_principal ? 1 : 0
-
-  client_id    = var.langsmith_app_client_id
-  use_existing = true
+# It lives in its own resource group, not in a data plane resource group,
+# because LangSmith can delete resources in the data plane resource groups.
+resource "azurerm_resource_group" "langsmith_identity" {
+  name     = "langsmith-byoc-identity"
+  location = var.location
+  tags     = var.tags
 }
 
-# create_service_principal = false: an Entra admin created the service
-# principal with `az ad sp create`. The module only reads it, so the caller
-# needs no Entra ID role.
-data "azuread_service_principal" "langsmith" {
-  count = var.create_service_principal ? 0 : 1
-
-  client_id = var.langsmith_app_client_id
+resource "azurerm_user_assigned_identity" "langsmith" {
+  name                = "langsmith-byoc"
+  location            = azurerm_resource_group.langsmith_identity.location
+  resource_group_name = azurerm_resource_group.langsmith_identity.name
+  tags                = var.tags
 }
 
-moved {
-  from = azuread_service_principal.langsmith
-  to   = azuread_service_principal.langsmith[0]
+resource "azurerm_federated_identity_credential" "langsmith" {
+  name                = "langsmith-byoc"
+  resource_group_name = azurerm_resource_group.langsmith_identity.name
+  parent_id           = azurerm_user_assigned_identity.langsmith.id
+  issuer              = var.langsmith_issuer
+  subject             = "byoc:${var.external_id}"
+  audience            = ["api://AzureADTokenExchange"]
 }
 
 locals {
-  langsmith_service_principal_object_id = (
-    var.create_service_principal
-    ? azuread_service_principal.langsmith[0].object_id
-    : data.azuread_service_principal.langsmith[0].object_id
-  )
+  langsmith_principal_id = azurerm_user_assigned_identity.langsmith.principal_id
 }

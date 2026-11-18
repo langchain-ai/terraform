@@ -1,21 +1,21 @@
-variable "langsmith_app_client_id" {
-  description = "Client ID of the LangSmith multi-tenant Entra application. LangChain gives you this value."
+variable "location" {
+  description = "Region of the resource group that holds the LangSmith managed identity."
   type        = string
 }
 
-variable "create_service_principal" {
-  description = "true: create or update the LangSmith service principal (needs Entra ID permission). false: only read it, after an Entra admin ran `az ad sp create`. Do not change from true to false later, or Terraform deletes it."
-  type        = bool
-  default     = true
+variable "langsmith_issuer" {
+  description = "OIDC issuer of the LangSmith control plane. The managed identity trusts tokens from this issuer only."
+  type        = string
+  default     = "https://azure.api.smith.langchain.com"
 }
 
 variable "external_id" {
-  description = "External ID from Settings > Data Planes in the LangSmith UI. The module writes it as the description of each LangSmith role assignment. LangSmith reads it to verify that you own the subscription."
+  description = "External ID from Settings > Data Planes in the LangSmith UI. The managed identity trusts only LangSmith tokens with the subject byoc:<external_id>."
   type        = string
 
   validation {
-    condition     = length(trimspace(var.external_id)) > 0
-    error_message = "external_id must not be empty. Copy it from Settings > Data Planes in the LangSmith UI."
+    condition     = can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.external_id))
+    error_message = "external_id must be the lowercase UUID from Settings > Data Planes in the LangSmith UI."
   }
 }
 
