@@ -1,0 +1,31 @@
+modules/byoc/aws/byoiam/roles.tf
+  s_08bd3e548e1070::t_7ae9bb10727c14 119
+modules/byoc/aws/byoiam/README.md
+  s_08bd3e548e1070::t_9e464edfeabc34 72-79
+  s_08bd3e548e1070::t_fe9ad4cb909329 37
+modules/byoc/aws/byoiam/policies.tf
+  s_08bd3e548e1070::t_7ba3e906d63451 550
+  s_08bd3e548e1070::t_6086bfe7d13f5c 198
+  s_08bd3e548e1070::t_78d8b0905c536b 276
+modules/byoc/aws/byoiam/variables.tf
+  s_08bd3e548e1070::t_53281143fa3269 152
+modules/byoc/aws/byoiam/tests/deployment_builds.tftest.hcl
+  s_08bd3e548e1070::t_0e40c1bf4bb4c3 123
+  s_08bd3e548e1070::t_9375aa6bb2ccb6 33-41,49-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd149dd63fedceb5dce5687ee33aac80ddf08bae",
+  "prompts": {},
+  "sessions": {
+    "s_08bd3e548e1070": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3f79e94c-c172-4104-a2de-c241e7d5e6f5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "syachamaneni-lc <sreekara.yachamaneni@langchain.dev>"
+    }
+  }
+}
