@@ -1,0 +1,67 @@
+modules/azure/README.md
+  s_e4adac1de87436::t_436552d64f71fb 1923-1952,1956-1957
+modules/azure/SMITHDB.md
+  s_e4adac1de87436::t_c89e75f08b1d34 52-59
+modules/azure/infra/main.tf
+  s_e4adac1de87436::t_d0253c25ca8c03 1415-1418,2076-2080,2084-2156,2542-2551,2568-2576
+modules/azure/infra/modules/k8s-bootstrap/main.tf
+  s_e4adac1de87436::t_9c41f05a49f65a 188-189,588-594
+modules/azure/infra/modules/k8s-cluster/main.tf
+  s_e4adac1de87436::t_3bd160f940dc1d 490,497-514
+modules/azure/infra/modules/k8s-cluster/outputs.tf
+  s_e4adac1de87436::t_3ea98db0877d6a 305-309
+modules/azure/infra/modules/k8s-cluster/variables.tf
+  s_e4adac1de87436::t_48a3561263be99 110-115,498-503
+modules/azure/infra/modules/smithdb/main.tf
+  s_e4adac1de87436::t_4b79161fd1e3f9 42-60,121-139
+modules/azure/infra/modules/smithdb/outputs.tf
+  s_e4adac1de87436::t_7b8ffae2c93344 70-97
+modules/azure/infra/modules/smithdb/variables.tf
+  s_e4adac1de87436::t_deb116fda26067 76-97
+modules/azure/infra/terraform.tfvars.example
+  s_e4adac1de87436::t_a2ecbdbb21e91c 308-319
+modules/azure/infra/tests/byo_network.tftest.hcl
+  s_e4adac1de87436::t_4ea9f15a20cab0 1039-1078
+modules/azure/infra/tests/smithdb_customer_managed_keys.tftest.hcl
+  s_e4adac1de87436::t_760a10111ff934 1-334
+modules/azure/infra/variables.tf
+  s_e4adac1de87436::t_107d47531e4621 2123-2133,2241-2352
+modules/byoc/aws/langsmith-byoc-role/README.md
+  s_e4adac1de87436::t_b3cb229c0be08c 302,306
+modules/byoc/aws/langsmith-byoc-role/policies.tf
+  s_e4adac1de87436::t_a1c831c6356b26 149-154,158,163,166-172
+modules/byoc/aws/langsmith-byoc-role/policies/s3.json
+  s_e4adac1de87436::t_b4437efd012f10 11-12,16,37-40,54-61
+modules/byoc/azure/langsmith-byoc-access/README.md
+  s_e4adac1de87436::t_33f184d02540d8 3,7,9-11,14,18-28,37-38,134,136,180,182,184-186,188,205,209,217,219-221,230,232,234,238,250,280,292,320-322,327-328
+modules/byoc/azure/langsmith-byoc-access/data_planes.tf
+  s_e4adac1de87436::t_f7a7f236696c19 87,99
+modules/byoc/azure/langsmith-byoc-access/identities.tf
+  s_e4adac1de87436::t_25b62e65861ef4 215
+modules/byoc/azure/langsmith-byoc-access/main.tf
+  s_e4adac1de87436::t_7b239dd7b669bb 5-9,11-12,16-37
+modules/byoc/azure/langsmith-byoc-access/variables.tf
+  s_e4adac1de87436::t_0adb323a2aedea 6-11
+modules/byoc/gcp/langsmith-byoc-service-account/README.md
+  s_e4adac1de87436::t_8ac46d05ea0192 70,98,100-101,109
+modules/byoc/gcp/langsmith-byoc-service-account/main.tf
+  s_e4adac1de87436::t_5e99bf58728b13 27-33,58,64-68,198-200,255,273-288
+modules/byoc/gcp/langsmith-byoc-service-account/tests/name_fence.tftest.hcl
+  s_e4adac1de87436::t_80a451691545e5 36,53,57,64,119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "efc8cd2d0c760cfac6078200a2d3b59e065b6339",
+  "prompts": {},
+  "sessions": {
+    "s_e4adac1de87436": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d63330c8-0ca7-4946-8f21-81ed39e4947b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
