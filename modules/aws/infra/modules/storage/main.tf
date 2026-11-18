@@ -53,46 +53,38 @@ resource "aws_vpc_endpoint" "s3" {
   route_table_ids   = data.aws_route_tables.vpc.ids
 }
 
-# The resource used to have count; keep existing state attached to it.
-moved {
-  from = aws_s3_bucket_lifecycle_configuration.ttl[0]
-  to   = aws_s3_bucket_lifecycle_configuration.ttl
-}
-
 # Lifecycle management — automatic object deletion by prefix and age.
 # Mirrors Azure Blob TTL pattern: ttl_s/ (short-lived) and ttl_l/ (long-lived).
 #
 # Rule "base":     delete ttl_s/* objects after N days (default: 14)  — standard traces
 # Rule "extended": delete ttl_l/* objects after N days (default: 400) — long-retention traces
-# Both are skipped when s3_ttl_enabled is false. The redaction-raw rule is not.
+# Rule "redaction-raw": delete ttl_1d/* objects after 1 day — raw values kept for redaction rules
+#
+# The module creates no lifecycle configuration when s3_ttl_enabled is false. A bucket
+# has one, so you then manage all lifecycle rules yourself, including ttl_1d/.
 resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
+  count  = var.s3_ttl_enabled ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
 
-  dynamic "rule" {
-    for_each = var.s3_ttl_enabled ? [1] : []
-    content {
-      id     = "base"
-      status = "Enabled"
-      filter {
-        prefix = "ttl_s/"
-      }
-      expiration {
-        days = var.s3_ttl_short_days
-      }
+  rule {
+    id     = "base"
+    status = "Enabled"
+    filter {
+      prefix = "ttl_s/"
+    }
+    expiration {
+      days = var.s3_ttl_short_days
     }
   }
 
-  dynamic "rule" {
-    for_each = var.s3_ttl_enabled ? [1] : []
-    content {
-      id     = "extended"
-      status = "Enabled"
-      filter {
-        prefix = "ttl_l/"
-      }
-      expiration {
-        days = var.s3_ttl_long_days
-      }
+  rule {
+    id     = "extended"
+    status = "Enabled"
+    filter {
+      prefix = "ttl_l/"
+    }
+    expiration {
+      days = var.s3_ttl_long_days
     }
   }
 
@@ -100,7 +92,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
   # projects that redact at ingestion under ttl_1d/ and deletes them once their
   # runs are done. This rule removes any it could not, including the previous
   # versions when versioning is on. S3 expires in whole days, so an object can
-  # live for up to about two days. It does not depend on s3_ttl_enabled.
+  # live for up to about two days.
   rule {
     id     = "redaction-raw"
     status = "Enabled"

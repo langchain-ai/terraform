@@ -62,5 +62,5 @@ output "identity_ids" {
 
 output "lifecycle_rule_names" {
   description = "Names of the storage lifecycle policy rules in force."
-  value       = [for r in azurerm_storage_management_policy.lifecycle_policy.rule : r.name]
+  value       = flatten([for p in azurerm_storage_management_policy.lifecycle_policy : [for r in p.rule : r.name]])
 }

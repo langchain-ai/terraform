@@ -17,5 +17,5 @@ output "s3_vpc_endpoint_id" {
 
 output "lifecycle_rule_ids" {
   description = "IDs of the bucket lifecycle rules in force."
-  value       = [for r in aws_s3_bucket_lifecycle_configuration.ttl.rule : r.id]
+  value       = flatten([for c in aws_s3_bucket_lifecycle_configuration.ttl : [for r in c.rule : r.id]])
 }

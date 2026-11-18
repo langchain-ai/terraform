@@ -657,7 +657,7 @@ run "in_cluster_fleet_storage_plans_no_shared_credentials" {
   }
 }
 
-run "redaction_raw_lifecycle_rule_survives_ttl_disabled" {
+run "no_lifecycle_rules_when_ttl_disabled" {
   command = plan
 
   variables {
@@ -665,13 +665,8 @@ run "redaction_raw_lifecycle_rule_survives_ttl_disabled" {
   }
 
   assert {
-    condition     = contains(module.storage.lifecycle_rule_ids, "redaction-raw")
-    error_message = "the ttl_1d/ backstop rule is missing when s3_ttl_enabled = false"
-  }
-
-  assert {
-    condition     = !contains(module.storage.lifecycle_rule_ids, "base") && !contains(module.storage.lifecycle_rule_ids, "extended")
-    error_message = "s3_ttl_enabled = false still created the ttl_s/ and ttl_l/ rules"
+    condition     = length(module.storage.lifecycle_rule_ids) == 0
+    error_message = "s3_ttl_enabled = false still created a lifecycle configuration"
   }
 }
 

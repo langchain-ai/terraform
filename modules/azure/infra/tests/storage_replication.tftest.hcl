@@ -310,7 +310,7 @@ run "lrs_to_gzrs_on_an_existing_account_is_refused" {
 
 # ── Lifecycle policy ─────────────────────────────────────────────────────────
 
-run "redaction_raw_lifecycle_rule_survives_ttl_disabled" {
+run "no_lifecycle_rules_when_ttl_disabled" {
   command = plan
 
   variables {
@@ -318,13 +318,8 @@ run "redaction_raw_lifecycle_rule_survives_ttl_disabled" {
   }
 
   assert {
-    condition     = contains(module.blob.lifecycle_rule_names, "redaction-raw")
-    error_message = "the ttl_1d/ backstop rule is missing when blob_ttl_enabled = false"
-  }
-
-  assert {
-    condition     = !contains(module.blob.lifecycle_rule_names, "base") && !contains(module.blob.lifecycle_rule_names, "extended")
-    error_message = "blob_ttl_enabled = false still created the ttl_s/ and ttl_l/ rules"
+    condition     = length(module.blob.lifecycle_rule_names) == 0
+    error_message = "blob_ttl_enabled = false still created a lifecycle policy"
   }
 }
 
