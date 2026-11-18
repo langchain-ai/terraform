@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from langsmith_sizing import (
+    DEFAULT_CHART,
     PLANNED_CHARTS,
     chart,
     citations,
@@ -20,6 +21,8 @@ from langsmith_sizing import (
     presets,
     profile,
     profile_report,
+    summary,
+    ui,
     values,
     wizard,
 )
@@ -61,9 +64,21 @@ def _flags(a: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _chart(a: argparse.Namespace) -> str:
+    """The chart a command sizes on: the flag, else the one a saved sizing was made on, else charts.yaml's default."""
+    if a.chart:
+        return str(a.chart)
+    if a.preset and presets.is_file(a.preset):
+        saved = presets.load(a.preset).chart
+        if saved:
+            return saved
+    return DEFAULT_CHART
+
+
 def _inputs(a: argparse.Namespace) -> inputs.Inputs:
     """The inputs a command's flags and preset give: the preset first, each flag given replacing its value."""
     flags = {k: v for k, v in _flags(a).items() if v is not None}
+    a.chart = _chart(a)
     if a.preset:
         return presets.load(a.preset).to_inputs(a.chart, **flags)
     if "users" not in flags:
@@ -86,9 +101,43 @@ def _stores(a: argparse.Namespace) -> int:
     return 0
 
 
+def _given(a: argparse.Namespace) -> dict[str, Any]:
+    return {k: v for k, v in _flags(a).items() if v is not None}
+
+
 def _wizard(a: argparse.Namespace) -> int:
-    given = {k: v for k, v in _flags(a).items() if v is not None}
-    return wizard.run(chart_version=a.chart, preset_name=a.preset, given=given, yes=a.yes, out=Path(a.out), ask=input, say=print)
+    return wizard.run(chart_version=a.chart, preset_name=a.preset, given=_given(a), yes=a.yes, out=Path(a.out), ask=input)
+
+
+def _plan(a: argparse.Namespace) -> int:
+    """The wizard asking nothing: size from the flags, the preset or the folder's saved inputs, and save the folder."""
+    return wizard.run(chart_version=a.chart, preset_name=a.preset, given=_given(a), yes=True, out=Path(a.out), ask=input)
+
+
+def _show(a: argparse.Namespace) -> int:
+    out = Path(a.out)
+    if not (out / "plan.json").is_file():
+        raise ValueError(f"no sizing at {out}/: make list shows the saved ones, make wizard NAME={out.name} makes one")
+    body = _read(str(out / "plan.json"))
+    ui.show(summary.sections(body), f"{out.name} on chart {body['chart']}")
+    ui.files([(str(out / f), what) for f, what in wizard.FILES if (out / f).exists()], "In the folder")
+    wizard.next_steps(out, body)
+    return 0
+
+
+def _list(a: argparse.Namespace) -> int:
+    root = Path(a.root)
+    rows = []
+    for plan_file in sorted(root.glob("*/plan.json")):
+        body = _read(str(plan_file))
+        r = body["rates"]
+        sized = body["totals"]["applied"]["sized"]["requests"]
+        rows.append((plan_file.parent.name, str(body["chart"]), body["regime"]["id"], f"{r['peak_traces_per_second']:g}", f"{summary.n(sized['cpu'])} vCPU, {summary.n(sized['memory_gib'])} GiB", "yes" if (plan_file.parent / "results.json").exists() else ""))
+    if not rows:
+        ui.note(f"No sizings under {root}/ yet. Start one: make wizard NAME=<customer>")
+        return 0
+    ui.table(summary.Table(f"Sizings in {root}/", ("name", "chart", "regime", "peak traces/s", "sized requests", "load tested"), rows, "make show NAME=<name> for one."))
+    return 0
 
 
 def _load_profile(a: argparse.Namespace) -> int:
@@ -106,9 +155,23 @@ def _read(path: str) -> dict[str, Any]:
     return doc
 
 
+def _presets(a: argparse.Namespace) -> int:
+    rows = []
+    for name in presets.names():
+        p = presets.load(name)
+        rows.append((name, f"{p.inputs['users']:g}", f"{p.inputs['peak_traces_per_second']:g}", p.why))
+    ui.table(summary.Table("Presets", ("preset", "users", "peak traces/s", "for"), rows, "Every preset is unmeasured until a load test reads it: presets/README.md says what each leaves open."))
+    return 0
+
+
 def _compare(a: argparse.Namespace) -> int:
     verdicts = compare.compare(_read(a.plan), _read(a.results))
-    print(compare.render(verdicts))
+    ui.heading("The load test against the plan")
+    ui.verdicts(verdicts)
+    ui.note(compare.render(verdicts).splitlines()[-1])
+    if a.save:
+        Path(a.save).write_text(json.dumps(verdicts, indent=2) + "\n")
+        ui.note(f"saved {a.save}")
     return 1 if compare.failed(verdicts) else 0
 
 
@@ -128,9 +191,9 @@ def _shape(text: str) -> tuple[float, float]:
     return float(cpu), float(mem)
 
 
-def _size_flags(s: argparse.ArgumentParser, chart_required: bool = True) -> None:
-    s.add_argument("--chart", required=chart_required, metavar="X.Y.Z")
-    s.add_argument("--preset", choices=presets.names(), help="start from a named load; a flag below replaces its value")
+def _size_flags(s: argparse.ArgumentParser) -> None:
+    s.add_argument("--chart", metavar="X.Y.Z", help="the chart version (default: a saved sizing's, else charts.yaml's default)")
+    s.add_argument("--preset", metavar="NAME|FILE", help=f"start from a named load ({', '.join(presets.names())}) or a saved sizing's inputs.yaml; a flag below replaces its value")
     s.add_argument("--users", type=float, help="concurrent frontend users at the busiest time")
     s.add_argument("--traces-per-second", type=float)
     s.add_argument("--traces-per-month", type=float)
@@ -173,17 +236,30 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("stores", help="print the spec of each data store to provision, as JSON")
     _size_flags(s)
     s.set_defaults(run=_stores)
-    s = sub.add_parser("wizard", help="ask each input, show the plan's headline, write plan, values, stores and the load profile")
-    _size_flags(s, chart_required=False)
-    s.add_argument("--out", default="langsmith-sizing-out", metavar="DIR", help="where the files go (default: ./langsmith-sizing-out)")
-    s.add_argument("--yes", action="store_true", help="ask nothing: every input comes from a flag, the preset or its default")
+    s = sub.add_parser("wizard", help="ask each input, show the plan, save the sizing folder (inputs, plan, values, stores, load profile, summary)")
+    _size_flags(s)
+    s.add_argument("--out", required=True, metavar="DIR", help="the sizing folder; its name is the sizing's (a saved inputs.yaml there is the starting point)")
+    s.add_argument("--yes", action="store_true", help="ask nothing: every input comes from a flag, the preset, the saved inputs or its default")
     s.set_defaults(run=_wizard)
+    s = sub.add_parser("plan", help="the wizard asking nothing: size and save the folder")
+    _size_flags(s)
+    s.add_argument("--out", required=True, metavar="DIR", help="the sizing folder")
+    s.set_defaults(run=_plan)
+    s = sub.add_parser("show", help="draw a saved sizing's plan again")
+    s.add_argument("--out", required=True, metavar="DIR", help="the sizing folder")
+    s.set_defaults(run=_show)
+    s = sub.add_parser("presets", help="the named loads a sizing can start from")
+    s.set_defaults(run=_presets)
+    s = sub.add_parser("list", help="every saved sizing under a folder")
+    s.add_argument("--root", default="out", metavar="DIR")
+    s.set_defaults(run=_list)
     s = sub.add_parser("load-profile", help="print the load a plan is sized for, as the load test reads it")
     _size_flags(s)
     s.set_defaults(run=_load_profile)
     s = sub.add_parser("compare", help="set a load test's results against the plan; exit 1 on a failed verdict")
     s.add_argument("--plan", required=True, metavar="plan.json", help="the output of size")
     s.add_argument("--results", required=True, metavar="results.json", help="the load test's --results file")
+    s.add_argument("--save", metavar="verdicts.json", help="also write the verdicts here")
     s.set_defaults(run=_compare)
     s = sub.add_parser("profile-report", help="set each preset's plan beside the modules' hand-written sizing profiles (read-only)")
     s.add_argument("--chart", required=True, metavar="X.Y.Z")
@@ -193,11 +269,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(a.run(a))
     except (params.ParamError, chart.ChartError, presets.PresetError, ValueError, KeyError) as err:
-        print(f"error: {err}", file=sys.stderr)
+        ui.error(str(err))
         return 1
     except (EOFError, KeyboardInterrupt):
         # a closed stdin or Ctrl-C in the wizard printed a traceback; nothing was written yet
-        print("error: input ended before the wizard finished; nothing was written", file=sys.stderr)
+        ui.error("input ended before the wizard finished; nothing was written")
         return 1
 
 

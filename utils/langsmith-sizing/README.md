@@ -33,99 +33,124 @@ source of every number in it, is in [docs/how-it-sizes.md](docs/how-it-sizes.md)
 ## Requirements
 
 Python 3.11 or later, [uv](https://docs.astral.sh/uv/) 0.13.4 or later, `helm` on your `PATH`, and network
-access for the first run of each chart version, which pulls the chart into a cache.
-
-## Quickstart
-
-### 1. Size an install
+access for the first run of each chart version, which pulls the chart into a cache. Then, once:
 
 ```bash
 make setup
-make wizard USERS=10 TRACES_PER_SECOND=5 PEAK_TRACES_PER_SECOND=15 YES=1
 ```
 
-That is 10 concurrent users, 5 traces a second on average and 15 at the peak. Without `YES=1` the wizard
-asks each input in turn, showing its default and where the default comes from. Without make:
-`uv run langsmith-sizing wizard --chart 0.17.56 --users 10 --traces-per-second 5 --peak-traces-per-second 15 --out out --yes`.
-It prints, at chart 0.17.56:
+## Size an install
 
-```
-uv run langsmith-sizing wizard --chart 0.17.56 --users 10 --traces-per-second 5 --peak-traces-per-second 15 --out out --yes
-regime lite: a peak of 15 traces/s is at or below 15
-smithdb tier small (cluster), peak 15 traces/s
-namespace requests (vCPU, GiB) before overhead
-  at floor    42.8 vCPU, 117.2 GiB, volumes 742 GiB
-  at sized    44.8 vCPU, 121.2 GiB, volumes 742 GiB
-  at ceiling  184.8 vCPU, 401.2 GiB, volumes 4042 GiB
-  with hook Jobs 185 vCPU, 401.5 GiB (largest: langsmith-smithdb-metastore-migration)
-  sized x1.2 overhead: 53.7 vCPU, 145.4 GiB
-node pools
-  app        3-4 nodes of 8x32; largest pod ls-redis DOES NOT FIT
-  smithdb    2-13 nodes of 16x64; largest pod smithdb-compaction-worker fits
-stores
-  postgres           statefulset, 1 x
-  redis              statefulset, 1 x
-  smithdb_metastore  external, instance
-  object_storage     external, instance
-warning postgres-connections: the pods open 262 Postgres connections against a budget of 80 (100 max_connections): size Postgres for them or lower the pools
-warning chart-ask:ingest-queue: ingest-queue: the chart cannot express the recommended trigger (the KEDA scaler also fires on the feedback and adhoc backlogs against the same queueTargetSize, so a feedback flood can still scale it; ask a switch to scale on the run backlog alone (GO_FEEDBACK_QUEUE_PRIORITY keeps runs ahead of feedback meanwhile)); applied instead: keda on run_backlog
-warning chart-ask:smithdb-query: smithdb-query: the chart cannot express the recommended trigger (scale on the SmithDB admission queue length (query_admission_queue_length), a trigger field the autoscaling block does not have); applied instead: hpa on cpu
-warning chart-ask:smithdb-ingestion: smithdb-ingestion: the chart cannot express the recommended trigger (scale on memory utilization; scale on pending ingest segments (ingest_pending_segment_entry_count), a trigger field the autoscaling block does not have); applied instead: hpa on cpu
-warning pod-does-not-fit-node: The largest pod of the app pool, ls-redis (2 vCPU, 32 GiB), does not fit a 8 vCPU, 32 GiB node: give the pool a larger node, or move that store out of the cluster
-wrote out/plan.json, out/values.yaml, out/stores.json, out/load-profile.json
-```
-
-Read it top down.
-
-- **`regime`** is the band the load falls in and the edge that put it there; it decides what the plan
-  turns on. `lite` is unmeasured, so treat its figures as what to observe.
-- **`smithdb tier`** is SmithDB's size and layout. The model's bands alone would plan `medium` here (two
-  28 vCPU query pods, 109 vCPU at the floor); the `lite` regime keeps `small` and scales it out instead, to
-  two ingestion pods at the 86 runs a second one pod was measured to hold and two query pods at the docs'
-  tested 10 queries a second. On a 0.18 chart, a load one pod carries runs as a single unified SmithDB pod:
-  `--chart 0.18.0-rc.79 --users 2 --traces-per-second 1 --peak-traces-per-second 3` plans 15 vCPU at the floor.
-- **`namespace requests`** are what the install asks the cluster for, before overhead, at the
-  autoscalers' floors, at the sized replicas and at their ceilings. `with hook Jobs` adds the largest Helm
-  hook Job, which runs beside the pods during an install or upgrade: that is the namespace's true peak.
-- **`node pools`** counts nodes of a stated shape (vCPU x GiB), a counting unit, not a provisioning
-  instruction. `DOES NOT FIT` means one pod asks for more than a node of that shape.
-- **`stores`** says where each store runs: `statefulset` in the cluster, `external` an instance to create.
-- **`warning`** lines are what the plan already knows is wrong or unproven; a `chart-ask` is a scaling
-  trigger the chart cannot express yet ([docs/autoscaling.md](docs/autoscaling.md)).
-
-Here the in-cluster Redis must hold every run for its six-hour expiry, 32 GiB, which does not fit the 8x32
-node: add `ARGS="--redis external"` for a managed Redis, or `ARGS="--datastores-on dedicated
---datastore-node 8x64"` for a pool of its own. A value you give replaces the preset's or the default; the
-flags are in [docs/reference.md](docs/reference.md).
-
-### 2. Deploy it
-
-| File | What to do with it |
-|:--|:--|
-| `out/values.yaml` | Pass it to `helm` after your own values. Each `# fill:` line names a value the plan cannot know (a secret name, a bucket). Credentials are never in it. |
-| `out/stores.json` | Provision from it: for each store, where it runs and the instance to create (vCPU, GiB, disk, connections, buckets with lifecycle rules). |
-| `out/plan.json` | The whole plan. Keep it: `compare` reads it. |
-
-Size node pools for the floor, with a cluster autoscaler able to reach the ceiling, and set the namespace
-quota at the ceiling plus the largest hook Job: a quota below it blocks the autoscalers when they act and
-fails an upgrade. [docs/autoscaling.md](docs/autoscaling.md) says why.
-
-### 3. Verify it
-
-`out/load-profile.json` is the load the plan was sized for: payload mix, runs a trace, feedback, read rate
-and read mix. The [load test](../langsmith-load-test/README.md) sends it at your instance, writing to the
-project named in its own `.env` (set `LANGSMITH_TRACING=true` there, since the read probe needs it).
+A team runs 20 million traces a month. Their agents make about 12 calls a trace, and about 20 people
+read traces at the busiest hour. They run on EKS with managed Postgres, Redis and S3, use 16 vCPU, 64 GiB
+application nodes (`16x64`, vCPU x GiB), and must keep serving when a node is lost. Every fact goes in as
+an input:
 
 ```bash
-cp ../langsmith-load-test/.env.example ../langsmith-load-test/.env   # then fill in your endpoint and API key
-make load        # 10 minutes at the average rate with reads; PEAK=1 for the peak, DURATION= and RAMP= to change
-make compare     # one verdict per promise; exit 1 on a failed one
+make plan NAME=acme USERS=20 TRACES_PER_MONTH=20000000 RUNS_PER_TRACE=12 ARGS="--postgres external --redis external --smithdb-metastore external --object-store external --survives-node-loss --app-node 16x64"
 ```
 
-`compare` judges the rate held after the ramp against the plan, the stored-within and trace-load targets,
-and lists each watch item as "not measured by the load test", since a client cannot see server metrics:
-read those from your monitoring ([docs/monitoring.md](docs/monitoring.md)). A figure that fails goes back
-into an input and a new plan, never into the values by hand.
+Or let the wizard ask, one question at a time, each with its default and where the default comes from.
+It offers the [presets](presets/README.md) as starting points, takes a month's count as `20M/month`, and
+skips what cannot matter (where in-cluster stores run, when none is in the cluster):
+
+```bash
+make wizard NAME=acme
+```
+
+Either one prints the plan and saves it as a folder, `out/acme/`. Part of what it prints, at chart 0.17.56:
+
+```
+╭─ acme on chart 0.17.56 ──────────────────────────────────────────────────────────────╮
+│ Chart                 0.17.56                                                        │
+│ Regime                standard: no tighter regime holds at 7.6 traces/s and a peak   │
+│                       of 274.1 runs/s                                                │
+│ Load                  20 users, 7.6 traces/s average, 22.8 at peak (274.1 runs/s)    │
+│ Retention             14 days base, 400 extended                                     │
+│ SmithDB               medium tier, cluster topology (chosen by both)                 │
+│ Survives a node loss  yes                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+
+Namespace capacity ─────────────────────────────────────────────────────────────────────
+  at        vCPU requested   GiB requested   vCPU limit   GiB limit   volumes GiB
+  floor     143.5            270.4           154.5        304.3       800
+  sized     149.5            282.4           160.5        316.3       800
+  ceiling   639.5            1198.4          650.5        1232.3      4000
+
+Node pools ─────────────────────────────────────────────────────────────────────────────
+  pool      node     nodes     largest pod     largest pod on a node
+  app       16x64    2 to 3    ingest-queue    fits
+  smithdb   32x128   5 to 23   smithdb-query   fits
+
+Data stores ────────────────────────────────────────────────────────────────────────────
+  store               runs       provision
+  postgres            external   2 vCPU, 8 GiB, 10 GiB disk, max_connections 901 for the pods' pools
+  redis               external   1 x 59 GiB, 2 vCPU a shard, noeviction
+  smithdb metastore   external   4 vCPU, 32 GiB, 50 GiB disk
+  object storage      external   SmithDB 4.3 TB, LangSmith 4.4 TB (expire ttl_s/ 14 d, ttl_l/ 400 d)
+```
+
+Below that come each workload's replicas, floor, ceiling and the signal it scales on, anything to act on
+before deploying, and what to watch once it runs. Read it top down:
+
+- **Regime** is the band the load falls in and the edge that put it there; it decides what the plan turns
+  on (autoscalers, dedicated SmithDB services, a Redis cluster). [docs/how-it-sizes.md](docs/how-it-sizes.md#2-regime).
+- **SmithDB** is the published tier the load needs, by its write rate and its readers.
+- **Namespace capacity** is what the install asks the cluster for with every autoscaler at its minimum
+  (floor), at the sized replicas, and at its maximum (ceiling). Size node pools for the floor with a cluster
+  autoscaler able to reach the ceiling. The ceiling is a quota to allow, not a bill: the autoscalers reach
+  it only under a backlog. [docs/autoscaling.md](docs/autoscaling.md) says why.
+- **Node pools** count nodes of your shape. `DOES NOT FIT` means one pod asks for more than a node has,
+  and the top box says `Act on first`: give that pool a larger node (`ARGS="--smithdb-node 16x64"`), or
+  move the store it names out of the cluster.
+- **Data stores** is what to provision outside the chart, or what the chart runs in the cluster.
+
+The folder holds everything the next steps need:
+
+| File | What it is |
+|:--|:--|
+| `inputs.yaml` | Your answers and where each came from. `make plan NAME=acme` sizes it again, on a new chart with `CHART=`. |
+| `summary.md` | The tables above, to send to whoever deploys it. |
+| `values.yaml` | The chart values that apply the plan. Each `# fill:` line names a value only you know (a secret name, a bucket). |
+| `stores.json` | Each data store's placement and the instance to create. |
+| `load-profile.json` | The load the plan was sized for, which the load test sends. |
+| `plan.json` | The whole plan, every figure with its source ([docs/fields.md](docs/fields.md)). |
+
+`make list` shows every saved sizing and `make show NAME=acme` draws one again. `OUT=<folder>` saves
+elsewhere. A value you give replaces the preset's, the saved answer or the default; every flag is in
+[docs/reference.md](docs/reference.md).
+
+## Deploy it
+
+1. Provision each store marked `external` in `stores.json`, to its spec.
+2. Fill the `# fill:` lines in `values.yaml`, then pass it to `helm upgrade --install` after your own values.
+3. Set the namespace quota at the ceiling plus the largest hook Job: a lower quota blocks the autoscalers
+   when they act and fails an upgrade.
+
+## Prove it
+
+The [load test](../langsmith-load-test/README.md) sends `load-profile.json` at your install, writing
+traces to the project named in its own `.env`. Run it only against an install you own.
+
+```bash
+cp ../langsmith-load-test/.env.example ../langsmith-load-test/.env   # your endpoint, API key, and LANGSMITH_TRACING=true
+make load NAME=acme       # 10 minutes at the average rate with reads; PEAK=1 for the peak, DURATION= and RAMP= to change
+make compare NAME=acme    # one verdict per promise; exit 1 on a failed one
+```
+
+`compare` judges the rate held after the ramp, the stored-within and trace-load targets, and lists each
+watch item as not measured, since a client cannot see server metrics: read those from your monitoring
+([docs/monitoring.md](docs/monitoring.md)). A figure that fails goes back into an input and a new plan,
+never into the values by hand.
+
+## With Claude
+
+[Claude Code](https://claude.com/claude-code) opened in this repository has the `langsmith-sizing` skill
+and agent (`.claude/` at the repository root). Describe the install in your own words, for example "20M
+traces a month, agents of about 12 calls, 20 people in the UI, EKS with RDS and ElastiCache, must survive a
+node loss", and Claude asks what is missing, writes `out/<name>/inputs.yaml` with a note on where each
+figure came from, runs `make plan`, and explains each number from its source in the chart, the docs or
+`params.yaml`. It never runs the load test or touches a cluster: those stay yours.
 
 ## Chart versions
 
@@ -161,7 +186,7 @@ measurements stop, the plan warns `beyond-tested`. 0.18.0-rc.79 is a release can
 ## Maintaining it
 
 ```bash
-make check       # every gate CI runs: tests (helm required), ruff, mypy, check-params on every planned chart, check-citations
+make check       # every gate CI runs, one line each: ruff, mypy, tests (helm required), check-params on every planned chart, check-citations, the load test's
 make reference   # rewrite docs/fields.md and the docs' generated tables
 make figures FONTS=<dir> LOGOS=<dir>   # draw each figure whose data changed, light and dark (needs Chrome and the brand faces)
 ```

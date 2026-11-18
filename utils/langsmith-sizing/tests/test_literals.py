@@ -26,6 +26,7 @@ PLUMBING = {
     ("docs_gen.py", 60): "characters past which a parameter's value is a pointer to params.yaml in the docs table",
     ("docs_gen.py", 2): "a regex group of the generated-block marker",
     ("docs_gen.py", 4): "a regex group of the generated-block marker",
+    ("ui.py", 2): "cells of indent and padding in the terminal layout",
     ("figures.py", 120): "seconds Chrome may take to draw a figure",
     ("figures.py", 7): "characters of a commit shown in a figure",
     ("figures.py", 2): "JSON indent of rendered.json",
@@ -61,7 +62,7 @@ class NoLiterals(unittest.TestCase):
     def test_the_scan_covers_the_whole_package(self) -> None:
         names = {p.relative_to(SRC).as_posix() for p in modules()}
         self.assertGreaterEqual(len(names), 20)
-        for must in ("plan.py", "values.py", "presets.py", "chart.py", "deploy.py", "wizard.py", "profile_report.py", "cli.py", "model/scale.py", "model/watch.py", "model/services.py", "units.py"):
+        for must in ("plan.py", "values.py", "presets.py", "chart.py", "deploy.py", "wizard.py", "profile_report.py", "cli.py", "ui.py", "summary.py", "model/scale.py", "model/watch.py", "model/services.py", "units.py"):
             self.assertIn(must, names)
 
     def test_every_listed_exception_still_exists(self) -> None:

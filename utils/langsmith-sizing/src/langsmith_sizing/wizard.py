@@ -1,23 +1,66 @@
-"""The wizard: ask each input in turn, show the plan's headline, write the files a deployment needs.
+"""The wizard: ask what the load and the install are, size it, save a folder a deployment needs.
 
 Each question says what the input is, the default and where the default comes from (the preset's
-note when a preset gave it). An input a flag or the preset already settles with --yes is not asked.
-The files are plan.json, values.yaml, stores.json and load-profile.json.
+note when a preset gave it). An input a flag, the preset or a saved sizing already settles is not
+asked with --yes. A sizing is a folder (`save`):
+
+  inputs.yaml        the answers and where each came from; `--preset <dir>/inputs.yaml` sizes it again
+  plan.json          everything the plan says, every figure with its source (docs/fields.md)
+  values.yaml        the chart values that apply it; `# fill:` lines name what only you know
+  stores.json        what to provision for each data store
+  load-profile.json  the load the plan was sized for, as the load test reads it
+  summary.md         the tables the terminal shows, to send to whoever deploys it
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from langsmith_sizing import DEFAULT_CHART, citations, deploy, inputs, params, plan, presets, profile
+from langsmith_sizing import DEFAULT_CHART, citations, deploy, inputs, params, plan, presets, profile, summary, ui
 from langsmith_sizing import chart as chart_mod
 from langsmith_sizing import values as values_mod
+from langsmith_sizing.units import KILO
 
-PLACEMENT_HELP = "external (managed or self-run outside the chart), statefulset (the chart's own), or operator (a Kubernetes operator's instances)"
+PLACEMENTS = (
+    ("external", "a managed service, or one you run outside the cluster"),
+    ("statefulset", "the chart runs it in the cluster"),
+    ("operator", "a Kubernetes operator's instances in the cluster"),
+)
+INPUTS_FILE = "inputs.yaml"
+FILES = (
+    (INPUTS_FILE, "your answers; size again with make plan NAME="),
+    ("plan.json", "the whole plan, every figure with its source"),
+    ("values.yaml", "chart values; fill the # fill: lines, then helm upgrade -f"),
+    ("stores.json", "what to provision for each data store"),
+    ("load-profile.json", "the load the plan was sized for, for make load"),
+    ("summary.md", "these tables, to send to whoever deploys it"),
+)
+
+
+IN_CLUSTER = ("statefulset", "operator")
+
+
+def _value(answers: Mapping[str, Any], name: str) -> Any:
+    return answers.get(name, inputs.Inputs.__dataclass_fields__[name].default)
+
+
+def _dual(a: Mapping[str, Any]) -> bool:
+    return bool(_value(a, "trace_store") != "smithdb")
+
+
+def _any_in_cluster(a: Mapping[str, Any]) -> bool:
+    """A store the cluster runs; datastores_on means nothing when every store is outside it."""
+    stores = ["postgres", "redis", "smithdb_metastore"] + (["clickhouse"] if _dual(a) else [])
+    return any(_value(a, k) in IN_CLUSTER or (k == "postgres" and _value(a, k) is None) for k in stores) or _value(a, "object_store") == "in-cluster"
+
+
+def _dedicated(a: Mapping[str, Any]) -> bool:
+    return bool(_any_in_cluster(a) and _value(a, "datastores_on") == "dedicated")
 
 
 @dataclass(frozen=True)
@@ -25,39 +68,68 @@ class Question:
     name: str
     kind: str
     what: str
-    choices: tuple[str, ...] = ()
-    when: str = ""
-    """A condition on the answers so far: `trace_store!=smithdb` asks only while ClickHouse is sized."""
+    section: str
+    choices: tuple[tuple[str, str], ...] = ()
+    when: Callable[[Mapping[str, Any]], bool] | None = None
+    """Asked only when this holds on the answers so far: ClickHouse only while the trace store is dual."""
 
 
 REQUIRED = ("users", "traces_per_second")
 """The inputs nothing defaults: a preset or the person gives them."""
 
+LOAD, INSTALL, STORES, NODES = "Load", "Install", "Data stores", "Nodes"
 QUESTIONS = (
-    Question("users", "float", "Concurrent frontend users looking at traces at the busiest time"),
-    Question("peak_traces_per_second", "float", "Traces a second at the busiest hour (leave blank to use the average times the peak factor)"),
-    Question("traces_per_second", "float", "Average traces a second (or give --traces-per-month)"),
-    Question("runs_per_trace", "float", "Runs in one trace"),
-    Question("retention_days", "float", "Days a trace is kept (the base TTL)"),
-    Question("trace_store", "choice", "SmithDB alone, or beside the deprecated ClickHouse during a migration", inputs.TRACE_STORES),
-    Question("survives_node_loss", "bool", "Must the install keep serving when a node is lost"),
-    Question("postgres", "choice", f"Where LangSmith's Postgres runs: {PLACEMENT_HELP}", inputs.PLACEMENTS),
-    Question("redis", "choice", f"Where Redis runs: {PLACEMENT_HELP}", inputs.PLACEMENTS),
-    Question("smithdb_metastore", "choice", f"Where the SmithDB metastore's Postgres runs: {PLACEMENT_HELP}", inputs.PLACEMENTS),
-    Question("object_store", "choice", "Where trace bytes live: external (a bucket) or in-cluster (an S3-compatible store the install runs)", inputs.OBJECT_PLACEMENTS),
-    Question("clickhouse", "choice", f"Where ClickHouse runs while the trace store is dual: {PLACEMENT_HELP}", inputs.PLACEMENTS, when="trace_store!=smithdb"),
-    Question("datastores_on", "choice", "Do in-cluster stores share the application nodes (app) or get a pool of their own (dedicated)", inputs.DATASTORES_ON),
-    Question("app_node", "shape", "The application node as vCPUxGiB, for counting nodes"),
-    Question("smithdb_node", "shape", "The SmithDB node as vCPUxGiB, for counting nodes"),
-    Question("datastore_node", "shape", "The data-store node as vCPUxGiB (only a dedicated pool uses it)"),
+    Question("users", "float", "People looking at traces at the same time, at the busiest hour", LOAD),
+    Question("traces_per_second", "rate", "Average traces a second, or a month's count as 20M/month", LOAD),
+    Question("peak_traces_per_second", "float", "Traces a second at the busiest hour; Enter takes the average times the peak factor", LOAD),
+    Question("runs_per_trace", "float", "Runs in one trace (each LLM call, tool call or step is a run)", LOAD),
+    Question("retention_days", "float", "Days a trace is kept before it expires (the base TTL)", LOAD),
+    Question("trace_store", "choice", "Where traces are stored", INSTALL, (
+        ("smithdb", "SmithDB alone, for a new install"),
+        ("dual", "SmithDB beside ClickHouse while history migrates"),
+        ("dual-replicated", "the same, with a 3-node ClickHouse"),
+    )),
+    Question("survives_node_loss", "bool", "Must it keep serving when a node is lost (yes: at least two of every pod, three of each operator-run store)", INSTALL),
+    Question("postgres", "choice", "LangSmith's Postgres", STORES, PLACEMENTS),
+    Question("redis", "choice", "Redis, the queue every run passes through", STORES, PLACEMENTS),
+    Question("smithdb_metastore", "choice", "SmithDB's metastore, a Postgres 18 of its own", STORES, PLACEMENTS),
+    Question("object_store", "choice", "Where trace bytes live", STORES, (
+        ("external", "a bucket: S3, GCS, Azure Blob or your own S3 API"),
+        ("in-cluster", "an S3-compatible store the install runs"),
+    )),
+    Question("clickhouse", "choice", "ClickHouse, while the trace store is dual", STORES, PLACEMENTS, when=_dual),
+    Question("datastores_on", "choice", "Where in-cluster stores run", NODES, (
+        ("app", "on the application nodes"),
+        ("dedicated", "on a node pool of their own"),
+    ), when=_any_in_cluster),
+    Question("app_node", "shape", "Your application node, as vCPUxGiB, to count nodes", NODES),
+    Question("smithdb_node", "shape", "Your SmithDB node, as vCPUxGiB", NODES),
+    Question("datastore_node", "shape", "Your data-store node, as vCPUxGiB", NODES, when=_dedicated),
 )
 
 
+SCALE = {"k": KILO, "m": KILO * KILO, "b": KILO * KILO * KILO}
+MONTH = "/month"
+
+
+def number(text: str) -> float:
+    """A count as a person writes it: 3000000, 3M or 2.5k."""
+    text = text.strip().lower().replace(",", "").replace("_", "")
+    if text[-1:] in SCALE:
+        return float(text[:-1]) * SCALE[text[-1]]
+    return float(text)
+
+
 def parse(q: Question, text: str) -> Any:
-    """An answer's value, or ValueError saying what is accepted."""
+    """An answer's value, or ValueError saying what is accepted. A choice takes its number or its name;
+    a rate takes traces a second, or a month's count as 20M/month (returned as ("month", count))."""
     text = text.strip()
+    if q.kind == "rate":
+        if text.lower().endswith(MONTH):
+            return ("month", number(text[: -len(MONTH)]))
+        return number(text)
     if q.kind == "float":
-        return float(text)
+        return number(text)
     if q.kind == "bool":
         if text.lower() in ("y", "yes", "true"):
             return True
@@ -65,8 +137,11 @@ def parse(q: Question, text: str) -> Any:
             return False
         raise ValueError("answer yes or no")
     if q.kind == "choice":
-        if text not in q.choices:
-            raise ValueError(f"one of {', '.join(q.choices)}")
+        names = [c[0] for c in q.choices]
+        if text.isdigit() and 1 <= int(text) <= len(names):
+            return names[int(text) - 1]
+        if text not in names:
+            raise ValueError(f"a number, or one of {', '.join(names)}")
         return text
     cpu, sep, mem = text.lower().partition("x")
     if not sep:
@@ -75,14 +150,21 @@ def parse(q: Question, text: str) -> Any:
 
 
 def _applies(q: Question, answers: Mapping[str, Any]) -> bool:
-    if not q.when:
-        return True
-    name, _, value = q.when.partition("!=")
-    return str(answers.get(name, inputs.Inputs.__dataclass_fields__[name].default)) != value
+    return q.when is None or q.when(answers)
 
 
-def _show(value: Any) -> str:
-    if isinstance(value, tuple):
+def plain(source: str) -> str:
+    """Where a default comes from, in words: param:x is params.yaml, chart:k the chart's value."""
+    kind, _, ref = source.partition(":")
+    if kind == "param" and ref:
+        return f"the model's default, params.yaml {ref}"
+    if kind == "chart" and ref:
+        return f"the chart's default, {ref}"
+    return source
+
+
+def show_value(value: Any) -> str:
+    if isinstance(value, (tuple, list)):
         return f"{value[0]:g}x{value[1]:g}"
     return "yes" if value is True else "no" if value is False else f"{value:g}" if isinstance(value, float) else str(value)
 
@@ -90,7 +172,10 @@ def _show(value: Any) -> str:
 def defaults(answers: Mapping[str, Any], preset: presets.Preset | None, chart: chart_mod.Chart, p: dict[str, params.Param]) -> dict[str, tuple[Any, str]]:
     """Each input's default and where it comes from, given the answers so far."""
     out: dict[str, tuple[Any, str]] = {}
-    if all(k in answers or (preset and k in preset.inputs) for k in REQUIRED):
+    have = set(answers) | set(preset.inputs if preset else {})
+    if "traces_per_month" in have:
+        have.add("traces_per_second")
+    if all(k in have for k in REQUIRED):
         merged: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in (preset.inputs if preset else {}).items()} | dict(answers)
         known = {f.name for f in fields(inputs.Inputs)}
         resolved, src = inputs.resolve(inputs.Inputs(chart_version=chart.version, **{k: v for k, v in merged.items() if k in known}), chart, params.values(p))
@@ -99,7 +184,7 @@ def defaults(answers: Mapping[str, Any], preset: presets.Preset | None, chart: c
     for f in fields(inputs.Inputs):
         if f.name in ("redis", "smithdb_metastore", "object_store", "clickhouse", "datastores_on", "trace_store", "survives_node_loss") and f.name not in out:
             out[f.name] = (f.default, "the model's default")
-    out["postgres"] = ("external if a Postgres memory is given, else statefulset", "the model's default")
+    out["postgres"] = ("statefulset", "the model's default")
     for name, param in (("app_node", "pools.app_node"), ("smithdb_node", "pools.smithdb_node"), ("datastore_node", "pools.app_node")):
         value = params.values(p)[param]
         if param == "pools.smithdb_node":
@@ -108,105 +193,155 @@ def defaults(answers: Mapping[str, Any], preset: presets.Preset | None, chart: c
             out[name] = ((value["cpu"], value["memory_gib"]), f"param:{param}")
     if preset:
         for k, v in preset.inputs.items():
-            out[k] = (tuple(v) if isinstance(v, list) else v, f"preset {preset.name}: {preset.notes[k]}")
+            out[k] = (tuple(v) if isinstance(v, list) else v, f"{'saved' if preset.saved else 'preset'} {preset.name}: {preset.notes[k]}")
     return out
 
 
-def _n(value: float) -> str:
-    """A figure for a person: one decimal at most. The raw :g printed 981.906 GiB from a sum of binary fractions."""
-    return f"{round(value, 1):g}"
-
-
-def headline(body: Mapping[str, Any]) -> str:
-    """The plan in a screenful: regime, totals, pools, stores and what needs attention."""
-    t, pools = body["totals"], body["pools"]
-    ap = t["applied"]
-    lines = [
-        f"regime {body['regime']['id']}: {body['regime']['why']}",
-        f"smithdb tier {body['smithdb']['tier']} ({body['smithdb']['topology']}), peak {body['rates']['peak_traces_per_second']:g} traces/s",
-        "namespace requests (vCPU, GiB) before overhead",
-    ]
-    for name in ("floor", "sized", "ceiling"):
-        r = ap[name]["requests"]
-        lines.append(f"  at {name:<8} {_n(r['cpu'])} vCPU, {_n(r['memory_gib'])} GiB, volumes {_n(ap[name]['volume_gib'])} GiB")
-    peak = t["hooks"]["peak"]
-    lines.append(f"  with hook Jobs {_n(peak['requests']['cpu'])} vCPU, {_n(peak['requests']['memory_gib'])} GiB (largest: {peak['job']})")
-    # The applied sized requests, not totals.cpu: that is the calculator's figure at the model's own
-    # replicas, and printed here it disagreed with the lines above whenever a regime adjusted them.
-    sized = ap["sized"]["requests"]
-    lines.append(f"  sized x{t['overhead']:g} overhead: {_n(sized['cpu'] * t['overhead'])} vCPU, {_n(sized['memory_gib'] * t['overhead'])} GiB")
-    lines.append("node pools")
-    for name, pool in pools.items():
-        if name == "single_node":
-            lines.append(f"  single node {pool['node_cpu']:g}x{pool['node_mem_gib']:g}: {'fits' if pool['fits'] else 'does not fit'} with the hook Jobs")
-            continue
-        lines.append(f"  {name:<10} {pool['applied']['floor']['nodes']}-{pool['applied']['ceiling']['nodes']} nodes of {pool['node_cpu']:g}x{pool['node_mem_gib']:g}; largest pod {pool['largest_pod']} {'fits' if pool['largest_pod_fits'] else 'DOES NOT FIT'}")
-    lines.append("stores")
-    for key in ("postgres", "redis", "smithdb_metastore", "object_storage", "clickhouse"):
-        store = body["stores"].get(key)
-        if store:
-            spec = store["spec"]
-            what = f"{spec['instances']} x" if "instances" in spec else "instance"
-            lines.append(f"  {key:<18} {spec['placement']}, {what}")
-    for w in body["warnings"]:
-        lines.append(f"warning {w['id']}: {w['message']}")
-    return "\n".join(lines)
-
-
-def write(out: Path, body: Mapping[str, Any], load_profile: Mapping[str, Any]) -> list[Path]:
-    out.mkdir(parents=True, exist_ok=True)
-    files = {
-        "plan.json": json.dumps(body, indent=2), "values.yaml": values_mod.to_yaml(body["values"]),
-        "stores.json": json.dumps(deploy.stores_json(body), indent=2), "load-profile.json": json.dumps(load_profile, indent=2),
-    }
-    paths = []
-    for name, text in files.items():
-        (out / name).write_text(text + "\n")
-        paths.append(out / name)
-    return paths
-
-
-def _ask(q: Question, have: tuple[Any, str] | None, ask: Callable[[str], str], say: Callable[[str], None]) -> Any:
+def _ask(q: Question, have: tuple[Any, str] | None, ask: Callable[[str], str]) -> Any:
     """One question until it is understood; None keeps the default."""
     required = have is None and q.name in REQUIRED
-    note = f" [{_show(have[0])}, from {have[1]}]" if have else " [required]" if required else ""
+    ui.question(q.name, q.what, "" if have is None else show_value(have[0]), "" if have is None else plain(have[1]), q.choices)
+    blank = False
     while True:
-        reply = ask(f"{q.name}: {q.what}{note}\n> ").strip()
+        reply = ask("  > ").strip()
         if not reply:
             if not required:
                 return None
-            say(f"{q.name} has no default")
+            if blank:
+                raise ValueError(f"{q.name} has no default and was left blank twice; nothing was written")
+            blank = True
+            ui.warn(f"{q.name} has no default: give a number")
             continue
         try:
             return parse(q, reply)
         except ValueError as err:
-            say(f"not understood: {err}")
+            ui.warn(f"not understood: {err}")
+
+
+def _pick_preset(ask: Callable[[str], str]) -> presets.Preset | None:
+    """Start from a named load, or from nothing."""
+    loaded = [presets.load(n) for n in presets.names()]
+    q = Question("start", "choice", "Start from a preset (every answer stays yours to change), or from nothing", "", (("none", "answer every question"),) + tuple((p.name, p.why) for p in loaded))
+    ui.question(q.name, q.what, "none", "", q.choices)
+    while True:
+        reply = ask("  > ").strip() or "none"
+        try:
+            choice = parse(q, reply)
+        except ValueError as err:
+            ui.warn(f"not understood: {err}")
+            continue
+        return None if choice == "none" else presets.load(choice)
+
+
+def _confirm(ask: Callable[[str], str]) -> bool:
+    while True:
+        reply = ask("  Size it and save the folder? [Y/n] > ").strip().lower()
+        if reply in ("", "y", "yes"):
+            return True
+        if reply in ("n", "no"):
+            return False
+
+
+def notes_for(answers: Mapping[str, Any], preset: presets.Preset | None, given: Mapping[str, Any], how: str) -> dict[str, str]:
+    """Where each saved input came from, so the folder says who decided what."""
+    def same(a: Any, b: Any) -> bool:
+        return (list(a) if isinstance(a, tuple) else a) == (list(b) if isinstance(b, tuple) else b)
+
+    out = {}
+    for k in answers:
+        if k in given:
+            out[k] = f"Given as --{k.replace('_', '-')} ({how})."
+        elif preset and k in preset.inputs and same(answers[k], preset.inputs[k]):
+            out[k] = preset.notes[k]
+        else:
+            out[k] = f"Answered in the wizard ({how})."
+    return out
+
+
+def save(out: Path, body: Mapping[str, Any], load_profile: Mapping[str, Any], saved: presets.Preset) -> list[tuple[str, str]]:
+    """Write the sizing folder; each file is written whole, then moved, so a reader never sees half of one."""
+    out.mkdir(parents=True, exist_ok=True)
+    names = [f for f, _ in FILES]
+    texts = {
+        "plan.json": json.dumps(body, indent=2), "values.yaml": values_mod.to_yaml(body["values"]).rstrip("\n"),
+        "stores.json": json.dumps(deploy.stores_json(body), indent=2), "load-profile.json": json.dumps(load_profile, indent=2),
+        "summary.md": summary.markdown(out.name, body, saved.why, names).rstrip("\n"),
+    }
+    presets.save(out / f"{INPUTS_FILE}.tmp", saved)
+    (out / f"{INPUTS_FILE}.tmp").replace(out / INPUTS_FILE)
+    for name, text in texts.items():
+        (out / f"{name}.tmp").write_text(text + "\n")
+        (out / f"{name}.tmp").replace(out / name)
+    return [(str(out / f), what) for f, what in FILES]
+
+
+def size_and_save(out: Path, preset: presets.Preset | None, answers: Mapping[str, Any], given: Mapping[str, Any], chart_version: str, how: str) -> dict[str, Any]:
+    """Size the answers on the chart, save the folder, draw the plan. The plan's body is returned."""
+    chart, loaded, cited = chart_mod.Chart(chart_version), params.load(), citations.load()
+    merged: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in (preset.inputs if preset else {}).items()}
+    if {"traces_per_second", "traces_per_month"} & set(answers):
+        merged.pop("traces_per_second", None)
+        merged.pop("traces_per_month", None)
+    merged |= dict(answers)
+    inp = inputs.Inputs(chart_version, **merged)
+    body = plan.size(inp, chart, loaded, cited)
+    why = preset.why if preset and preset.saved else f"Sized from preset {preset.name}: {preset.why}" if preset else "Sized from answers given in the wizard."
+    saved = presets.Preset(out.name, why, merged, notes_for(merged, preset, given, how), chart_version)
+    written = save(out, body, profile.load_profile(inp, chart, loaded, cited), saved)
+    ui.show(summary.sections(body), f"{out.name} on chart {chart_version}")
+    ui.files(written)
+    next_steps(out, body)
+    return body
+
+
+def next_steps(out: Path, body: Mapping[str, Any]) -> None:
+    fills = sum(line.startswith("# fill:") for line in values_mod.to_yaml(body["values"]).splitlines())
+    tested = (out / "results.json").exists()
+    ui.steps([
+        (f"make show NAME={out.name}", "these tables again"),
+        (f"{out}/values.yaml", f"fill its {fills} # fill: lines (secret names, hosts), then helm upgrade --install -f it"),
+        (f"{out}/stores.json", "provision each external store to its spec before the install"),
+        (f"make load NAME={out.name}", "once it runs: send the planned load (needs ../langsmith-load-test/.env)" + (", again" if tested else "")),
+        (f"make compare NAME={out.name}", "the load test's results against this plan"),
+    ])
 
 
 def run(
     *, chart_version: str | None, preset_name: str | None, given: Mapping[str, Any], yes: bool, out: Path,
-    ask: Callable[[str], str], say: Callable[[str], None],
+    ask: Callable[[str], str],
 ) -> int:
-    """Ask what is not given, size, show the headline, write the files."""
-    preset = presets.load(preset_name) if preset_name else None
-    if chart_version is None:
-        if yes:
-            raise ValueError("give --chart")
-        chart_version = ask(f"chart version (for example {DEFAULT_CHART}): ").strip()
+    """Ask what is not given, size, show the plan, save the folder."""
+    saved_file = out / INPUTS_FILE
+    preset = presets.load(preset_name) if preset_name else presets.load(str(saved_file)) if saved_file.is_file() else None
+    chart_version = chart_version or (preset.chart if preset and preset.chart else DEFAULT_CHART)
+    if yes and preset is None and "users" not in given:
+        raise ValueError(f"nothing to size: give PRESET= or USERS= with a rate, or size {out.name} once with make wizard NAME={out.name}")
+    ui.banner(f"LangSmith sizing: {out.name}", f"chart {chart_version}, saving to {out}/" + ("" if yes else "\nEnter keeps the default shown. Ctrl-C stops; nothing is written until you confirm."))
+    if preset and preset.saved:
+        ui.note(f"Sizing {out.name} again from its saved answers ({saved_file})" + ("." if yes else "; each default below is what was saved."))
+    if preset is None and not yes and not ({"users"} & set(given)):
+        preset = _pick_preset(ask)
     chart, loaded = chart_mod.Chart(chart_version), params.load()
     answers: dict[str, Any] = dict(given)
+    section = ""
     for q in QUESTIONS:
-        if yes or q.name in given or (q.name == "traces_per_second" and "traces_per_month" in given) or not _applies(q, answers):
+        if yes or q.name in given or (q.name == "traces_per_second" and "traces_per_month" in given) or not _applies(q, {**(preset.inputs if preset else {}), **answers}):
             continue
-        reply = _ask(q, defaults(answers, preset, chart, loaded).get(q.name), ask, say)
-        if reply is not None:
+        if q.section != section:
+            section = q.section
+            ui.heading(section)
+        reply = _ask(q, defaults(answers, preset, chart, loaded).get(q.name), ask)
+        if isinstance(reply, tuple) and reply[0] == "month":
+            answers["traces_per_month"] = reply[1]
+        elif reply is not None:
             answers[q.name] = reply
     if preset is None and "users" not in answers:
-        raise ValueError("give --preset or --users")
-    inp = preset.to_inputs(chart_version, **answers) if preset else inputs.Inputs(chart_version, **answers)
-    cited = citations.load()
-    body = plan.size(inp, chart, loaded, cited)
-    say(headline(body))
-    paths = write(out, body, profile.load_profile(inp, chart, loaded, cited))
-    say("wrote " + ", ".join(str(x) for x in paths))
+        raise ValueError("give PRESET, USERS, or a NAME with a saved inputs.yaml")
+    if not yes:
+        ui.heading("Your answers")
+        ui.facts([(k, show_value(v)) for k, v in ({**(preset.inputs if preset else {}), **answers}).items()])
+        if not _confirm(ask):
+            ui.note("Nothing written.")
+            return 1
+    size_and_save(out, preset, answers, given, chart_version, f"{'wizard' if not yes else 'make plan'}, {dt.date.today().isoformat()}")
     return 0

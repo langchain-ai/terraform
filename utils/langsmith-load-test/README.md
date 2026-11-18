@@ -45,17 +45,17 @@ before you raise the load.
 uv run load-test --users 1 --duration-seconds 30 --run-limit 10 --pause-seconds 1
 ```
 
-Then verify a plan. From `../langsmith-sizing`, `make profile PRESET=production` writes
-`out/load-profile.json` (or `make wizard`, which writes it with the rest), and:
+Then verify a plan. From `../langsmith-sizing`, `make plan NAME=acme PRESET=production` saves a sizing
+with its `out/acme/load-profile.json`, and:
 
 ```bash
-uv run load-test --profile ../langsmith-sizing/out/load-profile.json --read \
+uv run load-test --profile ../langsmith-sizing/out/acme/load-profile.json --read \
   --duration-seconds 600 --ramp-up-seconds 60 --results results.json
 ```
 
 `--peak` sends the profile's peak rate instead of its average. `--traces-per-second 50` sends the model's
-default load at a rate you choose, with no profile. From the sizing folder, `make load` runs the profile
-form and `make compare` reads the results against the plan.
+default load at a rate you choose, with no profile. From `../langsmith-sizing`, `make load NAME=acme` runs the
+profile form and `make compare NAME=acme` reads the results against the plan.
 
 The first `uv run` creates `.venv` here and installs the dependencies.
 

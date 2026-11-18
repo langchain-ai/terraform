@@ -7,12 +7,16 @@ with its type, unit and meaning, is in [fields.md](fields.md), which `make refer
 ## Commands
 
 ```
-uv run langsmith-sizing size          --chart X.Y.Z [inputs]    plan as JSON on stdout
-uv run langsmith-sizing values        --chart X.Y.Z [inputs]    chart values (YAML)
-uv run langsmith-sizing stores        --chart X.Y.Z [inputs]    store specs (JSON)
-uv run langsmith-sizing load-profile  --chart X.Y.Z [inputs]    the load the plan was sized for (JSON)
-uv run langsmith-sizing wizard        [--chart X.Y.Z] [inputs] [--out DIR] [--yes]
-uv run langsmith-sizing compare       --plan plan.json --results results.json
+uv run langsmith-sizing wizard        [inputs] --out DIR [--yes]   ask, show the plan, save the sizing folder
+uv run langsmith-sizing plan          [inputs] --out DIR           the same, asking nothing
+uv run langsmith-sizing show          --out DIR                    draw a saved sizing again
+uv run langsmith-sizing list          [--root DIR]                 every saved sizing
+uv run langsmith-sizing presets                                    the named loads
+uv run langsmith-sizing size          [inputs]    plan as JSON on stdout
+uv run langsmith-sizing values        [inputs]    chart values (YAML)
+uv run langsmith-sizing stores        [inputs]    store specs (JSON)
+uv run langsmith-sizing load-profile  [inputs]    the load the plan was sized for (JSON)
+uv run langsmith-sizing compare       --plan plan.json --results results.json [--save verdicts.json]
 uv run langsmith-sizing profile-report --chart X.Y.Z [--root DIR]
 uv run langsmith-sizing check-params  [--chart X.Y.Z]
 uv run langsmith-sizing check-citations [--ref BRANCH_OR_COMMIT]
@@ -20,12 +24,16 @@ uv run langsmith-sizing chart-info    --chart X.Y.Z [--key a.b.c]
 ```
 
 The chart is pulled once per version into `~/.cache/langsmith-sizing` (`LANGSMITH_SIZING_CACHE` moves
-it). `helm` must be on `PATH`. An error prints `error: <what>` and exits 1.
+it). `helm` must be on `PATH`. An error prints `error <what>` and exits 1. Output for a person is drawn
+with [rich](https://github.com/Textualize/rich): plain text when piped or when `NO_COLOR` is set. `size`,
+`values`, `stores` and `load-profile` print only their document, for a tool to read.
 
 ### Inputs
 
-`size`, `values`, `stores`, `load-profile` and `wizard` take the same inputs: `--preset NAME`, or `--users`
-with a rate (`--traces-per-second` or `--traces-per-month`). Any flag replaces the preset's value (a traces
+`wizard`, `plan`, `size`, `values`, `stores` and `load-profile` take the same inputs: `--preset NAME`, a
+saved sizing's `--preset DIR/inputs.yaml`, or `--users` with a rate (`--traces-per-second` or
+`--traces-per-month`). `--chart X.Y.Z` defaults to a saved sizing's chart, else `charts.yaml`'s default.
+`wizard` and `plan` start from `DIR/inputs.yaml` when it exists and no preset is given. Any flag replaces the preset's value (a traces
 flag replaces its average, and leaves the preset's peak where it was: overriding a preset's rate means
 giving its peak too, and a peak below the average is refused).
 
@@ -44,13 +52,19 @@ giving its peak too, and a peak below the average is refused).
 | `--smithdb-tier`, `--smithdb-topology` | SmithDB's tier (`small`, `medium`, `large`) and layout (`cluster`, or `unified` on a chart with `smithdb.topology`); default the load's, and the regime's for a low one |
 | `--backfill-runs`, `--backfill-days` | ClickHouse history to copy into SmithDB, and the days to copy it in; both or neither |
 
-`make wizard` writes all four files (`plan.json`, `values.yaml`, `stores.json`, `load-profile.json`) to `OUT`;
-`make plan`, `make values`, `make stores` and `make profile` each write only their own file from the same inputs,
-and `make load` needs `load-profile.json` from `make wizard` or `make profile`. `make reference` rewrites
+### The sizing folder
+
+`make wizard NAME=x` and `make plan NAME=x` save `out/x/` (`OUT=` moves it; `NAME` defaults to `PRESET`):
+`inputs.yaml` (the answers, each with a note on where it came from, in the preset format plus `chart`),
+`plan.json`, `values.yaml`, `stores.json`, `load-profile.json` and `summary.md`. `make load NAME=x` adds
+`results.json` and `make compare NAME=x` adds `verdicts.json`. Each file is written whole and then moved
+into place, so a failed run never leaves half a plan for `compare` to read. `make reference` rewrites
 `docs/fields.md` and the load test's `docs/results-fields.md`.
 
-`make` takes the common ones as variables (`PRESET`, `USERS`, `TRACES_PER_SECOND`,
-`PEAK_TRACES_PER_SECOND`, `RUNS_PER_TRACE`, `RETENTION_DAYS`, `CHART`, `OUT`) and any other flag as `ARGS`.
+`make` takes the common inputs as variables (`PRESET`, `USERS`, `TRACES_PER_SECOND`, `TRACES_PER_MONTH`,
+`PEAK_TRACES_PER_SECOND`, `RUNS_PER_TRACE`, `RETENTION_DAYS`, `CHART`) and any other flag as `ARGS`.
+`make check` runs every gate with one line each and its output in `out/.logs/<gate>.log`; `make lint`,
+`types`, `test`, `params` and `citations` run one with its output on the screen.
 
 ### What each command does
 
@@ -136,7 +150,9 @@ model/         pure functions, numbers in and numbers out
 plan.py        size(inputs, chart, params, cited) -> the plan, with a provenance map
 deploy.py      store placements and specs, dbs, totals, pools
 values.py      the chart values overlay, with <placeholders> where the plan cannot know
-wizard.py      the questions, the headline, the four files
+wizard.py      the questions and the sizing folder
+summary.py     a plan as tables, for the terminal and summary.md
+ui.py          the terminal layout every command draws through
 presets.py     presets/<name>.yaml -> inputs
 profile.py     the same inputs -> the load profile
 compare.py     a plan and a load test's results -> one verdict per promise

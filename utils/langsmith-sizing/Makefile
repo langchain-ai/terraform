@@ -2,14 +2,18 @@
 # Every recipe forwards to the CLI; the logic lives in the package, so a person without make runs
 # the same commands (the README shows them).
 
-# charts.yaml is the one place a chart version is written.
-CHART ?= $(shell sed -n 's/^default: //p' charts.yaml)
-OUT   ?= out
-# Same inputs as the CLI: PRESET alone, or USERS with TRACES_PER_SECOND. A variable given replaces
-# the preset's value. ARGS carries any other flag, for example ARGS="--redis operator".
+# A sizing is a folder named for who it is for. OUT moves it, for example into a project's own folder.
+NAME  ?= $(PRESET)
+ROOT  ?= out
+OUT   ?= $(ROOT)/$(NAME)
+# Unset, the chart is the one a saved sizing was made on, else charts.yaml's default.
+CHART ?=
+# Inputs, as the CLI takes them: PRESET alone, or USERS with TRACES_PER_SECOND; a variable given
+# replaces the preset's or the saved sizing's value. ARGS carries any other flag, ARGS="--redis operator".
 PRESET ?=
 USERS ?=
 TRACES_PER_SECOND ?=
+TRACES_PER_MONTH ?=
 PEAK_TRACES_PER_SECOND ?=
 RUNS_PER_TRACE ?=
 RETENTION_DAYS ?=
@@ -18,55 +22,107 @@ ARGS ?=
 DURATION ?= 600
 RAMP ?= 60
 PEAK ?=
-PLAN ?= $(OUT)/plan.json
-RESULTS ?= $(OUT)/results.json
+LOGS := $(ROOT)/.logs
 
-SIZING := uv run langsmith-sizing
-LOADTEST := uv run --directory ../langsmith-load-test load-test
-INPUTS := --chart $(CHART) $(if $(PRESET),--preset $(PRESET)) $(if $(USERS),--users $(USERS)) $(if $(TRACES_PER_SECOND),--traces-per-second $(TRACES_PER_SECOND)) $(if $(PEAK_TRACES_PER_SECOND),--peak-traces-per-second $(PEAK_TRACES_PER_SECOND)) $(if $(RUNS_PER_TRACE),--runs-per-trace $(RUNS_PER_TRACE)) $(if $(RETENTION_DAYS),--retention-days $(RETENTION_DAYS)) $(ARGS)
+SIZING := uv run --quiet langsmith-sizing
+LOADTEST := uv run --quiet --directory ../langsmith-load-test load-test
+INPUTS := $(if $(CHART),--chart $(CHART)) $(if $(PRESET),--preset $(PRESET)) $(if $(USERS),--users $(USERS)) $(if $(TRACES_PER_SECOND),--traces-per-second $(TRACES_PER_SECOND)) $(if $(TRACES_PER_MONTH),--traces-per-month $(TRACES_PER_MONTH)) $(if $(PEAK_TRACES_PER_SECOND),--peak-traces-per-second $(PEAK_TRACES_PER_SECOND)) $(if $(RUNS_PER_TRACE),--runs-per-trace $(RUNS_PER_TRACE)) $(if $(RETENTION_DAYS),--retention-days $(RETENTION_DAYS)) $(ARGS)
+
+# One line a gate: its name, then ok or FAILED with the tail of its log. A gate's output goes to
+# $(LOGS)/<gate>.log, never to the screen, unless it failed. No pipe: one through tail would hide a
+# failing exit code from make.
+B := $(shell [ -t 1 ] && [ -z "$$NO_COLOR" ] && printf '\033[1m')
+G := $(shell [ -t 1 ] && [ -z "$$NO_COLOR" ] && printf '\033[1;32m')
+R := $(shell [ -t 1 ] && [ -z "$$NO_COLOR" ] && printf '\033[1;31m')
+C := $(shell [ -t 1 ] && [ -z "$$NO_COLOR" ] && printf '\033[36m')
+D := $(shell [ -t 1 ] && [ -z "$$NO_COLOR" ] && printf '\033[2m')
+X := $(shell [ -t 1 ] && [ -z "$$NO_COLOR" ] && printf '\033[0m')
+define gate
+	@mkdir -p $(LOGS); printf '  %-34s ' "$(1)"; start=$$(date +%s); \
+	if $(2) > "$(LOGS)/$(1).log" 2>&1; then printf '$(G)ok$(X)   $(D)%ss$(X)\n' $$(( $$(date +%s) - start )); \
+	else printf '$(R)FAILED$(X)  $(D)%s$(X)\n' "$(LOGS)/$(1).log"; tail -n 25 "$(LOGS)/$(1).log" | sed 's/^/      /'; exit 1; fi
+endef
+define need_name
+	@test -n "$(NAME)" || { printf '$(R)error$(X) give NAME=<customer>, the sizing folder under $(ROOT)/ (make list shows them)\n' >&2; exit 2; }
+endef
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check lint types test params citations load-test-check reference figures wizard plan values stores profile load compare report
+.PHONY: help setup wizard plan show list presets load compare chart check lint types test params citations load-test-check reference figures report
 
-help: ## this list
-	@echo "langsmith-sizing: size an install, deploy it, verify it."
-	@echo ""
-	@echo "  1. make setup                              install the dependencies (needs uv; helm for the chart tests)"
-	@echo "  2. make wizard USERS=10 TRACES_PER_SECOND=5 PEAK_TRACES_PER_SECOND=15   ask, size, write all four files to OUT=$(OUT): plan.json, values.yaml, stores.json, load-profile.json"
-	@echo "     or one file per target with the same inputs: make plan | values | stores | profile (each writes only its own file; make load needs profile)"
-	@echo "  3. deploy with $(OUT)/values.yaml and provision from $(OUT)/stores.json (your Helm or Terraform)"
-	@echo "  4. make load                               send the load at your instance (reads ../langsmith-load-test/.env; needs $(OUT)/load-profile.json from make wizard or make profile)"
-	@echo "  5. make compare                            the load test's results against the plan"
-	@echo ""
-	@awk -F':.*## ' '/^[a-z-]+:.*## /{printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@echo ""
-	@echo "Inputs: CHART=$(CHART) PRESET= USERS= TRACES_PER_SECOND= PEAK_TRACES_PER_SECOND= RUNS_PER_TRACE= RETENTION_DAYS= ARGS='' YES=1 (the wizard asks nothing)"
-	@echo "Presets: see presets/README.md. All six carry an open question and none is proven."
-	@echo "Next: make wizard USERS=10 TRACES_PER_SECOND=5 PEAK_TRACES_PER_SECOND=15"
+help: ## this screen
+	@printf '\n$(B)langsmith-sizing$(X)  size a self-hosted LangSmith install from its load, deploy it, prove it\n\n'
+	@printf '  $(B)1  size$(X)     $(C)make wizard NAME=acme$(X)                 $(D)asks about the load and the install, saves $(ROOT)/acme/$(X)\n'
+	@printf '             $(C)make plan NAME=acme PRESET=lite$(X)       $(D)the same, asking nothing; again later re-sizes from the saved answers$(X)\n'
+	@printf '  $(B)2  deploy$(X)   $(D)provision from $(ROOT)/acme/stores.json, then helm upgrade --install with $(ROOT)/acme/values.yaml$(X)\n'
+	@printf '  $(B)3  prove$(X)    $(C)make load NAME=acme$(X)                   $(D)sends the planned load at the install$(X)\n'
+	@printf '             $(C)make compare NAME=acme$(X)                $(D)one verdict per promise the plan makes$(X)\n\n'
+	@printf '$(B)Targets$(X)\n'
+	@awk -F':.*## ' '/^[a-z-]+:.*## /{printf "  $(C)%-18s$(X) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf '\n$(B)Inputs$(X)  $(D)NAME= PRESET= USERS= TRACES_PER_SECOND= TRACES_PER_MONTH= PEAK_TRACES_PER_SECOND= RUNS_PER_TRACE= RETENTION_DAYS= CHART= ARGS="--redis operator ..." OUT=<folder>$(X)\n'
+	@printf '$(B)Docs$(X)    $(D)README.md, docs/how-it-sizes.md, docs/autoscaling.md, docs/monitoring.md$(X)\n\n'
 
-setup: ## install the package and the load test's dependencies
-	uv sync --group dev
-	uv sync --directory ../langsmith-load-test
+setup: ## install the package and the load test (needs uv; helm reads the chart)
+	$(call gate,uv sync,uv sync --group dev)
+	$(call gate,uv sync load test,uv sync --directory ../langsmith-load-test)
+	@command -v helm >/dev/null || printf '  $(R)helm is not on PATH$(X): sizing reads the chart with it (https://helm.sh/docs/intro/install/)\n'
 
-check: lint types test params citations load-test-check ## every gate CI runs (helm required; citations need the network)
+wizard: ## ask, size, save the folder (NAME=; PRESET= to start from one, or it offers them)
+	$(need_name)
+	@$(SIZING) wizard $(INPUTS) --out $(OUT)
 
+plan: ## size and save the folder, asking nothing (NAME= with PRESET=, USERS=..., or its saved inputs)
+	$(need_name)
+	@$(SIZING) plan $(INPUTS) --out $(OUT)
+
+show: ## a saved sizing's plan again (NAME=)
+	$(need_name)
+	@$(SIZING) show --out $(OUT)
+
+list: ## every saved sizing under ROOT
+	@$(SIZING) list --root $(ROOT)
+
+presets: ## the named loads a sizing can start from
+	@$(SIZING) presets
+
+chart: ## chart values at CHART (KEY=a.dotted.key, repeatable as ARGS="--key ...")
+	@$(SIZING) chart-info --chart $(or $(CHART),$(shell sed -n 's/^default: //p' charts.yaml)) $(if $(KEY),--key $(KEY)) $(ARGS)
+
+# Never run against an instance you do not own: it writes traces and feedback to the project in .env.
+# The load test reads LANGSMITH_ENDPOINT, LANGSMITH_API_KEY and LANGSMITH_PROJECT from its own .env.
+load: ## send the planned load at your install (NAME=; needs ../langsmith-load-test/.env); saves results.json
+	$(need_name)
+	@test -f $(OUT)/load-profile.json || { printf '$(R)error$(X) $(OUT)/load-profile.json is missing: run make wizard NAME=$(NAME) or make plan NAME=$(NAME) first\n' >&2; exit 2; }
+	$(LOADTEST) --profile $(abspath $(OUT))/load-profile.json $(if $(PEAK),--peak) --read --duration-seconds $(DURATION) --ramp-up-seconds $(RAMP) --results $(abspath $(OUT))/results.json
+
+compare: ## the load test's results against the plan; exit 1 on a failed promise (NAME=)
+	$(need_name)
+	@$(SIZING) compare --plan $(OUT)/plan.json --results $(OUT)/results.json --save $(OUT)/verdicts.json
+
+check: ## every gate CI runs (helm required; citations need the network)
+	@printf '\n$(B)Gates$(X)  $(D)logs in $(LOGS)/$(X)\n'
+	$(call gate,lint,uv run --group dev ruff check src tests)
+	$(call gate,types,uv run --group dev mypy --strict src)
+	$(call gate,tests,env LANGSMITH_SIZING_REQUIRE_HELM=1 uv run python -m unittest discover -s tests)
+	$(call gate,params against every planned chart,uv run langsmith-sizing check-params)
+	$(call gate,citations at the pinned docs,uv run langsmith-sizing check-citations)
+	$(call gate,load test lint,uv run --directory ../langsmith-load-test --group dev ruff check src tests)
+	$(call gate,load test types,uv run --directory ../langsmith-load-test --group dev mypy --strict -p loadtest)
+	$(call gate,load test tests,uv run --directory ../langsmith-load-test python -m unittest discover -s tests)
+	@printf '  $(G)every gate passed$(X)\n\n'
+
+# The gates one at a time, with their output on the screen.
+lint: ## ruff
+	uv run --group dev ruff check src tests
+types: ## mypy --strict
+	uv run --group dev mypy --strict src
 # CI sets this so a missing helm fails the chart tests instead of skipping them green.
 test: ## the package's tests
 	LANGSMITH_SIZING_REQUIRE_HELM=1 uv run python -m unittest discover -s tests
-
-lint: ## ruff
-	uv run --group dev ruff check src tests
-
-types: ## mypy --strict
-	uv run --group dev mypy --strict src
-
 # Both chart lines the package plans for: a release candidate can change a default under a parameter.
 params: ## check-params against every chart in charts.yaml
 	uv run langsmith-sizing check-params
-
 citations: ## check-citations at the pinned docs commit
 	uv run langsmith-sizing check-citations
-
 load-test-check: ## the load test's ruff, mypy --strict and offline tests
 	uv run --directory ../langsmith-load-test --group dev ruff check src tests
 	uv run --directory ../langsmith-load-test --group dev mypy --strict -p loadtest
@@ -79,37 +135,8 @@ reference: ## rewrite docs/fields.md, the docs' generated tables, and the load t
 	uv run python -m langsmith_sizing.docs_gen
 	uv run --directory ../langsmith-load-test python tests/results_fields.py
 
-figures: ## draw each figure whose data changed, light and dark, to docs/figures/ (needs Chrome, FONTS= the brand faces' folder, LOGOS= the logos' folder; DRAFT=1 without them)
+figures: ## redraw each figure whose data changed (needs Chrome, FONTS= the brand faces, LOGOS= the logos; DRAFT=1 without)
 	uv run python -m langsmith_sizing.figures $(if $(FONTS),--fonts $(FONTS)) $(if $(LOGOS),--logos $(LOGOS)) $(if $(DRAFT),--draft)
 
-# The wizard asks for what a flag and the preset leave open; --yes stops it asking.
-wizard: ## ask each input, print the headline, write the four files to OUT
-	$(SIZING) wizard $(INPUTS) --out $(OUT) $(if $(YES),--yes)
-
-# A failed command must not leave an empty file for compare or load to read: write, then move.
-$(OUT):
-	mkdir -p $@
-
-plan: | $(OUT) ## size the load: OUT/plan.json
-	$(SIZING) size $(INPUTS) > $(OUT)/plan.json.tmp && mv $(OUT)/plan.json.tmp $(OUT)/plan.json
-
-values: | $(OUT) ## the chart values that apply the plan: OUT/values.yaml
-	$(SIZING) values $(INPUTS) > $(OUT)/values.yaml.tmp && mv $(OUT)/values.yaml.tmp $(OUT)/values.yaml
-
-stores: | $(OUT) ## what to provision per data store: OUT/stores.json
-	$(SIZING) stores $(INPUTS) > $(OUT)/stores.json.tmp && mv $(OUT)/stores.json.tmp $(OUT)/stores.json
-
-profile: | $(OUT) ## the load the plan was sized for, as the load test reads it: OUT/load-profile.json
-	$(SIZING) load-profile $(INPUTS) > $(OUT)/load-profile.json.tmp && mv $(OUT)/load-profile.json.tmp $(OUT)/load-profile.json
-
-# Never run against an instance you do not own: it writes traces and feedback to the project in .env.
-# The load test reads LANGSMITH_ENDPOINT, LANGSMITH_API_KEY and LANGSMITH_PROJECT from its own .env.
-load: ## run the load test with OUT/load-profile.json (make wizard or make profile first; needs ../langsmith-load-test/.env); writes OUT/results.json
-	@test -f $(OUT)/load-profile.json || { echo "error: $(OUT)/load-profile.json is missing: run make wizard, or make profile with the same inputs, first" >&2; exit 1; }
-	$(LOADTEST) --profile $(abspath $(OUT))/load-profile.json $(if $(PEAK),--peak) --read --duration-seconds $(DURATION) --ramp-up-seconds $(RAMP) --results $(abspath $(RESULTS))
-
-compare: ## the results against the plan, one verdict per promise; exit 1 on a failed one
-	$(SIZING) compare --plan $(PLAN) --results $(RESULTS)
-
-report: ## the four presets with module profiles (minimum, dev, production, production-large) beside the modules' profiles
-	$(SIZING) profile-report --chart $(CHART)
+report: ## the module profiles' presets beside the modules' hand-written profiles
+	@$(SIZING) profile-report --chart $(or $(CHART),$(shell sed -n 's/^default: //p' charts.yaml))

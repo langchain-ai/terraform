@@ -1,46 +1,67 @@
-"""The Makefile's help says what each target writes, and the targets do what it says."""
+"""The Makefile's help says what each target does, a sizing is a folder named for who it is for,
+and a target that needs a folder says what to run when it is missing."""
 
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 from langsmith_sizing import ROOT
-
-INPUTS = ["USERS=10", "TRACES_PER_SECOND=5", "PEAK_TRACES_PER_SECOND=15"]
 
 
 def make(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["make", "-C", str(ROOT), *args], capture_output=True, text=True, check=False)
 
 
+def dry(*args: str) -> str:
+    """The commands a target would run, with make's runs of spaces from unset inputs closed up."""
+    return " ".join(make("-n", *args).stdout.split())
+
+
 @unittest.skipUnless(shutil.which("make"), "make is not on PATH")
 class MakefileTest(unittest.TestCase):
-    def test_wizard_writes_all_four_files_and_the_help_says_so(self) -> None:
-        self.assertIn("all four files", make("help").stdout)
-        self.assertIn(" wizard ", make("-n", "wizard", *INPUTS).stdout)
-
-    def test_plan_writes_only_plan_json_and_the_help_says_each_target_writes_its_own_file(self) -> None:
+    def test_the_help_walks_size_deploy_prove_and_lists_every_target(self) -> None:
         text = make("help").stdout
-        self.assertIn("each writes only its own file", text)
-        self.assertIn("make load needs profile", text)
-        dry = make("-n", "plan", "OUT=scratch", *INPUTS).stdout
-        self.assertIn("> scratch/plan.json.tmp && mv", dry)
-        for other in ("load-profile.json", "values.yaml", "stores.json"):
-            self.assertNotIn(other, dry)
+        for step in ("1  size", "2  deploy", "3  prove", "make wizard NAME=acme", "make plan NAME=acme PRESET=lite", "make compare NAME=acme"):
+            self.assertIn(step, text)
+        targets = {line.split(":")[0] for line in (ROOT / "Makefile").read_text().splitlines() if "## " in line and line[:1].isalpha()}
+        for t in targets:
+            self.assertIn(t, text)
 
-    def test_a_failed_plan_leaves_no_plan_for_compare_to_read(self) -> None:
-        with tempfile.TemporaryDirectory() as out:
-            failed = make("plan", f"OUT={out}", "TRACES_PER_SECOND=50", "PEAK_TRACES_PER_SECOND=10")
-            self.assertNotEqual(failed.returncode, 0)
-            self.assertFalse((ROOT / out / "plan.json").exists())
+    def test_a_sizing_lands_in_a_folder_named_for_it(self) -> None:
+        self.assertIn("plan --preset lite --out out/acme", dry("plan", "NAME=acme", "PRESET=lite"))
+        self.assertIn("--out elsewhere/acme", dry("plan", "NAME=acme", "OUT=elsewhere/acme"))
+
+    def test_the_preset_names_the_folder_when_no_name_is_given(self) -> None:
+        self.assertIn("--out out/lite", dry("plan", "PRESET=lite"))
+
+    def test_a_target_that_needs_a_folder_refuses_without_a_name(self) -> None:
+        for target in ("wizard", "plan", "show", "load", "compare"):
+            done = make(target)
+            self.assertEqual(done.returncode, 2, target)
+            self.assertIn("give NAME=<customer>", done.stderr)
 
     def test_load_without_a_profile_stops_and_says_what_to_run(self) -> None:
         with tempfile.TemporaryDirectory() as empty:
-            done = make("load", f"OUT={empty}")
+            done = make("load", "NAME=x", f"OUT={Path(empty) / 'x'}")
         self.assertEqual(done.returncode, 2)
-        self.assertIn("load-profile.json is missing: run make wizard, or make profile", done.stderr)
+        self.assertIn("load-profile.json is missing: run make wizard NAME=x or make plan NAME=x first", done.stderr)
         self.assertNotIn("load-test", done.stdout)
+
+
+class DocsNameRealTargetsTest(unittest.TestCase):
+    """A doc or the Claude skill that names a target the Makefile lacks sends a reader to an error."""
+
+    def test_every_make_target_a_doc_names_exists(self) -> None:
+        targets = {m.group(1) for m in re.finditer(r"^([a-z-]+):", (ROOT / "Makefile").read_text(), re.M)}
+        skill = ROOT.parent.parent / ".claude" / "skills" / "langsmith-sizing" / "SKILL.md"
+        agent = ROOT.parent.parent / ".claude" / "agents" / "langsmith-sizing.md"
+        docs = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md")), ROOT / "presets" / "README.md", skill, agent]
+        for doc in docs:
+            for name in re.findall(r"(?:`|^)make ([a-z][a-z-]*)\b", doc.read_text(), re.M):
+                self.assertIn(name, targets, f"{doc.relative_to(ROOT.parent.parent)} names make {name}")
 
 
 if __name__ == "__main__":

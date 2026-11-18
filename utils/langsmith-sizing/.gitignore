@@ -1,2 +1,2 @@
-# What make wizard and make plan write by default (OUT=out)
+# Sizing folders (make wizard, make plan) and the gates' logs: a customer's figures never enter git
 /out/

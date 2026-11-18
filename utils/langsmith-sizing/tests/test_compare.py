@@ -109,12 +109,12 @@ class Command(unittest.TestCase):
     def test_exit_zero_when_nothing_failed(self) -> None:
         code, out = self._run(results())
         self.assertEqual(code, 0)
-        self.assertIn("PASS         write-rate", out)
+        self.assertRegex(out, r"PASS +write-rate")
 
     def test_exit_one_on_a_failed_verdict(self) -> None:
         code, out = self._run(results(missing=2))
         self.assertEqual(code, 1)
-        self.assertIn("FAIL         no_missing_runs", out)
+        self.assertRegex(out, r"FAIL +no_missing_runs")
 
     def test_an_unreadable_file_is_an_error(self) -> None:
         err = io.StringIO()

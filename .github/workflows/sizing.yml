@@ -8,6 +8,8 @@ on:
     paths:
       - "utils/langsmith-sizing/**"
       - "utils/langsmith-load-test/**"
+      - ".claude/skills/langsmith-sizing/**"
+      - ".claude/agents/langsmith-sizing.md"
       - ".github/workflows/sizing.yml"
   push:
     branches:
@@ -15,6 +17,8 @@ on:
     paths:
       - "utils/langsmith-sizing/**"
       - "utils/langsmith-load-test/**"
+      - ".claude/skills/langsmith-sizing/**"
+      - ".claude/agents/langsmith-sizing.md"
       - ".github/workflows/sizing.yml"
   # Weekly, with no change to the repository: the docs the model cites move on their own.
   schedule:

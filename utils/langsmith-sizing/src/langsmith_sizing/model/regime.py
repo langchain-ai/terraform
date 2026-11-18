@@ -22,17 +22,17 @@ def _holds(regime: Mapping[str, Any], tps: float, peak: float, bands: Mapping[st
     if ptop is not None:
         if peak_tps > ptop:
             return None
-        why.append(f"a peak of {peak_tps:g} traces/s is at or below {ptop:g}")
+        why.append(f"a peak of {round(peak_tps, 1):g} traces/s is at or below {ptop:g}")
     band = regime.get("peak_band_min")
     if band is not None:
         if peak < bands[band]:
             return None
-        why.append(f"peak {peak:g} runs/s is at or above the {band} band's upper edge, {bands[band]:g} runs/s")
+        why.append(f"peak {round(peak, 1):g} runs/s is at or above the {band} band's upper edge, {bands[band]:g} runs/s")
     top = regime.get("traces_per_second_max")
     if top is not None:
         if tps > top:
             return None
-        why.append(f"{tps:g} traces/s is at or below {top:g}")
+        why.append(f"{round(tps, 1):g} traces/s is at or below {top:g}")
     return why
 
 
@@ -41,6 +41,6 @@ def classify(regimes: Sequence[Mapping[str, Any]], *, traces_per_second: float, 
         why = _holds(r, traces_per_second, peak_runs_per_second, peak_bands, peak_traces_per_second, facts)
         if why is None:
             continue
-        reason = "; ".join(why) or f"no tighter regime holds at {traces_per_second:g} traces/s and a peak of {peak_runs_per_second:g} runs/s"
+        reason = "; ".join(why) or f"no tighter regime holds at {round(traces_per_second, 1):g} traces/s and a peak of {round(peak_runs_per_second, 1):g} runs/s"
         return {"id": r["id"], "why": reason, "about": r["about"], "turns_on": dict(r["turns_on"]), "observe": bool(r.get("unmeasured"))}
     raise ValueError("regimes: the last must have no bounds, so every load matches one")

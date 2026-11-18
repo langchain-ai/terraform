@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
-from langsmith_sizing import cli, inputs, wizard
+from langsmith_sizing import cli, inputs, summary, wizard
 from langsmith_sizing.chart import hook_jobs
 from langsmith_sizing.model import datastores, totals
 from tests.helpers import CHART, CITED, P, chart_at, needs_helm, size
@@ -217,46 +217,98 @@ class Outputs(unittest.TestCase):
         self.assertEqual(doc["stores"]["redis"]["placement"], "operator")
         self.assertEqual(doc["dbs"]["ls-redis"]["count"], 3)
 
-    def scripted(self, answers: list[str], **kw: Any) -> tuple[int, list[str], list[str]]:
+    def scripted(self, answers: list[str], **kw: Any) -> tuple[int, list[str], str]:
         asked: list[str] = []
-        said: list[str] = []
         queue = iter(answers)
+        shown = io.StringIO()
 
         def ask(prompt: str) -> str:
-            asked.append(prompt)
+            # what the screen held when the question was put: the block above the prompt
+            asked.append(shown.getvalue()[sum(len(a) for a in asked):])
             return next(queue)
 
-        with tempfile.TemporaryDirectory() as d:
-            code = wizard.run(chart_version=CHART, preset_name=kw.get("preset"), given=kw.get("given", {}), yes=kw.get("yes", False), out=Path(d), ask=ask, say=said.append)
-            self.files = sorted(f.name for f in Path(d).iterdir())
-            self.plan = json.loads((Path(d) / "plan.json").read_text())
-        return code, asked, said
+        with tempfile.TemporaryDirectory() as d, redirect_stdout(shown):
+            out = Path(d) / "acme"
+            code = wizard.run(chart_version=CHART, preset_name=kw.get("preset"), given=kw.get("given", {}), yes=kw.get("yes", False), out=out, ask=ask)
+            self.files = sorted(f.name for f in out.iterdir()) if out.exists() else []
+            self.plan = json.loads((out / "plan.json").read_text()) if out.exists() else {}
+            self.saved = (out / "inputs.yaml").read_text() if out.exists() else ""
+        return code, asked, shown.getvalue()
 
-    def test_the_wizard_asks_each_input_with_its_default_and_source_and_writes_four_files(self) -> None:
-        answers = ["20", "100", "33", "", "", "smithdb", "yes", "external", "external", "external", "external", "app", "", "", ""]
-        code, asked, said = self.scripted(answers, preset="production")
+    # preset production: users, average, peak, runs, retention, trace store, node loss, 4 stores, 2 nodes, confirm.
+    # Every store is external, so where in-cluster stores run, and their node, are not asked.
+    PRODUCTION = ["25", "33", "100", "", "", "1", "yes", "external", "external", "external", "external", "", "", "y"]
+    # no preset: the picker, users, average, peak, runs, retention, trace store, node loss, 4 stores, where, 2 nodes, confirm
+    SCRATCH = ["none", "5", "3", "10", "", "", "smithdb", "no", "statefulset", "statefulset", "statefulset", "external", "app", "", "", "y"]
+
+    def test_the_wizard_asks_each_input_with_its_default_and_source_and_saves_the_folder(self) -> None:
+        code, asked, _ = self.scripted(self.PRODUCTION, preset="production")
         self.assertEqual(code, 0)
-        self.assertEqual(self.files, ["load-profile.json", "plan.json", "stores.json", "values.yaml"])
+        self.assertEqual(self.files, ["inputs.yaml", "load-profile.json", "plan.json", "stores.json", "summary.md", "values.yaml"])
         self.assertIn("preset production", asked[0])
         self.assertIn("The scale guide's Medium read load", asked[0])
-        runs = next(a for a in asked if a.startswith("runs_per_trace"))
-        self.assertIn("[10, from preset production: The model's default of 10 runs a trace", runs)
-        days = next(a for a in asked if a.startswith("retention_days"))
-        self.assertIn("[14, from chart:config.ttl.ttl_period_seconds.shortlived]", days)
-        self.assertTrue(any(s.startswith("regime ") for s in said))
-        self.assertEqual(self.plan["inputs"]["users"], 20)
+        runs = next(a for a in asked if "runs_per_trace" in a)
+        self.assertRegex(runs, r"default +10 +preset production: The model's default of 10 runs a trace")
+        days = next(a for a in asked if "retention_days" in a)
+        self.assertRegex(days, r"default +14 +the chart's default, config.ttl.ttl_period_seconds.shortlived")
+        self.assertEqual(self.plan["inputs"]["users"], 25)
+        self.assertEqual(self.plan["inputs"]["trace_store"], "smithdb")
+
+    def test_a_months_count_is_taken_as_the_average(self) -> None:
+        answers = self.SCRATCH[:2] + ["3M/month"] + self.SCRATCH[3:]
+        self.scripted(answers, given={})
+        self.assertEqual(self.plan["rates"]["traces_per_month"], 3_000_000)
+
+    def test_a_note_the_person_wrote_survives_a_re_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "acme"
+            out.mkdir()
+            (out / "inputs.yaml").write_text("why: Their words.\ninputs:\n  users: 8\n  traces_per_month: 3000000\n  app_node: [16, 64]\nnotes:\n  users: Their lead said 8.\n  traces_per_month: October dashboard.\n  app_node: n2-standard-16.\n")
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["plan", "--out", str(out)]), 0)
+            saved = (out / "inputs.yaml").read_text()
+        for kept in ("why: Their words.", "users: Their lead said 8.", "traces_per_month: October dashboard.", "app_node: n2-standard-16."):
+            self.assertIn(kept, saved)
+
+    def test_a_blank_required_answer_twice_stops_without_writing(self) -> None:
+        with self.assertRaisesRegex(ValueError, "left blank twice"):
+            self.scripted(["none", "", ""], given={})
+
+    def test_the_saved_inputs_size_the_same_plan_again(self) -> None:
+        self.scripted(self.PRODUCTION, preset="production")
+        first = self.plan
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "acme"
+            out.mkdir()
+            (out / "inputs.yaml").write_text(self.saved)
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["plan", "--out", str(out)]), 0)
+            again = json.loads((out / "plan.json").read_text())
+        self.assertEqual(again, first)
+        self.assertIn("chart: " + CHART, self.saved)
+        self.assertIn("users: Answered in the wizard", self.saved)
+        self.assertNotIn("datastores_on", self.saved)
+
+    def test_saying_no_at_the_end_writes_nothing(self) -> None:
+        code, _, _ = self.scripted(self.PRODUCTION[:-1] + ["n"], preset="production")
+        self.assertEqual((code, self.files), (1, []))
 
     def test_a_bad_answer_is_asked_again(self) -> None:
-        answers = ["lots", "5", "10", "3", "", "", "smithdb", "no", "statefulset", "statefulset", "statefulset", "external", "app", "", "", ""]
-        _, _, said = self.scripted(answers, given={})  # no preset: users is asked first
-        self.assertTrue(any(s.startswith("not understood") for s in said))
+        answers = self.SCRATCH[:1] + ["lots"] + self.SCRATCH[1:]
+        _, _, shown = self.scripted(answers, given={})
+        self.assertIn("not understood", shown)
         self.assertEqual(self.plan["inputs"]["redis"], "statefulset")
 
+    def test_a_choice_takes_its_number(self) -> None:
+        answers = list(self.SCRATCH)
+        answers[9] = "3"  # redis: the third placement
+        self.scripted(answers, given={})
+        self.assertEqual(self.plan["inputs"]["redis"], "operator")
+
     def test_an_empty_answer_to_a_required_input_is_asked_again(self) -> None:
-        answers = ["", "5", "10", "3", "", "", "smithdb", "no", "statefulset", "statefulset", "statefulset", "external", "app", "", "", ""]
-        _, asked, said = self.scripted(answers, given={})
-        self.assertIn("users has no default", said)
-        self.assertTrue(asked[0].startswith("users") and asked[1].startswith("users") and "[required]" in asked[0])
+        answers = self.SCRATCH[:1] + [""] + self.SCRATCH[1:]
+        _, asked, shown = self.scripted(answers, given={})
+        self.assertIn("users has no default", shown)
         self.assertEqual(self.plan["inputs"]["users"], 5)
 
     def test_every_input_given_with_yes_asks_nothing(self) -> None:
@@ -264,18 +316,21 @@ class Outputs(unittest.TestCase):
         self.assertEqual((code, asked), (0, []))
         self.assertEqual(self.plan["inputs"]["users"], 10)
 
-    def test_the_headline_overhead_is_the_applied_sized_requests_not_the_calculators_total(self) -> None:
+    def test_the_overhead_line_is_the_applied_sized_requests_not_the_calculators_total(self) -> None:
         # extra-lite runs its serving pods at one replica; the calculator's total counts the model's three.
         plan_ = size(users=2, traces_per_second=1, peak_traces_per_second=3)
         sized, overhead = plan_["totals"]["applied"]["sized"]["requests"]["cpu"], plan_["totals"]["overhead"]
-        line = next(x for x in wizard.headline(plan_).splitlines() if "sized x" in x)
-        self.assertIn(f"{round(sized * overhead, 1):g} vCPU", line)
+        note = summary.sections(plan_).tables[0].note
+        self.assertIn(f"overhead: {round(sized * overhead, 1):g} vCPU", note)
         self.assertNotEqual(round(sized * overhead, 1), round(plan_["totals"]["cpu"], 1))
 
     def test_parse_refuses_what_the_input_does_not_take(self) -> None:
         q = next(x for x in wizard.QUESTIONS if x.name == "redis")
         with self.assertRaises(ValueError):
             wizard.parse(q, "internal")
+        self.assertEqual(wizard.parse(q, "2"), "statefulset")
+        with self.assertRaises(ValueError):
+            wizard.parse(q, "4")
         self.assertEqual(wizard.parse(next(x for x in wizard.QUESTIONS if x.name == "app_node"), "8x32"), (8.0, 32.0))
         self.assertEqual(inputs.PLACEMENTS, ("external", "statefulset", "operator"))
 
