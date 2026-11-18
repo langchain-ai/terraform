@@ -574,7 +574,7 @@ Error: Failed to get existing workspaces: S3 bucket "<your-tf-state-bucket>" doe
 The referenced S3 bucket must have been previously created.
 ```
 
-**Cause:** `infra/backend.tf` was populated from `backend.tf.example` with a bucket that does not exist yet. Terraform cannot bootstrap its own state bucket — the bucket has to exist before `terraform init` runs. The shipped `backend.tf` uses local state, so this only appears once you opt into the S3 backend.
+**Cause:** `infra/backend.hcl` (or a `backend.tf` copied from `backend.tf.example`) names a bucket that does not exist yet. Terraform cannot bootstrap its own state bucket — the bucket has to exist before `terraform init` runs. The shipped default is local state, so this only appears once you opt into the S3 backend.
 
 **Fix — create the bucket first** (recommended whenever more than one person applies against the deployment):
 
@@ -599,7 +599,7 @@ aws s3api put-public-access-block \
     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 ```
 
-**Fix — fall back to local state:** remove or rename `infra/backend.tf`. Terraform then writes `terraform.tfstate` into `infra/`. Acceptable for single-operator testing only, since the state file is not shared, locked, or versioned.
+**Fix — fall back to local state:** delete `infra/backend.hcl` (or remove the backend block you added to `backend.tf`) and run `make init`. Terraform then writes `terraform.tfstate` into `infra/`. Acceptable for single-operator testing only, since the state file is not shared, locked, or versioned.
 
 ---
 

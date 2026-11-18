@@ -5,6 +5,9 @@
 *.tfstate.backup
 *.tfstate.*.backup
 
+# Remote state settings for the S3 backend (copy infra/backend.hcl.example)
+infra/backend.hcl
+
 # Terraform variable files (keep examples, ignore actuals)
 *.tfvars
 *.auto.tfvars.json

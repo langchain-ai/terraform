@@ -91,7 +91,7 @@ pass "terraform.tfvars found"
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ ! -d "$INFRA_DIR/.terraform" ]]; then
   warn ".terraform/ not found — running terraform init automatically..."
-  _terraform -chdir="$INFRA_DIR" init
+  env "${_AWS_STALE_VARS[@]/#/-u }" "$SCRIPT_DIR/tf-init.sh"
   echo ""
 else
   pass "terraform already initialized (.terraform/ exists)"

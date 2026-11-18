@@ -76,8 +76,8 @@ setup-env: ## Set up secrets in SSM (prints the source command you need to run)
 	fi
 	@echo ""
 
-init: ## terraform init (infra)
-	terraform -chdir=$(INFRA_DIR) init $(ARGS)
+init: ## terraform init (infra); keeps state in S3 when infra/backend.hcl exists
+	$(INFRA_DIR)/scripts/tf-init.sh $(ARGS)
 
 plan: ## terraform plan (infra)
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
