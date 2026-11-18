@@ -72,6 +72,47 @@ run
 check "does not remove it" grep -q 'backend "gcs"' "$INFRA/backend_override.tf"
 check "runs a plain init" test "$(cat "$FAKE_TF_ARGS")" = "-chdir=$INFRA/scripts/.. init"
 
+# quickdeploy runs the whole script tree, so give it a private copy and a terraform
+# that fails on apply: the gate decides whether it ever gets that far, and nothing
+# after apply (aws, kubectl, helm) can run.
+QD="$TEST_TMP/qd"
+mkdir -p "$QD/bin" "$QD/infra/.terraform"
+cp -R "$SCRIPT_DIR" "$QD/infra/scripts"
+touch "$QD/infra/terraform.tfvars"
+cat > "$QD/bin/terraform" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$QD_TF_ARGS"
+exit 1
+EOF
+chmod +x "$QD/bin/terraform"
+export QD_TF_ARGS="$TEST_TMP/qd-args"
+qd_reset() { rm -f "$QD/infra/backend.hcl" "$QD/infra/backend_override.tf" "$QD_TF_ARGS"; }
+qd_run() {
+  (cd "$QD" && PATH="$QD/bin:$PATH" TF_VAR_langsmith_api_key_salt=test \
+    bash infra/scripts/quickdeploy.sh >"$TEST_TMP/qd.out" 2>&1)
+}
+
+echo "quickdeploy: already initialized, backend.hcl added later (no override yet)"
+qd_reset
+echo 'bucket = "b"' > "$QD/infra/backend.hcl"
+qd_run || true
+check "tells the user to run make init with -migrate-state" grep -q -- 'make init ARGS="-migrate-state"' "$TEST_TMP/qd.out"
+check "never reaches terraform apply" test ! -e "$QD_TF_ARGS"
+
+echo "quickdeploy: already initialized, override present"
+qd_reset
+echo 'bucket = "b"' > "$QD/infra/backend.hcl"
+echo "# generated" > "$QD/infra/backend_override.tf"
+qd_run || true
+check "passes the init gate" grep -q "already initialized" "$TEST_TMP/qd.out"
+check "goes on to terraform apply" grep -q "apply" "$QD_TF_ARGS"
+
+echo "quickdeploy: already initialized, no backend.hcl"
+qd_reset
+qd_run || true
+check "passes the init gate" grep -q "already initialized" "$TEST_TMP/qd.out"
+check "goes on to terraform apply" grep -q "apply" "$QD_TF_ARGS"
+
 echo
 if [[ "$failures" -ne 0 ]]; then
   echo "$failures check(s) failed."

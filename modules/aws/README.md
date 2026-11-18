@@ -264,9 +264,11 @@ make init                                         # new deployment
 make init ARGS="-migrate-state"                   # move existing local state into the bucket
 ```
 
-`make init` (and `make quickdeploy`) detect `infra/backend.hcl` and run
+`make init` detects `infra/backend.hcl` and runs
 `terraform init -backend-config=backend.hcl`, so `make plan` and `make apply` use
-the bucket from then on. Locking uses S3 itself (`use_lockfile = true`), so no
+the bucket from then on. `make quickdeploy` does the same when it has to initialize;
+if the directory was already initialized without `backend.hcl`, it stops and tells
+you to run `make init ARGS="-migrate-state"` first. Locking uses S3 itself (`use_lockfile = true`), so no
 DynamoDB table is needed, and a second concurrent run is refused while the first
 holds the lock. Without `backend.hcl`, nothing changes.
 
@@ -965,7 +967,7 @@ Runs `infra/scripts/quickdeploy.sh`. Before doing anything it gates on two prere
 1. `TF_VAR_langsmith_api_key_salt` is exported — confirms `source infra/scripts/setup-env.sh` has been run.
 2. `infra/terraform.tfvars` exists — confirms `make quickstart` has been run.
 
-If either gate fails it prints the exact command to fix and exits. If terraform is not yet initialized (`.terraform/` missing), it runs `terraform init` automatically.
+If either gate fails it prints the exact command to fix and exits. If terraform is not yet initialized (`.terraform/` missing), it runs `terraform init` automatically. If `infra/backend.hcl` exists but the directory was initialized without it, it stops instead of applying to local state, and prints `make init ARGS="-migrate-state"`.
 
 Then chains 5 steps: `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` → success banner with LangSmith URL.
 
