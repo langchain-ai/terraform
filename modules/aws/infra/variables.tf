@@ -257,8 +257,8 @@ variable "postgres_username" {
 
 variable "postgres_engine_version" {
   type        = string
-  description = "PostgreSQL engine version for the RDS instance. PG 14 reaches EOL Nov 2026; 16 is recommended for new deployments."
-  default     = "16"
+  description = "PostgreSQL engine version for the RDS instance."
+  default     = "18"
 }
 
 variable "postgres_password" {
