@@ -307,3 +307,31 @@ run "lrs_to_gzrs_on_an_existing_account_is_refused" {
 
   expect_failures = [terraform_data.storage_replication_guard]
 }
+
+# ── Lifecycle policy ─────────────────────────────────────────────────────────
+
+run "no_lifecycle_rules_when_ttl_disabled" {
+  command = plan
+
+  variables {
+    blob_ttl_enabled = false
+  }
+
+  assert {
+    condition     = length(module.blob.lifecycle_rule_names) == 0
+    error_message = "blob_ttl_enabled = false still created a lifecycle policy"
+  }
+}
+
+run "all_lifecycle_rules_present_when_ttl_enabled" {
+  command = plan
+
+  variables {
+    blob_ttl_enabled = true
+  }
+
+  assert {
+    condition     = toset(module.blob.lifecycle_rule_names) == toset(["base", "extended", "redaction-raw"])
+    error_message = "blob_ttl_enabled = true did not produce the base, extended and redaction-raw rules"
+  }
+}

@@ -40,6 +40,30 @@ resource "google_storage_bucket" "langsmith_traces" {
     }
   }
 
+  # Backstop for redaction rules: LangSmith writes the unredacted large fields of
+  # projects that redact at ingestion under ttl_1d/ and deletes them once their
+  # runs are done. These rules remove any it could not. Versioning is on, so the
+  # second rule also removes the noncurrent versions that a delete leaves behind.
+  lifecycle_rule {
+    condition {
+      age            = 1
+      matches_prefix = ["ttl_1d/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  lifecycle_rule {
+    condition {
+      days_since_noncurrent_time = 1
+      matches_prefix             = ["ttl_1d/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
   # Lifecycle rule for incomplete multipart uploads
   lifecycle_rule {
     condition {

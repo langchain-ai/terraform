@@ -3,6 +3,12 @@ variable "langsmith_app_client_id" {
   type        = string
 }
 
+variable "create_service_principal" {
+  description = "true: create or update the LangSmith service principal (needs Entra ID permission). false: only read it, after an Entra admin ran `az ad sp create`. Do not change from true to false later, or Terraform deletes it."
+  type        = bool
+  default     = true
+}
+
 variable "external_id" {
   description = "External ID from Settings > Data Planes in the LangSmith UI. The module writes it as the description of each LangSmith role assignment. LangSmith reads it to verify that you own the subscription."
   type        = string
@@ -41,6 +47,13 @@ variable "data_planes" {
     # the host-backend identity and its roles in identities.tf. Without it,
     # LangSmith creates them itself and this setting changes nothing.
     dedicated_deployments = optional(bool, false)
+    # Let LangSmith build GitHub deployments and langgraph deploy images in the
+    # cluster, pushing to a container registry in the resource group. With
+    # byo_iam, the module creates the build and host-backend identities and
+    # their roles in deployment_builds.tf; set it after the data plane is
+    # active. Without byo_iam, LangSmith creates them itself and this setting
+    # changes nothing.
+    deployment_builds = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
