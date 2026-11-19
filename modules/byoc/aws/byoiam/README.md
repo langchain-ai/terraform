@@ -34,6 +34,7 @@ module "byoiam" {
 | `workload_migration_source_blob_bucket_arns` | Optional. Self-hosted blob buckets the workload role may read to copy run attachments during a migration. Set to `[]` after the migration. |
 | `workload_migration_source_blob_kms_key_arns` | Optional. KMS keys of those buckets. The workload role may decrypt objects of those buckets only. |
 | `dedicated_deployments` | Optional. Let LangSmith run dedicated deployments. See [Dedicated deployments](#dedicated-deployments). |
+| `deployment_builds` | Optional. Let LangSmith build GitHub deployments and `langgraph deploy` images in the cluster. See [Deployment builds](#deployment-builds). |
 | `tags` | Customer tags. `managed_by` is reserved and enforced as `customer`. |
 
 ## Provisioning requirements
@@ -65,6 +66,17 @@ don't name your own RDS instances `lg-*`. It can't change instances tagged
 Before you set it back to `false`, delete the dedicated deployments and have
 LangSmith turn the feature off. Instances LangSmith can't delete keep running
 and billing in your account.
+
+### Deployment builds
+
+`deployment_builds = true` lets LangSmith build GitHub deployments and
+`langgraph deploy` images in the cluster. It creates the build role
+`byoc-build-smith-workload-iam-role` and the push role
+`byoc-push-smith-workload-iam-role`, which `role_names` can't rename, and
+grants the workload role access to `lsd/*` ECR repositories and the deployment
+source buckets. Run `terraform apply` before LangSmith turns builds on, and
+have LangSmith turn them off before you set it back to `false`. Don't name your
+own ECR repositories `lsd/*`.
 
 ### Custom names
 
