@@ -194,7 +194,7 @@ Create the data plane with `byoiam_enabled` set to `true`.
 Set `deployment_observability = true` before LangSmith turns on deployment observability for a data plane in the project. It is not supported with `byo_iam`. LangSmith then shows Monitoring charts and searchable runtime and build log history for each LangGraph deployment, and reads them from this project:
 
 - **Metrics:** the data plane's GKE cluster runs Managed Prometheus managed collection, which scrapes the LangGraph deployment pods. Managed Prometheus bills per sample ingested. CPU, memory and restart charts use GKE system metrics, which are free.
-- **Logs:** LangSmith creates a log bucket for each data plane, `langsmith-<hash>-logs`, in the data plane's region, and a sink that routes only the LangGraph deployment and build container logs from the data plane's cluster to it. The bucket keeps them for 30 days unless LangSmith sets another retention; Cloud Logging bills retention past 30 days. The project's `_Default` bucket keeps its copy, so those logs are stored twice. The bucket is kept, with its logs, if observability is turned off.
+- **Logs:** LangSmith creates a log bucket for each data plane, `langsmith-<hash>-logs`, in the data plane's region, and a sink that routes only the LangGraph deployment and build container logs from the data plane's cluster to it. The bucket keeps them for 30 days unless LangSmith sets another retention; Cloud Logging bills retention past 30 days. The project's `_Default` bucket keeps its copy, so those logs are stored twice, unless [regional container logs](#regional-container-logs) are on. The bucket is kept, with its logs, if observability is turned off.
 - **Reads:** the LangSmith app's service account gets `roles/logging.viewAccessor` on its data plane's log bucket view only, so it reads no other logs in the project. It reads the metrics with `roles/monitoring.viewer`, which it has without this setting too.
 
 Before you set it back to `false` or remove it, have LangSmith turn observability off or delete the data plane, for every data plane in the project, because the provisioner needs these permissions to remove the sinks and the read grants.
@@ -208,6 +208,23 @@ The setting makes these changes:
 | `<prefix>ProjectIamGranter` condition | `roles/logging.viewAccessor` joins the roles the provisioner may grant. LangSmith grants `roles/logging.viewAccessor` with a condition naming the data plane's log view. Changing the condition replaces the binding. |
 
 Sinks do not support IAM conditions, so the sink permissions apply to every sink in the project: the provisioner could route any of the project's logs to another destination, or change or delete the project's other sinks (not `_Required`). Likewise, the project IAM granter's condition limits only which role is granted, so the provisioner could grant itself `roles/logging.viewAccessor` with no condition and read every log view in the project, including the `_Required` bucket's audit logs, as it already can grant itself `roles/secretmanager.secretAccessor` on every secret. LangSmith grants the role only to the data plane's app service account, with a condition naming its log view. Turn it on only in a project that holds only LangSmith resources.
+
+### Regional container logs
+
+GKE sends container logs to the project's `_Default` log bucket. Google creates that bucket in the `global` location, and a bucket's location can't be changed, so app and LangGraph deployment logs, which can hold customer data, are stored outside the data plane's region. Set `regional_container_logs = true`, with `deployment_observability`, before LangSmith turns on regional container logs for a data plane to keep them in the region:
+
+- LangSmith creates a second log bucket for each data plane, `langsmith-<hash>-cluster-logs`, in the data plane's region, and a sink that routes every container log of the data plane's cluster to it. No LangSmith account reads this bucket; you read it in Logs Explorer.
+- Once that sink is ready, LangSmith adds an exclusion for the same logs on the `_Default` sink, so `_Default` stops storing them. Logs it already stores stay until its retention removes them.
+
+Other services' logs, such as Cloud SQL's, still go to `_Default`. To keep every log in the region, also point the `_Default` sink at a regional bucket ([Regionalize your logs](https://cloud.google.com/logging/docs/regionalized-logs)), or set a default storage location for new projects in your organization or folder.
+
+Before you set it back to `false` or remove it, have LangSmith turn the setting off or delete the data plane, for every data plane in the project, because the provisioner needs these permissions to remove the exclusions.
+
+| | Added |
+|---|---|
+| `<prefix>Provisioner` | `logging.exclusions.create`, `logging.exclusions.delete`, `logging.exclusions.get`, `logging.exclusions.update` |
+
+Exclusions do not support IAM conditions, so the provisioner could add, change or delete any exclusion on the project's `_Default` sink, and so stop `_Default` storing any log except those the `_Required` bucket keeps. It can already redirect or change that sink with the sink permissions above. LangSmith adds one exclusion per data plane, named `langsmith-<hash>-cluster-logs`, which matches only that data plane's cluster.
 
 ## Dedicated deployments
 
@@ -236,6 +253,7 @@ Name your own Cloud SQL instances so they don't start with `lg-`. Before you set
 | `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 | `byo_iam` | Create the data plane service accounts and their project roles. See [Bring your own IAM](#bring-your-own-iam). | `false` |
 | `deployment_observability` | Let LangSmith turn on deployment observability. Not with `byo_iam`. See [Deployment observability](#deployment-observability). | `false` |
+| `regional_container_logs` | Let LangSmith keep data plane container logs out of the global `_Default` bucket. Requires `deployment_observability`. See [Regional container logs](#regional-container-logs). | `false` |
 | `dedicated_deployments` | Let LangSmith run dedicated deployments. Only changes anything with `byo_iam`. See [Dedicated deployments](#dedicated-deployments). | `false` |
 | `deployment_builds` | Let LangSmith turn on in-cluster deployment builds. Only changes anything with `byo_iam`. See [Deployment builds](#deployment-builds). | `false` |
 

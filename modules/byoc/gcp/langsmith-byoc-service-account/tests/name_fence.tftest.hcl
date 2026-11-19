@@ -215,6 +215,48 @@ run "deployment_observability" {
   }
 }
 
+run "regional_container_logs" {
+  command = plan
+
+  variables {
+    deployment_observability = true
+    regional_container_logs  = true
+  }
+
+  assert {
+    condition     = alltrue([for p in local.regional_container_logs_provisioner_permissions : contains(google_project_iam_custom_role.provisioner.permissions, p)])
+    error_message = "Regional container logs add the exclusion permissions to the provisioner role."
+  }
+
+  assert {
+    condition     = length(setintersection(google_project_iam_custom_role.provisioner.permissions, local.name_fenced_permissions)) == 0
+    error_message = "Fenced permissions stay out of the provisioner role with regional container logs."
+  }
+}
+
+run "regional_container_logs_off" {
+  command = plan
+
+  variables {
+    deployment_observability = true
+  }
+
+  assert {
+    condition     = length(setintersection(google_project_iam_custom_role.provisioner.permissions, local.regional_container_logs_provisioner_permissions)) == 0
+    error_message = "The exclusion permissions stay out of the provisioner role without regional container logs."
+  }
+}
+
+run "regional_container_logs_requires_observability" {
+  command = plan
+
+  variables {
+    regional_container_logs = true
+  }
+
+  expect_failures = [var.regional_container_logs]
+}
+
 run "dedicated_deployments" {
   command = plan
 
