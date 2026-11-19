@@ -49,7 +49,7 @@ LangSmith on AWS is deployed in three passes.
 │                                                                              │
 │  Networking: VPC + private/public subnets + single NAT gateway               │
 │  Compute:    EKS cluster + managed node group + cluster autoscaler          │
-│  Database:   RDS PostgreSQL (db.t3.large, private subnets)                  │
+│  Database:   RDS PostgreSQL (db.m6g.large, private subnets)                 │
 │  Cache:      ElastiCache Redis (cache.m6g.xlarge, private subnets)          │
 │  Storage:    S3 bucket (VPC Gateway Endpoint — no public internet)          │
 │  Add-ons:    ALB controller + EBS CSI driver + metrics server               │
@@ -264,7 +264,7 @@ Discovered during the gateway permutation test run (April 2026, all four modes v
 | Resource         | Default size        | vCPU | Memory  |
 |------------------|---------------------|------|---------|
 | EKS node         | `m5.4xlarge`        | 16   | 64 GB   |
-| RDS PostgreSQL   | `db.t3.large`       | 2    | 8 GB    |
+| RDS PostgreSQL   | `db.m6g.large`      | 2    | 8 GB    |
 | ElastiCache Redis| `cache.m6g.xlarge`  | 4    | 13.07 GB|
 | RDS storage      | 10 GB               | —    | —       |
 
@@ -357,8 +357,8 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 
 SmithDB remains disabled by default. When enabled, Pass 1 adds a dedicated
 PostgreSQL 18 metastore, a dedicated S3 object store, SmithDB IRSA, and
-Karpenter-managed local-NVMe/compute pools. S3 data traffic uses the shared
-Gateway VPC endpoint. Pass 2 requires an explicit compatible v16 chart and
+a dedicated EKS managed node group with EBS caches. S3 data traffic uses the shared
+Gateway VPC endpoint. Pass 2 uses the pinned 0.17.x Helm chart and
 starts with ingestion, migration, and query integration disabled. See
 [SMITHDB.md](SMITHDB.md).
 

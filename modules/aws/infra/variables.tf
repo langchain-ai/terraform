@@ -192,7 +192,7 @@ variable "eks_managed_node_groups" {
   default = {
     default = {
       name           = "node-group-default"
-      instance_types = ["m5.4xlarge"]
+      instance_types = ["m6g.2xlarge"]
       min_size       = 3
       max_size       = 10
     }
@@ -224,7 +224,7 @@ variable "postgres_source" {
 variable "postgres_instance_type" {
   type        = string
   description = "Instance type for the postgres database"
-  default     = "db.t3.large"
+  default     = "db.m6g.large"
 }
 
 variable "postgres_storage_gb" {
@@ -1012,19 +1012,19 @@ variable "langsmith_polly_encryption_key" {
 }
 
 #------------------------------------------------------------------------------
-# SmithDB (chart 0.16+)
+# SmithDB (chart 0.17+)
 #
 # SmithDB is the columnar store/query engine shipped in-chart with LangSmith.
 # It shares the LangSmith namespace and release (it cannot run in a separate
 # namespace or cluster). Enabling it provisions a dedicated metastore Postgres,
 # a dedicated object-store S3 bucket, an IRSA role for the SmithDB service
-# account, and instance-store + compute node groups (SmithDB requires local
-# NVMe SSD instances). The Helm side is enabled in Pass 2 (helm/ or app/).
+# account, a dedicated managed node group, and an EBS cache StorageClass.
+# The Helm side is enabled in Pass 2 (helm/ or app/).
 #
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Pass 2 uses the repository's compatible 0.17.x chart pin. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  description = "Provision the SmithDB metastore, S3 bucket, IRSA role, managed node group, and EBS cache storage."
   default     = false
 }
 
@@ -1181,8 +1181,8 @@ variable "smithdb_s3_force_destroy" {
   default     = false
 }
 
-# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
-# Karpenter (installed by the eks module when enable_smithdb = true) provisions
+# ── Legacy Karpenter pools (transition mode only) ────────────────────────────
+# Karpenter is retained only during smithdb_transition_mode. It provisions
 # the SmithDB pools on demand. The instance-store pool uses instanceStorePolicy
 # RAID0, so no launch-template userdata is needed. Both amd64 and arm64 work;
 # amd64 is the default to match core LangSmith and avoid multi-arch job issues.
@@ -1259,7 +1259,7 @@ variable "smithdb_compute_limits" {
 
 variable "smithdb_node_root_volume_size_gb" {
   type        = number
-  description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
+  description = "Root EBS volume size (GiB) for SmithDB nodes."
   default     = 100
 }
 

@@ -985,7 +985,7 @@ YAML
 echo "Written: $OUT_FILE"
 echo ""
 
-# ── SmithDB (chart 0.16+) ─────────────────────────────────────────────────────
+# ── SmithDB (chart 0.17+) ─────────────────────────────────────────────────────
 # Copies the SmithDB overlay and generates langsmith-values-smithdb-overrides.yaml
 # with the object-store bucket, region, IRSA role ARN, and metastore secret-key
 # mapping from the infra outputs. All LangSmith integration gates start disabled;
@@ -1003,8 +1003,9 @@ if [[ "$_enable_smithdb" == "true" ]]; then
 
   SMITHDB_BUCKET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null) || SMITHDB_BUCKET=""
   SMITHDB_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_irsa_role_arn 2>/dev/null) || SMITHDB_IRSA_ROLE_ARN=""
-  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_IRSA_ROLE_ARN" ]]; then
-    echo "ERROR: enable_smithdb = true but smithdb_object_store_bucket / smithdb_irsa_role_arn outputs are empty." >&2
+  SMITHDB_CACHE_STORAGE_CLASS=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage_class_name 2>/dev/null) || SMITHDB_CACHE_STORAGE_CLASS=""
+  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_IRSA_ROLE_ARN" || -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
+    echo "ERROR: enable_smithdb = true but smithdb_object_store_bucket / smithdb_irsa_role_arn / smithdb_cache_storage_class_name outputs are empty." >&2
     echo "       Is 'terraform apply' complete in $INFRA_DIR with enable_smithdb = true?" >&2
     exit 1
   fi
@@ -1016,8 +1017,10 @@ if [[ "$_enable_smithdb" == "true" ]]; then
 # Re-run init-values.sh to refresh from Terraform outputs.
 #
 # Advance these flags one stage at a time by following the SmithDB installation
-# guide. Keep ClickHouse enabled throughout version 16.
+# guide.
 smithdb:
+  cache:
+    storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
   serviceAccount:
     annotations:
       eks.amazonaws.com/role-arn: "${SMITHDB_IRSA_ROLE_ARN}"
