@@ -54,6 +54,16 @@ variable "data_planes" {
     # active. Without byo_iam, LangSmith creates them itself and this setting
     # changes nothing.
     deployment_builds = optional(bool, false)
+    # Encrypt the Blob storage accounts, the PostgreSQL servers, and the AKS
+    # disks with a key in your Key Vault. See cmk.tf. Set it before you create
+    # the data plane, and pass output data_planes.<key>.customer_managed_keys
+    # to LangSmith. Do not change or remove it while the data plane exists.
+    # The vault must be in this subscription and the data plane region, use
+    # Azure RBAC, and have purge protection.
+    cmk = optional(object({
+      key_vault_id = string
+      key_name     = string
+    }))
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
@@ -75,6 +85,16 @@ variable "data_planes" {
       can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+  }
+
+  validation {
+    condition = alltrue([
+      for dp in values(var.data_planes) : dp.cmk == null || (
+        can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.KeyVault/vaults/[a-zA-Z0-9-]{3,24}$", dp.cmk.key_vault_id)) &&
+        can(regex("^[a-zA-Z0-9-]{1,127}$", dp.cmk.key_name))
+      )
+    ])
+    error_message = "cmk.key_vault_id must be a Key Vault resource ID, and cmk.key_name a key name of letters, digits, and hyphens. Managed HSM keys are not supported."
   }
 }
 
