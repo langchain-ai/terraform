@@ -188,9 +188,15 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "product" {
+  type        = string
+  description = "Product label. Used as the 'product' tag on all resources when non-empty."
+  default     = ""
+}
+
 variable "tags" {
   type        = map(string)
-  description = "Extra tags on all resources, for keys a tag policy requires beyond environment, owner, and cost_center (e.g. { team = \"platform\", product = \"langsmith\" }). A key here overrides environment, owner, cost_center, project, or managed_by of the same name in any case, since Azure tag names are case-insensitive. module, component, and pool are reserved: each sub-module sets them."
+  description = "Extra tags on all resources, for keys a tag policy requires beyond environment, owner, cost_center, and product (e.g. { team = \"platform\" }). A key here overrides environment, owner, cost_center, product, project, or managed_by of the same name in any case, since Azure tag names are case-insensitive. module, component, and pool are reserved: each sub-module sets them."
   default     = {}
 
   # Azure stores Team and team as one tag, so the map can hold only one of them.
@@ -213,8 +219,9 @@ variable "tags" {
       ["environment", "project", "managed_by", "module", "component"],
       var.owner != "" ? ["owner"] : [],
       var.cost_center != "" ? ["cost_center"] : [],
+      var.product != "" ? ["product"] : [],
     )) <= 15
-    error_message = "tags: private DNS zones and Key Vault secrets accept at most 15 tags, and these keys plus environment, project, managed_by, module, component, and owner and cost_center when set come to ${length(setunion([for k in keys(var.tags) : lower(k)], ["environment", "project", "managed_by", "module", "component"], var.owner != "" ? ["owner"] : [], var.cost_center != "" ? ["cost_center"] : []))}. Drop keys from tags until the total is 15 or fewer."
+    error_message = "tags: private DNS zones and Key Vault secrets accept at most 15 tags, and these keys plus environment, project, managed_by, module, component, and owner, cost_center, and product when set come to ${length(setunion([for k in keys(var.tags) : lower(k)], ["environment", "project", "managed_by", "module", "component"], var.owner != "" ? ["owner"] : [], var.cost_center != "" ? ["cost_center"] : [], var.product != "" ? ["product"] : []))}. Drop keys from tags until the total is 15 or fewer."
   }
 }
 

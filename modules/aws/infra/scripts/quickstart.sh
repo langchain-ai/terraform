@@ -442,7 +442,10 @@ OWNER="$_REPLY"
 _ask "$(_choice_arg "cost_center")" "$(_numbered_prompt "2.5" "Cost center" " — billing label, leave blank to skip")" "$(_existing "cost_center" "")"
 COST_CENTER="$_REPLY"
 
-_ask_required "$(_choice_arg "langsmith_admin_email")" "$(_numbered_prompt "2.6" "Initial org admin email")" "$(_existing "langsmith_admin_email" "")"
+_ask "$(_choice_arg "product")" "$(_numbered_prompt "2.6" "Product" " — product tag on every resource")" "$(_existing "product" "langsmith")"
+PRODUCT="$_REPLY"
+
+_ask_required "$(_choice_arg "langsmith_admin_email")" "$(_numbered_prompt "2.7" "Initial org admin email")" "$(_existing "langsmith_admin_email" "")"
 ADMIN_EMAIL="$_REPLY"
 
 echo ""
@@ -1228,6 +1231,7 @@ _show_summary() {
   _summary_row "Initial org admin email:" "$ADMIN_EMAIL"
   _summary_row "Owner:" "$OWNER"
   [[ -n "$COST_CENTER" ]] && _summary_row "Cost center:" "$COST_CENTER"
+  _summary_row "Product:" "$PRODUCT"
 
   _summary_section "3. Networking"
   _summary_row "VPC:" "$([[ "$CREATE_VPC" == "true" ]] && echo "Terraform-managed" || echo "existing ($VPC_ID)")"
@@ -1356,6 +1360,7 @@ name_prefix = "${NAME_PREFIX}"
 environment = "${ENVIRONMENT}"
 region      = "${REGION}"
 owner       = "${OWNER}"
+product     = "${PRODUCT}"
 langsmith_admin_email = "${ADMIN_EMAIL}"
 TFVARS
 

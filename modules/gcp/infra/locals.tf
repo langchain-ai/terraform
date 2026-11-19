@@ -300,6 +300,7 @@ locals {
     },
     # Add cost center if provided
     var.cost_center != "" ? { "cost-center" = var.cost_center } : {},
+    var.product != "" ? { "product" = var.product } : {},
     # Merge custom labels
     var.labels
   )

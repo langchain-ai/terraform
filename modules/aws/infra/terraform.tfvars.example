@@ -97,6 +97,9 @@ owner = "platform-team"
 # Billing label — shows up in AWS Cost Explorer when you group by tag.
 cost_center = "engineering"
 
+# Product label — applied as the "product" tag when set. Leave blank to skip.
+# product = "langsmith"
+
 # Additional custom tags. Add any your organization requires
 # (e.g. compliance tags, project codes, etc.).
 tags = {
