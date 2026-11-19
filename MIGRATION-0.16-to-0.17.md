@@ -260,6 +260,11 @@ both outputs.
 This section applies to `enable_smithdb = true` on Azure. The Azure module always
 creates the SmithDB metastore, an Azure Database for PostgreSQL Flexible Server.
 
+SmithDB now uses its own tainted AKS pool with independent minimum and maximum
+counts. Apply the infrastructure before `make init-values` and `make deploy`;
+the existing LangSmith pools remain. For an existing deployment, follow the
+[pool transition steps](modules/azure/SMITHDB.md#adding-a-zonal-pool-to-a-nonzonal-cluster).
+
 An unset `smithdb_metastore_sku_name` used to give `GP_Standard_D2ds_v5`. It now
 follows `smithdb_sizing`, and an unset `smithdb_sizing` follows `sizing_profile`.
 See [Sizing](modules/azure/SMITHDB.md#sizing).
