@@ -1,6 +1,6 @@
 output "role_names" {
   description = "Role names, keyed by role purpose, for the Crossplane customer-managed IAM contract."
-  value       = { for key, role in aws_iam_role.this : key => role.name }
+  value       = { for key in keys(local.default_roles) : key => aws_iam_role.this[key].name }
 }
 
 output "role_arns" {
