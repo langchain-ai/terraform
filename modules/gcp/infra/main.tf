@@ -141,13 +141,8 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_query_enabled)
       error_message = "SmithDB integration gates require enable_smithdb = true."
-    }
-
-    precondition {
-      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
-      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
     }
 
     # The proxy takes the instance's connection name as its only positional
@@ -186,13 +181,6 @@ resource "terraform_data" "validate_inputs" {
     precondition {
       condition     = !local.smithdb_create_cache_storage_class || (can(regex("^c3d?-", local.smithdb_instance_store_machine_type)) && local.smithdb_instance_store_local_ssd_count == 0)
       error_message = "smithdb_cache_storage = 'network-disk' requires a C3 or C3D cache machine type and smithdb_instance_store_local_ssd_count = 0. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
-    }
-
-    # In network-disk mode, the backfill Job takes its 100Gi of ephemeral
-    # storage from the cache pool boot disk.
-    precondition {
-      condition     = !local.smithdb_create_cache_storage_class || !var.smithdb_migration_enabled || local.smithdb_instance_store_disk_size >= 300
-      error_message = "smithdb_cache_storage = 'network-disk' with smithdb_migration_enabled = true requires smithdb_instance_store_disk_size >= 300 for the 100Gi backfill Job. The resolved boot disk is ${local.smithdb_instance_store_disk_size} GB."
     }
 
     # local-ssd puts each cache in an emptyDir, so the cache pool needs Local SSD
@@ -574,12 +562,6 @@ module "smithdb" {
   bucket_versioning_enabled = var.smithdb_bucket_versioning_enabled
   bucket_force_destroy      = var.smithdb_bucket_force_destroy
 
-  # The backfill reads offloaded run payloads out of the traces bucket, so it
-  # needs a read grant there. Passed unconditionally; the module only creates the
-  # binding when the migration gate is on.
-  traces_bucket_name = module.storage.bucket_name
-  migration_enabled  = var.smithdb_migration_enabled
-
   service_account_email = var.smithdb_service_account_email
 
   depends_on = [module.networking, google_project_service.apis]
@@ -947,24 +929,6 @@ resource "kubernetes_secret" "smithdb_metastore" {
     smithdb_metastore_db_name     = module.smithdb[0].metastore_database
     smithdb_metastore_db_username = module.smithdb[0].metastore_username
     smithdb_metastore_db_password = module.smithdb[0].metastore_password
-  }
-
-  depends_on = [module.k8s_bootstrap]
-}
-
-# Credential for the in-chart taskdb Postgres backing the historical
-# ClickHouse-to-SmithDB migration. Created unconditionally with SmithDB so that
-# smithdb_migration_enabled stays a values-only flip.
-resource "kubernetes_secret" "smithdb_taskdb" {
-  count = var.enable_smithdb ? 1 : 0
-
-  metadata {
-    name      = "smithdb-taskdb"
-    namespace = var.langsmith_namespace
-  }
-
-  data = {
-    postgres_password = module.smithdb[0].taskdb_password
   }
 
   depends_on = [module.k8s_bootstrap]

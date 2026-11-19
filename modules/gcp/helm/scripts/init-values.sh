@@ -124,19 +124,17 @@ _enable_smithdb=false
 _tfvar_is_true "enable_smithdb" && _enable_smithdb=true
 _smithdb_ingestion_enabled=false
 _tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
-_smithdb_migration_enabled=false
-_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
 _smithdb_query_enabled=false
 _tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
 
 if [[ "$_enable_smithdb" != "true" ]] && \
-   [[ "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ]]; then
+   [[ "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_query_enabled" == "true" ]]; then
   echo "ERROR: SmithDB integration gates require enable_smithdb = true." >&2
   exit 1
 fi
 if [[ "$_smithdb_ingestion_enabled" != "true" ]] && \
-   [[ "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ]]; then
-  echo "ERROR: smithdb_migration_enabled and smithdb_query_enabled both require smithdb_ingestion_enabled = true." >&2
+   [[ "$_smithdb_query_enabled" == "true" ]]; then
+  echo "ERROR: smithdb_query_enabled requires smithdb_ingestion_enabled = true." >&2
   exit 1
 fi
 
@@ -216,7 +214,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   echo "  smithdb_gsa_email             = ${SMITHDB_GSA:-(not available)}"
   echo "  smithdb_metastore_port        = $SMITHDB_METASTORE_PORT (useSsl: $SMITHDB_METASTORE_USE_SSL)"
   echo "  smithdb auth proxy            = $SMITHDB_USE_AUTH_PROXY${SMITHDB_CONNECTION_NAME:+ ($SMITHDB_CONNECTION_NAME)}"
-  echo "  smithdb gates                 = ingestion:$_smithdb_ingestion_enabled migration:$_smithdb_migration_enabled query:$_smithdb_query_enabled"
+  echo "  smithdb gates                 = ingestion:$_smithdb_ingestion_enabled query:$_smithdb_query_enabled"
 
   if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_GSA" ]]; then
     echo "ERROR: enable_smithdb = true but the SmithDB Terraform outputs are missing." >&2
@@ -853,26 +851,9 @@ ${_smithdb_proxy_block}
   # included, so no separate metastoreMigration.useSsl leaf is needed - the chart
   # does not read one.
 
-  # The TaskDB credential and the migration sizing are in
-  # langsmith-values-smithdb-migration.yaml, which make
-  # smithdb-migration-job-start writes and deploy.sh loads after this file.
-  #
-  # The backfill's *source* blob store - the traces bucket holding the run
-  # payloads LangSmith offloaded out of ClickHouse - needs nothing here. The
-  # migration Job follows config.blobStorage.engine, so a GCS engine renders the
-  # native GCS provider. That provider takes no credential fields and
-  # authenticates as the Pod's Workload Identity principal.
-  #
-  # What the source store does need is the read grant, and that is Terraform's
-  # side: modules/smithdb holds roles/storage.objectViewer on the traces bucket
-  # while smithdb_migration_enabled is true. Helm cannot create a GCP IAM
-  # binding, so the chart fix alone is not sufficient.
-
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
-    migration:
-      enabled: ${_smithdb_migration_enabled}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDBYAML

@@ -218,9 +218,7 @@ echo ""
 # data-langsmith-standalone-polly-redis-0. helm uninstall does not delete these
 # claims, and Terraform does not track the disks. Delete the claims while CSI is
 # available so their reclaim policy can remove the disks before the GKE cluster
-# is destroyed. The chart deletes the SmithDB backfill claim
-# (data-langsmith-smithdb-taskdb-postgres-*) with its StatefulSet. The pattern
-# also matches the taskdb claim, in case the claim is still there.
+# is destroyed.
 #
 # The Postgres and Redis pattern matches only the chart claim names of this
 # release: data-<prefix>-[<component>-](postgres|redis)-<ordinal>. The chart
@@ -234,7 +232,7 @@ _chart_prefix="$RELEASE_NAME"
 # Escape each dot, because a dot in an extended regex matches any character.
 _prefix_re=$(printf '%s' "$_chart_prefix" | sed 's/[.]/\\./g')
 _db_claim_re="^data-${_prefix_re}-"
-_db_claim_re+="((standalone-(fleet|insights|polly)|smithdb-taskdb)-)?(postgres|redis)-[0-9]+\$"
+_db_claim_re+="(standalone-(fleet|insights|polly)-)?(postgres|redis)-[0-9]+\$"
 _data_pvcs=$(_names_matching pvc "clickhouse|${_db_claim_re}")
 if [[ -n "$_data_pvcs" ]]; then
   if [[ "$DELETE_DATA_PVCS" == "true" ]]; then

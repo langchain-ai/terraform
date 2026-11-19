@@ -124,20 +124,13 @@ locals {
   smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
   smithdb_compute_components = ["compaction", "clusterManager"]
 
-  # minimal: explicit resources, limits 2x requests. A partial resources block
-  # keeps the chart default for each key that it omits. The chart Job default
-  # has 100Gi of ephemeral-storage, so the Job block sets every key.
-  # The taskdb keeps the chart default resources.
+  # minimal: explicit resources, limits 2x requests.
   smithdb_minimal_resources = {
     query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
     clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
-    migration_job = {
-      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
-      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
-    }
   }
 
   # Default node pool shapes. An explicit smithdb_* pool variable wins.
@@ -156,8 +149,6 @@ locals {
     var.smithdb_instance_store_local_ssd_count,
     local.smithdb_network_disk ? 0 : local.smithdb_pool_default.local_ssd_count,
   )
-  # network-disk: the backfill Job takes 100Gi of ephemeral storage from the
-  # boot disk, and a 200 GB boot disk has only about 97 GiB allocatable.
   smithdb_instance_store_disk_size = coalesce(var.smithdb_instance_store_disk_size, local.smithdb_network_disk ? 300 : 100)
   smithdb_compute_machine_type     = coalesce(var.smithdb_compute_machine_type, local.smithdb_pool_default.compute_type)
 
@@ -199,12 +190,9 @@ locals {
     nodeSelector = { "smithdb-local/compute" = "true" }
     tolerations  = [{ key = "smithdb-local/compute", operator = "Equal", value = "true", effect = "NoSchedule" }]
   }
-  smithdb_start_time_values = var.smithdb_migration_start_time != "" ? { startTime = var.smithdb_migration_start_time } : {}
 
-  # Values for small, medium, and large. The backfill Job goes to the cache
-  # pool, which has room for its 100Gi ephemeral-storage request, and the taskdb
-  # goes to the compute pool. Each cache component gets the tier replicas as
-  # its HPA minReplicas, and keeps the chart maxReplicas (10). The tier
+  # Values for small, medium, and large. Each cache component gets the tier
+  # replicas as its HPA minReplicas, and keeps the chart maxReplicas (10). The tier
   # replicas also go to deployment.replicas. The chart uses that field only
   # when the HPA is off.
   smithdb_values_cache_autoscaling = {
@@ -216,12 +204,6 @@ locals {
   smithdb_values_pools_common = merge(
     { resourceTier = local.smithdb_resource_tier },
     { for c in local.smithdb_compute_components : c => { deployment = local.smithdb_pin_compute_pool } },
-    {
-      migration = merge(local.smithdb_start_time_values, {
-        job    = local.smithdb_pin_cache_pool
-        taskdb = { postgres = { statefulSet = local.smithdb_pin_compute_pool } }
-      })
-    },
   )
 
   # local-ssd: each cache is an emptyDir on node Local SSD. The chart needs
@@ -270,11 +252,6 @@ locals {
         }
       },
       { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
-      {
-        migration = merge(local.smithdb_start_time_values, {
-          job = { resources = local.smithdb_minimal_resources.migration_job }
-        })
-      },
     )
   }
 

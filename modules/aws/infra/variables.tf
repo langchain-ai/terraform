@@ -1034,12 +1034,6 @@ variable "smithdb_ingestion_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_enabled" {
-  type        = bool
-  description = "Enable historical ClickHouse-to-SmithDB migration integration."
-  default     = false
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Serve LangSmith queries from SmithDB after ingestion and migration validation."

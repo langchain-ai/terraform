@@ -28,7 +28,6 @@ set -euo pipefail
 #   langsmith-agent-builder-encryption-key   — generated (Fernet)
 #   langsmith-insights-encryption-key        — generated (Fernet)
 #   langsmith-polly-encryption-key           — generated (Fernet)
-#   smithdb-taskdb-password                  — generated (hex)
 #   langsmith-sandbox-callback-signing-jwk   — generated (Ed25519 JWK), enable_sandboxes only
 #
 # The LangSmith secrets are deliberately NOT Terraform-managed: Terraform
@@ -38,14 +37,13 @@ set -euo pipefail
 #
 # postgres-admin-password and langsmith-license-key are Terraform's on the
 # default path, and seeded here for keyvault_manage_secrets = false, where apply
-# left them out. Write-once means both paths end with the same ten. They go
-# last, so a value this script cannot resolve never costs the eight above.
+# left them out. They go last, so a value this script cannot resolve never
+# costs the app secrets above.
 #
 # WRITE-ONCE: an existing secret is never overwritten. Rotating any of these
 # breaks running deployments — a new API key salt invalidates every API key, a
 # new JWT secret drops every session, a new Fernet key makes existing encrypted
-# data unreadable, and a new taskdb password locks the migration Job out of a
-# taskdb that already initialized with the old one. Rotate deliberately via `make keyvault` instead.
+# data unreadable. Rotate deliberately via `make keyvault` instead.
 #
 # Safe to re-run: it seeds only what is missing.
 
@@ -199,16 +197,6 @@ _seed "langsmith-insights-encryption-key" "$(_gen_fernet)" \
 _seed "langsmith-polly-encryption-key" "$(_gen_fernet)" \
   "component=polly stability=critical module=seed-script"
 
-# ── SmithDB taskdb password ───────────────────────────────────────────────────
-# The chart refuses to render the backfill without a taskdb credential.
-# create-k8s-secrets.sh copies it into the smithdb-taskdb secret. Seeded
-# unconditionally, like the Fernet keys, so the backfill phase needs no extra
-# step. Hex, because it carries no character a connection string would need
-# escaped.
-
-_seed "smithdb-taskdb-password" "$(openssl rand -hex 32)" \
-  "component=smithdb stability=critical module=seed-script"
-
 # ── Sandbox callback signing key ──────────────────────────────────────────────
 # An Ed25519 private JWK. platform-backend signs sandbox callbacks with it and
 # sandbox-host verifies them; create-k8s-secrets.sh copies it into
@@ -249,7 +237,7 @@ fi
 # langsmith-config-secret.
 #
 # Last on purpose: resolving either value can fail (secrets.auto.tfvars is
-# gitignored), and nothing else writes the eight above.
+# gitignored), and nothing else writes the app secrets above.
 
 _pg_password="${LANGSMITH_PG_PASSWORD:-${TF_VAR_postgres_admin_password:-}}"
 if [[ -z "$_pg_password" ]]; then
