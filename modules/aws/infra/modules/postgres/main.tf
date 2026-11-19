@@ -30,11 +30,12 @@ resource "aws_security_group" "this" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "Postgres ingress"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = var.ingress_cidrs
+    description     = "Postgres ingress"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    cidr_blocks     = var.ingress_cidrs
+    security_groups = var.ingress_security_group_ids
   }
 
   egress {

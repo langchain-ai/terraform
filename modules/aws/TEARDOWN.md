@@ -83,6 +83,15 @@ cd aws/helm
 DELETE_DATA_PVCS=true ./scripts/uninstall.sh
 ```
 
+**Separate sandbox cluster:** with `sandbox_runtime_source = "external"`, the script first uninstalls the `langsmith-sandbox` release from the sandbox cluster (the `sandbox_cluster_name` output), then removes the `langsmith` release, the reverse of the install order. If Terraform output cannot name the sandbox cluster, the script says so before it asks to proceed; uninstall the runtime from that cluster yourself first:
+
+```bash
+aws eks update-kubeconfig --name <name_prefix>-<environment>-sandbox-eks --region <region>
+helm uninstall langsmith-sandbox -n langsmith-sandbox --wait --timeout 15m
+```
+
+If you put the runtime chart's host ingress behind a load balancer, uninstalling the release removes it. Check that it is gone before `terraform destroy`: a load balancer left in the VPC keeps the VPC from being deleted.
+
 After the script completes:
 
 ```bash
@@ -184,6 +193,19 @@ available. Final snapshots remain after teardown and incur storage charges.
 
 ## A5 — Destroy AWS Infrastructure
 
+### Empty the trace bucket first
+
+Terraform creates the bucket without `force_destroy`, so `terraform destroy` stops with `BucketNotEmpty` (HTTP 409) while the bucket holds any object: traces, and with sandboxes the JuiceFS data under its prefix. Once you no longer need the contents, empty it from the `aws/infra` directory:
+
+```bash
+BUCKET=$(terraform output -raw bucket_name)
+aws s3 rm "s3://$BUCKET" --recursive
+```
+
+With `s3_versioning_enabled = true`, also delete the old object versions and delete markers, for example with the console's **Empty** action; `aws s3 rm` removes only the current versions.
+
+### Destroy
+
 Run from the `aws/infra` directory:
 
 ```bash
@@ -205,6 +227,7 @@ Terraform will destroy in dependency order:
 - ALB (pre-provisioned)
 - IAM roles (IRSA, ESO, Engine)
 - EKS node groups and cluster
+- With sandboxes: the JuiceFS ElastiCache store; with an external sandbox runtime, also the sandbox EKS cluster and its node group, the sandbox IAM role, and the Secrets in the sandbox namespace
 - VPC, subnets, NAT gateway, route tables
 
 ### Customer-supplied security groups in a Terraform-created VPC
@@ -240,6 +263,7 @@ export TF_VAR_redis_auth_token=$(openssl rand -hex 16)
 Replace `<name_prefix>` with your value from `terraform.tfvars`.
 
 ```bash
+# Neither <name_prefix>-<environment>-eks nor, with an external runtime, <name_prefix>-<environment>-sandbox-eks
 aws eks list-clusters --region <region>
 aws rds describe-db-instances \
   --query "DBInstances[?contains(DBInstanceIdentifier, '<name_prefix>')].[DBInstanceIdentifier,DBInstanceStatus]" \
@@ -321,7 +345,15 @@ Same as Option A, but since there's no Terraform to clean up k8s-bootstrap resou
 1. Delete ingress resources *before* uninstalling the ALB controller
 2. Uninstall KEDA *after* deleting namespaces that contain ScaledObjects, OR delete ScaledObjects first
 
-Point kubectl at the cluster first, since there is no Terraform output to resolve it:
+With a separate sandbox cluster (`sandbox_runtime_source = "external"`), remove the runtime from it first. `uninstall.sh` cannot find that cluster without Terraform output:
+
+```bash
+aws eks update-kubeconfig --name $PREFIX-sandbox-eks --region $REGION
+helm uninstall langsmith-sandbox -n langsmith-sandbox --wait --timeout 15m
+kubectl delete namespace langsmith-sandbox
+```
+
+Then point kubectl at the LangSmith cluster, since there is no Terraform output to resolve it:
 
 ```bash
 aws eks update-kubeconfig --name <cluster-name> --region $REGION
@@ -369,20 +401,26 @@ done
 
 ## B2 — Delete EKS Cluster
 
-Node groups must be deleted first, then the cluster.
+Node groups must be deleted first, then the cluster. With a separate sandbox cluster there are two clusters; the loop skips one that does not exist.
 
 ```bash
-# List and delete node groups
-for ng in $(aws eks list-nodegroups --cluster-name $PREFIX-eks --region $REGION --query 'nodegroups[*]' --output text); do
-  echo "Deleting node group: $ng"
-  aws eks delete-nodegroup --cluster-name $PREFIX-eks --nodegroup-name "$ng" --region $REGION
+for cluster in $PREFIX-sandbox-eks $PREFIX-eks; do
+  aws eks describe-cluster --name "$cluster" --region $REGION >/dev/null 2>&1 || continue
+
+  # List and delete node groups
+  for ng in $(aws eks list-nodegroups --cluster-name "$cluster" --region $REGION --query 'nodegroups[*]' --output text); do
+    echo "Deleting node group: $cluster/$ng"
+    aws eks delete-nodegroup --cluster-name "$cluster" --nodegroup-name "$ng" --region $REGION
+  done
+
+  # Wait for node groups to be deleted (~5 min)
+  for ng in $(aws eks list-nodegroups --cluster-name "$cluster" --region $REGION --query 'nodegroups[*]' --output text); do
+    aws eks wait nodegroup-deleted --cluster-name "$cluster" --nodegroup-name "$ng" --region $REGION
+  done
+
+  # Delete cluster
+  aws eks delete-cluster --name "$cluster" --region $REGION
 done
-
-# Wait for node groups to be deleted (~5 min)
-aws eks wait nodegroup-deleted --cluster-name $PREFIX-eks --nodegroup-name "$ng" --region $REGION 2>/dev/null
-
-# Delete cluster
-aws eks delete-cluster --name $PREFIX-eks --region $REGION
 ```
 
 ## B3 — Delete RDS Instance
@@ -409,9 +447,12 @@ aws rds delete-db-instance --db-instance-identifier $PREFIX-pg \
 ## B4 — Delete ElastiCache
 
 ```bash
-# Delete by replication group (not individual cache cluster)
-aws elasticache delete-replication-group \
-  --replication-group-id $PREFIX-redis --region $REGION
+# Delete by replication group (not individual cache cluster). With sandboxes,
+# the JuiceFS metadata store is a second group, $PREFIX-jfs-redis.
+for rg in $PREFIX-redis $PREFIX-jfs-redis; do
+  aws elasticache delete-replication-group \
+    --replication-group-id "$rg" --region $REGION || echo "No replication group $rg"
+done
 ```
 
 > **Note:** There is no `--no-final-snapshot-identifier` flag for ElastiCache. Simply omit `--final-snapshot-identifier` to skip it.
@@ -419,8 +460,11 @@ aws elasticache delete-replication-group \
 ## B5 — Empty and Delete S3 Bucket
 
 ```bash
-aws s3 rm s3://$PREFIX-traces --recursive
-aws s3 rb s3://$PREFIX-traces
+# The bucket name ends in a random suffix: $PREFIX-traces-<hex>
+BUCKET=$(aws s3 ls | awk -v p="$PREFIX-traces-" 'index($3, p) == 1 {print $3}')
+echo "Bucket: $BUCKET"
+aws s3 rm "s3://$BUCKET" --recursive
+aws s3 rb "s3://$BUCKET"
 ```
 
 ## B6 — Delete SSM Parameters

@@ -24,10 +24,11 @@ resource "aws_security_group" "redis_sg" {
   vpc_id      = var.vpc_id
 
   ingress {
-    from_port   = 6379
-    to_port     = 6379
-    protocol    = "tcp"
-    cidr_blocks = var.ingress_cidrs
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    cidr_blocks     = var.ingress_cidrs
+    security_groups = var.ingress_security_group_ids
   }
 
   egress {
