@@ -675,3 +675,29 @@ run "default_envoy_has_no_direct_frontend_access" {
     error_message = "Envoy must remain the default without also opening direct frontend access."
   }
 }
+
+run "no_lifecycle_rules_when_ttl_disabled" {
+  command = plan
+
+  variables {
+    s3_ttl_enabled = false
+  }
+
+  assert {
+    condition     = length(module.storage.lifecycle_rule_ids) == 0
+    error_message = "s3_ttl_enabled = false still created a lifecycle configuration"
+  }
+}
+
+run "all_lifecycle_rules_present_when_ttl_enabled" {
+  command = plan
+
+  variables {
+    s3_ttl_enabled = true
+  }
+
+  assert {
+    condition     = toset(module.storage.lifecycle_rule_ids) == toset(["base", "extended", "redaction-raw"])
+    error_message = "s3_ttl_enabled = true did not produce the base, extended and redaction-raw rules"
+  }
+}

@@ -185,6 +185,8 @@ resource "kubernetes_storage_class_v1" "smithdb_cache" {
       DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
     },
     length(var.tags) > 0 ? { tags = join(",", [for k, v in var.tags : "${k}=${v}"]) } : {},
+    # The set the root resolves (per-store, else the cluster's); empty omits it.
+    var.smithdb_cache_disk_encryption_set_id != "" ? { diskEncryptionSetID = var.smithdb_cache_disk_encryption_set_id } : {},
   )
 }
 
@@ -478,6 +480,40 @@ resource "kubernetes_secret_v1" "smithdb_metastore" {
   type = "Opaque"
 }
 
+# External ClickHouse connection, in the Secret the chart reads through
+# clickhouse.external.existingSecretName, with the chart's key names
+# (values.yaml at 0.16.39: hostSecretKey clickhouse_host, portSecretKey
+# clickhouse_port for HTTP, nativePortSecretKey clickhouse_native_port, and so
+# on). Written here only when clickhouse_host is set; otherwise init-values.sh
+# prompts for the connection and creates the same Secret, as before. The
+# cluster name is not a Secret key: init-values.sh writes it into the values.
+resource "kubernetes_secret_v1" "clickhouse" {
+  count = var.use_external_clickhouse && var.clickhouse_host != "" ? 1 : 0
+
+  metadata {
+    name      = "langsmith-clickhouse"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    # preflight.sh reads this label to tell a Secret Terraform wrote from one
+    # init-values.sh created before clickhouse_host was set; the provider cannot
+    # adopt the latter, and preflight prints the import that does.
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  data = {
+    clickhouse_host        = var.clickhouse_host
+    clickhouse_port        = tostring(var.clickhouse_http_port)
+    clickhouse_native_port = tostring(var.clickhouse_native_port)
+    clickhouse_user        = var.clickhouse_user
+    clickhouse_password    = var.clickhouse_password
+    clickhouse_db          = var.clickhouse_database
+    clickhouse_tls         = var.clickhouse_tls ? "true" : "false"
+  }
+
+  type = "Opaque"
+}
+
 # LangSmith license key secret — required for the application to start.
 # The Helm chart references this via config.licenseKeySecretName.
 resource "kubernetes_secret_v1" "license" {
@@ -549,9 +585,13 @@ resource "kubernetes_storage_class_v1" "sandbox_juicefs_redis" {
   reclaim_policy         = "Retain"
   volume_binding_mode    = "WaitForFirstConsumer"
   allow_volume_expansion = true
-  parameters = {
-    skuName = "Premium_LRS"
-  }
+  # The set the root resolves (per-store, else the cluster's); empty omits it.
+  # Kubernetes refuses parameter updates, so a change replaces the class and
+  # applies to new volumes only.
+  parameters = merge(
+    { skuName = "Premium_LRS" },
+    var.sandbox_juicefs_redis_disk_encryption_set_id != "" ? { diskEncryptionSetID = var.sandbox_juicefs_redis_disk_encryption_set_id } : {},
+  )
 }
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_redis" {
