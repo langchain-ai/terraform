@@ -201,7 +201,7 @@ gcloud credentials.
 
 ## 5) Envoy Gateway v1.9 on GCP
 
-With `ingress_type = "envoy"` (the default), `make apply` upgrades Envoy Gateway to
+With `ingress_type = "envoy"` (the default at the 0.17 cut), `make apply` upgrades Envoy Gateway to
 v1.9.2 in one step, and the Envoy proxy to v1.39. The ingress module applies the
 parts in this order:
 
