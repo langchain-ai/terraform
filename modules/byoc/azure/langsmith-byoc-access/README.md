@@ -280,6 +280,34 @@ Terraform creates a VNet flow log for the data plane VNet. Azure writes the logs
 
 Remove `flow_logs` before you delete the data plane.
 
+### Use your own encryption key (optional)
+
+LangSmith can encrypt the Blob storage accounts, the PostgreSQL servers, and the AKS disks of a data plane with a key in your Key Vault. Azure accepts the key only when it creates these resources, so set `cmk` before you create the data plane:
+
+```hcl
+data_planes = {
+  prod = {
+    location = "eastus"
+    cmk = {
+      key_vault_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/security/providers/Microsoft.KeyVault/vaults/contoso-keys"
+      key_name     = "langsmith"
+    }
+  }
+}
+```
+
+The vault must:
+
+- Be in the subscription of this module and in the region of the data plane.
+- Use Azure RBAC and have purge protection.
+- Let trusted Microsoft services through its firewall, if it has one.
+
+Terraform creates, in the data plane resource group, the identity `langsmith-cmk-identity` and the disk encryption set `langsmith-cmk`. Both get `Key Vault Crypto Service Encryption User` on the key only. With `byo_iam`, `langsmith-aks-identity` also gets `Reader` on the disk encryption set. LangSmith gets no access to the key.
+
+Copy `data_planes.prod.customer_managed_keys` from the Terraform output into the create request. Azure uses the newest version of the key, so you can rotate it without a change. Do not change or remove `cmk` while the data plane exists. If you disable or delete the key, the data plane stops.
+
+Geo-redundant PostgreSQL backups are not supported with `cmk`.
+
 ### Remove a data plane
 
 > **CAUTION:** Delete the data plane in LangSmith before you remove its entry. LangSmith needs its role assignments to delete the resources.
@@ -314,6 +342,7 @@ Fields of each `data_planes` entry:
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
 | `deployment_builds` | `bool` | no | `false` | With `byo_iam`, create the identities and roles that deployment builds and `langgraph deploy` need. Set it after the data plane is active. See [Deployment builds](#deployment-builds-optional). |
+| `cmk` | `object` | no | `null` | Your Key Vault key for the data plane: `key_vault_id` and `key_name`. Set it before you create the data plane. See [Use your own encryption key](#use-your-own-encryption-key-optional). |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
@@ -323,7 +352,7 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 | Output | Description |
 |--------|-------------|
 | `azure_entra_tenant_id` | Entra tenant ID of the subscription. |
-| `data_planes` | Map of data plane key to `resource_group_id`, `region`, and `key_vault_name`. |
+| `data_planes` | Map of data plane key to `resource_group_id`, `region`, `key_vault_name`, and `customer_managed_keys` (`null` without `cmk`). |
 
 ## Security model
 
