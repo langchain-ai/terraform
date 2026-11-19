@@ -68,6 +68,7 @@ locals {
   # chose something else", so only configurations with no gateway controller at all
   # change behaviour. An explicit true/false in terraform.tfvars still wins.
   enable_envoy_gateway = var.enable_envoy_gateway != null ? var.enable_envoy_gateway : !(var.enable_istio_gateway || var.enable_nginx_ingress)
+  no_gateway           = !(local.enable_envoy_gateway || var.enable_istio_gateway || var.enable_nginx_ingress)
 
   # A bare-metal type (*.metal, *.metal-*) keeps local NVMe bootstrap and does
   # not get nested virtualization, which AWS rejects on bare metal. Any other

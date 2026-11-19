@@ -459,7 +459,7 @@ Pod autoscaling is built into the `dev`, `production`, and `production-large` si
 
 ## Envoy Gateway (Gateway API)
 
-Envoy Gateway is the default ingress mode, both in Terraform and in `make quickstart` for new deployments. When rerun, quickstart keeps your existing ingress selection. Set `enable_envoy_gateway = false` to fall back to a standard ALB-backed Kubernetes Ingress.
+Envoy Gateway is the default ingress mode, both in Terraform and in `make quickstart` for new deployments. When rerun, quickstart keeps your existing ingress selection. Set `enable_envoy_gateway = false` (with Istio and NGINX disabled) to route the ALB directly to langsmith-frontend (NGINX).
 
 `enable_envoy_gateway` is unset by default and derived rather than hardcoded to `true`:
 
@@ -471,7 +471,40 @@ Envoy Gateway is the default ingress mode, both in Terraform and in `make quicks
 
 Enabling two controllers is rejected at plan time by a precondition in `infra/main.tf`, because all gateway modes share a single ALB target group and only one port can be health-checked on it.
 
-**Upgrading an existing deployment?** Istio and NGINX deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
+### ALB ownership and routing modes
+
+For net-new deployments, Terraform owns one ALB, its listeners, target groups,
+TLS configuration, security groups, and DNS alias in every mode. The AWS Load
+Balancer Controller registers pod IPs through TargetGroupBindings; it does not
+create a second ALB for the application.
+
+| Mode | Configuration | Traffic path |
+| --- | --- | --- |
+| **Envoy Gateway (default, recommended)** | Leave gateway flags unset | ALB → Envoy pods → HTTPRoute → frontend or agent services |
+| Istio Gateway | `enable_istio_gateway = true` | ALB → Istio pods → VirtualService → frontend or agent services |
+| No gateway | `enable_envoy_gateway = false`, other controllers disabled | ALB → langsmith-frontend (NGINX) → application services |
+
+langsmith-frontend (NGINX) serves the UI and proxies API requests to backend services. In
+no-gateway mode, Terraform forwards to its HTTP port 8080 and checks `/health`.
+`make init-values` disables application Ingress/Gateway resources and keeps the
+frontend Service as ClusterIP. `make deploy` discovers that Service and creates
+its TargetGroupBinding after Helm installs it. The binding has a Service owner
+reference, so Kubernetes removes it when the Service is deleted. Redeploy with
+`make deploy` after changing the target group or reinstalling the application.
+
+ALB-only mode supports application APIs, Sandboxes, and Engine with ACM TLS
+or HTTP-only (`tls_certificate_source = "none"`). Agent deployment endpoints
+require Envoy or Istio. Sandbox service URLs need additional wildcard routing.
+
+`make quickstart` presents Envoy, Istio, then no gateway. Its ALB client CIDR
+prompt writes `alb_allowed_cidr_blocks` and displays it in the review summary.
+The default `0.0.0.0/0` permits connections from any IP. These restrictions apply
+to the same Terraform ALB in every mode. For a supplied ALB security group,
+configure its rules yourself; Terraform only attaches it.
+
+Run `make test-quickstart` and `make test-routing` for credential-free setup and
+frontend-registration regression checks. `make test-e2e` checks the live ALB
+binding, target health, and application endpoints after deployment.
 
 When enabled, the `k8s-bootstrap` module:
 1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
@@ -506,11 +539,11 @@ make deploy
 
 ### TLS with ACM
 
-Set `tls_certificate_source = "acm"` and `acm_certificate_arn` in `terraform.tfvars`. The `deploy.sh` script annotates the Envoy Gateway NLB service with the ACM certificate ARN automatically. TLS is terminated at the NLB — Envoy sees plain HTTP internally.
+Set `tls_certificate_source = "acm"` and `acm_certificate_arn` in `terraform.tfvars`. Terraform configures the ACM certificate on the ALB HTTPS listener. The ALB terminates TLS and forwards HTTP to Envoy pod targets.
 
 Traffic flow:
 ```
-Client → NLB:443 (ACM TLS termination) → Envoy proxy:80 → HTTPRoute → langsmith-frontend:80
+Client → ALB:443 (ACM TLS termination) → Envoy proxy:10080 → HTTPRoute → langsmith-frontend (NGINX)
 ```
 
 ### Dataplane RBAC
@@ -589,7 +622,8 @@ make deploy
 
 ```bash
 kubectl get pods -n langsmith
-kubectl get ingress -n langsmith
+terraform -chdir=infra output -raw alb_dns_name
+kubectl get targetgroupbindings -A
 ```
 
 ---

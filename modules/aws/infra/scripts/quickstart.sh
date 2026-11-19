@@ -227,12 +227,11 @@ _existing() {
 
 # Return the gateway menu choice for QuickStart.
 # Fresh configurations recommend Envoy (1). Updates preserve the existing
-# controller; ALB is represented by all three controller flags being false (3).
+# controller; no gateway is represented by all controller flags being false (3).
 _quickstart_gateway_default() {
   local update_mode="$1"
   local envoy_enabled="$2"
   local istio_enabled="$3"
-  local nginx_enabled="$4"
 
   if [[ "$update_mode" != "true" ]]; then
     echo "1"
@@ -240,8 +239,6 @@ _quickstart_gateway_default() {
     echo "1"
   elif [[ "$istio_enabled" == "true" ]]; then
     echo "2"
-  elif [[ "$nginx_enabled" == "true" ]]; then
-    echo "4"
   else
     echo "3"
   fi
@@ -686,20 +683,18 @@ _section "8. Traffic Routing"
 echo ""
 printf "  ${DIM}Choose how traffic reaches LangSmith. These options are mutually exclusive:${RESET}\n"
 printf "  ${DIM}only one gateway controller can be active at a time.${RESET}\n"
-printf "  ${DIM}Envoy Gateway is recommended for new configurations. ALB is simplest if${RESET}\n"
-printf "  ${DIM}you don't need Gateway API. Istio is another split-dataplane option.${RESET}\n"
+printf "  ${DIM}Terraform manages one ALB in every mode. Envoy Gateway is recommended.${RESET}\n"
+printf "  ${DIM}ALB only routes directly to langsmith-frontend (NGINX); agent deployment endpoints require a gateway.${RESET}\n"
 
 _ex_envoy=$(_existing "enable_envoy_gateway" "false")
 _ex_istio=$(_existing "enable_istio_gateway" "false")
-_ex_nginx=$(_existing "enable_nginx_ingress" "false")
 _gw_default=$(_quickstart_gateway_default \
-  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio" "$_ex_nginx")
+  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio")
 
 _ask_choice "$(_choice_arg "enable_envoy_gateway" "enable_istio_gateway" "enable_nginx_ingress")" "$_gw_default" --recommended 1 "$(_numbered_prompt "8.1" "Ingress / Gateway mode:")" \
-  "Envoy Gateway — modern routing with the Kubernetes Gateway API" \
-  "Istio Gateway — service-mesh routing with VirtualServices" \
-  "Application Load Balancer (ALB) — simplest path using AWS load balancing" \
-  "NGINX Ingress Controller — legacy ingress compatibility"
+  "Envoy Gateway — Kubernetes Gateway API routing, including agent deployment routes" \
+  "Istio Gateway — agent deployment routing for teams that standardize on Istio" \
+  "ALB only — direct to langsmith-frontend (NGINX) with fewer components"
 
 GATEWAY_MODE="envoy"
 ENABLE_ENVOY="true"
@@ -709,23 +704,20 @@ ENABLE_NGINX="false"
 case "$_CHOICE" in
   1) GATEWAY_MODE="envoy"; ENABLE_ENVOY="true" ;;
   2) GATEWAY_MODE="istio"; ENABLE_ENVOY="false"; ENABLE_ISTIO="true" ;;
-  3) GATEWAY_MODE="alb"; ENABLE_ENVOY="false" ;;
-  4) GATEWAY_MODE="nginx"; ENABLE_ENVOY="false"; ENABLE_NGINX="true" ;;
+  3) GATEWAY_MODE="none"; ENABLE_ENVOY="false" ;;
 esac
 
-# For NGINX: brief note (ALB TGB wires automatically, no extra input needed)
-if [[ "$GATEWAY_MODE" == "nginx" ]]; then
-  echo ""
-  printf "  ${DIM}NGINX: ALB → TargetGroupBinding → NGINX controller pods → LangSmith.${RESET}\n"
-  printf "  ${DIM}TLS terminates at the ALB using ACM.${RESET}\n"
-fi
+echo ""
+printf "  ${DIM}0.0.0.0/0 allows client connections from any IP.${RESET}\n"
+_ask "$(_choice_arg "alb_allowed_cidr_blocks")" "$(_numbered_prompt "8.2" "ALB allowed client CIDRs" " — comma-separated")" "$(_existing "alb_allowed_cidr_blocks" "0.0.0.0/0")"
+ALB_ALLOWED_CIDRS="$_REPLY"
 
 # For Istio: brief note. No input is needed because the gateway service is ClusterIP and the ALB in front of it decides whether it is public or internal.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
   echo ""
   printf "  ${DIM}Istio: ALB → TargetGroupBinding → istio-ingressgateway pods → LangSmith.${RESET}\n"
   printf "  ${DIM}Terraform installs the gateway chart with service.type=ClusterIP, so it${RESET}\n"
-  printf "  ${DIM}provisions no NLB of its own. alb_scheme is what makes this public or${RESET}\n"
+  printf "  ${DIM}uses the Terraform ALB. alb_scheme is what makes this public or${RESET}\n"
   printf "  ${DIM}internal (asked below on the prod profile; dev stays internet-facing).${RESET}\n"
 fi
 
@@ -785,20 +777,15 @@ elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
   esac
   TLS_MODE="$_CHOICE"  # 1=acm, 2=no_tls
 else
-  _tls_default_alb=3
+  _tls_default_alb=2
   [[ "$_ex_tls" == "acm" ]] && _tls_default_alb=1
-  [[ "$_ex_tls" == "letsencrypt" ]] && _tls_default_alb=2
-  _tls_recommended_alb=""
-  [[ "$UPDATE_MODE" != "true" ]] && _tls_recommended_alb=3
-  _ask_choice "$(_choice_arg "tls_certificate_source")" "$_tls_default_alb" --recommended "$_tls_recommended_alb" "$(_numbered_prompt "9.2" "HTTPS readiness:")" \
+  _ask_choice "$(_choice_arg "tls_certificate_source")" "$_tls_default_alb" "$(_numbered_prompt "9.2" "HTTPS readiness:")" \
     "ACM — configure HTTPS through AWS Certificate Manager" \
-    "Let's Encrypt — auto-provisioned through cert-manager HTTP-01" \
-    "None — prepare DNS and an ACM certificate first, then enable HTTPS on a later run"
+    "None — HTTP only"
   TLS_MODE="$_CHOICE"
   case "$_CHOICE" in
     1) TLS_SOURCE="acm" ;;
-    2) TLS_SOURCE="letsencrypt" ;;
-    3) TLS_SOURCE="none" ;;
+    2) TLS_SOURCE="none" ;;
   esac
 fi
 
@@ -1272,6 +1259,7 @@ _show_summary() {
 
   _summary_section "8. Traffic Routing"
   _summary_row "Gateway mode:" "$GATEWAY_MODE"
+  _summary_row "ALB allowed client CIDRs:" "$ALB_ALLOWED_CIDRS"
 
   _summary_section "9. Domain & HTTPS"
   _summary_row "Custom domain:" "${DOMAIN:-load balancer hostname}"
@@ -1313,6 +1301,11 @@ _show_summary() {
   [[ "$ENABLE_INSIGHTS" == "true" ]] && _summary_row "Insights storage:" "$INSIGHTS_STORAGE"
   _summary_bool_row "Sandboxes:" "$ENABLE_SANDBOXES"
 }
+
+if [[ "$GATEWAY_MODE" == "none" && "$ENABLE_DEPLOYMENTS" == "true" ]]; then
+  _red "ERROR: Agent deployment endpoints require Envoy (recommended) or Istio. Rerun QuickStart and select a gateway."
+  exit 1
+fi
 
 _section "Review your configuration"
 _show_summary
@@ -1456,6 +1449,7 @@ cat >> "$OUTPUT" << TFVARS
 enable_nginx_ingress = ${ENABLE_NGINX}
 enable_envoy_gateway = ${ENABLE_ENVOY}
 enable_istio_gateway = ${ENABLE_ISTIO}
+alb_allowed_cidr_blocks = $(_tf_list "$ALB_ALLOWED_CIDRS")
 TFVARS
 
 cat >> "$OUTPUT" << TFVARS
