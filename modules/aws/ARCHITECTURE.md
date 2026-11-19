@@ -321,7 +321,8 @@ Envoy Gateway is an opt-in alternative to the ALB ingress controller, enabled by
 
 | Resource | Name | Namespace |
 |----------|------|-----------|
-| Helm release | `envoy-gateway` (chart: `gateway-helm` v1.3.0) | `envoy-gateway-system` |
+| CRDs | Gateway API v1.6.1 and Envoy Gateway v1.9.2, applied with `kubectl apply --server-side` | cluster-scoped |
+| Helm release | `envoy-gateway` (chart: `gateway-helm` v1.9.2) | `envoy-gateway-system` |
 | GatewayClass | `eg` | cluster-scoped |
 | Gateway | `langsmith-gateway` | `langsmith` |
 

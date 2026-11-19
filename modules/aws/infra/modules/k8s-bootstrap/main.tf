@@ -429,6 +429,53 @@ MANIFEST
 # The Gateway resource is created in the langsmith namespace so HTTPRoutes
 # can reference it without cross-namespace ReferenceGrants.
 
+locals {
+  # Envoy Gateway v1.9 supports Kubernetes 1.33 to 1.36 and needs Gateway API
+  # v1.6. The upstream upgrade order is Gateway API first, then Envoy Gateway.
+  envoy_gateway_version = "v1.9.2"
+
+  # Gateway API standard channel.
+  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
+
+  # The Envoy Gateway CRDs of that release, without the Gateway API CRDs.
+  envoy_gateway_crds_url = "https://github.com/envoyproxy/gateway/releases/download/${local.envoy_gateway_version}/envoy-gateway-crds.yaml"
+}
+
+# Helm installs CRDs only on the first install and never upgrades them, so a chart
+# version bump alone leaves the old CRDs on an existing cluster. The next two steps
+# apply the CRDs of the pinned releases and run again when a URL changes. Server-side
+# apply with --force-conflicts takes over fields that an earlier client-side apply or
+# Helm wrote, and two of the Envoy Gateway CRDs are too large for a client-side apply.
+resource "terraform_data" "gateway_api_crds" {
+  count = var.enable_envoy_gateway ? 1 : 0
+
+  triggers_replace = [local.gateway_api_crds_url]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      ${local._ctx_check}
+      kubectl apply --server-side --force-conflicts -f ${local.gateway_api_crds_url}
+    EOT
+  }
+}
+
+resource "terraform_data" "envoy_gateway_crds" {
+  count = var.enable_envoy_gateway ? 1 : 0
+
+  triggers_replace = [local.envoy_gateway_crds_url]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      ${local._ctx_check}
+      kubectl apply --server-side --force-conflicts -f ${local.envoy_gateway_crds_url}
+    EOT
+  }
+
+  depends_on = [terraform_data.gateway_api_crds]
+}
+
 resource "helm_release" "envoy_gateway" {
   count = var.enable_envoy_gateway ? 1 : 0
 
@@ -437,7 +484,7 @@ resource "helm_release" "envoy_gateway" {
   chart            = "gateway-helm"
   namespace        = "envoy-gateway-system"
   create_namespace = true
-  version          = "v1.3.0"
+  version          = local.envoy_gateway_version
 
   set {
     name  = "deployment.envoyGateway.resources.requests.cpu"
@@ -447,6 +494,22 @@ resource "helm_release" "envoy_gateway" {
     name  = "deployment.envoyGateway.resources.requests.memory"
     value = "256Mi"
   }
+
+  # The two CRD steps above own the CRDs. With the chart copy on, the chart also adds
+  # a Gateway API admission policy.
+  set {
+    name  = "crds.enabled"
+    value = "false"
+  }
+
+  # The module does not use zone-aware routing, and the EKS control plane may not
+  # reach the injector webhook port (9443).
+  set {
+    name  = "topologyInjector.enabled"
+    value = "false"
+  }
+
+  depends_on = [terraform_data.gateway_api_crds, terraform_data.envoy_gateway_crds]
 }
 
 # GatewayClass + Gateway resource — applied via kubectl to avoid CRD plan-time

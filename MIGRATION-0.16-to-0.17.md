@@ -11,9 +11,10 @@ Most of the 0.16 values schema carries over to 0.17. The modules absorb two chan
 
 On GCP, `make apply` also removes the project-wide Secret Manager grant (section 4)
 and upgrades Envoy Gateway (section 5). On Azure with SmithDB, `make apply` can
-change the metastore SKU, which restarts the metastore (section 6). Otherwise, a
-deployment with `enable_sandboxes = false` and `enable_smithdb = false` only moves
-the chart pin.
+change the metastore SKU, which restarts the metastore (section 6). On AWS with
+Envoy Gateway on, which is the default, `make apply` upgrades Envoy Gateway
+(section 7). Otherwise, a deployment with `enable_sandboxes = false` and
+`enable_smithdb = false` only moves the chart pin.
 
 ## Status of the 0.17 line
 
@@ -300,6 +301,58 @@ See [Sizing](modules/azure/SMITHDB.md#sizing).
   `infra/terraform.tfvars` before `make apply`. A wrapper root must pass the same
   value to the module.
 
+## 7) Envoy Gateway v1.9 on AWS
+
+With Envoy Gateway on (`enable_envoy_gateway`, the default), `make apply` upgrades
+Envoy Gateway from v1.3.0 to v1.9.2 in one step, and the Envoy proxy to v1.39. The
+`k8s-bootstrap` module applies the parts in this order:
+
+1. The Gateway API CRDs v1.6.1 (standard channel), which Envoy Gateway v1.9 needs.
+2. The Envoy Gateway v1.9.2 CRDs. Helm does not upgrade CRDs, so the module applies
+   them with `kubectl apply --server-side`.
+3. The `envoy-gateway` Helm release, with the chart copy of the CRDs off.
+
+On an existing stack, `terraform plan` adds the two CRD steps
+(`terraform_data.gateway_api_crds` and `terraform_data.envoy_gateway_crds`) and
+updates `helm_release.envoy_gateway` in place. The CRD steps run `kubectl` and fetch
+the two CRD files from GitHub, so the machine that runs `make apply` needs network
+access to `github.com`.
+
+The steps are tested on EKS 1.34, in two cases: an upgrade from v1.3.0 (Gateway API
+v1.2.1), and an install on a cluster that had neither Envoy Gateway nor its CRDs.
+In both, the Gateway is `Programmed`, the GatewayClass and the HTTPRoutes are
+`Accepted`, and the new proxy pod registers in the ALB target group as `healthy`.
+In the upgrade, the proxy Service keeps its UID.
+
+Envoy Gateway v1.9 supports Kubernetes 1.33 to 1.36. Before the upgrade, make sure
+that the EKS control plane runs a version from 1.33 to 1.36. As on GCP, go to v1.9.2
+in one step: do not stop on v1.8.0 to v1.8.3 or on v1.9.0.
+
+- Plan a maintenance window. The proxy pod is replaced: the new pod registers in the
+  ALB target group and the old pod drains. Connections that stay open on the old pod
+  end when it stops, and streams must reconnect. The ALB and its DNS name do not
+  change.
+- The Gateway API v1.6.1 bundle adds the admission policy
+  `safe-upgrades.gateway.networking.k8s.io`. After that, the cluster rejects Gateway
+  API CRDs older than v1.5.
+- A rollback of the Helm release (`helm rollback envoy-gateway <revision>`) keeps the
+  new CRDs. A rollback is not tested on AWS.
+- The module creates only an EnvoyProxy, a GatewayClass, a Gateway, the
+  TargetGroupBinding, the `langsmith-fleet-streams` route, and the chart HTTPRoutes.
+  If you added Envoy Gateway policies (for example SecurityPolicy,
+  ClientTrafficPolicy or BackendTrafficPolicy) or v1alpha2 TCPRoute, TLSRoute or
+  UDPRoute objects, read the Envoy Gateway v1.3 to v1.9 release notes before the
+  upgrade.
+- The proxy metric labels changed in v1.7. Check dashboards that read the proxy
+  metrics.
+- The GatewayClass owns the proxy Service. Do not delete the GatewayClass before the
+  Gateway. The module's destroy step deletes them in that order.
+- Mirrors and egress allowlists need the chart
+  `oci://docker.io/envoyproxy/gateway-helm:v1.9.2`, the images
+  `docker.io/envoyproxy/gateway:v1.9.2` and `docker.io/envoyproxy/envoy:distroless-v1.39.1`,
+  and the two CRD files from the GitHub releases of `kubernetes-sigs/gateway-api`
+  (v1.6.1) and `envoyproxy/gateway` (v1.9.2).
+
 ## Upgrade path
 
 1) Take a database backup. Chart downgrades are not supported, so 0.17 to 0.16 is not
@@ -317,7 +370,8 @@ See [Sizing](modules/azure/SMITHDB.md#sizing).
    step 5. After step 6, remove the pin. Then run `make apply` again. GKE recreates
    every sandbox-host node, and running sandboxes stop. On GCP, `make apply` also
    removes the project-wide Secret Manager grant (section 4), and upgrades Envoy
-   Gateway (section 5).
+   Gateway (section 5). On AWS with Envoy Gateway on, `make apply` upgrades Envoy
+   Gateway (section 7).
 4) Run `make init-values` so the generated overrides file is regenerated in the 0.17
    shape.
 5) Deploy: `make deploy`. If sandboxes ran on chart 0.16, the first run stops and
