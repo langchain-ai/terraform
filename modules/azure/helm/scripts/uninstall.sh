@@ -11,7 +11,9 @@
 #
 # Also available as: make uninstall
 #
-# Removes: Helm release, operator-managed LGP resources.
+# Removes: Helm release, operator-managed LGP resources, and with
+#          sandbox_runtime_source = external the langsmith-sandbox
+#          release in the sandbox cluster, first.
 # Leaves: AKS cluster, Key Vault, Blob Storage, Postgres, Redis (infrastructure intact).
 #
 # NOTE: Uninstall BEFORE running terraform destroy.
@@ -27,12 +29,58 @@ source "$SCRIPT_DIR/../../infra/scripts/_common.sh"
 # langsmith: the same order deploy.sh uses.
 RELEASE_NAME="${RELEASE_NAME:-$(_parse_tfvar langsmith_release_name || echo langsmith)}"
 NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
+SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  LangSmith Azure — Uninstall"
 echo "══════════════════════════════════════════════════════"
 echo ""
+
+# ── Sandbox runtime first (external runtime) ───────────────────────────────
+# The runtime goes before the langsmith release, the reverse of deploy.sh:
+# sandbox-host unmounts JuiceFS and stops its sandbox VMs within a 300 s grace
+# period while platform-backend, Redis and Blob are all still up. A pod still
+# there after that is force-deleted so it cannot hold up teardown; its host
+# mount goes away with the node. Through a kubeconfig of its own, so the current
+# context stays on the LangSmith cluster.
+if _external_sandbox_runtime; then
+  _sandbox_cluster_name=$(_tf_out sandbox_cluster_name) || {
+    fail "Could not read sandbox_cluster_name. Is 'terraform apply' complete?"
+    action "Uninstall the langsmith-sandbox release from the sandbox cluster yourself, then re-run"
+    exit 1
+  }
+  _sandbox_namespace=$(_tf_out sandbox_namespace) || _sandbox_namespace="langsmith-sandbox"
+  _sandbox_kubeconfig_dir=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/langsmith-sandbox-kube.XXXXXX")
+  # shellcheck disable=SC2064 # expand the path now, not at trap time
+  trap "rm -rf '$_sandbox_kubeconfig_dir'" EXIT
+  _sandbox_kc="$_sandbox_kubeconfig_dir/config"
+  _sandbox_kubeconfig "$_sandbox_kc" || {
+    fail "Could not fetch credentials for the sandbox cluster '${_sandbox_cluster_name}'."
+    exit 1
+  }
+
+  info "Sandbox cluster: $_sandbox_cluster_name"
+  _sandbox_host_selector="app.kubernetes.io/instance=${SANDBOX_RELEASE_NAME},app=sandbox-host"
+  if KUBECONFIG="$_sandbox_kc" kubectl get deployment -n "$_sandbox_namespace" -l "$_sandbox_host_selector" -o name 2>/dev/null | grep -q .; then
+    info "Stopping sandbox-host in the sandbox cluster (up to 6m while sandboxes shut down)..."
+    KUBECONFIG="$_sandbox_kc" kubectl delete deployment -n "$_sandbox_namespace" -l "$_sandbox_host_selector" --wait=false 2>/dev/null || true
+    KUBECONFIG="$_sandbox_kc" kubectl wait --for=delete pod -n "$_sandbox_namespace" -l "$_sandbox_host_selector" --timeout=6m 2>/dev/null || {
+      warn "sandbox-host pods still present after 6m; force-deleting them"
+      KUBECONFIG="$_sandbox_kc" kubectl delete pod -n "$_sandbox_namespace" -l "$_sandbox_host_selector" --grace-period=0 --force 2>/dev/null || true
+    }
+    pass "sandbox-host stopped"
+  fi
+  if KUBECONFIG="$_sandbox_kc" helm list -n "$_sandbox_namespace" --filter "^${SANDBOX_RELEASE_NAME}$" --short 2>/dev/null | grep -q "^${SANDBOX_RELEASE_NAME}$"; then
+    info "Uninstalling Helm release: ${SANDBOX_RELEASE_NAME} (sandbox cluster)..."
+    KUBECONFIG="$_sandbox_kc" helm uninstall "$SANDBOX_RELEASE_NAME" -n "$_sandbox_namespace" --wait --timeout 5m 2>/dev/null || \
+      KUBECONFIG="$_sandbox_kc" helm uninstall "$SANDBOX_RELEASE_NAME" -n "$_sandbox_namespace" 2>/dev/null || true
+    pass "Helm release '${SANDBOX_RELEASE_NAME}' uninstalled from the sandbox cluster"
+  else
+    skip "Helm release '${SANDBOX_RELEASE_NAME}' not found in the sandbox cluster"
+  fi
+  echo ""
+fi
 
 # ── Resolve cluster from terraform outputs ─────────────────────────────────
 # Stop without both outputs, or if the credential fetch fails: kubectl would

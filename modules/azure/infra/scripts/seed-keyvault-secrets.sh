@@ -30,6 +30,7 @@ set -euo pipefail
 #   langsmith-polly-encryption-key           — generated (Fernet)
 #   smithdb-taskdb-password                  — generated (hex)
 #   langsmith-sandbox-callback-signing-jwk   — generated (Ed25519 JWK), enable_sandboxes only
+#   langsmith-sandbox-service-auth-secret    — generated (hex), sandbox_runtime_source = external only
 #
 # The LangSmith secrets are deliberately NOT Terraform-managed: Terraform
 # would persist their plaintext in state. This mirrors the AWS module (writes SSM)
@@ -241,6 +242,20 @@ if _tfvar_is_true "enable_sandboxes"; then
   _seed "langsmith-sandbox-callback-signing-jwk" "$(_gen_ed25519_jwk || true)" \
     "component=sandboxes stability=critical module=seed-script" \
     "Generating it needs OpenSSL 3 with Ed25519 (openssl version; on macOS: brew install openssl@3)."
+fi
+
+# ── Sandbox service-auth secret ───────────────────────────────────────────────
+# External runtime only. It signs the calls between LangSmith and the sandbox
+# hosts, so the sandbox cluster, which runs untrusted code, never holds
+# langsmith-api-key-salt. The langsmith chart refuses sandboxes.external.enabled without
+# it. create-k8s-secrets.sh copies it into langsmith-config-secret and into the
+# sandbox cluster's runtime Secret. Hex, like the taskdb password, so it is never
+# mistaken for the base64 salt. Rotating it drops calls to the hosts until both
+# copies match again.
+
+if _external_sandbox_runtime; then
+  _seed "langsmith-sandbox-service-auth-secret" "$(openssl rand -hex 32)" \
+    "component=sandboxes stability=critical module=seed-script"
 fi
 
 # ── Terraform's two secrets ───────────────────────────────────────────────────
