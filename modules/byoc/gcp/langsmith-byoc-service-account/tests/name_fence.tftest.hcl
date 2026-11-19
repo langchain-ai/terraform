@@ -176,6 +176,11 @@ run "byo_iam" {
     condition     = !contains(keys(google_service_account.byo_iam), "langsmith-deployment-builds")
     error_message = "No build service account without deployment_builds."
   }
+
+  assert {
+    condition     = !contains(keys(google_service_account.byo_iam), "langsmith-cell-operator")
+    error_message = "No cell operator service account without scale_to_zero."
+  }
 }
 
 run "role_ids_fit_with_longest_prefix" {
@@ -281,5 +286,53 @@ run "deployment_builds_byo_iam" {
   assert {
     condition     = alltrue([for p in ["artifactregistry.repositories.create", "artifactregistry.repositories.setIamPolicy"] : contains(google_project_iam_custom_role.provisioner.permissions, p)]) && contains(keys(google_project_service.apis), "artifactregistry.googleapis.com")
     error_message = "The provisioner can create the build repositories and grant on them."
+  }
+}
+
+run "scale_to_zero" {
+  command = plan
+
+  variables {
+    scale_to_zero = true
+  }
+
+  assert {
+    condition     = length(google_service_account.byo_iam) == 0
+    error_message = "Without byo_iam, LangSmith creates the cell operator service account."
+  }
+}
+
+run "scale_to_zero_byo_iam" {
+  command = plan
+
+  variables {
+    byo_iam       = true
+    scale_to_zero = true
+  }
+
+  assert {
+    condition     = google_service_account.byo_iam["langsmith-cell-operator"].account_id == "langsmith-cell-operator" && length(google_service_account.byo_iam) == 7
+    error_message = "With byo_iam, the module creates langsmith-cell-operator next to the other six accounts."
+  }
+
+  assert {
+    condition = toset([for k in keys(google_project_iam_member.byo_iam) : k if startswith(k, "langsmith-cell-operator/")]) == toset([
+      "langsmith-cell-operator/roles/cloudsql.client",
+      "langsmith-cell-operator/roles/cloudsql.instanceUser",
+    ])
+    error_message = "The cell operator gets the Cloud SQL client and instance user roles only."
+  }
+
+  assert {
+    condition = alltrue([for k in [
+      "langsmith-cell-operator/roles/cloudsql.client",
+      "langsmith-cell-operator/roles/cloudsql.instanceUser",
+    ] : google_project_iam_member.byo_iam[k].condition[0].expression == "resource.name.extract(\"/instances/{name}\").startsWith(\"langsmith-\")"])
+    error_message = "The cell operator's Cloud SQL grants are limited to langsmith- instances."
+  }
+
+  assert {
+    condition     = contains(keys(google_service_account_iam_member.byo_iam_iam_manager), "langsmith-cell-operator") && !contains(keys(google_service_account_iam_member.byo_iam_service_account_user), "langsmith-cell-operator")
+    error_message = "The provisioner may set the cell operator's IAM policy for its Workload Identity binding, but not act as it."
   }
 }
