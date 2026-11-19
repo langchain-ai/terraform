@@ -41,7 +41,7 @@ in the Terraform outputs), under the `sandbox_juicefs_name` prefix
 (`sandbox-juicefs` by default), and its metadata lives in a dedicated
 ElastiCache Redis. The platform bucket's TTL rules match only the `ttl_s/`, `ttl_l/`,
 and `ttl_1d/` prefixes, so they do not touch Sandbox data. Keep `sandbox_juicefs_name`
-away from those two prefixes. The application deletes Sandbox data, not S3: a
+away from those prefixes. The application deletes Sandbox data, not S3: a
 stopped sandbox is deleted by a server-side sweep after `delete_after_stop_seconds`,
 typically 14 days by default and at most 30 days when set. Setting it to `0`
 turns off automatic deletion, and a sandbox with `idle_ttl_seconds = 0` never
