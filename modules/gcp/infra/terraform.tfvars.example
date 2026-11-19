@@ -211,6 +211,29 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
 # Requires wildcard DNS and TLS for *.<host>.
 # sandbox_service_url_base_url = "https://sandbox-services.example.com"
+#
+# Optional: run sandbox-host in a dedicated GKE cluster in the same VPC instead
+# of the LangSmith cluster. Needs one exact langsmith chart on 0.18 or later, a
+# sandbox namespace that differs from langsmith_namespace, and either an
+# internal gateway or TLS, because the sandbox cluster calls the LangSmith API
+# through the gateway, so its name must resolve from the VPC: set
+# langsmith_domain = "" to use the gateway IP.
+# setup-env.sh generates the dedicated sandbox service-auth secret. See the
+# README, "Optional dedicated sandbox cluster".
+# sandbox_runtime_source      = "external"
+# sandbox_namespace            = "langsmith-sandbox"
+# langsmith_helm_chart_version = "0.18.0"
+# gateway_load_balancer_type   = "internal"
+# The sandbox cluster's subnet and control-plane range. They must not overlap
+# the LangSmith ranges above or the private services range.
+# sandbox_subnet_cidr          = "10.10.0.0/20"
+# sandbox_pods_cidr            = "10.12.0.0/16"
+# sandbox_services_cidr        = "10.10.16.0/20"
+# sandbox_gke_master_ipv4_cidr = "172.17.0.16/28"
+# Small untainted pool for GKE's own add-ons in the sandbox cluster.
+# sandbox_system_node_machine_type = "e2-standard-4"
+# Increment to rewrite the runtime Secret after rotating either sandbox secret.
+# sandbox_runtime_secret_revision = 1
 
 #------------------------------------------------------------------------------
 # Optional: Storage Configuration

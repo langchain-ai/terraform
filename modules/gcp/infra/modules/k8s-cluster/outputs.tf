@@ -18,8 +18,11 @@ output "endpoint" {
 
 output "ca_certificate" {
   description = "GKE cluster CA certificate"
-  value       = var.use_autopilot ? google_container_cluster.autopilot[0].master_auth[0].cluster_ca_certificate : google_container_cluster.primary[0].master_auth[0].cluster_ca_certificate
-  sensitive   = true
+  # one() rather than [0]: a mock provider plans master_auth as an empty list,
+  # and this lets the module plan on its own in tests. A real cluster always
+  # has exactly one master_auth block.
+  value     = one(var.use_autopilot ? google_container_cluster.autopilot[0].master_auth[*].cluster_ca_certificate : google_container_cluster.primary[0].master_auth[*].cluster_ca_certificate)
+  sensitive = true
 }
 
 output "location" {

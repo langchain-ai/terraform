@@ -29,6 +29,8 @@
 #   - values/langsmith-values-smithdb-sizing.yaml    (if enable_smithdb; from terraform output)
 #   - values/langsmith-values-smithdb.yaml           (if enable_smithdb)
 #   - values/langsmith-values-smithdb-overrides.yaml (if enable_smithdb)
+#   - values/langsmith-sandbox-values-overrides.yaml (langsmith-sandbox chart, if
+#                                                     sandbox_runtime_source = external)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -444,13 +446,34 @@ done
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source=""
+_sandbox_runtime_source="${_sandbox_runtime_source:-in-cluster}"
+SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
+SANDBOX_CLUSTER_NAME=""
+SANDBOX_RUNTIME_SECRET_NAME=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
     echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
-  if [[ -z "$WI_ANNOTATION" ]]; then
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
+    # The sandbox cluster calls ${_protocol}://${HOSTNAME}/api, so the name has
+    # to resolve to the Envoy Gateway from inside the VPC. langsmith_domain = ""
+    # with an internal gateway uses its private IP.
+    if [[ -z "$HOSTNAME" || "$HOSTNAME" == "langsmith.example.com" ]]; then
+      echo "ERROR: an external sandbox runtime needs a LangSmith hostname the sandbox cluster can resolve (now: '${HOSTNAME}')." >&2
+      echo "       Set langsmith_domain to a name that resolves from the VPC, or set langsmith_domain = \"\"" >&2
+      echo "       and run deploy.sh once so the gateway IP is known, then re-run init-values." >&2
+      exit 1
+    fi
+    SANDBOX_CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || SANDBOX_CLUSTER_NAME=""
+    SANDBOX_RUNTIME_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_runtime_secret_name 2>/dev/null) || SANDBOX_RUNTIME_SECRET_NAME=""
+    if [[ -z "$SANDBOX_CLUSTER_NAME" || "$SANDBOX_CLUSTER_NAME" == "null" || -z "$SANDBOX_RUNTIME_SECRET_NAME" || "$SANDBOX_RUNTIME_SECRET_NAME" == "null" ]]; then
+      echo "ERROR: Could not read sandbox_cluster_name and sandbox_runtime_secret_name. Is 'terraform apply' complete?" >&2
+      exit 1
+    fi
+  elif [[ -z "$WI_ANNOTATION" ]]; then
     echo "ERROR: enable_sandboxes requires Workload Identity. Set enable_gcp_iam_module = true and re-run terraform apply." >&2
     exit 1
   fi
@@ -555,7 +578,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   fi
 
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -619,7 +642,7 @@ fi
 
 if [[ "$_tfvars_drive_addons" != "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -914,6 +937,22 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
+fi
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  # The control plane stays here; the langsmith-sandbox chart runs sandbox-host
+  # in the sandbox cluster. The sandbox cluster runs untrusted code, so sandbox
+  # service auth uses a dedicated key in langsmith-config (deploy.sh writes it
+  # from Secret Manager), never api_key_salt. Terraform writes the same value
+  # into the runtime Secret.
+  _sandbox_config_block="
+sandboxes:
+  enabled: true
+  external:
+    enabled: true${_sandbox_service_url_block}
+  callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
+  serviceAuth:
+    secretKey: \"sandbox_service_auth_secret\""
+elif [[ "$_enable_sandboxes" == "true" ]]; then
   # The chart's JuiceFS format Job runs under the sandbox-host ServiceAccount, so
   # the Workload Identity annotation goes on sandboxHost. infra binds
   # langsmith-sandbox-host to the LangSmith GSA. sandbox-host itself runs on the
@@ -1152,6 +1191,46 @@ ${_agent_defaults_block}
 YAML
 
 echo "Written: $OUT_FILE"
+
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  # No secrets in this file: Terraform writes both Secrets it names into the
+  # sandbox cluster. Its keys are the chart defaults, spelled out because the
+  # Secret depends on them.
+  cat > "$SANDBOX_VALUES_FILE" << YAML
+# Auto-generated by init-values.sh for the dedicated sandbox cluster
+# (${SANDBOX_CLUSTER_NAME}). deploy.sh installs the langsmith-sandbox chart with it.
+# Both Secret values match the same keys in langsmith-config; neither is the
+# API key salt.
+config:
+  endpoint: "${_protocol}://${HOSTNAME}/api"
+  existingSecretName: "${SANDBOX_RUNTIME_SECRET_NAME}"
+  callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+serviceAuth:
+  secretKey: "sandbox_service_auth_secret"
+
+# sandbox-host runs on the host network, where GKE Workload Identity does not
+# apply, so it uses the sandbox node service account. provider gcp moves the
+# JuiceFS formatter onto the host network too, so one bucket grant (made by
+# Terraform on the JuiceFS-only bucket) covers both pods.
+workloadIdentity:
+  provider: gcp
+
+juicefs:
+  existingSecretName: "${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}"
+
+sandboxHost:
+  enabled: true
+  deployment:
+    nodeSelector:
+      sandbox.langsmith.com/host: "true"
+    # Keeps the cluster autoscaler from removing a node that runs sandbox-host
+    # (and its sandbox VMs) to consolidate the pool.
+    podAnnotations:
+      cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+YAML
+  echo "Written: $SANDBOX_VALUES_FILE (sandbox cluster: $SANDBOX_CLUSTER_NAME)"
+fi
+
 if [[ -z "$HOSTNAME" ]]; then
   echo ""
   echo "WARNING: hostname is empty. Run again after the Envoy Gateway has an external IP:"
