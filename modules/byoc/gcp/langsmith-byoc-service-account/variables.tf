@@ -63,6 +63,17 @@ variable "deployment_observability" {
   }
 }
 
+variable "regional_container_logs" {
+  description = "Let LangSmith keep each data plane's container logs in the data plane's region: it routes them to a regional log bucket and excludes them from the project's _Default bucket, which is global. Adds the provisioner's logging.exclusions permissions. Requires deployment_observability. Set it before LangSmith turns the setting on for a data plane, and keep it until LangSmith turns it off or deletes every such data plane."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.regional_container_logs || var.deployment_observability
+    error_message = "regional_container_logs requires deployment_observability."
+  }
+}
+
 variable "dedicated_deployments" {
   description = "Let LangSmith run dedicated deployments, each with a Cloud SQL instance named lg-<id> that the LangSmith app creates, resizes and deletes in this project. With byo_iam, grants langsmith-workload roles/cloudsql.admin on lg- instances only; without byo_iam, LangSmith makes that grant and this changes nothing. Set it before LangSmith turns the feature on for a data plane."
   type        = bool

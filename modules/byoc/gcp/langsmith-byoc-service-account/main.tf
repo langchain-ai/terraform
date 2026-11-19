@@ -163,9 +163,20 @@ locals {
     "logging.sinks.update",
   ]
 
+  # With regional_container_logs, each data plane also excludes its cluster's
+  # container logs from the _Default sink, so the global _Default bucket does
+  # not store them.
+  regional_container_logs_provisioner_permissions = [
+    "logging.exclusions.create",
+    "logging.exclusions.delete",
+    "logging.exclusions.get",
+    "logging.exclusions.update",
+  ]
+
   all_provisioner_permissions = concat(
     local.base_provisioner_permissions,
     var.deployment_observability ? local.observability_provisioner_permissions : [],
+    var.regional_container_logs ? local.regional_container_logs_provisioner_permissions : [],
   )
 
   # With byo_iam, this module creates the data plane service accounts, so the
