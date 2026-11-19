@@ -52,8 +52,9 @@ resource "azurerm_key_vault" "data_plane" {
 }
 
 # The LangSmith custom role of each data plane. Its scope is the data plane
-# resource group, so it cannot apply anywhere else. reduced_access changes the
-# actions in place; the role and its assignment stay. See roles.tf.
+# resource group, so it cannot apply anywhere else. reduced_access and
+# deletion_protection change the actions in place; the role and its assignment
+# stay. See roles.tf.
 resource "azurerm_role_definition" "langsmith_byoc" {
   for_each = var.data_planes
 
@@ -64,15 +65,16 @@ resource "azurerm_role_definition" "langsmith_byoc" {
 
   permissions {
     # Keep the list order. setsubtract sorts it.
-    actions = concat(
-      [
-        for action in(each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions) : action
-        if !(each.value.byo_iam && contains(local.langsmith_byoiam_removed_actions, action))
-      ],
-      each.value.deployment_observability ? (
-        each.value.reduced_access ? local.langsmith_byoc_observability_reduced_actions : local.langsmith_byoc_observability_actions
-      ) : [],
-    )
+    actions = [
+      for action in concat(
+        each.value.reduced_access ? local.langsmith_byoc_reduced_actions : local.langsmith_byoc_actions,
+        each.value.deployment_observability ? (
+          each.value.reduced_access ? local.langsmith_byoc_observability_reduced_actions : local.langsmith_byoc_observability_actions
+        ) : [],
+      ) : action
+      if !(each.value.byo_iam && contains(local.langsmith_byoiam_removed_actions, action)) &&
+      !(each.value.deletion_protection && endswith(action, "/delete"))
+    ]
   }
 }
 
