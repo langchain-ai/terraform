@@ -68,7 +68,7 @@ Every customer's provisioner trusts the same LangSmith Crossplane service accoun
 By default, the provisioner holds custom roles, not predefined admin roles:
 
 - **`<prefix>Provisioner`**: the permissions for creating, updating and deleting data plane resources. These are the VPC, subnets, routes, Cloud NAT, the optional egress firewall policy, the Private Service Connect endpoint, GKE, Cloud SQL, Memorystore, Cloud Storage, Cloud DNS, Secret Manager, the Artifact Registry repository for in-cluster deployment builds and the data plane service accounts. It also has the list and get permissions that teardown needs to confirm deletions. The list comes from provisioning and tearing down data planes with nothing more. The create, change and delete permissions of the kinds that IAM checks by name are in the `<prefix>Named<kind>` roles instead.
-- **`<prefix>ProjectIamGranter`**: reads and sets the project IAM policy. The binding has an IAM condition so the provisioner can only add or remove grants of the project roles the data planes use: `artifactregistry.reader`, `cloudsql.admin`, `cloudsql.client`, `cloudsql.instanceUser`, `container.defaultNodeServiceAccount`, `redis.dbConnectionUser` and `secretmanager.secretAccessor`. Data plane workloads get narrower grants: External Secrets' `secretmanager.secretAccessor` has a condition limiting it to the data plane's own secrets, and cert-manager gets `dns.admin` on the data plane's DNS zones only (through the zones' IAM policies), never on the project.
+- **`<prefix>ProjectIamGranter`**: reads and sets the project IAM policy. The binding has an IAM condition so the provisioner can only add or remove grants of the project roles the data planes use: `artifactregistry.reader`, `cloudsql.admin`, `cloudsql.client`, `cloudsql.instanceUser`, `container.defaultNodeServiceAccount`, `monitoring.viewer`, `redis.dbConnectionUser` and `secretmanager.secretAccessor`. Data plane workloads get narrower grants: External Secrets' `secretmanager.secretAccessor` has a condition limiting it to the data plane's own secrets, and cert-manager gets `dns.admin` on the data plane's DNS zones only (through the zones' IAM policies), never on the project.
 - **`<prefix>ServiceAccountUser`**: `iam.serviceAccounts.actAs`, so GKE nodes and workloads can run as the data plane service accounts. IAM checks on a service account carry only its numeric unique ID, and the provisioner creates these accounts, so no condition can single them out and this binding is unconditional.
 - **`<prefix>Named<kind>`**: one role per kind of data plane resource, bound with a condition on the resource name. See [Limit changes to data plane names](#limit-changes-to-data-plane-names).
 
@@ -149,6 +149,7 @@ These IAM checks carry no resource name, or a name LangSmith doesn't choose, so 
 - **Service connection policies in other networks.** Creating a policy checks no permission on its network, so the provisioner can create a `langsmith-` policy in any network in the project. Creating a Memorystore for Redis cluster also checks nothing on its network, so a `langsmith-` cluster can then get endpoints in that network.
 - **Service accounts.** IAM checks carry the numeric ID, not the account name. With `byo_iam`, the provisioner can still read the other service accounts in the project and their IAM policies, but not change them.
 - `roles/container.defaultNodeServiceAccount` of the node service accounts, which writes logs and metrics for the project.
+- `roles/monitoring.viewer` of the LangSmith app, which reads every metric in the project. LangSmith reads its data plane's Cloud SQL and Memorystore metrics with it, for health alerts on the data plane.
 
 Use a dedicated project for a full boundary. As a partial measure, tag your own resources of the kinds above with a protected tag and add a condition such as `!resource.matchTag(...)` to the provisioner's bindings, or an IAM deny policy. Artifact Registry repositories and Cloud SQL instances can be tagged; Cloud DNS managed zones can't, so they stay unprotected. Do not put the tag on the project, because resources inherit project tags.
 
@@ -162,7 +163,7 @@ The module then creates these service accounts in the project. LangSmith finds t
 
 | Service account | Used by | Project roles |
 |-----------------|---------|---------------|
-| `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/redis.dbConnectionUser`; with [dedicated deployments](#dedicated-deployments), `roles/cloudsql.admin` limited to `lg-` instances |
+| `langsmith-workload` | The LangSmith application | `roles/cloudsql.client`, `roles/cloudsql.instanceUser`, `roles/monitoring.viewer`, `roles/redis.dbConnectionUser`; with [dedicated deployments](#dedicated-deployments), `roles/cloudsql.admin` limited to `lg-` instances |
 | `langsmith-external-secrets` | External Secrets Operator | `roles/secretmanager.secretAccessor`, with a condition limiting it to secrets whose IDs start with `ls-` |
 | `langsmith-cert-manager` | cert-manager | None. LangSmith grants `roles/dns.admin` on each data plane's DNS zones. |
 | `langsmith-postgres-setup` | The job that sets up the Cloud SQL databases | `<prefix>PostgresSetup` (`cloudsql.users.create`, `list`, `update`) on instances with the `managed_by: langsmith` tag, and `roles/cloudsql.viewer` limited to `langsmith-` instances |
@@ -194,7 +195,7 @@ Set `deployment_observability = true` before LangSmith turns on deployment obser
 
 - **Metrics:** the data plane's GKE cluster runs Managed Prometheus managed collection, which scrapes the LangGraph deployment pods. Managed Prometheus bills per sample ingested. CPU, memory and restart charts use GKE system metrics, which are free.
 - **Logs:** LangSmith creates a log bucket for each data plane, `langsmith-<hash>-logs`, in the data plane's region, and a sink that routes only the LangGraph deployment and build container logs from the data plane's cluster to it. The bucket keeps them for 30 days unless LangSmith sets another retention; Cloud Logging bills retention past 30 days. The project's `_Default` bucket keeps its copy, so those logs are stored twice. The bucket is kept, with its logs, if observability is turned off.
-- **Reads:** the LangSmith app's service account gets `roles/logging.viewAccessor` on its data plane's log bucket view only, so it reads no other logs in the project, and `roles/monitoring.viewer` on the project.
+- **Reads:** the LangSmith app's service account gets `roles/logging.viewAccessor` on its data plane's log bucket view only, so it reads no other logs in the project. It reads the metrics with `roles/monitoring.viewer`, which it has without this setting too.
 
 Before you set it back to `false` or remove it, have LangSmith turn observability off or delete the data plane, for every data plane in the project, because the provisioner needs these permissions to remove the sinks and the read grants.
 
@@ -202,9 +203,9 @@ The setting makes these changes:
 
 | | Added |
 |---|---|
-| APIs (with `enable_apis`) | `logging.googleapis.com`, `monitoring.googleapis.com` |
+| APIs (with `enable_apis`) | `logging.googleapis.com` |
 | `<prefix>Provisioner` | `logging.buckets.create`, `logging.buckets.get`, `logging.buckets.update`, `logging.sinks.create`, `logging.sinks.delete`, `logging.sinks.get`, `logging.sinks.update` |
-| `<prefix>ProjectIamGranter` condition | `roles/logging.viewAccessor` and `roles/monitoring.viewer` join the roles the provisioner may grant. LangSmith grants `roles/logging.viewAccessor` with a condition naming the data plane's log view. Changing the condition replaces the binding. |
+| `<prefix>ProjectIamGranter` condition | `roles/logging.viewAccessor` joins the roles the provisioner may grant. LangSmith grants `roles/logging.viewAccessor` with a condition naming the data plane's log view. Changing the condition replaces the binding. |
 
 Sinks do not support IAM conditions, so the sink permissions apply to every sink in the project: the provisioner could route any of the project's logs to another destination, or change or delete the project's other sinks (not `_Required`). Likewise, the project IAM granter's condition limits only which role is granted, so the provisioner could grant itself `roles/logging.viewAccessor` with no condition and read every log view in the project, including the `_Required` bucket's audit logs, as it already can grant itself `roles/secretmanager.secretAccessor` on every secret. LangSmith grants the role only to the data plane's app service account, with a condition naming its log view. Turn it on only in a project that holds only LangSmith resources.
 

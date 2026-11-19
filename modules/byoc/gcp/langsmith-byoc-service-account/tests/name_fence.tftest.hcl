@@ -33,6 +33,11 @@ run "default" {
   }
 
   assert {
+    condition     = contains(keys(google_project_service.apis), "monitoring.googleapis.com") && contains(local.granted_roles, "roles/monitoring.viewer")
+    error_message = "The LangSmith app reads its Cloud SQL and Memorystore metrics from Cloud Monitoring without deployment observability."
+  }
+
+  assert {
     condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routes", "FirewallPolicies", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
     error_message = "One fenced role per kind."
   }
@@ -147,6 +152,7 @@ run "byo_iam" {
       "langsmith-node/roles/artifactregistry.reader",
       "langsmith-node/roles/container.defaultNodeServiceAccount",
       "langsmith-sandbox-host/roles/artifactregistry.reader",
+      "langsmith-workload/roles/monitoring.viewer",
     ] : length(google_project_iam_member.byo_iam[k].condition) == 0])
     error_message = "Grants that carry no resource name stay unconditioned."
   }

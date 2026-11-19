@@ -373,15 +373,18 @@ locals {
     # The app logs in to Cloud SQL as its IAM database user.
     "roles/cloudsql.instanceUser",
     "roles/container.defaultNodeServiceAccount",
+    # The app reads its Cloud SQL and Memorystore metrics from Cloud Monitoring
+    # for LangSmith's health alerts, and, with deployment observability,
+    # deployment metrics through Managed Prometheus.
+    "roles/monitoring.viewer",
     "roles/redis.dbConnectionUser",
     "roles/secretmanager.secretAccessor",
   ]
 
   # The app reads its data plane's log bucket through one log view (an IAM
-  # condition on the grant), and deployment metrics through Managed Prometheus.
+  # condition on the grant).
   observability_granted_roles = [
     "roles/logging.viewAccessor",
-    "roles/monitoring.viewer",
   ]
 
   granted_roles = concat(
@@ -401,13 +404,14 @@ locals {
     "dns.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "monitoring.googleapis.com",
     "networkconnectivity.googleapis.com",
     "redis.googleapis.com",
     "secretmanager.googleapis.com",
     "servicedirectory.googleapis.com",
     "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
-  ], var.deployment_observability ? ["logging.googleapis.com", "monitoring.googleapis.com"] : []))
+  ], var.deployment_observability ? ["logging.googleapis.com"] : []))
 }
 
 resource "google_project_service" "apis" {
@@ -665,7 +669,7 @@ locals {
     "langsmith-workload" = {
       display_name = "LangSmith workload"
       description  = "LangSmith application workloads in the data plane GKE clusters"
-      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/redis.dbConnectionUser"]
+      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/monitoring.viewer", "roles/redis.dbConnectionUser"]
       act_as       = false
     }
     # Secret Manager access is the conditional grant below.
