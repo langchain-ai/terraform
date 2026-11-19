@@ -216,7 +216,7 @@ resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
-  principal_id         = local.langsmith_service_principal_object_id
+  principal_id         = local.langsmith_principal_id
   principal_type       = "ServicePrincipal"
   description          = var.external_id
 }
