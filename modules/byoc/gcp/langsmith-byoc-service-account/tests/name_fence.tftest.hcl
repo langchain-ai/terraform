@@ -33,6 +33,11 @@ run "default" {
   }
 
   assert {
+    condition     = contains(keys(google_project_service.apis), "monitoring.googleapis.com") && contains(local.granted_roles, "roles/monitoring.viewer")
+    error_message = "The LangSmith app reads its Cloud SQL and Memorystore metrics from Cloud Monitoring without deployment observability."
+  }
+
+  assert {
     condition     = toset(keys(google_project_iam_custom_role.name_fenced)) == toset(["CloudSql", "Gke", "ForwardingRules", "Networks", "Subnetworks", "Routes", "FirewallPolicies", "Routers", "Addresses", "RedisClusters", "ConnectionPolicies", "Storage", "SecretManager"])
     error_message = "One fenced role per kind."
   }
@@ -147,6 +152,7 @@ run "byo_iam" {
       "langsmith-node/roles/artifactregistry.reader",
       "langsmith-node/roles/container.defaultNodeServiceAccount",
       "langsmith-sandbox-host/roles/artifactregistry.reader",
+      "langsmith-workload/roles/monitoring.viewer",
     ] : length(google_project_iam_member.byo_iam[k].condition) == 0])
     error_message = "Grants that carry no resource name stay unconditioned."
   }
@@ -164,6 +170,11 @@ run "byo_iam" {
   assert {
     condition     = google_project_iam_member.byo_iam_external_secrets[0].condition[0].expression == "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
     error_message = "External Secrets stays limited to ls- secrets."
+  }
+
+  assert {
+    condition     = !contains(keys(google_service_account.byo_iam), "langsmith-deployment-builds")
+    error_message = "No build service account without deployment_builds."
   }
 }
 
@@ -204,6 +215,48 @@ run "deployment_observability" {
   }
 }
 
+run "regional_container_logs" {
+  command = plan
+
+  variables {
+    deployment_observability = true
+    regional_container_logs  = true
+  }
+
+  assert {
+    condition     = alltrue([for p in local.regional_container_logs_provisioner_permissions : contains(google_project_iam_custom_role.provisioner.permissions, p)])
+    error_message = "Regional container logs add the exclusion permissions to the provisioner role."
+  }
+
+  assert {
+    condition     = length(setintersection(google_project_iam_custom_role.provisioner.permissions, local.name_fenced_permissions)) == 0
+    error_message = "Fenced permissions stay out of the provisioner role with regional container logs."
+  }
+}
+
+run "regional_container_logs_off" {
+  command = plan
+
+  variables {
+    deployment_observability = true
+  }
+
+  assert {
+    condition     = length(setintersection(google_project_iam_custom_role.provisioner.permissions, local.regional_container_logs_provisioner_permissions)) == 0
+    error_message = "The exclusion permissions stay out of the provisioner role without regional container logs."
+  }
+}
+
+run "regional_container_logs_requires_observability" {
+  command = plan
+
+  variables {
+    regional_container_logs = true
+  }
+
+  expect_failures = [var.regional_container_logs]
+}
+
 run "dedicated_deployments" {
   command = plan
 
@@ -228,5 +281,47 @@ run "dedicated_deployments_byo_iam" {
   assert {
     condition     = google_project_iam_member.byo_iam_dedicated_deployments[0].role == "roles/cloudsql.admin" && google_project_iam_member.byo_iam_dedicated_deployments[0].condition[0].expression == "resource.name.extract(\"/instances/{name}\").startsWith(\"lg-\")"
     error_message = "With byo_iam, the workload gets roles/cloudsql.admin on lg- instances only."
+  }
+}
+
+run "deployment_builds" {
+  command = plan
+
+  variables {
+    deployment_builds = true
+  }
+
+  assert {
+    condition     = length(google_service_account.byo_iam) == 0
+    error_message = "Without byo_iam, LangSmith creates the build service account."
+  }
+}
+
+run "deployment_builds_byo_iam" {
+  command = plan
+
+  variables {
+    byo_iam           = true
+    deployment_builds = true
+  }
+
+  assert {
+    condition     = google_service_account.byo_iam["langsmith-deployment-builds"].account_id == "langsmith-deployment-builds" && length(google_service_account.byo_iam) == 7
+    error_message = "With byo_iam, the module creates langsmith-deployment-builds next to the other six accounts."
+  }
+
+  assert {
+    condition     = length([for k in keys(google_project_iam_member.byo_iam) : k if startswith(k, "langsmith-deployment-builds/")]) == 0
+    error_message = "The build service account gets no project roles."
+  }
+
+  assert {
+    condition     = contains(keys(google_service_account_iam_member.byo_iam_iam_manager), "langsmith-deployment-builds") && !contains(keys(google_service_account_iam_member.byo_iam_service_account_user), "langsmith-deployment-builds")
+    error_message = "The provisioner may set the build service account's IAM policy for its repository writer and Workload Identity grants, but not act as it."
+  }
+
+  assert {
+    condition     = alltrue([for p in ["artifactregistry.repositories.create", "artifactregistry.repositories.setIamPolicy"] : contains(google_project_iam_custom_role.provisioner.permissions, p)]) && contains(keys(google_project_service.apis), "artifactregistry.googleapis.com")
+    error_message = "The provisioner can create the build repositories and grant on them."
   }
 }

@@ -8,9 +8,13 @@ locals {
   # LangSmith expects the name langsmith-<short>-identity.
   byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox", "deployment-metrics-collector"]
 
+  # host-backend manages dedicated deployment databases and CLI build push
+  # tokens as its own identity.
+  host_backend_data_planes = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments || dp.deployment_builds }
+
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
-      for short in concat(local.byo_iam_identity_shorts, dp.dedicated_deployments ? ["host-backend"] : []) : "${key}/${short}" => {
+      for short in concat(local.byo_iam_identity_shorts, contains(keys(local.host_backend_data_planes), key) ? ["host-backend"] : [], dp.deployment_builds ? ["deployment-builds"] : []) : "${key}/${short}" => {
         data_plane = key
         short      = short
         tags       = dp.tags
@@ -194,7 +198,7 @@ resource "azurerm_role_assignment" "host_backend_dedicated_deployments" {
 
 resource "azurerm_role_assignment" "host_backend_observability" {
   for_each = merge([
-    for key in keys(azurerm_role_definition.dedicated_deployments) : {
+    for key in keys(local.host_backend_data_planes) : {
       for role in ["Log Analytics Reader", "Monitoring Data Reader"] : "${key}/${role}" => { data_plane = key, role = role }
     }
   ]...)
@@ -212,7 +216,7 @@ resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
-  principal_id         = azuread_service_principal.langsmith.object_id
+  principal_id         = local.langsmith_service_principal_object_id
   principal_type       = "ServicePrincipal"
   description          = var.external_id
 }

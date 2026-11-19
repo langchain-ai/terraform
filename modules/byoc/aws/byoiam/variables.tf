@@ -147,3 +147,9 @@ variable "dedicated_deployments" {
   type        = bool
   default     = false
 }
+
+variable "deployment_builds" {
+  description = "Let LangSmith build GitHub deployments and langgraph deploy images in the cluster. Creates the byoc-build-smith-workload-iam-role build role and the byoc-push-smith-workload-iam-role push role, and grants the workload role ECR repository management on lsd/* and access to the deployment source buckets."
+  type        = bool
+  default     = false
+}
