@@ -136,6 +136,11 @@ resource "azurerm_role_assignment" "blob_data_contributor" {
 #                 the user hasn't explicitly kept long-term
 # Rule "extended": delete ttl_l/* blobs after N days (default: 400) — traces
 #                  explicitly marked for long retention (~13 months)
+# Rule "redaction-raw": delete ttl_1d/* blobs after 1 day — raw values kept for
+#                       redaction rules
+#
+# The module creates no policy when ttl_enabled is false. A storage account has
+# one, so you then manage all lifecycle rules yourself, including ttl_1d/.
 resource "azurerm_storage_management_policy" "lifecycle_policy" {
   count              = var.ttl_enabled ? 1 : 0
   storage_account_id = azurerm_storage_account.storage_account.id
@@ -176,6 +181,30 @@ resource "azurerm_storage_management_policy" "lifecycle_policy" {
       }
       version {
         delete_after_days_since_creation = var.ttl_long_days
+      }
+    }
+  }
+
+  # Backstop for redaction rules: LangSmith writes the unredacted large fields of
+  # projects that redact at ingestion under ttl_1d/ and deletes them once their
+  # runs are done. This rule removes any it could not, with their snapshots and
+  # versions.
+  rule {
+    name    = "redaction-raw"
+    enabled = true
+    filters {
+      prefix_match = ["${var.container_name}/ttl_1d"]
+      blob_types   = ["blockBlob"]
+    }
+    actions {
+      base_blob {
+        delete_after_days_since_creation_greater_than = 1
+      }
+      snapshot {
+        delete_after_days_since_creation_greater_than = 1
+      }
+      version {
+        delete_after_days_since_creation = 1
       }
     }
   }

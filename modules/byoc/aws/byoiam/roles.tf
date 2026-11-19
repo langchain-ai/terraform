@@ -20,8 +20,14 @@ locals {
     juicefs-csi-iam-role              = { name = "byoc-smith-juicefs-csi-iam-role", service = "pods.eks.amazonaws.com" }
     playground-iam-role               = { name = "byoc-playground-smith-workload-iam-role", service = "pods.eks.amazonaws.com" }
   }
-  roles     = { for key, role in local.default_roles : key => merge(role, { name = lookup(var.role_names, key, role.name) }) }
+  # LangSmith observes the build role by its default name, so role_names can't rename it.
+  roles = merge(
+    { for key, role in local.default_roles : key => merge(role, { name = lookup(var.role_names, key, role.name) }) },
+    var.deployment_builds ? { deployment-build-iam-role = { name = "byoc-build-smith-workload-iam-role", service = "pods.eks.amazonaws.com" } } : {}
+  )
   role_arns = { for key, role in local.roles : key => "arn:${local.partition}:iam::${local.account_id}:role/${role.name}" }
+  # LangSmith observes the CLI push role by this name.
+  cli_push_role_name = "byoc-push-smith-workload-iam-role"
 
   pod_identities = {
     ebs-csi-role              = { namespace = "kube-system", service_accounts = ["ebs-csi-controller-sa"] }
@@ -42,6 +48,7 @@ locals {
     clickhouse-backup-iam-role = { namespace = "langsmith", service_accounts = ["langsmith-clickhouse"] }
     juicefs-csi-iam-role       = { namespace = "sandbox", service_accounts = ["sandbox-host"] }
     playground-iam-role        = { namespace = "langsmith", service_accounts = ["*-langsmith-playground"] }
+    deployment-build-iam-role  = { namespace = "langsmith", service_accounts = ["lsd-build"] }
   }
 
   node_policy_names = ["AmazonEKSWorkerNodePolicy", "AmazonEKS_CNI_Policy", "AmazonEC2ContainerRegistryReadOnly", "AmazonSSMManagedInstanceCore"]
@@ -98,7 +105,7 @@ resource "aws_iam_role" "this" {
   })
   # langsmith-byoc-role participates in EKS access-entry authorization. local.tags
   # enforces customer ownership to keep IAM outside the provisioner's write scope.
-  tags = merge(local.tags, contains(["eks-node-role", "karpenter-node-role", "workload-iam-role", "privatelink-lambda-role"], each.key) ? { "langsmith-byoc-role" = "true" } : {})
+  tags = merge(local.tags, contains(["eks-node-role", "karpenter-node-role", "workload-iam-role", "privatelink-lambda-role", "deployment-build-iam-role"], each.key) ? { "langsmith-byoc-role" = "true" } : {})
 
   lifecycle {
     precondition {
@@ -106,6 +113,27 @@ resource "aws_iam_role" "this" {
       error_message = "Every BYOIAM role needs a distinct name; check role_names against the default names."
     }
   }
+}
+
+resource "aws_iam_role" "cli_push" {
+  count                = var.deployment_builds ? 1 : 0
+  name                 = local.cli_push_role_name
+  path                 = "/"
+  description          = "Customer-owned shared LangSmith BYOC cli-push-role"
+  permissions_boundary = var.permissions_boundary_arn
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { AWS = aws_iam_role.this["workload-iam-role"].arn }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+      Condition = {
+        StringEquals = { "aws:PrincipalTag/kubernetes-namespace" = "langsmith" }
+        StringLike   = { "aws:PrincipalTag/kubernetes-service-account" = "*-langsmith-host-backend" }
+      }
+    }]
+  })
+  tags = local.tags
 }
 
 resource "aws_iam_role_policy_attachment" "managed" {
