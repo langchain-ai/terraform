@@ -731,7 +731,20 @@ locals {
     }
   } : {}
 
-  byo_iam_service_accounts = merge(local.byo_iam_base_service_accounts, local.byo_iam_deployment_builds_service_account)
+  byo_iam_scale_to_zero_service_account = var.byo_iam && var.scale_to_zero ? {
+    "langsmith-cell-operator" = {
+      display_name = "LangSmith cell operator"
+      description  = "The scale-to-zero cell's operator in the data plane GKE clusters"
+      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser"]
+      act_as       = false
+    }
+  } : {}
+
+  byo_iam_service_accounts = merge(
+    local.byo_iam_base_service_accounts,
+    local.byo_iam_deployment_builds_service_account,
+    local.byo_iam_scale_to_zero_service_account,
+  )
 
   # Keyed "<account ID>/<role>".
   byo_iam_project_roles = merge([
