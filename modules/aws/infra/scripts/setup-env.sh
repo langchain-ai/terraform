@@ -74,8 +74,13 @@ export AWS_REGION="${_tfvars_region:-${AWS_REGION:-us-west-2}}"
 _tfvars_env=$(grep -E '^\s*environment\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _tfvars_env=""
 export TF_VAR_environment="${_tfvars_env:-${LANGSMITH_ENV:-dev}}"
-export TF_VAR_owner="${LANGSMITH_OWNER:-}"
-export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
+# Not _parse_tfvar: it strips all whitespace, and owner can contain spaces.
+TF_VAR_owner=$(grep -E '^\s*owner\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
+  | head -1 | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p') || TF_VAR_owner=""
+export TF_VAR_owner
+TF_VAR_cost_center=$(grep -E '^\s*cost_center\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
+  | head -1 | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p') || TF_VAR_cost_center=""
+export TF_VAR_cost_center
 export TF_VAR_region="$AWS_REGION"
 
 # ── SSM path prefix ───────────────────────────────────────────────────────────
