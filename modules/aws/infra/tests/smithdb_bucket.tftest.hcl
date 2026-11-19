@@ -2,7 +2,7 @@
 #
 # Compaction handles retention on the SmithDB bucket, so it gets no TTL, and
 # deleting live objects can make data unavailable. Only the platform bucket gets
-# TTL rules (modules/storage, ttl_s/ and ttl_l/).
+# TTL rules (modules/storage, ttl_s/, ttl_l/, and ttl_1d/).
 #
 # A plan test cannot assert that a resource is absent by referencing it, and the
 # test framework does not expose resources inside a child module. So this scans

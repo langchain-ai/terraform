@@ -22,7 +22,7 @@ LangSmith uses at least two buckets on AWS, and they follow different retention 
 
 | Bucket | Created by | Lifecycle (TTL) rules |
 |---|---|---|
-| Platform bucket (trace blobs) | `modules/storage` | Yes. `ttl_s/` expires after 14 days and `ttl_l/` after 400 days. Set with `s3_ttl_enabled`, `s3_ttl_short_days`, and `s3_ttl_long_days`. |
+| Platform bucket (trace blobs) | `modules/storage` | Yes. `ttl_s/` expires after 14 days, `ttl_l/` after 400 days, and `ttl_1d/` after 1 day. Set with `s3_ttl_enabled`, `s3_ttl_short_days`, and `s3_ttl_long_days`. |
 | SmithDB bucket | `modules/smithdb`, when `enable_smithdb = true` | **None. Do not add any.** |
 
 **Do not set a TTL on the SmithDB bucket.** Compaction handles retention
@@ -39,8 +39,8 @@ Sandboxes (`enable_sandboxes = true`) do not get their own bucket on AWS. Their
 JuiceFS volume stores objects in the platform bucket (`sandbox_juicefs_bucket_url`
 in the Terraform outputs), under the `sandbox_juicefs_name` prefix
 (`sandbox-juicefs` by default), and its metadata lives in a dedicated
-ElastiCache Redis. The platform bucket's TTL rules match only the `ttl_s/` and
-`ttl_l/` prefixes, so they do not touch Sandbox data. Keep `sandbox_juicefs_name`
+ElastiCache Redis. The platform bucket's TTL rules match only the `ttl_s/`, `ttl_l/`,
+and `ttl_1d/` prefixes, so they do not touch Sandbox data. Keep `sandbox_juicefs_name`
 away from those two prefixes. The application deletes Sandbox data, not S3: a
 stopped sandbox is deleted by a server-side sweep after `delete_after_stop_seconds`,
 typically 14 days by default and at most 30 days when set. Setting it to `0`

@@ -302,3 +302,8 @@ output "disk_encryption_set_reader_scope" {
   description = "Scope of the Reader assignment the module made on the disk encryption set for the cluster identity; null when the grant is left to the set's owner."
   value       = one(azurerm_role_assignment.disk_encryption_set_reader[*].scope)
 }
+
+output "additional_disk_encryption_set_reader_scopes" {
+  description = "Scopes of the Reader assignments the module made on further disk encryption sets for the cluster identity; empty when none."
+  value       = sort([for a in azurerm_role_assignment.additional_disk_encryption_set_reader : a.scope])
+}
