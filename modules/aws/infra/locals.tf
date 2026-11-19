@@ -21,8 +21,6 @@ locals {
   bucket_name                = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
   postgres_name              = "${local.base_name}-pg"
   alb_name                   = "${local.base_name}-alb"
-  bastion_name               = "${local.base_name}-bastion"
-  firewall_name              = "${local.base_name}-fw"
 
   common_tags = merge(
     {
@@ -58,9 +56,12 @@ locals {
   pod_cidr_blocks = !local.custom_networking ? [] : (
     var.create_vpc ? [var.eks_pod_cidr] : [for s in data.aws_subnet.pod : s.cidr_block]
   )
-  # In-cluster callers of the LangSmith hostname reach an internal ALB from
-  # their pod IPs, so a restricted alb_allowed_cidr_blocks still admits them.
-  alb_ingress_cidr_blocks = concat(var.alb_allowed_cidr_blocks, local.pod_cidr_blocks)
+  # Engine sandboxes call the public LangSmith hostname through the NAT gateway.
+  # The ALB sees the NAT IP, not the pod IP. BYO VPCs supply their own egress CIDRs.
+  engine_alb_egress_cidr_blocks = var.enable_engine && var.create_vpc && !contains(var.alb_allowed_cidr_blocks, "0.0.0.0/0") ? [
+    for ip in module.vpc[0].nat_public_ips : "${ip}/32"
+  ] : []
+  alb_ingress_cidr_blocks = distinct(concat(var.alb_allowed_cidr_blocks, local.pod_cidr_blocks, local.engine_alb_egress_cidr_blocks))
 
   # Envoy Gateway is the default ingress mode, but a bare default of `true` would
   # silently add a second gateway controller to every existing Istio/NGINX tfvars

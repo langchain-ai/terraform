@@ -674,7 +674,7 @@ aws ec2 delete-vpc --vpc-id $VPC_ID --region $REGION
 
 **Known issue — EKS security groups:** EKS creates node and cluster security groups that reference each other. You must revoke all rules from both before either can be deleted, which is why the script above revokes rules in a separate pass before deleting.
 
-**Manual teardown preserves supplied security groups.** If you set `existing_security_group_id` (alb/bastion/postgres/redis) or `smithdb_existing_metastore_security_group_id`, add every supplied ID to `BYO_SECURITY_GROUP_IDS`. Step 6 excludes those groups from rule removal and deletion, even when they share the deployment's ownership tag.
+**Manual teardown preserves supplied security groups.** If you set `existing_security_group_id` (alb/postgres/redis) or `smithdb_existing_metastore_security_group_id`, add every supplied ID to `BYO_SECURITY_GROUP_IDS`. Step 6 excludes those groups from rule removal and deletion, even when they share the deployment's ownership tag.
 
 With `smithdb_manage_byo_security_group_rules = true`, Terraform manages the tcp/5432-from-EKS-nodes ingress rule on your supplied group. `terraform destroy` (Option A) removes that rule. The Option B script preserves it along with the supplied group; remove the ingress rule yourself if you want the group back to its original state.
 

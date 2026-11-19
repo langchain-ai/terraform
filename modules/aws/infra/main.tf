@@ -128,13 +128,8 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = !var.create_firewall || var.create_vpc
-      error_message = "create_firewall = true requires create_vpc = true. Bring-your-own-VPC deployments must configure firewall routing manually."
-    }
-
-    precondition {
-      condition     = var.create_vpc || var.alb_scheme == "internal" || length(var.public_subnets) > 0
-      error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
+      condition     = var.create_vpc || length(var.public_subnets) > 0
+      error_message = "When create_vpc = false, public_subnets must be provided for the internet-facing ALB."
     }
 
     # External Fleet storage uses a dedicated database and logical Redis index on
@@ -215,10 +210,9 @@ resource "terraform_data" "validate_inputs" {
 module "vpc" {
   source = "./modules/vpc"
 
-  count            = var.create_vpc ? 1 : 0
-  vpc_name         = local.vpc_name
-  cluster_name     = local.cluster_name
-  firewall_enabled = var.create_firewall
+  count        = var.create_vpc ? 1 : 0
+  vpc_name     = local.vpc_name
+  cluster_name = local.cluster_name
 
   private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
@@ -228,22 +222,6 @@ module "vpc" {
   extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
 
   pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
-}
-
-module "firewall" {
-  source = "./modules/firewall"
-  count  = var.create_firewall ? 1 : 0
-
-  name                    = local.firewall_name
-  vpc_id                  = local.vpc_id
-  nat_gateway_id          = module.vpc[0].nat_gateway_id
-  nat_gateway_az          = module.vpc[0].nat_gateway_az
-  firewall_subnet_cidr    = var.firewall_subnet_cidr
-  private_route_table_ids = module.vpc[0].private_route_table_ids
-  allowed_fqdns           = var.firewall_allowed_fqdns
-  tags                    = local.common_tags
-
-  depends_on = [module.vpc]
 }
 
 # BYO VPC with custom networking: the pod subnets' AZs and CIDRs, and the AZs of
@@ -272,7 +250,6 @@ module "eks" {
   extra_eks_managed_node_groups   = local.extra_eks_managed_node_groups
   enable_karpenter                = var.enable_smithdb
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
-  public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
   langsmith_namespace             = var.langsmith_namespace
@@ -591,13 +568,10 @@ module "alb" {
   vpc_id                 = local.vpc_id
   vpc_cidr_block         = local.vpc_cidr_block
   pod_cidr_blocks        = local.pod_cidr_blocks
-  subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
-  internal               = var.alb_scheme == "internal"
+  subnets                = local.public_subnets
   allowed_cidr_blocks    = local.alb_ingress_cidr_blocks
   tls_certificate_source = var.tls_certificate_source
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
-  access_logs_enabled    = var.alb_access_logs_enabled
-  bucket_suffix          = random_id.bucket_suffix.hex
   enable_envoy_gateway   = local.enable_envoy_gateway
   enable_istio_gateway   = var.enable_istio_gateway
   enable_nginx_ingress   = var.enable_nginx_ingress
@@ -657,51 +631,6 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_nginx" {
   description                  = "Allow ALB to reach NGINX ingress controller pods on HTTP (target-type: ip)"
 
   tags = local.common_tags
-}
-
-module "cloudtrail" {
-  source = "./modules/cloudtrail"
-  count  = var.create_cloudtrail ? 1 : 0
-
-  trail_name            = "${local.base_name}-trail"
-  bucket_name           = "${local.base_name}-cloudtrail-logs-${random_id.bucket_suffix.hex}"
-  is_multi_region_trail = var.cloudtrail_multi_region
-  log_retention_days    = var.cloudtrail_log_retention_days
-  force_destroy         = true
-  tags                  = local.common_tags
-}
-
-module "waf" {
-  source = "./modules/waf"
-  count  = var.create_waf ? 1 : 0
-
-  name    = "${local.base_name}-waf"
-  alb_arn = module.alb.alb_arn
-  tags    = local.common_tags
-
-  depends_on = [module.alb]
-}
-
-module "bastion" {
-  source = "./modules/bastion"
-  count  = var.create_bastion ? 1 : 0
-
-  name                = local.bastion_name
-  vpc_id              = local.vpc_id
-  subnet_id           = var.bastion_enable_ssh ? local.public_subnets[0] : local.private_subnets[0]
-  associate_public_ip = var.bastion_enable_ssh
-  cluster_name        = module.eks.cluster_name
-  region              = var.region
-  instance_type       = var.bastion_instance_type
-  key_name            = var.bastion_key_name
-  enable_ssh          = var.bastion_enable_ssh
-  ssh_allowed_cidrs   = var.bastion_ssh_allowed_cidrs
-  root_volume_size_gb = var.bastion_root_volume_size_gb
-  tags                = local.common_tags
-
-  existing_security_group_id = var.bastion_existing_security_group_id
-
-  depends_on = [module.vpc]
 }
 
 # The ALB controller (installed by EKS blueprints) registers a mutating webhook

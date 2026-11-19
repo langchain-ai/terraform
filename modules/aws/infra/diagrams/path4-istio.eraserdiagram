@@ -141,7 +141,6 @@ VPC [icon: aws-vpc, color: blue] {
 // ── AWS platform services ─────────────────────────────────────
 SSMParameterStore [icon: aws-systems-manager, color: green]
 SecretsManager [icon: aws-systems-manager, color: green]
-CloudTrail [icon: aws-cloudtrail, color: gray]
 // cert-manager IRSA role: route53:ChangeResourceRecordSets on hosted zone
 IRSACertManagerRole [icon: shield, color: orange]
 
@@ -208,9 +207,6 @@ HostBackend > RDSPostgres: Postgres (agent state)
 
 // Outbound egress via NAT (image pulls, external APIs, ACME)
 NATGateway --> Internet: outbound egress (image pulls, ACME challenge)
-
-// Audit logging
-CloudTrail --> EKSCluster: API audit log stream
 
 // ============================================================
 // LEGEND

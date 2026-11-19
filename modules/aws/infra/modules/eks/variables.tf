@@ -19,12 +19,6 @@ variable "subnet_ids" {
   description = "The IDs of the subnets"
 }
 
-variable "public_cluster_enabled" {
-  type        = bool
-  description = "Whether to enable public cluster access"
-  default     = true
-}
-
 variable "public_access_cidrs" {
   type        = list(string)
   description = "CIDRs allowed to reach the public EKS API endpoint"
