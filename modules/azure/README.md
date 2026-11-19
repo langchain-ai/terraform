@@ -308,7 +308,7 @@ The zone names are Microsoft's recommended names from the [private endpoint DNS 
 Limits in Azure Government:
 
 - **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run. The same applies to the Sandboxes JuiceFS Redis: with `enable_sandboxes = true`, set `sandbox_juicefs_redis_source = "in-cluster"` or `"external"`. See [Sandboxes](#sandboxes)
-- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true`; a region with only `SameZone` takes `postgres_high_availability_mode = "SameZone"` (#291)
 - **SmithDB metastore needs a password.** SmithDB requests its Entra token for the commercial Azure scope, which a Government Flexible Server refuses (LG-913), so `enable_smithdb = true` without `TF_VAR_smithdb_metastore_admin_password` is refused at plan. See [SMITHDB.md](SMITHDB.md)
 - **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
 
@@ -1227,7 +1227,7 @@ Enables ClickHouse-backed analytics in the Insights tab. The file is the same ei
 Where ClickHouse runs is a separate decision, made by `clickhouse_source` in `terraform.tfvars` and written into `values-overrides.yaml`, not this file:
 
 - `in-cluster` → the chart runs ClickHouse as a StatefulSet. Dev/POC only; the PVC is a zonal Azure managed disk, so the pod is pinned to one zone for the life of the volume.
-- `external` → the chart skips ClickHouse entirely and reads the connection from the `langsmith-clickhouse` secret. `init-values.sh` prompts for host/ports/user/password/db/tls and creates that secret; `deploy.sh` refuses to deploy if it is missing a key.
+- `external` → the chart skips ClickHouse entirely and reads the connection from the `langsmith-clickhouse` secret. With `clickhouse_host` set in `terraform.tfvars` (and `clickhouse_password` in `secrets.auto.tfvars`), `make apply` writes that secret from the `clickhouse_*` variables (`clickhouse_http_port`, `clickhouse_native_port`, `clickhouse_user`, `clickhouse_database`, `clickhouse_tls`) and `init-values.sh` says so. On an install where `init-values.sh` already created that secret before `clickhouse_host` was set, the next `make apply` would stop with `secrets "langsmith-clickhouse" already exists`, because the kubernetes provider does not adopt existing objects: `make preflight` reports it and prints the import that adopts the secret (`terraform import 'module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]' <namespace>/langsmith-clickhouse`), after which preflight passes on the imported address and the next apply adds the label and rewrites it from the variables; deleting the secret and applying also works but drops the connection until apply finishes. With `clickhouse_host` empty, `init-values.sh` prompts for host/ports/user/password/db/tls and creates the secret, as before. `deploy.sh` refuses to deploy if the secret is missing a key. For a replicated ClickHouse (several replicas on Keeper, for example under the Altinity operator), set `clickhouse_cluster` to the cluster's name before the first deploy, in any tfvars file or `TF_VAR_clickhouse_cluster`: `init-values.sh` writes it as `clickhouse.external.cluster` from the `clickhouse_cluster` output (from `terraform.tfvars` before the first apply), and the first migration then creates `Replicated*MergeTree` tables, which a standalone schema cannot be converted to afterwards. A certificate from an internal CA is trusted through `langsmith_custom_ca_secret_name`, the chart's one CA path for ClickHouse.
 
 **`langsmith-values-polly.yaml`** — Pass 5 (`enable_polly = true`)
 
@@ -1919,13 +1919,41 @@ there, and every variable takes the ID the platform team returns.
   unless `postgres_source = "external"`, the only source with a server to take
   them.
 - **Blob storage.** `storage_customer_managed_key_id` and
-  `storage_customer_managed_key_identity_id` do the same for the blob account
-  (SmithDB's account takes the same pair in a later change).
+  `storage_customer_managed_key_identity_id` do the same for the blob account.
+- **SmithDB.** With `enable_smithdb`, the metastore takes
+  `smithdb_metastore_customer_managed_key_id` and its identity, and the SmithDB
+  storage account takes `smithdb_storage_customer_managed_key_id` and its
+  identity. Each pair left empty falls back to LangSmith's own pair
+  (`postgres_customer_managed_key_id` for the metastore,
+  `storage_customer_managed_key_id` for the account), so one key per kind still
+  covers SmithDB. The metastore takes its key only at creation, like the
+  LangSmith server, and plan refuses adding or removing one on an existing
+  metastore. An existing metastore on the service-managed key does not take
+  LangSmith's key by fallback: it keeps its key, and plan warns
+  (`check.smithdb_metastore_keeps_service_managed_key`). The metastore has no
+  geo-redundant backup, so it takes no geo pair.
+- **A key per store.** Set the per-store pairs above, and give a StorageClass
+  its own disk encryption set: `smithdb_cache_disk_encryption_set_id` for
+  SmithDB's cache volumes and `sandbox_juicefs_redis_disk_encryption_set_id`
+  for the in-cluster JuiceFS Redis volume. Each is written as
+  `diskEncryptionSetID` on the class only when it differs from
+  `aks_disk_encryption_set_id`. Empty, or the cluster's own set, leaves the
+  parameter off, and new volumes take the cluster's set, which the Azure Disk
+  CSI driver applies by default. Kubernetes refuses parameter changes, so a
+  change replaces the class and applies to new volumes only. The cluster
+  identity needs Reader on every set a class names: with
+  `aks_additional_disk_encryption_set_reader_grant = true` the module grants it
+  on each distinct set, on a cluster it creates or an attached one, and on each entry of
+  `aks_additional_disk_encryption_set_ids`, a list for sets that StorageClasses
+  outside the module name, such as the in-cluster databases'. Revoking one
+  store's key then makes only that store's data unreadable. The flag is separate from
+  `aks_disk_encryption_set_reader_grant`, so the cluster's set can be granted
+  in Terraform while each store's owner grants Reader on its own set.
 
 A versionless key URL follows the key's newest version. Each identity holds Key
 Vault Crypto Service Encryption User on its vault before the apply. `make
-preflight` reads the set's region, each vault's purge protection and each
-identity, and stops on a set outside the cluster's region or a vault without
+preflight` reads the cluster set's region, each LangSmith vault's purge
+protection and each LangSmith identity (not yet the per-store inputs), and stops on a set outside the cluster's region or a vault without
 purge protection. A read it cannot make is a warning. The provider documents Key
 Vault key IDs for all three resources. A Managed HSM key has no documented route
 for the server and is unverified for the set and the account.
@@ -2045,6 +2073,27 @@ postgres_high_availability = true
 
 Azure puts the standby in a zone other than the primary's, so HA works under the
 `[]` default and does not force you to pin anything.
+
+A region that offers no zone-redundant capacity for the SKU, as `usgovvirginia`
+does for the General Purpose sizes (`az postgres flexible-server list-skus
+--location <region>` shows `supportedHaMode: ["SameZone"]` and
+`zoneRedundantHaSupported: Disabled`), takes same-zone HA instead: the standby
+in the primary's zone, which survives a node loss and shortens planned
+maintenance but not a zone loss (Microsoft's 99.95% mode, against 99.99% for
+zone-redundant and 99.9% with no standby):
+
+```hcl
+postgres_high_availability      = true
+postgres_high_availability_mode = "SameZone"
+```
+
+`SameZone` takes no `postgres_standby_availability_zone`. Azure sets the mode on
+the server, so a server already switched to one mode by hand (the ARM call is
+`PATCH .../flexibleServers/<name>?api-version=2024-08-01` with
+`{"properties":{"highAvailability":{"mode":"SameZone"}}}`; the CLI has no
+flag for it) must be told the same mode here, or the next apply changes it:
+with the default, the plan changes `SameZone` to `ZoneRedundant` and the apply
+fails in a region without zone-redundant capacity.
 
 Pin zones when you want to choose the placement yourself:
 

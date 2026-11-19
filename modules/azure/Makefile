@@ -9,7 +9,7 @@
 # Where am I?              make status
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-chart-image-keys setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-clickhouse-cluster test-chart-image-keys setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -59,6 +59,9 @@ test-images-block: ## Unit-test the images: block init-values writes for a mirro
 
 test-values-stamp: ## Unit-test the stamp check that stops make deploy on a values file generated from other tfvars (no Azure)
 	$(INFRA_DIR)/scripts/test-values-stamp.sh
+
+test-clickhouse-cluster: ## Unit-test how clickhouse_cluster reaches the chart from any tfvars source (no Azure)
+	$(INFRA_DIR)/scripts/test-clickhouse-cluster.sh
 
 test-chart-image-keys: ## Unit-test the parser deploy.sh reads the chart's images block with, under pipefail (no Azure)
 	$(INFRA_DIR)/scripts/test-chart-image-keys.sh

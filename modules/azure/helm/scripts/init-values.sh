@@ -580,14 +580,7 @@ fi
 # whether or not the insights add-on is on. The chart reads every connection field
 # (host, ports, user, password, db, tls) from the secret, so the values file only
 # carries the pointer to it.
-if [[ "$_clickhouse_source" == "external" ]]; then
-  _clickhouse_block='clickhouse:
-  external:
-    enabled: true
-    existingSecretName: "langsmith-clickhouse"'
-else
-  _clickhouse_block='# clickhouse: in-cluster (managed by Helm chart)'
-fi
+_clickhouse_block=$(_clickhouse_values_block "$_clickhouse_source")
 
 if [[ -n "$STORAGE_BLOB_ENDPOINT" ]]; then
   _blob_endpoint_line="    azureStorageServiceUrlOverride: \"${STORAGE_BLOB_ENDPOINT}\""
@@ -1085,9 +1078,19 @@ fi
 if [[ "$_clickhouse_source" == "external" ]]; then
   header "External ClickHouse"
 
+  # Terraform owns the Secret when the clickhouse_secret_name output is set:
+  # that reflects clickhouse_host wherever it was configured, terraform.tfvars
+  # or an *.auto.tfvars file. The tfvars read is the fallback for a run before
+  # the apply that would set the output.
+  _clickhouse_tf_secret=$(_tf_out clickhouse_secret_name) || _clickhouse_tf_secret=""
+  _clickhouse_tf_host=$(_parse_tfvar "clickhouse_host") || _clickhouse_tf_host=""
   # Probe before prompting — discovering an unreachable cluster after the
   # operator has typed a password is a bad trade.
-  if ! kubectl auth can-i create secret -n "$NAMESPACE" &>/dev/null; then
+  if _clickhouse_detail=$(_clickhouse_owner_detail "$_clickhouse_tf_secret" "$_clickhouse_tf_host"); then
+    pass "langsmith-clickhouse secret is Terraform's (${_clickhouse_detail}), so make apply writes it from the clickhouse_* variables"
+    info "To change the connection, edit the clickhouse_* variables and run make apply; deploy.sh checks the secret's keys before deploying."
+    info "If this install's secret predates clickhouse_host (an earlier init-values.sh created it), make preflight says so and prints the import that adopts it; apply cannot adopt it on its own."
+  elif ! kubectl auth can-i create secret -n "$NAMESPACE" &>/dev/null; then
     warn "clickhouse_source = \"external\" needs a langsmith-clickhouse secret, but kubectl cannot create secrets in namespace $NAMESPACE."
     info "Values files are written and complete — only the secret is outstanding."
     action "Run: make kubeconfig   (then re-run: make init-values)"

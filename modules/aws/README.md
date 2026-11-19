@@ -1113,7 +1113,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
+| `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL (`ttl_s/`, `ttl_l/`) and the 1-day expiry of redaction raw values (`ttl_1d/`). When `false`, no lifecycle configuration is created: manage all rules yourself, including `ttl_1d/` |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
 | `s3_kms_key_arn` | `""` | no | KMS CMK ARN for S3 encryption (empty = SSE-S3) |
