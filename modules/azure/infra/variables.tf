@@ -745,6 +745,98 @@ variable "clickhouse_source" {
   }
 }
 
+# ── External ClickHouse connection ────────────────────────────────────────────
+# With clickhouse_source = "external" and clickhouse_host set, the k8s-bootstrap
+# module writes the langsmith-clickhouse Secret the chart reads (host, ports,
+# user, password, database, tls, the chart's own key names) and init-values.sh
+# skips its prompt for them. With clickhouse_host empty, init-values.sh prompts
+# as before and creates the Secret itself. A custom CA for the server goes
+# through langsmith_custom_ca_secret_name: the chart validates ClickHouse's
+# certificate against config.customCa, not a ClickHouse-specific secret.
+variable "clickhouse_host" {
+  type        = string
+  description = "Host of an external ClickHouse, with clickhouse_source = \"external\": a self-hosted cluster (for example the Altinity operator's service, <chi>-<cluster>.<namespace>.svc) or a managed endpoint. Set, Terraform writes the langsmith-clickhouse Secret from the clickhouse_* variables and make init-values skips its prompt; empty (default), init-values prompts for the connection and creates the Secret itself. A host without a port; the ports are clickhouse_http_port and clickhouse_native_port."
+  default     = ""
+
+  validation {
+    condition     = var.clickhouse_host == "" || var.clickhouse_source == "external"
+    error_message = "clickhouse_host only applies with clickhouse_source = \"external\". Set clickhouse_source = \"external\", or leave clickhouse_host empty."
+  }
+
+  validation {
+    condition     = var.clickhouse_host == "" || can(regex("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$", var.clickhouse_host))
+    error_message = "clickhouse_host must be a host name or address with no scheme, port or path (e.g. 'ch-repl-replicated.langsmith-data.svc' or 'abc.clickhouse.cloud')."
+  }
+}
+
+variable "clickhouse_http_port" {
+  type        = number
+  description = "HTTP port of the external ClickHouse (the chart's clickhouse_port): 8123 plain, 8443 with TLS. Applies with clickhouse_host."
+  default     = 8443
+
+  validation {
+    condition     = var.clickhouse_http_port >= 1 && var.clickhouse_http_port <= 65535
+    error_message = "clickhouse_http_port must be a port number from 1 to 65535."
+  }
+}
+
+variable "clickhouse_native_port" {
+  type        = number
+  description = "Native protocol port of the external ClickHouse (the chart's clickhouse_native_port): 9000 plain, 9440 with TLS. Applies with clickhouse_host."
+  default     = 9440
+
+  validation {
+    condition     = var.clickhouse_native_port >= 1 && var.clickhouse_native_port <= 65535
+    error_message = "clickhouse_native_port must be a port number from 1 to 65535."
+  }
+}
+
+variable "clickhouse_user" {
+  type        = string
+  description = "User LangSmith connects to the external ClickHouse as. Applies with clickhouse_host."
+  default     = "default"
+}
+
+variable "clickhouse_password" {
+  type        = string
+  description = "Password of clickhouse_user. Required with clickhouse_host. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars; it is written to the langsmith-clickhouse Secret and held in state, as the Postgres password is."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.clickhouse_host == "" || var.clickhouse_password != ""
+    error_message = "clickhouse_password is required with clickhouse_host: the chart reads every connection field from the Secret, and a missing key leaves every LangSmith pod in CreateContainerConfigError."
+  }
+}
+
+variable "clickhouse_database" {
+  type        = string
+  description = "Database LangSmith uses on the external ClickHouse. Applies with clickhouse_host."
+  default     = "default"
+}
+
+variable "clickhouse_tls" {
+  type        = bool
+  description = "Whether LangSmith connects to the external ClickHouse over TLS. The certificate is validated against the system CAs, plus the bundle in langsmith_custom_ca_secret_name when set. Applies with clickhouse_host."
+  default     = true
+}
+
+variable "clickhouse_cluster" {
+  type        = string
+  description = "Name of the ClickHouse cluster (the cluster in the server's remote_servers, for example the Altinity operator's cluster name) that LangSmith's migrations create tables ON CLUSTER in, written as clickhouse.external.cluster. Set it before the first deploy against a replicated ClickHouse: the first migration decides whether tables are Replicated*MergeTree, and a standalone schema cannot be converted later. Empty (default) creates standalone tables. Applies with clickhouse_source = \"external\", whether or not Terraform writes the Secret."
+  default     = ""
+
+  validation {
+    condition     = var.clickhouse_cluster == "" || var.clickhouse_source == "external"
+    error_message = "clickhouse_cluster only applies with clickhouse_source = \"external\": the chart's own ClickHouse is a single server with no cluster."
+  }
+
+  validation {
+    condition     = var.clickhouse_cluster == "" || can(regex("^[A-Za-z0-9_.-]+$", var.clickhouse_cluster))
+    error_message = "clickhouse_cluster must match ^[A-Za-z0-9_.-]+$: init-values.sh writes it into values-overrides.yaml inside double quotes with no escaping."
+  }
+}
+
 variable "redis_subnet_address_prefix" {
   type        = list(string)
   description = "Prefix for the Redis subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
@@ -797,7 +889,7 @@ variable "redis_location" {
 
 variable "blob_ttl_enabled" {
   type        = bool
-  description = "Enable TTL for the blob container"
+  description = "Enable TTL for the blob container: lifecycle rules for trace blobs (ttl_s/, ttl_l/) and the raw values kept for redaction rules (ttl_1d/). When false, the module creates no management policy: you manage all lifecycle rules yourself, including a 1-day expiry on ttl_1d/."
   default     = true
 }
 
@@ -1967,6 +2059,22 @@ variable "postgres_standby_availability_zone" {
   default     = ""
 }
 
+variable "postgres_high_availability_mode" {
+  type        = string
+  description = "How PostgreSQL high availability places the standby when postgres_high_availability is true or postgres_standby_availability_zone is set. \"ZoneRedundant\" (default): the standby in a zone other than the primary's; survives a zone loss; the 99.99% SLA mode. \"SameZone\": the standby in the primary's zone; survives a node loss and shortens planned maintenance, not a zone loss; the 99.95% SLA mode, and the only one a region offers when it has no zone-redundant capacity for the SKU, as usgovvirginia does for the General Purpose SKUs. Azure sets the mode at the server, so a server already set to one mode by hand must be told the same mode here, or the next apply changes it. SameZone takes no postgres_standby_availability_zone: the standby shares the primary's zone."
+  default     = "ZoneRedundant"
+
+  validation {
+    condition     = contains(["ZoneRedundant", "SameZone"], var.postgres_high_availability_mode)
+    error_message = "postgres_high_availability_mode must be \"ZoneRedundant\" or \"SameZone\"."
+  }
+
+  validation {
+    condition     = var.postgres_high_availability_mode != "SameZone" || var.postgres_standby_availability_zone == ""
+    error_message = "postgres_high_availability_mode = \"SameZone\" places the standby in the primary's zone, so postgres_standby_availability_zone cannot pin it elsewhere. Leave postgres_standby_availability_zone empty, or use \"ZoneRedundant\"."
+  }
+}
+
 variable "postgres_geo_redundant_backup" {
   type        = bool
   description = "Enable geo-redundant backups for PostgreSQL."
@@ -2009,6 +2117,17 @@ variable "aks_disk_encryption_set_reader_grant" {
   validation {
     condition     = !var.aks_disk_encryption_set_reader_grant || var.aks_disk_encryption_set_id != ""
     error_message = "aks_disk_encryption_set_reader_grant = true needs aks_disk_encryption_set_id: there is no set to grant Reader on."
+  }
+}
+
+variable "aks_additional_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether the module assigns the Reader role to the cluster identity on each distinct further disk encryption set: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id and aks_additional_disk_encryption_set_ids, excluding aks_disk_encryption_set_id (which aks_disk_encryption_set_reader_grant covers). Works on an attached cluster too (create_cluster = false), granting the identity the cluster reports. Separate from that flag so a deployment can grant the cluster's set in Terraform and leave per-store sets to their owners, or the reverse. true needs roleAssignments/write on each set's scope; leave it false when the owners grant Reader themselves, or the apply fails with RoleAssignmentExists. Requires at least one further set."
+  default     = false
+
+  validation {
+    condition     = !var.aks_additional_disk_encryption_set_reader_grant || var.smithdb_cache_disk_encryption_set_id != "" || var.sandbox_juicefs_redis_disk_encryption_set_id != "" || length(var.aks_additional_disk_encryption_set_ids) > 0
+    error_message = "aks_additional_disk_encryption_set_reader_grant = true needs a further disk encryption set to grant Reader on: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id or aks_additional_disk_encryption_set_ids."
   }
 }
 
@@ -2116,6 +2235,118 @@ variable "storage_customer_managed_key_identity_id" {
   validation {
     condition     = var.storage_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.storage_customer_managed_key_identity_id))
     error_message = "storage_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+# ── SmithDB and per-store keys (PRO-190) ─────────────────────────────────────
+# Each store can take its own key, so one store's data can be made unreadable by
+# revoking its key without touching the others. Empty inputs fall back to
+# LangSmith's own keys and the cluster's disk encryption set.
+
+variable "smithdb_metastore_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the SmithDB metastore (PostgreSQL Flexible Server) encrypts with (https://<vault host>/keys/<name>, with or without a version). Empty (default) uses postgres_customer_managed_key_id and its identity, else the service-managed key. Set only when the metastore is created: the provider would apply a change by replacing the server and destroying SmithDB's catalog, so on an existing metastore plan refuses adding or removing the key (moving to another key or version is allowed). The key's vault has soft delete and purge protection on, and smithdb_metastore_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Needs enable_smithdb."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.smithdb_metastore_customer_managed_key_id))
+    error_message = "smithdb_metastore_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.smithdb_metastore_customer_managed_key_id == "") == (var.smithdb_metastore_customer_managed_key_identity_id == "")
+    error_message = "smithdb_metastore_customer_managed_key_id and smithdb_metastore_customer_managed_key_identity_id are set together or not at all: the metastore reads the key as that identity."
+  }
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_id == "" || var.enable_smithdb
+    error_message = "smithdb_metastore_customer_managed_key_id is set with enable_smithdb = false, so there is no metastore to encrypt. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "smithdb_metastore_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>) the SmithDB metastore reads smithdb_metastore_customer_managed_key_id with. It must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with smithdb_metastore_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.smithdb_metastore_customer_managed_key_identity_id))
+    error_message = "smithdb_metastore_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "smithdb_storage_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the SmithDB storage account encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL enables automatic rotation). Empty (default) uses storage_customer_managed_key_id and its identity, else the service-managed key. Azure accepts the switch on an existing account. The key's vault has soft delete and purge protection on, and smithdb_storage_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Needs enable_smithdb."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.smithdb_storage_customer_managed_key_id))
+    error_message = "smithdb_storage_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.smithdb_storage_customer_managed_key_id == "") == (var.smithdb_storage_customer_managed_key_identity_id == "")
+    error_message = "smithdb_storage_customer_managed_key_id and smithdb_storage_customer_managed_key_identity_id are set together or not at all: the account reads the key as that identity."
+  }
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_id == "" || var.enable_smithdb
+    error_message = "smithdb_storage_customer_managed_key_id is set with enable_smithdb = false, so there is no SmithDB storage account to encrypt. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "smithdb_storage_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity the SmithDB storage account reads smithdb_storage_customer_managed_key_id with. It must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with smithdb_storage_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.smithdb_storage_customer_managed_key_identity_id))
+    error_message = "smithdb_storage_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "smithdb_cache_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set for SmithDB's cache volumes, written as diskEncryptionSetID on the SmithDB cache StorageClass. Empty (default), or the same set as aks_disk_encryption_set_id, writes no parameter: new volumes then take the cluster's set, which the Azure Disk CSI driver applies by default, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; existing cache volumes keep their key until their pods are recreated. The cluster identity needs Reader on the set (aks_additional_disk_encryption_set_reader_grant, or a grant made by the set's owner), and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_cache_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.smithdb_cache_disk_encryption_set_id))
+    error_message = "smithdb_cache_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  validation {
+    condition     = var.smithdb_cache_disk_encryption_set_id == "" || var.enable_smithdb
+    error_message = "smithdb_cache_disk_encryption_set_id is set with enable_smithdb = false, so there is no SmithDB cache StorageClass. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "sandbox_juicefs_redis_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set for the in-cluster JuiceFS Redis volume, written as diskEncryptionSetID on its StorageClass. Empty (default), or the same set as aks_disk_encryption_set_id, writes no parameter: new volumes then take the cluster's set, which the Azure Disk CSI driver applies by default, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; the existing volume keeps its key. The cluster identity needs Reader on the set, and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault. Takes effect with sandbox_juicefs_redis_source = \"in-cluster\"."
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.sandbox_juicefs_redis_disk_encryption_set_id))
+    error_message = "sandbox_juicefs_redis_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_disk_encryption_set_id == "" || (var.enable_sandboxes && var.sandbox_juicefs_redis_source == "in-cluster")
+    error_message = "sandbox_juicefs_redis_disk_encryption_set_id is set, but the module runs no JuiceFS Redis in the cluster (it needs enable_sandboxes = true and sandbox_juicefs_redis_source = \"in-cluster\"). Remove it."
+  }
+}
+
+variable "aks_additional_disk_encryption_set_ids" {
+  type        = list(string)
+  description = "Resource IDs of further disk encryption sets that StorageClasses outside this module name (for example in-cluster databases or agent deployment databases, one key per store). The module only grants the cluster identity Reader on each, with aks_additional_disk_encryption_set_reader_grant = true, so the Azure Disk CSI driver can create their volumes; it sets no StorageClass for them. Empty (default) grants nothing more."
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.aks_additional_disk_encryption_set_ids : can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", id))])
+    error_message = "Each entry of aks_additional_disk_encryption_set_ids must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
   }
 }
 
