@@ -583,6 +583,7 @@ fi
 # SmithDB last, so its overrides beat every sizing and addon file above. The
 # generated sizing file goes first, so the hand-edited overlay can override it.
 if [[ "$_smithdb_enabled" == "true" ]]; then
+  _smithdb_cache_mode=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage)
   _smithdb_sizing_file="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides_file="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
@@ -595,6 +596,9 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
 
   # init-values.sh copies the overlay only once, so a chart 0.16 copy stays.
   _smithdb_legacy=$(_smithdb_legacy_values "$_smithdb_file")
+  if [[ "$_smithdb_cache_mode" == "network-disk" ]]; then
+    _smithdb_legacy=$(sed '/the volume name local-ssd-storage/d' <<< "$_smithdb_legacy")
+  fi
   if [[ -n "$_smithdb_legacy" ]]; then
     echo "ERROR: langsmith-values-smithdb.yaml has chart 0.16 SmithDB values that chart 0.17 rejects:" >&2
     sed 's/^/         /' <<< "$_smithdb_legacy" >&2
@@ -633,6 +637,10 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     fi
     VALUES_ARGS+=(-f "$_smithdb_migration_file")
     echo "  ✔ langsmith-values-smithdb-migration.yaml"
+  fi
+  if [[ "$_smithdb_cache_mode" == "network-disk" ]]; then
+    source "$INFRA_DIR/scripts/_smithdb-transition.sh"
+    _smithdb_managed_values
   fi
 elif [[ -f "$VALUES_DIR/langsmith-values-smithdb.yaml" ]]; then
   echo "  ○ langsmith-values-smithdb.yaml (file exists but enable_smithdb=false — skipped)"
@@ -1004,9 +1012,8 @@ else
   echo "         Check with: kubectl get pods -n $NAMESPACE"
   if [[ "$_smithdb_enabled" == "true" ]]; then
     echo ""
-    echo "         If SmithDB pods are Pending, confirm the Local SSD nodes came up and"
-    echo "         advertise enough allocatable ephemeral-storage:"
-    echo "           kubectl get nodes -l smithdb-local/instance-store=true"
+    echo "         If SmithDB pods are Pending, check SmithDB node capacity and cache PVC events:"
+    echo "           kubectl get nodes -L langsmith-nodepool/smithdb,smithdb-local/instance-store"
     echo "           kubectl get node NODE -o jsonpath='{.status.allocatable.ephemeral-storage}'"
     echo "         In network-disk mode, check the cache volumes: kubectl get pvc -n $NAMESPACE"
   fi

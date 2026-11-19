@@ -428,8 +428,15 @@ case "$(_tfvar "sizing_profile")" in
   production-large) _sdb_default_sizing=large ;;
 esac
 _sdb_sizing=$(_tfvar_or "smithdb_sizing" "$_sdb_default_sizing")
-_sdb_cache=$(_tfvar_or "smithdb_cache_storage" "$([[ "$_sdb_sizing" == "minimal" ]] && echo network-disk || echo local-ssd)")
-case "$_sdb_sizing/$_sdb_cache" in
+_sdb_cache=$(_tfvar_or "smithdb_cache_storage" "network-disk")
+_sdb_tier="$_sdb_sizing"
+[[ "$_sdb_tier" == minimal ]] && _sdb_tier=small
+_legacy_cache="$_sdb_cache"
+if [[ "$(_tfvar "smithdb_transition_mode")" == true ]]; then
+  _legacy_cache=$(_tfvar_or "smithdb_cache_storage" "local-ssd")
+  _sdb_cache=network-disk
+fi
+case "$_sdb_tier/$_legacy_cache" in
   small/local-ssd)     _sdb_pools="n2-standard-16 2 n2-standard-8" ;;
   medium/local-ssd)    _sdb_pools="n2-standard-32 4 n2-standard-8" ;;
   large/local-ssd)     _sdb_pools="n2-standard-64 8 n2-standard-16" ;;
@@ -467,15 +474,31 @@ elif [[ "$ENABLE_SMITHDB" == "true" ]]; then
   # each pool on its own passes wherever either fits alone — 48 and 24 both clear
   # a 60 vCPU allowance that 72 does not. bash 3.2 has no associative arrays, so
   # the tally is a plain "FAMILY need detail" list folded together by awk.
+  _pool_entries=()
+  if [[ "$_sdb_cache" == "network-disk" ]]; then
+    case "$_sdb_tier" in
+      medium) _general_default=c3-standard-44; _general_max=10 ;;
+      large) _general_default=c3-standard-88; _general_max=10 ;;
+      *) _general_default=c3-standard-22; _general_max=5 ;;
+    esac
+    _general_type=$(_tfvar_or "smithdb_node_machine_type" "$_general_default")
+    _general_max=$(_tfvar_or "smithdb_node_max_count" "$_general_max")
+    _pool_entries+=("general:$_general_type:$_general_max:1")
+  fi
+  if [[ "$_sdb_cache" == "local-ssd" || "$(_tfvar "smithdb_transition_mode")" == true ]]; then
+    _pool_entries+=("instance-store:$_is_type:$_is_max:$_zones" "compute:$_cm_type:$_cm_max:$_zones")
+  else
+    _ssd_count=0
+  fi
   _fam_needs=""
-  for _pool in "instance-store:$_is_type:$_is_max" "compute:$_cm_type:$_cm_max"; do
-    _name="${_pool%%:*}"; _rest="${_pool#*:}"; _type="${_rest%%:*}"; _max="${_rest##*:}"
+  for _pool in "${_pool_entries[@]}"; do
+    IFS=: read -r _name _type _max _pool_zones <<< "$_pool"
     _vcpu=$(_vcpu_of "$_type")
     if [[ "$_vcpu" == "0" ]]; then
       info "  Skipping $_name pool ($_type) — cannot infer vCPU count from the machine type"
       continue
     fi
-    _fam_needs="${_fam_needs}$(_family_of "$_type") $(( _vcpu * _max * _zones )) ${_name}=${_max}x${_zones}z-${_type}
+    _fam_needs="${_fam_needs}$(_family_of "$_type") $(( _vcpu * _max * _pool_zones )) ${_name}=${_max}x${_pool_zones}z-${_type}
 "
   done
 

@@ -405,8 +405,9 @@ output "smithdb_query_enabled" {
 }
 
 output "smithdb_node_pools" {
-  description = "SmithDB node pool names, or null on Autopilot, for smithdb_sizing = minimal, or when disabled"
+  description = "SmithDB node pool names, or null when disabled"
   value = local.smithdb_dedicated_pools ? {
+    general        = module.smithdb_nodes[0].general_pool_name
     instance_store = module.smithdb_nodes[0].instance_store_pool_name
     compute        = module.smithdb_nodes[0].compute_pool_name
   } : null
@@ -419,12 +420,17 @@ output "smithdb_local_ssd_capacity_gb" {
 
 output "smithdb_node_pool_config" {
   description = "Resolved SmithDB node pool shapes, or null when there are no SmithDB node pools"
-  value = local.smithdb_dedicated_pools ? {
+  value = !local.smithdb_dedicated_pools ? null : jsondecode(local.smithdb_network_disk ? jsonencode({
+    machine_type = local.smithdb_node_machine_type
+    disk_size_gb = var.smithdb_node_disk_size_gb
+    min_count    = var.smithdb_node_min_count
+    max_count    = local.smithdb_node_max_count
+    }) : jsonencode({
     instance_store_machine_type    = local.smithdb_instance_store_machine_type
     instance_store_local_ssd_count = local.smithdb_instance_store_local_ssd_count
     instance_store_disk_size_gb    = local.smithdb_instance_store_disk_size
     compute_machine_type           = local.smithdb_compute_machine_type
-  } : null
+  }))
 }
 
 output "smithdb_sizing" {
@@ -497,4 +503,9 @@ output "next_steps" {
     GCS bucket: ${module.storage.bucket_name}
     (HMAC key required — create in GCP Console: Storage → Settings → Interoperability)
   EOT
+}
+
+output "smithdb_cache_storage_class_name" {
+  description = "SmithDB network cache StorageClass, or null when not used"
+  value       = local.smithdb_create_cache_storage_class ? local.smithdb_cache_storage_class : null
 }

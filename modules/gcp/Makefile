@@ -73,8 +73,8 @@ init: ## terraform init (infra)
 plan: ## terraform plan (infra)
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
-apply: ## terraform apply (infra)
-	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
+apply: ## Apply infrastructure with SmithDB transition checks
+	bash $(INFRA_DIR)/scripts/apply.sh $(ARGS)
 
 destroy: ## terraform destroy (infra)
 	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
