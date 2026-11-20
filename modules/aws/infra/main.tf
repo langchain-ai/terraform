@@ -1316,12 +1316,12 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 #     runs/delta/stream: /api/v1/platform/datasets
 #   - The same delta stream on shared links: /api/v1/platform/public
 #   - The prompt canvas: /api/v1/prompts/canvas, /api/v1/platform/prompt-canvas
-# The playground and experiments are always on, so the route is created with
-# every Envoy Gateway install that has a domain. The name stays
-# langsmith-fleet-streams, as on existing installs and in the Azure module, so
-# an upgrade replaces the route in place. Behind Envoy these requests are
-# still bounded: the chart's nginx reads with a 300s timeout, and
-# platform-backend's handlers carry their own.
+# The route exists on every Envoy Gateway install that has a domain, which
+# suits the playground and experiments because they are always on. The name
+# stays langsmith-fleet-streams, as on existing installs and in the Azure
+# module, so an upgrade updates the route in place. Behind Envoy these
+# requests are still bounded: the chart's nginx reads with a 300s timeout,
+# and platform-backend's handlers carry their own.
 #
 # A second HTTPRoute on the same Gateway+hostname with more specific path
 # matches takes precedence over the chart's "/" catch-all per Gateway API
