@@ -653,10 +653,17 @@ _instance_xlarge_multiple() {
 
 _section "7. SmithDB"
 
-# Older configurations may omit these flags and rely on Terraform's defaults.
-_smithdb_default=true
-[[ "$UPDATE_MODE" == "true" ]] && _smithdb_default=false
-_ex_smithdb="$(_existing enable_smithdb "$_smithdb_default")"
+# An existing install's SmithDB state as applied, read from the Terraform
+# outputs: its tfvars may leave a key to its default, and the defaults changed
+# in 0.18. Before a 0.18 apply there are no gate outputs, and an unset key keeps
+# 0.17's meaning, off. A new setup defaults to SmithDB on.
+_ex_smithdb="true"; _ex_smithdb_ingestion="false"; _ex_smithdb_migration="false"; _ex_smithdb_query="false"
+if [[ "$UPDATE_MODE" == "true" ]]; then
+  _ex_smithdb=$(_read_applied_flag "enable_smithdb" false)
+  _ex_smithdb_ingestion=$(_read_applied_flag "smithdb_ingestion_enabled" false)
+  _ex_smithdb_migration=$(_read_applied_flag "smithdb_migration_enabled" false)
+  _ex_smithdb_query=$(_read_applied_flag "smithdb_query_enabled" false)
+fi
 ENABLE_SMITHDB="false"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
 SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
@@ -684,7 +691,7 @@ fi
 
 echo ""
 printf "  ${DIM}SmithDB is LangChain's purpose-built trace database for LangSmith.${RESET}\n"
-printf "  ${DIM}SmithDB and ingestion are enabled by default. SmithDB adds:${RESET}\n"
+printf "  ${DIM}SmithDB is enabled by default. SmithDB adds:${RESET}\n"
 printf "  ${DIM}  - A dedicated RDS PostgreSQL metastore${RESET}\n"
 printf "  ${DIM}  - A dedicated S3 bucket for object storage${RESET}\n"
 printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes service account${RESET}\n"
@@ -695,14 +702,22 @@ printf "  ${DIM}    EBS volumes, each configured with 7,000 IOPS and 1,000 MiB/s
 printf "  ${DIM}    of throughput${RESET}\n"
 printf "  ${DIM}The SmithDB nodes default to m6a.4xlarge, which fits the Small tier. Medium needs${RESET}\n"
 printf "  ${DIM}m6a.8xlarge and Large needs m6a.16xlarge (smithdb_node_instance_type).${RESET}\n"
-printf "  ${DIM}Migration and query cutover remain disabled initially.${RESET}\n"
+printf "  ${DIM}A new install writes to and queries SmithDB from the start. An existing${RESET}\n"
+printf "  ${DIM}install that turns SmithDB on starts with ingestion, migration, and query${RESET}\n"
+printf "  ${DIM}off, because its traces are in ClickHouse; ../SMITHDB.md stages them.${RESET}\n"
 echo ""
 if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
   "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SMITHDB="true"
-  SMITHDB_INGESTION="$(_existing smithdb_ingestion_enabled "$_smithdb_default")"
-  SMITHDB_MIGRATION="$(_existing smithdb_migration_enabled false)"
-  SMITHDB_QUERY="$(_existing smithdb_query_enabled false)"
+  if [[ "$UPDATE_MODE" == "true" ]]; then
+    # Keep an existing install's gates: turning query on before its ClickHouse
+    # history is migrated would hide that history from the UI.
+    SMITHDB_INGESTION="$_ex_smithdb_ingestion"
+    SMITHDB_MIGRATION="$_ex_smithdb_migration"
+    SMITHDB_QUERY="$_ex_smithdb_query"
+  else
+    SMITHDB_INGESTION="true"; SMITHDB_QUERY="true"
+  fi
 fi
 if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" != "true" ]]; then
   echo ""

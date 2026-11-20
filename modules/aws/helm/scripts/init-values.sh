@@ -64,23 +64,20 @@ _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 # is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
 # Envoy still deploys it. Reading the applied state keeps this script in agreement with
 # what Terraform actually built.
-_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
-_enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
-_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
+_enable_envoy_gateway=$(_read_applied_flag "enable_envoy_gateway" false)
+_enable_istio_gateway=$(_read_applied_flag "enable_istio_gateway" false)
+_enable_nginx_ingress=$(_read_applied_flag "enable_nginx_ingress" false)
 
-_enable_smithdb=false
-_tfvar_is_true "enable_smithdb" && _enable_smithdb=true
-_smithdb_ingestion_enabled=false
-_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
-_smithdb_migration_enabled=false
-_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
-_smithdb_query_enabled=false
-_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+# The defaults match variables.tf, for a run before the first apply.
+_enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
+_smithdb_ingestion_enabled=$(_read_applied_flag "smithdb_ingestion_enabled" true)
+_smithdb_migration_enabled=$(_read_applied_flag "smithdb_migration_enabled" false)
+_smithdb_query_enabled=$(_read_applied_flag "smithdb_query_enabled" true)
 _smithdb_metastore_use_ssl=$(_parse_tfvar "smithdb_metastore_use_ssl") || _smithdb_metastore_use_ssl="true"
 
-if [[ "$_enable_smithdb" != "true" && ( "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
-  echo "ERROR: SmithDB integration gates require enable_smithdb = true." >&2
-  exit 1
+# The gates default to true and count only with SmithDB on (as in outputs.tf).
+if [[ "$_enable_smithdb" != "true" ]]; then
+  _smithdb_ingestion_enabled=false; _smithdb_migration_enabled=false; _smithdb_query_enabled=false
 fi
 if [[ "$_smithdb_ingestion_enabled" != "true" && ( "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
   echo "ERROR: SmithDB migration/query require smithdb_ingestion_enabled = true." >&2

@@ -307,7 +307,7 @@ for sizing in dev production-large; do
   has_line "SmithDB enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
   has_line "ingestion enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
   has_line "migration remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_migration_enabled             = false'
-  has_line "query cutover remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_query_enabled                 = false'
+  has_line "a new setup serves reads from SmithDB for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_query_enabled                 = true'
 done
 
 echo "8. SmithDB can be turned on and off in the wizard"

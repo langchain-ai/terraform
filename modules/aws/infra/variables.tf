@@ -1024,14 +1024,14 @@ variable "langsmith_polly_encryption_key" {
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB metastore, S3 bucket, IRSA role, managed node group, and EBS cache storage."
-  default     = false
+  description = "Provision the SmithDB metastore, S3 bucket, IRSA role, managed node group, and EBS cache storage. On by default: SmithDB is part of every install from 0.18. An install upgraded from 0.17 without SmithDB must set this to false, or follow SMITHDB.md, before it applies."
+  default     = true
 }
 
 variable "smithdb_ingestion_enabled" {
   type        = bool
-  description = "Route new LangSmith writes to SmithDB after service validation."
-  default     = false
+  description = "Write new LangSmith runs to SmithDB (and to ClickHouse too while ClickHouse is on). On by default for a new install."
+  default     = true
 }
 
 variable "smithdb_migration_enabled" {
@@ -1042,8 +1042,8 @@ variable "smithdb_migration_enabled" {
 
 variable "smithdb_query_enabled" {
   type        = bool
-  description = "Serve LangSmith queries from SmithDB after ingestion and migration validation."
-  default     = false
+  description = "Serve LangSmith queries from SmithDB. On by default for a new install, which has no history to migrate. An install with traces in ClickHouse keeps this false until they are migrated (SMITHDB.md)."
+  default     = true
 }
 
 variable "langsmith_release_name" {

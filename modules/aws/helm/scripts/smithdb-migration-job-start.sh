@@ -54,7 +54,7 @@ if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
   fail "name_prefix, environment, and region must be set in terraform.tfvars"
   exit 1
 fi
-if ! _tfvar_is_true "enable_smithdb" || ! _tfvar_is_true "smithdb_ingestion_enabled"; then
+if [[ "$(_read_applied_flag "enable_smithdb" true)" != "true" || "$(_read_applied_flag "smithdb_ingestion_enabled" true)" != "true" ]]; then
   fail "The migration needs enable_smithdb = true and smithdb_ingestion_enabled = true, applied and deployed first"
   exit 1
 fi
