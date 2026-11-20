@@ -369,7 +369,6 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
-_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
@@ -377,7 +376,7 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
-_tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
+_enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
 
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
 if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
@@ -416,9 +415,9 @@ fi
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
 # hostname resolution below to the Ingress status instead of the Terraform ALB.
-_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
-_enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
-_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
+_enable_envoy_gateway=$(_read_applied_flag "enable_envoy_gateway" false)
+_enable_istio_gateway=$(_read_applied_flag "enable_istio_gateway" false)
+_enable_nginx_ingress=$(_read_applied_flag "enable_nginx_ingress" false)
 
 # Classic ALB Ingress mode = none of the gateway/nginx routing modes are enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB, so the

@@ -393,20 +393,19 @@ run "sandbox_host_nested_virt_true_rejects_bare_metal" {
   ]
 }
 
-run "enable_smithdb_adds_only_smithdb" {
+# SmithDB is part of every install from 0.18: a default install plans it, on its
+# own node group with its EBS cache class and no Karpenter pools, writing and
+# serving reads, with no historical migration.
+run "default_install_smithdb_state" {
   command = plan
 
-  variables {
-    enable_smithdb = true
-  }
-
   assert {
-    condition     = length(module.smithdb) == 1
-    error_message = "enable_smithdb = true did not plan SmithDB"
+    condition     = length(module.smithdb) == 1 && output.enable_smithdb
+    error_message = "a default install did not plan SmithDB"
   }
   assert {
     condition     = length(module.bastion) == 0
-    error_message = "enable_smithdb = true also planned the bastion"
+    error_message = "a default install with SmithDB also planned the bastion"
   }
   assert {
     condition     = length(kubernetes_storage_class_v1.smithdb_cache) == 1 && module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2
@@ -415,6 +414,28 @@ run "enable_smithdb_adds_only_smithdb" {
   assert {
     condition     = length(kubectl_manifest.smithdb_nodepool_instance_store) == 0 && length(kubectl_manifest.smithdb_nodepool_compute) == 0
     error_message = "new SmithDB installations must not provision Karpenter pools"
+  }
+  assert {
+    condition     = output.smithdb_ingestion_enabled && output.smithdb_query_enabled && !output.smithdb_migration_enabled
+    error_message = "a default install must have SmithDB ingestion and query on and migration off"
+  }
+}
+
+# An install upgraded from 0.17 without SmithDB opts out with one variable.
+run "enable_smithdb_false_opts_out" {
+  command = plan
+
+  variables {
+    enable_smithdb = false
+  }
+
+  assert {
+    condition     = length(module.smithdb) == 0 && !contains(keys(module.eks.eks_managed_node_group_inputs), "smithdb") && length(kubernetes_storage_class_v1.smithdb_cache) == 0
+    error_message = "enable_smithdb = false still planned SmithDB, its node group or its cache class"
+  }
+  assert {
+    condition     = !output.smithdb_ingestion_enabled && !output.smithdb_query_enabled && !output.smithdb_migration_enabled
+    error_message = "enable_smithdb = false must report every SmithDB gate off"
   }
 }
 

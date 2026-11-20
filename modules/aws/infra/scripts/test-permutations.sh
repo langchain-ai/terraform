@@ -97,7 +97,7 @@ if [[ "$DRY_RUN" != "true" && "$SKIP_DESTROY" != "true" ]]; then
     exit 1
   fi
 
-  _smithdb_enabled=$(_parse_tfvar "enable_smithdb") || _smithdb_enabled="false"
+  _smithdb_enabled=$(_parse_tfvar "enable_smithdb") || _smithdb_enabled="true"
   _smithdb_source=$(_parse_tfvar "smithdb_metastore_source") || _smithdb_source="create"
   _smithdb_skip_snapshot=$(_parse_tfvar "smithdb_metastore_skip_final_snapshot") || _smithdb_skip_snapshot="false"
   if [[ "$_smithdb_enabled" == "true" && "$_smithdb_source" == "create" && "$_smithdb_skip_snapshot" != "true" ]]; then
