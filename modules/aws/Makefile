@@ -16,7 +16,7 @@
 .PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
         init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end sso uninstall clean deploy-all \
-        test-e2e test-permutations test-parallel \
+        test-e2e test-permutations test-parallel test-custom-ca \
         quickdeploy quickdeploy-auto
 
 INFRA_DIR := infra
@@ -58,6 +58,9 @@ quickstart: ## Interactive setup wizard — generates terraform.tfvars
 
 test-quickstart: ## Test QuickStart Route 53 choices and update-mode defaults (no AWS calls)
 	$(INFRA_DIR)/scripts/test-quickstart-dns.sh
+
+test-custom-ca: ## Unit-test the custom CA values block and the deploy.sh Secret check (no AWS calls)
+	$(INFRA_DIR)/scripts/test-custom-ca.sh
 
 # ── Pass 1: Infrastructure ────────────────────────────────────────────────────
 

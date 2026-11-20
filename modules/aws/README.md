@@ -513,6 +513,28 @@ Traffic flow:
 Client → NLB:443 (ACM TLS termination) → Envoy proxy:80 → HTTPRoute → langsmith-frontend:80
 ```
 
+### Custom CA bundle (private CA)
+
+If LangSmith's pods call anything that a private CA signed, such as an OIDC provider behind an internal CA, they need the CA bundle. Browsers trust your CA through your organization's devices; the pods do not. This is separate from TLS on LangSmith's own address.
+
+Give the pods the bundle (root and intermediates, PEM) as a Secret, and name it in `terraform.tfvars`:
+
+```hcl
+langsmith_custom_ca_secret_name = "langsmith-ca"   # the key defaults to ca.crt (langsmith_custom_ca_secret_key)
+```
+
+```bash
+kubectl -n langsmith create secret generic langsmith-ca --from-file=ca.crt=ca-bundle.pem
+make init-values
+make deploy
+```
+
+`make init-values` sets the chart's `config.customCa` (`secretName` and `secretKey`) from it, and `make deploy` checks that the Secret exists and holds the key before Helm runs. It stops with the command above if not. With `langsmith_custom_ca_secret_name` unset, nothing changes.
+
+- **Which pods get it:** the chart mounts the bundle and sets `SSL_CERT_FILE` in backend, platform-backend, host-backend, queue, ingest-queue, listener and playground; in the Insights, Polly and Fleet workloads, agent-gateway, presidio-analyzer and the sandbox host when those are enabled; and in the migration and bootstrap Jobs.
+- **Which pods do not:** the frontend, the operator, and the agent deployments the operator creates. If those must trust the CA, they need wiring this module does not yet do.
+- **It replaces the default trust store** for those pods, so include a public CA as well if they also reach public endpoints, such as Beacon for an online license.
+
 ### Dataplane RBAC
 
 When running the `langgraph-dataplane` chart in a separate namespace (e.g. `langsmith-agents`), apply the RBAC manifest once per dataplane namespace to allow `langsmith-host-backend` to read pods and logs:
@@ -1122,6 +1144,8 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `acm_certificate_arn` | `""` | when acm | ACM certificate ARN |
 | `letsencrypt_email` | `""` | when letsencrypt | Email for Let's Encrypt |
 | `langsmith_domain` | `""` | no | Custom hostname; activates managed DNS/ACM when no certificate ARN is supplied |
+| `langsmith_custom_ca_secret_name` | `""` | no | A Secret in the LangSmith namespace holding a CA bundle, for endpoints a private CA signed (the chart's `config.customCa`). See [Custom CA bundle](#custom-ca-bundle-private-ca) |
+| `langsmith_custom_ca_secret_key` | `ca.crt` | no | The key in that Secret that holds the PEM bundle |
 | `dns_create_zone` | `true` | no | Create a dedicated public Route 53 zone exactly matching `langsmith_domain` |
 | `dns_existing_zone_id` | `""` | when reusing DNS | Existing public parent or same-name Route 53 zone ID |
 | `dns_include_wildcard_san` | `false` | no | Add `*.langsmith_domain` to the managed ACM certificate |

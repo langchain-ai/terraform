@@ -15,6 +15,8 @@
 #   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
 #   _ssm_exists / _ssm_put    — Check or write an SSM parameter in $_region
 #   _confirm <prompt>         — Yes/no prompt that defaults to no
+#   _custom_ca_values_block <secret> <key>        — The config.customCa values block, or nothing
+#   _custom_ca_secret_check <ns> <secret> <key>   — deploy.sh check that the CA Secret exists
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -173,3 +175,33 @@ skip()  { printf "  \033[0;90m○${_RESET}  %s\n" "$1"; }
 info()  { printf "  \033[0;36mℹ${_RESET}  %s\n" "$1"; }
 header(){ printf "\n\033[1m── %s ──${_RESET}\n" "$1"; }
 action(){ printf "  \033[1;33m→${_RESET}  %s\n" "$1"; }
+
+# ── Custom CA bundle (the chart's config.customCa) ────────────────────────────
+
+# _custom_ca_values_block <secret> <key>
+# The config.customCa block that init-values.sh writes under `config:`, for endpoints
+# a private CA signed. Prints nothing when no Secret is set. It starts with a newline,
+# so the caller appends it to the previous line of the values heredoc.
+_custom_ca_values_block() {
+  local _secret="${1:-}" _key="${2:-ca.crt}"
+  [[ -n "$_secret" ]] || return 0
+  printf '\n  customCa:\n    secretName: "%s"\n    secretKey: "%s"' "$_secret" "$_key"
+}
+
+# _custom_ca_secret_check <namespace> <secret> <key>
+# deploy.sh preflight: the Secret exists in the namespace and has the key. Prints how
+# to fix it and returns 1 if not. Does nothing when <secret> is empty.
+_custom_ca_secret_check() {
+  local _ns="$1" _secret="${2:-}" _key="${3:-ca.crt}" _keys
+  [[ -n "$_secret" ]] || return 0
+  _keys=$(kubectl get secret "$_secret" -n "$_ns" -o go-template='{{range $k, $v := .data}}{{$k}} {{end}}' 2>/dev/null) || _keys=""
+  if [[ -z "$_keys" ]]; then
+    fail "langsmith_custom_ca_secret_name = \"${_secret}\" but that Secret is missing in namespace ${_ns}. Create it from your root and intermediate certificates:"
+    echo "      kubectl -n ${_ns} create secret generic ${_secret} --from-file=${_key}=ca-bundle.pem"
+    return 1
+  elif [[ " ${_keys} " != *" ${_key} "* ]]; then
+    fail "Secret ${_secret} has no key ${_key} (it has: ${_keys% }). Set langsmith_custom_ca_secret_key, or re-create the Secret."
+    return 1
+  fi
+  pass "CA bundle ${_secret}/${_key} found in ${_ns}"
+}
