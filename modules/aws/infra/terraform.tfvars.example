@@ -34,23 +34,14 @@
 #
 # Before filling this out, decide which tier fits your needs:
 #
-#   PostgreSQL is always RDS from 0.18: SmithDB needs it outside the cluster.
+#   PostgreSQL and Redis are always RDS and ElastiCache from 0.18: SmithDB
+#   and LangSmith need them outside the cluster. ClickHouse is the one choice.
 #
-#   Tier 1 — Internal Redis and ClickHouse (simplest, not recommended for production)
-#     redis_source       = "in-cluster"
-#     clickhouse_source  = "in-cluster"
-#     → Redis and ClickHouse run as pods inside EKS. No ElastiCache.
-#     → Good for: quick demos, dev/test environments.
-#
-#   Tier 2 — External Redis, internal ClickHouse (recommended)
-#     redis_source       = "external"    ← ElastiCache cluster
+#   Internal ClickHouse (recommended)
 #     clickhouse_source  = "in-cluster"  ← pod in EKS
-#     → Best balance of reliability and simplicity. RDS handles backups,
-#       failover, and scaling. ElastiCache provides a managed Redis.
 #     → Good for: production deployments.
 #
-#   Tier 3 — All external (fully managed)
-#     redis_source       = "external"
+#   External ClickHouse (fully managed)
 #     clickhouse_source  = "external"
 #     → Requires a ClickHouse Cloud subscription or self-managed ClickHouse.
 #       Connection details are configured in Helm values, not here.
@@ -296,17 +287,11 @@ postgres_skip_final_snapshot = false
 #------------------------------------------------------------------------------
 # REDIS (ElastiCache)
 #------------------------------------------------------------------------------
-# Controls where Redis runs. Redis is used for caching and as a message broker
-# for LangSmith's async task processing.
-#
-#   "external"   — (recommended) Provisions an ElastiCache Redis cluster in a
-#                  private subnet. Managed failover, encryption in transit.
-#
-#   "in-cluster" — Redis runs as a pod inside EKS. No ElastiCache is created.
-#                  Skip the rest of this section if using in-cluster.
-redis_source = "external"
-
-# --- The settings below only apply when redis_source = "external" ---
+# Redis is used for caching and as a message broker for LangSmith's async task
+# processing. Terraform provisions ElastiCache in OSS mode (not cluster mode) in
+# a private subnet, with encryption in transit. OSS mode gives DB indexes 0-15:
+# LangSmith uses DB 0, and Fleet, Chat and Insights on external storage use 1-3.
+# In-cluster Redis was removed in 0.18.
 
 # Instance size.
 # Full specs: https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/CacheNodes.SupportedTypes.html

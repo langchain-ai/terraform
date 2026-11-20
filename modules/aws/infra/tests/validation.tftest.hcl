@@ -216,6 +216,16 @@ run "postgres_source_rejects_in_cluster" {
   expect_failures = [var.postgres_source]
 }
 
+run "redis_source_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    redis_source = "in-cluster"
+  }
+
+  expect_failures = [var.redis_source]
+}
+
 # RDS rejects these characters in a master password, and the ones that survive
 # RDS still have to travel through a connection URL.
 run "postgres_password_rejects_a_reserved_character" {
