@@ -10,7 +10,7 @@
 #
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
-#   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
+#   _read_applied_flag <key> <default> — Resolve an applied boolean flag from Terraform outputs
 #   _use_cluster_kubeconfig <cluster> <region> — Export KUBECONFIG for one cluster
 #   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
 #   _ssm_exists / _ssm_put    — Check or write an SSM parameter in $_region
@@ -96,19 +96,20 @@ _confirm() {
   [[ "$_answer" =~ ^[Yy] ]]
 }
 
-# Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway /
-# enable_nginx_ingress) for post-apply scripts.
+# Resolve a boolean flag as applied, for post-apply scripts: the gateway
+# controllers (enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress)
+# and the SmithDB gates.
 #
-# enable_envoy_gateway is derived in Terraform — unset means "on unless Istio or
-# NGINX was chosen" — so terraform.tfvars text alone cannot tell you which mode was
-# applied. Read the Terraform output instead, and fall back to tfvars only when no
+# Neither is readable from terraform.tfvars text alone. enable_envoy_gateway is
+# derived in Terraform (unset means "on unless Istio or NGINX was chosen"), and a
+# SmithDB gate left out of tfvars takes a variable default of true. Read the
+# Terraform output instead; fall back to tfvars, then to <default>, only when no
 # state exists yet (pre-apply callers such as preflight).
-_read_gateway_flag() {
-  local key="$1" val
+_read_applied_flag() {
+  local key="$1" default="$2" val
   val=$(terraform -chdir="$INFRA_DIR" output -raw "$key" 2>/dev/null) || val=""
   if [[ "$val" != "true" && "$val" != "false" ]]; then
-    val=false
-    _tfvar_is_true "$key" && val=true
+    val=$(_parse_tfvar "$key") || val="$default"
   fi
   echo "$val"
 }

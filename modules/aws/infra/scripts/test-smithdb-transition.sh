@@ -217,6 +217,7 @@ echo "terraform $*" >> "$TEST_DIR/events"
 case "$2" in
   show) cat "$TEST_DIR/plan.json" ;;
   plan|apply) : ;;
+  state) : ;;  # upgrade-guard.sh: an empty state list passes
   *) exit 2 ;;
 esac
 MOCK
