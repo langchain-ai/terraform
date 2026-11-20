@@ -210,14 +210,17 @@ variable "eks_managed_node_groups" {
 #------------------------------------------------------------------------------
 # PostgreSQL (RDS) Configuration
 #------------------------------------------------------------------------------
+# Only "external" since 0.18: SmithDB, part of every install, needs PostgreSQL
+# that outlives the cluster. The variable stays so a 0.17 tfvars file that still
+# says in-cluster fails at plan instead of silently getting a new RDS instance.
 variable "postgres_source" {
   type        = string
-  description = "PostgreSQL deployment type: 'external' (default, RDS with private access) or 'in-cluster' (deployed via Helm)"
+  description = "PostgreSQL deployment type. Only 'external' (RDS with private access) is supported from 0.18."
   default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.postgres_source)
-    error_message = "postgres_source must be one of: external, in-cluster."
+    condition     = var.postgres_source == "external"
+    error_message = "postgres_source = \"in-cluster\" was removed in 0.18: LangSmith needs an external PostgreSQL (RDS, the default). Remove the line from terraform.tfvars. To move an in-cluster database to RDS, see https://docs.langchain.com/langsmith/self-host-external-postgres."
   }
 }
 

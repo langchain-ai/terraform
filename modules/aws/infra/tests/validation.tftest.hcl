@@ -204,6 +204,18 @@ run "sizes_and_counts_reject_a_value_above_the_ceiling" {
   ]
 }
 
+# A 0.17 tfvars file that still runs PostgreSQL in the cluster must fail at plan,
+# not silently get a new RDS instance.
+run "postgres_source_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    postgres_source = "in-cluster"
+  }
+
+  expect_failures = [var.postgres_source]
+}
+
 # RDS rejects these characters in a master password, and the ones that survive
 # RDS still have to travel through a connection URL.
 run "postgres_password_rejects_a_reserved_character" {

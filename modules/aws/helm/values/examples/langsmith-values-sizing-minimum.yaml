@@ -266,16 +266,6 @@ smithdb:
 # ClickHouse is the one component that actually uses its resources.
 # Don't go below this or queries will time out.
 
-postgres:
-  statefulSet:
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "512Mi"
-      limits:
-        cpu: "500m"
-        memory: "1Gi"
-
 redis:
   statefulSet:
     resources:

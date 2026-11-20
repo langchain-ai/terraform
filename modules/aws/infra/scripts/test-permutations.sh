@@ -30,7 +30,7 @@
 #
 # Prerequisites (set in terraform.tfvars before running):
 #   - name_prefix, environment, region
-#   - postgres_source, redis_source (external or in-cluster)
+#   - redis_source (external or in-cluster)
 #   - For destructive external-RDS tests: postgres_skip_final_snapshot = true
 #   - For a managed SmithDB metastore: smithdb_metastore_skip_final_snapshot = true
 #   - For permutations 2-6: langsmith_domain (must be Route 53 delegated)
@@ -90,9 +90,8 @@ _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
 _hosted_zone=$(_parse_tfvar "cert_manager_hosted_zone_id") || _hosted_zone=""
 
 if [[ "$DRY_RUN" != "true" && "$SKIP_DESTROY" != "true" ]]; then
-  _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
   _postgres_skip_snapshot=$(_parse_tfvar "postgres_skip_final_snapshot") || _postgres_skip_snapshot="false"
-  if [[ "$_postgres_source" == "external" && "$_postgres_skip_snapshot" != "true" ]]; then
+  if [[ "$_postgres_skip_snapshot" != "true" ]]; then
     echo "ERROR: destructive permutation tests require postgres_skip_final_snapshot = true." >&2
     exit 1
   fi

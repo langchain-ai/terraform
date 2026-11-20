@@ -21,7 +21,7 @@
 # Prerequisites:
 #   - chart >= 0.15.0
 #   - Insights entitlement in your LangSmith license
-#   - postgres_source = "external" and redis_source = "external" in terraform.tfvars
+#   - redis_source = "external" in terraform.tfvars
 #   - An external ClickHouse reachable from the cluster (see clickhouse_source)
 #   - A 'langsmith_insights' database on RDS — created automatically by terraform apply
 #   - TF_VAR_langsmith_insights_encryption_key set (see infra/scripts/setup-env.sh)

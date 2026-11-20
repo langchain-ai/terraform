@@ -296,21 +296,11 @@ smithdb:
           memory: "256Mi"
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
-# These apply when using in-cluster postgres, redis, and clickhouse.
+# These apply when using in-cluster redis and clickhouse.
 # If you're pointing at managed services (RDS, ElastiCache, ClickHouse Cloud),
 # these blocks are ignored — the StatefulSets won't be created.
 #
 # Chart default for ClickHouse is 3.5 CPU / 12Gi — wildly oversized for dev.
-
-postgres:
-  statefulSet:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
 
 redis:
   statefulSet:
