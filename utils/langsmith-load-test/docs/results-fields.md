@@ -38,6 +38,15 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `write.duration_seconds` | number | seconds | wall time of the load |
 | `write.first_error` | string or null | - | the first error message, or null |
 | `write.mode` | string | - | open-loop (a rate) or closed-loop (users) |
+| `write.payload_shape` | object | - | how each run's bytes were shaped and sent, after any flag replaced the profile's |
+| `write.payload_shape.attachment_kib_per_run` | number | KiB | attachment bytes sent with every run; 0 sent none |
+| `write.payload_shape.batch_runs` | number | runs | the most runs the SDK sent in one request |
+| `write.payload_shape.content` | string | - | text (prose), json (a message list) or base64 (incompressible bytes) |
+| `write.payload_shape.fields_per_side` | number | count | fields the input and the output each split into, the size spread evenly |
+| `write.payload_shape.metadata_keys` | number | count | metadata keys a run carried beyond the test's own |
+| `write.payload_shape.project_skew` | number | exponent | Zipf exponent of that spread; 0 is even |
+| `write.payload_shape.projects` | number | count | projects the traces spread over, the first the busiest |
+| `write.payload_shape.send` | string | - | post_then_patch (a create, then an update) or post_once (a finished run in one request) |
 | `write.run_errors` | number | errors | runs the SDK reported an error for |
 | `write.runs_sent` | number | runs | runs in those traces |
 | `write.schedule_lag_seconds` | object | - | how late each open-loop start was |
@@ -115,4 +124,26 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `targets.trace_load_seconds_p99.target_seconds` | number | seconds | the target |
 | `server` | object | - | what the install said about itself |
 | `server.app_version` | null | - | the LangSmith release it serves (its /info version), the images' version, not the chart's; null when tracing was off or the read failed |
+| `metrics` | object | - | each of the plan's watch items the run read, keyed by its id (langsmith-sizing params watch.items; an autoscaler's is autoscaler-at-ceiling:<workload>): peak and end, or a mean, a share or a count during the run, with its unit; `langsmith-sizing compare` sets each against the plan's alarm level. Empty when the install was not read |
+| `cluster` | object | - | what the install itself did under the load, read through kubectl (--namespace) |
+| `cluster.coefficients` | object | - | each workload's CPU in the window, from its containers' cAdvisor CPU seconds |
+| `cluster.coefficients.<workload>` | object | - | one workload |
+| `cluster.coefficients.<workload>.cores_used` | number | cores | CPU cores it used on average, not requested |
+| `cluster.coefficients.<workload>.runs_per_core` | number | runs/s per core | runs sent a second over the cores it used; on the ingest path only, the figure sizing's ingest model rests on |
+| `cluster.kept_up` | object | - | whether a backlog was still climbing at the window's end |
+| `cluster.kept_up.compaction` | boolean | - | the same for pending compaction jobs |
+| `cluster.kept_up.ingestion_queue` | boolean | - | ingestion_queue.pending at the end no larger than the largest in the window's first half; null when not read |
+| `cluster.namespace` | string | - | the namespace read |
+| `cluster.read` | boolean | - | whether the install was read; false leaves every other field out but why |
+| `cluster.release` | string | - | the Helm release, the prefix of every workload's name |
+| `cluster.runs_per_second_sent` | number | runs/s | runs sent a second in the window, the numerator of every runs-per-core figure; null when none were |
+| `cluster.sample_seconds` | number | seconds | time between samples |
+| `cluster.samples` | number | samples | samples taken from the load's start until the stored count settled |
+| `cluster.smithdb_rows_flushed_per_second` | number | rows/s | rows SmithDB ingestion flushed a second in the window (ingest_flush_rows); null when not read |
+| `cluster.steady_samples` | number | samples | samples inside the window after the ramp, the only ones coefficients come from |
+| `cluster.unread` | list | list | what could not be read in some sample; a missing reading is unknown, never zero |
+| `cluster.why` | string | - | why it was not read |
+| `cluster.window` | object | - | the window after the ramp |
+| `cluster.window.from` | number | seconds | its start, Unix time |
+| `cluster.window.to` | number | seconds | its end, Unix time |
 | `passed` | boolean | - | every measured target met, nothing missing, and no run, feedback, upload, read or stored-count error |

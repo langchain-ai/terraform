@@ -1,6 +1,6 @@
 # LangSmith load test
 
-> The load test has not yet run against a live instance, so no plan has been checked end to end.
+> **Status:** current. How far any plan has been checked is in the [sizing README](../langsmith-sizing/README.md).
 
 Sends a self-hosted LangSmith instance the load a sizing plan was sized for, reads it back, and checks the
 two things a plan promises: how long a sent run takes to become readable, and whether every run sent is
@@ -11,28 +11,15 @@ load test, compare. That package writes the load profile this tool reads (payloa
 feedback, read rate and read mix, targets), so the load exists once, in its `params.yaml`. The load test
 needs neither `helm` nor a chart.
 
-## With make
-
-```bash
-make setup                 # once
-cp .env.example .env       # then set the endpoint, API key, project and LANGSMITH_TRACING=true
-make smoke                 # 10 traces in 30 s: confirm they appear in the project
-make run NAME=acme         # the load ../langsmith-sizing planned for acme; results saved beside its plan
-```
-
-Then in `../langsmith-sizing`, `make compare NAME=acme` judges the results against the plan. `make run`
-takes `PROFILE=<load-profile.json>` instead of `NAME=`, and `DURATION=`, `RAMP=`, `PEAK=1` and `ARGS=`.
-The run prints a header, a progress line every `--progress-seconds`, and the results as tables: what was
-sent and stored, each read class's latency, send-to-readable lag, and one verdict per target. The results
-record the LangSmith app version the install reports, so `compare` can say whether it is the one the plan
-was sized for. `make check` runs the gates CI runs.
-
 ## Set up
 
 You need Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13.4 or later, and
-an API key for the instance. `helm` and a chart pull are needed only by `langsmith-sizing`, not here. From this folder:
+an API key for the instance. `helm` and a chart pull are needed only by `langsmith-sizing`, not here; to
+read the install while the load runs (`--namespace`, below) you also need `kubectl` on your PATH with a
+context for the cluster. From this folder:
 
 ```bash
+make setup               # once
 cp .env.example .env     # then edit it
 ```
 
@@ -50,19 +37,19 @@ over the same names exported in your shell. When tracing is enabled the script p
 and workspace before it starts.
 
 Use a project that only this test writes to: project statistics and trace listings cover the whole
-project, and the heavy filter and the stored count filter on the test's id.
+project, and the heavy filter and the stored count filter on the test's id. With `--projects N` the test
+writes to `<LANGSMITH_PROJECT>-000` and on instead, creating each.
 
 ## Run it
 
-A small test first. It stops after 10 traces or 30 seconds; open the project and confirm the traces appear
+A small test first. `make smoke` sends 10 traces in 30 seconds; open the project and confirm they appear
 before you raise the load.
 
-```bash
-uv run load-test --users 1 --duration-seconds 30 --run-limit 10 --pause-seconds 1
-```
-
-Then verify a plan. From `../langsmith-sizing`, `make plan NAME=acme PRESET=production` saves a sizing
-with its `out/acme/load-profile.json`, and:
+Then verify a plan. From `../langsmith-sizing`, `make plan NAME=acme PRESET=production` saves a sizing with its
+`out/acme/load-profile.json`, and `make load NAME=acme` sends it with reads for 600 seconds after a 60 second
+ramp, saving `results.json` beside the plan; `make compare NAME=acme` judges it. Here, `make run NAME=acme`
+does the same, or `make run PROFILE=<load-profile.json>`; `DURATION=`, `RAMP=`, `PEAK=1` and `ARGS=` apply. The
+plain command:
 
 ```bash
 uv run load-test --profile ../langsmith-sizing/out/acme/load-profile.json --read \
@@ -70,8 +57,10 @@ uv run load-test --profile ../langsmith-sizing/out/acme/load-profile.json --read
 ```
 
 `--peak` sends the profile's peak rate instead of its average. `--traces-per-second 50` sends the model's
-default load at a rate you choose, with no profile. From `../langsmith-sizing`, `make load NAME=acme` runs the
-profile form and `make compare NAME=acme` reads the results against the plan.
+default load at a rate you choose, with no profile. The run prints a header, a progress line every
+`--progress-seconds`, and the results as tables: what was sent and stored, each read class's latency,
+send-to-readable lag, and one verdict per target. The results record the LangSmith app version the install
+reports, so `compare` can say whether it is the one the plan was sized for.
 
 The first `uv run` creates `.venv` here and installs the dependencies.
 
@@ -87,6 +76,106 @@ prose. Every run carries the test's unique id in its metadata.
 
 Feedback is `feedback_per_trace` writes a trace (default 0.5, and it can exceed one), spread evenly. It is
 sent from its own threads so a slow server does not slow the trace schedule, and drained after the load.
+
+### The payload's shape
+
+A run's size is not the only thing that moves what ingest costs a core, so the shape is a profile field
+(`write.payload`, defaults in `langsmith-sizing`'s params `load.payload_shape`) and each part has a flag
+that replaces it for one run:
+
+| Flag | Default | Why it can change the cost |
+|:--|:--|:--|
+| `--fields-per-side N` | 1 | Offload to the bucket is decided per field: ten 4 KiB fields stay inline where one 40 KiB field is offloaded. |
+| `--content text\|json\|base64` | text | Prose, a message list and encoded bytes compress differently in Redis and in storage. |
+| `--send post_then_patch\|post_once` | post_then_patch | A run created and then updated is two requests; a finished run is one. |
+| `--attachment-kib K` | the profile's (0) | Attachments go to the LangSmith bucket at the bytes sent; `langsmith-sizing --attachment-kib-per-run` sizes them. |
+| `--projects N` | 1 | SmithDB partitions by project: one busy project concentrates its runs on the same ingestion pods. |
+| `--project-skew S` | 1.0 | How unevenly traces spread over the projects (Zipf over rank; 0 is even). |
+| `--metadata-keys K` | 0 | SmithDB indexes metadata; every fifth key is a per-trace id, as a thread or user id is. |
+| `--batch-runs R` | 100 | The most runs the SDK sends a request; fewer runs a request is more requests and more object-store writes. |
+
+To learn what one of them costs, hold everything else and change one flag between two runs that read the
+install (below), with the same rate, duration and ramp:
+
+```bash
+uv run load-test --traces-per-second 200 --duration-seconds 900 --ramp-up-seconds 120 --namespace langsmith --results a.json
+uv run load-test --traces-per-second 200 --duration-seconds 900 --ramp-up-seconds 120 --namespace langsmith --results b.json --send post_once
+```
+
+Then set `cluster.coefficients.ingest-queue.runs_per_core` (and platform-backend's and SmithDB ingestion's)
+of `b.json` against `a.json`'s, after checking `cluster.kept_up` in both: a run whose backlog was still
+climbing measured a queue filling, not what the workers carry. `write.payload_shape` in each result says
+what was sent. To send a load shaped like LangChain's 200,000 runs/s test, add `--projects 200
+--metadata-keys 34` and a run size near its 130 KB average.
+
+## The install under the load
+
+With `--namespace` the test also reads the install while it runs, through `kubectl` alone, every
+`--sample-seconds` (default 15):
+
+- the queue depths the chart's autoscalers read (platform-backend `/metrics?format=json`, backend
+  `/metrics/queue/default`, SmithDB compaction `/metrics/jobs`);
+- every SmithDB pod's `/metrics`, the families the plan watches;
+- the age of the oldest queued task (platform-backend `/metrics`, `langsmith_asynq_queue_latency_seconds`);
+- Redis `INFO` (memory, evictions, connected clients) and Postgres's connections in use, when each runs
+  in the cluster (a managed one is read through its cloud's monitoring);
+- each autoscaler's replicas against its maximum, restarts and OOM kills;
+- each container's CPU and throttling from its node's cAdvisor;
+- at the end, the runs ingest-queue logged as skipped because their payload had expired in Redis.
+
+SmithDB's series keep their `status`, `level` and `job_kind` labels: a compaction backlog counts pending
+jobs, not ones in flight, and an ingestion backlog counts `level=l0` segments, since `l1` ones wait for a
+scheduled flush by design.
+
+The results gain two sections:
+
+- `metrics`: one reading per watch item of the plan, keyed as the plan names it (a peak and an end, or a
+  count, a mean or a share, with its unit). `langsmith-sizing compare` prints each with the side of the
+  plan's alarm level it reached; a watch item is `observed`, never pass or fail, because a backlog over an
+  autoscaler's target is what makes it scale. `make compare` saves them in `verdicts.json`.
+- `cluster`: what the install did in the window after the ramp, to the end of the load.
+  - `kept_up` is true when a backlog (the ingestion queue, pending compaction jobs) was no larger at the
+    window's end than its largest in the first half; false means it was still climbing; null, not read.
+  - `coefficients.<workload>.cores_used` is the CPU it used on average, from cAdvisor, not what it requested;
+    `runs_per_core` is the runs sent a second over those cores, on the ingest path only. Set ingest-queue's
+    against the field curve `langsmith-sizing` sizes from (params `ingest.runs_per_core_points`) and the
+    plan's `regime.measured.ingest_cores_by`: that is the figure the two ingest models disagree on.
+  - `smithdb_rows_flushed_per_second` is the rate SmithDB actually wrote, to set beside the rate sent.
+  - `unread` names what could not be read in some sample; a missing reading is unknown, never zero.
+
+Every sample is kept beside the results (`<results>.metrics.jsonl`). `uv run load-test-plot <results>.json
+--plan <sizing>/plan.json` (or `make plot`) writes `<results>.html` beside them, `--out` elsewhere: one chart
+a signal, the window after the ramp shaded, and with `--plan` each watch item's alarm level as a line.
+
+Read a run only once its backlogs settle: after an upgrade that rebuilds SmithDB's data, compaction runs
+behind for a while by design, and a coefficient read then measures the catch-up, not the load.
+
+The kubectl context needs these permissions; `kubectl auth can-i` checks each:
+
+```yaml
+# In the LangSmith namespace (a Role)
+- apiGroups: [""]
+  resources: [pods, services]
+  verbs: [get, list]
+- apiGroups: [""]
+  resources: [pods/proxy, services/proxy, pods/log]
+  verbs: [get]
+- apiGroups: [""]
+  resources: [pods/exec]                 # Redis INFO and Postgres's connection count, in-cluster stores only
+  verbs: [create]
+- apiGroups: [autoscaling]
+  resources: [horizontalpodautoscalers]
+  verbs: [get, list]
+# Cluster-wide (a ClusterRole): each node's cAdvisor
+- apiGroups: [""]
+  resources: [nodes/proxy]
+  verbs: [get]
+```
+
+```bash
+kubectl auth can-i get nodes/proxy                       # yes: CPU and throttling are read
+kubectl -n langsmith auth can-i create pods/exec        # yes: in-cluster Redis and Postgres are read
+```
 
 ## Rate mode and users mode
 
@@ -156,15 +245,18 @@ times. Every field, with its type, unit and meaning, is in [docs/results-fields.
 | Group | Options |
 | --- | --- |
 | load | `--profile`, `--traces-per-second`, `--peak`, `--users`, `--duration-seconds` (10), `--ramp-up-seconds` (0), `--run-limit`, `--max-in-flight` (256), `--pause-seconds` (0), `--simulated-delay-ms` (0), `--feedback-per-trace`, `--data-seed` |
+| payload shape | `--fields-per-side`, `--content`, `--send`, `--attachment-kib`, `--projects`, `--project-skew`, `--metadata-keys`, `--batch-runs` |
+| the install's own metrics | `--namespace`, `--release` (langsmith), `--kube-context`, `--sample-seconds` (15) |
 | reads | `--read`, `--reads-per-second`, `--read-min-age-seconds` (60) |
 | lag and loss | `--lag-sample` (0.05), `--lag-deadline-seconds` (120), `--lag-poll-seconds` (2), `--settle-seconds` (60) |
 | output | `--results`, `--json`, `--latency-limit-seconds`, `--progress-seconds` (10), `--feedback-drain-seconds` (60) |
 
 ## Limits
 
-The load test has not yet run against a live instance, so no plan has been checked end to end. One process
-generates about 70 traces a second; the stored count reads one project, so use a project only this test writes
-to. It sees what a client sees, so it reports no server metric.
+One process generates about 70 traces a second; the stored count reads the test's projects, so use projects
+only this test writes to. Without `--namespace` it sees what a client sees and reports no server metric;
+with it, a managed Redis or Postgres is still read through its cloud's monitoring, and the expired-run
+count reads every ingest-queue pod's logs once at the end, which is slow at hundreds of pods.
 
 ## Tests
 
@@ -173,7 +265,7 @@ uv run python -m unittest discover -s tests
 uvx ruff@0.17.3 check src tests
 ```
 
-Both are offline and need no instance. `make check` in the sizing folder runs them with the sizing gates.
+Both are offline and need no instance. `make check` here runs them, and `make check` in the sizing folder runs them with the sizing gates.
 
 ## Files
 
@@ -190,6 +282,8 @@ Every module under `src/loadtest/` is listed here; `tests/test_readme.py` fails 
 - `lag.py`: the send-to-readable lag.
 - `verify.py`: runs stored against runs sent.
 - `results.py`: the results document and target verdicts.
+- `cluster.py`: reads the install through kubectl while the load runs, and turns the samples into watch readings and cores used.
+- `plot.py`: draws a run's samples as one HTML page (`load-test-plot`).
 - `fields.py`: the unit and meaning of every results field; [docs/results-fields.md](docs/results-fields.md) is generated from it (`make reference` in `../langsmith-sizing`).
 - `payloads/`: payload sizes from the mix and the English-like text.
 

@@ -1,8 +1,8 @@
 # Reference
 
-The detail behind the [README](../README.md): every command and flag, how totals and node pools are
-counted, where each store runs, the module map, and what each output is for. Every field of every output,
-with its type, unit and meaning, is in [fields.md](fields.md), which `make reference` generates from real plans.
+Every command and flag, how totals and node pools are counted, where each store runs, what each output is
+for, and the warning ids. Every field of every output, with its type, unit and meaning, is in
+[fields.md](fields.md), which `make reference` generates from real plans.
 
 ## Commands
 
@@ -34,9 +34,9 @@ with [rich](https://github.com/Textualize/rich): plain text when piped or when `
 saved sizing's `--preset DIR/inputs.yaml`, or `--users` with a rate (`--traces-per-second` or
 `--traces-per-month`). `--chart` takes an exact version, a line (`0.18`, its newest) or `latest`, and defaults
 to a saved sizing's chart, else the newest release in the chart repository.
-`wizard` and `plan` start from `DIR/inputs.yaml` when it exists and no preset is given. Any flag replaces the preset's value (a traces
-flag replaces its average, and leaves the preset's peak where it was: overriding a preset's rate means
-giving its peak too, and a peak below the average is refused).
+`wizard` and `plan` start from `DIR/inputs.yaml` when it exists and no preset is given. Any flag replaces the
+preset's value. A traces flag replaces the average and leaves the preset's peak where it was, so overriding a
+preset's rate means giving its peak too; a peak below the average is refused.
 
 | Flag | Meaning |
 |:--|:--|
@@ -46,6 +46,7 @@ giving its peak too, and a peak below the average is refused).
 | `--runs-per-trace`, `--retention-days` | the shape of a trace and how long it is kept |
 | `--trace-store` | `smithdb`, `dual` or `dual-replicated`: SmithDB alone, or beside the deprecated ClickHouse during a migration |
 | `--survives-node-loss` / `--no-survives-node-loss` | serving pods keep at least two replicas |
+| `--requests-from-measured` / `--no-requests-from-measured` | pods ask what a lab run measured them to use, not the chart's requests; default the regime's (on in extra-lite) |
 | `--postgres`, `--redis`, `--smithdb-metastore`, `--clickhouse` | where each store runs: `external`, `statefulset` or `operator` |
 | `--object-store` | `external` (a bucket) or `in-cluster` |
 | `--datastores-on` | `app` (in-cluster stores share the application pool) or `dedicated` |
@@ -56,20 +57,41 @@ giving its peak too, and a peak below the average is refused).
 | `--gateway-streams` | LLM gateway: concurrent streams at the busiest time |
 | `--sandboxes`, `--sandbox-vcpu`, `--sandbox-memory-gib`, `--sandbox-node` | Sandboxes: how many run at once, each one's size, and the KVM node (one host a node) |
 | `--backfill-runs`, `--backfill-days` | ClickHouse history to copy into SmithDB, and the days to copy it in; both or neither |
+| `--attachment-kib-per-run` | attachment KiB a run carries on average (images, audio, files); sized into the LangSmith bucket, so it needs blob storage |
+
+Blob storage is required from chart 0.18 (the self-hosted changelog), so an `inputs.yaml` with
+`blob_storage: false` is refused on 0.18 and later, and with any attachments on every chart.
+
+### Chart versions
+
+Two versions are easy to confuse. The **chart version** is the Helm chart's own: what `helm upgrade --version`
+takes and what `--chart` names. The **app version** is the LangSmith release the chart deploys: its
+`appVersion`, the images' tag, and what a running install reports at `/api/info`. A chart pins one app
+version, but an install can override image tags, so the two can drift. The plan records both (`chart`,
+`app_version`); the load test reads the install's app version and `compare` sets it against the plan's.
+
+| `--chart` | Sizes on |
+|:--|:--|
+| unset, or `latest` | a saved sizing's own chart, else the newest release in the chart repository |
+| a line, `0.18` | the newest of that line: its newest release, else its newest release candidate |
+| exact, such as `0.17.60` | that version, without reading the repository's index |
+
+A saved sizing keeps its chart, so `make plan NAME=acme` sizes it again on the same one and `CHART=latest`
+moves it. The versions CI renders are in [`charts.yaml`](../charts.yaml). The index is read at most once a day.
 
 ### The sizing folder
 
-`make wizard NAME=x` and `make plan NAME=x` save `out/x/` (`OUT=` moves it; `NAME` defaults to `PRESET`):
-`inputs.yaml` (the answers, each with a note on where it came from, in the preset format plus `chart`),
-`plan.json`, `values.yaml`, `stores.json`, `load-profile.json` and `summary.md`. `make load NAME=x` adds
-`results.json` and `make compare NAME=x` adds `verdicts.json`. Each file is written whole and then moved
-into place, so a failed run never leaves half a plan for `compare` to read. `make reference` rewrites
-`docs/fields.md` and the load test's `docs/results-fields.md`.
+`make wizard NAME=x` and `make plan NAME=x` save `out/x/` (`OUT=` moves it; `NAME` defaults to `PRESET`); the
+files are listed in the [README](../README.md#the-sizing-folder). `make load` adds `results.json` (and with
+`NAMESPACE=`, `results.metrics.jsonl`, the install's readings over the run), `make compare` adds
+`verdicts.json` (one verdict a promise, the watch items with their readings), and `make plot` adds
+`results.html`. Each file is written whole and then moved into place, so a failed run never
+leaves half a plan for `compare` to read.
 
 `make` takes the common inputs as variables (`PRESET`, `USERS`, `TRACES_PER_SECOND`, `TRACES_PER_MONTH`,
-`PEAK_TRACES_PER_SECOND`, `RUNS_PER_TRACE`, `RETENTION_DAYS`, `CHART`) and any other flag as `ARGS`.
-`make check` runs every gate with one line each and its output in `out/.logs/<gate>.log`; `make lint`,
-`types`, `test`, `params` and `citations` run one with its output on the screen.
+`PEAK_TRACES_PER_SECOND`, `RUNS_PER_TRACE`, `RETENTION_DAYS`, `CHART`) and any other flag as `ARGS`;
+`make load` takes `NAMESPACE`, and its `ARGS` go to the load test. The load test's flags are in
+[its README](../../langsmith-load-test/README.md).
 
 ### What each command does
 
@@ -88,35 +110,33 @@ into place, so a failed run never leaves half a plan for `compare` to read. `mak
 
 ## Totals and node pools
 
-`plan["totals"]` and `plan["pools"]` say what the namespace asks for and how many nodes carry it. The
-shape follows the calculator's `compute()`, so the names match its result fields.
+`plan["totals"]` and `plan["pools"]` say what the namespace asks for and how many nodes carry it. There is one
+set of figures.
 
-`plan["totals"]` holds the namespace's requests before and after overhead, at the sized replicas and at the
-autoscalers' floors, `applied.{floor,sized,ceiling}` (requests, limits and volume GiB at each replica count) and
+`plan["totals"]` holds `floor`, `sized` and `ceiling` (requests, limits and volume GiB at the autoscalers'
+minimum, at the sized replicas and at their maximum), `overhead` (the factor nodes are counted with) and
 `hooks` (the chart's hook Jobs, and `peak`: the namespace at its `base` of ceiling plus the largest Job).
-`plan["pools"]` has `app`, `smithdb` and, with `--datastores-on dedicated`, `datastores`, each with the same sums
-at the floors and the sized replicas, the node shape counted in and where it came from, the largest pod and
-whether it fits, and nodes at each of `applied.{floor,sized,ceiling}`; the one-node regime adds `single_node`.
-Each field is in [fields.md](fields.md).
+`plan["pools"]` has `app`, `smithdb` and, with `--datastores-on dedicated`, `datastores`. Each pool holds
+`floor`, `sized` and `ceiling`, each with its `nodes` and sums, and `node_cpu`, `node_mem_gib`, `node_floor`
+and `node_from` (the node shape and where it came from), `largest_pod` with its size, whether it fits, and
+`pods`; the one-node regime adds `single_node`. Each field is in [fields.md](fields.md).
 
 Nodes are `max(ceil(cpu x overhead / node vCPU), ceil(mem x overhead / node GiB), floor)`; a pod fits a
-node only strictly below it. The default shapes are the calculator's reference shapes in `params.yaml`
-(application 8 vCPU / 32 GiB, SmithDB by tier 16 / 64, 32 / 128, 64 / 256, a floor of two nodes each).
-In-cluster stores share the application pool as the calculator counts them, or get their own with
-`--datastores-on dedicated`.
+node only strictly below it. The default shapes are in `params.yaml` (application 8 vCPU / 32 GiB, SmithDB
+by tier 16 / 64, 32 / 128, 64 / 256, a floor of two nodes each). In-cluster stores share the application pool,
+or get their own with `--datastores-on dedicated`.
 
-The calculator's names read the model's figures before a regime adjusts the replicas (under
-`regime_adjusted`); everything under `applied` is what the chart values do. Hook Jobs are read from the
-chart rendered with the plan's values: Helm runs them one at a time, so the peak is the ceiling plus the
-largest Job. The one-node regime also gets `pools.single_node`: whether everything plus that Job fits one
-node.
+Hook Jobs are read from the chart rendered with the plan's values: Helm runs them one at a time, so the peak
+is the ceiling plus the largest Job. The one-node regime also gets `pools.single_node`: whether everything
+plus that Job fits one node.
 
 ## Where each store runs
 
 Each store is placed: `postgres`, `redis`, `smithdb_metastore` and `clickhouse` (only while the trace
 store is dual) as `external`, `statefulset` or `operator`; `object_store` as `external` or `in-cluster`.
-`plan["stores"][name]` gains `placement` and `spec`, and `plan["dbs"]` lists the instances the cluster
-runs, under the calculator's ids (`ls-postgres`, `ls-redis`, `clickhouse`) and ours.
+`plan["stores"][name]` gains `placement` and `spec`. The pods the cluster runs for a store are named
+`postgres`, `redis`, `smithdb-metastore`, `object-storage`, `clickhouse` and `redis-sentinel`, and sit in
+`stores.<store>.spec` as `instances`, `per_instance` and `extra`.
 
 | Placement | Spec |
 |:--|:--|
@@ -136,47 +156,14 @@ runs / 5,000,000 / days in vCPUs, as migration pods at the chart's per-pod CPU a
 the pod's resources; turning migration on stays a rollout step. The pods run beside the serving pods until
 the backfill completes, so they are not in the totals: leave room for `smithdb.backfill.requests_total`.
 
-## The model, module by module
-
-```
-inputs.py      what a person says
-model/         pure functions, numbers in and numbers out
-  load         rates, load bands, the scale guide's grid and the blend between its corners
-  payload      the payload mix and the per-run curves (SmithDB, blob and Redis KB a run)
-  services     application replicas, ingest-queue CPUs and pods, platform-backend, KEDA
-  smithdb      the tier by peak runs a second and by reads, replicas, splits, metastore
-  stores       object storage, Redis memory and shards, Postgres connections, ClickHouse while dual
-  datastores   each store sized for where it runs
-  totals       the namespace's requests, limits and volumes, node counts per pool
-  regime       extra-lite, lite, standard, large or beyond-tested, by bands in params.yaml
-  scale        per workload: the recommended trigger, what the chart supports, the exact chart keys, the gap
-  configure    commonEnv, the dedicated SmithDB services, Redis noeviction, the Go CPU limit, per-operation memory limit
-  watch        what to watch, with a threshold only where a parameter, the chart or the plan gives one
-plan.py        size(inputs, chart, params, cited) -> the plan, with a provenance map
-deploy.py      store placements and specs, dbs, totals, pools
-values.py      the chart values overlay, with <placeholders> where the plan cannot know
-wizard.py      the questions and the sizing folder
-summary.py     a plan as tables, for the terminal and summary.md
-ui.py          the terminal layout every command draws through
-presets.py     presets/<name>.yaml -> inputs
-profile.py     the same inputs -> the load profile
-compare.py     a plan and a load test's results -> one verdict per promise
-profile_report.py  each preset's plan beside the modules' hand-written profiles
-units.py       the unit conversions and float tolerances: the only numbers the code spells out
-docs_gen.py    the docs' generated tables, from params.yaml and citations.yaml
-figures.py     the docs' figures in the LangChain brand, light and dark, from the same data
-```
-
-A parameter that overrides a chart setting names it (`chart_key`); `check-params --chart` and the tests
-fail when the chart already gives that value, so no number has two sources. A scalar parameter that
-names no chart setting says why in `chart_has_no_key`, or the same check fails.
-
 ## The load profile
 
 `load-profile` writes the load once, from `params.yaml`, so the plan and the load test share it: write
 rate (average and peak), runs a trace, payload mix and sizes, feedback per trace, read rate and mix, the
-SLO targets, and the provenance of each figure. The load test reads it with `--profile`; it needs neither
-`helm` nor a chart.
+SLO targets, the payload's shape (attachments, fields a side, content, how a run is sent, projects and
+their skew, metadata keys and runs a request, defaults in `load.payload_shape`), and the provenance of each
+figure. The load test reads it with `--profile`, and each shape flag of its own replaces one part for a
+run; it needs neither `helm` nor a chart.
 
 ## Schemas for tool authors
 
@@ -189,11 +176,11 @@ do not know. Values are the plan's own; a figure is `null` only where [fields.md
 
 - `plan.json`: the whole plan. Keep it: `compare` reads it. Its sections, in the order to read them: `inputs` and
   `rates` (what you gave and what it resolved to), `regime` (the load band and what it turns on), `workloads` and
-  `smithdb` (replicas, floors, ceilings, requests, limits), `stores` and `dbs` (each store's size, placement and
+  `smithdb` (replicas, floors, ceilings, requests, limits), `stores` (each store's size, placement and
   spec), `scale` (the recommended trigger, what the chart supports, what is applied, the chart ask), `configure`
   and `watch` (what to set and what to read), `warnings`, `totals` and `pools`, `values` (the overlay
   `values.yaml` is written from) and `provenance`.
-- `stores.json`: what to provision, `{"schema": 1, "chart", "stores", "dbs", "warnings"}`. Each store is
+- `stores.json`: what to provision, `{"schema": 1, "chart", "stores", "smithdb_cache_volume", "warnings"}`. Each store is
   `{placement, spec}`: for `external`, `spec.instance`; for `statefulset` and `operator`, `spec.instances`,
   `spec.per_instance` and `spec.extra`; an in-cluster object store also has `spec.buckets`. `warnings` are the
   plan's whose id starts with `redis`, `postgres`, `object-store` or `clickhouse`.
@@ -214,7 +201,7 @@ are the numbers its message cites; which keys each id carries is in [fields.md](
 | `redis-needs-cluster` | action | Redis needs more shards or memory than one node |
 | `redis-over-shard-cap` | action | more shards than the managed cap |
 | `beyond-published` | action | past the scale guide's highest configuration |
-| `beyond-tested` | action | past the load the payload figures were measured at |
+| `beyond-payload-tested` | action | past the 300 traces/s the payload figures were measured at (the `beyond-tested` regime is a different edge: a peak above 202,700 runs/s) |
 | `beyond-tiers` | action | past SmithDB's largest band |
 | `object-store-unmeasured` | action | an in-cluster object store past the measured load |
 | `pod-does-not-fit-node` | action | the largest pod of a pool is larger than its node |
@@ -226,6 +213,7 @@ are the numbers its message cites; which keys each id carries is in [fields.md](
 | `postgres-connections-at-scale` | action | past the tiers, the connections the pods hold and the max_connections to set, with PgBouncer |
 | `offload-throttled` | action | past the rate where offloaded payloads throttled the load test's object store, payloads still offloaded |
 | `ingestion-hot-project` | info | one busy project's runs land on the same SmithDB ingestion pods; larger-memory nodes, not more pods |
+| `scale-out-extrapolated` | info | past the tiers the plan rests on one synthetic load test: reads never measured (SmithDB query pods stay at the large tier), a run size far from its 128 KiB, a rate above the 114.6k it held for long, a chart line other than the 0.17.48 it ran |
 | `products-single-replica` | info | a product's Deployments run one replica on an install that must survive a node loss |
 | `chart-ask:<workload>` | info | the chart cannot express the recommended trigger; the message says what was applied instead |
 
@@ -234,8 +222,8 @@ are the numbers its message cites; which keys each id carries is in [fields.md](
 `provenance` maps a path to `{"kind": ..., "from": [...]}`. `kind` is `input`, `param`, `chart`, `docs` or
 `derived`; `from` lists sources as `input:<name>`, `param:<id>`, `chart:<values key>`, `docs:<citation id>`
 or `derived:<what>`. It is per section, not per number. The paths that carry it: `inputs.<name>` for each
-input; `rates`, `rates.bands`, `rates.beyond_published`, `rates.beyond_tested`, `rates.extrapolation`;
+input; `rates`, `rates.bands`, `rates.beyond_published`, `rates.beyond_payload_tested`, `rates.extrapolation`;
 `guide`, `payload`, `ingest`; `workloads.<name>`; `smithdb`, `smithdb.auto`, `smithdb.metastore`;
 `stores.object_storage`, `stores.redis`, `stores.postgres`, `stores.smithdb_metastore` and `stores.clickhouse`
-(while dual); `regime`, `scale`, `configure`, `watch`, `warnings`, `dbs`, `values`, `totals`, `pools`. A
+(while dual); `regime`, `scale`, `configure`, `watch`, `warnings`, `values`, `totals`, `pools`. A
 figure under a path inherits that path's sources; the individual numbers inside are not listed.

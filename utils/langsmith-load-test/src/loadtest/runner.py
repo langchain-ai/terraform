@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import datetime
 import math
+import random
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -16,7 +17,7 @@ from uuid import UUID, uuid4
 from langsmith import Client
 from langsmith.run_trees import RunTree
 from loadtest import results
-from loadtest.draw import share_due
+from loadtest.draw import Projects, share_due
 from loadtest.feedback import FeedbackSender
 from loadtest.lag import LagTracker
 from loadtest.payloads.generator import PayloadGenerator, RunPayload
@@ -27,6 +28,8 @@ from loadtest.stats import summarize
 from loadtest.verify import Stored, settle
 
 READ_BATCH_WINDOW = datetime.timedelta(minutes=1)
+HIGH_CARDINALITY_EVERY = 5
+LOW_CARDINALITY_VALUES = 8
 
 
 @dataclass
@@ -88,172 +91,229 @@ class LoadOutcome:
     read_mix: dict[str, Any] = field(default_factory=dict)
 
 
-def post_trace(client: Client, project_name: str, trace_id: UUID, number: int, test_id: str, payloads: list[RunPayload]) -> None:
-    """One root run with its children, each carrying its own text; every run carries the test's id."""
-    metadata = {"load_test": True, "load_test_id": test_id, "load_test_sequence": number}
+def trace_metadata(test_id: str, number: int, keys: int) -> dict[str, Any]:
+    """The test's own keys, then `keys` more as an application tags its runs: every fifth a per-trace id
+    (a thread, user or request id), the rest from a handful of values. SmithDB indexes metadata, and
+    Ben Nagengast's load test sent 34 keys a run, 5 of them per-trace ids."""
+    metadata: dict[str, Any] = {"load_test": True, "load_test_id": test_id, "load_test_sequence": number}
+    trace_id = str(uuid4())
+    for n in range(keys):
+        metadata[f"key_{n:02d}"] = trace_id if n % HIGH_CARDINALITY_EVERY == 0 else f"value-{(number + n) % LOW_CARDINALITY_VALUES}"
+    return metadata
+
+
+def post_trace(
+    client: Client, project_name: str, trace_id: UUID, number: int, test_id: str, payloads: list[RunPayload],
+    send: str = "post_then_patch", metadata_keys: int = 0,
+) -> None:
+    """One root run with its children, each carrying its own payload; every run carries the test's id.
+    post_then_patch creates each run and then updates it with its outputs, as a traced function does;
+    post_once sends each run finished, in one request, as a run logged after the fact is."""
+    metadata = trace_metadata(test_id, number, metadata_keys)
     root_payload = payloads[0]
     root = RunTree(
         name="load-test-trace", run_type="chain", id=trace_id, inputs=root_payload.inputs, project_name=project_name,
         ls_client=client, extra={"metadata": {**metadata, "load_test_payload_profile": root_payload.size_name}},
-        tags=["load-test", f"profile:{root_payload.size_name}"],
+        tags=["load-test", f"profile:{root_payload.size_name}"], attachments=root_payload.attachments,
     )
-    root.post()
+    once = send == "post_once"
+    if not once:
+        root.post()
     for position, payload in enumerate(payloads[1:], start=1):
-        child = root.create_child(name=f"step-{position}", run_type="llm" if position % 2 else "tool", inputs=payload.inputs)
+        child = root.create_child(name=f"step-{position}", run_type="llm" if position % 2 else "tool", inputs=payload.inputs, attachments=payload.attachments)
+        if once:
+            child.end(outputs=payload.outputs)
+            child.post()
+            continue
         child.post()
         child.end(outputs=payload.outputs)
         child.patch()
     root.end(outputs=root_payload.outputs)
-    root.patch()
+    if once:
+        root.post()
+    else:
+        root.patch()
+
+
+class _Run:
+    """One load test's shared state: the sending, reading and checking steps are its methods."""
+
+    def __init__(
+        self, settings: LoadSettings, profile: Profile, client: Client | None, projects: Projects,
+        on_progress: Callable[[int, int, float], None] | None,
+    ) -> None:
+        self.settings, self.profile, self.client, self.projects, self.on_progress = settings, profile, client, projects, on_progress
+        shape = profile.shape
+        self.generator = PayloadGenerator(
+            profile.mix, profile.sizes_kib, settings.data_seed,
+            fields_per_side=shape.fields_per_side, content=shape.content, attachment_kib=shape.attachment_kib_per_run,
+        )
+        self.counts = results.WriteCounts(
+            mode="open-loop" if settings.traces_per_second else "closed-loop", target_traces_per_second=settings.traces_per_second,
+        )
+        self.test_id = str(uuid4())
+        self.started_at = datetime.datetime.now(datetime.UTC)
+        self.total_seconds = settings.ramp_up_seconds + settings.duration_seconds
+        self.pool = TracePool(settings.read_min_age_seconds)
+        self.lag = LagTracker(settings.lag_deadline_seconds)
+        self.lag_sampled = self.lag_poll_errors = 0
+        self.pick_project = random.Random(settings.data_seed)
+        self.reader: Reader | None = None
+        self.feedback = FeedbackSender(client, profile.feedback_per_trace, self.counts) if client is not None else None
+        self.origin = self.deadline = 0.0
+
+    async def one_trace(self, number: int) -> None:
+        s, counts = self.settings, self.counts
+        run_count = max(1, share_due(self.profile.runs_per_trace, number))
+        try:
+            payloads = await asyncio.to_thread(lambda: [self.generator.next_run() for _ in range(run_count)])
+            await asyncio.sleep(s.simulated_delay_ms / 1000)
+            trace_id = uuid4()
+            at = self.projects.pick(self.pick_project)
+            sent_at = time.monotonic()
+            if self.client is not None:
+                shape = self.profile.shape
+                await asyncio.to_thread(post_trace, self.client, self.projects.names[at], trace_id, number, self.test_id, payloads, shape.send, shape.metadata_keys)
+            counts.send_latencies_seconds.append(time.monotonic() - sent_at)
+            counts.traces_sent += 1
+            # Starts on the ramp offer half the target on average; the rate a plan is judged on is
+            # the one held after it (schedule.start_offset fixes which starts those are).
+            if s.traces_per_second and number - 1 >= s.traces_per_second * s.ramp_up_seconds / 2:
+                counts.steady_traces_sent += 1
+            counts.runs_sent += run_count
+            self._track(trace_id, number, sent_at, at)
+        except Exception as error:  # noqa: BLE001 - record a failed trace and continue the load
+            counts.run_errors += 1
+            counts.first_error = counts.first_error or str(error)
+
+    def _track(self, trace_id: UUID, number: int, sent_at: float, at: int) -> None:
+        """What follows a sent trace: the read pool, the lag sample and its feedback."""
+        if self.client is None:
+            return
+        self.pool.add(str(trace_id), sent_at, datetime.datetime.now(datetime.UTC), str(self.projects.ids[at]))
+        if share_due(self.settings.lag_sample, number):
+            self.lag.add(str(trace_id), sent_at)
+            self.lag_sampled += 1
+        if self.feedback is not None:
+            self.feedback.send(trace_id, number, self.projects.ids[at])
+
+    async def run_user(self, user_number: int) -> None:
+        s, loop = self.settings, asyncio.get_running_loop()
+        await asyncio.sleep(s.ramp_up_seconds * user_number / s.users)
+        while loop.time() < self.deadline:
+            if s.run_limit is not None and self.counts.traces_started >= s.run_limit:
+                return
+            self.counts.traces_started += 1
+            await self.one_trace(self.counts.traces_started)
+            await asyncio.sleep(min(s.pause_seconds, max(0, self.deadline - loop.time())))
+
+    async def readable(self, ids: list[str]) -> set[str]:
+        assert self.client is not None
+        try:
+            page = await self.client.runs.query(
+                project_ids=self.projects.id_strings, ids=ids, min_start_time=self.started_at - READ_BATCH_WINDOW,
+                page_size=len(ids), selects=["ID"],
+            )
+        except Exception as error:  # noqa: BLE001 - a failed check is counted; the run stays pending until its deadline
+            self.lag_poll_errors += 1
+            self.counts.first_error = self.counts.first_error or f"lag check: {error}"
+            return set()
+        return {str(run.id) for run in page.items or []}
+
+    async def report_progress(self) -> None:
+        assert self.on_progress is not None
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(self.settings.progress_seconds)
+            self.on_progress(self.counts.traces_sent, self.counts.run_errors + self.counts.feedback_errors, loop.time() - self.origin)
+
+    def _loads(self) -> list[Any]:
+        s = self.settings
+        load: list[Any] = []
+        if s.traces_per_second:
+            load.append(open_loop(s.traces_per_second, s.ramp_up_seconds, self.total_seconds, self.one_trace, s.max_in_flight, s.run_limit))
+        else:
+            load.extend(self.run_user(user) for user in range(s.users))
+        if self.reader is not None and s.reads_per_second:
+            load.append(open_loop(s.reads_per_second, s.ramp_up_seconds, self.total_seconds, self.reader.read, s.max_in_flight))
+        return load
+
+    async def _settle(self, finished: asyncio.Event, poll_task: asyncio.Task[None] | None) -> Stored:
+        if self.feedback is not None:
+            await self.feedback.drain(self.settings.feedback_drain_seconds)
+        if self.client is None:
+            return Stored()
+        await asyncio.to_thread(self.client.flush)
+        finished.set()
+        if poll_task is not None:
+            await poll_task
+        return await settle(self.client, self.projects.ids, self.test_id, self.started_at - READ_BATCH_WINDOW, self.counts.runs_sent, self.settings.settle_seconds)
+
+    def _tasks(self, finished: asyncio.Event) -> tuple[asyncio.Task[None] | None, asyncio.Task[None] | None]:
+        s = self.settings
+        poll_task = None
+        if self.client is not None and s.lag_sample > 0:
+            poll_task = asyncio.create_task(self.lag.poll(self.readable, time.monotonic, s.lag_poll_seconds, finished))
+        progress_task = asyncio.create_task(self.report_progress()) if self.on_progress is not None and s.progress_seconds > 0 else None
+        return poll_task, progress_task
+
+    async def go(self) -> LoadOutcome:
+        s, loop = self.settings, asyncio.get_running_loop()
+        if self.client is not None:
+            client = self.client
+            # Touch the SDK's lazily fetched server info here: the first read would otherwise do it
+            # as a blocking call on the event loop.
+            await asyncio.to_thread(lambda: client.info)
+            if s.read:
+                self.reader = Reader(client, self.projects, self.test_id, self.started_at, self.profile.read_mix, self.profile.heavy_window_days, self.pool, s.data_seed)
+        self.origin = loop.time()
+        self.deadline = self.origin + self.total_seconds
+        finished = asyncio.Event()
+        poll_task, progress_task = self._tasks(finished)
+        read_dropped, read_lags = 0, []
+        try:
+            outcomes = await asyncio.gather(*self._loads())
+            self.counts.duration_seconds = loop.time() - self.origin
+            if s.traces_per_second:
+                write_loop = outcomes[0]
+                self.counts.traces_started, self.counts.dropped_starts, self.counts.schedule_lags_seconds = write_loop.started, write_loop.dropped, write_loop.lags_seconds
+            if self.reader is not None and s.reads_per_second:
+                read_dropped, read_lags = outcomes[-1].dropped, outcomes[-1].lags_seconds
+            stored = await self._settle(finished, poll_task)
+        finally:
+            await self._close(finished, (progress_task, poll_task))
+        return LoadOutcome(
+            self.test_id, self.started_at, datetime.datetime.now(datetime.UTC), self.counts, self.reader, read_dropped, read_lags,
+            self.lag, self.lag_poll_errors, self.lag_sampled, stored,
+        )
+
+    async def _close(self, finished: asyncio.Event, tasks: tuple[asyncio.Task[None] | None, ...]) -> None:
+        finished.set()
+        if self.feedback is not None:
+            self.feedback.close()
+        for task in tasks:
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
 
 
 async def run_load_test(
     settings: LoadSettings,
     profile: Profile,
     client: Client | None,
-    project_name: str,
-    project_id: UUID | None,
+    projects: Projects,
     on_progress: Callable[[int, int, float], None] | None = None,
 ) -> LoadOutcome:
-    generator = PayloadGenerator(profile.mix, profile.sizes_kib, settings.data_seed)
-    counts = results.WriteCounts(
-        mode="open-loop" if settings.traces_per_second else "closed-loop", target_traces_per_second=settings.traces_per_second,
-    )
-    loop = asyncio.get_running_loop()
-    test_id = str(uuid4())
-    started_at = datetime.datetime.now(datetime.UTC)
-    total_seconds = settings.ramp_up_seconds + settings.duration_seconds
-    pool = TracePool(settings.read_min_age_seconds)
-    lag = LagTracker(settings.lag_deadline_seconds)
-    lag_state = {"sampled": 0, "poll_errors": 0}
-    reader: Reader | None = None
-    if client is not None and project_id is not None:
-        # Touch the SDK's lazily fetched server info here: the first read would otherwise do it
-        # as a blocking call on the event loop.
-        await asyncio.to_thread(lambda: client.info)
-        if settings.read:
-            reader = Reader(
-                client, project_id, test_id, started_at, profile.read_mix, profile.heavy_window_days, pool, settings.data_seed,
-            )
-    feedback = FeedbackSender(client, project_id, profile.feedback_per_trace, counts) if client is not None and project_id is not None else None
-
-    async def one_trace(number: int) -> None:
-        run_count = max(1, share_due(profile.runs_per_trace, number))
-        try:
-            payloads = await asyncio.to_thread(lambda: [generator.next_run() for _ in range(run_count)])
-            await asyncio.sleep(settings.simulated_delay_ms / 1000)
-            trace_id = uuid4()
-            sent_at = time.monotonic()
-            if client is not None:
-                await asyncio.to_thread(post_trace, client, project_name, trace_id, number, test_id, payloads)
-            counts.send_latencies_seconds.append(time.monotonic() - sent_at)
-            counts.traces_sent += 1
-            # Starts on the ramp offer half the target on average; the rate a plan is judged on is
-            # the one held after it (schedule.start_offset fixes which starts those are).
-            if settings.traces_per_second and number - 1 >= settings.traces_per_second * settings.ramp_up_seconds / 2:
-                counts.steady_traces_sent += 1
-            counts.runs_sent += run_count
-            if client is not None:
-                pool.add(str(trace_id), sent_at, datetime.datetime.now(datetime.UTC))
-                if share_due(settings.lag_sample, number):
-                    lag.add(str(trace_id), sent_at)
-                    lag_state["sampled"] += 1
-                if feedback is not None:
-                    feedback.send(trace_id, number)
-        except Exception as error:  # noqa: BLE001 - record a failed trace and continue the load
-            counts.run_errors += 1
-            counts.first_error = counts.first_error or str(error)
-
-    async def run_user(user_number: int) -> None:
-        await asyncio.sleep(settings.ramp_up_seconds * user_number / settings.users)
-        while loop.time() < deadline:
-            if settings.run_limit is not None and counts.traces_started >= settings.run_limit:
-                return
-            counts.traces_started += 1
-            await one_trace(counts.traces_started)
-            await asyncio.sleep(min(settings.pause_seconds, max(0, deadline - loop.time())))
-
-    async def readable(ids: list[str]) -> set[str]:
-        assert client is not None
-        try:
-            page = await client.runs.query(
-                project_ids=[str(project_id)], ids=ids, min_start_time=started_at - READ_BATCH_WINDOW,
-                page_size=len(ids), selects=["ID"],
-            )
-        except Exception as error:  # noqa: BLE001 - a failed check is counted; the run stays pending until its deadline
-            lag_state["poll_errors"] += 1
-            counts.first_error = counts.first_error or f"lag check: {error}"
-            return set()
-        return {str(run.id) for run in page.items or []}
-
-    async def report_progress() -> None:
-        assert on_progress is not None
-        while True:
-            await asyncio.sleep(settings.progress_seconds)
-            on_progress(counts.traces_sent, counts.run_errors + counts.feedback_errors, loop.time() - origin)
-
-    origin = loop.time()
-    deadline = origin + total_seconds
-    finished = asyncio.Event()
-    poll_task = None
-    if client is not None and settings.lag_sample > 0:
-        poll_task = asyncio.create_task(lag.poll(readable, time.monotonic, settings.lag_poll_seconds, finished))
-    progress_task = None
-    if on_progress is not None and settings.progress_seconds > 0:
-        progress_task = asyncio.create_task(report_progress())
-    read_dropped = 0
-    read_lags: list[float] = []
-    try:
-        load: list[Any] = []
-        if settings.traces_per_second:
-            load.append(open_loop(
-                settings.traces_per_second, settings.ramp_up_seconds, total_seconds, one_trace,
-                settings.max_in_flight, settings.run_limit,
-            ))
-        else:
-            load.extend(run_user(user) for user in range(settings.users))
-        if reader is not None and settings.reads_per_second:
-            load.append(open_loop(
-                settings.reads_per_second, settings.ramp_up_seconds, total_seconds, reader.read, settings.max_in_flight,
-            ))
-        outcomes = await asyncio.gather(*load)
-        counts.duration_seconds = loop.time() - origin
-        if settings.traces_per_second:
-            write_loop = outcomes[0]
-            counts.traces_started = write_loop.started
-            counts.dropped_starts = write_loop.dropped
-            counts.schedule_lags_seconds = write_loop.lags_seconds
-        if reader is not None and settings.reads_per_second:
-            read_dropped = outcomes[-1].dropped
-            read_lags = outcomes[-1].lags_seconds
-        if feedback is not None:
-            await feedback.drain(settings.feedback_drain_seconds)
-        stored = Stored()
-        if client is not None and project_id is not None:
-            await asyncio.to_thread(client.flush)
-            finished.set()
-            if poll_task is not None:
-                await poll_task
-            stored = await settle(client, project_id, test_id, started_at - READ_BATCH_WINDOW, counts.runs_sent, settings.settle_seconds)
-    finally:
-        finished.set()
-        if feedback is not None:
-            feedback.close()
-        for task in (progress_task, poll_task):
-            if task is not None:
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
-    return LoadOutcome(
-        test_id, started_at, datetime.datetime.now(datetime.UTC), counts, reader, read_dropped, read_lags,
-        lag, lag_state["poll_errors"], lag_state["sampled"], stored,
-    )
+    return await _Run(settings, profile, client, projects, on_progress).go()
 
 
 def build_report(
     outcome: LoadOutcome, settings: LoadSettings, profile: Profile, project_name: str, tracing_enabled: bool,
     upload_errors: int, first_upload_error: str | None, app_version: str | None = None,
+    cluster: tuple[dict[str, Any], dict[str, Any]] = results.NOT_READ,
 ) -> dict[str, Any]:
+    """cluster is (metrics keyed by watch item id, the cluster section)."""
     write = outcome.write
     send = summarize(write.send_latencies_seconds)
     schedule = summarize(write.schedule_lags_seconds)
@@ -280,6 +340,7 @@ def build_report(
             "send_latency_seconds": {key: send[key] for key in ("p50", "p95", "p99", "max")},
             "schedule_lag_seconds": {key: schedule[key] for key in ("p50", "p95", "p99", "max")},
             "first_error": write.first_error or first_upload_error,
+            "payload_shape": dataclasses.asdict(profile.shape),
         },
         feedback={"per_trace": profile.feedback_per_trace, "sent": write.feedback_sent, "errors": write.feedback_errors},
         reads={
@@ -299,4 +360,5 @@ def build_report(
             "missing_runs": missing_runs, "error": stored.error,
         },
         targets=profile.targets, upload_errors=upload_errors, latency_limit_passed=limit_passed,
+        cluster=cluster,
     )

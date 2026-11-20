@@ -1,7 +1,8 @@
 """The docs' tables, generated from params.yaml and citations.yaml.
 
 A table typed by hand goes stale the day a parameter moves, and nothing says so. Each table here sits
-between `<!-- generated:NAME -->` markers in a doc; `python -m langsmith_sizing.docs_gen` rewrites them,
+between `<!-- generated:NAME -->` markers in a doc (the citations and parameters in docs/parameters.md, the
+rest beside the prose that reads them); `python -m langsmith_sizing.docs_gen` rewrites them,
 and a test fails a committed table that differs from what this writes. The figures are figures.py.
 """
 
@@ -198,7 +199,7 @@ def fill(text: str) -> str:
 
 
 def write() -> None:
-    for doc in [ROOT / "README.md", *sorted(DOCS.glob("*.md")), ROOT / "presets" / "README.md"]:
+    for doc in [ROOT / "README.md", ROOT / "CONTRIBUTING.md", *sorted(DOCS.glob("*.md")), ROOT / "presets" / "README.md"]:
         text = doc.read_text()
         if MARKER.search(text):
             doc.write_text(fill(text))

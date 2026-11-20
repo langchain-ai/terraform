@@ -1,13 +1,15 @@
 import unittest
 
-from loadtest.cli import build_parser, resolve
+from loadtest.cli import build_parser, cluster_options, resolve
 from loadtest.profile import from_document
 from loadtest.runner import LoadSettings
 from profiles import document as profile
 
 
 def parse(*argv: str) -> dict:
-    return vars(build_parser(LoadSettings()).parse_args(argv))
+    parsed = vars(build_parser(LoadSettings()).parse_args(argv))
+    cluster_options(parsed)
+    return parsed
 
 
 def arguments(*argv: str) -> dict:
@@ -56,3 +58,30 @@ class ResolveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectsTest(unittest.TestCase):
+    def test_one_project_keeps_its_name_and_many_are_numbered_busiest_first(self) -> None:
+        from types import SimpleNamespace
+        from uuid import uuid4
+
+        from loadtest import cli
+        from loadtest.profile import Shape
+
+        made: list[str] = []
+
+        def create_project(project_name: str, upsert: bool) -> SimpleNamespace:
+            made.append(project_name)
+            return SimpleNamespace(id=uuid4())
+
+        client = SimpleNamespace(create_project=create_project)
+        self.assertEqual(cli._projects(client, "load-test", Shape()).names, ("load-test",))  # type: ignore[arg-type]
+        many = cli._projects(client, "load-test", Shape(projects=3, project_skew=0.5))  # type: ignore[arg-type]
+        self.assertEqual((many.names, many.skew), (("load-test-000", "load-test-001", "load-test-002"), 0.5))
+        self.assertEqual(made, ["load-test", "load-test-000", "load-test-001", "load-test-002"])
+
+    def test_the_shape_flags_replace_the_profiles(self) -> None:
+        _, values = resolve(arguments("--projects", "200", "--project-skew", "1", "--metadata-keys", "34", "--batch-runs", "40"), None)
+        self.assertNotIn("projects", values)
+        loaded, _ = resolve(arguments("--projects", "200", "--metadata-keys", "34", "--batch-runs", "40"), None)
+        self.assertEqual((loaded.shape.projects, loaded.shape.metadata_keys, loaded.shape.batch_runs), (200, 34, 40))

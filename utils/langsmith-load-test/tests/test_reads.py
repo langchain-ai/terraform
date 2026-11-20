@@ -12,11 +12,14 @@ from langsmith import Client
 from langsmith._openapi_client.resources.runs.runs import AsyncRunsResource
 from langsmith._openapi_client.resources.traces import AsyncTracesResource
 from langsmith._openapi_client.types import RunSelectField
+from loadtest.draw import Projects
 from loadtest.profile import from_document
 from loadtest.reads import FEEDBACK_KEY, Reader, TracePool
 from profiles import document
 
 NOW = datetime.datetime.now(datetime.UTC)
+PROJECT = uuid4()
+TRACE_PROJECT = str(uuid4())  # a read_trace reads the trace in its own project
 WEIGHTS = {"list_traces": 45, "read_trace": 30, "project_stats": 15, "feedback_stats": 8, "heavy_filter": 2}
 
 
@@ -53,7 +56,7 @@ class RecordingClient:
 
 def make_reader(client: RecordingClient, pool: TracePool | None = None, seed: int = 1) -> Reader:
     mix = from_document(document()).read_mix
-    return Reader(client, uuid4(), "tid", NOW, mix, 30, pool or TracePool(0), seed)  # type: ignore[arg-type]
+    return Reader(client, Projects(("p",), (PROJECT,)), "tid", NOW, mix, 30, pool or TracePool(0), seed)  # type: ignore[arg-type]
 
 
 class ReaderTest(unittest.IsolatedAsyncioTestCase):
@@ -64,7 +67,7 @@ class ReaderTest(unittest.IsolatedAsyncioTestCase):
     async def test_classes_are_drawn_by_the_profile_weights_and_each_calls_its_sdk_method(self) -> None:
         client = RecordingClient()
         pool = TracePool(0)
-        pool.add("t1", 0.0, NOW)
+        pool.add("t1", 0.0, NOW, TRACE_PROJECT)
         reader = make_reader(client, pool)
         await self.read_many(reader, 4000)
         report = {name: entry.report() for name, entry in reader.stats.items()}
@@ -104,22 +107,22 @@ class ReaderTest(unittest.IsolatedAsyncioTestCase):
     async def test_calls_carry_the_project_the_window_and_the_tests_own_filters(self) -> None:
         client = RecordingClient()
         pool = TracePool(0)
-        pool.add("trace-1", 0.0, NOW)
+        pool.add("trace-1", 0.0, NOW, TRACE_PROJECT)
         reader = make_reader(client, pool)
         for name in WEIGHTS:
             await reader.calls[name]()
-        project = reader.project_id
+        project = str(PROJECT)
         (_, query), = client.named("traces.query")
         self.assertEqual((query["project_id"], query["min_start_time"], query["page_size"]), (project, NOW, 20))
         (args, listing), = client.named("traces.list_runs")
         self.assertEqual(args, ("trace-1",))
-        self.assertEqual(listing["project_id"], project)
+        self.assertEqual(listing["project_id"], TRACE_PROJECT)
         self.assertEqual(listing["min_start_time"], NOW - datetime.timedelta(minutes=5))
         self.assertEqual(listing["max_start_time"], NOW + datetime.timedelta(minutes=5))
         (_, stats), = client.named("read_project")
         self.assertEqual(stats, {"project_id": project, "include_stats": True})
         (_, feedback), = client.named("get_run_stats")
-        self.assertEqual((feedback["project_ids"], feedback["is_root"]), ([project], True))
+        self.assertEqual((feedback["project_ids"], feedback["is_root"]), ([PROJECT], True))
         self.assertEqual(feedback["filter"], f'eq(feedback_key, "{FEEDBACK_KEY}")')
         (_, heavy), = client.named("runs.query")
         self.assertIn('"tid"', heavy["filter"])
@@ -130,7 +133,7 @@ class ReaderTest(unittest.IsolatedAsyncioTestCase):
     async def test_every_call_binds_to_the_installed_sdk_signature_with_valid_selects(self) -> None:
         client = RecordingClient()
         pool = TracePool(0)
-        pool.add("trace-1", 0.0, NOW)
+        pool.add("trace-1", 0.0, NOW, TRACE_PROJECT)
         reader = make_reader(client, pool)
         for name in WEIGHTS:
             await reader.calls[name]()
@@ -152,8 +155,8 @@ class ReaderTest(unittest.IsolatedAsyncioTestCase):
 class TracePoolTest(unittest.TestCase):
     def test_only_traces_old_enough_are_picked(self) -> None:
         pool = TracePool(min_age_seconds=60)
-        pool.add("old", 10.0, NOW)
-        pool.add("young", 100.0, NOW)
+        pool.add("old", 10.0, NOW, TRACE_PROJECT)
+        pool.add("young", 100.0, NOW, TRACE_PROJECT)
         random_source = random.Random(1)
         self.assertIsNone(pool.pick(50.0, random_source))
         for _ in range(20):
@@ -162,7 +165,7 @@ class TracePoolTest(unittest.TestCase):
     def test_the_aged_pool_is_bounded(self) -> None:
         pool = TracePool(min_age_seconds=0)
         for number in range(4500):
-            pool.add(f"t{number}", 0.0, NOW)
+            pool.add(f"t{number}", 0.0, NOW, TRACE_PROJECT)
         pool.pick(1.0, random.Random(1))
         self.assertLessEqual(len(pool.aged), 4000)
         self.assertEqual(pool.aged[-1][0], "t4499")

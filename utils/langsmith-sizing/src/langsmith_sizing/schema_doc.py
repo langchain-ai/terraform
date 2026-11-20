@@ -29,7 +29,7 @@ SAMPLES = ROOT / "cases" / "field-samples.yaml"
 sizing code stays free of literals."""
 
 WILD = {
-    "workloads": "<workload>", "smithdb.components": "<component>", "scale": "<workload>", "dbs": "<instance>",
+    "workloads": "<workload>", "smithdb.components": "<component>", "scale": "<workload>",
     "configure.splits": "<split>", "configure.go": "<workload>", "scale.<workload>.chart_supports.signals": "<signal>",
     "provenance": "<path>", "regime.turns_on": "<switch>", "configure.inputs_to_change": "<input>",
     "warnings[ceilings-above-chart-default].figures.ceilings": "<workload>",
@@ -141,7 +141,7 @@ def render(paths: dict[str, dict[str, set[str]]] | None = None) -> str:
         "Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) are the chart's own keys and are not listed.", "",
         "## plan.json (`size`)", "", *_table(found["plan.json"], DESCRIPTIONS), "",
         "## stores.json (`stores`)", "",
-        "The same fields as the plan's `stores`, `dbs` and `warnings`, written for provisioning.", "",
+        "The same fields as the plan's `stores` and `warnings`, written for provisioning.", "",
         *_table(found["stores.json"], DESCRIPTIONS), "",
         "## load-profile.json (`load-profile`)", "", *_table(found["load-profile.json"], LOAD_PROFILE_DESCRIPTIONS), "",
     ]

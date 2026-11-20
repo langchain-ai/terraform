@@ -98,8 +98,18 @@ class Compare(unittest.TestCase):
         self.assertFalse(compare.failed(v))
 
     def test_a_reading_the_results_carry_is_observed_not_judged(self) -> None:
-        v = by_item(compare.compare(PLAN, results(metrics={"redis-memory": 41})))
+        reading = {"peak": 81.5, "end": 40.0, "unit": "% of maxmemory", "samples": 9}
+        verdicts = compare.compare(PLAN, results(metrics={"redis-memory": reading}))
+        v = by_item(verdicts)
         self.assertEqual((v["watch:redis-memory"], v["watch:metastore-flush"]), ("observed", "not measured"))
+        detail = next(x["detail"] for x in verdicts if x["item"] == "watch:redis-memory")
+        self.assertIn("peak 81.5, end 40 % of maxmemory; ABOVE the alarm level", detail)
+
+    def test_a_level_set_per_pod_is_read_against_a_pods_share(self) -> None:
+        self.assertFalse(compare._crossed({"value": 10, "unit": "pending runs"}, {"peak": 80, "peak_per_pod": 8, "end": 0}))
+        self.assertTrue(compare._crossed({"value": 4, "unit": "replicas"}, {"peak": 4, "end": 4, "unit": "replicas"}))
+        self.assertTrue(compare._crossed({"value": 0, "unit": "OOM kills, any"}, {"during_run": 1}))
+        self.assertIsNone(compare._crossed("observe", {"peak": 3, "end": 1}))
 
     def test_the_summary_counts_each_verdict(self) -> None:
         last = compare.render(compare.compare(PLAN, results(missing=1))).splitlines()[-1]

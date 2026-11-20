@@ -53,13 +53,41 @@ def _missing(entry: dict[str, Any]) -> dict[str, Any]:
     return _verdict("no_missing_runs", entry["passed"], "the stored count could not be read" if missing is None else f"{missing} runs sent and not stored")
 
 
+def _reading(entry: dict[str, Any]) -> str:
+    unit = entry.get("unit", "")
+    if "peak" in entry:
+        per = f" ({entry['peak_per_pod']:g} a pod)" if "peak_per_pod" in entry else ""
+        return f"peak {entry['peak']:g}{per}, end {entry['end']:g} {unit}"
+    for key in ("during_run", "mean", "share"):
+        if key in entry:
+            return f"{key.replace('_', ' ')} {entry[key]:g} {unit}"
+    return ", ".join(f"{k} {v}" for k, v in entry.items())
+
+
+def _crossed(threshold: Any, entry: dict[str, Any]) -> bool | None:
+    """Whether the reading went past the alarm level: a peak (a pod's, where the level is per pod) or a
+    count during the run above it, an autoscaler at its ceiling. None when the plan only observes."""
+    if not isinstance(threshold, dict):
+        return None
+    level = threshold["value"]
+    if "during_run" in entry:
+        return bool(entry["during_run"] > level)
+    if "peak" not in entry:
+        return None
+    if entry.get("unit") == "replicas":
+        return bool(entry["peak"] >= level)
+    return bool(entry.get("peak_per_pod", entry["peak"]) > level)
+
+
 def _watch(item: dict[str, Any], metrics: dict[str, Any]) -> dict[str, Any]:
     if item["id"] not in metrics:
         return _verdict(f"watch:{item['id']}", None, f"{item['metric']}: {NOT_MEASURED_NOTE}")
-    threshold = item["threshold"]
-    limit = f", threshold {threshold['value']:g} {threshold['unit']}" if isinstance(threshold, dict) else ""
-    # No pass or fail: which side of a threshold is the alarm depends on the metric, and the plan does not say.
-    return {"item": f"watch:{item['id']}", "verdict": OBSERVED, "detail": f"{item['metric']}: the results carry {metrics[item['id']]}{limit}"}
+    entry, threshold = metrics[item["id"]], item["threshold"]
+    crossed = _crossed(threshold, entry)
+    level = "" if crossed is None else f"; {'ABOVE' if crossed else 'within'} the alarm level of {threshold['value']:g} {threshold['unit']}"
+    # Observed, not failed: a backlog over the autoscaler's target is what makes it scale, so crossing a
+    # level says where to look (the item's action), not that the plan failed.
+    return {"item": f"watch:{item['id']}", "verdict": OBSERVED, "detail": f"{item['metric']}: {_reading(entry)}{level}"}
 
 
 def _app(plan: dict[str, Any], results: dict[str, Any]) -> dict[str, Any]:

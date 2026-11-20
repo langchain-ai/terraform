@@ -79,27 +79,39 @@ def workload(
     have = supports(autoscaling, signals, wanted)
     ok = [s for s in wanted if mech in have["signals"][s]]
     missing = [s for s in wanted if s not in ok]
-    if not autoscalers or mech == "none":
+    if not autoscalers:
         applied = _applied("none", [], key, a, None)
-        if not autoscalers:
-            _off(applied["values"], key, a)
-            if fixed_replicas is not None and sized is not None and default_replicas is not None:
-                _put(applied["values"], f"{key}.deployment.replicas", fixed_replicas, default_replicas)
-    elif ok:
-        applied = _applied(mech, ok, key, a, sized)
-    elif _expresses(a, fallback["mechanism"], signals[fallback["signal"]]["field"]):
-        applied = _applied(fallback["mechanism"], [fallback["signal"]], key, a, sized)
+        _off(applied["values"], key, a)
+        if fixed_replicas is not None and sized is not None and default_replicas is not None:
+            _put(applied["values"], f"{key}.deployment.replicas", fixed_replicas, default_replicas)
     else:
-        applied = _applied("none", [], key, a, None)
-    asks = [signals[s]["ask"] for s in missing if signals[s]["ask"]]
-    if applied["kind"] == mech and spec.get("chart_limit"):
-        asks.append(spec["chart_limit"])
-    gap = {"signals": missing, "ask": "; ".join(asks), "applied_instead": {"kind": applied["kind"], "signals": applied["signals"]}} if asks and autoscalers else None
+        applied = _choose(mech, ok, key, a, sized, signals, fallback)
+    gap = _gap(spec, missing, applied, signals) if autoscalers else None
     return {
         "recommended": {"mechanism": mech, "signals": wanted, "why": spec["why"]},
         "chart_supports": have, "applied": applied, "gap": gap, "deployed": sized is not None,
         "above_chart_default": _above_default(applied, a),
     }
+
+
+def _gap(spec: Mapping[str, Any], missing: list[str], applied: Mapping[str, Any], signals: Mapping[str, Mapping[str, Any]]) -> dict[str, Any] | None:
+    """What the chart would have to add for the recommended trigger, and what runs meanwhile."""
+    asks = [signals[s]["ask"] for s in missing if signals[s]["ask"]]
+    if applied["kind"] == spec["mechanism"] and spec.get("chart_limit"):
+        asks.append(spec["chart_limit"])
+    return {"signals": missing, "ask": "; ".join(asks), "applied_instead": {"kind": applied["kind"], "signals": applied["signals"]}} if asks else None
+
+
+def _choose(
+    mech: str, ok: list[str], key: str, a: Mapping[str, Any], sized: Mapping[str, Any] | None,
+    signals: Mapping[str, Mapping[str, Any]], fallback: Mapping[str, str],
+) -> dict[str, Any]:
+    """The recommended mechanism on the signals the chart supports, else the fallback, else none."""
+    if mech != "none" and ok:
+        return _applied(mech, ok, key, a, sized)
+    if mech != "none" and _expresses(a, fallback["mechanism"], signals[fallback["signal"]]["field"]):
+        return _applied(fallback["mechanism"], [fallback["signal"]], key, a, sized)
+    return _applied("none", [], key, a, None)
 
 
 def _above_default(applied: Mapping[str, Any], autoscaling: Mapping[str, Any]) -> bool:

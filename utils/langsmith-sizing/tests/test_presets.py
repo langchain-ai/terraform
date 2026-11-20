@@ -92,10 +92,9 @@ class Sizing(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_production_large_is_the_large_regime_the_guides_high_load_is(self) -> None:
-        # The guide publishes its High configuration (up to 1,000 traces/s) and a load test covers the
-        # large band, so the preset should plan as `large`. At 10 runs a trace its 10,000 peak runs/s
-        # reach the last band's edge, which the bands call `beyond-tested`: a warning that no test
-        # covers a load the guide itself documents.
+        # The guide publishes its High configuration (up to 1,000 traces/s), so the preset should plan as
+        # `large`. At 10 runs a trace its 10,000 peak runs/s reach the large band's top, where `scale-out`
+        # starts: the plan treats a load the guide documents as past the docs' tiers.
         self.assertEqual(self.regime("production-large"), "large")
 
     def test_the_production_presets_survive_a_node_loss(self) -> None:
@@ -114,7 +113,7 @@ class Sizing(unittest.TestCase):
         p = size(**vars_of("lite"))
         s = p["smithdb"]
         need = -(-p["rates"]["runs_per_second_peak"] // P["smithdb.small_ingestion_runs_per_pod"])
-        self.assertEqual((s["tier"], s["tier_by"], s["regime_adjusted"]["tier"]), ("small", "regime", "medium"))
+        self.assertEqual((s["tier"], s["tier_by"], s["auto"]["tier"]), ("small", "regime", "medium"))
         self.assertEqual(s["components"]["ingestion"]["min"], need)
 
 
@@ -127,10 +126,11 @@ class OnOneNode(unittest.TestCase):
     @unittest.expectedFailure
     def test_the_extra_lite_preset_fits_one_8_vcpu_32_gib_node_on_both_charts(self) -> None:
         # Extra-lite is the install that runs on one node, its pods, stores and Helm's hook Jobs
-        # included. At chart-default requests it does not fit: on the 0.18 release candidate as on 0.17 the pods, the
-        # in-cluster stores and the largest hook Job ask for 38 vCPU and 100 GiB after overhead, and
-        # even SmithDB unified (21 vCPU, 76 GiB) is far over an 8 vCPU / 32 GiB node. The plan says so
-        # (single-node-hook-peak); the preset's why and its regime's about still promise one node.
+        # included. With each pod at what the lab measured it to use (lite.measured) it still does not
+        # fit: after overhead about 12 vCPU and 44 GiB on 0.18, 29 and 69 on 0.17, which cannot run
+        # SmithDB as one pod. Three requests nobody has measured at this load hold it there: the unified
+        # SmithDB pod at the chart's 4 vCPU / 16 GiB, the in-cluster object store's 7.2 GiB peak from a
+        # far heavier run, and six hours of runs in Redis. The plan says so (single-node-hook-peak).
         for version in (CHART, NEXT):
             single = size(chart_version=version, **{k: v for k, v in vars_of("extra-lite").items()})["pools"]["single_node"]
             self.assertTrue(single["fits"], f"{version}: {single['cpu']:g} vCPU, {single['mem_gib']:g} GiB on {single['node_cpu']:g} x {single['node_mem_gib']:g}")

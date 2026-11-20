@@ -8,7 +8,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from loadtest import fields, runner
+from fake_cluster import STEP_SECONDS, samples
+from loadtest import cluster, fields, runner
 from loadtest.profile import from_document
 from loadtest.reads import ClassStats, Reader
 from profiles import document
@@ -18,10 +19,12 @@ DOC = Path(__file__).resolve().parent.parent / "docs" / "results-fields.md"
 
 
 def reports() -> list[dict]:
-    """A clean open-loop run, and a run whose counts could not be read, with errors and a latency limit,
-    so every field that is sometimes null appears with and without a value."""
+    """A clean open-loop run whose install was read, and a run whose counts could not be read, with errors
+    and a latency limit, so every field that is sometimes null appears with and without a value."""
     profile = from_document(document())
-    clean = runner.build_report(outcome(150, 150), runner.LoadSettings(), profile, "p", True, 0, None)
+    metrics, section = cluster.summarize(samples(), (1_000.0 + STEP_SECONDS, 1_000.0 + 6 * STEP_SECONDS), 1000.0)
+    read = (metrics, {"namespace": "ls", "release": "langsmith", "sample_seconds": STEP_SECONDS, **section})
+    clean = runner.build_report(outcome(150, 150), runner.LoadSettings(), profile, "p", True, 0, None, None, read)
     broken = outcome(150, None)
     broken.write.mode = "closed-loop"
     broken.write.first_error = "run error"

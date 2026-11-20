@@ -14,8 +14,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from langsmith_sizing.model.stores import GIB_TO_GB
-from langsmith_sizing.units import GIB, KIB, TB
+from langsmith_sizing.units import GIB, GIB_TO_GB, KIB, TB
 
 TB_TO_GIB = TB / GIB
 

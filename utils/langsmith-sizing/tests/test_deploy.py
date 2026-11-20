@@ -64,26 +64,24 @@ class HandCase(unittest.TestCase):
     SERVICES = [entry("web", 2, 4, (1, 3, 5)), entry("api", 1, 8, (2, 2, 4), volume=10)]
     DBS = [entry("pg", 4, 16, (1, 1, 1), volume=100)]
 
-    def test_the_namespace_is_the_pods_times_replicas_times_overhead(self) -> None:
-        # services: 3 x 2 + 2 x 1 = 8 vCPU, 3 x 4 + 2 x 8 = 28 GiB; database 4 vCPU, 16 GiB
-        # at the floors: 1 x 2 + 2 x 1 = 4 vCPU, 1 x 4 + 2 x 8 = 20 GiB
-        t = totals.totals(self.SERVICES, self.DBS, 1.5)
-        self.assertEqual((t["svc_cpu"], t["svc_mem_gib"], t["db_cpu"], t["db_mem_gib"]), (8, 28, 4, 16))
-        self.assertEqual((t["cpu"], t["mem_gib"]), (18, 66))  # (8 + 4) x 1.5, (28 + 16) x 1.5
-        self.assertEqual((t["min_svc_cpu"], t["min_svc_mem_gib"]), (4, 20))
-        self.assertEqual((t["min_cpu"], t["min_mem_gib"]), (12, 54))  # (4 + 4) x 1.5, (20 + 16) x 1.5
+    def test_the_namespace_is_the_pods_times_replicas(self) -> None:
+        # sized: 3 x 2 + 2 x 1 + 4 = 12 vCPU, 3 x 4 + 2 x 8 + 16 = 44 GiB
+        # floors: 1 x 2 + 2 x 1 + 4 = 8 vCPU, 1 x 4 + 2 x 8 + 16 = 36 GiB
+        everything = [*self.SERVICES, *self.DBS]
+        sized, low = totals.pod_sum(everything, "sized")["requests"], totals.pod_sum(everything, "min")["requests"]
+        self.assertEqual((sized["cpu"], sized["memory_gib"], low["cpu"], low["memory_gib"]), (12, 44, 8, 36))
 
     def test_a_pool_counts_nodes_of_the_binding_resource_at_each_replica_count(self) -> None:
         node = {"cpu": 4, "memory_gib": 16}
         everything = [*self.SERVICES, *self.DBS]
         pool = totals.pool(everything, node, 1, 1.5, "input")
         # sized: 12 vCPU and 44 GiB; x 1.5 is 18 and 66; 18 / 4 -> 5 nodes, 66 / 16 -> 5 nodes
-        self.assertEqual((pool["cpu"], pool["mem_gib"], pool["nodes"]), (18, 66, 5))
+        self.assertEqual(pool["sized"]["nodes"], 5)
         # floors: 8 vCPU, 36 GiB; x 1.5 is 12 and 54; 12 / 4 -> 3, 54 / 16 -> 4: memory binds
-        self.assertEqual((pool["min_cpu"], pool["min_mem_gib"], pool["min_nodes"]), (12, 54, 4))
+        self.assertEqual(pool["floor"]["nodes"], 4)
         # ceilings: 5 x 2 + 4 x 1 + 4 = 18 vCPU, 5 x 4 + 4 x 8 + 16 = 68 GiB; x 1.5 is 27 and 102: 7 and 7
-        self.assertEqual(pool["applied"]["ceiling"]["nodes"], 7)
-        self.assertEqual(pool["applied"]["ceiling"]["volume_gib"], 4 * 10 + 100)
+        self.assertEqual(pool["ceiling"]["nodes"], 7)
+        self.assertEqual(pool["ceiling"]["volume_gib"], 4 * 10 + 100)
         # the biggest pod is the database (4 vCPU) and it does not fit a 4 vCPU node: strictly below
         self.assertEqual((pool["largest_pod"], pool["largest_pod_fits"]), ("pg", False))
 
@@ -109,7 +107,7 @@ class Placements(unittest.TestCase):
 class PlanDeploy(unittest.TestCase):
     def test_floor_is_below_sized_is_below_ceiling_in_every_namespace_sum(self) -> None:
         p = size(users=20, traces_per_second=33, peak_traces_per_second=100)
-        a = p["totals"]["applied"]
+        a = p["totals"]
         for kind in ("requests", "limits"):
             self.assertLessEqual(a["floor"][kind]["cpu"], a["sized"][kind]["cpu"])
             self.assertLessEqual(a["sized"][kind]["cpu"], a["ceiling"][kind]["cpu"])
@@ -124,16 +122,15 @@ class PlanDeploy(unittest.TestCase):
 
     def test_the_in_cluster_stores_are_counted_beside_the_services(self) -> None:
         p = size(redis="statefulset")
-        t, pools = p["totals"], p["pools"]
-        self.assertEqual(t["nodes"], pools["app"]["nodes"])
-        self.assertEqual({"ls-postgres", "ls-redis"}, set(p["dbs"]))
-        # the stores' requests are in the database sums, so the namespace is more than the services alone
-        self.assertEqual(t["db_cpu"], sum(d["count"] * d["cpu"] for d in p["dbs"].values()))
-        self.assertGreater(t["cpu"], t["svc_cpu"] * t["overhead"])
+        app = p["pools"]["app"]
+        self.assertLessEqual({"postgres", "redis"}, set(app["pods"]))
+        stores = sum(p["stores"][k]["spec"]["instances"] * p["stores"][k]["spec"]["per_instance"]["requests"]["cpu"] for k in ("postgres", "redis"))
+        services = sum(w["replicas"] * w["requests"]["cpu"] for w in p["workloads"].values())
+        self.assertGreaterEqual(app["sized"]["requests"]["cpu"], services + stores)
 
     def test_the_node_shape_is_an_input(self) -> None:
         small, large = size(app_node=(4, 16)), size(app_node=(64, 256))
-        self.assertGreater(small["pools"]["app"]["nodes"], large["pools"]["app"]["nodes"])
+        self.assertGreater(small["pools"]["app"]["sized"]["nodes"], large["pools"]["app"]["sized"]["nodes"])
         self.assertEqual(large["pools"]["app"]["node_from"], "input")
         self.assertEqual(size()["pools"]["app"]["node_from"], "param:pools.app_node")
 
@@ -145,9 +142,9 @@ class PlanDeploy(unittest.TestCase):
     def test_dedicated_data_store_pool_takes_the_stores_off_the_application_pool(self) -> None:
         shared, own = size(), size(datastores_on="dedicated")
         self.assertNotIn("datastores", shared["pools"])
-        self.assertEqual(set(own["pools"]["datastores"]["pods"]), {"ls-postgres", "ls-redis"})
-        self.assertLess(own["pools"]["app"]["cpu"], shared["pools"]["app"]["cpu"])
-        self.assertAlmostEqual(own["totals"]["cpu"], shared["totals"]["cpu"])
+        self.assertEqual(set(own["pools"]["datastores"]["pods"]), {"postgres", "redis"})
+        self.assertLess(own["pools"]["app"]["sized"]["requests"]["cpu"], shared["pools"]["app"]["sized"]["requests"]["cpu"])
+        self.assertAlmostEqual(own["totals"]["sized"]["requests"]["cpu"], shared["totals"]["sized"]["requests"]["cpu"])
 
     def test_external_stores_are_instance_specs(self) -> None:
         p = size(postgres="external", redis="external", users=20, traces_per_second=33, peak_traces_per_second=100)
@@ -156,21 +153,22 @@ class PlanDeploy(unittest.TestCase):
         rd = p["stores"]["redis"]["spec"]["instance"]
         self.assertEqual(rd["maxmemory_policy"], "noeviction")
         self.assertGreaterEqual(rd["memory_gib_per_shard"] * rd["shards"], p["stores"]["redis"]["memory_gi"])
-        self.assertEqual(p["dbs"], {})
+        self.assertNotIn("postgres", p["pools"]["app"]["pods"])
 
     def test_operator_stores_are_instances_times_the_pod_and_redis_gets_sentinels(self) -> None:
         p = size(postgres="operator", redis="operator", survives_node_loss=True)
-        self.assertEqual((p["dbs"]["ls-postgres"]["count"], p["dbs"]["ls-redis"]["count"], p["dbs"]["redis-sentinel"]["count"]), (3, 3, 3))
+        spec = {k: p["stores"][k]["spec"] for k in ("postgres", "redis")}
+        self.assertEqual((spec["postgres"]["instances"], spec["redis"]["instances"], spec["redis"]["extra"][0]["instances"]), (3, 3, 3))
         one = size(postgres="operator", redis="operator")
-        self.assertEqual((one["dbs"]["ls-postgres"]["count"], "redis-sentinel" in one["dbs"]), (1, False))
+        self.assertEqual((one["stores"]["postgres"]["spec"]["instances"], one["stores"]["redis"]["spec"]["extra"]), (1, []))
         self.assertIn("operator", p["configure"]["redis"]["instruction"])
 
     def test_the_metastore_and_the_object_store_follow_the_tier_and_the_bytes(self) -> None:
         p = size(smithdb_metastore="statefulset", object_store="in-cluster")
         tier = p["smithdb"]["tier"]
-        pod = p["dbs"]["smithdb-metastore"]
+        pod = p["stores"]["smithdb_metastore"]["spec"]["per_instance"]
         self.assertEqual((pod["requests"]["cpu"], pod["requests"]["memory_gib"]), (CITED["smithdb.metastore"][tier]["cpu"], CITED["smithdb.metastore"][tier]["memory_gib"]))
-        obj = p["dbs"]["object-store"]
+        obj = p["stores"]["object_storage"]["spec"]["per_instance"]
         self.assertGreaterEqual(obj["volume_gib"], p["stores"]["object_storage"]["total_tb"] * 1e12 / 2**30)
         self.assertEqual(p["values"]["smithdb"]["config"]["objectStore"]["s3"]["endpoint"], "<in-cluster object store endpoint>")
 
@@ -215,7 +213,7 @@ class Outputs(unittest.TestCase):
     def test_stores_prints_each_placement_and_spec(self) -> None:
         doc = json.loads(self.run_cli("stores", "--chart", CHART, "--preset", "production", "--redis", "operator", "--survives-node-loss"))
         self.assertEqual(doc["stores"]["redis"]["placement"], "operator")
-        self.assertEqual(doc["dbs"]["ls-redis"]["count"], 3)
+        self.assertEqual(doc["stores"]["redis"]["spec"]["instances"], 3)
 
     def scripted(self, answers: list[str], **kw: Any) -> tuple[int, list[str], str]:
         asked: list[str] = []
@@ -327,13 +325,11 @@ class Outputs(unittest.TestCase):
         self.assertEqual((code, asked), (0, []))
         self.assertEqual(self.plan["inputs"]["users"], 10)
 
-    def test_the_overhead_line_is_the_applied_sized_requests_not_the_calculators_total(self) -> None:
-        # extra-lite runs its serving pods at one replica; the calculator's total counts the model's three.
+    def test_the_overhead_line_is_the_sized_requests_times_overhead(self) -> None:
         plan_ = size(users=2, traces_per_second=1, peak_traces_per_second=3)
-        sized, overhead = plan_["totals"]["applied"]["sized"]["requests"]["cpu"], plan_["totals"]["overhead"]
+        sized, overhead = plan_["totals"]["sized"]["requests"]["cpu"], plan_["totals"]["overhead"]
         note = summary.sections(plan_).tables[0].note
         self.assertIn(f"overhead: {round(sized * overhead, 1):g} vCPU", note)
-        self.assertNotEqual(round(sized * overhead, 1), round(plan_["totals"]["cpu"], 1))
 
     def test_parse_refuses_what_the_input_does_not_take(self) -> None:
         q = next(x for x in wizard.QUESTIONS if x.name == "redis")

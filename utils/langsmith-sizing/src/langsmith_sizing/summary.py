@@ -14,8 +14,7 @@ STORES = ("postgres", "redis", "smithdb_metastore", "object_storage", "clickhous
 STATES = ("floor", "sized", "ceiling")
 DOCS = {
     "how it sizes": "docs/how-it-sizes.md",
-    "autoscaling": "docs/autoscaling.md",
-    "monitoring": "docs/monitoring.md",
+    "operating it": "docs/operate.md",
     "every field": "docs/fields.md",
 }
 
@@ -66,10 +65,10 @@ def _capacity(body: Mapping[str, Any]) -> Table:
     t = body["totals"]
     rows = []
     for state in STATES:
-        a = t["applied"][state]
+        a = t[state]
         rows.append((state, n(a["requests"]["cpu"]), n(a["requests"]["memory_gib"]), n(a["limits"]["cpu"]), n(a["limits"]["memory_gib"]), n(a["volume_gib"])))
     peak = t["hooks"]["peak"]
-    sized = t["applied"]["sized"]["requests"]
+    sized = t["sized"]["requests"]
     note = (
         f"Floor is every autoscaler at its minimum, ceiling at its maximum. Upgrades add hook Jobs one at a time "
         f"on top: at the ceiling with the largest ({peak['job']}) running, {_shape(peak['requests']['cpu'], peak['requests']['memory_gib'])}. "
@@ -85,7 +84,7 @@ def _pools(body: Mapping[str, Any]) -> Table:
             rows.append(("single node", f"{pool['node_cpu']:g}x{pool['node_mem_gib']:g}", "1", "", "fits" if pool["fits"] else "does not fit"))
             warn = warn or not pool["fits"]
             continue
-        a = pool["applied"]
+        a = pool
         fits = pool["largest_pod_fits"]
         warn = warn or not fits
         rows.append((name, f"{pool['node_cpu']:g}x{pool['node_mem_gib']:g}", f"{a['floor']['nodes']} to {a['ceiling']['nodes']}", pool["largest_pod"], "fits" if fits else "DOES NOT FIT"))
@@ -113,7 +112,7 @@ def _workloads(body: Mapping[str, Any]) -> Table:
         lo, hi = (scale["applied"]["min"], scale["applied"]["max"]) if scale and _scaled(scale) else (spec["replicas"], spec["replicas"])
         req = spec["requests"]
         rows.append((name, str(spec["replicas"]), f"{lo} to {hi}", _shape(req["cpu"], req["memory_gib"]), _trigger(scale)))
-    return Table("Workloads", ("workload", "replicas", "autoscaled", "requests a pod", "scales on"), rows, "Why each signal: docs/autoscaling.md.")
+    return Table("Workloads", ("workload", "replicas", "autoscaled", "requests a pod", "scales on"), rows, "Why each signal: docs/operate.md.")
 
 
 def _spec(spec: Mapping[str, Any]) -> str:
@@ -159,7 +158,7 @@ def _watch(body: Mapping[str, Any]) -> Table:
     if ceilings:
         rows.append((f"autoscaler at its ceiling ({len(ceilings)} workloads)", ceilings[0]["metric"], "its max replicas, sustained"))
     needs = [f"{w['id']} needs {w['needs']}." for w in items if w.get("needs")]
-    return Table("What to watch", ("item", "metric", "alarm at"), rows, " ".join(["Where each is read and what to do: plan.json watch[], docs/monitoring.md.", *needs]))
+    return Table("What to watch", ("item", "metric", "alarm at"), rows, " ".join(["Where each is read and what to do: plan.json watch[], docs/operate.md.", *needs]))
 
 
 def _warnings(body: Mapping[str, Any]) -> Table | None:
@@ -168,7 +167,7 @@ def _warnings(body: Mapping[str, Any]) -> Table | None:
     asks = [w["id"].removeprefix(CHART_ASK) for w in body["warnings"] if w["id"].startswith(CHART_ASK)]
     rows = [(w["severity"], w["id"], w["message"]) for w in acting]
     if asks:
-        rows.append(("info", "chart asks", f"{', '.join(asks)} scale on the nearest trigger the chart has; the better one is a chart change (docs/autoscaling.md), nothing to do here"))
+        rows.append(("info", "chart asks", f"{', '.join(asks)} scale on the nearest trigger the chart has; the better one is a chart change (docs/operate.md), nothing to do here"))
     if not rows:
         return None
     return Table("Before you deploy", ("level", "id", "what"), rows, "", "warn" if any(w["severity"] != "info" for w in acting) else "info")

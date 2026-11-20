@@ -28,6 +28,7 @@ from. Nothing but users and a rate is required; every other input has a default 
 | `survives_node_loss` | Must it keep serving when a node is lost? | Ask; if they have not said, record your choice in its note as a guess. "Single zone is fine" is about zones, not nodes. |
 | `postgres`, `redis`, `smithdb_metastore` | Managed (RDS, Cloud SQL, ElastiCache, Memorystore, Azure) or in the cluster? | `external` for managed or their own; `statefulset` for the chart's; `operator` for an operator. |
 | `object_store` | A bucket, or storage inside the cluster? | `external` for S3, GCS, Azure Blob or any S3 API; `in-cluster` otherwise. |
+| `attachment_kib_per_run` | Do traces carry files, images or audio, and about how big on average a run? | KiB a run averaged over every run (a 500 KiB image on one run in ten is 50). Needs blob storage, which chart 0.18 requires anyway. |
 | `products` | Besides tracing, do they run Agent Server deployments, Fleet, Insights, Chat, Engine, the LLM gateway or Sandboxes? | A list: `agent_server`, `fleet`, `insights`, `polly`, `engine`, `gateway`, `sandboxes`. Engine brings Sandboxes. Leave out what they do not run: it is switched off. |
 | `agent_deployments`, `agent_load` | How many agent deployments, and how busy is each? | The load is the docs' Agent Server table column, read then write: `ll` (about 5 requests a second each), `mm` (50), `hh` (500), or the mixed `lh`, `hl`. |
 | `gateway_streams` | How many concurrent LLM streams through the gateway at peak? | Leave out when unknown: the chart's autoscaler stays. |
@@ -47,7 +48,7 @@ A sizing is a folder, `out/<name>/` (gitignored). Write `out/<name>/inputs.yaml`
 
 ```yaml
 why: "<who it is for and what they run, one sentence>"
-chart: 0.17.60            # exact, a line such as 0.18 (its newest), or omit for the newest release
+chart: 0.18               # exact, a line such as 0.18 (its newest), or omit for the newest release
 inputs:
   users: 20
   traces_per_month: 50000000
@@ -82,13 +83,13 @@ Read `summary.md` first, then `plan.json` for any figure asked about. Every figu
 
 | Question | Where the answer is |
 |:--|:--|
-| Why this many replicas, this tier, these nodes | `docs/how-it-sizes.md`, the regime in `plan.json regime` |
-| What it scales on and why | `plan.json scale`, `docs/autoscaling.md` |
-| What to monitor, at what threshold | `plan.json watch`, `docs/monitoring.md` |
-| What a field means | `docs/fields.md` |
+| Why this many replicas, this tier, these nodes | `docs/how-it-sizes.md`, the regime in `plan.json regime`; every constant in `docs/parameters.md` |
+| What it scales on and why | `plan.json scale`, `docs/operate.md` |
+| What to monitor, at what threshold | `plan.json watch`, `docs/operate.md` |
+| What a flag, warning or field means | `docs/reference.md`, which links `docs/fields.md` |
 | What the published guide says | the citation in `citations.yaml`; the live pages are docs.langchain.com `langsmith/self-host-scale` and `langsmith/self-host-smithdb-scale` |
 | A chart default | `make chart KEY=<dotted.key>` (`CHART=` for a version) |
-| What a product adds and needs | the Products and What the products need tables; `plan.json products`; `products.yaml` |
+| What a product adds and needs | `docs/how-it-sizes.md` section 13; `plan.json products`; `products.yaml` |
 | Agent Server per deployment | `plan.json products.agent_server.each`: the resource_spec to set on each deployment |
 
 Read the top box first. An `Act on first` line names warnings to resolve before anything else. The most
@@ -102,13 +103,23 @@ than `info` must be acted on before deploying.
 
 ## 4. Deploy and prove it
 
-- `values.yaml`: the person fills each `# fill:` line (secret names, hostnames), then runs
-  `helm upgrade --install` with it. You do not run helm against their cluster.
-- `stores.json`: what to provision for each store outside the chart.
-- `make load NAME=<name>` sends the planned load at their install. It writes traces to the project in
-  `../langsmith-load-test/.env`, so only the person runs it, and only against an install they own.
-- `make compare NAME=<name>` judges `results.json` against the plan: one verdict per promise. A
-  `not measured` server-side item needs the metric read from the install (`docs/monitoring.md`).
+The steps are the README's quick start (`utils/langsmith-sizing/README.md`); the load test's flags, `.env` and
+exit codes are in `utils/langsmith-load-test/README.md`. What is yours alone to do:
+
+- The person fills each `# fill:` line in `values.yaml`, provisions the stores `stores.json` marks external,
+  and runs `helm upgrade --install`. You do not run helm against their cluster.
+- Only the person runs `make load`, and only against an install they own: it writes traces to the project in
+  `../langsmith-load-test/.env`.
+- Ask for the namespace LangSmith runs in and have the person add `NAMESPACE=` to `make load`: the load test
+  then reads the plan's watch items from the install through their kubectl (the permissions are in the load
+  test's README). Without it every server-side item in `make compare` is `not measured`.
+- Read `make compare` with them: a watch item is `observed`, with its reading and "ABOVE" or "within" the
+  plan's alarm level; ABOVE says where to look (the item's action in `plan.json watch`), not that the plan
+  failed. `results.json cluster.kept_up` false means the run measured a backlog filling, so read nothing
+  else from it. `make plot NAME=` draws the run.
+- To learn what a payload trait costs (fields a side, content, one request or two, attachments, projects,
+  metadata keys, runs a request), run twice at the same rate changing one load-test flag, both with
+  `NAMESPACE=`, and set `cluster.coefficients` side by side (`ARGS="--send post_once"`).
 
 ## Rules
 

@@ -123,6 +123,22 @@ def _order(version: str) -> tuple[int, int, int, int, int]:
     return (int(major), int(minor), int(patch), 0 if pre else 1, int(n.group(1)) if n else 0)
 
 
+def _line(version: str) -> tuple[int, int]:
+    """major.minor: the line a version is on (0.17.48 and 0.17.60 are both 0.17)."""
+    major, minor, *_ = _order(version)
+    return major, minor
+
+
+def line_at_least(version: str, line: str) -> bool:
+    """Whether version is on line (such as 0.18) or a later one."""
+    return _line(version) >= _line(f"{line}.0")
+
+
+def same_line(a: str, b: str) -> bool:
+    """Whether two versions share major.minor (0.17.48 and 0.17.60 do; 0.18.0-rc.82 does not)."""
+    return _line(a) == _line(b)
+
+
 def is_release(version: str) -> bool:
     """A release, not a candidate: no pre-release part after the patch number."""
     m = _VERSION.match(version)

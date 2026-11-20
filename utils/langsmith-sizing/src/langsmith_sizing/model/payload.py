@@ -5,7 +5,7 @@ written to the LangSmith bucket and whether Redis holds its body or a pointer; t
 each field's uncompressed length against the threshold. Per-run costs are power-law (log-log)
 curves through LangChain's measurements at three run sizes. Field sizes and the threshold are KiB,
 per-run coefficients and every output are decimal KB.
-Ported from the PS sizing calculator (payload.ts, formulas.ts section 4), by Dzmitry Dubarau.
+First ported from the PS sizing calculator (README, Lineage), by Dzmitry Dubarau.
 """
 
 from __future__ import annotations

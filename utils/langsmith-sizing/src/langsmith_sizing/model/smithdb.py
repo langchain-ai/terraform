@@ -4,7 +4,7 @@ Per-replica CPU, memory and cache come from the chart's tier helper (never copie
 replica counts come from the SmithDB scale guide. This module picks the tier and the counts.
 Reads raise the tier (a bigger query pod), never the replica count: each query pod holds its own
 cache, so scaling out dilutes it.
-Ported from the PS sizing calculator (formulas.ts section 3), by Dzmitry Dubarau; the tier sizes
+First ported from the PS sizing calculator (README, Lineage), by Dzmitry Dubarau; the tier sizes
 were first read from the chart by Dariel Dato-on.
 """
 

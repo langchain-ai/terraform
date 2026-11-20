@@ -3,7 +3,7 @@
 The guide publishes five configurations (Low, Medium and High on each axis, in five of the nine
 combinations). The sizing between them is a bilinear blend over a 3 x 3 grid whose four unpublished
 nodes start from the ratios in params and are clamped between their published neighbors.
-Ported from the PS sizing calculator (formulas.ts section 1, classify.ts), by Dzmitry Dubarau.
+First ported from the PS sizing calculator (README, Lineage), by Dzmitry Dubarau.
 """
 
 from __future__ import annotations

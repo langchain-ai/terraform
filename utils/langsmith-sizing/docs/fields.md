@@ -20,6 +20,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `inputs.agent_load` | string | - | each Agent Server deployment's read then write load as the docs' table column: ll, lh, hl, mm or hh |
 | `inputs.app_node` | list or null | vCPU, then GiB | the application pool's node shape when given, else null (the default is in params.yaml) |
 | `inputs.app_node[]` | number | vCPU, then GiB | one of the two figures of the shape |
+| `inputs.attachment_kib_per_run` | number | KiB | attachment bytes a run carries on average; they go to the LangSmith bucket at the bytes sent |
 | `inputs.backfill_days` | number or null | days | the days the backfill should take; null with backfill_runs |
 | `inputs.backfill_runs` | number or null | runs | ClickHouse history to copy into SmithDB; null when nothing is backfilled |
 | `inputs.blob_storage` | boolean | - | whether large payload fields are offloaded to the object store |
@@ -69,8 +70,8 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `rates.bands` | object | - | the scale guide's band on each axis (advisory: the sizing itself is continuous) |
 | `rates.bands.r` | string | - | read band: l, m or h |
 | `rates.bands.w` | string | - | write band: l, m or h |
+| `rates.beyond_payload_tested` | boolean | - | the peak is past the rate the payload figures were measured at |
 | `rates.beyond_published` | boolean | - | the load is past the scale guide's highest configuration |
-| `rates.beyond_tested` | boolean | - | the peak is past the rate the payload figures were measured at |
 | `rates.extrapolation` | object | - | the linear scale-up applied past the guide's highest configuration |
 | `rates.extrapolation.rx` | number | ratio | users over the guide's high read anchor, at least 1; scales frontend and backend |
 | `rates.extrapolation.wx` | number | ratio | traces/s over the guide's high write anchor, at least 1; scales platform-backend, ingest-queue and Redis |
@@ -127,16 +128,6 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `workloads.<workload>.limits.memory_gib` | number | GiB | limits memory |
 | `workloads.<workload>.max` | number | pods | the autoscaler's ceiling, reported and never reserved in the totals |
 | `workloads.<workload>.min` | number | pods | the autoscaler's floor |
-| `workloads.<workload>.regime_adjusted` | object | - | present when the regime changed the replicas or requests: what the model sized before it did |
-| `workloads.<workload>.regime_adjusted.limits` | object | - | the model's own per pod limits |
-| `workloads.<workload>.regime_adjusted.limits.cpu` | number | vCPU | limits CPU |
-| `workloads.<workload>.regime_adjusted.limits.memory_gib` | number | GiB | limits memory |
-| `workloads.<workload>.regime_adjusted.max` | number | pods | the model's own max |
-| `workloads.<workload>.regime_adjusted.min` | number | pods | the model's own min |
-| `workloads.<workload>.regime_adjusted.replicas` | number | pods | the model's own replicas |
-| `workloads.<workload>.regime_adjusted.requests` | object | - | the model's own per pod requests |
-| `workloads.<workload>.regime_adjusted.requests.cpu` | number | vCPU | requests CPU |
-| `workloads.<workload>.regime_adjusted.requests.memory_gib` | number | GiB | requests memory |
 | `workloads.<workload>.replicas` | number | pods | the replicas the plan sizes, which the chart values apply (the regime's count when it fixed them) |
 | `workloads.<workload>.requests` | object | - | per pod requests |
 | `workloads.<workload>.requests.cpu` | number | vCPU | requests CPU |
@@ -177,16 +168,6 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `smithdb.components.<component>.limits.memory_gib` | number | GiB | limits memory |
 | `smithdb.components.<component>.max` | number | pods | the autoscaler's ceiling, reported and never reserved in the totals |
 | `smithdb.components.<component>.min` | number | pods | the autoscaler's floor |
-| `smithdb.components.<component>.regime_adjusted` | object | - | present when the regime changed the replicas or requests: what the model sized before it did |
-| `smithdb.components.<component>.regime_adjusted.limits` | object | - | the model's own per pod limits |
-| `smithdb.components.<component>.regime_adjusted.limits.cpu` | number | vCPU | limits CPU |
-| `smithdb.components.<component>.regime_adjusted.limits.memory_gib` | number | GiB | limits memory |
-| `smithdb.components.<component>.regime_adjusted.max` | number | pods | the model's own max |
-| `smithdb.components.<component>.regime_adjusted.min` | number | pods | the model's own min |
-| `smithdb.components.<component>.regime_adjusted.replicas` | number | pods | the model's own replicas |
-| `smithdb.components.<component>.regime_adjusted.requests` | object | - | the model's own per pod requests |
-| `smithdb.components.<component>.regime_adjusted.requests.cpu` | number | vCPU | requests CPU |
-| `smithdb.components.<component>.regime_adjusted.requests.memory_gib` | number | GiB | requests memory |
 | `smithdb.components.<component>.replicas` | number | pods | the replicas the plan sizes, which the chart values apply (the regime's count when it fixed them) |
 | `smithdb.components.<component>.requests` | object | - | per pod requests |
 | `smithdb.components.<component>.requests.cpu` | number | vCPU | requests CPU |
@@ -196,9 +177,6 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `smithdb.metastore.cpu` | number | vCPU | metastore CPU |
 | `smithdb.metastore.memory_gib` | number | GiB | metastore memory |
 | `smithdb.metastore.postgres_min_major_version` | number | major version | the oldest PostgreSQL major version the metastore runs on |
-| `smithdb.regime_adjusted` | object | - | present when a low regime ran SmithDB on a smaller tier or as one unified pod: the model's own choice |
-| `smithdb.regime_adjusted.tier` | string | - | the tier the model's band gave |
-| `smithdb.regime_adjusted.topology` | string | - | the layout the model would have run |
 | `smithdb.splits` | boolean | - | the dedicated stats-query and mutations services run (cluster topology, from the tier the model names) |
 | `smithdb.tier` | string | - | the resource tier in use |
 | `smithdb.tier_by` | string | - | what chose the tier: write, read or both |
@@ -282,6 +260,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `stores.object_storage.extended_days` | number | days | the extended retention used, never below base |
 | `stores.object_storage.extended_share` | number | fraction | share of runs upgraded to extended retention, 0 when extended is no longer than base |
 | `stores.object_storage.langsmith` | object | - | the LangSmith bucket for offloaded fields; null when blob storage is off |
+| `stores.object_storage.langsmith.attachments_tb` | number | TB | the part that is attachments, included in tb |
 | `stores.object_storage.langsmith.base_tb` | number | TB | the part held for base retention (ttl_s/) |
 | `stores.object_storage.langsmith.extended_tb` | number | TB | the part held for extended retention (ttl_l/) |
 | `stores.object_storage.langsmith.tb` | number | TB | capacity, decimal terabytes with headroom |
@@ -331,11 +310,13 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `stores.smithdb_metastore.tier` | string | - | the SmithDB tier it is sized for |
 | `regime` | object | - | the load band the install is in and what it turns on |
 | `regime.about` | string | - | what the regime means |
-| `regime.id` | string | - | extra-lite, lite, standard, large or beyond-tested |
+| `regime.id` | string | - | extra-lite, lite, standard, large, scale-out or beyond-tested |
 | `regime.measured` | object | - | present in scale-out and beyond-tested: the figures a load test's measured rates gave (params scale_out.measured) |
 | `regime.measured.api_cores` | number | vCPU | requested API (platform-backend) vCPU at the peak |
 | `regime.measured.compaction_workers` | number | pods | SmithDB compaction workers at the measured runs/s a worker |
+| `regime.measured.frontend_pods` | number | pods | frontend pods at the peak, at the runs/s a pod proxies |
 | `regime.measured.ingest_cores` | number | vCPU | requested ingest-queue vCPU at the peak |
+| `regime.measured.ingest_cores_by` | string | - | which model gave the larger ingest vCPU and so sized it: field curve or load test |
 | `regime.measured.postgres` | object | - | Postgres connections at the measured rate of about one a pod |
 | `regime.measured.postgres.in_use` | number | connections | connections in use across the pods |
 | `regime.measured.postgres.max_connections_needed` | number | connections | max_connections to set, at the test's ratio of configured to used |
@@ -490,10 +471,10 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `warnings[].id` | string | - | the warning's id |
 | `warnings[].message` | string | - | the sentence to show a person |
 | `warnings[].severity` | string | - | action or info |
+| `warnings[beyond-payload-tested].figures` | object | - | the figures of this warning |
+| `warnings[beyond-payload-tested].figures.peak_traces_per_second` | number | traces/s | the plan's peak |
+| `warnings[beyond-payload-tested].figures.tested` | number | traces/s | the rate the payload figures were measured at |
 | `warnings[beyond-published].figures` | object | - | no figures |
-| `warnings[beyond-tested].figures` | object | - | the figures of this warning |
-| `warnings[beyond-tested].figures.peak_traces_per_second` | number | traces/s | the plan's peak |
-| `warnings[beyond-tested].figures.tested` | number | traces/s | the rate the payload figures were measured at |
 | `warnings[beyond-tiers].figures` | object | - | the figures of this warning |
 | `warnings[beyond-tiers].figures.peak_runs_per_second` | number | runs/s | the plan's peak |
 | `warnings[ceilings-above-chart-default].figures` | object | - | the figures of this warning |
@@ -537,52 +518,31 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `warnings[redis-over-shard-cap].figures.shards` | number | shards | shards the peak needs |
 | `warnings[sandboxes-memory-bound].figures` | object | - | the hosts memory needs |
 | `warnings[sandboxes-memory-bound].figures.hosts` | number | hosts | the floor the values set on the host autoscaler |
+| `warnings[scale-out-extrapolated].figures` | object | - | where the plan leaves the load test it rests on |
+| `warnings[scale-out-extrapolated].figures.gaps` | number | count | how many figures are extrapolated past it |
+| `warnings[scale-out-extrapolated].figures.reference_kib` | number | KiB | the load test's run size |
+| `warnings[scale-out-extrapolated].figures.run_kib` | number | KiB | the plan's mean run size |
 | `warnings[single-node-hook-peak].figures` | object | - | the figures of this warning |
 | `warnings[single-node-hook-peak].figures.requests_cpu` | number | vCPU | everything plus the largest hook Job |
 | `warnings[single-node-hook-peak].figures.requests_mem_gib` | number | GiB | the same in memory |
-| `dbs` | object | - | the instances the cluster runs, under the calculator's ids (ls-postgres, ls-redis, clickhouse, smithdb-metastore, object-store) and ours |
-| `dbs.<instance>` | object | - | one instance |
-| `dbs.<instance>.count` | number | instances | how many |
-| `dbs.<instance>.cpu` | number | vCPU | CPU request of one |
-| `dbs.<instance>.limits` | object | - | one instance's limits |
-| `dbs.<instance>.limits.cpu` | number | vCPU | limits CPU |
-| `dbs.<instance>.limits.memory_gib` | number | GiB | limits memory |
-| `dbs.<instance>.memory_gib` | number | GiB | memory request of one |
-| `dbs.<instance>.placement` | string | - | statefulset, operator or in-cluster |
-| `dbs.<instance>.requests` | object | - | one instance's requests |
-| `dbs.<instance>.requests.cpu` | number | vCPU | requests CPU |
-| `dbs.<instance>.requests.memory_gib` | number | GiB | requests memory |
-| `dbs.<instance>.volume_gib` | number | GiB | persistent volume of one |
 | `values` | object | - | the chart values overlay values.yaml is written from; the chart's own keys, not listed here |
 | `totals` | object | - | the namespace's requests, and how many nodes carry them |
-| `totals.applied` | object | - | what the chart values apply, at each replica count |
-| `totals.applied.ceiling` | object | - | the sums at the autoscalers' ceilings |
-| `totals.applied.ceiling.limits` | object | - | summed limits |
-| `totals.applied.ceiling.limits.cpu` | number | vCPU | summed CPU limits |
-| `totals.applied.ceiling.limits.memory_gib` | number | GiB | summed memory limits |
-| `totals.applied.ceiling.requests` | object | - | summed requests |
-| `totals.applied.ceiling.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
-| `totals.applied.ceiling.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
-| `totals.applied.ceiling.volume_gib` | number | GiB | persistent volume claims of the pods counted |
-| `totals.applied.floor` | object | - | the sums at the autoscalers' floors |
-| `totals.applied.floor.limits` | object | - | summed limits |
-| `totals.applied.floor.limits.cpu` | number | vCPU | summed CPU limits |
-| `totals.applied.floor.limits.memory_gib` | number | GiB | summed memory limits |
-| `totals.applied.floor.requests` | object | - | summed requests |
-| `totals.applied.floor.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
-| `totals.applied.floor.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
-| `totals.applied.floor.volume_gib` | number | GiB | persistent volume claims of the pods counted |
-| `totals.applied.sized` | object | - | the sums at the replicas the plan sized |
-| `totals.applied.sized.limits` | object | - | summed limits |
-| `totals.applied.sized.limits.cpu` | number | vCPU | summed CPU limits |
-| `totals.applied.sized.limits.memory_gib` | number | GiB | summed memory limits |
-| `totals.applied.sized.requests` | object | - | summed requests |
-| `totals.applied.sized.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
-| `totals.applied.sized.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
-| `totals.applied.sized.volume_gib` | number | GiB | persistent volume claims of the pods counted |
-| `totals.cpu` | number | vCPU | services plus stores, times overhead |
-| `totals.db_cpu` | number | vCPU | in-cluster stores' CPU requests, before overhead |
-| `totals.db_mem_gib` | number | GiB | in-cluster stores' memory requests, before overhead |
+| `totals.ceiling` | object | - | the sums at the autoscalers' ceilings |
+| `totals.ceiling.limits` | object | - | summed limits |
+| `totals.ceiling.limits.cpu` | number | vCPU | summed CPU limits |
+| `totals.ceiling.limits.memory_gib` | number | GiB | summed memory limits |
+| `totals.ceiling.requests` | object | - | summed requests |
+| `totals.ceiling.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
+| `totals.ceiling.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
+| `totals.ceiling.volume_gib` | number | GiB | persistent volume claims of the pods counted |
+| `totals.floor` | object | - | the sums at the autoscalers' floors |
+| `totals.floor.limits` | object | - | summed limits |
+| `totals.floor.limits.cpu` | number | vCPU | summed CPU limits |
+| `totals.floor.limits.memory_gib` | number | GiB | summed memory limits |
+| `totals.floor.requests` | object | - | summed requests |
+| `totals.floor.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
+| `totals.floor.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
+| `totals.floor.volume_gib` | number | GiB | persistent volume claims of the pods counted |
 | `totals.hooks` | object | - | the chart's Helm hook Jobs |
 | `totals.hooks.base` | string | - | the sums the peak is added to: ceiling |
 | `totals.hooks.jobs` | list | - | every hook Job, in weight order |
@@ -607,65 +567,55 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `totals.hooks.peak.requests.cpu` | number | vCPU | CPU |
 | `totals.hooks.peak.requests.memory_gib` | number | GiB | memory |
 | `totals.hooks.peak.volume_gib` | number | GiB | volumes at the base |
-| `totals.mem_gib` | number | GiB | the same in memory |
-| `totals.min_cpu` | number | vCPU | services plus stores at the floors, times overhead |
-| `totals.min_mem_gib` | number | GiB | the same in memory |
-| `totals.min_nodes` | number | nodes | nodes of the application pool at the floors |
-| `totals.min_svc_cpu` | number | vCPU | services' CPU at the autoscalers' floors, before overhead |
-| `totals.min_svc_mem_gib` | number | GiB | services' memory at the floors, before overhead |
-| `totals.nodes` | number | nodes | nodes of the application pool at the sized replicas |
 | `totals.overhead` | number | ratio | the multiplier for system pods and headroom |
-| `totals.svc_cpu` | number | vCPU | services' CPU requests at the sized replicas, before overhead |
-| `totals.svc_mem_gib` | number | GiB | services' memory requests, before overhead |
-| `totals.volume_gib` | number | GiB | persistent volume claims at the sized replicas |
+| `totals.sized` | object | - | the sums at the replicas the plan sized |
+| `totals.sized.limits` | object | - | summed limits |
+| `totals.sized.limits.cpu` | number | vCPU | summed CPU limits |
+| `totals.sized.limits.memory_gib` | number | GiB | summed memory limits |
+| `totals.sized.requests` | object | - | summed requests |
+| `totals.sized.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
+| `totals.sized.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
+| `totals.sized.volume_gib` | number | GiB | persistent volume claims of the pods counted |
 | `pools` | object | - | node pools: app, smithdb, datastores when --datastores-on dedicated, single_node in the one-node regime |
 | `pools.<pool>` | object | - | one pool |
-| `pools.<pool>.applied` | object | - | what the chart values apply, at each replica count |
-| `pools.<pool>.applied.ceiling` | object | - | the sums at the autoscalers' ceilings |
-| `pools.<pool>.applied.ceiling.limits` | object | - | summed limits |
-| `pools.<pool>.applied.ceiling.limits.cpu` | number | vCPU | summed CPU limits |
-| `pools.<pool>.applied.ceiling.limits.memory_gib` | number | GiB | summed memory limits |
-| `pools.<pool>.applied.ceiling.nodes` | number | nodes | nodes of the pool's shape that carry the sums after overhead, never below the pool's floor |
-| `pools.<pool>.applied.ceiling.requests` | object | - | summed requests |
-| `pools.<pool>.applied.ceiling.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
-| `pools.<pool>.applied.ceiling.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
-| `pools.<pool>.applied.ceiling.volume_gib` | number | GiB | persistent volume claims of the pods counted |
-| `pools.<pool>.applied.floor` | object | - | the sums at the autoscalers' floors |
-| `pools.<pool>.applied.floor.limits` | object | - | summed limits |
-| `pools.<pool>.applied.floor.limits.cpu` | number | vCPU | summed CPU limits |
-| `pools.<pool>.applied.floor.limits.memory_gib` | number | GiB | summed memory limits |
-| `pools.<pool>.applied.floor.nodes` | number | nodes | nodes of the pool's shape that carry the sums after overhead, never below the pool's floor |
-| `pools.<pool>.applied.floor.requests` | object | - | summed requests |
-| `pools.<pool>.applied.floor.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
-| `pools.<pool>.applied.floor.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
-| `pools.<pool>.applied.floor.volume_gib` | number | GiB | persistent volume claims of the pods counted |
-| `pools.<pool>.applied.sized` | object | - | the sums at the replicas the plan sized |
-| `pools.<pool>.applied.sized.limits` | object | - | summed limits |
-| `pools.<pool>.applied.sized.limits.cpu` | number | vCPU | summed CPU limits |
-| `pools.<pool>.applied.sized.limits.memory_gib` | number | GiB | summed memory limits |
-| `pools.<pool>.applied.sized.nodes` | number | nodes | nodes of the pool's shape that carry the sums after overhead, never below the pool's floor |
-| `pools.<pool>.applied.sized.requests` | object | - | summed requests |
-| `pools.<pool>.applied.sized.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
-| `pools.<pool>.applied.sized.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
-| `pools.<pool>.applied.sized.volume_gib` | number | GiB | persistent volume claims of the pods counted |
-| `pools.<pool>.cpu` | number | vCPU | requests at the sized replicas, times overhead |
+| `pools.<pool>.ceiling` | object | - | the sums at the autoscalers' ceilings |
+| `pools.<pool>.ceiling.limits` | object | - | summed limits |
+| `pools.<pool>.ceiling.limits.cpu` | number | vCPU | summed CPU limits |
+| `pools.<pool>.ceiling.limits.memory_gib` | number | GiB | summed memory limits |
+| `pools.<pool>.ceiling.nodes` | number | nodes | nodes of the pool's shape that carry the sums after overhead, never below the pool's floor |
+| `pools.<pool>.ceiling.requests` | object | - | summed requests |
+| `pools.<pool>.ceiling.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
+| `pools.<pool>.ceiling.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
+| `pools.<pool>.ceiling.volume_gib` | number | GiB | persistent volume claims of the pods counted |
+| `pools.<pool>.floor` | object | - | the sums at the autoscalers' floors |
+| `pools.<pool>.floor.limits` | object | - | summed limits |
+| `pools.<pool>.floor.limits.cpu` | number | vCPU | summed CPU limits |
+| `pools.<pool>.floor.limits.memory_gib` | number | GiB | summed memory limits |
+| `pools.<pool>.floor.nodes` | number | nodes | nodes of the pool's shape that carry the sums after overhead, never below the pool's floor |
+| `pools.<pool>.floor.requests` | object | - | summed requests |
+| `pools.<pool>.floor.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
+| `pools.<pool>.floor.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
+| `pools.<pool>.floor.volume_gib` | number | GiB | persistent volume claims of the pods counted |
 | `pools.<pool>.largest_pod` | string | - | the pod with the biggest request |
 | `pools.<pool>.largest_pod_cpu` | number | vCPU | its CPU request |
 | `pools.<pool>.largest_pod_fits` | boolean | - | it fits a node (strictly below it) |
 | `pools.<pool>.largest_pod_mem_gib` | number | GiB | its memory request |
-| `pools.<pool>.mem_gib` | number | GiB | the same in memory |
-| `pools.<pool>.min_cpu` | number | vCPU | requests at the floors, times overhead |
-| `pools.<pool>.min_mem_gib` | number | GiB | the same in memory |
-| `pools.<pool>.min_nodes` | number | nodes | nodes at the floors |
 | `pools.<pool>.node_cpu` | number | vCPU | the node shape the pool is counted in |
 | `pools.<pool>.node_floor` | number | nodes | the least nodes the pool has |
 | `pools.<pool>.node_from` | string | - | input or the param that gave the shape |
 | `pools.<pool>.node_mem_gib` | number | GiB | memory of that shape |
-| `pools.<pool>.nodes` | number | nodes | nodes at the sized replicas |
 | `pools.<pool>.one_pod_a_node` | boolean | - | present on the sandbox pool: one host pod a node, so its nodes are its hosts, not a sum of requests |
 | `pools.<pool>.pods` | list | - | the pods counted in the pool |
 | `pools.<pool>.pods[]` | string | - | a pod's name |
-| `pools.<pool>.present` | boolean | - | always true: a pool with no pods is absent |
+| `pools.<pool>.sized` | object | - | the sums at the replicas the plan sized |
+| `pools.<pool>.sized.limits` | object | - | summed limits |
+| `pools.<pool>.sized.limits.cpu` | number | vCPU | summed CPU limits |
+| `pools.<pool>.sized.limits.memory_gib` | number | GiB | summed memory limits |
+| `pools.<pool>.sized.nodes` | number | nodes | nodes of the pool's shape that carry the sums after overhead, never below the pool's floor |
+| `pools.<pool>.sized.requests` | object | - | summed requests |
+| `pools.<pool>.sized.requests.cpu` | number | vCPU | summed CPU requests, before overhead |
+| `pools.<pool>.sized.requests.memory_gib` | number | GiB | summed memory requests, before overhead |
+| `pools.<pool>.sized.volume_gib` | number | GiB | persistent volume claims of the pods counted |
 | `pools.single_node` | object | - | the one-node regime: everything plus the largest hook Job against the one node |
 | `pools.single_node.cpu` | number | vCPU | CPU times overhead |
 | `pools.single_node.fits` | boolean | - | it fits the node |
@@ -685,7 +635,7 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 
 ## stores.json (`stores`)
 
-The same fields as the plan's `stores`, `dbs` and `warnings`, written for provisioning.
+The same fields as the plan's `stores` and `warnings`, written for provisioning.
 
 | Path | Type | Unit | Meaning |
 |:--|:--|:--|:--|
@@ -762,19 +712,6 @@ The same fields as the plan's `stores`, `dbs` and `warnings`, written for provis
 | `smithdb_cache_volume` | object | - | the StorageClass every SmithDB cache volume needs, as smithdb.cache_volume |
 | `smithdb_cache_volume.min_iops` | number | IOPS | per volume, at least |
 | `smithdb_cache_volume.min_mib_per_second` | number | MiB/s | per volume, at least |
-| `dbs` | object | - | the instances the cluster runs, under the calculator's ids (ls-postgres, ls-redis, clickhouse, smithdb-metastore, object-store) and ours |
-| `dbs.<instance>` | object | - | one instance |
-| `dbs.<instance>.count` | number | instances | how many |
-| `dbs.<instance>.cpu` | number | vCPU | CPU request of one |
-| `dbs.<instance>.limits` | object | - | one instance's limits |
-| `dbs.<instance>.limits.cpu` | number | vCPU | limits CPU |
-| `dbs.<instance>.limits.memory_gib` | number | GiB | limits memory |
-| `dbs.<instance>.memory_gib` | number | GiB | memory request of one |
-| `dbs.<instance>.placement` | string | - | statefulset, operator or in-cluster |
-| `dbs.<instance>.requests` | object | - | one instance's requests |
-| `dbs.<instance>.requests.cpu` | number | vCPU | requests CPU |
-| `dbs.<instance>.requests.memory_gib` | number | GiB | requests memory |
-| `dbs.<instance>.volume_gib` | number | GiB | persistent volume of one |
 | `warnings` | list | - | what is wrong or unproven; ids are in reference.md |
 | `warnings[]` | object | - | one warning |
 | `warnings[].figures` | object | - | the numbers the message cites; the keys depend on the id |
@@ -809,9 +746,17 @@ The same fields as the plan's `stores`, `dbs` and `warnings`, written for provis
 | `write` | object | - | what to send |
 | `write.feedback_per_trace` | number | feedback/trace | feedback writes for each trace (it can exceed one) |
 | `write.payload` | object | - | the payload shape |
+| `write.payload.attachment_kib_per_run` | number | KiB | attachment bytes the test sends with each run; 0 sends none |
+| `write.payload.batch_runs` | number | runs | the most runs the SDK sends in one request |
 | `write.payload.compression` | number | ratio | multiplier on the measured storage bytes the model sizes at; 1 is the measurements |
+| `write.payload.content` | string | - | text (prose), json (a message list) or base64 (incompressible bytes) |
+| `write.payload.fields_per_side` | number | count | fields the input and the output each split into, the size spread evenly |
+| `write.payload.metadata_keys` | number | count | metadata keys a run carries beyond the test's own |
 | `write.payload.mix` | object | - | share of runs by size |
 | `write.payload.mix.<size>` | number | % | share of runs of that size; the sizes sum to 100 |
+| `write.payload.project_skew` | number | exponent | Zipf exponent of that spread; 0 is even |
+| `write.payload.projects` | number | count | projects the test's traces spread over, the first the busiest |
+| `write.payload.send` | string | - | post_then_patch (a create, then an update) or post_once (a finished run in one request) |
 | `write.payload.single_run_kib` | list or null | KiB | [input, output] when one size replaces the mix, else null |
 | `write.payload.single_run_kib[]` | number | KiB | the input size, then the output size |
 | `write.payload.sizes_kib` | object | - | the size of each class |

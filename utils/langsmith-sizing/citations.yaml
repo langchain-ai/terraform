@@ -4,6 +4,14 @@
 repo: langchain-ai/docs
 commit: 96a94d110402cbda3f5dcf0ae40c94470c77026f
 citations:
+  blob_storage.required_from:
+    file: src/langsmith/self-hosted-changelog.mdx
+    quote: Blob storage is required starting in v0.18. Set up blob storage before upgrading to that version.
+    values: {line: "0.18", unit: chart line}
+  blob_storage.attachments:
+    file: src/langsmith/self-host-blob-storage.mdx
+    quote: LangSmith supports storing run inputs, outputs, errors, manifests, extras, events, and attachments in an external blob storage system.
+    values: {holds: attachments, unit: "-"}
   scale.read_anchors:
     file: src/langsmith/self-host-scale.mdx
     quote: Low means roughly 5 users looking at traces at a time (about 10 requests per second) - Medium means roughly 20 users looking at traces at a time (about 40 requests per second) - High means roughly 50 users looking at traces at a time (about 100 requests per second)

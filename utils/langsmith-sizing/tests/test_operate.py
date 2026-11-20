@@ -152,9 +152,8 @@ class Scale(unittest.TestCase):
             self.assertIsNone(s["gap"], n)
         self.assertIs(p["scale"]["smithdb-query"]["applied"]["values"]["smithdb.query.autoscaling.hpa.enabled"], False)
         self.assertEqual(p["scale"]["platform-backend"]["applied"]["values"], {"platformBackend.deployment.replicas": 1})
-        # the sizing says what the scale applies, and keeps what the model sized
+        # the sizing says what the scale applies
         self.assertEqual({n: w["replicas"] for n, w in p["workloads"].items()}, dict.fromkeys(("frontend", "backend", "platform-backend", "ingest-queue", "queue", "ace-backend", "playground"), 1))
-        self.assertEqual(p["workloads"]["platform-backend"]["regime_adjusted"]["replicas"], 3)
 
     def test_an_install_that_survives_a_node_loss_is_never_extra_lite(self) -> None:
         # this once asserted 2 pods under the extra-lite label, encoding a plan that said both
@@ -231,19 +230,18 @@ class Configure(unittest.TestCase):
         # 150 runs/s, past one small ingestion pod. The model's bands gave medium for both.
         p = size(users=10, traces_per_second=5, peak_traces_per_second=15)
         s = p["smithdb"]
-        self.assertEqual((p["regime"]["id"], s["tier"], s["regime_adjusted"]["tier"]), ("lite", "small", "medium"))
+        self.assertEqual((p["regime"]["id"], s["tier"], s["auto"]["tier"]), ("lite", "small", "medium"))
         self.assertEqual((s["components"]["ingestion"]["min"], s["components"]["query"]["min"]), (2, 2))
-        self.assertEqual(s["components"]["query"]["regime_adjusted"]["min"], 1)
 
     def test_a_tier_or_layout_the_person_gives_is_kept(self) -> None:
         load = {"users": 10, "traces_per_second": 5, "peak_traces_per_second": 15}
         self.assertEqual(size(smithdb_tier="medium", **load)["smithdb"]["tier"], "medium")
-        self.assertNotIn("regime_adjusted", size(smithdb_tier="medium", **load)["smithdb"])
+        self.assertNotEqual(size(smithdb_tier="medium", **load)["smithdb"]["tier_by"], "regime")
         self.assertEqual(size(chart_version=NEXT, smithdb_topology="cluster", users=2, traces_per_second=1, peak_traces_per_second=3)["smithdb"]["topology"], "cluster")
 
     def test_unified_only_where_the_chart_has_it_and_one_pod_carries_the_load(self) -> None:
         tiny = size(chart_version=NEXT, users=2, traces_per_second=1, peak_traces_per_second=3)["smithdb"]
-        self.assertEqual((tiny["topology"], list(tiny["components"]), tiny["regime_adjusted"]["topology"]), ("unified", ["smithdb"], "cluster"))
+        self.assertEqual((tiny["topology"], list(tiny["components"])), ("unified", ["smithdb"]))
         # 150 peak runs/s is more than one measured pod: the cluster layout, scaled out, even on a chart with unified.
         self.assertEqual(size(chart_version=NEXT, users=5, traces_per_second=5, peak_traces_per_second=15)["smithdb"]["topology"], "cluster")
         self.assertEqual(size(users=2, traces_per_second=1, peak_traces_per_second=3)["smithdb"]["topology"], "cluster")
@@ -329,11 +327,11 @@ class Warnings(unittest.TestCase):
         self.assertEqual(w["postgres-connections"]["figures"], {"connections": 334, "budget": 80, "max_connections": 100})
         self.assertIn("redis-needs-cluster", w)
         self.assertIn("ceilings-above-chart-default", w)
-        self.assertNotIn("beyond-tested", w)
+        self.assertNotIn("beyond-payload-tested", w)
 
     def test_past_what_was_published_and_tested(self) -> None:
         w = ids(size(users=200, traces_per_second=5000)["warnings"])
-        for n in ("beyond-published", "beyond-tested", "beyond-tiers"):
+        for n in ("beyond-published", "beyond-payload-tested", "beyond-tiers"):
             self.assertIn(n, w)
         self.assertIn("redis-over-shard-cap", ids(size(users=200, traces_per_second=50_000)["warnings"]))
 

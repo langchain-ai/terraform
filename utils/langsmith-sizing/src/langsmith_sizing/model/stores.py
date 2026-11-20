@@ -4,7 +4,7 @@ Object storage is bytes a day x retention x headroom. Redis holds every run's pa
 expiry, so its memory is sized on the peak run rate and never by shortening the expiry. Both run
 queue sizes and partitions follow from the peak. ClickHouse is deprecated and sized only while it
 still receives the writes.
-Ported from the PS sizing calculator (formulas.ts sections 4 to 6), by Dzmitry Dubarau.
+First ported from the PS sizing calculator (README, Lineage), by Dzmitry Dubarau.
 """
 
 from __future__ import annotations
@@ -13,13 +13,11 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from langsmith_sizing.units import EPSILON, GB, GIB, KILO, PERCENT, SECONDS_PER_HOUR, TB
-
-GIB_TO_GB = GIB / GB
+from langsmith_sizing.units import EPSILON, GB, GIB, GIB_TO_GB, KILO, PERCENT, SECONDS_PER_HOUR, TB
 
 
 def _round(x: float) -> int:
-    """Round half up, as the calculator does: Python's round() takes halves to even."""
+    """Round half up: Python's round() takes halves to even, so 2.5 GiB a day would plan 2."""
     return math.floor(x + 0.5)
 
 
@@ -59,9 +57,10 @@ def written_tb_per_day(runs_per_day: float, kb_per_run: float) -> float:
 
 def object_storage(
     runs_per_day: float, blend: Mapping[str, float], *, base_days: float, extended_share_pct: float, extended_days: float, lag_days: float,
-    headroom: float, blob: bool,
+    headroom: float, blob: bool, attachment_kb: float = 0.0,
 ) -> dict[str, Any]:
-    """Both buckets at steady state. The LangSmith bucket exists only when blob storage is on."""
+    """Both buckets at steady state. The LangSmith bucket exists only when blob storage is on, and holds
+    attachments beside offloaded payloads, at the bytes sent: SmithDB keeps only a pointer to them."""
     extended = max(extended_days, base_days)
     ext = effective_extended_share(extended_share_pct, base_days, extended)
     sdb = {
@@ -72,11 +71,13 @@ def object_storage(
     ls = None
     if blob:
         days = blob_retention_days(base_days, ext, extended)
+        kb = blend["blob_kb"] + attachment_kb
         ls = {
-            "tb": storage_tb(runs_per_day, blend["blob_kb"], days, headroom),
-            "written_tb_per_day": written_tb_per_day(runs_per_day, blend["blob_kb"]),
-            "base_tb": storage_tb(runs_per_day, blend["blob_kb"], base_days, headroom),
-            "extended_tb": storage_tb(runs_per_day, blend["blob_kb"], ext * extended, headroom),
+            "tb": storage_tb(runs_per_day, kb, days, headroom),
+            "written_tb_per_day": written_tb_per_day(runs_per_day, kb),
+            "base_tb": storage_tb(runs_per_day, kb, base_days, headroom),
+            "extended_tb": storage_tb(runs_per_day, kb, ext * extended, headroom),
+            "attachments_tb": storage_tb(runs_per_day, attachment_kb, days, headroom),
         }
     return {"smithdb": sdb, "langsmith": ls, "total_tb": sdb["tb"] + (ls["tb"] if ls else 0), "extended_share": ext, "extended_days": extended}
 

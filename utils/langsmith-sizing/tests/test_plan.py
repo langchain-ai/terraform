@@ -32,7 +32,7 @@ class Defaults(unittest.TestCase):
         r = self.p["rates"]
         self.assertEqual((r["runs_per_second_avg"], r["runs_per_second_peak"], r["runs_per_day"]), (500, 1500, 43_200_000))
         self.assertEqual(r["bands"], {"r": "m", "w": "m"})
-        self.assertFalse(r["beyond_published"] or r["beyond_tested"])
+        self.assertFalse(r["beyond_published"] or r["beyond_payload_tested"])
 
     def test_smithdb_is_large_on_the_peak_write_rate(self) -> None:
         s = self.p["smithdb"]
@@ -123,14 +123,12 @@ class Loads(unittest.TestCase):
     def test_a_small_install_stays_small(self) -> None:
         p = size(users=2, traces_per_month=10_000)
         self.assertEqual((p["smithdb"]["tier"], p["regime"]["id"]), ("small", "extra-lite"))
-        # the model's floors, which extra-lite takes to one replica on one node
-        self.assertEqual(p["workloads"]["ingest-queue"]["regime_adjusted"]["replicas"], 2)
-        self.assertEqual(p["workloads"]["platform-backend"]["regime_adjusted"]["replicas"], 3)
+        # extra-lite takes the serving pods to one replica on one node
         self.assertEqual(p["workloads"]["platform-backend"]["replicas"], 1)
 
     def test_past_the_highest_published_configuration(self) -> None:
         p = size(users=200, traces_per_second=5000)
-        self.assertTrue(p["rates"]["beyond_published"] and p["rates"]["beyond_tested"])
+        self.assertTrue(p["rates"]["beyond_published"] and p["rates"]["beyond_payload_tested"])
         self.assertTrue(p["smithdb"]["auto"]["write"]["beyond_tiers"])
         self.assertEqual(p["smithdb"]["tier"], "large")
         self.assertEqual(p["rates"]["extrapolation"], {"rx": 4, "wx": 5})
@@ -176,6 +174,20 @@ class Loads(unittest.TestCase):
         p = size(blob_storage=False)
         self.assertIsNone(p["stores"]["object_storage"]["langsmith"])
         self.assertGreater(p["stores"]["redis"]["memory_gi"], 319)
+
+    def test_blob_storage_off_is_refused_from_the_chart_line_that_requires_it(self) -> None:
+        with self.assertRaisesRegex(ValueError, "blob storage is required from chart 0.18"):
+            size(blob_storage=False, chart_version=PLANNED_CHARTS[-1])
+        self.assertEqual(inputs.BLOB_REQUIRED_FROM, CITED["blob_storage.required_from"]["line"])
+
+    def test_attachments_go_to_the_langsmith_bucket_at_the_bytes_sent(self) -> None:
+        base, more = (size(attachment_kib_per_run=k)["stores"]["object_storage"]["langsmith"] for k in (0, 100))
+        self.assertEqual(base["attachments_tb"], 0)
+        # 500 runs/s x 86,400 s x 102.4 KB x the bucket's retention, the same days payloads are kept
+        self.assertAlmostEqual(more["tb"] - base["tb"], more["attachments_tb"])
+        self.assertAlmostEqual(more["written_tb_per_day"] - base["written_tb_per_day"], 500 * 86_400 * 102.4 * 1000 / 1e12)
+        with self.assertRaisesRegex(ValueError, "needs blob storage"):
+            size(attachment_kib_per_run=10, blob_storage=False)
 
     def test_untuned_expiry_stacks_headroom(self) -> None:
         self.assertAlmostEqual(size(redis_expiry_tuned=False)["stores"]["redis"]["headroom"], 1.69)

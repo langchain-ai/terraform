@@ -24,15 +24,11 @@ def _pod(table: D, prefix: str, what: str) -> None:
     table[f"{prefix}.min"] = ("pods", "the autoscaler's floor")
     table[f"{prefix}.max"] = ("pods", "the autoscaler's ceiling, reported and never reserved in the totals")
     _both(table, prefix, "per pod")
-    table[f"{prefix}.regime_adjusted"] = ("", "present when the regime changed the replicas or requests: what the model sized before it did")
-    for k in ("replicas", "min", "max"):
-        table[f"{prefix}.regime_adjusted.{k}"] = ("pods", f"the model's own {k}")
-    _both(table, f"{prefix}.regime_adjusted", "the model's own per pod")
 
 
 def _sums(table: D, prefix: str, nodes: bool) -> None:
     """The namespace or a pool at the floor, the sized replicas and the ceiling."""
-    table[prefix] = ("", "what the chart values apply, at each replica count")
+    table.setdefault(prefix, ("", "what the chart values run, at each replica count"))
     for phase, what in (("floor", "the autoscalers' floors"), ("sized", "the replicas the plan sized"), ("ceiling", "the autoscalers' ceilings")):
         table[f"{prefix}.{phase}"] = ("", f"the sums at {what}")
         table[f"{prefix}.{phase}.requests"] = ("", "summed requests")
@@ -56,6 +52,7 @@ DESCRIPTIONS: D = {
     "inputs.peak_traces_per_second": ("traces/s", "the busiest hour's rate when given; null means the average times peak_factor"),
     "inputs.runs_per_trace": ("runs", "runs in one trace"),
     "inputs.peak_factor": ("ratio", "peak rate over average rate, used when no peak was given"),
+    "inputs.attachment_kib_per_run": ("KiB", "attachment bytes a run carries on average; they go to the LangSmith bucket at the bytes sent"),
     "inputs.compression": ("ratio", "multiplier on the measured storage bytes; 1 is the measurements, taken on payloads that compress well, and real text can need 2 to 5"),
     "inputs.blob_storage": ("", "whether large payload fields are offloaded to the object store"),
     "inputs.offload_threshold_kib": ("KiB", "a field at or above this size is offloaded"),
@@ -105,7 +102,7 @@ DESCRIPTIONS: D = {
     "rates.extrapolation": ("", "the linear scale-up applied past the guide's highest configuration"),
     "rates.extrapolation.rx": ("ratio", "users over the guide's high read anchor, at least 1; scales frontend and backend"),
     "rates.extrapolation.wx": ("ratio", "traces/s over the guide's high write anchor, at least 1; scales platform-backend, ingest-queue and Redis"),
-    "rates.beyond_tested": ("", "the peak is past the rate the payload figures were measured at"),
+    "rates.beyond_payload_tested": ("", "the peak is past the rate the payload figures were measured at"),
     # guide
     "guide": ("", "the scale guide's figures at this load (blended between its published configurations)"),
     "guide.fe": ("pods", "frontend replicas"),
@@ -174,9 +171,6 @@ DESCRIPTIONS: D = {
     "smithdb.metastore.cpu": ("vCPU", "metastore CPU"),
     "smithdb.metastore.memory_gib": ("GiB", "metastore memory"),
     "smithdb.metastore.postgres_min_major_version": ("major version", "the oldest PostgreSQL major version the metastore runs on"),
-    "smithdb.regime_adjusted": ("", "present when a low regime ran SmithDB on a smaller tier or as one unified pod: the model's own choice"),
-    "smithdb.regime_adjusted.tier": ("", "the tier the model's band gave"),
-    "smithdb.regime_adjusted.topology": ("", "the layout the model would have run"),
     "smithdb.cache_volume": ("", "what each SmithDB cache volume's StorageClass must give; a cluster's default is usually too slow"),
     "smithdb.cache_volume.min_iops": ("IOPS", "per volume, at least"),
     "smithdb.cache_volume.min_mib_per_second": ("MiB/s", "per volume, at least"),
@@ -205,6 +199,7 @@ DESCRIPTIONS: D = {
     "stores.object_storage.langsmith.written_tb_per_day": ("TB/day", "bytes written a day, with no headroom"),
     "stores.object_storage.langsmith.base_tb": ("TB", "the part held for base retention (ttl_s/)"),
     "stores.object_storage.langsmith.extended_tb": ("TB", "the part held for extended retention (ttl_l/)"),
+    "stores.object_storage.langsmith.attachments_tb": ("TB", "the part that is attachments, included in tb"),
     "stores.object_storage.total_tb": ("TB", "both buckets"),
     "stores.object_storage.extended_share": ("fraction", "share of runs upgraded to extended retention, 0 when extended is no longer than base"),
     "stores.object_storage.extended_days": ("days", "the extended retention used, never below base"),
@@ -306,7 +301,7 @@ DESCRIPTIONS: D = {
     "stores.<store>.spec.buckets.langsmith.lifecycle_rules[].expire_days": ("days", "delete objects after this many days"),
     # regime
     "regime": ("", "the load band the install is in and what it turns on"),
-    "regime.id": ("", "extra-lite, lite, standard, large or beyond-tested"),
+    "regime.id": ("", "extra-lite, lite, standard, large, scale-out or beyond-tested"),
     "regime.why": ("", "the edge that put the load in this regime"),
     "regime.about": ("", "what the regime means"),
     "regime.turns_on": ("", "the switches the regime sets; the keys are those of the regime in params.yaml"),
@@ -409,9 +404,9 @@ DESCRIPTIONS: D = {
     "warnings[redis-over-shard-cap].figures.shards": ("shards", "shards the peak needs"),
     "warnings[redis-over-shard-cap].figures.cap": ("shards", "the managed cap"),
     "warnings[beyond-published].figures": ("", "no figures"),
-    "warnings[beyond-tested].figures": ("", "the figures of this warning"),
-    "warnings[beyond-tested].figures.peak_traces_per_second": ("traces/s", "the plan's peak"),
-    "warnings[beyond-tested].figures.tested": ("traces/s", "the rate the payload figures were measured at"),
+    "warnings[beyond-payload-tested].figures": ("", "the figures of this warning"),
+    "warnings[beyond-payload-tested].figures.peak_traces_per_second": ("traces/s", "the plan's peak"),
+    "warnings[beyond-payload-tested].figures.tested": ("traces/s", "the rate the payload figures were measured at"),
     "warnings[beyond-tiers].figures": ("", "the figures of this warning"),
     "warnings[beyond-tiers].figures.peak_runs_per_second": ("runs/s", "the plan's peak"),
     "warnings[object-store-unmeasured].figures": ("", "no figures"),
@@ -428,17 +423,9 @@ DESCRIPTIONS: D = {
     "warnings[ceilings-above-chart-default].figures.ceilings": ("", "the ceilings above the chart's default, by workload"),
     "warnings[ceilings-above-chart-default].figures.ceilings.<workload>": ("pods", "its ceiling"),
     "warnings[chart-ask:<workload>].figures": ("", "always empty"),
-    # dbs
-    "dbs": ("", "the instances the cluster runs, under the calculator's ids (ls-postgres, ls-redis, clickhouse, smithdb-metastore, object-store) and ours"),
     "smithdb_cache_volume": ("", "the StorageClass every SmithDB cache volume needs, as smithdb.cache_volume"),
     "smithdb_cache_volume.min_iops": ("IOPS", "per volume, at least"),
     "smithdb_cache_volume.min_mib_per_second": ("MiB/s", "per volume, at least"),
-    "dbs.<instance>": ("", "one instance"),
-    "dbs.<instance>.count": ("instances", "how many"),
-    "dbs.<instance>.cpu": ("vCPU", "CPU request of one"),
-    "dbs.<instance>.memory_gib": ("GiB", "memory request of one"),
-    "dbs.<instance>.volume_gib": ("GiB", "persistent volume of one"),
-    "dbs.<instance>.placement": ("", "statefulset, operator or in-cluster"),
     "inputs.products": ("", "what runs: tracing, and each product chosen besides it (products.yaml)"),
     "inputs.products[]": ("", "a product: traces, agent_server, fleet, insights, polly, engine, gateway or sandboxes"),
     "inputs.agent_deployments": ("deployments", "Agent Server deployments the operator runs; 1 when not given"),
@@ -527,6 +514,8 @@ DESCRIPTIONS: D = {
     "regime.requests_from_measured": ("", "whether this plan's pods ask what they were measured to use: the input, else the regime (extra-lite)"),
     "regime.measured": ("", "present in scale-out and beyond-tested: the figures a load test's measured rates gave (params scale_out.measured)"),
     "regime.measured.ingest_cores": ("vCPU", "requested ingest-queue vCPU at the peak"),
+    "regime.measured.frontend_pods": ("pods", "frontend pods at the peak, at the runs/s a pod proxies"),
+    "regime.measured.ingest_cores_by": ("-", "which model gave the larger ingest vCPU and so sized it: field curve or load test"),
     "regime.measured.api_cores": ("vCPU", "requested API (platform-backend) vCPU at the peak"),
     "regime.measured.smithdb_ingestion_pods": ("pods", "SmithDB ingestion pods at the measured runs/s a pod"),
     "regime.measured.compaction_workers": ("pods", "SmithDB compaction workers at the measured runs/s a worker"),
@@ -536,6 +525,10 @@ DESCRIPTIONS: D = {
     "stores.postgres.connections_in_use": ("connections", "present in scale-out: the connections measured in use, beside the pools' count in connections"),
     "stores.postgres.max_connections_needed": ("connections", "present in scale-out: max_connections to set, with PgBouncer in front"),
     "warnings[ingestion-hot-project].figures": ("", "the ingestion pods planned"),
+    "warnings[scale-out-extrapolated].figures": ("", "where the plan leaves the load test it rests on"),
+    "warnings[scale-out-extrapolated].figures.run_kib": ("KiB", "the plan's mean run size"),
+    "warnings[scale-out-extrapolated].figures.reference_kib": ("KiB", "the load test's run size"),
+    "warnings[scale-out-extrapolated].figures.gaps": ("count", "how many figures are extrapolated past it"),
     "warnings[ingestion-hot-project].figures.pods": ("pods", "SmithDB ingestion pods"),
     "warnings[offload-throttled].figures": ("", "where offloading payloads stopped holding"),
     "warnings[offload-throttled].figures.ceiling": ("runs/s", "the run rate past which the test's object store throttled offloaded reads"),
@@ -546,19 +539,6 @@ DESCRIPTIONS: D = {
     # totals
     "totals": ("", "the namespace's requests, and how many nodes carry them"),
     "totals.overhead": ("ratio", "the multiplier for system pods and headroom"),
-    "totals.svc_cpu": ("vCPU", "services' CPU requests at the sized replicas, before overhead"),
-    "totals.svc_mem_gib": ("GiB", "services' memory requests, before overhead"),
-    "totals.db_cpu": ("vCPU", "in-cluster stores' CPU requests, before overhead"),
-    "totals.db_mem_gib": ("GiB", "in-cluster stores' memory requests, before overhead"),
-    "totals.cpu": ("vCPU", "services plus stores, times overhead"),
-    "totals.mem_gib": ("GiB", "the same in memory"),
-    "totals.nodes": ("nodes", "nodes of the application pool at the sized replicas"),
-    "totals.min_svc_cpu": ("vCPU", "services' CPU at the autoscalers' floors, before overhead"),
-    "totals.min_svc_mem_gib": ("GiB", "services' memory at the floors, before overhead"),
-    "totals.min_cpu": ("vCPU", "services plus stores at the floors, times overhead"),
-    "totals.min_mem_gib": ("GiB", "the same in memory"),
-    "totals.min_nodes": ("nodes", "nodes of the application pool at the floors"),
-    "totals.volume_gib": ("GiB", "persistent volume claims at the sized replicas"),
     "totals.hooks": ("", "the chart's Helm hook Jobs"),
     "totals.hooks.base": ("", "the sums the peak is added to: ceiling"),
     "totals.hooks.jobs": ("", "every hook Job, in weight order"),
@@ -586,17 +566,10 @@ DESCRIPTIONS: D = {
     # pools
     "pools": ("", "node pools: app, smithdb, datastores when --datastores-on dedicated, single_node in the one-node regime"),
     "pools.<pool>": ("", "one pool"),
-    "pools.<pool>.present": ("", "always true: a pool with no pods is absent"),
     "pools.<pool>.node_cpu": ("vCPU", "the node shape the pool is counted in"),
     "pools.<pool>.node_mem_gib": ("GiB", "memory of that shape"),
     "pools.<pool>.node_floor": ("nodes", "the least nodes the pool has"),
     "pools.<pool>.node_from": ("", "input or the param that gave the shape"),
-    "pools.<pool>.cpu": ("vCPU", "requests at the sized replicas, times overhead"),
-    "pools.<pool>.mem_gib": ("GiB", "the same in memory"),
-    "pools.<pool>.nodes": ("nodes", "nodes at the sized replicas"),
-    "pools.<pool>.min_cpu": ("vCPU", "requests at the floors, times overhead"),
-    "pools.<pool>.min_mem_gib": ("GiB", "the same in memory"),
-    "pools.<pool>.min_nodes": ("nodes", "nodes at the floors"),
     "pools.<pool>.largest_pod": ("", "the pod with the biggest request"),
     "pools.<pool>.largest_pod_cpu": ("vCPU", "its CPU request"),
     "pools.<pool>.largest_pod_mem_gib": ("GiB", "its memory request"),
@@ -623,11 +596,10 @@ DESCRIPTIONS: D = {
 }
 for _pfx, _what in (("workloads.<workload>", "one application service"), ("smithdb.components.<component>", "one SmithDB component")):
     _pod(DESCRIPTIONS, _pfx, _what)
-_sums(DESCRIPTIONS, "totals.applied", nodes=False)
-_sums(DESCRIPTIONS, "pools.<pool>.applied", nodes=True)
+_sums(DESCRIPTIONS, "totals", nodes=False)
+_sums(DESCRIPTIONS, "pools.<pool>", nodes=True)
 _both(DESCRIPTIONS, "stores.<store>.spec.per_instance", "one pod's")
 _both(DESCRIPTIONS, "stores.<store>.spec.extra[].per_instance", "one pod's")
-_both(DESCRIPTIONS, "dbs.<instance>", "one instance's")
 _both(DESCRIPTIONS, "products.pods.<workload>", "per pod")
 
 LOAD_PROFILE_DESCRIPTIONS: D = {
@@ -646,6 +618,14 @@ LOAD_PROFILE_DESCRIPTIONS: D = {
     "write.payload.sizes_kib.<size>.out": ("KiB", "output size"),
     "write.payload.single_run_kib": ("KiB", "[input, output] when one size replaces the mix, else null"),
     "write.payload.single_run_kib[]": ("KiB", "the input size, then the output size"),
+    "write.payload.attachment_kib_per_run": ("KiB", "attachment bytes the test sends with each run; 0 sends none"),
+    "write.payload.fields_per_side": ("count", "fields the input and the output each split into, the size spread evenly"),
+    "write.payload.content": ("-", "text (prose), json (a message list) or base64 (incompressible bytes)"),
+    "write.payload.send": ("-", "post_then_patch (a create, then an update) or post_once (a finished run in one request)"),
+    "write.payload.projects": ("count", "projects the test's traces spread over, the first the busiest"),
+    "write.payload.project_skew": ("exponent", "Zipf exponent of that spread; 0 is even"),
+    "write.payload.metadata_keys": ("count", "metadata keys a run carries beyond the test's own"),
+    "write.payload.batch_runs": ("runs", "the most runs the SDK sends in one request"),
     "write.payload.compression": ("ratio", "multiplier on the measured storage bytes the model sizes at; 1 is the measurements"),
     "write.feedback_per_trace": ("feedback/trace", "feedback writes for each trace (it can exceed one)"),
     "read": ("", "what to read"),

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from langsmith_sizing.chart import Chart
+from langsmith_sizing.chart import Chart, line_at_least
 from langsmith_sizing.model.payload import clamp
 from langsmith_sizing.units import PERCENT, SECONDS_PER_DAY
 
@@ -42,6 +42,9 @@ class Inputs:
     single_run_kib: tuple[float, float] | None = None
     """One run size (input KiB, output KiB) in place of the mix."""
     compression: float | None = None
+    attachment_kib_per_run: float | None = None
+    """Attachment bytes a run carries on average (images, audio, files), in KiB; None is none. They go to
+    the LangSmith bucket beside offloaded payloads, so they need blob storage."""
     blob_storage: bool | None = None
     offload_threshold_kib: float | None = None
     retention_days: float | None = None
@@ -98,11 +101,21 @@ def _validate_backfill(runs: float | None, days: float | None) -> None:
         raise ValueError("a backfill needs both backfill_runs and backfill_days, each above zero")
 
 
-def validate(i: Inputs) -> None:
+def _validate_load(i: Inputs) -> None:
     if (i.traces_per_second is None) == (i.traces_per_month is None):
         raise ValueError("give exactly one of traces_per_second and traces_per_month")
     if i.users < 0 or (i.traces_per_second or i.traces_per_month or 0) < 0:
         raise ValueError("users and traces cannot be negative")
+    if (i.attachment_kib_per_run or 0) > 0 and i.blob_storage is False:
+        raise ValueError("attachment_kib_per_run needs blob storage: the model counts attachments only in the LangSmith bucket")
+    for name in ("agent_deployments", "gateway_streams", "sandboxes", "sandbox_vcpu", "sandbox_memory_gib", "attachment_kib_per_run"):
+        if (getattr(i, name) or 0) < 0:
+            raise ValueError(f"{name} cannot be negative")
+    _validate_backfill(i.backfill_runs, i.backfill_days)
+
+
+def validate(i: Inputs) -> None:
+    _validate_load(i)
     if i.trace_store not in TRACE_STORES:
         raise ValueError(f"trace_store is one of {', '.join(TRACE_STORES)}")
     for name in ("postgres", "redis", "smithdb_metastore", "clickhouse"):
@@ -115,10 +128,11 @@ def validate(i: Inputs) -> None:
     for shape in (i.app_node, i.smithdb_node, i.datastore_node, i.sandbox_node):
         if shape is not None and (len(shape) != len(NODE_SHAPE) or min(shape) <= 0):
             raise ValueError("a node shape is (vCPU, GiB), both above zero")
-    _validate_backfill(i.backfill_runs, i.backfill_days)
-    for name in ("agent_deployments", "gateway_streams", "sandboxes", "sandbox_vcpu", "sandbox_memory_gib"):
-        if (getattr(i, name) or 0) < 0:
-            raise ValueError(f"{name} cannot be negative")
+
+
+# The changelog's (citations blob_storage.required_from): a plan without a bucket on 0.18 or later
+# describes an install the chart will not run.
+BLOB_REQUIRED_FROM = "0.18"
 
 
 def resolve(i: Inputs, chart: Chart, p: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
@@ -153,7 +167,9 @@ def resolve(i: Inputs, chart: Chart, p: dict[str, Any]) -> tuple[dict[str, Any],
     out["single_run_kib"] = i.single_run_kib and tuple(clamp(v, lim["field_kib"], lim["field_kib"]["min"]) for v in i.single_run_kib)
     comp = pick("compression", i.compression, p["defaults.compression"], "param:defaults.compression")
     out["compression"] = clamp(comp, lim["compression"], p["defaults.compression"])
-    pick("blob_storage", i.blob_storage, p["defaults.blob_storage"], "param:defaults.blob_storage")
+    pick("attachment_kib_per_run", i.attachment_kib_per_run, 0.0, "input:default")
+    if not pick("blob_storage", i.blob_storage, p["defaults.blob_storage"], "param:defaults.blob_storage") and line_at_least(chart.version, BLOB_REQUIRED_FROM):
+        raise ValueError(f"blob storage is required from chart {BLOB_REQUIRED_FROM} on (the self-hosted changelog), and this plan is for {chart.version}: keep blob_storage on")
     thr = pick("offload_threshold_kib", i.offload_threshold_kib, chart.number("config.blobStorage.minBlobStorageSizeKb"), "chart:config.blobStorage.minBlobStorageSizeKb")
     out["offload_threshold_kib"] = round(clamp(thr, lim["threshold_kib"], chart.number("config.blobStorage.minBlobStorageSizeKb")))
     pick("retention_days", i.retention_days, chart.number("config.ttl.ttl_period_seconds.shortlived") / SECONDS_PER_DAY, "chart:config.ttl.ttl_period_seconds.shortlived")

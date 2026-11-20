@@ -147,44 +147,54 @@ def number(text: str) -> float:
     return float(text)
 
 
-def parse(q: Question, text: str) -> Any:
-    """An answer's value, or ValueError saying what is accepted. A choice takes its number or its name;
-    a rate takes traces a second, or a month's count as 20M/month (returned as ("month", count))."""
-    text = text.strip()
-    if q.kind == "rate":
-        if text.lower().endswith(MONTH):
-            return ("month", number(text[: -len(MONTH)]))
-        return number(text)
-    if q.kind == "float":
-        return number(text)
-    if q.kind == "int":
-        return int(number(text))
-    if q.kind == "multi":
-        names = [c[0] for c in q.choices]
-        if text.lower() in ("none", "traces"):
-            return ("traces",)
-        picked = [names[int(t) - 1] if t.isdigit() and 1 <= int(t) <= len(names) else t.replace("-", "_") for t in (x.strip() for x in text.split(",")) if t]
-        bad = [t for t in picked if t not in names]
-        if bad:
-            raise ValueError(f"numbers or names from the list; not {', '.join(bad)}")
-        return tuple(dict.fromkeys(["traces", *picked]))
-    if q.kind == "bool":
-        if text.lower() in ("y", "yes", "true"):
-            return True
-        if text.lower() in ("n", "no", "false"):
-            return False
+def _rate(q: Question, text: str) -> Any:
+    return ("month", number(text[: -len(MONTH)])) if text.lower().endswith(MONTH) else number(text)
+
+
+def _multi(q: Question, text: str) -> tuple[str, ...]:
+    names = [c[0] for c in q.choices]
+    if text.lower() in ("none", "traces"):
+        return ("traces",)
+    picked = [names[int(t) - 1] if t.isdigit() and 1 <= int(t) <= len(names) else t.replace("-", "_") for t in (x.strip() for x in text.split(",")) if t]
+    bad = [t for t in picked if t not in names]
+    if bad:
+        raise ValueError(f"numbers or names from the list; not {', '.join(bad)}")
+    return tuple(dict.fromkeys(["traces", *picked]))
+
+
+def _bool(q: Question, text: str) -> bool:
+    answer = {"y": True, "yes": True, "true": True, "n": False, "no": False, "false": False}.get(text.lower())
+    if answer is None:
         raise ValueError("answer yes or no")
-    if q.kind == "choice":
-        names = [c[0] for c in q.choices]
-        if text.isdigit() and 1 <= int(text) <= len(names):
-            return names[int(text) - 1]
-        if text not in names:
-            raise ValueError(f"a number, or one of {', '.join(names)}")
-        return text
+    return answer
+
+
+def _choice(q: Question, text: str) -> str:
+    names = [c[0] for c in q.choices]
+    if text.isdigit() and 1 <= int(text) <= len(names):
+        return names[int(text) - 1]
+    if text not in names:
+        raise ValueError(f"a number, or one of {', '.join(names)}")
+    return text
+
+
+def _shape(q: Question, text: str) -> tuple[float, float]:
     cpu, sep, mem = text.lower().partition("x")
     if not sep:
         raise ValueError("vCPUxGiB, for example 8x32")
     return (float(cpu), float(mem))
+
+
+PARSERS: dict[str, Callable[[Question, str], Any]] = {
+    "rate": _rate, "float": lambda q, t: number(t), "int": lambda q, t: int(number(t)),
+    "multi": _multi, "bool": _bool, "choice": _choice, "shape": _shape,
+}
+
+
+def parse(q: Question, text: str) -> Any:
+    """An answer's value, or ValueError saying what is accepted. A choice takes its number or its name;
+    a rate takes traces a second, or a month's count as 20M/month (returned as ("month", count))."""
+    return PARSERS[q.kind](q, text.strip())
 
 
 def _applies(q: Question, answers: Mapping[str, Any]) -> bool:
@@ -209,37 +219,49 @@ def show_value(value: Any) -> str:
     return "yes" if value is True else "no" if value is False else f"{value:g}" if isinstance(value, float) else str(value)
 
 
-def defaults(answers: Mapping[str, Any], preset: presets.Preset | None, chart: chart_mod.Chart, p: dict[str, params.Param]) -> dict[str, tuple[Any, str]]:
-    """Each input's default and where it comes from, given the answers so far."""
-    out: dict[str, tuple[Any, str]] = {}
+def _resolved(answers: Mapping[str, Any], preset: presets.Preset | None, chart: chart_mod.Chart, p: dict[str, params.Param]) -> dict[str, tuple[Any, str]]:
+    """Once the load is known, the defaults that follow from it."""
     have = set(answers) | set(preset.inputs if preset else {})
     if "traces_per_month" in have:
         have.add("traces_per_second")
-    if all(k in have for k in REQUIRED):
-        merged: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in (preset.inputs if preset else {}).items()} | dict(answers)
-        known = {f.name for f in fields(inputs.Inputs)}
-        resolved, src = inputs.resolve(inputs.Inputs(chart_version=chart.version, **{k: v for k, v in merged.items() if k in known}), chart, params.values(p))
-        for name in ("runs_per_trace", "retention_days", "peak_factor"):
-            out[name] = (resolved[name], src[name])
-    for f in fields(inputs.Inputs):
-        if f.name in ("redis", "smithdb_metastore", "object_store", "clickhouse", "datastores_on", "trace_store", "survives_node_loss") and f.name not in out:
-            out[f.name] = (f.default, "the model's default")
-    out["postgres"] = ("statefulset", "the model's default")
+    if not all(k in have for k in REQUIRED):
+        return {}
+    merged: dict[str, Any] = {k: tuple(v) if isinstance(v, list) else v for k, v in (preset.inputs if preset else {}).items()} | dict(answers)
+    known = {f.name for f in fields(inputs.Inputs)}
+    resolved, src = inputs.resolve(inputs.Inputs(chart_version=chart.version, **{k: v for k, v in merged.items() if k in known}), chart, params.values(p))
+    return {name: (resolved[name], src[name]) for name in ("runs_per_trace", "retention_days", "peak_factor")}
+
+
+def _fixed(p: dict[str, params.Param]) -> dict[str, tuple[Any, str]]:
+    """The defaults no answer changes."""
     pv = params.values(p)
-    out["products"] = (("traces",), "tracing only")
-    out["agent_deployments"] = (1, "the model's default")
-    out["agent_load"] = (pv["agent_server.load_default"], "param:agent_server.load_default")
-    out["gateway_streams"] = ("the chart's autoscaler", "chart:agentGateway.autoscaling")
-    out["sandboxes"] = (pv["sandboxes.concurrent_default"], "param:sandboxes.concurrent_default")
-    out["sandbox_vcpu"] = (pv["sandboxes.vcpu_each"], "param:sandboxes.vcpu_each")
-    out["sandbox_memory_gib"] = (citations.load()["sandboxes.memory"]["memory_gib_each"], "the docs' example, self-host-sandbox-scaling")
-    out["sandbox_node"] = ((pv["pools.sandbox_node"]["cpu"], pv["pools.sandbox_node"]["memory_gib"]), "param:pools.sandbox_node")
-    for name, param in (("app_node", "pools.app_node"), ("smithdb_node", "pools.smithdb_node"), ("datastore_node", "pools.app_node")):
-        value = params.values(p)[param]
-        if param == "pools.smithdb_node":
-            out[name] = ("by the SmithDB tier", f"param:{param}")
-        else:
-            out[name] = ((value["cpu"], value["memory_gib"]), f"param:{param}")
+    out: dict[str, tuple[Any, str]] = {
+        f.name: (f.default, "the model's default") for f in fields(inputs.Inputs)
+        if f.name in ("redis", "smithdb_metastore", "object_store", "clickhouse", "datastores_on", "trace_store", "survives_node_loss")
+    }
+
+    def shape(param: str) -> tuple[Any, str]:
+        return (pv[param]["cpu"], pv[param]["memory_gib"]), f"param:{param}"
+
+    return out | {
+        "postgres": ("statefulset", "the model's default"),
+        "products": (("traces",), "tracing only"),
+        "agent_deployments": (1, "the model's default"),
+        "agent_load": (pv["agent_server.load_default"], "param:agent_server.load_default"),
+        "gateway_streams": ("the chart's autoscaler", "chart:agentGateway.autoscaling"),
+        "sandboxes": (pv["sandboxes.concurrent_default"], "param:sandboxes.concurrent_default"),
+        "sandbox_vcpu": (pv["sandboxes.vcpu_each"], "param:sandboxes.vcpu_each"),
+        "sandbox_memory_gib": (citations.load()["sandboxes.memory"]["memory_gib_each"], "the docs' example, self-host-sandbox-scaling"),
+        "sandbox_node": shape("pools.sandbox_node"),
+        "app_node": shape("pools.app_node"),
+        "smithdb_node": ("by the SmithDB tier", "param:pools.smithdb_node"),
+        "datastore_node": shape("pools.app_node"),
+    }
+
+
+def defaults(answers: Mapping[str, Any], preset: presets.Preset | None, chart: chart_mod.Chart, p: dict[str, params.Param]) -> dict[str, tuple[Any, str]]:
+    """Each input's default and where it comes from, given the answers so far."""
+    out = _fixed(p) | _resolved(answers, preset, chart, p)
     if preset:
         for k, v in preset.inputs.items():
             out[k] = (tuple(v) if isinstance(v, list) else v, f"{'saved' if preset.saved else 'preset'} {preset.name}: {preset.notes[k]}")
@@ -355,11 +377,8 @@ def next_steps(out: Path, body: Mapping[str, Any]) -> None:
     ])
 
 
-def run(
-    *, chart_version: str | None, preset_name: str | None, given: Mapping[str, Any], yes: bool, out: Path,
-    ask: Callable[[str], str],
-) -> int:
-    """Ask what is not given, size, show the plan, save the folder."""
+def _start(chart_version: str | None, preset_name: str | None, given: Mapping[str, Any], yes: bool, out: Path) -> tuple[presets.Preset | None, str]:
+    """The preset to start from (named, or the folder's saved answers) and the chart to size on."""
     saved_file = out / INPUTS_FILE
     preset = presets.load(preset_name) if preset_name else presets.load(str(saved_file)) if saved_file.is_file() else None
     chart_version = chart_mod.resolve(chart_version) if chart_version else preset.chart if preset and preset.chart else chart_mod.resolve(None)
@@ -368,13 +387,20 @@ def run(
     ui.banner(f"LangSmith sizing: {out.name}", f"chart {chart_version}, saving to {out}/" + ("" if yes else "\nEnter keeps the default shown. Ctrl-C stops; nothing is written until you confirm."))
     if preset and preset.saved:
         ui.note(f"Sizing {out.name} again from its saved answers ({saved_file})" + ("." if yes else "; each default below is what was saved."))
-    if preset is None and not yes and not ({"users"} & set(given)):
-        preset = _pick_preset(ask)
+    return preset, chart_version
+
+
+def _skipped(q: Question, given: Mapping[str, Any], known: Mapping[str, Any]) -> bool:
+    return q.name in given or (q.name == "traces_per_second" and "traces_per_month" in given) or not _applies(q, known)
+
+
+def _questions(preset: presets.Preset | None, given: Mapping[str, Any], chart_version: str, ask: Callable[[str], str]) -> dict[str, Any]:
+    """Ask each question that applies and was not given, section by section."""
     chart, loaded = chart_mod.Chart(chart_version), params.load()
     answers: dict[str, Any] = dict(given)
     section = ""
     for q in QUESTIONS:
-        if yes or q.name in given or (q.name == "traces_per_second" and "traces_per_month" in given) or not _applies(q, {**(preset.inputs if preset else {}), **answers}):
+        if _skipped(q, given, {**(preset.inputs if preset else {}), **answers}):
             continue
         if q.section != section:
             section = q.section
@@ -384,6 +410,18 @@ def run(
             answers["traces_per_month"] = reply[1]
         elif reply is not None:
             answers[q.name] = reply
+    return answers
+
+
+def run(
+    *, chart_version: str | None, preset_name: str | None, given: Mapping[str, Any], yes: bool, out: Path,
+    ask: Callable[[str], str],
+) -> int:
+    """Ask what is not given, size, show the plan, save the folder."""
+    preset, version = _start(chart_version, preset_name, given, yes, out)
+    if preset is None and not yes and not ({"users"} & set(given)):
+        preset = _pick_preset(ask)
+    answers = dict(given) if yes else _questions(preset, given, version, ask)
     if preset is None and "users" not in answers:
         raise ValueError("give PRESET, USERS, or a NAME with a saved inputs.yaml")
     if not yes:
@@ -392,5 +430,5 @@ def run(
         if not _confirm(ask):
             ui.note("Nothing written.")
             return 1
-    size_and_save(out, preset, answers, given, chart_version, f"{'wizard' if not yes else 'make plan'}, {dt.date.today().isoformat()}")
+    size_and_save(out, preset, answers, given, version, f"{'wizard' if not yes else 'make plan'}, {dt.date.today().isoformat()}")
     return 0

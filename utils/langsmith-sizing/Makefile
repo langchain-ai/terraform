@@ -25,10 +25,14 @@ ARGS ?=
 DURATION ?= 600
 RAMP ?= 60
 PEAK ?=
+# The namespace LangSmith runs in: the load test also reads the install through kubectl (its queues,
+# SmithDB, Redis, autoscalers and CPU), so compare can read the plan's watch items.
+NAMESPACE ?=
 LOGS := $(ROOT)/.logs
 
 SIZING := uv run --quiet langsmith-sizing
 LOADTEST := uv run --quiet --directory ../langsmith-load-test load-test
+LOADTEST_PLOT := uv run --quiet --directory ../langsmith-load-test load-test-plot
 INPUTS := $(if $(CHART),--chart $(CHART)) $(if $(PRESET),--preset $(PRESET)) $(if $(USERS),--users $(USERS)) $(if $(TRACES_PER_SECOND),--traces-per-second $(TRACES_PER_SECOND)) $(if $(TRACES_PER_MONTH),--traces-per-month $(TRACES_PER_MONTH)) $(if $(PEAK_TRACES_PER_SECOND),--peak-traces-per-second $(PEAK_TRACES_PER_SECOND)) $(if $(RUNS_PER_TRACE),--runs-per-trace $(RUNS_PER_TRACE)) $(if $(RETENTION_DAYS),--retention-days $(RETENTION_DAYS)) $(if $(PRODUCTS),--products $(PRODUCTS)) $(ARGS)
 
 # One line a gate: its name, then ok or FAILED with the tail of its log. A gate's output goes to
@@ -50,19 +54,20 @@ define need_name
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help setup wizard plan show list presets load compare chart check lint types test params citations load-test-check reference figures report
+.PHONY: help setup wizard plan show list presets load plot compare chart check lint types test params citations load-test-check reference figures report
 
 help: ## this screen
 	@printf '\n$(B)langsmith-sizing$(X)  size a self-hosted LangSmith install from its load, deploy it, prove it\n\n'
 	@printf '  $(B)1  size$(X)     $(C)make wizard NAME=acme$(X)                 $(D)asks about the load and the install, saves $(ROOT)/acme/$(X)\n'
 	@printf '             $(C)make plan NAME=acme PRESET=lite$(X)       $(D)the same, asking nothing; again later re-sizes from the saved answers$(X)\n'
 	@printf '  $(B)2  deploy$(X)   $(D)provision from $(ROOT)/acme/stores.json, then helm upgrade --install with $(ROOT)/acme/values.yaml$(X)\n'
-	@printf '  $(B)3  prove$(X)    $(C)make load NAME=acme$(X)                   $(D)sends the planned load at the install$(X)\n'
-	@printf '             $(C)make compare NAME=acme$(X)                $(D)one verdict per promise the plan makes$(X)\n\n'
+	@printf '  $(B)3  prove$(X)    $(C)make load NAME=acme NAMESPACE=langsmith$(X) $(D)sends the planned load and reads the install while it runs$(X)\n'
+	@printf '             $(C)make compare NAME=acme$(X)                $(D)one verdict per promise the plan makes$(X)\n'
+	@printf '             $(C)make plot NAME=acme$(X)                   $(D)the install over the run, with the plan'"'"'s alarm levels$(X)\n\n'
 	@printf '$(B)Targets$(X)\n'
 	@awk -F':.*## ' '/^[a-z-]+:.*## /{printf "  $(C)%-18s$(X) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\n$(B)Inputs$(X)  $(D)NAME= PRESET= USERS= TRACES_PER_SECOND= TRACES_PER_MONTH= PEAK_TRACES_PER_SECOND= RUNS_PER_TRACE= RETENTION_DAYS= PRODUCTS= CHART= ARGS="--redis operator ..." OUT=<folder>$(X)\n'
-	@printf '$(B)Docs$(X)    $(D)README.md, docs/how-it-sizes.md, docs/autoscaling.md, docs/monitoring.md$(X)\n\n'
+	@printf '\n$(B)Inputs$(X)  $(D)NAME= PRESET= USERS= TRACES_PER_SECOND= TRACES_PER_MONTH= PEAK_TRACES_PER_SECOND= RUNS_PER_TRACE= RETENTION_DAYS= PRODUCTS= CHART= NAMESPACE= ARGS="--redis operator ..." OUT=<folder>$(X)\n'
+	@printf '$(B)Docs$(X)    $(D)README.md, docs/how-it-sizes.md, docs/operate.md, docs/reference.md$(X)\n\n'
 
 setup: ## install the package and the load test (needs uv; helm reads the chart)
 	$(call gate,uv sync,uv sync --group dev)
@@ -95,7 +100,11 @@ chart: ## chart values at CHART, default the newest release (KEY=a.dotted.key, r
 load: ## send the planned load at your install (NAME=; needs ../langsmith-load-test/.env); saves results.json
 	$(need_name)
 	@test -f $(OUT)/load-profile.json || { printf '$(R)error$(X) $(OUT)/load-profile.json is missing: run make wizard NAME=$(NAME) or make plan NAME=$(NAME) first\n' >&2; exit 2; }
-	$(LOADTEST) --profile $(abspath $(OUT))/load-profile.json $(if $(PEAK),--peak) --read --duration-seconds $(DURATION) --ramp-up-seconds $(RAMP) --results $(abspath $(OUT))/results.json
+	$(LOADTEST) --profile $(abspath $(OUT))/load-profile.json $(if $(PEAK),--peak) --read --duration-seconds $(DURATION) --ramp-up-seconds $(RAMP) --results $(abspath $(OUT))/results.json $(if $(NAMESPACE),--namespace $(NAMESPACE)) $(ARGS)
+
+plot: ## draw a load test's install readings over time with the plan's alarm levels (NAME=; a run with NAMESPACE=)
+	$(need_name)
+	@$(LOADTEST_PLOT) $(abspath $(OUT))/results.json --plan $(abspath $(OUT))/plan.json
 
 compare: ## the load test's results against the plan; exit 1 on a failed promise (NAME=)
 	$(need_name)

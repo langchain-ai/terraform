@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
-WILD = {"reads.classes": "<class>"}
-OPAQUE = {"profile": "the load profile the run used, as langsmith-sizing writes it (its fields are in langsmith-sizing/docs/fields.md)"}
+WILD = {"reads.classes": "<class>", "cluster.coefficients": "<workload>"}
+OPAQUE = {
+    "profile": "the load profile the run used, as langsmith-sizing writes it (its fields are in langsmith-sizing/docs/fields.md)",
+    "metrics": "each of the plan's watch items the run read, keyed by its id (langsmith-sizing params watch.items; an autoscaler's is autoscaler-at-ceiling:<workload>): peak and end, or a mean, a share or a count during the run, with its unit; `langsmith-sizing compare` sets each against the plan's alarm level. Empty when the install was not read",
+}
 
 PERCENTILES = {"p50": "median", "p95": "95th percentile", "p99": "99th percentile", "max": "largest"}
 
@@ -64,6 +67,15 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "write.run_errors": ("errors", "runs the SDK reported an error for"),
     "write.dropped_starts": ("traces", "starts dropped for being over max_in_flight, never delayed"),
     "write.first_error": ("", "the first error message, or null"),
+    "write.payload_shape": ("", "how each run's bytes were shaped and sent, after any flag replaced the profile's"),
+    "write.payload_shape.fields_per_side": ("count", "fields the input and the output each split into, the size spread evenly"),
+    "write.payload_shape.content": ("", "text (prose), json (a message list) or base64 (incompressible bytes)"),
+    "write.payload_shape.send": ("", "post_then_patch (a create, then an update) or post_once (a finished run in one request)"),
+    "write.payload_shape.attachment_kib_per_run": ("KiB", "attachment bytes sent with every run; 0 sent none"),
+    "write.payload_shape.projects": ("count", "projects the traces spread over, the first the busiest"),
+    "write.payload_shape.project_skew": ("exponent", "Zipf exponent of that spread; 0 is even"),
+    "write.payload_shape.metadata_keys": ("count", "metadata keys a run carried beyond the test's own"),
+    "write.payload_shape.batch_runs": ("runs", "the most runs the SDK sent in one request"),
     "feedback": ("", "feedback writes"),
     "feedback.per_trace": ("feedback/trace", "the rate the profile asks for"),
     "feedback.sent": ("feedback", "writes made"),
@@ -122,6 +134,28 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "targets.no_missing_runs.passed": ("", "true, false, or null when unread"),
     "targets.send_latency_limit": ("", "the optional limit on the send latency"),
     "targets.send_latency_limit.passed": ("", "true, false, or null when no limit was set"),
+    "metrics": ("", OPAQUE["metrics"]),
+    "cluster": ("", "what the install itself did under the load, read through kubectl (--namespace)"),
+    "cluster.read": ("", "whether the install was read; false leaves every other field out but why"),
+    "cluster.why": ("", "why it was not read"),
+    "cluster.namespace": ("", "the namespace read"),
+    "cluster.release": ("", "the Helm release, the prefix of every workload's name"),
+    "cluster.sample_seconds": ("seconds", "time between samples"),
+    "cluster.samples": ("samples", "samples taken from the load's start until the stored count settled"),
+    "cluster.steady_samples": ("samples", "samples inside the window after the ramp, the only ones coefficients come from"),
+    "cluster.window": ("", "the window after the ramp"),
+    "cluster.window.from": ("seconds", "its start, Unix time"),
+    "cluster.window.to": ("seconds", "its end, Unix time"),
+    "cluster.runs_per_second_sent": ("runs/s", "runs sent a second in the window, the numerator of every runs-per-core figure; null when none were"),
+    "cluster.smithdb_rows_flushed_per_second": ("rows/s", "rows SmithDB ingestion flushed a second in the window (ingest_flush_rows); null when not read"),
+    "cluster.kept_up": ("", "whether a backlog was still climbing at the window's end"),
+    "cluster.kept_up.ingestion_queue": ("", "ingestion_queue.pending at the end no larger than the largest in the window's first half; null when not read"),
+    "cluster.kept_up.compaction": ("", "the same for pending compaction jobs"),
+    "cluster.coefficients": ("", "each workload's CPU in the window, from its containers' cAdvisor CPU seconds"),
+    "cluster.coefficients.<workload>": ("", "one workload"),
+    "cluster.coefficients.<workload>.cores_used": ("cores", "CPU cores it used on average, not requested"),
+    "cluster.coefficients.<workload>.runs_per_core": ("runs/s per core", "runs sent a second over the cores it used; on the ingest path only, the figure sizing's ingest model rests on"),
+    "cluster.unread": ("list", "what could not be read in some sample; a missing reading is unknown, never zero"),
     "passed": ("", "every measured target met, nothing missing, and no run, feedback, upload, read or stored-count error"),
 }
 for _prefix, _what in (("write.send_latency_seconds", "the time to hand a trace to the SDK"), ("write.schedule_lag_seconds", "how late each open-loop start was")):

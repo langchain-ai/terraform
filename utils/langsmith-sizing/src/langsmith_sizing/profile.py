@@ -12,6 +12,8 @@ Schema "langsmith-load-profile/1":
   write.payload.sizes_kib  {size: {in, out}} KiB per field
   write.payload.single_run_kib  [in, out] when one size replaces the mix, else null
   write.payload.compression     the compression the model sizes storage at
+  write.payload.attachment_kib_per_run  attachment KiB each run carries; 0 sends none
+  write.payload.fields_per_side, content, send  how the bytes are shaped and sent (params load.payload_shape)
   write.feedback_per_trace
   read.users, read.requests_per_second
   read.mix               {class: {weight, component, what}}
@@ -52,6 +54,8 @@ def load_profile(inputs: inputs_mod.Inputs, chart: Chart, params: dict[str, Para
                 "sizes_kib": p["payload.bucket_kib"],
                 "single_run_kib": list(r["single_run_kib"]) if r["single_run_kib"] else None,
                 "compression": r["compression"],
+                "attachment_kib_per_run": r["attachment_kib_per_run"],
+                **p["load.payload_shape"],
             },
             "feedback_per_trace": p["load.feedback_per_trace"],
         },
@@ -66,6 +70,7 @@ def load_profile(inputs: inputs_mod.Inputs, chart: Chart, params: dict[str, Para
             **{f"inputs.{k}": v for k, v in src.items()},
             "write.peak_traces_per_second": "derived:inputs.peak_factor",
             "write.payload.sizes_kib": "param:payload.bucket_kib",
+            "write.payload.shape": "param:load.payload_shape",
             "write.feedback_per_trace": "param:load.feedback_per_trace",
             "read.requests_per_second": "docs:scale.read_anchors",
             "read.mix": "param:load.read_mix",

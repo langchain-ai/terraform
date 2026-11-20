@@ -110,7 +110,7 @@ class Backfill(unittest.TestCase):
         self.assertEqual(job["parallelism"], with_backfill["smithdb"]["backfill"]["parallelism"])
         self.assertEqual(job["resources"]["requests"]["memory"], f"{self.FLOOR}Gi")
         self.assertNotIn("migration", size()["values"]["smithdb"])
-        self.assertEqual(with_backfill["totals"]["cpu"], size()["totals"]["cpu"])
+        self.assertEqual(with_backfill["totals"]["sized"], size()["totals"]["sized"])
 
     @needs_helm
     def test_every_plan_names_the_cache_volume_and_the_metastore_postgres_the_docs_require(self) -> None:

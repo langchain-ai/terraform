@@ -2,10 +2,10 @@
 
 A pod entry is {name, pool, requests, limits, volume_gib, replicas: {min, sized, max}}. The sums are
 read at the autoscalers' floors (min), at the replicas the model sized (sized) and at their ceilings
-(max). Nodes follow the calculator's rule: whichever of CPU or memory binds after the scheduling
+(max). Nodes are whichever of CPU or memory binds after the scheduling
 overhead, never below the pool's floor; a pod fits a node only strictly below it, because the
 kubelet and system pods take part of every node.
-Ported from the PS sizing calculator (formulas.ts section 2, compute.ts), by Dzmitry Dubarau.
+First ported from the PS sizing calculator (README, Lineage), by Dzmitry Dubarau.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def pod_sum(entries: Sequence[Mapping[str, Any]], which: str) -> dict[str, Any]:
 
 def node_count(cpu: float, mem_gib: float, node: Mapping[str, float], floor: int, overhead: float) -> int:
     """max(ceil(cpu x overhead / node vCPU), ceil(mem x overhead / node GiB), floor); cpu and mem are
-    requests before overhead. Plain ceil, as the calculator's Math.ceil."""
+    requests before overhead."""
     return max(math.ceil(cpu * overhead / node["cpu"]), math.ceil(mem_gib * overhead / node["memory_gib"]), floor)
 
 
@@ -70,36 +70,20 @@ def clickhouse_node(cpu: float, mem_gib: float, shapes: Sequence[Mapping[str, fl
 
 
 def pool(entries: Sequence[Mapping[str, Any]], node: Mapping[str, float], floor: int, overhead: float, node_from: str) -> dict[str, Any]:
-    """One pool: the calculator's figures (`cpu`, `mem_gib`, `nodes` at the sized replicas, `min_*` at
-    the floors, all requests x overhead), the largest pod and whether it fits, and every sum."""
-    sums = {name: pod_sum(entries, which) for name, which in PHASES.items()}
-    nodes = {name: node_count(s["requests"]["cpu"], s["requests"]["memory_gib"], node, floor, overhead) for name, s in sums.items()}
+    """One pool: its node, its largest pod and whether that fits, and at each of floor, sized and
+    ceiling the requests, limits, volumes and nodes."""
     big = largest(entries)
-    sized, low = sums["sized"]["requests"], sums["floor"]["requests"]
-    return {
-        "present": True, "node_cpu": node["cpu"], "node_mem_gib": node["memory_gib"], "node_floor": floor, "node_from": node_from,
-        "cpu": sized["cpu"] * overhead, "mem_gib": sized["memory_gib"] * overhead, "nodes": nodes["sized"],
-        "min_cpu": low["cpu"] * overhead, "min_mem_gib": low["memory_gib"] * overhead, "min_nodes": nodes["floor"],
+    out: dict[str, Any] = {
+        "node_cpu": node["cpu"], "node_mem_gib": node["memory_gib"], "node_floor": floor, "node_from": node_from,
         "largest_pod": big["name"] if big else None,
         "largest_pod_cpu": big["requests"]["cpu"] if big else None, "largest_pod_mem_gib": big["requests"]["memory_gib"] if big else None,
         "largest_pod_fits": fits(big["requests"]["cpu"], big["requests"]["memory_gib"], node) if big else None,
-        "applied": {name: s | {"nodes": nodes[name]} for name, s in sums.items()},
         "pods": [e["name"] for e in entries],
     }
-
-
-def totals(entries: Sequence[Mapping[str, Any]], dbs: Sequence[Mapping[str, Any]], overhead: float) -> dict[str, Any]:
-    """The namespace: raw requests of the services and of the in-cluster databases, and both
-    after overhead, at the sized replicas and at the floors."""
-    svc, db = pod_sum(entries, "sized")["requests"], pod_sum(dbs, "sized")["requests"]
-    svc_min, db_min = pod_sum(entries, "min")["requests"], pod_sum(dbs, "min")["requests"]
-    return {
-        "overhead": overhead,
-        "svc_cpu": svc["cpu"], "svc_mem_gib": svc["memory_gib"], "db_cpu": db["cpu"], "db_mem_gib": db["memory_gib"],
-        "cpu": (svc["cpu"] + db["cpu"]) * overhead, "mem_gib": (svc["memory_gib"] + db["memory_gib"]) * overhead,
-        "min_svc_cpu": svc_min["cpu"], "min_svc_mem_gib": svc_min["memory_gib"],
-        "min_cpu": (svc_min["cpu"] + db_min["cpu"]) * overhead, "min_mem_gib": (svc_min["memory_gib"] + db_min["memory_gib"]) * overhead,
-    }
+    for name, which in PHASES.items():
+        s = pod_sum(entries, which)
+        out[name] = s | {"nodes": node_count(s["requests"]["cpu"], s["requests"]["memory_gib"], node, floor, overhead)}
+    return out
 
 
 def hook_peak(jobs: Sequence[Mapping[str, Any]], base: Mapping[str, Any]) -> dict[str, Any]:

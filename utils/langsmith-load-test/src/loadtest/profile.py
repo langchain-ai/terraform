@@ -18,6 +18,36 @@ from langsmith_sizing.profile import SCHEMA
 
 READ_CLASSES = ("list_traces", "read_trace", "project_stats", "feedback_stats", "heavy_filter")
 SINGLE = "single"
+CONTENTS = ("text", "json", "base64")
+SENDS = ("post_then_patch", "post_once")
+
+
+@dataclass(frozen=True)
+class Shape:
+    """How a run's bytes are shaped and sent, beyond their size (params load.payload_shape)."""
+
+    fields_per_side: int = 1
+    content: str = "text"
+    send: str = "post_then_patch"
+    attachment_kib_per_run: float = 0.0
+    projects: int = 1
+    project_skew: float = 1.0
+    metadata_keys: int = 0
+    batch_runs: int = 100
+
+    def __post_init__(self) -> None:
+        for name in ("fields_per_side", "projects", "batch_runs"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ProfileError(f"{name} must be a whole number of at least 1, got {value!r}")
+        if isinstance(self.metadata_keys, bool) or not isinstance(self.metadata_keys, int) or self.metadata_keys < 0:
+            raise ProfileError(f"metadata_keys must be a whole number of 0 or more, got {self.metadata_keys!r}")
+        _number(self.project_skew, "project_skew")
+        if self.content not in CONTENTS:
+            raise ProfileError(f"content is one of {', '.join(CONTENTS)}, got {self.content!r}")
+        if self.send not in SENDS:
+            raise ProfileError(f"send is one of {', '.join(SENDS)}, got {self.send!r}")
+        _number(self.attachment_kib_per_run, "attachment_kib_per_run")
 
 
 class ProfileError(ValueError):
@@ -36,6 +66,7 @@ class Profile:
     read_mix: dict[str, dict[str, Any]]
     heavy_window_days: float
     targets: dict[str, float]
+    shape: Shape = field(default_factory=Shape)
     document: dict[str, Any] = field(default_factory=dict)
 
 
@@ -70,6 +101,15 @@ def _payload(mix: dict[str, Any], sizes: dict[str, Any], single: Any) -> tuple[d
         name: (_number(sizes[name]["in"], f"sizes_kib.{name}.in", positive=True), _number(sizes[name]["out"], f"sizes_kib.{name}.out", positive=True))
         for name in weights
     }
+
+
+def _shape(payload: dict[str, Any]) -> Shape:
+    return Shape(
+        fields_per_side=_get(payload, "fields_per_side"), content=_get(payload, "content"), send=_get(payload, "send"),
+        attachment_kib_per_run=_number(_get(payload, "attachment_kib_per_run"), "write.payload.attachment_kib_per_run"),
+        projects=_get(payload, "projects"), project_skew=_number(_get(payload, "project_skew"), "write.payload.project_skew"),
+        metadata_keys=_get(payload, "metadata_keys"), batch_runs=_get(payload, "batch_runs"),
+    )
 
 
 def _read_mix(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -109,6 +149,7 @@ def from_document(document: dict[str, Any]) -> Profile:
         read_mix=_read_mix(_get(document, "read", "mix")),
         heavy_window_days=_number(_get(document, "read", "heavy_window_days"), "read.heavy_window_days", positive=True),
         targets=_targets(_get(document, "targets")),
+        shape=_shape(_get(document, "write", "payload")),
         document=document,
     )
 
@@ -136,5 +177,6 @@ def from_params() -> Profile:
         read_mix=_read_mix(p["load.read_mix"]),
         heavy_window_days=_number(p["load.heavy_window_days"], "load.heavy_window_days", positive=True),
         targets=_targets({"stored_within_seconds": p["slo.stored_within_seconds"], "trace_load_seconds": p["slo.trace_load_seconds"]}),
+        shape=_shape({**p["load.payload_shape"], "attachment_kib_per_run": 0.0}),
         document={"schema": SCHEMA, "source": "langsmith_sizing params defaults"},
     )

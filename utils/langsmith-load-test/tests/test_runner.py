@@ -1,11 +1,13 @@
 """The whole write path, run against a fake client: what is sent, drained, flushed, counted and reported."""
 
+import dataclasses
 import json
 import threading
 import unittest
 from uuid import uuid4
 
 from fakes import FakeClient
+from loadtest.draw import Projects
 from loadtest.payloads.generator import KIB
 from loadtest.profile import from_document
 from loadtest.runner import LoadSettings, build_report, run_load_test
@@ -32,7 +34,7 @@ def settings(**overrides) -> LoadSettings:
 async def run(client: FakeClient, loaded=None, **overrides):
     config = settings(**overrides)
     loaded = loaded or small_profile()
-    outcome = await run_load_test(config, loaded, client, "p", uuid4())
+    outcome = await run_load_test(config, loaded, client, Projects(("p",), (uuid4(),)))
     return outcome, build_report(outcome, config, loaded, "p", True, 0, None)
 
 
@@ -74,6 +76,36 @@ class ClosedLoopTest(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len(text.encode()), 2 * KIB - 16)
         self.assertEqual(len(client.patched), 12)
 
+    async def test_post_once_sends_each_run_finished_with_its_attachment_in_one_request(self) -> None:
+        loaded = small_profile()
+        loaded = dataclasses.replace(loaded, shape=dataclasses.replace(loaded.shape, send="post_once", attachment_kib_per_run=3, fields_per_side=2, content="json"))
+        client = FakeClient()
+        await run(client, loaded, run_limit=2, users=1)
+        self.assertEqual((len(client.created), len(client.patched)), (6, 0))
+        for run_ in client.created:
+            self.assertIsNotNone(run_.get("end_time"))
+            self.assertEqual(set(run_["outputs"]), {"output_0", "output_1"})
+            self.assertIsInstance(run_["inputs"]["input_0"], list)
+            self.assertEqual(len(run_["attachments"]["file"][1]), 3 * KIB)  # the SDK passes it on as (mime type, bytes)
+
+    async def test_traces_spread_over_projects_by_rank_and_feedback_follows_each_trace(self) -> None:
+        loaded = small_profile(runs_per_trace=1, feedback_per_trace=1)
+        loaded = dataclasses.replace(loaded, shape=dataclasses.replace(loaded.shape, metadata_keys=10))
+        projects = Projects(("p-000", "p-001", "p-002"), (uuid4(), uuid4(), uuid4()), skew=1.0)
+        client = FakeClient()
+        config = settings(run_limit=600, users=4)
+        await run_load_test(config, loaded, client, projects)
+        per = [sum(r["session_name"] == name for r in client.created) for name in projects.names]
+        # Zipf 1 over three ranks: 6/11, 3/11 and 2/11 of the traces.
+        for share, count in zip((6 / 11, 3 / 11, 2 / 11), per, strict=True):
+            self.assertAlmostEqual(count / 600, share, delta=0.06)
+        by_trace = {r["id"]: projects.ids[projects.names.index(r["session_name"])] for r in client.created}
+        self.assertEqual({call["session_id"] for call in client.feedback if by_trace[call["trace_id"]] != call["session_id"]}, set())
+        meta = client.created[0]["extra"]["metadata"]
+        self.assertEqual(len([k for k in meta if k.startswith("key_")]), 10)
+        ids = {r["extra"]["metadata"]["key_00"] for r in client.created}
+        self.assertEqual(len(ids), 600)  # every fifth key, the first included, is a per-trace id
+
     async def test_a_hung_feedback_call_is_cancelled_after_the_drain_and_counted(self) -> None:
         client = FakeClient()
         release = threading.Event()
@@ -96,7 +128,7 @@ class ClosedLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["passed"])
 
     async def test_without_a_client_nothing_is_sent_and_nothing_is_stored(self) -> None:
-        outcome = await run_load_test(settings(run_limit=3, users=1), small_profile(), None, "p", None)
+        outcome = await run_load_test(settings(run_limit=3, users=1), small_profile(), None, Projects(("p",), (uuid4(),)))
         self.assertEqual((outcome.write.traces_sent, outcome.write.runs_sent), (3, 9))
         self.assertEqual((outcome.stored.traces, outcome.stored.runs), (None, None))
 

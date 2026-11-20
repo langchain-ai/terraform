@@ -12,6 +12,7 @@ TIB = GIB * KIB
 KILO = 1000  # KB to MB, millicores to cores
 GB = KILO**3  # decimal gigabyte, bytes
 TB = KILO**4  # decimal terabyte, bytes
+GIB_TO_GB = GIB / GB
 PERCENT = 100
 SECONDS_PER_HOUR = 3600
 SECONDS_PER_DAY = 86_400

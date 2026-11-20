@@ -31,7 +31,7 @@ EVERY_PLAN = {
     "ingest": {"param:ingest.runs_per_core_points", "param:ingest.cpu_headroom", "param:ingest.min_pods", "param:keda.max_factor", "param:keda.round_to", "derived:rates", "derived:payload"},
     "payload": {"param:payload.bucket_kib", "param:payload.smithdb_kb_per_run", "param:payload.blob_kb_per_run", "param:payload.redis_kb_per_run", "param:payload.partial_inline_share", "input:payload_mix", "chart:config.blobStorage.minBlobStorageSizeKb"},
     "rates": {"input:traces", "param:load.runs_per_trace", "param:load.peak_factor", "param:time.seconds_per_month", "param:time.seconds_per_year"},
-    "rates.beyond_tested": {"param:payload.tested_traces_per_second"},
+    "rates.beyond_payload_tested": {"param:payload.tested_traces_per_second"},
     "smithdb.auto": {"param:smithdb.peak_runs_bands", "docs:smithdb.tested_qps", "docs:scale.read_anchors", "derived:rates"},
     "regime": {"param:regimes", "param:smithdb.peak_runs_bands", "derived:rates", "input:survives_node_loss"},
     "pools": {"param:pools.overhead", "param:pools.app_node", "param:pools.app_min_nodes", "derived:totals"},

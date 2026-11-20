@@ -1,11 +1,9 @@
 """The deployable half of a plan: each store's spec for where it runs, the namespace totals, the
 node pools and the chart values that apply it.
 
-`assemble` adds to a plan that has been sized: the stores' `placement` and `spec`, `dbs` (the
-in-cluster instances), `totals`, `pools` and `values`. The calculator's quantities (totals.cpu,
-pools.app.nodes, dbs.<id>.count ...) are computed from the model's own figures, before a regime
-adjusts the replicas, so they compare with the calculator; what the chart values apply, with its
-autoscalers' floors and ceilings and the hook Jobs' peak, is under `applied`.
+`assemble` adds to a plan that has been sized: the stores' `placement` and `spec`, `totals`, `pools`
+and `values`. Totals and pools are what the chart values run, at the autoscalers' floors, at the
+sized replicas and at their ceilings, with the hook Jobs' peak on top.
 """
 
 from __future__ import annotations
@@ -16,17 +14,9 @@ from typing import Any
 from langsmith_sizing import values as values_mod
 from langsmith_sizing.chart import Chart, gib, hook_jobs, merge
 from langsmith_sizing.model import datastores as ds
-from langsmith_sizing.model import lite
+from langsmith_sizing.model import lite, watch
 from langsmith_sizing.model import totals as tot
-from langsmith_sizing.model.watch import _warn
-
-DB_IDS = (("ls-postgres", "postgres"), ("ls-redis", "redis"), ("clickhouse", "clickhouse"), ("smithdb-metastore", "smithdb_metastore"), ("object-store", "object_storage"))
-"""The calculator's names for the in-cluster databases, then the ones it counts as managed."""
-
-
-def _model(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """The model's own figures, before a regime adjusted them."""
-    return dict(entry) | dict(entry.get("regime_adjusted", {}))
+from langsmith_sizing.model.watch import warn
 
 
 def _entry(name: str, pool: str, e: Mapping[str, Any], volume_gib: float | None = None) -> dict[str, Any]:
@@ -103,59 +93,33 @@ def _stores(body: dict[str, Any], r: Mapping[str, Any], p: Mapping[str, Any], ci
             ch |= {"fits_app_node": None, "node_cpu": None, "node_mem_gib": None}
 
 
-def _dbs(st: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """Every instance the cluster runs for a store, by the calculator's id."""
-    out: dict[str, dict[str, Any]] = {}
-    for did, key in DB_IDS:
-        store = st.get(key)
+def _store_pods(st: Mapping[str, Any], datastores_on: str) -> list[dict[str, Any]]:
+    """Every pod the cluster runs for a store: the store's own, then its extras (Redis Sentinel)."""
+    out, pool = [], "app" if datastores_on == "app" else "datastores"
+    for key, store in st.items():
         if not store or store["spec"]["placement"] == "external":
             continue
         spec = store["spec"]
-        rows = [(did, spec["instances"], spec["per_instance"], store["placement"])] + [(e["name"], e["instances"], e["per_instance"], store["placement"]) for e in spec["extra"]]
-        for name, count, pod, place in rows:
-            out[name] = {"count": count, "cpu": pod["requests"]["cpu"], "memory_gib": pod["requests"]["memory_gib"], "requests": pod["requests"], "limits": pod["limits"], "volume_gib": pod["volume_gib"], "placement": place}
+        for name, count, pod in [(key.replace("_", "-"), spec["instances"], spec["per_instance"])] + [(e["name"], e["instances"], e["per_instance"]) for e in spec["extra"]]:
+            out.append({"name": name, "pool": pool, "requests": pod["requests"], "limits": pod["limits"], "volume_gib": pod["volume_gib"], "replicas": dict.fromkeys(("min", "sized", "max"), count)})
     return out
 
 
-def _entries(body: Mapping[str, Any], dbs: Mapping[str, Any], adjust: Any, datastores_on: str) -> list[dict[str, Any]]:
-    """Every pod the plan sizes with the pool it runs on; `adjust` picks the figures to read."""
-    out = [_entry(n, "app", adjust(w)) for n, w in body["workloads"].items()]
+def _entries(body: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every pod the plan sizes with the pool it runs on."""
+    out = [_entry(n, "app", w) for n, w in body["workloads"].items()]
     unified = body["smithdb"]["topology"] == "unified"
     for n, c in body["smithdb"]["components"].items():
-        e = adjust(c)
-        out.append(_entry(n if unified else f"smithdb-{n}", "smithdb", e, e["cache_gib"]))
+        out.append(_entry(n if unified else f"smithdb-{n}", "smithdb", c, c["cache_gib"]))
     for n, x in body["products"]["pods"].items():
         out.append(_entry(n, x.get("pool", "app"), x))
-    pool = "app" if datastores_on == "app" else "datastores"
-    for n, d in dbs.items():
-        out.append({"name": n, "pool": pool, "requests": d["requests"], "limits": d["limits"], "volume_gib": d["volume_gib"], "replicas": dict.fromkeys(("min", "sized", "max"), d["count"])})
-    return out
+    return out + _store_pods(body["stores"], body["inputs"]["datastores_on"])
 
 
-def _warnings(body: Mapping[str, Any], pools: Mapping[str, Any]) -> list[dict[str, Any]]:
-    out = []
-    for name, pl in pools.items():
-        if pl.get("largest_pod_fits") is False:
-            out.append(_warn("pod-does-not-fit-node", "action", f"The largest pod of the {name} pool, {pl['largest_pod']} ({pl['largest_pod_cpu']:g} vCPU, {pl['largest_pod_mem_gib']:g} GiB), does not fit a {pl['node_cpu']:g} vCPU, {pl['node_mem_gib']:g} GiB node: give the pool a larger node, or move that store out of the cluster", pool=name, pod=pl["largest_pod"]))
-    ch = body["stores"]["clickhouse"]
-    if ch and ch.get("fits_app_node") is False:
-        out.append(_warn("clickhouse-does-not-fit-node", "action", f"One ClickHouse pod does not fit the node it is placed on; it fits a {ch['node_cpu']:g} vCPU, {ch['node_mem_gib']:g} GiB node, one a replica", node_cpu=ch["node_cpu"], node_mem_gib=ch["node_mem_gib"]))
-    single = pools.get("single_node")
-    if single and not single["fits"]:
-        out.append(_warn("single-node-hook-peak", "action", "Everything plus the largest hook Job does not fit the one node: Helm's hook Jobs run beside the pods and set the peak", requests_cpu=single["requests"]["cpu"], requests_mem_gib=single["requests"]["memory_gib"]))
-    return out
-
-
-def _pools(model: list[dict[str, Any]], applied: list[dict[str, Any]], floors: Mapping[str, int], nodes: Mapping[str, tuple[dict[str, float], str]], overhead: float) -> dict[str, Any]:
-    """Each pool that holds a pod: its nodes at the model's replicas, and at what the values apply."""
-    pools: dict[str, Any] = {}
-    for name, (node, node_from) in nodes.items():
-        entries = [e for e in model if e["pool"] == name]
-        if not entries:
-            continue
-        pools[name] = tot.pool(entries, node, floors[name], overhead, node_from)
-        pools[name]["applied"] = tot.pool([e for e in applied if e["pool"] == name], node, floors[name], overhead, node_from)["applied"]
-    return pools
+def _pools(entries: list[dict[str, Any]], floors: Mapping[str, int], nodes: Mapping[str, tuple[dict[str, float], str]], overhead: float) -> dict[str, Any]:
+    """Each pool that holds a pod."""
+    return {name: tot.pool(held, node, floors[name], overhead, node_from)
+            for name, (node, node_from) in nodes.items() if (held := [e for e in entries if e["pool"] == name])}
 
 
 def assemble(body: dict[str, Any], *, p: Mapping[str, Any], cited: Any, chart: Chart, pods: Mapping[str, Any], keys: Mapping[str, str], prov: Any) -> None:
@@ -166,44 +130,37 @@ def assemble(body: dict[str, Any], *, p: Mapping[str, Any], cited: Any, chart: C
     ds_node, ds_from = _shape(r["datastore_node"], app_node, "pools.app_node")
     landing = ds_node if r["datastores_on"] == "dedicated" else app_node
     _stores(body, r, p, cited, chart, pods, landing)
-    dbs = _dbs(body["stores"])
-    body["dbs"] = dbs
-    prov("dbs", "derived:stores", "param:datastores.operator_instances", "param:datastores.limit_factor", "param:datastores.redis_maxmemory_share", "param:datastores.redis_sentinel", "param:datastores.object_store_pod", "param:smithdb.metastore_disk_gib", "docs:scale.postgres", "docs:smithdb.metastore", "chart:postgres.statefulSet.resources", "chart:redis.statefulSet.resources", "chart:redis.statefulSet.persistence.size", "chart:clickhouse.statefulSet.resources")
 
+    prov("stores", "param:datastores.operator_instances", "param:datastores.limit_factor", "param:datastores.redis_maxmemory_share", "param:datastores.redis_sentinel", "param:datastores.object_store_pod", "docs:scale.postgres", "chart:postgres.statefulSet.resources", "chart:redis.statefulSet.resources", "chart:redis.statefulSet.persistence.size", "chart:clickhouse.statefulSet.resources")
     prov("stores.smithdb_metastore", "docs:smithdb.metastore", "param:smithdb.metastore_disk_gib", "param:datastores.limit_factor", "input:smithdb_metastore")
     values = values_mod.overlay(body, chart, keys)
     body["values"] = values
     prov("values", "derived:workloads", "derived:smithdb", "derived:scale", "derived:configure", "derived:stores", "chart:autoscaling")
 
-    model = _entries(body, dbs, _model, r["datastores_on"])
-    applied = _entries(body, dbs, dict, r["datastores_on"])
-    floors = {"app": p["pools.app_min_nodes"], "smithdb": p["pools.smithdb_min_nodes"], "datastores": max(p["pools.datastores_min_nodes"], *(d["count"] for d in dbs.values()), 0)}
+    entries = _entries(body)
+    stored = [e for e in entries if e["pool"] == "datastores"]
+    floors = {"app": p["pools.app_min_nodes"], "smithdb": p["pools.smithdb_min_nodes"], "datastores": max(p["pools.datastores_min_nodes"], *(e["replicas"]["sized"] for e in stored), 0)}
     nodes = {"app": (app_node, app_from), "smithdb": (sdb_node, sdb_from), "datastores": (ds_node, ds_from)}
     sandboxes = body["products"].get("sandboxes")
     if sandboxes:
         nodes["sandboxes"] = (sandboxes["node"], sandboxes["node_from"])
         floors["sandboxes"] = sandboxes["min_hosts"]
-    pools = _pools(model, applied, floors, nodes, overhead)
+    pools = _pools(entries, floors, nodes, overhead)
     if sandboxes:
         # One host pod a node (pod anti-affinity): the pool is as many nodes as hosts, whatever they ask.
         sb = pools["sandboxes"]
-        sb["nodes"], sb["min_nodes"] = sandboxes["hosts"], sandboxes["min_hosts"]
         for phase, n in (("floor", sandboxes["min_hosts"]), ("sized", sandboxes["hosts"]), ("ceiling", sandboxes["hosts"])):
-            sb["applied"][phase]["nodes"] = n
+            sb[phase]["nodes"] = n
         sb["one_pod_a_node"] = True
         juicefs = p["sandboxes.juicefs_redis"]
         body["stores"]["sandboxes_juicefs_redis"] = {"placement": "external", "spec": {"placement": "external", "instance": {
             "vcpu": juicefs["cpu"], "memory_gib": juicefs["memory_gib"], "maxmemory_policy": cited["sandboxes.juicefs_redis"]["maxmemory_policy"], "dedicated": True}}}
         prov("stores.sandboxes_juicefs_redis", "param:sandboxes.juicefs_redis", "docs:sandboxes.juicefs_redis")
 
-    summary = tot.totals([e for e in model if e["name"] not in dbs], [e for e in model if e["name"] in dbs], overhead)
-    sums = {name: tot.pod_sum(applied, which) for name, which in tot.PHASES.items()}
+    sums = {name: tot.pod_sum(entries, which) for name, which in tot.PHASES.items()}
     # The products' keys and URLs are <placeholders> in the values; their stand-ins let the chart render.
     jobs = hook_jobs(chart.render(merge(values, body["products"]["render"])))
-    body["totals"] = summary | {
-        "nodes": pools["app"]["nodes"], "min_nodes": pools["app"]["min_nodes"], "volume_gib": tot.pod_sum(model, "sized")["volume_gib"],
-        "applied": sums, "hooks": {"base": "ceiling", "jobs": jobs, "peak": tot.hook_peak(jobs, sums["ceiling"])},
-    }
+    body["totals"] = {"overhead": overhead, **sums, "hooks": {"base": "ceiling", "jobs": jobs, "peak": tot.hook_peak(jobs, sums["ceiling"])}}
     if body["regime"]["turns_on"].get("one_node"):
         peak = tot.hook_peak(jobs, sums["sized"])
         rq = peak["requests"]
@@ -212,16 +169,16 @@ def assemble(body: dict[str, Any], *, p: Mapping[str, Any], cited: Any, chart: C
             "cpu": rq["cpu"] * overhead, "mem_gib": rq["memory_gib"] * overhead, "fits": tot.fits(rq["cpu"] * overhead, rq["memory_gib"] * overhead, app_node),
         }
     body["pools"] = pools
-    body["warnings"] += _warnings(body, pools)
+    body["warnings"] += watch.pool_warnings(body, pools)
     measured = p["datastores.object_store_measured_traces_per_second"]
     if r["object_store"] == "in-cluster" and body["rates"]["peak_traces_per_second"] > measured:
-        body["warnings"].append(_warn("object-store-unmeasured", "action", f"The in-cluster object store was measured only up to {measured:g} traces/s; past it no figure sizes it: use an external bucket or measure first"))
-    prov("totals", "param:pools.overhead", "derived:workloads", "derived:smithdb", "derived:dbs", "chart:hook-jobs")
+        body["warnings"].append(warn("object-store-unmeasured", "action", f"The in-cluster object store was measured only up to {measured:g} traces/s; past it no figure sizes it: use an external bucket or measure first"))
+    prov("totals", "param:pools.overhead", "derived:workloads", "derived:smithdb", "derived:stores", "chart:hook-jobs")
     prov.extend("warnings", "param:datastores.object_store_measured_traces_per_second")
     prov("pools", "param:pools.overhead", "param:pools.app_node", "param:pools.smithdb_node", "param:pools.app_min_nodes", "param:pools.smithdb_min_nodes", "param:pools.datastores_min_nodes", "param:pools.clickhouse_node_shapes", "derived:totals")
 
 
 def stores_json(body: Mapping[str, Any]) -> dict[str, Any]:
-    """What to provision: each store's placement and spec, and the instances the cluster runs for them."""
+    """What to provision: each store's placement and spec, in-cluster instances included."""
     out = {k: {"placement": s["placement"], "spec": s["spec"]} for k, s in body["stores"].items() if s}
-    return {"schema": 1, "chart": body["chart"], "stores": out, "smithdb_cache_volume": body["smithdb"]["cache_volume"], "dbs": body["dbs"], "warnings": [w for w in body["warnings"] if w["id"].startswith(("redis", "postgres", "object-store", "clickhouse"))]}
+    return {"schema": 1, "chart": body["chart"], "stores": out, "smithdb_cache_volume": body["smithdb"]["cache_volume"], "warnings": [w for w in body["warnings"] if w["id"].startswith(("redis", "postgres", "object-store", "clickhouse"))]}

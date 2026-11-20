@@ -22,22 +22,21 @@ WORKERS = 32
 
 
 class FeedbackSender:
-    def __init__(self, client: Client, project_id: UUID, per_trace: float, counts: results.WriteCounts) -> None:
+    def __init__(self, client: Client, per_trace: float, counts: results.WriteCounts) -> None:
         self._client = client
-        self._project_id = project_id
         self._per_trace = per_trace
         self._counts = counts
         self._pool = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="feedback")
         self._pending: set[asyncio.Future[Any]] = set()
 
-    def send(self, trace_id: UUID, number: int) -> None:
+    def send(self, trace_id: UUID, number: int, project_id: UUID) -> None:
         """The feedback due on trace `number`, started without waiting for it."""
         loop = asyncio.get_running_loop()
         for _ in range(share_due(self._per_trace, number)):
             sent = loop.run_in_executor(
                 self._pool,
                 functools.partial(
-                    self._client.create_feedback, run_id=trace_id, trace_id=trace_id, session_id=self._project_id,
+                    self._client.create_feedback, run_id=trace_id, trace_id=trace_id, session_id=project_id,
                     key=FEEDBACK_KEY, score=1.0,
                 ),
             )

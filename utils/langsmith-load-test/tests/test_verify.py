@@ -30,7 +30,7 @@ class StoredCountsTest(unittest.IsolatedAsyncioTestCase):
     async def test_counts_roots_then_everything_for_this_tests_id_only(self) -> None:
         client = Counting([4, 12])
         project = uuid4()
-        self.assertEqual(await verify.stored_counts(client, project, "tid", SINCE), (4, 12))
+        self.assertEqual(await verify.stored_counts(client, [project], "tid", SINCE), (4, 12))
         roots, everything = client.stats_calls
         self.assertIs(roots["is_root"], True)
         self.assertNotIn("is_root", everything)
@@ -46,7 +46,7 @@ class SettleTest(unittest.IsolatedAsyncioTestCase):
     async def settle(self, client: Counting, runs_sent: int, seconds: float) -> tuple[verify.Stored, float]:
         started = time.monotonic()
         with mock.patch.object(verify, "SETTLE_POLL_SECONDS", 0.01):
-            stored = await verify.settle(client, uuid4(), "tid", SINCE, runs_sent, seconds)
+            stored = await verify.settle(client, [uuid4()], "tid", SINCE, runs_sent, seconds)
         return stored, time.monotonic() - started
 
     async def test_returns_at_once_when_every_run_is_stored(self) -> None:

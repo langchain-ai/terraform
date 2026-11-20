@@ -10,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-# The chart has no setting for a per-operation memory limit at 0.17.35, 0.17.56, 0.18.0-rc.57 or 0.18.0-rc.79 (searched
-# its values); no replica count saves one query larger than a pod's memory.
+# The chart has no setting for a per-operation memory limit at 0.17.60 or 0.18.0-rc.82 (its values
+# searched 2026-11-18, as at every chart before them); no replica count saves one query larger than a pod's memory.
 OPERATION_MEMORY = {
     "workloads": ["smithdb-query", "smithdb-stats-query"],
     "recommendation": "Cap the memory one query or stats operation may use, below the pod's memory limit, so the operation fails and the pod stays up.",

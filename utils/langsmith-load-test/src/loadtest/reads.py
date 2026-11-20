@@ -1,7 +1,7 @@
 """Read load: the five classes the sizing model weights, sent with the pinned langsmith SDK.
 
 Each class is one SDK call (the SDK's v2 resources, which call the instance's /api/v2/ endpoints;
-an instance without them answers not found, and those reads count as errors). Reads touch the test's project; heavy_filter also filters on the test's id.
+an instance without them answers not found, and those reads count as errors). Reads touch the test's projects, the busier ones more often; heavy_filter also filters on the test's id.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from langsmith import Client
-from loadtest.draw import weighted_choice
+from loadtest.draw import Projects, weighted_choice
 from loadtest.stats import summarize
 
 if TYPE_CHECKING:
@@ -45,16 +45,17 @@ class TracePool:
     """Traces old enough to be stored: a read of a trace still in flight would count as an error."""
 
     min_age_seconds: float
-    fresh: deque[tuple[float, str, datetime.datetime]] = field(default_factory=deque)
-    aged: list[tuple[str, datetime.datetime]] = field(default_factory=list)
+    fresh: deque[tuple[float, str, datetime.datetime, str]] = field(default_factory=deque)
+    aged: list[tuple[str, datetime.datetime, str]] = field(default_factory=list)
 
-    def add(self, trace_id: str, sent_at: float, started: datetime.datetime) -> None:
-        self.fresh.append((sent_at, trace_id, started))
+    def add(self, trace_id: str, sent_at: float, started: datetime.datetime, project_id: str) -> None:
+        self.fresh.append((sent_at, trace_id, started, project_id))
 
-    def pick(self, now: float, random_source: random.Random) -> tuple[str, datetime.datetime] | None:
+    def pick(self, now: float, random_source: random.Random) -> tuple[str, datetime.datetime, str] | None:
+        """(trace id, start, its project id) of a trace old enough to read."""
         while self.fresh and now - self.fresh[0][0] >= self.min_age_seconds:
-            _, trace_id, started = self.fresh.popleft()
-            self.aged.append((trace_id, started))
+            _, trace_id, started, project_id = self.fresh.popleft()
+            self.aged.append((trace_id, started, project_id))
         if len(self.aged) > 2 * POOL_LIMIT:
             del self.aged[:-POOL_LIMIT]
         return random_source.choice(self.aged) if self.aged else None
@@ -79,11 +80,11 @@ class ClassStats:
 
 class Reader:
     def __init__(
-        self, client: Client, project_id: UUID, test_id: str, started: datetime.datetime,
+        self, client: Client, projects: Projects, test_id: str, started: datetime.datetime,
         profile_mix: dict[str, dict[str, object]], heavy_window_days: float, pool: TracePool, seed: int | None,
     ) -> None:
         self.client = client
-        self.project_id = str(project_id)
+        self.projects = projects
         self.test_id = test_id
         self.started = started
         self.weights = {name: float(entry["weight"]) for name, entry in profile_mix.items()}  # type: ignore[arg-type]
@@ -96,10 +97,14 @@ class Reader:
             "feedback_stats": self.feedback_stats, "heavy_filter": self.heavy_filter,
         }
 
+    def _project(self) -> str:
+        """A project drawn as traces are written to them, so reads land where the writes are."""
+        return str(self.projects.ids[self.projects.pick(self.random_source)])
+
     async def list_traces(self) -> object:
         # client.traces.query: the most recent root traces of the project, one page.
         return await self.client.traces.query(
-            project_id=self.project_id, min_start_time=self.started, page_size=LIST_LIMIT, selects=LIST_SELECTS,
+            project_id=self._project(), min_start_time=self.started, page_size=LIST_LIMIT, selects=LIST_SELECTS,
         )
 
     async def read_trace(self) -> object:
@@ -107,21 +112,21 @@ class Reader:
         picked = self.pool.pick(time.monotonic(), self.random_source)
         if picked is None:
             return None
-        trace_id, started = picked
+        trace_id, started, project_id = picked
         return await self.client.traces.list_runs(
-            trace_id, project_id=self.project_id, min_start_time=started - TRACE_WINDOW,
+            trace_id, project_id=project_id, min_start_time=started - TRACE_WINDOW,
             max_start_time=started + TRACE_WINDOW, selects=TRACE_SELECTS,
         )
 
     async def project_stats(self) -> object:
         # Client.read_project(include_stats=True): the project row with run count, latency and error rate.
-        return await asyncio.to_thread(self.client.read_project, project_id=self.project_id, include_stats=True)
+        return await asyncio.to_thread(self.client.read_project, project_id=self._project(), include_stats=True)
 
     async def feedback_stats(self) -> object:
         # The SDK has no feedback-statistics method. Client.get_run_stats (POST /runs/stats) over the
         # project's root runs that carry the test's feedback key returns run_count and feedback_stats.
         return await asyncio.to_thread(
-            self.client.get_run_stats, project_ids=[self.project_id], is_root=True,
+            self.client.get_run_stats, project_ids=list[UUID | str](self.projects.ids), is_root=True,
             start_time=self.started.isoformat(), filter=f'eq(feedback_key, "{FEEDBACK_KEY}")',
         )
 
@@ -129,7 +134,7 @@ class Reader:
         # client.runs.query: a metadata filter on the test's id across the heavy window.
         now = datetime.datetime.now(datetime.UTC)
         return await self.client.runs.query(
-            project_ids=[self.project_id], is_root=True, filter=run_filter(self.test_id),
+            project_ids=self.projects.id_strings, is_root=True, filter=run_filter(self.test_id),
             min_start_time=now - self.heavy_window, max_start_time=now, page_size=LIST_LIMIT, selects=LIST_SELECTS,
         )
 

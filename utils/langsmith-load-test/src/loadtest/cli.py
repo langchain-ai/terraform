@@ -9,10 +9,11 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 from dotenv import load_dotenv
@@ -20,8 +21,11 @@ from langsmith import Client
 from langsmith.utils import tracing_is_enabled
 from langsmith_sizing import ui
 from langsmith_sizing.summary import Table
-from loadtest.profile import Profile, ProfileError, from_file, from_params
-from loadtest.runner import LoadSettings, build_report, run_load_test
+from loadtest import cluster
+from loadtest.draw import Projects, project_names
+from loadtest.profile import CONTENTS, SENDS, Profile, ProfileError, Shape, from_file, from_params
+from loadtest.results import NOT_READ
+from loadtest.runner import LoadOutcome, LoadSettings, build_report, run_load_test
 from rich.console import Console
 
 SETUP_ERROR = 2
@@ -57,6 +61,15 @@ def build_parser(defaults: LoadSettings) -> argparse.ArgumentParser:
     load.add_argument("--simulated-delay-ms", type=float, default=defaults.simulated_delay_ms, help="add this many milliseconds of local work before each trace")
     load.add_argument("--feedback-per-trace", type=float, help="feedback writes per trace; the profile's or the model's default (load.feedback_per_trace) when omitted; 0 disables")
     load.add_argument("--data-seed", type=int, help="seed for repeatable text and size draws")
+    shape = parser.add_argument_group("payload shape (each replaces the profile's; vary one at a time to measure what it costs)")
+    shape.add_argument("--fields-per-side", type=int, help="fields an input and an output each split into, the size spread evenly")
+    shape.add_argument("--content", choices=CONTENTS, help="text (prose), json (a message list) or base64 (incompressible bytes)")
+    shape.add_argument("--send", choices=SENDS, help="post_then_patch (a create, then an update) or post_once (a finished run in one request)")
+    shape.add_argument("--attachment-kib", type=float, help="attachment KiB sent with every run; 0 sends none")
+    shape.add_argument("--projects", type=int, help="projects the traces spread over (named <LANGSMITH_PROJECT>-000 on), the first the busiest")
+    shape.add_argument("--project-skew", type=float, help="Zipf exponent of that spread: 0 is even, 1 puts a third of 10 projects' traces on the first")
+    shape.add_argument("--metadata-keys", type=int, help="metadata keys a run carries beyond the test's own, every fifth a per-trace id")
+    shape.add_argument("--batch-runs", type=int, help="the most runs the SDK sends in one request (its default 100)")
     reads = parser.add_argument_group("reads")
     reads.add_argument("--read", action="store_true", help="send read load across the profile's read mix")
     reads.add_argument("--reads-per-second", type=float, help="read rate; the profile's read.requests_per_second when --profile is given")
@@ -66,6 +79,11 @@ def build_parser(defaults: LoadSettings) -> argparse.ArgumentParser:
     verify.add_argument("--lag-deadline-seconds", type=float, default=defaults.lag_deadline_seconds, help="a sampled run not readable by then counts as never readable")
     verify.add_argument("--lag-poll-seconds", type=float, default=defaults.lag_poll_seconds, help="seconds between readable checks; the resolution of a lag")
     verify.add_argument("--settle-seconds", type=float, default=defaults.settle_seconds, help="after the load, how long to wait for stored runs to reach runs sent")
+    cluster = parser.add_argument_group("the install's own metrics (read through kubectl while the load runs)")
+    cluster.add_argument("--namespace", help="the namespace LangSmith runs in; without it only the client side is measured")
+    cluster.add_argument("--release", default="langsmith", help="the Helm release name, the prefix of every workload's name")
+    cluster.add_argument("--kube-context", help="the kubectl context; the current one when omitted")
+    cluster.add_argument("--sample-seconds", type=float, default=15, help="seconds between samples; raise it on a cluster of hundreds of nodes, where each sample reads every node's cAdvisor")
     output = parser.add_argument_group("output")
     output.add_argument("--results", type=Path, help="write the langsmith-load-results/1 JSON here")
     output.add_argument("--latency-limit-seconds", type=float, help="fail if the p95 time to hand a trace to the SDK exceeds this limit")
@@ -73,6 +91,26 @@ def build_parser(defaults: LoadSettings) -> argparse.ArgumentParser:
     output.add_argument("--feedback-drain-seconds", type=float, default=defaults.feedback_drain_seconds, help="after the load, how long to wait for feedback still in flight; the rest count as errors")
     output.add_argument("--json", action="store_true", help="print the results document to stdout; logs go to stderr")
     return parser
+
+
+CLUSTER_OPTIONS = ("namespace", "release", "kube_context", "sample_seconds")
+
+
+def cluster_options(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Take the options for reading the install out of the parsed arguments; the rest are the load's."""
+    return {name: arguments.pop(name) for name in CLUSTER_OPTIONS}
+
+
+SHAPE_FLAGS = {
+    "fields_per_side": "fields_per_side", "content": "content", "send": "send", "attachment_kib": "attachment_kib_per_run",
+    "projects": "projects", "project_skew": "project_skew", "metadata_keys": "metadata_keys", "batch_runs": "batch_runs",
+}
+
+
+def _with_shape_flags(base: Profile, arguments: dict[str, Any]) -> Profile:
+    """The profile's payload shape with each shape flag given replacing its part."""
+    given = {field: value for flag, field in SHAPE_FLAGS.items() if (value := arguments.pop(flag)) is not None}
+    return dataclasses.replace(base, shape=dataclasses.replace(base.shape, **given))
 
 
 def resolve(arguments: dict[str, Any], profile: Profile | None) -> tuple[Profile, dict[str, Any]]:
@@ -83,6 +121,7 @@ def resolve(arguments: dict[str, Any], profile: Profile | None) -> tuple[Profile
     feedback = arguments.pop("feedback_per_trace")
     if feedback is not None:
         base = dataclasses.replace(base, feedback_per_trace=feedback)
+    base = _with_shape_flags(base, arguments)
     if peak and profile is None:
         raise ValueError("--peak needs a --profile")
     rate = arguments["traces_per_second"]
@@ -118,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser(LoadSettings())
     arguments = vars(parser.parse_args(argv))
     json_output = arguments.pop("json")
+    watch = cluster_options(arguments)
     results_path = arguments.pop("results")
     profile_path = arguments.pop("profile")
     try:
@@ -137,10 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     if json_output:
         # stdout carries the results document alone; everything a person reads goes to stderr
         ui.console = Console(theme=ui.THEME, stderr=True, highlight=False)
-    mode = f"open loop at {settings.traces_per_second:g} traces/s" if settings.traces_per_second else f"closed loop, {settings.users} users"
-    ui.banner("LangSmith load test", f"{os.getenv('LANGSMITH_ENDPOINT', '(no endpoint: local only)')}\n{mode}, {settings.duration_seconds:g} s after a {settings.ramp_up_seconds:g} s ramp; "
-              f"reads {f'{settings.reads_per_second:g}/s' if settings.read else 'off'}; run limit {settings.run_limit if settings.run_limit is not None else 'none'}"
-              + (f"\nprofile {profile_path}" if profile_path else ""))
+    _banner(settings, profile_path)
     upload_errors: SimpleQueue[Exception] = SimpleQueue()
 
     def report_progress(traces: int, errors: int, elapsed_seconds: float) -> None:
@@ -149,21 +186,22 @@ def main(argv: list[str] | None = None) -> int:
         (ui.warn if errors else ui.note)(line)
 
     client = None
-    project_id = None
+    projects = Projects(project_names(project_name, profile.shape.projects), tuple(uuid4() for _ in range(profile.shape.projects)), profile.shape.project_skew)
     app_version = None
     try:
         if tracing_enabled:
+            # The SDK reads its cap on runs a request from here once, when it first sends.
+            os.environ[BATCH_RUNS_ENV] = str(profile.shape.batch_runs)
             client = Client(
                 api_url=os.environ["LANGSMITH_ENDPOINT"], api_key=os.environ["LANGSMITH_API_KEY"],
                 workspace_id=workspace_id, max_batch_size_bytes=6 * 1024 * 1024, tracing_error_callback=upload_errors.put,
             )
-            project = client.create_project(project_name=project_name, upsert=True)
-            project_id = project.id
+            projects = _projects(client, project_name, profile.shape)
             app_version = _app_version(client)
-            ui.note(f"project {project_name}, workspace {project.tenant_id}, LangSmith {app_version or 'version not read'}")
+            ui.note(f"{len(projects.names)} project(s) from {projects.names[0]}, LangSmith {app_version or 'version not read'}")
         else:
             ui.note("tracing is off: payloads are generated locally and nothing is uploaded")
-        outcome = asyncio.run(run_load_test(settings, profile, client, project_name, project_id, report_progress))
+        outcome, samples = _load_while_reading(watch, results_path, lambda: asyncio.run(run_load_test(settings, profile, client, projects, report_progress)))
     except Exception as error:  # noqa: BLE001 - turn setup and flush failures into CLI errors
         logger.error(f"Load test failed: Reason: {' '.join(str(error).splitlines())}")
         return SETUP_ERROR
@@ -173,9 +211,61 @@ def main(argv: list[str] | None = None) -> int:
 
     upload_count = upload_errors.qsize()
     first_upload_error = str(upload_errors.get()) if upload_count else None
-    report = build_report(outcome, settings, profile, project_name, tracing_enabled, upload_count, first_upload_error, app_version)
+    report = build_report(outcome, settings, profile, project_name, tracing_enabled, upload_count, first_upload_error, app_version, _cluster(samples, watch, outcome, settings, profile))
     _emit(report, results_path, json_output)
     return 0 if report["passed"] else 1
+
+
+BATCH_RUNS_ENV = "LANGSMITH_BATCH_INGEST_SIZE_LIMIT"
+
+
+def _projects(client: Client, base: str, shape: Shape) -> Projects:
+    names = project_names(base, shape.projects)
+    ids = tuple(client.create_project(project_name=name, upsert=True).id for name in names)
+    return Projects(names, ids, shape.project_skew)
+
+
+def _banner(settings: LoadSettings, profile_path: Path | None) -> None:
+    mode = f"open loop at {settings.traces_per_second:g} traces/s" if settings.traces_per_second else f"closed loop, {settings.users} users"
+    ui.banner("LangSmith load test", f"{os.getenv('LANGSMITH_ENDPOINT', '(no endpoint: local only)')}\n{mode}, {settings.duration_seconds:g} s after a {settings.ramp_up_seconds:g} s ramp; "
+              f"reads {f'{settings.reads_per_second:g}/s' if settings.read else 'off'}; run limit {settings.run_limit if settings.run_limit is not None else 'none'}"
+              + (f"\nprofile {profile_path}" if profile_path else ""))
+
+
+def _load_while_reading(watch: dict[str, Any], results_path: Path | None, run: Callable[[], LoadOutcome]) -> tuple[LoadOutcome, list[dict[str, Any]]]:
+    """The load, with the install read on its own thread from before it starts until it has settled."""
+    collector = _collector(watch, results_path)
+    if collector is None:
+        return run(), []
+    collector.start()
+    try:
+        outcome = run()
+    finally:
+        samples = collector.stop()
+    return outcome, samples
+
+
+def _collector(watch: dict[str, Any], results_path: Path | None) -> cluster.Collector | None:
+    if not watch["namespace"]:
+        return None
+    series = results_path.with_suffix(".metrics.jsonl") if results_path else None
+    if series is not None:
+        series.unlink(missing_ok=True)
+    kube = cluster.kubectl(watch["kube_context"], timeout_seconds=max(10.0, watch["sample_seconds"]))
+    ui.note(f"reading the install's metrics in namespace {watch['namespace']} every {watch['sample_seconds']:g} s" + (f" into {series}" if series else ""))
+    return cluster.Collector(kube, watch["namespace"], watch["release"], watch["sample_seconds"], series)
+
+
+def _cluster(samples: list[dict[str, Any]], watch: dict[str, Any], outcome: Any, settings: LoadSettings, profile: Profile) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not watch["namespace"]:
+        return NOT_READ
+    if not samples:
+        return {}, {"read": False, "why": "no sample was taken"}
+    start = outcome.started_at.timestamp() + settings.ramp_up_seconds
+    write = outcome.write
+    traces = write.steady_traces_sent / settings.duration_seconds if write.mode == "open-loop" else write.traces_sent / (write.duration_seconds or 1)
+    metrics, section = cluster.summarize(samples, (start, start + settings.duration_seconds), traces * profile.runs_per_trace if traces else None)
+    return metrics, {"namespace": watch["namespace"], "release": watch["release"], "sample_seconds": watch["sample_seconds"], **section}
 
 
 def _app_version(client: Client) -> str | None:
@@ -229,12 +319,31 @@ def print_summary(report: dict[str, Any]) -> None:
     ui.table(Table("Send to readable", ("readable", "never readable", "p50", "p95", "p99", "max"),
                    [(f"{lag['readable']} of {lag['sampled']}", str(lag["never_readable"]), _s(lag["p50_seconds"]), _s(lag["p95_seconds"]), _s(lag["p99_seconds"]), _s(lag["max_seconds"]))],
                    f"A {lag['sample_share']:g} share of traces polled until readable, up to {lag['deadline_seconds']:g} s."))
+    _print_cluster(report["cluster"])
     ui.heading("Targets")
     ui.verdicts([{"item": name, "verdict": VERDICT[e["passed"]], "detail": _target_detail(e)} for name, e in report["targets"].items()])
     if write["first_error"]:
         ui.warn(f"first error: {write['first_error']}")
     (ui.ok if report["passed"] else ui.error)("the run passed" if report["passed"] else "the run FAILED")
     ui.console.print()
+
+
+def _yes(value: bool | None) -> str:
+    return "not read" if value is None else "yes" if value else "NO: still climbing at the window's end"
+
+
+def _print_cluster(section: dict[str, Any]) -> None:
+    if not section.get("read"):
+        ui.note(f"install metrics: {section.get('why')}")
+        return
+    rows = [(w, f"{c['cores_used']:.2f}", f"{c['runs_per_core']:.1f}" if "runs_per_core" in c else "") for w, c in section["coefficients"].items()]
+    flushed = section["smithdb_rows_flushed_per_second"]
+    ui.table(Table("The install under the load", ("workload", "cores used", "runs/s per core"), rows,
+                   f"Over the {section['steady_samples']} samples after the ramp, at {section['runs_per_second_sent'] or 0:g} runs/s sent"
+                   + (f"; SmithDB flushed {flushed:g} rows/s" if flushed is not None else "")
+                   + f". Ingestion queue kept up: {_yes(section['kept_up']['ingestion_queue'])}; compaction kept up: {_yes(section['kept_up']['compaction'])}."))
+    for what in section["unread"]:
+        ui.warn(f"not read: {what}")
 
 
 def _target_detail(entry: dict[str, Any]) -> str:

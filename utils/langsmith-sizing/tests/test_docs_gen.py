@@ -7,7 +7,7 @@ import unittest
 
 from langsmith_sizing import ROOT, docs_gen, figures
 
-DOCS = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md")), ROOT / "presets" / "README.md"]
+DOCS = [ROOT / "README.md", ROOT / "CONTRIBUTING.md", *sorted((ROOT / "docs").glob("*.md")), ROOT / "presets" / "README.md"]
 
 
 def anchors(text: str) -> set[str]:
@@ -24,6 +24,10 @@ class DocsGenTest(unittest.TestCase):
     def test_every_table_the_generator_knows_is_used_once(self) -> None:
         used = [m[2] for doc in DOCS for m in docs_gen.MARKER.finditer(doc.read_text())]
         self.assertEqual(sorted(used), sorted(docs_gen.TABLES))
+
+    def test_the_citation_and_parameter_tables_live_in_parameters_md_alone(self) -> None:
+        homes = {name: doc.name for doc in DOCS for m in docs_gen.MARKER.finditer(doc.read_text()) for name in [m[2]]}
+        self.assertEqual({homes["citations"], homes["params"]}, {"parameters.md"})
 
     def test_every_figure_was_drawn_from_the_current_data_in_both_themes(self) -> None:
         self.assertEqual(figures.stale(figures.pages()), [], "a figure was drawn from older data: run `make figures`")

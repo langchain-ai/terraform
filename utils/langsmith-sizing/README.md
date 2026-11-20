@@ -1,251 +1,95 @@
 # langsmith-sizing
 
-> **Status:** sizing, values, store specs and load profiles are generated and tested at charts 0.17.56
-> and 0.18.0-rc.79. No plan has yet been checked end to end by a load test against a live install, so
-> every preset carries an open question ([presets/README.md](presets/README.md)).
+> **Status:** sizing, values, store specs and load profiles are generated and tested at every chart in
+> [charts.yaml](charts.yaml). No plan has yet been checked end to end by a load test against a live
+> install, so every preset carries an open question ([presets/README.md](presets/README.md)).
 
-Turns the load a self-hosted LangSmith install must carry into a plan: how many replicas each service runs,
-what each requests and scales on, what each data store needs, and what to watch once it runs. It writes the
-chart values and store specifications that apply the plan, and the load profile a load test sends to check
-it. It is for anyone sizing an install: a LangChain engineer, a customer's platform team, or a tool that
-sizes LangSmith for a cluster.
+Give it the load a self-hosted LangSmith install must carry (users, traces a second or a month, runs a trace,
+retention, where each data store runs) and it writes the plan: replicas, requests and autoscaler for every
+service, the spec of every data store, the chart values that apply it, and the load profile that proves it.
+The load test sends that profile at your install and `compare` says which promises of the plan held.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/figures/how-it-works-dark.png">
-  <img alt="How a plan is made. Four sources feed the model: the Helm chart (every default, rendered with helm at the version planned), the public docs (the scale guide, SmithDB's tiers, store requirements, the backfill rate, quoted by commit and checked), your inputs (users, traces a second, runs a trace, retention, where each store runs) and the parameters (the model's own constants in params.yaml, each with its evidence). The model runs eight stages in order: rates, regime, the scale guide's grid, payload, SmithDB, stores, operate and totals. It writes plan.json, values.yaml, stores.json and load-profile.json; the load test sends the profile at the install and compare judges its results against the plan." src="docs/figures/how-it-works-light.png">
-</picture>
+## Quick start
 
-**What is canon.** The Helm chart and LangChain's public docs. The plan reads every default from the chart
-at the version you install, and quotes every published figure (the scale guide's five configurations,
-SmithDB's three tiers) from the docs by commit and exact text; CI fails when either moves. The model's own
-constants are in [`params.yaml`](params.yaml), each with the evidence behind it. Every formula, and the
-source of every number in it, is in [docs/how-it-sizes.md](docs/how-it-sizes.md).
-
-| Read | For |
-|:--|:--|
-| [docs/how-it-sizes.md](docs/how-it-sizes.md) | What is canon, the published profiles it builds from, and every formula with a worked example |
-| [docs/autoscaling.md](docs/autoscaling.md) | Why autoscaling matters here, which signal moves each workload, and what the chart cannot express yet |
-| [docs/monitoring.md](docs/monitoring.md) | The metrics endpoints a running install serves, how to scrape them, and what to watch at each size |
-| [presets/README.md](presets/README.md) | The six named loads, the regime each lands in, and each one's open question |
-| [docs/reference.md](docs/reference.md) | Every make target and flag, the warning ids, the schemas for tool authors |
-| [docs/fields.md](docs/fields.md) | Every field of `plan.json`, `stores.json` and the load profile, generated from real plans |
-
-## Requirements
-
-Python 3.11 or later, [uv](https://docs.astral.sh/uv/) 0.13.4 or later, `helm` on your `PATH`, and network
-access for the first run of each chart version, which pulls the chart into a cache. Then, once:
+You need Python 3.11+, [uv](https://docs.astral.sh/uv/) 0.13.4+, `helm` on your `PATH`, and network access
+the first time each chart version is pulled.
 
 ```bash
-make setup
+make setup                                  # once: this package and the load test
+make plan NAME=acme PRESET=lite             # or: make wizard NAME=acme (asks, one question at a time)
+# fill the "# fill:" lines in out/acme/values.yaml, provision each external store in out/acme/stores.json, helm upgrade --install
+cp ../langsmith-load-test/.env.example ../langsmith-load-test/.env   # set your endpoint, API key and project
+make load NAME=acme NAMESPACE=langsmith     # sends the planned load and reads the install while it runs
+make compare NAME=acme                      # one verdict per promise; exit 1 on a failed one
+make plot NAME=acme                         # the install over the run, against the plan's alarm levels
 ```
 
-## Size an install
+`make plan NAME=acme USERS=20 TRACES_PER_MONTH=20000000 RUNS_PER_TRACE=12 ARGS="--postgres external --app-node 16x64"`
+sizes a load of your own instead of a [preset](presets/README.md). Run `make load` only against an install you
+own: it writes traces to the project in `.env`. The load test's flags, `.env` and exit codes are in its
+[README](../langsmith-load-test/README.md). A figure that fails goes back into an input and a new plan, never
+into the values by hand.
 
-A team runs 20 million traces a month. Their agents make about 12 calls a trace, and about 20 people
-read traces at the busiest hour. They run on EKS with managed Postgres, Redis and S3, use 16 vCPU, 64 GiB
-application nodes (`16x64`, vCPU x GiB), and must keep serving when a node is lost. Every fact goes in as
-an input:
+## Glossary
 
-```bash
-make plan NAME=acme USERS=20 TRACES_PER_MONTH=20000000 RUNS_PER_TRACE=12 ARGS="--postgres external --redis external --smithdb-metastore external --object-store external --survives-node-loss --app-node 16x64"
-```
+- **Regime**: the kind of load (extra-lite, lite, standard, large, scale-out, beyond-tested). It decides what
+  the plan turns on.
+- **Tier**: SmithDB's published size (small, medium, large), chosen from the write and read rate.
+- **Floor, sized, ceiling**: the replicas, and the namespace totals, with every autoscaler at its minimum, at
+  the replicas sized for the peak, and at its maximum. Size nodes for the floor, quota for the ceiling.
+- **KEDA**: Kubernetes Event-driven Autoscaling, which scales a workload on a queue's depth instead of CPU.
+- **Hook Job**: a Job Helm runs during an install or upgrade; the largest one adds to the namespace's peak.
+- **Node shape**: the machine a pool is counted in, written vCPU x GiB, such as `16x64`. A counting unit, not
+  an instance type.
+- **Scale-out**: the regime past the docs' tiers (a peak from 10,000 runs/s), sized from a load test's
+  measured rates rather than a published table.
+- **Open question**: what a preset or regime has not been measured to do.
 
-Or let the wizard ask, one question at a time, each with its default and where the default comes from.
-It offers the [presets](presets/README.md) as starting points, takes a month's count as `20M/month`, and
-skips what cannot matter (where in-cluster stores run, when none is in the cluster):
+## Reading the plan
 
-```bash
-make wizard NAME=acme
-```
+`make plan` prints the plan and saves it as `out/acme/`. Read it top down. The top box says what to act on
+first; `DOES NOT FIT` under Node pools means one pod asks for more than a node has, so give that pool a larger
+node (`ARGS="--smithdb-node 32x128"`) or move the store it names out of the cluster. Namespace capacity is
+the floor, sized and ceiling totals; the ceiling is a quota to allow, not a bill. Data stores is what to
+provision outside the chart, or what the chart runs in the cluster. `make list` shows every saved sizing,
+`make show NAME=acme` draws one again, and `OUT=<folder>` saves elsewhere.
 
-Either one prints the plan and saves it as a folder, `out/acme/`. Part of what it prints, at chart 0.17.56:
-
-```
-╭─ acme on chart 0.17.56 ──────────────────────────────────────────────────────────────╮
-│ Chart                 0.17.56                                                        │
-│ Regime                standard: no tighter regime holds at 7.6 traces/s and a peak   │
-│                       of 274.1 runs/s                                                │
-│ Load                  20 users, 7.6 traces/s average, 22.8 at peak (274.1 runs/s)    │
-│ Retention             14 days base, 400 extended                                     │
-│ SmithDB               medium tier, cluster topology (chosen by both)                 │
-│ Survives a node loss  yes                                                            │
-╰──────────────────────────────────────────────────────────────────────────────────────╯
-
-Namespace capacity ─────────────────────────────────────────────────────────────────────
-  at        vCPU requested   GiB requested   vCPU limit   GiB limit   volumes GiB
-  floor     143.5            270.4           154.5        304.3       800
-  sized     149.5            282.4           160.5        316.3       800
-  ceiling   639.5            1198.4          650.5        1232.3      4000
-
-Node pools ─────────────────────────────────────────────────────────────────────────────
-  pool      node     nodes     largest pod     largest pod on a node
-  app       16x64    2 to 3    ingest-queue    fits
-  smithdb   32x128   5 to 23   smithdb-query   fits
-
-Data stores ────────────────────────────────────────────────────────────────────────────
-  store               runs       provision
-  postgres            external   2 vCPU, 8 GiB, 10 GiB disk, max_connections 901 for the pods' pools
-  redis               external   1 x 59 GiB, 2 vCPU a shard, noeviction
-  smithdb metastore   external   4 vCPU, 32 GiB, 50 GiB disk
-  object storage      external   SmithDB 4.3 TB, LangSmith 4.4 TB (expire ttl_s/ 14 d, ttl_l/ 400 d)
-```
-
-Below that come each workload's replicas, floor, ceiling and the signal it scales on, anything to act on
-before deploying, and what to watch once it runs. Read it top down:
-
-- **Regime** is the band the load falls in and the edge that put it there; it decides what the plan turns
-  on (autoscalers, dedicated SmithDB services, a Redis cluster). [docs/how-it-sizes.md](docs/how-it-sizes.md#2-regime).
-- **SmithDB** is the published tier the load needs, by its write rate and its readers.
-- **Namespace capacity** is what the install asks the cluster for with every autoscaler at its minimum
-  (floor), at the sized replicas, and at its maximum (ceiling). Size node pools for the floor with a cluster
-  autoscaler able to reach the ceiling. The ceiling is a quota to allow, not a bill: the autoscalers reach
-  it only under a backlog. [docs/autoscaling.md](docs/autoscaling.md) says why.
-- **Node pools** count nodes of your shape. `DOES NOT FIT` means one pod asks for more than a node has,
-  and the top box says `Act on first`: give that pool a larger node (`ARGS="--smithdb-node 16x64"`), or
-  move the store it names out of the cluster.
-- **Data stores** is what to provision outside the chart, or what the chart runs in the cluster.
-
-The folder holds everything the next steps need:
+### The sizing folder
 
 | File | What it is |
 |:--|:--|
 | `inputs.yaml` | Your answers and where each came from. `make plan NAME=acme` sizes it again, on a new chart with `CHART=`. |
-| `summary.md` | The tables above, to send to whoever deploys it. |
-| `values.yaml` | The chart values that apply the plan. Each `# fill:` line names a value only you know (a secret name, a bucket). |
+| `summary.md` | The tables the command prints, to send to whoever deploys it. |
+| `values.yaml` | The chart values that apply the plan. Each `# fill:` line names a value only you know. |
 | `stores.json` | Each data store's placement and the instance to create. |
 | `load-profile.json` | The load the plan was sized for, which the load test sends. |
-| `plan.json` | The whole plan, every figure with its source ([docs/fields.md](docs/fields.md)). |
+| `plan.json` | The whole plan, every figure with its source. |
+| `results.json`, `verdicts.json`, `results.html` | What `make load`, `make compare` and `make plot` add: the run, with the install's readings when it had `NAMESPACE=`; a verdict a promise, the watch items as readings set against their alarm levels; the run drawn over time. |
 
-`make list` shows every saved sizing and `make show NAME=acme` draws one again. `OUT=<folder>` saves
-elsewhere. A value you give replaces the preset's, the saved answer or the default; every flag is in
-[docs/reference.md](docs/reference.md).
+Set the namespace quota at the ceiling plus the largest hook Job: a lower quota blocks the autoscalers when
+they act and fails an upgrade.
 
-### Products beside tracing
+## What to read next
 
-Add what else the install runs. Each product's pods are read from the chart with it switched on, and what
-the cluster must have for it is listed with the docs page that says so:
-
-```bash
-make plan NAME=acme PRESET=production PRODUCTS=agent_server,fleet,engine ARGS="--agent-deployments 3 --agent-load mm --sandboxes 50 --sandbox-node 32x128"
-```
-
-| Product | `PRODUCTS=` | What the plan adds |
-|:--|:--|:--|
-| Agent Server | `agent_server` | the control plane pods, and each deployment's API servers, queue workers, Postgres and Redis from the docs' table (`--agent-deployments`, `--agent-load`) |
-| Fleet | `fleet` | its tool and trigger servers, and its own API server, queue, Postgres and Redis |
-| Insights | `insights` | its API server, queue, Postgres and Redis |
-| Chat (Polly) | `polly` | its API server, queue, Postgres and Redis |
-| Engine | `engine` | Sandboxes; it runs in Insights' deployment |
-| LLM gateway | `gateway` | the gateway, with replicas for `--gateway-streams` |
-| Sandboxes | `sandboxes` | a KVM node pool counted in hosts (`--sandboxes`, `--sandbox-vcpu`, `--sandbox-memory-gib`, `--sandbox-node`) and a dedicated JuiceFS Redis |
-
-`PRODUCTS=all` turns everything on. Every product not chosen is switched off in `values.yaml`: Insights
-and Chat are on in the chart by default. How each is sized: [docs/how-it-sizes.md](docs/how-it-sizes.md#13-products-beside-tracing).
-
-## Deploy it
-
-1. Provision each store marked `external` in `stores.json`, to its spec.
-2. Fill the `# fill:` lines in `values.yaml`, then pass it to `helm upgrade --install` after your own values.
-3. Set the namespace quota at the ceiling plus the largest hook Job: a lower quota blocks the autoscalers
-   when they act and fails an upgrade.
-
-## Prove it
-
-The [load test](../langsmith-load-test/README.md) sends `load-profile.json` at your install, writing
-traces to the project named in its own `.env`. Run it only against an install you own.
-
-```bash
-cp ../langsmith-load-test/.env.example ../langsmith-load-test/.env   # your endpoint, API key, and LANGSMITH_TRACING=true
-make load NAME=acme       # 10 minutes at the average rate with reads; PEAK=1 for the peak, DURATION= and RAMP= to change
-make compare NAME=acme    # one verdict per promise; exit 1 on a failed one
-```
-
-`compare` judges the rate held after the ramp, the stored-within and trace-load targets, and lists each
-watch item as not measured, since a client cannot see server metrics: read those from your monitoring
-([docs/monitoring.md](docs/monitoring.md)). A figure that fails goes back into an input and a new plan,
-never into the values by hand.
+| Read | For |
+|:--|:--|
+| [docs/how-it-sizes.md](docs/how-it-sizes.md) | What is canon, the published profiles it builds from, every formula with a worked example |
+| [docs/operate.md](docs/operate.md) | Which signal scales each workload, the metrics a running install serves, what to watch at each size |
+| [presets/README.md](presets/README.md) | The six named loads, the regime each lands in, and each one's open question |
+| [docs/reference.md](docs/reference.md) | Every command and flag, the warning ids, the output schemas, and every field of `plan.json` |
+| [docs/parameters.md](docs/parameters.md) | Every citation from the public docs and every constant the model owns |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | The gates, how it is proven, the module map, how to change a parameter, citation, chart or preset |
 
 ## With Claude
 
 [Claude Code](https://claude.com/claude-code) opened in this repository has the `langsmith-sizing` skill
-and agent (`.claude/` at the repository root). Describe the install in your own words, for example "20M
-traces a month, agents of about 12 calls, 20 people in the UI, EKS with RDS and ElastiCache, must survive a
-node loss", and Claude asks what is missing, writes `out/<name>/inputs.yaml` with a note on where each
-figure came from, runs `make plan`, and explains each number from its source in the chart, the docs or
-`params.yaml`. It never runs the load test or touches a cluster: those stay yours.
+(`.claude/` at the repository root). Describe the install in your own words and Claude asks what is missing,
+writes `out/<name>/inputs.yaml` with a note on where each figure came from, runs `make plan`, and explains
+each number from its source. It never runs the load test or touches a cluster.
 
-## Chart versions
+## Lineage
 
-Two versions are easy to confuse. The **chart version** (0.17.60, 0.18.0-rc.82) is the Helm chart's own:
-what `helm upgrade --version` takes and what `CHART=` names. The **app version** (0.17.2026111800,
-0.18.29rc1) is the LangSmith release the chart deploys: its `appVersion`, the images' tag, and what a
-running install reports at `/api/info`. `helm search repo langchain/langsmith --versions` lists both. A
-chart pins one app version, but an install can override image tags, so the two can drift apart. The plan
-records both (`chart`, `app_version`); the load test reads the install's app version, and `compare` sets it
-against the plan's, so a plan sized on one release and tested on another says so.
-
-Every default in a plan is read from the chart at the version planned, so give the chart your install runs:
-
-| `CHART=` | Sizes on |
-|:--|:--|
-| unset, or `latest` | the newest release in the chart repository (0.17.60 at this writing) |
-| a line, `0.18` | the newest of that line: its newest release, else its newest release candidate |
-| exact, `0.17.56` | that version, without reading the repository's index |
-
-A saved sizing keeps the chart it was made on, so `make plan NAME=acme` sizes it again on the same chart;
-`CHART=latest` moves it. Both lines size the same way; on 0.18 and later a load one pod carries runs SmithDB
-as a single unified pod (`smithdb.topology`). [`charts.yaml`](charts.yaml) lists the versions CI renders
-(0.17.60 and 0.18.0-rc.82); a plan on any other says so in an info warning, and `make params CHART=<version>`
-checks it. The first run of a version pulls the chart into `~/.cache/langsmith-sizing`
-(`LANGSMITH_SIZING_CACHE` moves it), and the index is read at most once a day.
-
-## How it is proven, and its limits
-
-- **A calculator oracle.** The model began as LangChain Professional Services' sizing calculator, and
-  `cases/calculator-<commit>.json` holds what that calculator returns for 180 inputs.
-  `tests/test_conformance.py` compares the plan with each field by field, and a test that moves one
-  parameter by 1% proves the comparison can fail. The fixture was recorded from LangChain's internal
-  calculator, so outside readers can run the comparison but not regenerate it.
-- **No stray numbers.** `tests/test_literals.py` fails a number in the code that is not a parameter, a
-  citation, the chart or an input.
-- **The plan matches what the chart renders.** `tests/test_values.py` renders the chart with each
-  preset's `values.yaml` at both chart versions and checks the replicas, requests, limits and every
-  autoscaler's floor and ceiling against the plan.
-- **The docs cannot drift.** The tables in `docs/` marked generated, and the figures, are built from
-  `params.yaml` and `citations.yaml`; a test fails when a table is stale or a figure was drawn from older
-  data. The figures are drawn in the LangChain brand, whose faces are licensed and never committed: `make
-  figures` reads them from the folder `FONTS=` names, and refuses a final render without them.
-- **Open questions are tests.** Three of the six presets' questions are written to the answer the preset's
-  name promises and marked `expectedFailure`, so fixing one fails the suite until the marker goes.
-
-A plan says vCPU and GiB, never an instance type or a price. Past about 300 traces a second, where the
-payload measurements stop, the plan warns `beyond-tested`. Fleet's, Insights' and Chat's own pods are
-sized from estimates, since the chart ships no resources for them; no load test has read them yet.
-
-## Maintaining it
-
-```bash
-make check       # every gate CI runs, one line each: ruff, mypy, tests (helm required), check-params on every planned chart, check-citations, the load test's
-make reference   # rewrite docs/fields.md and the docs' generated tables
-make figures FONTS=<dir> LOGOS=<dir>   # draw each figure whose data changed, light and dark (needs Chrome and the brand faces)
-```
-
-- **A parameter** is an entry in `params.yaml` with `value`, `unit`, `why`, `source` (kind and ref), `by`
-  and `since`. One that overrides a chart setting names it in `chart_key`; one with no chart setting says
-  why in `chart_has_no_key`. Run `make reference` and `make figures` after: the docs' tables and figures read it.
-- **A citation** moves only after every quote in `citations.yaml` has been re-read against the docs; then
-  move `commit`. `make citations` fails a quote that is gone.
-- **A chart version** is an edit to `charts.yaml`, then `make check`.
-- **A preset** is a file in `presets/` with a note for every input, and a row in `presets/README.md`.
-
-## Credits
-
-The model is LangChain Professional Services' sizing calculator, by Dzmitry Dubarau, with SmithDB's tiers
-by Dariel Dato-on, the scale guide's interpolation by Dzmitry Dubarau, devfreddy-langchain, Denis
-Karabanov, Hari Narayan and David Cisneros, and the bare-metal module's sizing by Reed Bender. Each
-parameter names its author.
-
-Hari Narayan wrote the load test this package's profile feeds, and his SmithDB guide for self-hosted
-installs set the backfill sizing, the cache volume's StorageClass and the metastore's PostgreSQL version
-the plan carries, each cited from the public docs. Ben Nagengast set the targets `compare` checks. Quentin
-Brosse proposed the queue partitions for a Redis cluster.
+The model began as a port of Dzmitry Dubarau's sizing calculator in the LangChain Enterprise Hub, and was
+checked case by case against it until it stood on its own; it no longer depends on it. Use the calculator for
+a first estimate with a LangChain architect, and this package for the plan you install and verify. A
+difference between the two is a bug in one of them, reported to either.

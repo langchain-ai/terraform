@@ -60,7 +60,7 @@ def _flags(a: argparse.Namespace) -> dict[str, Any]:
         "postgres": a.postgres, "redis": a.redis, "smithdb_metastore": a.smithdb_metastore, "object_store": a.object_store, "clickhouse": a.clickhouse,
         "datastores_on": a.datastores_on, "app_node": a.app_node, "smithdb_node": a.smithdb_node, "datastore_node": a.datastore_node,
         "trace_store": a.trace_store, "survives_node_loss": a.survives_node_loss, "requests_from_measured": a.requests_from_measured,
-        "backfill_runs": a.backfill_runs, "backfill_days": a.backfill_days,
+        "backfill_runs": a.backfill_runs, "backfill_days": a.backfill_days, "attachment_kib_per_run": a.attachment_kib_per_run,
         "smithdb_tier": a.smithdb_tier, "smithdb_topology": a.smithdb_topology,
         "products": a.products, "agent_deployments": a.agent_deployments, "agent_load": a.agent_load, "gateway_streams": a.gateway_streams,
         "sandboxes": a.sandboxes, "sandbox_vcpu": a.sandbox_vcpu, "sandbox_memory_gib": a.sandbox_memory_gib, "sandbox_node": a.sandbox_node,
@@ -134,7 +134,7 @@ def _list(a: argparse.Namespace) -> int:
     for plan_file in sorted(root.glob("*/plan.json")):
         body = _read(str(plan_file))
         r = body["rates"]
-        sized = body["totals"]["applied"]["sized"]["requests"]
+        sized = body["totals"]["sized"]["requests"]
         rows.append((plan_file.parent.name, str(body["chart"]), body["regime"]["id"], f"{r['peak_traces_per_second']:g}", f"{summary.n(sized['cpu'])} vCPU, {summary.n(sized['memory_gib'])} GiB", "yes" if (plan_file.parent / "results.json").exists() else ""))
     if not rows:
         ui.note(f"No sizings under {root}/ yet. Start one: make wizard NAME=<customer>")
@@ -235,6 +235,7 @@ def _size_flags(s: argparse.ArgumentParser) -> None:
     s.add_argument("--sandbox-node", type=_shape, metavar="CPUxGIB", help="Sandboxes: the KVM node, one host a node")
     s.add_argument("--backfill-runs", type=float, help="ClickHouse history to copy into SmithDB, in runs (with --backfill-days)")
     s.add_argument("--backfill-days", type=float, help="the days the backfill should take")
+    s.add_argument("--attachment-kib-per-run", type=float, help="attachment KiB a run carries on average (images, audio, files); they go to the LangSmith bucket")
 
 
 def main(argv: list[str] | None = None) -> int:

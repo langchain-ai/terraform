@@ -51,6 +51,8 @@ SCENARIOS: dict[str, tuple[str, dict[str, Any]]] = {
     "extra-lite-unified": ("extra-lite", {"smithdb_topology": "unified"}),
 }
 ONLY_NEXT = {"extra-lite-unified"}
+# The changelog requires blob storage from 0.18 (citations blob_storage.required_from), and the plan refuses it there.
+ONLY_BEFORE_NEXT = {"blob-storage-off"}
 """Unified is a chart 0.18 setting."""
 
 
@@ -217,7 +219,7 @@ class Render:
 @needs_helm
 class RenderedMatchesPlan(unittest.TestCase):
     def scenarios(self) -> list[tuple[str, str, str]]:
-        return [(f"{label}@{v}", v, label) for label in SCENARIOS for v in CHARTS if v == NEXT or label not in ONLY_NEXT]
+        return [(f"{label}@{v}", v, label) for label in SCENARIOS for v in CHARTS if (v == NEXT or label not in ONLY_NEXT) and (v != NEXT or label not in ONLY_BEFORE_NEXT)]
 
     def render(self, version: str, label: str) -> Render:
         chart_or_skip(self, version)

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 SCHEMA = "langsmith-load-results/1"
+NOT_READ: tuple[dict[str, Any], dict[str, Any]] = ({}, {"read": False, "why": "no --namespace: the run measured what a client sees, not the install"})
 
 
 @dataclass
@@ -54,7 +55,7 @@ def assemble(
     *, profile: dict[str, Any], settings: dict[str, Any], test_id: str, project: str, started_at: str, ended_at: str,
     write: dict[str, Any], feedback: dict[str, Any], reads: dict[str, Any], lag: dict[str, Any],
     stored: dict[str, Any], targets: dict[str, float], upload_errors: int, latency_limit_passed: bool | None,
-    server: dict[str, Any] | None = None,
+    server: dict[str, Any] | None = None, cluster: tuple[dict[str, Any], dict[str, Any]] = NOT_READ,
 ) -> dict[str, Any]:
     verdicts = target_verdicts(targets, lag, reads["classes"], stored["missing_runs"])
     verdicts["send_latency_limit"] = {"passed": latency_limit_passed}
@@ -68,5 +69,6 @@ def assemble(
         "profile": profile, "settings": settings, "write": write, "feedback": feedback, "reads": reads, "lag": lag,
         "stored": stored, "errors": {"upload": upload_errors, "reads": read_errors}, "targets": verdicts,
         "server": server or {"app_version": None},
+        "metrics": cluster[0], "cluster": cluster[1],
         "passed": not failed,
     }

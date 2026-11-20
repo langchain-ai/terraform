@@ -26,7 +26,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from langsmith_sizing import ROOT, citations, params
+from langsmith_sizing import PLANNED_CHARTS, ROOT, citations, params
 
 FIGURES = ROOT / "docs" / "figures"
 RENDERED = FIGURES / "rendered.json"
@@ -40,7 +40,7 @@ FACES = (  # (file, family, weight, format): the brand's two faces at the only w
 )
 LOGOS = {"light": "langchain-on-light.svg", "dark": "langchain-on-dark.svg"}
 # Where each autoscaling signal is read, as the chart wires it (its scaled-object and hpa templates at
-# 0.17.56 and 0.18.0-rc.79). A signal params adds without a row here fails the build.
+# the charts CI renders, charts.yaml). A signal params adds without a row here fails the build.
 SIGNAL_SOURCE = {
     "cpu": ("metrics-server", "pod CPU over its request"),
     "memory": ("metrics-server", "pod memory over its request"),
@@ -461,7 +461,7 @@ def _autoscaling(p: Mapping[str, Any], cited: citations.Cited) -> str:
         "Each workload scales on the signal that shows its work waiting",
         "CPU lags a backlog and hides a memory-bound pod: SmithDB query pods were OOM-killed at about 7% CPU while a CPU autoscaler sat at its floor. Dashed rows are triggers no chart field expresses yet.",
         body,
-        "Generated from params.yaml scale.signals and scale.workloads; endpoints from the chart's templates at 0.17.56 and 0.18.0-rc.79",
+        f"Generated from params.yaml scale.signals and scale.workloads; endpoints from the chart's templates at {' and '.join(PLANNED_CHARTS)}",
         wires,
     )
 

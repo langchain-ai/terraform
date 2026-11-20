@@ -4,7 +4,7 @@ The scale guide sizes frontend, platform-backend, ingest-queue and backend repli
 payload model replaces its ingest-queue column (which counted 1-CPU pods) with CPUs from the peak
 run rate, and floors platform-backend by what the payload needs; the guide's figure stays the
 floor under both, never a cap.
-Ported from the PS sizing calculator (formulas.ts section 4, compute.ts), by Dzmitry Dubarau.
+First ported from the PS sizing calculator (README, Lineage), by Dzmitry Dubarau.
 """
 
 from __future__ import annotations

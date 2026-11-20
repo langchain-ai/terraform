@@ -70,6 +70,11 @@ def load(name: str, directory: Path = PRESETS) -> Preset:
     if not str(doc["why"]).strip():
         raise PresetError(f"{name}: why is empty")
     given, notes = doc["inputs"], doc["notes"]
+    _check_inputs(name, given, notes, saved)
+    return Preset(path.parent.name if saved else name, str(doc["why"]), given, notes, str(doc["chart"]) if doc.get("chart") else None, saved)
+
+
+def _check_inputs(name: str, given: dict[str, Any], notes: dict[str, Any], saved: bool) -> None:
     known = {f.name for f in fields(Inputs)} - {"chart_version"}
     if unknown := sorted(set(given) - known):
         raise PresetError(f"{name}: inputs Inputs does not have: {', '.join(unknown)}")
@@ -83,7 +88,6 @@ def load(name: str, directory: Path = PRESETS) -> Preset:
         raise PresetError(f"{name}: inputs lack {', '.join(absent)}")
     if bare := sorted(set(given) - set(notes)):
         raise PresetError(f"{name}: no note for {', '.join(bare)}")
-    return Preset(path.parent.name if saved else name, str(doc["why"]), given, notes, str(doc["chart"]) if doc.get("chart") else None, saved)
 
 
 def save(path: Path, p: Preset) -> None:

@@ -11,7 +11,9 @@ RESULTS ?= $(if $(NAME),$(SIZINGS)/$(NAME)/results.json,out/results.json)
 DURATION ?= 600
 RAMP ?= 60
 PEAK ?=
-# Any other flag, for example ARGS="--max-in-flight 2000".
+# The namespace LangSmith runs in: with it the test also reads the install through kubectl.
+NAMESPACE ?=
+# Any other flag, for example ARGS="--max-in-flight 2000" or a payload shape, ARGS="--send post_once".
 ARGS ?=
 LOGS := out/.logs
 
@@ -33,17 +35,17 @@ define need_env
 endef
 
 .DEFAULT_GOAL := help
-.PHONY: help setup smoke run check
+.PHONY: help setup smoke run plot check
 
 help: ## this screen
 	@printf '\n$(B)langsmith-load-test$(X)  send a sizing plan'"'"'s load at your install, read it back, measure lag and loss\n\n'
 	@printf '  $(B)1  connect$(X)  $(D)cp .env.example .env, then set the endpoint, API key, project and LANGSMITH_TRACING=true$(X)\n'
 	@printf '  $(B)2  check$(X)    $(C)make smoke$(X)              $(D)10 traces in 30 s: confirm they appear in the project before raising the load$(X)\n'
-	@printf '  $(B)3  run$(X)      $(C)make run NAME=acme$(X)      $(D)the load sizing acme was planned for, results saved beside its plan$(X)\n'
-	@printf '  $(B)4  judge$(X)    $(D)in ../langsmith-sizing: $(X)$(C)make compare NAME=acme$(X)\n\n'
+	@printf '  $(B)3  run$(X)      $(C)make run NAME=acme NAMESPACE=langsmith$(X)  $(D)the load acme was planned for, reading the install as it runs$(X)\n'
+	@printf '  $(B)4  judge$(X)    $(D)in ../langsmith-sizing: $(X)$(C)make compare NAME=acme$(X)$(D), then $(X)$(C)make plot NAME=acme$(X)\n\n'
 	@printf '$(B)Targets$(X)\n'
 	@awk -F':.*## ' '/^[a-z-]+:.*## /{printf "  $(C)%-10s$(X) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\n$(B)Inputs$(X)  $(D)NAME= (a sizing in $(SIZINGS)/) or PROFILE=<load-profile.json>, DURATION=$(DURATION) RAMP=$(RAMP) PEAK=1 RESULTS= ARGS="..."$(X)\n'
+	@printf '\n$(B)Inputs$(X)  $(D)NAME= (a sizing in $(SIZINGS)/) or PROFILE=<load-profile.json>, DURATION=$(DURATION) RAMP=$(RAMP) PEAK=1 NAMESPACE= RESULTS= ARGS="..."$(X)\n'
 	@printf '$(B)Never$(X)   $(D)against an install you do not own: it writes traces and feedback to the project in .env$(X)\n\n'
 
 setup: ## install the dependencies (needs uv)
@@ -58,7 +60,10 @@ run: ## send a profile's load with reads (NAME= or PROFILE=); saves the results
 	@test -n "$(PROFILE)" || { printf '$(R)error$(X) give NAME=<sizing> (a folder in $(SIZINGS)/) or PROFILE=<load-profile.json>\n' >&2; exit 2; }
 	@test -f "$(PROFILE)" || { printf '$(R)error$(X) %s is missing: in ../langsmith-sizing, make plan NAME=%s first\n' "$(PROFILE)" "$(or $(NAME),<sizing>)" >&2; exit 2; }
 	@mkdir -p $(dir $(RESULTS))
-	@uv run --quiet load-test --profile $(abspath $(PROFILE)) $(if $(PEAK),--peak) --read --duration-seconds $(DURATION) --ramp-up-seconds $(RAMP) --results $(abspath $(RESULTS)) $(ARGS)
+	@uv run --quiet load-test --profile $(abspath $(PROFILE)) $(if $(PEAK),--peak) --read --duration-seconds $(DURATION) --ramp-up-seconds $(RAMP) --results $(abspath $(RESULTS)) $(if $(NAMESPACE),--namespace $(NAMESPACE)) $(ARGS)
+
+plot: ## draw a run's install readings over time (RESULTS= or NAME=; a run with NAMESPACE=)
+	@uv run --quiet load-test-plot $(abspath $(RESULTS)) $(if $(NAME),--plan $(abspath $(SIZINGS)/$(NAME)/plan.json))
 
 check: ## every gate CI runs: ruff, mypy --strict, the offline tests
 	@printf '\n$(B)Gates$(X)  $(D)logs in $(LOGS)/$(X)\n'

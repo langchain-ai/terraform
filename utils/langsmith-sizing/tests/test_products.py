@@ -76,9 +76,9 @@ class Plans(unittest.TestCase):
                 p = self.plan(version, products=ALL, agent_deployments=2, gateway_streams=300, sandboxes=40)
                 pooled = {n for pl in p["pools"].values() if isinstance(pl, dict) and "pods" in pl for n in pl["pods"]}
                 self.assertLessEqual(set(p["products"]["pods"]), pooled)
-                self.assertEqual(p["pools"]["sandboxes"]["nodes"], p["products"]["sandboxes"]["hosts"])
+                self.assertEqual(p["pools"]["sandboxes"]["sized"]["nodes"], p["products"]["sandboxes"]["hosts"])
                 alone = self.plan(version)
-                self.assertGreater(p["totals"]["applied"]["sized"]["requests"]["cpu"], alone["totals"]["applied"]["sized"]["requests"]["cpu"])
+                self.assertGreater(p["totals"]["sized"]["requests"]["cpu"], alone["totals"]["sized"]["requests"]["cpu"])
 
     def test_the_values_render_exactly_the_product_pods_the_plan_counts(self) -> None:
         for version in PLANNED_CHARTS:
