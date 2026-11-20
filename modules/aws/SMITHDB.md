@@ -63,7 +63,10 @@ from S3; no data is lost, and queries are slower until the caches warm up.
 
 Do not skip step 4's wait. Karpenter must outlive its NodePools: if both are
 removed in one apply while Karpenter still owns nodes, those EC2 instances are
-left running with nothing to remove them.
+left running with nothing to remove them. `make apply` and `make quickdeploy`
+refuse that apply: while the pools are in the Terraform state and
+`smithdb_keep_karpenter_pools` is not true, they check the cluster and stop if
+`kubectl get nodeclaims` lists anything, or if they cannot check.
 
 ## Configure infrastructure
 
@@ -120,6 +123,7 @@ To run the historical migration, run `make smithdb-migration-job-start`, then `m
 It asks whether TaskDB is chart-managed or an external Postgres, how many runs to migrate in how many days, and how many migration pods to run (suggesting a count from the LangSmith formula plus 50% headroom), then stores the TaskDB settings in SSM, writes `helm/values/langsmith-values-smithdb-migration.yaml`, and sets `smithdb_migration_enabled = true`.
 Existing chart-managed migrations keep using `smithdb-migration-taskdb/postgres_password` when that Secret exists, so the helper does not change the Job's immutable secret reference.
 With the flag on, Terraform grants the SmithDB role read access to the traces bucket, and the deploy starts the migration Job.
+The migration pods run on the SmithDB node group, so the helper also raises `smithdb_node_max_count` to make room for one node per pod; Cluster Autoscaler adds those nodes only while the pods run.
 Once the Job is Complete, run `make smithdb-migration-job-end`, then the same three commands, to remove the grant, TaskDB, and its settings.
 An external TaskDB Postgres is not deleted.
 If migration pods are OOMKilled, raise their memory in `langsmith-values-smithdb-migration.yaml` (keep requests equal to limits).

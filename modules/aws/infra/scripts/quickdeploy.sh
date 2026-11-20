@@ -101,6 +101,7 @@ fi
 # STEP 1/5: terraform apply
 # ─────────────────────────────────────────────────────────────────────────────
 _step 1 "$TOTAL_STEPS" "Running terraform apply..."
+"$INFRA_DIR/scripts/upgrade-guard.sh" || exit 1
 
 if [[ "$AUTO_APPROVE" == "true" ]]; then
   info "Running with -auto-approve (--yes flag set)"

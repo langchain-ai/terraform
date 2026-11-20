@@ -235,6 +235,16 @@ info "Preserve TaskDB and its PVC, delete only the failed migration Job, then re
 header "6. terraform.tfvars"
 _set_tfvar "smithdb_migration_enabled" "true"
 pass "smithdb_migration_enabled = true"
+# Migration pods run on the SmithDB node group, whose maximum is sized for
+# SmithDB alone; past it they stay Pending with no message. One pod (8 vCPU,
+# 32 GiB) takes most of an m5.4xlarge, so make room for one node per pod.
+# ponytail: one node per pod is the default type's fit; a larger type fits more,
+# and the maximum is only a ceiling Cluster Autoscaler scales up to on demand.
+_node_max=$(_parse_tfvar "smithdb_node_max_count") || _node_max=5
+if (( _node_max < 5 + _parallelism )); then
+  _set_tfvar "smithdb_node_max_count" "$(( 5 + _parallelism ))"
+  pass "smithdb_node_max_count = $(( 5 + _parallelism )) (room for $_parallelism migration pod(s) on the SmithDB node group)"
+fi
 
 header "Next"
 action "make apply          # grants SmithDB read access to the traces bucket"

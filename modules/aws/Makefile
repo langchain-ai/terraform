@@ -82,7 +82,8 @@ init: ## terraform init (infra)
 plan: ## terraform plan (infra)
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
-apply: ## terraform apply (infra)
+apply: ## terraform apply (infra), after the 0.17 upgrade checks
+	$(INFRA_DIR)/scripts/upgrade-guard.sh
 	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
