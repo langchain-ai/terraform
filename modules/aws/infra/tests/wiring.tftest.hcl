@@ -410,6 +410,30 @@ run "enable_smithdb_adds_only_smithdb" {
   }
 }
 
+# Where SmithDB runs is a node layout choice: the next change moves it, so this
+# records the layout it moves from.
+run "smithdb_runs_on_the_karpenter_nvme_pools" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  assert {
+    condition = (
+      length(kubectl_manifest.smithdb_nodepool_instance_store) == 1 &&
+      length(kubectl_manifest.smithdb_nodepool_compute) == 1 &&
+      length(kubectl_manifest.smithdb_ec2nc_instance_store) == 1 &&
+      length(kubectl_manifest.smithdb_ec2nc_compute) == 1
+    )
+    error_message = "enable_smithdb = true did not plan both Karpenter NodePools and their EC2NodeClasses"
+  }
+  assert {
+    condition     = !contains(keys(module.eks.eks_managed_node_group_inputs), "smithdb")
+    error_message = "enable_smithdb = true planned a managed SmithDB node group"
+  }
+}
+
 # ── DNS, which is gated on two variables rather than a flag ──────────────────
 # A domain with no certificate ARN means Terraform provisions the Route 53 zone
 # and the ACM certificate. Supplying the ARN means the customer already has one.
