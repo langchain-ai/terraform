@@ -43,7 +43,7 @@ _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
 jq -e --slurpfile before "$TEST_DIR/legacy.json" '
-  .resourceTier == "medium" and
+  .resourceTier == "small" and
   .query.deployment.resources == {} and .compaction.deployment.resources == {} and
   .query.deployment.volumes == [{name:"customer-config",configMap:{name:"customer-config"}}] and
   .query.deployment.volumeMounts == [{name:"cache",mountPath:"/data"},{name:"customer-config",mountPath:"/config"}] and
@@ -53,7 +53,7 @@ jq -e --slurpfile before "$TEST_DIR/legacy.json" '
   .migration.taskdb.postgres.statefulSet.resources.requests.memory == "12Gi" and
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
-echo "PASS: EBS clears legacy service overrides and preserves migration, TaskDB, and customer volumes"
+echo "PASS: EBS clears legacy service overrides, uses the small tier when no values file sets one, and preserves migration, TaskDB, and customer volumes"
 
 VALUES_ARGS=(--set smithdb.enabled=true --set smithdb.resourceTier=large)
 _sizing_profile=dev
@@ -98,6 +98,55 @@ jq -e --slurpfile before "$TEST_DIR/before.json" '
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
 echo "PASS: generated service cache settings preserve the migration Job and TaskDB settings"
+
+# The generated overrides put every SmithDB service, the metastore migration Job and TaskDB on
+# the managed node group. migration.job is not touched here.
+jq -e '
+  def pool: {"langsmith-nodepool/smithdb": "true"};
+  def tol: [{key:"langsmith-nodepool/smithdb", operator:"Equal", value:"true", effect:"NoSchedule"}];
+  ([.query.deployment, .mutations.deployment, .runRules.deployment, .statsQuery.deployment,
+    .ingestion.deployment, .compactionWorker.deployment, .compaction.deployment,
+    .clusterManager.deployment, .metastoreMigration.job,
+    .migration.taskdb.postgres.statefulSet]
+   | all(.[]; .nodeSelector == pool and .tolerations == tol))
+' "$TEST_DIR/values.json" >/dev/null
+echo "PASS: generated overrides schedule SmithDB and TaskDB on the managed pool"
+
+# A langsmith-values-smithdb.yaml from an older release pins the Karpenter pools, and Helm would
+# merge those keys with the new one. init-values.sh replaces such a copy first.
+cat > "$TEST_DIR/legacy-smithdb.yaml" <<'LEGACY'
+smithdb:
+  enabled: true
+  query:
+    deployment:
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+  compaction:
+    deployment:
+      nodeSelector:
+        smithdb-local/compute: "true"
+LEGACY
+printf 'smithdb:\n  enabled: true\n' > "$TEST_DIR/example-smithdb.yaml"
+render_pools() { helm template values-test "$TEST_DIR/chart" "$@" | sed '/^#/d; /^---$/d' | jq -er '.data.values'; }
+render_pools -f "$TEST_DIR/legacy-smithdb.yaml" -f "$TEST_DIR/generated.yaml" > "$TEST_DIR/stale.json"
+jq -e '.query.deployment.nodeSelector["smithdb-local/instance-store"] == "true"' "$TEST_DIR/stale.json" >/dev/null ||
+  { echo "FAIL: the old pool selector no longer merges, so the refresh below may be unnecessary"; exit 1; }
+_smithdb_refresh_legacy_overlay "$TEST_DIR/legacy-smithdb.yaml" "$TEST_DIR/example-smithdb.yaml"
+[[ -f "$TEST_DIR/legacy-smithdb.legacy.yaml" ]] && grep -q 'smithdb-local/instance-store' "$TEST_DIR/legacy-smithdb.legacy.yaml"
+if _smithdb_refresh_legacy_overlay "$TEST_DIR/legacy-smithdb.yaml" "$TEST_DIR/example-smithdb.yaml"; then
+  echo "FAIL: a current overlay was replaced"; exit 1
+fi
+render_pools -f "$TEST_DIR/legacy-smithdb.yaml" -f "$TEST_DIR/generated.yaml" > "$TEST_DIR/fresh.json"
+jq -e '
+  def pool: {"langsmith-nodepool/smithdb": "true"};
+  .query.deployment.nodeSelector == pool and .compaction.deployment.nodeSelector == pool
+' "$TEST_DIR/fresh.json" >/dev/null
+echo "PASS: an overlay that pins the old Karpenter pools is replaced, and only the managed pool remains"
 
 jq -n '{items: ([range(0;5) | {
   kind:"Deployment", metadata:{name:("langsmith-smithdb-" + tostring), generation:2},

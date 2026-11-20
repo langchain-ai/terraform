@@ -33,23 +33,47 @@ smithdb_external_metastore_username = "smithdb"
 Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file.
 The Postgres database and S3 bucket must be dedicated to SmithDB.
 
-SmithDB services and TaskDB use a separate node group. Defaults:
+SmithDB services and TaskDB run on their own EKS managed node group. The module
+does not pick its size from `sizing_profile`: the defaults fit the Small tier, and
+you raise them for a larger tier.
 
-| `sizing_profile` | Instance type | Minimum nodes | Maximum nodes |
-| --- | --- | --- | --- |
-| `default`, `dev`, `minimum` | `m6a.4xlarge` | 2 | 5 |
-| `production` | `m6a.8xlarge` | 2 | 10 |
-| `production-large` | `m6a.16xlarge` | 2 | 10 |
+| Input | Default | Notes |
+| --- | --- | --- |
+| `smithdb_node_instance_type` | `m6a.4xlarge` | Small tier. Medium needs `m6a.8xlarge`, Large needs `m6a.16xlarge`. |
+| `smithdb_node_min_count` | `2` | At least 1, for the Helm migration hooks. |
+| `smithdb_node_max_count` | `5` | Must exceed the minimum. Raise it for Medium and Large. |
 
-The sizing profile selects the instance type automatically. QuickStart asks for
-`smithdb_node_min_count` and `smithdb_node_max_count`. Set
-`smithdb_node_instance_type` in `infra/terraform.tfvars` to override the instance
-type. Increase the maximum for additional capacity.
+Set them in `infra/terraform.tfvars`. QuickStart asks for the two counts.
 LangSmith uses its own group, defaulting to `m6a.2xlarge`.
 
 Nodes keep the 100 GiB boot-disk default. `smithdb.resourceTier` sets service
 resources and cache sizes. Caches use gp3
 (7,000 IOPS, 1,000 MiB/s), set through `smithdb.cache.storageClassName`.
+
+**Scheduling.** `make init-values` writes the node selector and tolerations for the
+SmithDB group (`langsmith-nodepool/smithdb`) into
+`langsmith-values-smithdb-overrides.yaml`, for every SmithDB service, the metastore
+migration Job and TaskDB. `make deploy` does not add them. If
+`langsmith-values-smithdb.yaml` is a copy from an older release that still pins the
+Karpenter pools, `make init-values` replaces it with the current example and keeps
+the old copy as `langsmith-values-smithdb.legacy.yaml`.
+
+**Tier and node size.** The sizing files set `smithdb.resourceTier`: `production` is
+Medium and `production-large` is Large, and the other profiles use Small. The module
+does not size the nodes from the tier. Medium needs `m6a.8xlarge` and Large needs
+`m6a.16xlarge`, so set `smithdb_node_instance_type` to match. `make plan` warns when
+the profile's tier needs larger nodes than `smithdb_node_instance_type`; pods that do
+not fit stay Pending.
+
+**One pool.** To run SmithDB on the LangSmith nodes instead of its own group, delete
+the `nodeSelector` and `tolerations` blocks under each SmithDB key in
+`langsmith-values-smithdb-overrides.yaml`. `make init-values` rewrites that file, so
+repeat the edit after each run. The SmithDB node group is still created.
+
+**Migration.** The migration Job (`make smithdb-migration-job-start`) runs on the SmithDB
+nodes. Each pod requests 100Gi of ephemeral storage, so raise
+`smithdb_node_root_volume_size_gb` and run `make apply` before you enable migration.
+The script warns when the boot disk is under 150 GiB.
 
 ## Deploy SmithDB services
 

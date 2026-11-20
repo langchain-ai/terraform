@@ -650,10 +650,12 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   SMITHDB_MIGRATION="$(_existing smithdb_migration_enabled false)"
   SMITHDB_QUERY="$(_existing smithdb_query_enabled false)"
 fi
-SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type null)"
+SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
+[[ "$SMITHDB_NODE_TYPE" == "null" ]] && SMITHDB_NODE_TYPE="m6a.4xlarge"
 SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
 SMITHDB_NODE_MIN="$(_existing smithdb_node_min_count 2)"
-SMITHDB_NODE_MAX="$(_existing smithdb_node_max_count null)"
+SMITHDB_NODE_MAX="$(_existing smithdb_node_max_count 5)"
+[[ "$SMITHDB_NODE_MAX" == "null" ]] && SMITHDB_NODE_MAX=5
 SMITHDB_NODE_DISK="$(_existing smithdb_node_root_volume_size_gb 100)"
 
 if [[ "$PROFILE" == "prod" ]]; then
@@ -1061,13 +1063,6 @@ case "$((_CHOICE - _size_offset))" in
 esac
 
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  # Resolve capacity after pod sizing, which can differ from the setup preset.
-  if [[ "$SMITHDB_NODE_MAX" == "null" ]]; then
-    case "$SIZING" in
-      production|production-large) SMITHDB_NODE_MAX=10 ;;
-      *) SMITHDB_NODE_MAX=5 ;;
-    esac
-  fi
   _ask_int_at_least 1 "$(_choice_arg smithdb_node_min_count)" "SmithDB minimum nodes" "$SMITHDB_NODE_MIN"; SMITHDB_NODE_MIN="$_REPLY"
   (( SMITHDB_NODE_MAX > SMITHDB_NODE_MIN )) || SMITHDB_NODE_MAX=$((SMITHDB_NODE_MIN + 1))
   _ask_int_at_least "$((SMITHDB_NODE_MIN + 1))" "$(_choice_arg smithdb_node_max_count)" "SmithDB maximum nodes (must exceed minimum)" "$SMITHDB_NODE_MAX"; SMITHDB_NODE_MAX="$_REPLY"
@@ -1288,7 +1283,7 @@ _show_summary() {
   _summary_section "7. SmithDB"
   _summary_bool_row "SmithDB:" "$ENABLE_SMITHDB"
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-    _summary_row "  Node pool:" "${SMITHDB_NODE_TYPE/null/profile default}  min=$SMITHDB_NODE_MIN  max=$SMITHDB_NODE_MAX"
+    _summary_row "  Node pool:" "${SMITHDB_NODE_TYPE}  min=$SMITHDB_NODE_MIN  max=$SMITHDB_NODE_MAX"
     _summary_bool_row "  Ingestion:" "$SMITHDB_INGESTION"
     _summary_bool_row "  Migration:" "$SMITHDB_MIGRATION"
     _summary_bool_row "  Query:" "$SMITHDB_QUERY"
@@ -1452,10 +1447,7 @@ redis_instance_type = "${REDIS_INSTANCE}"
 TFVARS
 fi
 
-SMITHDB_NODE_TYPE_HCL=null
-if [[ -n "$SMITHDB_NODE_TYPE" && "$SMITHDB_NODE_TYPE" != "null" ]]; then
-  SMITHDB_NODE_TYPE_HCL="\"${SMITHDB_NODE_TYPE}\""
-fi
+SMITHDB_NODE_TYPE_HCL="\"${SMITHDB_NODE_TYPE}\""
 
 cat >> "$OUTPUT" << TFVARS
 

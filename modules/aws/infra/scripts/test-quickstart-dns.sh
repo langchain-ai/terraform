@@ -269,20 +269,29 @@ has_line "SmithDB maximum preserved" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_
 has_line "SmithDB transition mode survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_transition_mode               = true"
 has_line "SmithDB instance override survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6i.4xlarge"'
 has_line "disabled ingestion survives with SmithDB enabled" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = false'
+# A tfvars written when null meant "follow sizing_profile" has to come out with the plain defaults.
+sed -e 's/^smithdb_node_instance_type[[:space:]]*=.*/smithdb_node_instance_type = null/' \
+  -e 's/^smithdb_node_max_count[[:space:]]*=.*/smithdb_node_max_count = null/' \
+  "$SMITHDB_INFRA/terraform.tfvars" > "$TMP/legacy.tfvars"
+mv "$TMP/legacy.tfvars" "$SMITHDB_INFRA/terraform.tfvars"
+write_update_defaults "$TMP/smithdb-legacy.answers" true
+run_wizard "SmithDB update replaces legacy null settings" "$SMITHDB_INFRA" "$TMP/smithdb-legacy.answers" "$TMP/smithdb-legacy.log"
+has_line "legacy null instance type becomes m6a.4xlarge" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6a.4xlarge"'
+has_line "legacy null maximum becomes 5" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"
 
-echo "7. SmithDB defaults follow pod sizing independently of the setup preset"
+echo "7. SmithDB node defaults are the same for every pod sizing"
 for sizing in dev production-large; do
   case "$sizing" in
-    dev) sizing_choice=2; smithdb_max=5 ;;
-    production-large) sizing_choice=4; smithdb_max=10 ;;
+    dev) sizing_choice=2 ;;
+    production-large) sizing_choice=4 ;;
   esac
   DEFAULT_INFRA="$TMP/smithdb-$sizing-defaults"
   write_fresh_answers "$TMP/$sizing.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false "$sizing_choice"
   run_wizard "SmithDB $sizing defaults complete" "$DEFAULT_INFRA" "$TMP/$sizing.answers" "$TMP/$sizing.log"
   has_line "LangSmith type is independent for $sizing" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6a.2xlarge"]'
-  has_line "SmithDB type follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = null'
+  has_line "SmithDB type is m6a.4xlarge for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6a.4xlarge"'
   has_line "SmithDB initial capacity for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
-  has_line "SmithDB ceiling follows $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = $smithdb_max"
+  has_line "SmithDB ceiling is 5 for $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"
   has_line "SmithDB enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
   has_line "ingestion enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
   has_line "migration remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_migration_enabled             = false'

@@ -1,25 +1,41 @@
 #!/usr/bin/env bash
 
-# --set-json replaces the selector map, whereas another YAML overlay merges it
-# and leaves the old pool keys behind. Clear legacy service resources so the
-# chart tier controls EBS workloads; migration and TaskDB keep their own sizing.
+# The node selector and tolerations that put a SmithDB workload on its managed
+# node group, as YAML for init-values.sh to write under the matching `smithdb:`
+# key. <indent> is the column the nodeSelector key starts in.
+_smithdb_pool_scheduling() {
+  local indent="$1"
+  printf '%snodeSelector:\n' "$indent"
+  printf '%s  langsmith-nodepool/smithdb: "true"\n' "$indent"
+  printf '%stolerations:\n' "$indent"
+  printf '%s  - key: langsmith-nodepool/smithdb\n' "$indent"
+  printf '%s    operator: Equal\n' "$indent"
+  printf '%s    value: "true"\n' "$indent"
+  printf '%s    effect: NoSchedule\n' "$indent"
+}
+
+# A langsmith-values-smithdb.yaml copied from an older release pins the Karpenter
+# pools (smithdb-local/instance-store, smithdb-local/compute). Helm merges node
+# selectors across values files, and a null does not remove a key that only an
+# earlier file sets, so those keys would sit next to the managed-pool key and no
+# node would match. Replace such a copy with the current example and keep the old
+# one beside it. Returns 1 when the file needs no replacing.
+_smithdb_refresh_legacy_overlay() {
+  local file="$1" example="$2"
+  grep -q 'smithdb-local/' "$file" 2>/dev/null || return 1
+  cp "$file" "${file%.yaml}.legacy.yaml" && cp "$example" "$file"
+}
+
+# Node scheduling comes from the generated overrides (see _smithdb_pool_scheduling).
+# --set-json replaces a map, whereas another YAML overlay merges it, so the legacy
+# service resources are cleared here: the chart tier controls EBS workloads, while
+# migration and TaskDB keep their own sizing. The tier is smithdb.resourceTier from
+# the values files (the sizing files set it per profile), and small when none does.
 _smithdb_managed_values() {
   local path values setting tier=small
-  for path in query.deployment mutations.deployment runRules.deployment statsQuery.deployment \
-    ingestion.deployment compactionWorker.deployment compaction.deployment clusterManager.deployment \
-    metastoreMigration.job migration.taskdb.postgres.statefulSet; do
-    VALUES_ARGS+=(
-      --set-json "smithdb.$path.nodeSelector={\"langsmith-nodepool/smithdb\":\"true\"}"
-      --set-json "smithdb.$path.tolerations=[{\"key\":\"langsmith-nodepool/smithdb\",\"operator\":\"Equal\",\"value\":\"true\",\"effect\":\"NoSchedule\"}]"
-    )
-  done
   for path in query mutations runRules statsQuery ingestion compactionWorker compaction clusterManager; do
     VALUES_ARGS+=(--set-json "smithdb.$path.deployment.resources={}")
   done
-  case "${_sizing_profile:-default}" in
-    production) tier=medium ;;
-    production-large) tier=large ;;
-  esac
   values=$(_smithdb_cache_values "$tier" "${VALUES_ARGS[@]}") || return 1
   while IFS= read -r setting; do
     VALUES_ARGS+=(--set-json "$setting")

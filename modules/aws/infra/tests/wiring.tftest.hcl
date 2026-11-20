@@ -418,6 +418,89 @@ run "enable_smithdb_adds_only_smithdb" {
   }
 }
 
+run "smithdb_node_group_defaults_fit_the_small_tier" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.4xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 5
+    )
+    error_message = "the SmithDB node group should default to m6a.4xlarge, minimum 2, maximum 5"
+  }
+}
+
+run "smithdb_node_group_does_not_follow_the_sizing_profile" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+    sizing_profile = "production-large"
+  }
+
+  # The node type stays at the Small-tier default, which is what the warning is for.
+  expect_failures = [check.smithdb_nodes_fit_the_sizing_profile]
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.4xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 5
+    )
+    error_message = "sizing_profile must not change the SmithDB node type or maximum"
+  }
+}
+
+run "smithdb_node_type_too_small_for_the_sizing_tier_is_flagged" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+    sizing_profile = "production"
+  }
+
+  expect_failures = [check.smithdb_nodes_fit_the_sizing_profile]
+}
+
+run "smithdb_node_type_that_fits_the_sizing_tier_is_not_flagged" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    sizing_profile             = "production-large"
+    smithdb_node_instance_type = "m6a.16xlarge"
+  }
+
+  assert {
+    condition     = module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.16xlarge"
+    error_message = "a node type that fits the tier should plan without the sizing warning"
+  }
+}
+
+run "smithdb_node_type_and_counts_are_plain_inputs" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    smithdb_node_instance_type = "m6a.16xlarge"
+    smithdb_node_min_count     = 3
+    smithdb_node_max_count     = 12
+  }
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.16xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 3 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 12
+    )
+    error_message = "the SmithDB node type and counts should reach the node group as set"
+  }
+}
+
 run "smithdb_transition_retains_both_old_pools_and_adds_managed_capacity" {
   command = plan
 

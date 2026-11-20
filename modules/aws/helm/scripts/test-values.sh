@@ -70,36 +70,24 @@ config:
     awsRegion: "us-west-2"
     apiURL: "https://s3.us-west-2.amazonaws.com"
 EOF
-cat > "$TEST_TMP/smithdb-overrides.yaml" <<'EOF'
-smithdb:
-  serviceAccount:
-    annotations:
-      eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/values-test-smithdb"
-  config:
-    objectStore:
-      type: "s3"
-      bucket: "values-test-smithdb"
-      s3:
-        region: "us-west-2"
-        accessKeyIdSecretKey: ""
-        secretAccessKeySecretKey: ""
-    metastore:
-      hostSecretKey: "smithdb_metastore_db_host"
-      databaseSecretKey: "smithdb_metastore_db_name"
-      usernameSecretKey: "smithdb_metastore_db_username"
-      passwordSecretKey: "smithdb_metastore_db_password"
-      port: "5432"
-      useSsl: true
-  metastoreMigration:
-    useSsl: true
-  langsmith:
-    ingestion:
-      enabled: false
-    migration:
-      enabled: false
-    query:
-      enabled: false
-EOF
+# The SmithDB overrides come from the heredoc in init-values.sh itself, so a change to the
+# generated scheduling or cache values is rendered against the real chart here.
+source "$SCRIPT_DIR/../../infra/scripts/_smithdb-transition.sh"
+(
+  export _smithdb_overrides="$TEST_TMP/smithdb-overrides.yaml"
+  export SMITHDB_CACHE_STORAGE_CLASS=smithdb-cache
+  export SMITHDB_BUCKET=values-test-smithdb
+  export SMITHDB_IRSA_ROLE_ARN=arn:aws:iam::123456789012:role/values-test-smithdb
+  export _region=us-west-2
+  export _smithdb_metastore_use_ssl=true
+  export _smithdb_ingestion_enabled=false
+  export _smithdb_migration_enabled=false
+  export _smithdb_query_enabled=false
+  sed -n '/^  cat > "\$_smithdb_overrides" << SMITHDB_YAML$/,/^SMITHDB_YAML$/p' \
+    "$SCRIPT_DIR/init-values.sh" > "$TEST_TMP/generate-smithdb.sh"
+  [[ -s "$TEST_TMP/generate-smithdb.sh" ]] || { echo "ERROR: no SmithDB overrides block found in init-values.sh" >&2; exit 2; }
+  source "$TEST_TMP/generate-smithdb.sh"
+)
 
 # deploy.sh turns Chat and Insights off with --set when their flags are off,
 # because the chart enables both by default.
@@ -167,6 +155,23 @@ expect_scaler() {
   [[ -z "$(spec_field replicas <<< "$deploy")" ]] || { echo "$name: Deployment pins replicas under $mode"; return 1; }
 }
 
+# The SmithDB workloads must run on the managed node group and nowhere else.
+expect_pool() {
+  local out="$1" kind="$2" name="$3" m
+  m=$(manifest "$out" "$kind" "$name")
+  [[ -n "$m" ]] || { echo "$name: no $kind rendered"; return 1; }
+  grep -q 'langsmith-nodepool/smithdb: "\?true"\?' <<< "$m" || { echo "$name: no nodeSelector for the SmithDB node group"; return 1; }
+  grep -q 'key: "\?langsmith-nodepool/smithdb"\?' <<< "$m" || { echo "$name: no toleration for the SmithDB node group"; return 1; }
+  ! grep -q 'smithdb-local/' <<< "$m" || { echo "$name: still pinned to an old Karpenter pool"; return 1; }
+}
+
+# Each cache volume claim uses the generated StorageClass.
+expect_cache_class() {
+  local out="$1" name="$2" want="$3"
+  manifest "$out" Deployment "$name" | grep -q "storageClassName: \"\?$want\"\?" ||
+    { echo "$name: cache volume does not use StorageClass $want"; return 1; }
+}
+
 failures=0
 while read -r profile queue ingest compaction; do
   [[ -n "$profile" ]] || continue
@@ -184,8 +189,18 @@ while read -r profile queue ingest compaction; do
     msg=$(expect_scaler "$out" langsmith-ingest-queue "$ingest") || problems+=("$msg")
     if [[ "$smithdb" == on ]]; then
       msg=$(expect_scaler "$out" langsmith-smithdb-compaction-worker "$compaction") || problems+=("$msg")
-    elif [[ -n "$(manifest "$out" Deployment langsmith-smithdb-compaction-worker)" ]]; then
-      problems+=("langsmith-smithdb-compaction-worker: rendered with SmithDB off")
+      for workload in query ingestion compaction-worker compaction cluster-manager; do
+        msg=$(expect_pool "$out" Deployment "langsmith-smithdb-$workload") || problems+=("$msg")
+      done
+      msg=$(expect_pool "$out" Job langsmith-smithdb-metastore-migration) || problems+=("$msg")
+      for workload in query ingestion compaction-worker; do
+        msg=$(expect_cache_class "$out" "langsmith-smithdb-$workload" smithdb-cache) || problems+=("$msg")
+      done
+    else
+      [[ -z "$(manifest "$out" Deployment langsmith-smithdb-compaction-worker)" ]] ||
+        problems+=("langsmith-smithdb-compaction-worker: rendered with SmithDB off")
+      ! grep -q 'langsmith-nodepool/smithdb' "$out" ||
+        problems+=("the SmithDB node group appears in the values with SmithDB off")
     fi
     if (( ${#problems[@]} )); then
       echo "FAIL: $label"

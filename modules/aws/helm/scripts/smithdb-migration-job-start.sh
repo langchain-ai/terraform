@@ -18,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INFRA_DIR="${INFRA_DIR:-$SCRIPT_DIR/../../infra}"
 source "$INFRA_DIR/scripts/_common.sh"
+source "$INFRA_DIR/scripts/_smithdb-transition.sh"
 
 NAMESPACE="${NAMESPACE:-langsmith}"
 TFVARS_FILE="$INFRA_DIR/terraform.tfvars"
@@ -122,6 +123,13 @@ if (( _parallelism > 20 )); then
   warn "Above about 20 pods, raise TaskDB CPU and memory instead of adding pods (chart guidance)"
 fi
 pass "Parallelism: $_parallelism"
+
+# Each migration pod requests 100Gi of ephemeral storage. A SmithDB node with the
+# default 100 GiB boot disk cannot hold one, and the pod stays Pending.
+_root_gb=$(_parse_tfvar "smithdb_node_root_volume_size_gb") || _root_gb=100
+if [[ "$_root_gb" =~ ^[0-9]+$ ]] && (( _root_gb < 150 )); then
+  warn "Each migration pod requests 100Gi of ephemeral storage and the SmithDB nodes have a ${_root_gb} GiB boot disk. Raise smithdb_node_root_volume_size_gb and run make apply first, or the pods stay Pending"
+fi
 # Same rule of thumb, solved for time, without headroom: the plain estimate for the pod count chosen.
 _hours=$(awk -v r="$_runs" -v p="$_parallelism" 'BEGIN { printf "%.1f", r / (5000000 * 8 * p) * 24 }')
 info "Estimated time for $_runs runs with $_parallelism pod(s): about $_hours hours (LangSmith rule of thumb; actual time varies with your data)"
@@ -191,6 +199,7 @@ fi
   echo "  migration:"
   echo "    job:"
   echo "      parallelism: $_parallelism"
+  _smithdb_pool_scheduling "      "
   echo "      resources:   # per migration pod; 32Gi memory is a practical minimum"
   echo "        requests:"
   echo "          cpu: \"8\""

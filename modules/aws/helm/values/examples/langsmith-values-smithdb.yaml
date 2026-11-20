@@ -1,6 +1,6 @@
 # SmithDB for AWS (chart 0.17+), in the LangSmith namespace and release.
-# init-values.sh supplies storage and connection settings in the overrides file.
-# deploy.sh applies node scheduling and tier resources; caches use chart defaults.
+# init-values.sh supplies storage, connection, node scheduling and cache StorageClass
+# settings in the overrides file; deploy.sh applies the tier resources.
 
 smithdb:
   enabled: true

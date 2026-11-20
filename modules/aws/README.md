@@ -1162,9 +1162,9 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_node_instance_type` | `null` | no | SmithDB instance type; defaults follow `sizing_profile`. See [SMITHDB.md](SMITHDB.md) |
+| `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for Small, `m6a.8xlarge` for Medium, `m6a.16xlarge` for Large. See [SMITHDB.md](SMITHDB.md) |
 | `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes, including TaskDB |
-| `smithdb_node_max_count` | `null` | no | Maximum nodes: 5 for Small, 10 for production profiles |
+| `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes; must exceed the minimum |
 | `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |
 | `smithdb_transition_mode` | `false` | no | Retain Karpenter during an existing deployment's transition. See [SMITHDB.md](SMITHDB.md#existing-karpenter-deployments) |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
