@@ -83,7 +83,7 @@ plan: ## terraform plan (infra)
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra)
-	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
+	bash $(INFRA_DIR)/scripts/apply.sh $(ARGS)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
 	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
