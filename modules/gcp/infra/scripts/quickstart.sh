@@ -97,6 +97,25 @@ _ask_int() {
   done
 }
 
+# GCP label rules intersected with Kubernetes', the same check as variables.tf.
+_LABEL_KEY_RE='^[a-z]([a-z0-9_-]{0,61}[a-z0-9])?$'
+_LABEL_VALUE_RE='^([a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?)?$'
+_LABEL_VALUE_HINT="lowercase letters, digits, '_' and '-', starting and ending with a letter or digit, max 63 chars (write name@example.com as name_example_com)"
+
+# A reply of "-" is the empty value, since a blank reply takes the default.
+_ask_label_value() {
+  local prompt="$1" default="${2:-}"
+  while true; do
+    _ask "$prompt" "$default"
+    if [[ "$_REPLY" == "-" ]]; then _REPLY=""; fi
+    if [[ "$_REPLY" =~ $_LABEL_VALUE_RE ]]; then
+      break
+    fi
+    _red "  ERROR: must be ${_LABEL_VALUE_HINT}. Try again."
+    echo ""
+  done
+}
+
 _section() {
   echo ""
   printf "${BOLD}── %s ──${RESET}\n" "$1"
@@ -150,10 +169,10 @@ PROJECT_ID="$_REPLY"
 while true; do
   _ask "Company/team prefix (max 11 chars, lowercase)" "myco"
   NAME_PREFIX="$_REPLY"
-  if [[ ${#NAME_PREFIX} -le 11 ]] && [[ "$NAME_PREFIX" =~ ^[a-z][a-z0-9-]*$ ]]; then
+  if [[ ${#NAME_PREFIX} -le 11 ]] && [[ "$NAME_PREFIX" =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ]]; then
     break
   fi
-  _red "  ERROR: must be 1-11 lowercase alphanumeric chars (may include hyphens, must start with a letter)."
+  _red "  ERROR: must be 1-11 lowercase alphanumeric chars (may include hyphens, must start with a letter and end with a letter or digit)."
   echo ""
 done
 
@@ -172,11 +191,35 @@ _default_zone="${REGION}-a"
 _ask "GCP zone (for zonal resources)" "$_default_zone"
 ZONE="$_REPLY"
 
-_ask "Owner (team or person, for labels)" "platform-team"
+_ask_label_value "Owner (team or person, for labels; - to omit)" "platform-team"
 OWNER="$_REPLY"
 
-_ask "Cost center (for billing, leave blank to skip)" ""
+_ask_label_value "Cost center (for billing, leave blank to skip)" ""
 COST_CENTER="$_REPLY"
+
+# Extra labels your org policy requires (team, product, ...). Written into the
+# labels map, which overrides a standard label of the same key.
+while true; do
+  _ask "Additional labels as key=value, comma-separated (leave blank to skip)" ""
+  LABELS_HCL=""
+  _labels_ok=true
+  IFS=',' read -r -a _label_pairs <<< "$_REPLY"
+  for _pair in ${_label_pairs[@]+"${_label_pairs[@]}"}; do
+    _pair="${_pair#"${_pair%%[![:space:]]*}"}"
+    _pair="${_pair%"${_pair##*[![:space:]]}"}"
+    [[ -z "$_pair" ]] && continue
+    _lkey="${_pair%%=*}"
+    _lval="${_pair#*=}"
+    if [[ "$_pair" != *=* ]] || [[ -z "$_lval" ]] || ! [[ "$_lkey" =~ $_LABEL_KEY_RE ]] || ! [[ "$_lval" =~ $_LABEL_VALUE_RE ]]; then
+      _red "  ERROR: '${_pair}' is not key=value with a valid key (lowercase letter first) and value (${_LABEL_VALUE_HINT}). Try again."
+      echo ""
+      _labels_ok=false
+      break
+    fi
+    LABELS_HCL="${LABELS_HCL}  \"${_lkey}\" = \"${_lval}\""$'\n'
+  done
+  [[ "$_labels_ok" == true ]] && break
+done
 
 while true; do
   _ask "Initial org admin email" "${LANGSMITH_ADMIN_EMAIL:-}"
@@ -601,7 +644,8 @@ smithdb_bucket_force_destroy          = ${SMITHDB_BUCKET_FORCE_DESTROY}
 #------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------
-labels = {}
+labels = {
+${LABELS_HCL}}
 TFVARS
 
 # ═══════════════════════════════════════════════════════════════════════════
