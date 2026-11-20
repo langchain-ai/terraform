@@ -583,7 +583,8 @@ run "byo_custom_networking_uses_the_supplied_pod_subnets" {
 }
 
 # ── Data plane source switches ───────────────────────────────────────────────
-# in-cluster means the chart runs it, so Terraform must plan nothing.
+# PostgreSQL and Redis are always external from 0.18 (validation.tftest.hcl
+# rejects in-cluster), so each one is always planned.
 
 run "external_postgres_is_planned" {
   command = plan
@@ -608,19 +609,6 @@ run "external_redis_is_planned" {
   assert {
     condition     = length(module.redis) == 1
     error_message = "redis_source = external did not plan ElastiCache"
-  }
-}
-
-run "in_cluster_redis_plans_nothing" {
-  command = plan
-
-  variables {
-    redis_source = "in-cluster"
-  }
-
-  assert {
-    condition     = length(module.redis) == 0
-    error_message = "redis_source = in-cluster still planned ElastiCache"
   }
 }
 

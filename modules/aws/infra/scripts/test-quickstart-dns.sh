@@ -93,7 +93,7 @@ write_fresh_answers() {
     printf '\n'                    # RDS instance type
     printf '\n'                    # RDS initial storage
     printf '\n'                    # RDS max storage
-    printf '%s\n' "2"             # Redis: in-cluster
+    printf '\n'                    # ElastiCache instance type
     printf '\n'                    # ClickHouse: in-cluster
     printf '\n'                    # SmithDB: disabled
     printf '%s\n' "3"             # Gateway: ALB
@@ -140,7 +140,7 @@ write_update_defaults() {
     printf '\n' # RDS instance type
     printf '\n' # RDS initial storage
     printf '\n' # RDS max storage
-    printf '\n' # Redis
+    printf '\n' # ElastiCache instance type
     printf '\n' # ClickHouse
     printf '\n' # SmithDB
     printf '\n' # Gateway
