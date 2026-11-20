@@ -10,11 +10,60 @@ With `enable_smithdb = true`, the infrastructure pass creates:
 - a dedicated PostgreSQL 18 RDS metastore, or wiring for dedicated BYO Postgres;
 - a dedicated S3 object-store bucket;
 - a SmithDB-specific IRSA role with bucket-scoped access;
-- Karpenter and dedicated local-NVMe and compute NodePools;
+- a dedicated EKS managed node group for SmithDB (see [Nodes](#nodes));
 - the `smithdb-local` Kubernetes Secret containing metastore connection fields.
 
 The existing S3 Gateway VPC endpoint is associated with the VPC route tables,
 so same-region SmithDB S3 traffic takes the private AWS network path.
+
+## Nodes
+
+SmithDB runs on its own managed node group, `node-group-smithdb`, apart from
+the LangSmith app nodes. A default install has three node groups: the
+LangSmith app, SmithDB, and Sandboxes when `enable_sandboxes = true`.
+
+- **Size.** `smithdb_node_instance_type` defaults to `m5.4xlarge`, the type of
+  the default app node group, which fits the SmithDB small tier. The medium tier
+  needs an 8xlarge and the large tier a 16xlarge. `smithdb_node_min_count`
+  (default 2) and `smithdb_node_max_count` (default 5) bound Cluster
+  Autoscaler.
+- **Disks.** The nodes have network disks only. SmithDB's caches are volume
+  claims on the cluster's default StorageClass, so no local NVMe is needed.
+- **Placement.** The group carries the label and the `NoSchedule` taint
+  `langsmith-nodepool/smithdb=true`. `make init-values` writes the matching node
+  selector and tolerations for every SmithDB workload into
+  `langsmith-values-smithdb-overrides.yaml`, so SmithDB pods run only there and
+  nothing else does.
+
+### Running on one node group
+
+The module always creates the SmithDB node group when SmithDB is on. A
+customer who deploys the chart from their own pipeline can still run SmithDB on
+the app nodes: remove the `nodeSelector` and `tolerations` keys under each
+SmithDB workload in the values they deploy. The app nodes then need the
+headroom of the SmithDB tier they run. With `make deploy`, `make init-values`
+writes those keys again on every run.
+
+### Upgrading from 0.17
+
+A 0.17 install ran SmithDB on two Karpenter NodePools with local NVMe. Moving it
+to the managed node group replaces the SmithDB caches, which SmithDB rebuilds
+from S3; no data is lost, and queries are slower until the caches warm up.
+
+1. Set `smithdb_keep_karpenter_pools = true` and run `make apply`. Terraform adds
+   `node-group-smithdb` and keeps Karpenter and its pools.
+2. Run `make init-values`. It replaces a 0.17 `langsmith-values-smithdb.yaml`,
+   which selected the Karpenter pools, and keeps the old copy as
+   `langsmith-values-smithdb.yaml.0.17.bak`. Carry over any edits of your own.
+3. Run `make deploy`. The SmithDB pods move to the new node group, and
+   Karpenter removes its nodes once they are empty.
+4. Wait until `kubectl get nodeclaims` lists nothing, then set
+   `smithdb_keep_karpenter_pools = false` and run `make apply` to remove
+   Karpenter.
+
+Do not skip step 4's wait. Karpenter must outlive its NodePools: if both are
+removed in one apply while Karpenter still owns nodes, those EC2 instances are
+left running with nothing to remove them.
 
 ## Configure infrastructure
 
@@ -83,5 +132,5 @@ Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `m
 - Set `s3_kms_key_arn` to use SSE-KMS. The SmithDB role receives key-scoped
   `kms:GenerateDataKey` and `kms:Decrypt`; the key policy must also permit it.
 - Do not place object-store credentials in Helm values. Pods use IRSA.
-- Verify SmithDB workloads schedule on the expected Karpenter pools and can
-  reach PostgreSQL and S3 before enabling ingestion.
+- Verify SmithDB workloads schedule on `node-group-smithdb` and can reach
+  PostgreSQL and S3 before enabling ingestion.

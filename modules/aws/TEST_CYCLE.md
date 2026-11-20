@@ -355,7 +355,8 @@ For an applied environment, verify:
 ```bash
 terraform -chdir=infra output smithdb_s3_vpc_endpoint_id
 kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
-kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+kubectl get nodes -l langsmith-nodepool/smithdb=true
+kubectl get pods -n langsmith -o wide | grep smithdb   # every pod on a node listed above
 ```
 
 Render the v16 chart with all integration gates disabled first. Confirm the

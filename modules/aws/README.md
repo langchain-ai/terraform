@@ -299,7 +299,7 @@ callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configure
 add-on with one ENIConfig per AZ and holds node group creation for two minutes
 after the cluster is active, so the add-on is configured before the first
 nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
-into that add-on. When `enable_smithdb = true`, it also sets Karpenter's
+into that add-on. When Karpenter runs (`smithdb_keep_karpenter_pools = true`), it also sets Karpenter's
 `settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
 node's primary ENI.
 
@@ -1157,15 +1157,19 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `false` | no | Provision SmithDB dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and the SmithDB node group. See [SMITHDB.md](SMITHDB.md). |
+| `smithdb_node_instance_type` | `m5.4xlarge` | no | Instance type of the SmithDB node group. Medium tier: an 8xlarge; large: a 16xlarge |
+| `smithdb_node_min_count` | `2` | no | Minimum and initial SmithDB nodes (at least 1) |
+| `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes for Cluster Autoscaler (at least the minimum) |
+| `smithdb_keep_karpenter_pools` | `false` | no | Keep the 0.17 Karpenter pools while an upgraded install moves SmithDB off them. See [Upgrading from 0.17](SMITHDB.md#upgrading-from-017) |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
-| `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
-| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
-| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
+| `smithdb_karpenter_chart_version` | `1.6.3` | no | With `smithdb_keep_karpenter_pools`: Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
+| `smithdb_node_arch` | `amd64` | no | With `smithdb_keep_karpenter_pools`: architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
+| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | With `smithdb_keep_karpenter_pools`: allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
+| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | With `smithdb_keep_karpenter_pools`: allowed instance sizes for the SmithDB compute pool |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |
