@@ -24,7 +24,7 @@ A custom policy needs these services. The **Required when** column is the config
 | S3 | `s3:*` on the deployment's buckets | LangSmith bucket, bucket policy, encryption, lifecycle | Always |
 | Elastic Load Balancing | `elasticloadbalancing:*` | ALB, listeners, target group | Always |
 | RDS | `rds:*` | PostgreSQL instance and subnet group | Always |
-| ElastiCache | `elasticache:*` | Redis replication group | `redis_source = "external"` (the default), or `enable_sandboxes = true` |
+| ElastiCache | `elasticache:*` | Redis replication group | Always |
 | ACM | `acm:*` | The LangSmith certificate and its validation | `langsmith_domain` is set and `acm_certificate_arn` is not |
 | Route 53 | `route53:*` | Hosted zone and records | `langsmith_domain` is set and `acm_certificate_arn` is not |
 | SQS, EventBridge | `sqs:*`, `events:*` | Karpenter's interruption queue and rules | `enable_smithdb = true` and `smithdb_transition_mode = true` |

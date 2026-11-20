@@ -39,7 +39,7 @@ LangSmith on AWS is deployed in three passes.
 │    • playground     — LLM prompt playground                                  │
 │    • queue          — background job worker                                  │
 │    • clickhouse     — trace analytics store                                  │
-│    • redis          — task queue (in-cluster or ElastiCache)                 │
+│    • redis          — task queue (ElastiCache)                               │
 │    • postgres       — metadata store (RDS)                                   │
 │                                                                              │
 │  Storage:  RDS PostgreSQL → metadata / S3 → trace blobs (VPC endpoint)      │
@@ -69,7 +69,7 @@ LangSmith on AWS is deployed in three passes.
 | backend     | RDS PostgreSQL               | Private subnet, security group    |
 | backend     | S3 bucket                    | IRSA + VPC Gateway Endpoint       |
 | clickhouse  | EBS volume (GP3, EKS PVC)   | Local                             |
-| redis       | ElastiCache or in-cluster    | Private subnet, security group    |
+| redis       | ElastiCache (OSS mode)       | Private subnet, security group    |
 | LGP operator| RDS PostgreSQL (shared)      | Private subnet, security group    |
 
 ---
@@ -93,7 +93,7 @@ EKS Cluster (private subnets)
   │     └── keda (scales queue, ingest-queue, and the SmithDB compaction worker)
   └── langsmith namespace
         ├── backend, frontend, playground, queue, clickhouse
-        └── redis (in-cluster) OR ElastiCache ──► private subnet
+        └── ElastiCache (redis) ──► private subnet
               └── RDS PostgreSQL ──────────────► private subnet
                     └── S3 bucket ──────────────► VPC Gateway Endpoint (no public route)
 ```

@@ -208,8 +208,7 @@ eks_managed_node_groups = {
 # RDS PostgreSQL
 postgres_password = "<strong-password>"   # or: export TF_VAR_postgres_password=...
 
-# ElastiCache Redis (required when redis_source = "external")
-redis_source     = "external"
+# ElastiCache Redis
 redis_auth_token = "<min-16-char-token>"  # or: export TF_VAR_redis_auth_token=...
 
 # TLS — "acm" (default), "letsencrypt", or "none"
@@ -1172,7 +1171,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `postgres_existing_security_group_id` | `null` | no | Attach an existing SG to RDS instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
+| `redis_source` | `external` | no | Only `external` (ElastiCache, OSS mode) from 0.18; `in-cluster` fails at plan |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
