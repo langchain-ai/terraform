@@ -55,7 +55,6 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
 _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
-_redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
@@ -683,18 +682,6 @@ if [[ ! -f "$VALUES_DIR/langsmith-values.yaml" ]]; then
   echo "Created: langsmith-values.yaml (base)"
 fi
 
-# ── In-cluster override for redis ────────────────────────────────────────────
-# The base langsmith-values.yaml hardcodes redis.external.enabled: true. With
-# in-cluster Redis, override it to false so the chart deploys its own pod
-# instead of looking for the (non-existent) external connection secret.
-_external_services_block=""
-if [[ "$_redis_source" == "in-cluster" ]]; then
-  _external_services_block+="
-redis:
-  external:
-    enabled: false"
-fi
-
 # ── Standalone agent feature overrides (chart v0.15+) ────────────────────────
 # Each enabled standalone feature needs (a) its Fernet encryptionKey and (b) IRSA
 # annotations on the service accounts the chart creates. These are written into
@@ -975,7 +962,6 @@ playground:
 #   kubectl annotate serviceaccount langsmith-ksa -n langsmith \
 #     eks.amazonaws.com/role-arn=<irsa_role_arn> --overwrite
 ${_routing_block}
-${_external_services_block}
 ${_standalone_block}
 YAML
 

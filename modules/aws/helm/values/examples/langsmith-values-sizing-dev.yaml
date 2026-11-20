@@ -228,21 +228,11 @@ fleetTriggerServer:
 # large tier, see SMITHDB.md, "Scaling up".
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
-# These apply when using in-cluster redis and clickhouse.
+# These apply when using in-cluster clickhouse.
 # If you're pointing at managed services (RDS, ElastiCache, ClickHouse Cloud),
 # these blocks are ignored — the StatefulSets won't be created.
 #
 # Chart default for ClickHouse is 3.5 CPU / 12Gi — wildly oversized for dev.
-
-redis:
-  statefulSet:
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"
 
 clickhouse:
   statefulSet:

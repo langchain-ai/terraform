@@ -605,19 +605,16 @@ _ask "$(_choice_arg "postgres_instance_type")" "$(_numbered_prompt "5.1" "RDS Po
 _ask_int "$(_choice_arg "postgres_storage_gb")" "$(_numbered_prompt "5.2" "RDS initial storage (GB)")" "$PG_STORAGE"; PG_STORAGE="$_REPLY"
 _ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.3" "RDS max storage (GB)")" "$PG_MAX_STORAGE"; PG_MAX_STORAGE="$_REPLY"
 
-_redis_source_default=1; [[ "$_ex_redis" == "in-cluster" ]] && _redis_source_default=2
-_ask_choice "$(_choice_arg "redis_source")" "$_redis_source_default" --recommended 1 "$(_numbered_prompt "5.4" "Where should Redis run?")" \
-  "Amazon ElastiCache — external and managed by AWS" \
-  "In-cluster — runs as Kubernetes pods"
-REDIS_SOURCE="external"; [[ "$_CHOICE" == "2" ]] && REDIS_SOURCE="in-cluster"
-_confirm_storage_change "Redis" "$_ex_redis" "$REDIS_SOURCE"
-
-REDIS_INSTANCE="$(_existing "redis_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "cache.m6g.xlarge" || echo "cache.m6g.large")")"
-if [[ "$REDIS_SOURCE" == "external" ]]; then
-  echo ""
-  _ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.5" "ElastiCache instance type")" "$REDIS_INSTANCE"
-  REDIS_INSTANCE="$_REPLY"
+# Redis is always Amazon ElastiCache (OSS mode) from 0.18.
+if [[ "$_ex_redis" == "in-cluster" ]]; then
+  _red "  ERROR: redis_source = \"in-cluster\" was removed in 0.18."
+  printf "  Move to ElastiCache first: https://docs.langchain.com/langsmith/self-host-external-redis\n"
+  exit 1
 fi
+REDIS_INSTANCE="$(_existing "redis_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "cache.m6g.xlarge" || echo "cache.m6g.large")")"
+echo ""
+_ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.4" "ElastiCache instance type")" "$REDIS_INSTANCE"
+REDIS_INSTANCE="$_REPLY"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. ClickHouse
@@ -1150,15 +1147,12 @@ _select_feature_storage() {
   if [[ "$existing_enabled" == "true" && "$existing_external" == "true" ]]; then
     default=2
     current="external"
-  elif [[ "$existing_enabled" != "true" && "$REDIS_SOURCE" == "external" ]]; then
+  elif [[ "$existing_enabled" != "true" ]]; then
     default=2
   fi
 
-  local storage_choice_arg recommended=""
+  local storage_choice_arg recommended=2
   storage_choice_arg=$(_choice_arg "$storage_key")
-  if [[ "$REDIS_SOURCE" == "external" ]]; then
-    recommended=2
-  fi
   _ask_choice "$storage_choice_arg" "$default" --recommended "$recommended" "$(_numbered_prompt "$question_number" "$feature storage (Postgres and Redis):")" \
     "In-cluster — dedicated pods with persistent volumes" \
     "External — use the same RDS and ElastiCache as LangSmith; $feature gets a separate Postgres database and Redis index"
@@ -1168,11 +1162,6 @@ _select_feature_storage() {
   if [[ "$UPDATE_MODE" == "true" && "$existing_enabled" == "true" && "$selected" != "$current" ]]; then
     _red "  ERROR: Changing $feature storage requires a separate data migration."
     printf "  Keep the current %s storage here and migrate it separately.\n" "$current"
-    exit 1
-  fi
-  if [[ "$selected" == "external" && "$REDIS_SOURCE" != "external" ]]; then
-    _red "  ERROR: External $feature storage requires external Redis."
-    printf "  Re-run QuickStart and choose external Redis in Section 5.\n"
     exit 1
   fi
 
@@ -1296,8 +1285,8 @@ _show_summary() {
   _summary_row "Postgres:" "external (RDS)"
   _summary_row "RDS instance type:" "$PG_INSTANCE"
   _summary_row "RDS storage:" "${PG_STORAGE}-${PG_MAX_STORAGE} GB"
-  _summary_row "Redis:" "$REDIS_SOURCE"
-  [[ "$REDIS_SOURCE" == "external" ]] && _summary_row "ElastiCache instance type:" "$REDIS_INSTANCE"
+  _summary_row "Redis:" "external (ElastiCache)"
+  _summary_row "ElastiCache instance type:" "$REDIS_INSTANCE"
 
   _summary_section "6. ClickHouse"
   _summary_row "ClickHouse:" "$CH_SOURCE"
@@ -1445,23 +1434,16 @@ create_gp3_storage_class = true
 #------------------------------------------------------------------------------
 # Backend Services
 #------------------------------------------------------------------------------
-redis_source = "${REDIS_SOURCE}"
-
 # PostgreSQL (RDS)
 postgres_instance_type       = "${PG_INSTANCE}"
 postgres_storage_gb          = ${PG_STORAGE}
 postgres_max_storage_gb      = ${PG_MAX_STORAGE}
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
 postgres_skip_final_snapshot = ${PG_SKIP_FINAL_SNAPSHOT}
-TFVARS
-
-if [[ "$REDIS_SOURCE" == "external" ]]; then
-  cat >> "$OUTPUT" << TFVARS
 
 # Redis (ElastiCache)
 redis_instance_type = "${REDIS_INSTANCE}"
 TFVARS
-fi
 
 SMITHDB_NODE_TYPE_HCL="\"${SMITHDB_NODE_TYPE}\""
 
