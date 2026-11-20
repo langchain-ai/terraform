@@ -410,13 +410,104 @@ run "enable_smithdb_adds_only_smithdb" {
   }
 }
 
-# Where SmithDB runs is a node layout choice: the next change moves it, so this
-# records the layout it moves from.
-run "smithdb_runs_on_the_karpenter_nvme_pools" {
+# Three pools by default: the LangSmith app, SmithDB, and Sandboxes when they
+# are on. SmithDB runs on its own managed node group, not on Karpenter.
+run "smithdb_runs_on_its_own_managed_node_group" {
   command = plan
 
   variables {
     enable_smithdb = true
+  }
+
+  assert {
+    condition     = toset(keys(module.eks.eks_managed_node_group_inputs)) == toset(["default", "smithdb"])
+    error_message = "enable_smithdb = true without Sandboxes must plan exactly the default and smithdb node groups"
+  }
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m5.4xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].desired_size == 2 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 5
+    )
+    error_message = "the SmithDB node group lost its default type or counts on the way to the EKS module"
+  }
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].labels["langsmith-nodepool/smithdb"] == "true" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].taints["smithdb"].key == "langsmith-nodepool/smithdb" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].taints["smithdb"].effect == "NO_SCHEDULE"
+    )
+    error_message = "the SmithDB node group must carry the label and taint that init-values.sh selects and tolerates"
+  }
+  assert {
+    condition = (
+      length(kubectl_manifest.smithdb_nodepool_instance_store) == 0 &&
+      length(kubectl_manifest.smithdb_nodepool_compute) == 0 &&
+      length(kubectl_manifest.smithdb_ec2nc_instance_store) == 0 &&
+      length(kubectl_manifest.smithdb_ec2nc_compute) == 0
+    )
+    error_message = "a new SmithDB install must not plan the Karpenter pools"
+  }
+}
+
+run "smithdb_and_sandboxes_plan_three_node_groups" {
+  command = plan
+
+  variables {
+    enable_smithdb                   = true
+    enable_sandboxes                 = true
+    sandbox_juicefs_redis_auth_token = "fixture-not-a-real-token-0123456789"
+  }
+
+  assert {
+    condition     = toset(keys(module.eks.eks_managed_node_group_inputs)) == toset(["default", "smithdb", "sandbox_host"])
+    error_message = "enable_smithdb and enable_sandboxes must plan the default, smithdb and sandbox_host node groups"
+  }
+}
+
+run "smithdb_off_plans_no_smithdb_node_group" {
+  command = plan
+
+  variables {
+    enable_smithdb = false
+  }
+
+  assert {
+    condition     = !contains(keys(module.eks.eks_managed_node_group_inputs), "smithdb")
+    error_message = "enable_smithdb = false still planned the SmithDB node group"
+  }
+}
+
+run "smithdb_node_group_takes_its_inputs" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    smithdb_node_instance_type = "m5.8xlarge"
+    smithdb_node_min_count     = 3
+    smithdb_node_max_count     = 7
+  }
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m5.8xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 3 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 7 &&
+      module.eks.eks_managed_node_group_inputs["default"].min_size == 3
+    )
+    error_message = "the SmithDB node inputs must reach its node group and leave the default group alone"
+  }
+}
+
+# An upgraded 0.17 install keeps the Karpenter controller and its pools while
+# SmithDB moves to the managed node group; the managed group is planned too.
+run "keep_karpenter_pools_plans_both_layouts" {
+  command = plan
+
+  variables {
+    enable_smithdb               = true
+    smithdb_keep_karpenter_pools = true
   }
 
   assert {
@@ -426,11 +517,25 @@ run "smithdb_runs_on_the_karpenter_nvme_pools" {
       length(kubectl_manifest.smithdb_ec2nc_instance_store) == 1 &&
       length(kubectl_manifest.smithdb_ec2nc_compute) == 1
     )
-    error_message = "enable_smithdb = true did not plan both Karpenter NodePools and their EC2NodeClasses"
+    error_message = "smithdb_keep_karpenter_pools = true must keep both Karpenter pools and their node classes"
   }
   assert {
-    condition     = !contains(keys(module.eks.eks_managed_node_group_inputs), "smithdb")
-    error_message = "enable_smithdb = true planned a managed SmithDB node group"
+    condition     = contains(keys(module.eks.eks_managed_node_group_inputs), "smithdb")
+    error_message = "smithdb_keep_karpenter_pools = true must still plan the SmithDB node group"
+  }
+}
+
+run "keep_karpenter_pools_without_smithdb_plans_no_pools" {
+  command = plan
+
+  variables {
+    enable_smithdb               = false
+    smithdb_keep_karpenter_pools = true
+  }
+
+  assert {
+    condition     = length(kubectl_manifest.smithdb_nodepool_instance_store) == 0 && length(kubectl_manifest.smithdb_nodepool_compute) == 0
+    error_message = "smithdb_keep_karpenter_pools planned Karpenter pools with SmithDB off"
   }
 }
 

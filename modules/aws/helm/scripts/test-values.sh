@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Renders the LangSmith chart with the AWS example values, in deploy.sh's order,
 # for every sizing profile with SmithDB off and on, and checks which scaler the
-# queue services get. No cluster and no AWS calls.
+# queue services get and that every SmithDB workload runs on the SmithDB node
+# group. No cluster and no AWS calls.
 # Requires helm, and network access to fetch the chart unless LANGSMITH_CHART
 # names a local chart directory or archive.
 # Usage: bash modules/aws/helm/scripts/test-values.sh
@@ -12,6 +13,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLES_DIR="$SCRIPT_DIR/../values/examples"
 CHART_REPO="https://langchain-ai.github.io/helm"
+# shellcheck source=../../infra/scripts/_common.sh
+source "$SCRIPT_DIR/../../infra/scripts/_common.sh"
 
 # The scaler each service gets, per sizing profile. "default" loads no sizing
 # file. The compaction worker column applies only with SmithDB on.
@@ -70,7 +73,7 @@ config:
     awsRegion: "us-west-2"
     apiURL: "https://s3.us-west-2.amazonaws.com"
 EOF
-cat > "$TEST_TMP/smithdb-overrides.yaml" <<'EOF'
+cat > "$TEST_TMP/smithdb-overrides.yaml" <<EOF
 smithdb:
   serviceAccount:
     annotations:
@@ -90,8 +93,7 @@ smithdb:
       passwordSecretKey: "smithdb_metastore_db_password"
       port: "5432"
       useSsl: true
-  metastoreMigration:
-    useSsl: true
+$(_smithdb_scheduling_values true)
   langsmith:
     ingestion:
       enabled: false
@@ -167,6 +169,34 @@ expect_scaler() {
   [[ -z "$(spec_field replicas <<< "$deploy")" ]] || { echo "$name: Deployment pins replicas under $mode"; return 1; }
 }
 
+# Checks that every rendered SmithDB workload selects and tolerates the SmithDB
+# node group and nothing selects a 0.17 Karpenter pool. Fewer than five SmithDB
+# workloads means the render is not the one this check was written for.
+expect_smithdb_scheduling() {
+  awk '
+    function flush() {
+      if (k ~ /^(Deployment|StatefulSet|Job)$/ && n ~ /smithdb/) {
+        count++
+        if (doc !~ /\n *langsmith-nodepool\/smithdb: "true"\n/) bad = bad n ": no SmithDB node selector\n"
+        if (doc !~ /key: langsmith-nodepool\/smithdb\n/) bad = bad n ": no SmithDB toleration\n"
+        if (doc ~ /smithdb-local\//) bad = bad n ": still selects a Karpenter pool\n"
+      }
+      doc = ""; k = ""; n = ""; top = ""
+    }
+    /^---/ { flush(); next }
+    { doc = doc $0 "\n" }
+    /^[^ #]/ { top = $1 }
+    /^kind:/ { k = $2 }
+    top == "metadata:" && /^  name:/ && n == "" { n = $2; gsub(/"/, "", n) }
+    END {
+      flush()
+      if (count < 5) bad = bad "only " count " SmithDB workloads rendered\n"
+      printf "%s", bad
+      exit bad != ""
+    }
+  ' "$1"
+}
+
 failures=0
 while read -r profile queue ingest compaction; do
   [[ -n "$profile" ]] || continue
@@ -184,6 +214,7 @@ while read -r profile queue ingest compaction; do
     msg=$(expect_scaler "$out" langsmith-ingest-queue "$ingest") || problems+=("$msg")
     if [[ "$smithdb" == on ]]; then
       msg=$(expect_scaler "$out" langsmith-smithdb-compaction-worker "$compaction") || problems+=("$msg")
+      while IFS= read -r msg; do problems+=("$msg"); done < <(expect_smithdb_scheduling "$out")
     elif [[ -n "$(manifest "$out" Deployment langsmith-smithdb-compaction-worker)" ]]; then
       problems+=("langsmith-smithdb-compaction-worker: rendered with SmithDB off")
     fi

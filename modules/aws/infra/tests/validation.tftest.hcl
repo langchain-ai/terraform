@@ -177,6 +177,7 @@ run "sizes_and_counts_reject_a_value_below_the_floor" {
     sandbox_host_node_count                        = 0
     sandbox_host_local_nvme_expected_device_count  = 0
     sandbox_juicefs_redis_snapshot_retention_limit = -1
+    smithdb_node_min_count                         = 0
   }
 
   expect_failures = [
@@ -185,7 +186,20 @@ run "sizes_and_counts_reject_a_value_below_the_floor" {
     var.sandbox_host_node_count,
     var.sandbox_host_local_nvme_expected_device_count,
     var.sandbox_juicefs_redis_snapshot_retention_limit,
+    var.smithdb_node_min_count,
   ]
+}
+
+# The maximum is checked against the minimum, so it needs a run of its own.
+run "smithdb_node_max_count_rejects_a_value_below_the_minimum" {
+  command = plan
+
+  variables {
+    smithdb_node_min_count = 3
+    smithdb_node_max_count = 2
+  }
+
+  expect_failures = [var.smithdb_node_max_count]
 }
 
 run "sizes_and_counts_reject_a_value_above_the_ceiling" {

@@ -612,6 +612,10 @@ fi
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  if grep -q 'smithdb-local/' "$_smithdb_base" 2>/dev/null; then
+    echo "  ✗ langsmith-values-smithdb.yaml still selects the 0.17 Karpenter pools, so SmithDB would not schedule on its node group; run: make init-values" >&2
+    exit 1
+  fi
   if [[ -f "$_smithdb_base" && -f "$_smithdb_overrides" ]]; then
     VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
     echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml (chart line: ${CHART_VERSION})"

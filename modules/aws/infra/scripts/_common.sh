@@ -15,6 +15,7 @@
 #   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
 #   _ssm_exists / _ssm_put    — Check or write an SSM parameter in $_region
 #   _confirm <prompt>         — Yes/no prompt that defaults to no
+#   _smithdb_scheduling_values — SmithDB node selector and tolerations, as Helm values
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -154,6 +155,58 @@ _helm() {
 
 _terraform() {
   env "${_AWS_STALE_VARS[@]/#/-u }" terraform "$@"
+}
+
+# ── SmithDB scheduling ───────────────────────────────────────────────────────
+# Prints the Helm values, indented to sit under "smithdb:", that put every
+# SmithDB workload on the SmithDB node group (label and taint
+# langsmith-nodepool/smithdb, set in infra/locals.tf). init-values.sh writes it
+# into langsmith-values-smithdb-overrides.yaml, which it regenerates on every
+# run; test-values.sh renders the chart with it.
+# unified is 0.18 and exportQuery is 0.17; a key the chart lacks is ignored.
+# It also owns metastoreMigration, so takes that block's useSsl (true|false):
+# a second metastoreMigration key in the same file would be a duplicate.
+_smithdb_scheduling_values() {
+  local use_ssl="$1"
+  cat <<YAML
+  query:
+    deployment:
+      nodeSelector: &smithdb_node_selector
+        langsmith-nodepool/smithdb: "true"
+      tolerations: &smithdb_tolerations
+        - key: langsmith-nodepool/smithdb
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+  unified:
+    deployment: &smithdb_scheduling
+      nodeSelector: *smithdb_node_selector
+      tolerations: *smithdb_tolerations
+  mutations:
+    deployment: *smithdb_scheduling
+  runRules:
+    deployment: *smithdb_scheduling
+  statsQuery:
+    deployment: *smithdb_scheduling
+  exportQuery:
+    deployment: *smithdb_scheduling
+  ingestion:
+    deployment: *smithdb_scheduling
+  compaction:
+    deployment: *smithdb_scheduling
+  compactionWorker:
+    deployment: *smithdb_scheduling
+  clusterManager:
+    deployment: *smithdb_scheduling
+  metastoreMigration:
+    useSsl: ${use_ssl}
+    job: *smithdb_scheduling
+  migration:
+    job: *smithdb_scheduling
+    taskdb:
+      postgres:
+        statefulSet: *smithdb_scheduling
+YAML
 }
 
 # ── Color helpers ────────────────────────────────────────────────────────────

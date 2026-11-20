@@ -988,7 +988,8 @@ echo ""
 # ── SmithDB (chart 0.16+) ─────────────────────────────────────────────────────
 # Copies the SmithDB overlay and generates langsmith-values-smithdb-overrides.yaml
 # with the object-store bucket, region, IRSA role ARN, and metastore secret-key
-# mapping from the infra outputs. All LangSmith integration gates start disabled;
+# mapping from the infra outputs, and the node selector and tolerations that put
+# SmithDB on its node group. All LangSmith integration gates start disabled;
 # operators enable ingestion, migration, and query in separate validated stages.
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
@@ -997,6 +998,14 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   if [[ ! -f "$_smithdb_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
     echo "SmithDB: created langsmith-values-smithdb.yaml"
+  elif grep -q 'smithdb-local/' "$_smithdb_file"; then
+    # A 0.17 copy selects the Karpenter pools. Helm merges nodeSelector maps
+    # across values files, so left in place it would add those labels to the
+    # SmithDB node group's and no SmithDB pod would schedule.
+    mv "$_smithdb_file" "$_smithdb_file.0.17.bak"
+    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
+    echo "SmithDB: replaced langsmith-values-smithdb.yaml, which selected the 0.17 Karpenter pools"
+    echo "         (old copy kept as langsmith-values-smithdb.yaml.0.17.bak; carry over any edits of your own)"
   else
     echo "SmithDB: langsmith-values-smithdb.yaml (existing)"
   fi
@@ -1036,8 +1045,7 @@ smithdb:
       passwordSecretKey: "smithdb_metastore_db_password"
       port: "5432"
       useSsl: ${_smithdb_metastore_use_ssl}
-  metastoreMigration:
-    useSsl: ${_smithdb_metastore_use_ssl}
+$(_smithdb_scheduling_values "$_smithdb_metastore_use_ssl")
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}

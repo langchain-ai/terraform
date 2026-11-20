@@ -203,9 +203,10 @@ module "eks_blueprints_addons" {
   enable_metrics_server     = true
   enable_cluster_autoscaler = true
 
-  # Karpenter provisions the SmithDB instance-store (local-NVMe, RAID0) and
-  # compute pools. It coexists with cluster-autoscaler, which manages the core
-  # managed node group; the two own disjoint nodes. When enabled, this installs
+  # Karpenter provisions the 0.17 SmithDB instance-store (local-NVMe, RAID0) and
+  # compute pools, kept only while an install upgrades off them (the root's
+  # smithdb_keep_karpenter_pools). It coexists with cluster-autoscaler, which manages the
+  # managed node groups; the two own disjoint nodes. When enabled, this installs
   # the Karpenter controller, its IRSA role, the node IAM role, and the SQS
   # interruption queue. The SmithDB NodePools/EC2NodeClasses are created in the
   # infra root.

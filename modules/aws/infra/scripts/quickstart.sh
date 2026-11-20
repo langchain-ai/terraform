@@ -660,7 +660,7 @@ printf "  ${DIM}  - A dedicated RDS PostgreSQL metastore${RESET}\n"
 printf "  ${DIM}  - A dedicated S3 object-store bucket${RESET}\n"
 printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes ServiceAccount${RESET}\n"
 printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection${RESET}\n"
-printf "  ${DIM}  - Karpenter with two EC2 node pools: local NVMe storage and general compute${RESET}\n"
+printf "  ${DIM}  - A dedicated EKS node group for SmithDB${RESET}\n"
 printf "  ${DIM}Ingestion, migration, and query cutover stay disabled initially.${RESET}\n"
 echo ""
 if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \

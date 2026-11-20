@@ -1018,13 +1018,13 @@ variable "langsmith_polly_encryption_key" {
 # It shares the LangSmith namespace and release (it cannot run in a separate
 # namespace or cluster). Enabling it provisions a dedicated metastore Postgres,
 # a dedicated object-store S3 bucket, an IRSA role for the SmithDB service
-# account, and instance-store + compute node groups (SmithDB requires local
-# NVMe SSD instances). The Helm side is enabled in Pass 2 (helm/ or app/).
+# account, and a dedicated SmithDB managed node group. The Helm side is enabled
+# in Pass 2 (helm/ or app/).
 #
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Pass 2 uses the repository's compatible 0.17.x chart pin. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, and the dedicated SmithDB managed node group). Pass 2 uses the repository's compatible chart pin."
   default     = false
 }
 
@@ -1181,11 +1181,50 @@ variable "smithdb_s3_force_destroy" {
   default     = false
 }
 
-# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
-# Karpenter (installed by the eks module when enable_smithdb = true) provisions
-# the SmithDB pools on demand. The instance-store pool uses instanceStorePolicy
-# RAID0, so no launch-template userdata is needed. Both amd64 and arm64 work;
-# amd64 is the default to match core LangSmith and avoid multi-arch job issues.
+# ── SmithDB node group ────────────────────────────────────────────────────────
+# SmithDB runs on its own EKS managed node group, apart from the LangSmith app,
+# on network disks: its caches are gp3 volume claims, so no local NVMe is
+# needed. The group is tainted, and init-values.sh writes the matching node
+# selector and tolerations, so only SmithDB pods land there. Cluster Autoscaler
+# scales it between the minimum and maximum.
+variable "smithdb_node_instance_type" {
+  type        = string
+  description = "EC2 instance type for the SmithDB node group. The default matches the default LangSmith node group; the SmithDB small tier fits it. Medium needs an 8xlarge and large a 16xlarge (see SMITHDB.md)."
+  default     = "m5.4xlarge"
+}
+
+variable "smithdb_node_min_count" {
+  type        = number
+  description = "Minimum (and initial) number of SmithDB nodes."
+  default     = 2
+
+  validation {
+    condition     = var.smithdb_node_min_count >= 1 && floor(var.smithdb_node_min_count) == var.smithdb_node_min_count
+    error_message = "smithdb_node_min_count must be a whole number of at least 1: SmithDB's migration hooks need a node to run on."
+  }
+}
+
+variable "smithdb_node_max_count" {
+  type        = number
+  description = "Maximum number of SmithDB nodes Cluster Autoscaler may scale to."
+  default     = 5
+
+  validation {
+    condition     = var.smithdb_node_max_count >= var.smithdb_node_min_count && floor(var.smithdb_node_max_count) == var.smithdb_node_max_count
+    error_message = "smithdb_node_max_count must be a whole number no smaller than smithdb_node_min_count."
+  }
+}
+
+variable "smithdb_keep_karpenter_pools" {
+  type        = bool
+  description = "Keep the Karpenter controller and the local-NVMe SmithDB pools of a 0.17 install while its SmithDB pods move to the managed node group. Set true for the upgrade, deploy, wait for the old nodes to empty and terminate, then set false and apply. See SMITHDB.md."
+  default     = false
+}
+
+# ── Karpenter pools (only with smithdb_keep_karpenter_pools) ──────────────────
+# The 0.17 layout: Karpenter provisioned an instance-store pool (local NVMe,
+# RAID0 through instanceStorePolicy) and a compute pool. These inputs shape
+# those pools while an upgraded install still has them.
 variable "smithdb_karpenter_chart_version" {
   type        = string
   description = "Karpenter Helm chart version. MUST match eks_cluster_version per the Karpenter compatibility matrix (https://karpenter.sh/docs/upgrading/compatibility/): K8s 1.34 -> >= 1.6, 1.35 -> >= 1.9, 1.36 -> 1.13."
@@ -1259,7 +1298,7 @@ variable "smithdb_compute_limits" {
 
 variable "smithdb_node_root_volume_size_gb" {
   type        = number
-  description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
+  description = "Root EBS volume size (GB) for SmithDB nodes. The caches are separate volume claims, so this only needs headroom for the OS and images."
   default     = 100
 }
 

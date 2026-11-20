@@ -93,7 +93,7 @@ variable "extra_eks_managed_node_groups" {
 
 variable "enable_karpenter" {
   type        = bool
-  description = "Install the Karpenter controller (via eks-blueprints-addons): controller IRSA, node IAM role, and the SQS interruption queue. Required for the SmithDB instance-store/compute pools. Coexists with cluster-autoscaler (disjoint nodes)."
+  description = "Install the Karpenter controller (via eks-blueprints-addons): controller IRSA, node IAM role, and the SQS interruption queue. Required only for the 0.17 SmithDB instance-store/compute pools. Coexists with cluster-autoscaler (disjoint nodes)."
   default     = false
 }
 
