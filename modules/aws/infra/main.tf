@@ -1305,10 +1305,23 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 # regularly run longer than that, so Envoy resets the HTTP/2 stream mid-response
 # (response_flags=UT, response_code_details=response_timeout) even though the
 # backend already returned 200 and is still streaming — the browser sees
-# net::ERR_HTTP2_PROTOCOL_ERROR. Covers:
+# net::ERR_HTTP2_PROTOCOL_ERROR, and the backend logs a client disconnect.
+# Covers:
 #   - Fleet run streams: POST /api/v1/fleet/threads/{id}/runs/stream,
 #     GET /api/v1/fleet/lg/threads/{id}/runs/{run_id}/stream
 #   - LangGraph Deployments proxy (host-backend): /api-host/v2/*
+#   - Playground invoke, batch and stream, and playground experiments
+#     (experiment/stream): /api/v1/playground
+#   - Live experiment results, the comparison view's runs/stream and
+#     runs/delta/stream: /api/v1/platform/datasets
+#   - The same delta stream on shared links: /api/v1/platform/public
+#   - The prompt canvas: /api/v1/prompts/canvas, /api/v1/platform/prompt-canvas
+# The route exists on every Envoy Gateway install that has a domain, which
+# suits the playground and experiments because they are always on. The name
+# stays langsmith-fleet-streams, as on existing installs and in the Azure
+# module, so an upgrade updates the route in place. Behind Envoy these
+# requests are still bounded: the chart's nginx reads with a 300s timeout,
+# and platform-backend's handlers carry their own.
 #
 # A second HTTPRoute on the same Gateway+hostname with more specific path
 # matches takes precedence over the chart's "/" catch-all per Gateway API
@@ -1338,6 +1351,11 @@ resource "kubectl_manifest" "fleet_stream_httproute" {
           { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },
           { path = { type = "PathPrefix", value = "/api/v1/fleet/lg" } },
           { path = { type = "PathPrefix", value = "/api-host/v2" } },
+          { path = { type = "PathPrefix", value = "/api/v1/playground" } },
+          { path = { type = "PathPrefix", value = "/api/v1/platform/datasets" } },
+          { path = { type = "PathPrefix", value = "/api/v1/platform/public" } },
+          { path = { type = "PathPrefix", value = "/api/v1/prompts/canvas" } },
+          { path = { type = "PathPrefix", value = "/api/v1/platform/prompt-canvas" } },
         ]
         backendRefs = [{ name = "langsmith-frontend", port = 80 }]
         timeouts    = { request = "0s" }

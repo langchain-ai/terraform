@@ -429,6 +429,67 @@ run "a_certificate_arn_plans_no_dns" {
   }
 }
 
+# ── Long-running streams under Envoy Gateway ─────────────────────────────────
+# Envoy Gateway is the default controller, so a domain alone plans the
+# supplemental route that lifts the 15s timeout. Every stream prefix must be on
+# it with the timeout at 0s; without a domain or without Envoy Gateway there is
+# no route.
+
+run "envoy_gateway_streams_route_carries_the_playground_prefixes" {
+  command = plan
+
+  variables {
+    langsmith_domain = "plan-tests.example.com"
+  }
+
+  assert {
+    condition     = length(kubectl_manifest.fleet_stream_httproute) == 1
+    error_message = "Envoy Gateway with a domain did not plan the langsmith-fleet-streams route"
+  }
+  assert {
+    condition     = yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].timeouts.request == "0s"
+    error_message = "langsmith-fleet-streams no longer disables the request timeout"
+  }
+  assert {
+    condition = alltrue([
+      for p in [
+        "/api/v1/fleet/threads",
+        "/api/v1/fleet/lg",
+        "/api-host/v2",
+        "/api/v1/playground",
+        "/api/v1/platform/datasets",
+        "/api/v1/platform/public",
+        "/api/v1/prompts/canvas",
+        "/api/v1/platform/prompt-canvas",
+      ] : contains([for m in yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].matches : m.path.value], p)
+    ])
+    error_message = "langsmith-fleet-streams is missing a long-running stream prefix"
+  }
+}
+
+run "no_domain_plans_no_streams_route" {
+  command = plan
+
+  assert {
+    condition     = length(kubectl_manifest.fleet_stream_httproute) == 0
+    error_message = "langsmith-fleet-streams was planned with no langsmith_domain to put in its hostnames"
+  }
+}
+
+run "nginx_ingress_plans_no_streams_route" {
+  command = plan
+
+  variables {
+    langsmith_domain     = "plan-tests.example.com"
+    enable_nginx_ingress = true
+  }
+
+  assert {
+    condition     = length(kubectl_manifest.fleet_stream_httproute) == 0
+    error_message = "langsmith-fleet-streams was planned without Envoy Gateway, so its parentRef has no Gateway"
+  }
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 run "create_vpc_false_plans_no_vpc" {
