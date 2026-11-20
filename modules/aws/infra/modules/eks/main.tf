@@ -14,7 +14,7 @@ locals {
   # these three go through module.eks's own `addons` input instead, normalized
   # from the Blueprints eks_addons schema (`resolve_conflicts` single key) to the
   # one `addons` uses (split create/update). A key in var.eks_addons overrides
-  # the matching default; the custom-networking vpc-cni entry's
+  # the matching default; the vpc-cni entry's
   # configuration_values are layered on separately below. coredns schedules onto
   # nodes like any other pod, so it keeps the default before_compute = false,
   # which depends_on the node groups directly — same ordering Blueprints gave it.
@@ -42,33 +42,36 @@ locals {
     )
   }
 
-  # Custom networking owns vpc-cni's configuration_values: prefix delegation or
-  # warm-pool tuning in a user-supplied var.eks_addons["vpc-cni"] still carries
-  # over via local.core_addons above, merged with the custom networking settings
-  # here so neither side clobbers the other.
-  user_vpc_cni_config = try(jsondecode(local.core_addons["vpc-cni"].configuration_values), {})
+  # Pod ENIs are created by the CNI, so default_tags never reach them. These tags
+  # go in its CreateNetworkInterface calls. The user's own vpc-cni settings, such
+  # as prefix delegation or warm-pool tuning, come from var.eks_addons because
+  # core_addons drops configuration_values, and are merged with the tags and the
+  # custom networking settings so neither side clobbers the other.
+  user_vpc_cni_config = try(jsondecode(var.eks_addons["vpc-cni"].configuration_values), {})
+  vpc_cni_tagged_config = merge(local.user_vpc_cni_config, {
+    env = merge(try(local.user_vpc_cni_config.env, {}), { ADDITIONAL_ENI_TAGS = jsonencode(var.tags) })
+  })
 
-  addons = merge(
-    local.core_addons,
-    local.custom_networking ? {
-      "vpc-cni" = merge(local.core_addons["vpc-cni"], {
-        configuration_values = jsonencode(merge(local.user_vpc_cni_config, {
-          env = merge(try(local.user_vpc_cni_config.env, {}), {
-            AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG = "true"
-            ENI_CONFIG_LABEL_DEF               = "topology.kubernetes.io/zone"
-          })
-          # One ENIConfig per AZ, named after the AZ. securityGroups is omitted,
-          # so pod ENIs carry the node security group and every rule that admits
-          # nodes (the ALB target rules included) admits pods too.
-          eniConfig = {
-            create  = true
-            region  = data.aws_region.current.region
-            subnets = { for az, id in var.pod_subnet_ids_by_az : az => { id = id } }
-          }
-        }))
-      })
-    } : {},
-  )
+  addons = merge(local.core_addons, {
+    "vpc-cni" = merge(local.core_addons["vpc-cni"], {
+      configuration_values = !local.custom_networking ? jsonencode(local.vpc_cni_tagged_config) : jsonencode(merge(local.vpc_cni_tagged_config, {
+        env = merge(local.vpc_cni_tagged_config.env, {
+          AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG = "true"
+          ENI_CONFIG_LABEL_DEF               = "topology.kubernetes.io/zone"
+        })
+        # One ENIConfig per AZ, named after the AZ. securityGroups is omitted,
+        # so pod ENIs carry the node security group and every rule that admits
+        # nodes (the ALB target rules included) admits pods too.
+        eniConfig = {
+          create  = true
+          region  = data.aws_region.current.region
+          subnets = { for az, id in var.pod_subnet_ids_by_az : az => { id = id } }
+        }
+      }))
+    })
+  })
+
+  load_balancer_controller_values = [yamlencode({ defaultTags = var.tags })]
 
   # v21 changed these (UPGRADE-21.0.md). They are merged under
   # eks_managed_node_group_defaults because setting that variable replaces its
@@ -170,7 +173,11 @@ resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
   service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
-  tags                     = var.tags
+  # The driver creates PVC volumes and snapshots itself, outside default_tags.
+  # These tags go in the CreateVolume and CreateSnapshot calls for every
+  # StorageClass, not only the gp3 one below.
+  configuration_values = jsonencode({ controller = { extraVolumeTags = var.tags } })
+  tags                 = var.tags
 
   depends_on = [module.eks]
 }
@@ -194,6 +201,9 @@ module "eks_blueprints_addons" {
   # "no endpoints available for service aws-load-balancer-webhook-service" if the
   # ALB controller pods aren't ready yet.
   aws_load_balancer_controller = {
+    # The controller creates the ALB, its target groups, and its security groups
+    # outside default_tags; defaultTags puts these tags in each create call.
+    values = local.load_balancer_controller_values
     set = [{
       name  = "enableServiceMutatorWebhook"
       value = "false"

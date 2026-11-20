@@ -1157,6 +1157,9 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
       subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
       securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
       associatePublicIPAddress   = false
+      # default_tags never reach Karpenter launches; these tag the instances,
+      # volumes, and ENIs in the CreateFleet call itself.
+      tags = local.common_tags
       # Karpenter RAID0s the local NVMe and points kubelet at it — no userdata.
       instanceStorePolicy = "RAID0"
       metadataOptions = {
@@ -1192,6 +1195,9 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
       subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
       securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
       associatePublicIPAddress   = false
+      # default_tags never reach Karpenter launches; these tag the instances,
+      # volumes, and ENIs in the CreateFleet call itself.
+      tags = local.common_tags
       metadataOptions = {
         httpEndpoint            = "enabled"
         httpProtocolIPv6        = "disabled"
