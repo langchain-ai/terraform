@@ -40,6 +40,7 @@ INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 EXAMPLES_DIR="$VALUES_DIR/examples"
 source "$INFRA_DIR/scripts/_common.sh"
+source "$INFRA_DIR/scripts/_smithdb-transition.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
@@ -985,10 +986,11 @@ YAML
 echo "Written: $OUT_FILE"
 echo ""
 
-# ── SmithDB (chart 0.16+) ─────────────────────────────────────────────────────
+# ── SmithDB (chart 0.17+) ─────────────────────────────────────────────────────
 # Copies the SmithDB overlay and generates langsmith-values-smithdb-overrides.yaml
 # with the object-store bucket, region, IRSA role ARN, and metastore secret-key
-# mapping from the infra outputs. All LangSmith integration gates start disabled;
+# mapping from the infra outputs, and the node selector and tolerations that put
+# SmithDB and TaskDB on their own node group. All LangSmith integration gates start disabled;
 # operators enable ingestion, migration, and query in separate validated stages.
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
@@ -997,14 +999,18 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   if [[ ! -f "$_smithdb_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
     echo "SmithDB: created langsmith-values-smithdb.yaml"
+  elif _smithdb_refresh_legacy_overlay "$_smithdb_file" "$EXAMPLES_DIR/langsmith-values-smithdb.yaml"; then
+    echo "SmithDB: replaced langsmith-values-smithdb.yaml, which still pinned the old Karpenter pools"
+    echo "         (the old copy is kept as langsmith-values-smithdb.legacy.yaml)"
   else
     echo "SmithDB: langsmith-values-smithdb.yaml (existing)"
   fi
 
   SMITHDB_BUCKET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null) || SMITHDB_BUCKET=""
   SMITHDB_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_irsa_role_arn 2>/dev/null) || SMITHDB_IRSA_ROLE_ARN=""
-  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_IRSA_ROLE_ARN" ]]; then
-    echo "ERROR: enable_smithdb = true but smithdb_object_store_bucket / smithdb_irsa_role_arn outputs are empty." >&2
+  SMITHDB_CACHE_STORAGE_CLASS=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage_class_name 2>/dev/null) || SMITHDB_CACHE_STORAGE_CLASS=""
+  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_IRSA_ROLE_ARN" || -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
+    echo "ERROR: enable_smithdb = true but smithdb_object_store_bucket / smithdb_irsa_role_arn / smithdb_cache_storage_class_name outputs are empty." >&2
     echo "       Is 'terraform apply' complete in $INFRA_DIR with enable_smithdb = true?" >&2
     exit 1
   fi
@@ -1016,8 +1022,10 @@ if [[ "$_enable_smithdb" == "true" ]]; then
 # Re-run init-values.sh to refresh from Terraform outputs.
 #
 # Advance these flags one stage at a time by following the SmithDB installation
-# guide. Keep ClickHouse enabled throughout version 16.
+# guide.
 smithdb:
+  cache:
+    storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
   serviceAccount:
     annotations:
       eks.amazonaws.com/role-arn: "${SMITHDB_IRSA_ROLE_ARN}"
@@ -1038,6 +1046,37 @@ smithdb:
       useSsl: ${_smithdb_metastore_use_ssl}
   metastoreMigration:
     useSsl: ${_smithdb_metastore_use_ssl}
+    job:
+$(_smithdb_pool_scheduling "      ")
+  query:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  mutations:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  runRules:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  statsQuery:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  ingestion:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  compactionWorker:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  compaction:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  clusterManager:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  migration:
+    taskdb:
+      postgres:
+        statefulSet:
+$(_smithdb_pool_scheduling "          ")
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
