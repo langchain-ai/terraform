@@ -634,6 +634,19 @@ _ask_choice "$(_choice_arg "clickhouse_source")" "$_ch_default" --recommended 1 
 CH_SOURCE="in-cluster"; [[ "$_CHOICE" == "2" ]] && CH_SOURCE="external"
 _confirm_storage_change "ClickHouse" "$_ex_ch" "$CH_SOURCE"
 
+# The size multiple in an instance type: m6a.4xlarge is 4, a type with no number
+# (xlarge, large) counts as 1, and a metal type is always big enough.
+_instance_xlarge_multiple() {
+  local t="$1"
+  if [[ "$t" == *.metal* ]]; then
+    echo 1000
+  elif [[ "$t" =~ \.([0-9]+)xlarge$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  else
+    echo 1
+  fi
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 7. SmithDB
 # ═══════════════════════════════════════════════════════════════════════════
@@ -643,13 +656,9 @@ _section "7. SmithDB"
 # Older configurations may omit these flags and rely on Terraform's defaults.
 _smithdb_default=true
 [[ "$UPDATE_MODE" == "true" ]] && _smithdb_default=false
-ENABLE_SMITHDB="$(_existing enable_smithdb "$_smithdb_default")"
+_ex_smithdb="$(_existing enable_smithdb "$_smithdb_default")"
+ENABLE_SMITHDB="false"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
-if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  SMITHDB_INGESTION="$(_existing smithdb_ingestion_enabled "$_smithdb_default")"
-  SMITHDB_MIGRATION="$(_existing smithdb_migration_enabled false)"
-  SMITHDB_QUERY="$(_existing smithdb_query_enabled false)"
-fi
 SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
 [[ "$SMITHDB_NODE_TYPE" == "null" ]] && SMITHDB_NODE_TYPE="m6a.4xlarge"
 SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
@@ -684,9 +693,23 @@ printf "  ${DIM}  - A dedicated general-purpose managed node pool${RESET}\n"
 printf "  ${DIM}  - A SmithDB cache storage class (smithdb-cache) for per-pod gp3${RESET}\n"
 printf "  ${DIM}    EBS volumes, each configured with 7,000 IOPS and 1,000 MiB/s${RESET}\n"
 printf "  ${DIM}    of throughput${RESET}\n"
-printf "  ${DIM}The sizing profile selects the instance type automatically.${RESET}\n"
+printf "  ${DIM}The SmithDB nodes default to m6a.4xlarge, which fits the Small tier. Medium needs${RESET}\n"
+printf "  ${DIM}m6a.8xlarge and Large needs m6a.16xlarge (smithdb_node_instance_type).${RESET}\n"
 printf "  ${DIM}Migration and query cutover remain disabled initially.${RESET}\n"
 echo ""
+if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
+  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
+  ENABLE_SMITHDB="true"
+  SMITHDB_INGESTION="$(_existing smithdb_ingestion_enabled "$_smithdb_default")"
+  SMITHDB_MIGRATION="$(_existing smithdb_migration_enabled false)"
+  SMITHDB_QUERY="$(_existing smithdb_query_enabled false)"
+fi
+if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" != "true" ]]; then
+  echo ""
+  _yellow "WARNING"; printf ": disabling SmithDB may remove its metastore, S3 bucket, and storage nodes.\n"
+  printf "  QuickStart does not move or preserve the data stored in those resources.\n"
+  _confirm_or_abort "Continue with disabling SmithDB?" "n"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. Traffic Routing
@@ -1067,6 +1090,20 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   (( SMITHDB_NODE_MAX > SMITHDB_NODE_MIN )) || SMITHDB_NODE_MAX=$((SMITHDB_NODE_MIN + 1))
   _ask_int_at_least "$((SMITHDB_NODE_MIN + 1))" "$(_choice_arg smithdb_node_max_count)" "SmithDB maximum nodes (must exceed minimum)" "$SMITHDB_NODE_MAX"; SMITHDB_NODE_MAX="$_REPLY"
   _ask_int_at_least 1 "$(_choice_arg smithdb_node_root_volume_size_gb)" "SmithDB boot disk size (GiB)" "$SMITHDB_NODE_DISK"; SMITHDB_NODE_DISK="$_REPLY"
+
+  # The sizing files give production a Medium SmithDB tier and production-large a Large one,
+  # which need larger nodes than the Small-tier default. Pods that do not fit stay Pending.
+  _smithdb_need=0
+  case "$SIZING" in
+    production) _smithdb_need=8 ;;
+    production-large) _smithdb_need=16 ;;
+  esac
+  if (( _smithdb_need > $(_instance_xlarge_multiple "$SMITHDB_NODE_TYPE") )); then
+    echo ""
+    _yellow "WARNING"; printf ": sizing '%s' gives SmithDB a tier that needs %sxlarge nodes or larger, but the SmithDB node type is %s.\n" "$SIZING" "$_smithdb_need" "$SMITHDB_NODE_TYPE"
+    printf "  Set smithdb_node_instance_type in terraform.tfvars (m6a.8xlarge for production,\n"
+    printf "  m6a.16xlarge for production-large), or the SmithDB pods stay Pending.\n"
+  fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

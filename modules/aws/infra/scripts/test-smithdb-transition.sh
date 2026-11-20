@@ -148,6 +148,17 @@ jq -e '
 ' "$TEST_DIR/fresh.json" >/dev/null
 echo "PASS: an overlay that pins the old Karpenter pools is replaced, and only the managed pool remains"
 
+# Migration pods request 100Gi of ephemeral storage, so a small boot disk stops the script
+# instead of leaving the pods Pending.
+for gb in 100 149; do
+  if _smithdb_migration_disk_check "$gb" 2>"$TEST_DIR/disk.err"; then echo "FAIL: a ${gb} GiB boot disk was accepted"; exit 1; fi
+done
+grep -q "smithdb_node_root_volume_size_gb to at least 150" "$TEST_DIR/disk.err"
+for gb in 150 400 not-a-number; do
+  _smithdb_migration_disk_check "$gb" 2>/dev/null || { echo "FAIL: '$gb' was rejected"; exit 1; }
+done
+echo "PASS: migration stops on a boot disk under 150 GiB and accepts 150 GiB or more"
+
 jq -n '{items: ([range(0;5) | {
   kind:"Deployment", metadata:{name:("langsmith-smithdb-" + tostring), generation:2},
   spec:{replicas:1, template:{spec:{nodeSelector:{"langsmith-nodepool/smithdb":"true"},

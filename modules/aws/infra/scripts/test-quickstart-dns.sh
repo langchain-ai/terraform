@@ -77,6 +77,7 @@ trap 'rm -rf "$TMP"' EXIT
 write_fresh_answers() {
   local file="$1" acm_arn="$2" domain="$3" dns_choice="${4:-}"
   local invalid_zone_id="${5:-}" zone_id="${6:-}" invalid_bounds="${7:-false}" sizing="${8:-}"
+  local smithdb_answer="${9:-}"
   {
     printf '%s\n' "1"             # Deployment profile: dev
     printf '\n'                    # Name prefix
@@ -93,6 +94,7 @@ write_fresh_answers() {
     printf '%s\n' "2"             # PostgreSQL: in-cluster
     printf '%s\n' "2"             # Redis: in-cluster
     printf '\n'                    # ClickHouse: in-cluster
+    printf '%s\n' "$smithdb_answer" # Enable SmithDB (blank accepts the default: yes)
     printf '%s\n' "3"             # Gateway: ALB
     printf '%s\n' "$domain"       # Custom domain
     printf '%s\n' "1"             # TLS: ACM
@@ -110,7 +112,9 @@ write_fresh_answers() {
       fi
     fi
     printf '%s\n' "$sizing"        # Sizing: dev unless overridden
-    if [[ "$invalid_bounds" == "true" ]]; then
+    if [[ "$smithdb_answer" == "n" ]]; then
+      :                            # SmithDB declined: no capacity questions
+    elif [[ "$invalid_bounds" == "true" ]]; then
       printf '%s\n' 0 2 2 7 0 400
       # Invalid minimum, maximum, and boot disk size must each be re-asked.
     else
@@ -129,7 +133,7 @@ write_fresh_answers() {
 # list explicit makes a newly inserted prompt fail the test instead of silently
 # shifting later answers onto the wrong questions.
 write_update_defaults() {
-  local file="$1" smithdb="${2:-true}"
+  local file="$1" smithdb="${2:-true}" enable_answer="${3:-}" confirm_answer="${4:-}"
   {
     printf '\n' # Update existing file
     printf '\n' # Deployment profile
@@ -143,6 +147,8 @@ write_update_defaults() {
     printf '\n' # PostgreSQL
     printf '\n' # Redis
     printf '\n' # ClickHouse
+    printf '%s\n' "$enable_answer" # Enable SmithDB
+    [[ -z "$confirm_answer" ]] || printf '%s\n' "$confirm_answer" # Confirm disabling SmithDB
     printf '\n' # Gateway
     printf '\n' # TLS
     printf '\n' # Certificate management
@@ -292,11 +298,30 @@ for sizing in dev production-large; do
   has_line "SmithDB type is m6a.4xlarge for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6a.4xlarge"'
   has_line "SmithDB initial capacity for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
   has_line "SmithDB ceiling is 5 for $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"
+  log_lacks "no claim that the sizing profile picks the SmithDB node type for $sizing" "$TMP/$sizing.log" "selects the instance type automatically"
+  if [[ "$sizing" == production-large ]]; then
+    log_has "production-large warns that the SmithDB node type is too small" "$TMP/$sizing.log" "gives SmithDB a tier that needs 16xlarge nodes or larger"
+  else
+    log_lacks "$sizing does not warn about the SmithDB node type" "$TMP/$sizing.log" "gives SmithDB a tier that needs"
+  fi
   has_line "SmithDB enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
   has_line "ingestion enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
   has_line "migration remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_migration_enabled             = false'
   has_line "query cutover remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_query_enabled                 = false'
 done
+
+echo "8. SmithDB can be turned on and off in the wizard"
+OPTOUT_INFRA="$TMP/smithdb-optout"
+write_fresh_answers "$TMP/optout.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false "" n
+run_wizard "a new setup can decline SmithDB" "$OPTOUT_INFRA" "$TMP/optout.answers" "$TMP/optout.log"
+has_line "SmithDB is off when declined" "$OPTOUT_INFRA/terraform.tfvars" 'enable_smithdb                        = false'
+write_update_defaults "$TMP/enable.answers" true y
+run_wizard "update mode can turn SmithDB on" "$OPTOUT_INFRA" "$TMP/enable.answers" "$TMP/enable.log"
+has_line "SmithDB is on after the update" "$OPTOUT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
+write_update_defaults "$TMP/disable.answers" false n y
+run_wizard "update mode can turn SmithDB off after a warning" "$OPTOUT_INFRA" "$TMP/disable.answers" "$TMP/disable.log"
+has_line "SmithDB is off after the update" "$OPTOUT_INFRA/terraform.tfvars" 'enable_smithdb                        = false'
+log_has "turning SmithDB off warns about its data" "$TMP/disable.log" "disabling SmithDB may remove its metastore"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

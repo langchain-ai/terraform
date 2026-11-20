@@ -45,6 +45,12 @@ you raise them for a larger tier.
 
 Set them in `infra/terraform.tfvars`. QuickStart asks for the two counts.
 LangSmith uses its own group, defaulting to `m6a.2xlarge`.
+That default was `m5.4xlarge` before this release. Changing a node group's instance
+type replaces the group and drains its pods, so an install that relies on the default
+(no `eks_managed_node_groups` in `terraform.tfvars`) replaces its default node group on
+the next `make apply`, and each node has half the vCPU and memory. Set
+`eks_managed_node_groups` to keep the previous size. A `terraform.tfvars` written by
+QuickStart already names the instance type.
 
 Nodes keep the 100 GiB boot-disk default. `smithdb.resourceTier` sets service
 resources and cache sizes. Caches use gp3
