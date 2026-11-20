@@ -47,7 +47,6 @@ eks_managed_node_groups = {
 #------------------------------------------------------------------------------
 # External Postgres + Redis (recommended even for dev)
 #------------------------------------------------------------------------------
-postgres_source        = "external"
 postgres_username      = "langsmith"
 postgres_instance_type = "db.t3.medium"    # 2 vCPU, 4 GB — fine for dev
 postgres_storage_gb    = 20

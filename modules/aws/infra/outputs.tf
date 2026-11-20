@@ -55,24 +55,24 @@ output "get_credentials_command" {
 # PostgreSQL (RDS)
 #------------------------------------------------------------------------------
 output "postgres_source" {
-  description = "PostgreSQL deployment type: external (RDS) or in-cluster (Helm)"
+  description = "PostgreSQL deployment type: always external (RDS) from 0.18"
   value       = var.postgres_source
 }
 
 output "postgres_connection_url" {
   description = "PostgreSQL connection URL (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].connection_url : null
+  value       = module.postgres[0].connection_url
   sensitive   = true
 }
 
 output "postgres_iam_connection_url" {
   description = "Connection URL for IAM authentication — no password (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].iam_connection_url : null
+  value       = module.postgres[0].iam_connection_url
 }
 
 output "postgres_security_group_id" {
   description = "Security group ID attached to the RDS instance (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].security_group_id : null
+  value       = module.postgres[0].security_group_id
 }
 
 #------------------------------------------------------------------------------
@@ -383,7 +383,7 @@ output "resource_summary" {
   value = {
     cluster          = module.eks.cluster_name
     postgres_source  = var.postgres_source
-    postgres         = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
+    postgres         = "external (RDS)"
     redis_source     = var.redis_source
     redis            = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
     storage_bucket   = local.bucket_name
@@ -418,7 +418,7 @@ output "next_steps" {
 
     Resources:
     - EKS Cluster:  ${module.eks.cluster_name}
-    - PostgreSQL:   ${var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"}
+    - PostgreSQL:   external (RDS)
     - Redis:        ${var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"}
     - S3 Bucket:    ${local.bucket_name}
     - ALB:          ${module.alb.alb_dns_name}

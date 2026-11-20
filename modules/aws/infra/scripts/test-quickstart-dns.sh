@@ -90,7 +90,9 @@ write_fresh_answers() {
     printf '\n'                    # Node instance type
     printf '\n'                    # Node min
     printf '\n'                    # Node max
-    printf '%s\n' "2"             # PostgreSQL: in-cluster
+    printf '\n'                    # RDS instance type
+    printf '\n'                    # RDS initial storage
+    printf '\n'                    # RDS max storage
     printf '%s\n' "2"             # Redis: in-cluster
     printf '\n'                    # ClickHouse: in-cluster
     printf '\n'                    # SmithDB: disabled
@@ -135,7 +137,9 @@ write_update_defaults() {
     printf '\n' # Node instance type
     printf '\n' # Node min
     printf '\n' # Node max
-    printf '\n' # PostgreSQL
+    printf '\n' # RDS instance type
+    printf '\n' # RDS initial storage
+    printf '\n' # RDS max storage
     printf '\n' # Redis
     printf '\n' # ClickHouse
     printf '\n' # SmithDB

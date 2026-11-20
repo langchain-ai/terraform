@@ -15,7 +15,7 @@
 # Prerequisites:
 #   - chart >= 0.15.0
 #   - LangSmith Chat entitlement in your LangSmith license
-#   - postgres_source = "external" and redis_source = "external" in terraform.tfvars
+#   - redis_source = "external" in terraform.tfvars
 #   - A 'langsmith_polly' database on RDS — created automatically by terraform apply
 #   - TF_VAR_langsmith_polly_encryption_key set (see infra/scripts/setup-env.sh)
 #     (shared with the legacy enable_polly path — same key, same data)

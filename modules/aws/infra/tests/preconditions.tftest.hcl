@@ -262,13 +262,13 @@ run "pod_subnets_in_another_vpc_are_rejected" {
 # local that is an OR of two arms, so each one takes two runs: the storage mode
 # here, and the enable_standalone_* compatibility flag below.
 
-run "external_fleet_storage_with_in_cluster_postgres_is_rejected" {
+run "external_fleet_storage_with_in_cluster_redis_is_rejected" {
   command = plan
 
   variables {
-    enable_fleet    = true
-    fleet_storage   = "external"
-    postgres_source = "in-cluster"
+    enable_fleet  = true
+    fleet_storage = "external"
+    redis_source  = "in-cluster"
   }
 
   expect_failures = [terraform_data.validate_inputs]
@@ -286,13 +286,13 @@ run "external_polly_storage_with_in_cluster_redis_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "external_insights_storage_with_in_cluster_postgres_is_rejected" {
+run "external_insights_storage_with_in_cluster_redis_is_rejected" {
   command = plan
 
   variables {
     enable_insights  = true
     insights_storage = "external"
-    postgres_source  = "in-cluster"
+    redis_source     = "in-cluster"
   }
 
   expect_failures = [terraform_data.validate_inputs]
@@ -312,12 +312,12 @@ run "standalone_polly_with_in_cluster_redis_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "standalone_insights_with_in_cluster_postgres_is_rejected" {
+run "standalone_insights_with_in_cluster_redis_is_rejected" {
   command = plan
 
   variables {
     enable_standalone_insights = true
-    postgres_source            = "in-cluster"
+    redis_source               = "in-cluster"
   }
 
   expect_failures = [terraform_data.validate_inputs]

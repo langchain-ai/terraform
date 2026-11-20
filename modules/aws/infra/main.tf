@@ -58,8 +58,8 @@ provider "kubectl" {
 resource "terraform_data" "validate_inputs" {
   lifecycle {
     precondition {
-      condition     = var.postgres_source != "external" || var.postgres_password != ""
-      error_message = "postgres_password is required when postgres_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_postgres_password."
+      condition     = var.postgres_password != ""
+      error_message = "postgres_password is required. Run: source ./scripts/setup-env.sh, or set TF_VAR_postgres_password."
     }
 
     precondition {
@@ -140,18 +140,18 @@ resource "terraform_data" "validate_inputs" {
     # External Fleet storage uses a dedicated database and logical Redis index on
     # the shared RDS and ElastiCache instances.
     precondition {
-      condition     = !var.enable_fleet || var.fleet_storage != "external" || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
+      condition     = !var.enable_fleet || var.fleet_storage != "external" || var.redis_source == "external"
+      error_message = "fleet_storage = \"external\" requires redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !local.polly_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "External LangSmith Chat storage requires postgres_source = \"external\" and redis_source = \"external\"."
+      condition     = !local.polly_external_storage || var.redis_source == "external"
+      error_message = "External LangSmith Chat storage requires redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !local.insights_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "External Insights storage requires postgres_source = \"external\" and redis_source = \"external\"."
+      condition     = !local.insights_external_storage || var.redis_source == "external"
+      error_message = "External Insights storage requires redis_source = \"external\"."
     }
 
     precondition {
@@ -355,7 +355,10 @@ module "storage" {
 
 module "postgres" {
   source = "./modules/postgres"
-  count  = var.postgres_source == "external" ? 1 : 0
+  # ponytail: always 1 since postgres_source admits only "external"; the count
+  # keeps the module.postgres[0] address every install's state already holds.
+  # Drop it with a moved block when the [0] references are rewritten.
+  count = var.postgres_source == "external" ? 1 : 0
 
   identifier     = local.postgres_name
   engine_version = var.postgres_engine_version
@@ -713,23 +716,13 @@ resource "time_sleep" "wait_for_alb_webhook" {
   create_duration = "30s"
 }
 
-# ── In-cluster credentials ────────────────────────────────────────────────────
-# When postgres or redis runs in-cluster (deployed by the LangSmith Helm chart),
-# Terraform still creates the k8s Secret so the chart can initialize the DB and
-# backend pods can connect without manual patching after deploy.
-# Passwords are generated here so they are stable across re-applies.
-
-resource "random_password" "in_cluster_postgres" {
-  count   = var.postgres_source == "in-cluster" ? 1 : 0
-  length  = 32
-  special = false
-}
-
+# ── Connection Secrets ────────────────────────────────────────────────────────
+# When redis runs in-cluster (deployed by the LangSmith Helm chart), Terraform
+# still creates the k8s Secret so backend pods can connect without manual
+# patching after deploy.
 
 locals {
-  postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : (
-    "postgresql://langsmith:${random_password.in_cluster_postgres[0].result}@langsmith-postgres:5432/langsmith"
-  )
+  postgres_connection_url = module.postgres[0].connection_url
   redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
     "redis://langsmith-redis:6379"
   )
@@ -745,10 +738,7 @@ module "k8s_bootstrap" {
 
   namespace = var.langsmith_namespace
 
-  postgres_connection_url  = local.postgres_connection_url
-  postgres_in_cluster_user = var.postgres_source == "in-cluster" ? "langsmith" : ""
-  postgres_in_cluster_db   = var.postgres_source == "in-cluster" ? "langsmith" : ""
-  postgres_in_cluster_pass = var.postgres_source == "in-cluster" ? random_password.in_cluster_postgres[0].result : ""
+  postgres_connection_url = local.postgres_connection_url
 
   redis_connection_url = local.redis_connection_url
 
@@ -819,9 +809,7 @@ locals {
   # Encoded admin URL for the shared RDS instance, without a database name.
   # Spaces are rejected by postgres_password validation, so urlencode() cannot
   # emit "+" for a space in URI userinfo.
-  standalone_pg_base = var.postgres_source == "external" ? (
-    "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
-  ) : ""
+  standalone_pg_base = "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
 
   standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
   standalone_polly_pg_url    = "${local.standalone_pg_base}/langsmith_polly?sslmode=require"
@@ -841,6 +829,7 @@ locals {
 # Jobs do not rerun when Secret data changes, so a Job that failed on a broken
 # (unencoded) URL would otherwise stay failed. SQL in the Job is idempotent.
 resource "terraform_data" "postgres_connection_url_revision" {
+  # ponytail: the same always-1 count as module.postgres, kept for its [0] address.
   count = var.postgres_source == "external" ? 1 : 0
   input = sha256(local.postgres_connection_url)
 }
@@ -856,7 +845,7 @@ resource "terraform_data" "standalone_db" {
       fleet    = var.enable_fleet && var.fleet_storage == "external"
       polly    = local.polly_external_storage
       insights = local.insights_external_storage
-    } : k => v if v && var.postgres_source == "external"
+    } : k => v if v
   }
 
   triggers_replace = jsonencode({
@@ -954,7 +943,7 @@ removed {
 # apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -980,7 +969,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = local.polly_external_storage && var.postgres_source == "external" ? 1 : 0
+  count = local.polly_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -1006,7 +995,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = local.insights_external_storage && var.postgres_source == "external" ? 1 : 0
+  count = local.insights_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
