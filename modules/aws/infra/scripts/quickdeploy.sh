@@ -87,12 +87,19 @@ fi
 pass "terraform.tfvars found"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GATE 3: terraform init (auto-run if .terraform/ missing)
+# GATE 3: terraform init (auto-run if .terraform/ missing; stop if backend.hcl was added later)
 # ─────────────────────────────────────────────────────────────────────────────
 if [[ ! -d "$INFRA_DIR/.terraform" ]]; then
   warn ".terraform/ not found — running terraform init automatically..."
-  _terraform -chdir="$INFRA_DIR" init
+  env "${_AWS_STALE_VARS[@]/#/-u }" "$SCRIPT_DIR/tf-init.sh"
   echo ""
+elif [[ -f "$INFRA_DIR/backend.hcl" && ! -f "$INFRA_DIR/backend_override.tf" ]]; then
+  # Initialized before backend.hcl was added: apply would silently keep using local state.
+  printf "${RED}[ERROR]${NC} infra/backend.hcl exists, but this directory was initialized without it.\n"
+  printf "Terraform would keep using local state. Move it into the bucket first:\n"
+  printf "  ${CYAN}make init ARGS=\"-migrate-state\"${NC}\n"
+  printf "Then re-run: ${CYAN}make quickdeploy${NC}\n"
+  exit 1
 else
   pass "terraform already initialized (.terraform/ exists)"
 fi

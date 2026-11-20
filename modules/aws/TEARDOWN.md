@@ -753,7 +753,7 @@ Several resources can be deleted in parallel since they have no dependencies on 
 
 ## Lessons Learned
 
-- **Always configure a remote backend** (S3 + DynamoDB) before `terraform apply` — local state is fragile and easily lost during directory restructuring
+- **Always configure a remote backend** (an S3 bucket with lockfile locking) before `terraform apply` — local state is fragile and easily lost during directory restructuring
 - **KEDA finalizers block namespace deletion** if the KEDA controller is uninstalled first — delete ScaledObjects before uninstalling KEDA, or patch out finalizers
 - **Delete ingress resources before the ALB controller** — otherwise ingress-created ALBs become orphaned
 - **EKS security groups cross-reference each other** — must revoke all rules before either can be deleted
