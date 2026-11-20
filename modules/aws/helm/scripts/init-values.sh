@@ -118,12 +118,21 @@ OUT_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
 _first_run="false"
 [[ ! -f "$OUT_FILE" ]] && _first_run="true"
 
+# A CA bundle for endpoints a private CA signed (config.customCa). The chart mounts it
+# in the pods that include langsmith.tlsVolumes: backend, platform-backend, host-backend,
+# the queues, listener, playground and the agent features. The operator and the agent
+# deployments it creates do not get it. The Secret is yours: deploy.sh checks it exists.
+_custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
+_custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
+_custom_ca_block=$(_custom_ca_values_block "$_custom_ca_secret" "$_custom_ca_key")
+
 echo "Parsed terraform.tfvars:"
 echo "  name_prefix            = ${_name_prefix:-(empty)}"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
 echo "  sizing_profile         = $_sizing_profile"
+[[ -n "$_custom_ca_secret" ]] && echo "  custom CA bundle       = ${_custom_ca_secret}/${_custom_ca_key}"
 echo ""
 
 # ── Terraform outputs ─────────────────────────────────────────────────────────
@@ -909,7 +918,7 @@ config:
     # URL used by the operator to build agent deployment endpoints.
     # Must match config.hostname with correct protocol — wrong value keeps
     # deployments stuck in DEPLOYING state.
-    url: "${_protocol}://${HOSTNAME}"
+    url: "${_protocol}://${HOSTNAME}"${_custom_ca_block}
   blobStorage:
     bucketName: "${BUCKET_NAME}"
     awsRegion: "${_region}"

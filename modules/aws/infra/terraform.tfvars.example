@@ -527,6 +527,15 @@ dns_create_zone = true
 # Let's Encrypt email — only needed for Option C above.
 # letsencrypt_email = "your-email@example.com"
 
+# Private CA — only if LangSmith's pods call something a private CA signed, such as
+# an OIDC provider behind an internal CA. Create the Secret yourself before make deploy:
+#   kubectl -n langsmith create secret generic langsmith-ca --from-file=ca.crt=ca-bundle.pem
+# init-values.sh then sets the chart's config.customCa, and deploy.sh checks the Secret.
+# The bundle replaces the default trust store for those pods, so include a public CA
+# too if they also reach public endpoints (for example Beacon for an online license).
+# langsmith_custom_ca_secret_name = "langsmith-ca"
+# langsmith_custom_ca_secret_key  = "ca.crt"
+
 #------------------------------------------------------------------------------
 # STORAGE (S3) — Trace blob lifecycle
 #------------------------------------------------------------------------------
