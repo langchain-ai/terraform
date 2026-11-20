@@ -847,7 +847,8 @@ enable_bedrock_access = false
 #------------------------------------------------------------------------------
 # SMITHDB (chart 0.17+)
 #------------------------------------------------------------------------------
-# SmithDB shares the LangSmith namespace and Helm release. Enabling it provisions:
+# SmithDB is on by default from 0.18. It shares the LangSmith namespace and Helm
+# release, and provisions:
 #   - a dedicated metastore Postgres (RDS) — separate from the LangSmith app DB
 #   - a dedicated object-store S3 bucket for .vortex segments
 #   - an IRSA role for the SmithDB service account (S3 access, no static keys)
@@ -856,13 +857,15 @@ enable_bedrock_access = false
 # Pass 2 uses the repository's ~0.17.0 pin, which resolves to the latest
 # compatible 0.17.x chart unless CHART_VERSION explicitly overrides it.
 #
-# QuickStart enables SmithDB and ingestion by default. Migration and query
-# cutover remain disabled. Follow ../SMITHDB.md to enable each after validation.
+# A new install writes runs to SmithDB and serves reads from it. An install with
+# traces in ClickHouse sets ingestion and query to false and stages them
+# (../SMITHDB.md); one upgraded from 0.17 without SmithDB sets enable_smithdb =
+# false before its first 0.18 apply.
 
-# enable_smithdb = true
+# enable_smithdb            = true
 # smithdb_ingestion_enabled = true
 # smithdb_migration_enabled = false
-# smithdb_query_enabled     = false
+# smithdb_query_enabled     = true
 
 # ── Metastore (dedicated RDS Postgres; set source = "external" to bring your own)
 # smithdb_metastore_source          = "create"

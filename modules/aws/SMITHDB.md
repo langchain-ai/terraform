@@ -1,12 +1,14 @@
 # SmithDB on AWS
 
 This module provides AWS reference infrastructure and Helm values for SmithDB.
-SmithDB shares the LangSmith cluster and Helm release. New QuickStart setups
-enable SmithDB and ingestion by default; existing settings are preserved.
+From 0.18, SmithDB is part of every install: `enable_smithdb` defaults to
+`true`, and a new install writes runs to SmithDB and serves reads from it from
+the start. It shares the LangSmith cluster and Helm release. ClickHouse stays on
+alongside it unless you turn it off.
 
 ## What is provisioned
 
-With `enable_smithdb = true`, the infrastructure pass creates:
+With `enable_smithdb = true` (the default), the infrastructure pass creates:
 
 - a dedicated PostgreSQL 18 RDS metastore, or wiring for dedicated BYO Postgres;
 - a dedicated S3 object-store bucket;
@@ -19,9 +21,8 @@ so same-region SmithDB S3 traffic takes the private AWS network path.
 
 ## Configure infrastructure
 
-Run `make quickstart` or set `enable_smithdb = true` and
-`smithdb_ingestion_enabled = true` in
-`infra/terraform.tfvars`. Managed PostgreSQL is the default. To use an existing
+Run `make quickstart`, or leave the SmithDB settings out of
+`infra/terraform.tfvars` to take the defaults. Managed PostgreSQL is the default. To use an existing
 metastore:
 
 ```hcl
@@ -96,8 +97,8 @@ The deploy script pins the latest 0.17.x Helm chart (`~0.17.0`):
 make deploy
 ```
 
-For new QuickStart setups, the generated values enable ingestion while leaving
-migration and query cutover disabled:
+The generated values follow the three LangSmith gates. A new install has no
+history to migrate, so it starts with ingestion and query on:
 
 ```yaml
 smithdb:
@@ -107,15 +108,16 @@ smithdb:
     migration:
       enabled: false
     query:
-      enabled: false
+      enabled: true
 ```
 
-Follow the installation guide provided by LangChain to validate services and
-dual ingestion, optionally migrate historical data, and finally switch queries.
-For the scripts path, set `smithdb_ingestion_enabled`,
-`smithdb_migration_enabled`, and `smithdb_query_enabled` in
-`infra/terraform.tfvars`; the app path exposes the same flags. Apply each stage
-separately.
+An install with traces in ClickHouse turns SmithDB on in stages instead: set
+`smithdb_ingestion_enabled = false` and `smithdb_query_enabled = false` in
+`infra/terraform.tfvars`, then follow the installation guide provided by
+LangChain to validate services and dual ingestion, optionally migrate historical
+data, and finally switch queries, applying each stage separately. The gates
+count only with `enable_smithdb = true`; with it false, all three are off
+whatever they are set to.
 
 To run the historical migration, run `make smithdb-migration-job-start`, then `make apply`, `make init-values`, and `make deploy`.
 It asks whether TaskDB is chart-managed or an external Postgres, how many runs to migrate in how many days, and how many migration pods to run (suggesting a count from the LangSmith formula plus 50% headroom), then stores the TaskDB settings in SSM, writes `helm/values/langsmith-values-smithdb-migration.yaml`, and sets `smithdb_migration_enabled = true`.
@@ -136,7 +138,23 @@ Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `m
 - Verify SmithDB workloads schedule on the dedicated managed group and can
   reach PostgreSQL and S3.
 
-## Existing Karpenter deployments
+## Upgrading from 0.17
+
+**SmithDB settings.** The defaults now turn SmithDB on with queries served from
+it. In 0.17 an unset `enable_smithdb`, `smithdb_ingestion_enabled` or
+`smithdb_query_enabled` meant off, so a `terraform.tfvars` that leaves them out
+would switch an install to querying a SmithDB that holds none of its ClickHouse
+history. Before the first 0.18 apply, write them explicitly:
+
+- without SmithDB: `enable_smithdb = false`, or turn it on and stage it as above;
+- with SmithDB still staged: `smithdb_ingestion_enabled` and
+  `smithdb_query_enabled` as they are today, `false` unless already cut over.
+
+`make apply` and `make quickdeploy` refuse the first 0.18 apply until these are
+set (`infra/scripts/upgrade-guard.sh`). Installs written by the QuickStart
+wizard already carry them.
+
+### Existing Karpenter deployments
 
 Finish and disable any historical migration on the current version before upgrading.
 
