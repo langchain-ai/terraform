@@ -40,7 +40,7 @@ LangSmith on AWS is deployed in three passes.
 │    • queue          — background job worker                                  │
 │    • clickhouse     — trace analytics store                                  │
 │    • redis          — task queue (in-cluster or ElastiCache)                 │
-│    • postgres       — metadata store (in-cluster or RDS)                     │
+│    • postgres       — metadata store (RDS)                                   │
 │                                                                              │
 │  Storage:  RDS PostgreSQL → metadata / S3 → trace blobs (VPC endpoint)      │
 │  Ingress:  AWS ALB | NGINX | Envoy Gateway | Istio  (see Ingress Options)    │

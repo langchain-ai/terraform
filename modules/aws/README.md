@@ -205,8 +205,7 @@ eks_managed_node_groups = {
   }
 }
 
-# RDS PostgreSQL (required when postgres_source = "external")
-postgres_source   = "external"
+# RDS PostgreSQL
 postgres_password = "<strong-password>"   # or: export TF_VAR_postgres_password=...
 
 # ElastiCache Redis (required when redis_source = "external")
@@ -1097,7 +1096,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
-| `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
+| `postgres_source` | `external` | no | Only `external` (RDS) from 0.18; `in-cluster` fails at plan |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
 | `postgres_max_storage_gb` | `100` | no | Maximum RDS storage in GB (autoscaling) |
