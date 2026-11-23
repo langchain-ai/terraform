@@ -4,7 +4,7 @@ output "azure_entra_tenant_id" {
 }
 
 output "data_planes" {
-  description = "Per data plane key: the resource group ID, the region, the Key Vault name, and the byovnet object of the create request (null without byo_vnet)."
+  description = "Per data plane key: resource group ID, region, Key Vault name, and the byovnet object for the create request (null without byo_vnet)."
   value = {
     for key, rg in azurerm_resource_group.data_plane : key => {
       resource_group_id = rg.id

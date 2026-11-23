@@ -1,7 +1,5 @@
-# The data planes that set byo_vnet use your VNet. You keep the VNet,
-# its subnets, its NSGs, and its egress. LangSmith joins the subnets and links
-# the private DNS zones of the data plane to the VNet. It cannot change the
-# network.
+# byo_vnet: the data plane uses your VNet. You own the VNet, subnets, NSGs
+# and egress. LangSmith joins the subnets and cannot change the network.
 
 locals {
   byo_vnets = {
@@ -16,13 +14,12 @@ locals {
     "Microsoft.Network/virtualNetworks/subnets/join/action",
     # The private DNS zones link to the VNet.
     "Microsoft.Network/virtualNetworks/join/action",
-    # LangSmith checks the role of the AKS identity on the AKS subnet.
+    # The preflight checks the AKS identity grant on the AKS subnet.
     "Microsoft.Authorization/roleAssignments/read",
   ]
 }
 
-# Azure limits a custom role to a resource group or a larger scope, so the
-# role is in the resource group of the VNet.
+# A custom role needs a resource group scope or larger. It is assigned on the VNet only.
 resource "azurerm_role_definition" "langsmith_byoc_network" {
   for_each = local.byo_vnets
 
@@ -36,7 +33,6 @@ resource "azurerm_role_definition" "langsmith_byoc_network" {
   }
 }
 
-# Scoped to the VNet only.
 resource "azurerm_role_assignment" "langsmith_byoc_network" {
   for_each = local.byo_vnets
 
@@ -57,9 +53,7 @@ resource "azurerm_role_assignment" "aks_subnet" {
   principal_type       = "ServicePrincipal"
 }
 
-# With USER_DEFINED_ROUTING, AKS reads the route table of the AKS subnet. The
-# table can be in another resource group, so the subnet grant does not reach it.
-# Azure CNI does not write routes, so read access is enough.
+# USER_DEFINED_ROUTING: AKS reads the route table. Azure CNI writes no routes.
 resource "azurerm_role_assignment" "aks_route_table" {
   for_each = { for key, network in local.byo_vnets : key => network if network.route_table_id != null }
 

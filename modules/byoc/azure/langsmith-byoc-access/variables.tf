@@ -54,16 +54,14 @@ variable "data_planes" {
     # active. Without byo_iam, LangSmith creates them itself and this setting
     # changes nothing.
     deployment_builds = optional(bool, false)
-    # Use your VNet. LangSmith joins the two subnets and cannot change the
-    # network. Needs byo_iam. Do not change after creation. See network.tf.
+    # Use your VNet. Needs byo_iam. Do not change after creation. See network.tf.
     byo_vnet = optional(object({
       vnet_id                     = string
       aks_subnet_id               = string
       private_endpoints_subnet_id = string
-      # The egress that you attach to the AKS subnet: NAT_GATEWAY, or
-      # USER_DEFINED_ROUTING for a route table with a 0.0.0.0/0 route.
+      # NAT_GATEWAY, or USER_DEFINED_ROUTING for a route table with 0.0.0.0/0.
       outbound_type = optional(string, "NAT_GATEWAY")
-      # The route table of the AKS subnet. Set it only with USER_DEFINED_ROUTING.
+      # The route table of the AKS subnet. Only with USER_DEFINED_ROUTING.
       route_table_id = optional(string)
     }))
     # VNet flow logs in your storage account. Set it after the data plane is
@@ -89,9 +87,7 @@ variable "data_planes" {
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
   }
 
-  # flow_logs.tf finds the VNet in the data plane resource group, so it cannot
-  # apply to your VNet. Dedicated deployments need a subnet that LangSmith adds
-  # to a VNet that it creates.
+  # flow_logs and dedicated_deployments need a VNet that LangSmith creates.
   validation {
     condition = alltrue([
       for data_plane in values(var.data_planes) : (
@@ -104,7 +100,7 @@ variable "data_planes" {
         (data_plane.byo_vnet.route_table_id == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/routeTables/[^/]+$", data_plane.byo_vnet.route_table_id)))
       ) if data_plane.byo_vnet != null
     ])
-    error_message = "byo_vnet needs byo_iam = true, no flow_logs and no dedicated_deployments. vnet_id must be a VNet resource ID, the two subnets must be in that VNet, outbound_type must be NAT_GATEWAY or USER_DEFINED_ROUTING, and route_table_id must be a route table resource ID with USER_DEFINED_ROUTING only."
+    error_message = "byo_vnet needs byo_iam, and no flow_logs or dedicated_deployments. Both subnets must be in vnet_id. outbound_type is NAT_GATEWAY or USER_DEFINED_ROUTING. route_table_id is required with USER_DEFINED_ROUTING only."
   }
 }
 
