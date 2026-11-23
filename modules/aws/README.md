@@ -1102,7 +1102,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
 | `postgres_max_storage_gb` | `100` | no | Maximum RDS storage in GB (autoscaling) |
 | `postgres_username` | `langsmith` | no | RDS database username |
-| `postgres_engine_version` | `16` | no | PostgreSQL engine version for RDS |
+| `postgres_engine_version` | `18` | no | PostgreSQL engine version for RDS |
 | `postgres_password` | `""` | when external | RDS password — use `TF_VAR_postgres_password` |
 | `postgres_iam_database_authentication_enabled` | `true` | no | Enable IAM database authentication on RDS |
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
