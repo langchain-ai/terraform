@@ -5,6 +5,7 @@ export AWS_PAGER=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${INFRA_DIR:-$SCRIPT_DIR/..}"
 source "$SCRIPT_DIR/_smithdb-transition.sh"
+"$SCRIPT_DIR/upgrade-guard.sh"
 
 # Inspect the exact plan being applied, including saved plans and -var overrides.
 # tfvars text alone cannot tell whether this apply removes the old controller.

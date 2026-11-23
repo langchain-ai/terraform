@@ -51,7 +51,7 @@ _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 # Derived in Terraform (unset = on unless Istio/NGINX was chosen), so read the
 # applied output rather than the tfvars text.
-_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
+_enable_envoy_gateway=$(_read_applied_flag "enable_envoy_gateway" false)
 
 _protocol="http"
 [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]] && _protocol="https"

@@ -187,6 +187,24 @@ output "enable_smithdb" {
   value       = var.enable_smithdb
 }
 
+# The applied LangSmith gates, read by init-values.sh: a gate left out of
+# terraform.tfvars takes its variable default, which the tfvars file cannot show.
+# A gate is on only with SmithDB on.
+output "smithdb_ingestion_enabled" {
+  description = "Whether LangSmith writes runs to SmithDB"
+  value       = var.enable_smithdb && var.smithdb_ingestion_enabled
+}
+
+output "smithdb_migration_enabled" {
+  description = "Whether the historical ClickHouse-to-SmithDB migration is on"
+  value       = var.enable_smithdb && var.smithdb_migration_enabled
+}
+
+output "smithdb_query_enabled" {
+  description = "Whether LangSmith queries SmithDB"
+  value       = var.enable_smithdb && var.smithdb_query_enabled
+}
+
 output "smithdb_object_store_bucket" {
   description = "SmithDB object-store S3 bucket name (null when enable_smithdb = false)"
   value       = var.enable_smithdb ? module.smithdb[0].object_store_bucket_name : null
