@@ -1,0 +1,38 @@
+modules/aws/infra/main.tf
+  s_c161e3bea7e1f6::t_6e7b596bdd8904 279
+modules/aws/ARCHITECTURE.md
+  s_c161e3bea7e1f6::t_2bf4a7d9a3af5e 253
+  s_c161e3bea7e1f6::t_a4f116ec4b3c17 254-258
+modules/aws/infra/variables.tf
+  s_c161e3bea7e1f6::t_2988804cfd3e88 343
+modules/aws/infra/scripts/quickstart.sh
+  s_c161e3bea7e1f6::t_fc589c7f9016af 611-613
+modules/aws/README.md
+  s_c161e3bea7e1f6::t_0646830cd0fd42 24
+  s_c161e3bea7e1f6::t_9e91c85db6d817 326-338
+  s_c161e3bea7e1f6::t_52a998f8362019 1187
+modules/aws/infra/outputs.tf
+  s_c161e3bea7e1f6::t_7172c26a7aaf18 93
+  s_c161e3bea7e1f6::t_d6631b2abebafa 87
+modules/aws/infra/scripts/test-orchestrator.sh
+  s_c161e3bea7e1f6::t_ef86a26a4e3f22 110
+  s_c161e3bea7e1f6::t_56bfc888df62bf 85-86
+modules/aws/infra/modules/k8s-bootstrap/variables.tf
+  s_c161e3bea7e1f6::t_66d879dca87ba0 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a3063e6dbae71a298711a148b7b6af937572e4f",
+  "prompts": {},
+  "sessions": {
+    "s_c161e3bea7e1f6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a37e189e-119a-411b-8ffc-c1c0585560e8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
