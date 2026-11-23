@@ -1,0 +1,35 @@
+modules/aws/infra/variables.tf
+  s_c161e3bea7e1f6::t_6778f157674aec 223
+modules/aws/infra/scripts/quickstart.sh
+  s_c161e3bea7e1f6::t_f0b6a1998b39dc 574-575
+modules/aws/README.md
+  s_c161e3bea7e1f6::t_023adf31a495ed 1163
+  s_c161e3bea7e1f6::t_15940266fe8ac7 24
+  s_c161e3bea7e1f6::t_3812eab32318d4 263-326
+modules/aws/infra/scripts/test-orchestrator.sh
+  s_c161e3bea7e1f6::t_d3beccf2781fe1 85-86
+  s_c161e3bea7e1f6::t_3bcf1210d0a48a 109-110
+modules/aws/infra/outputs.tf
+  s_c161e3bea7e1f6::t_505fd7debedb3d 69
+  s_c161e3bea7e1f6::t_d3a39323439de4 63
+  s_c161e3bea7e1f6::t_9a5dfb50c73e5b 74
+modules/aws/infra/main.tf
+  s_c161e3bea7e1f6::t_c0e3e20924d3ca 358-360
+  s_c161e3bea7e1f6::t_0bb8c42a1a81c5 832
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b96413f79c6a3a08d73e18ba9c78d1030861bc8e",
+  "prompts": {},
+  "sessions": {
+    "s_c161e3bea7e1f6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a37e189e-119a-411b-8ffc-c1c0585560e8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
