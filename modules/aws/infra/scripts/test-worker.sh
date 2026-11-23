@@ -15,7 +15,6 @@
 # Required env vars (exported by orchestrator, inherited automatically):
 #   WORKER_REGION           — AWS region
 #   WORKER_EKS_VERSION      — Kubernetes version (default: 1.34)
-#   WORKER_REDIS_SOURCE     — redis_source:    external|in-cluster (default: external)
 #   WORKER_DOMAIN           — langsmith_domain  (can be empty)
 #   WORKER_LE_EMAIL         — letsencrypt_email (can be empty)
 #   WORKER_HOSTED_ZONE      — cert_manager_hosted_zone_id (can be empty)
@@ -50,10 +49,8 @@ DRY_RUN_FLAG="${4:-}"
 
 REGION="${WORKER_REGION:?WORKER_REGION env var required (set by orchestrator or manually)}"
 EKS_VERSION="${WORKER_EKS_VERSION:-1.34}"
-# Workers use in-cluster Redis: test clusters are short-lived, and the
-# gateway/TLS permutations don't test backend service provisioning. PostgreSQL is
-# always RDS from 0.18, so each worker's is created deletable.
-REDIS_SOURCE="in-cluster"
+# PostgreSQL and Redis are always RDS and ElastiCache from 0.18, so each
+# worker's RDS instance is created deletable.
 DOMAIN="${WORKER_DOMAIN:-}"
 LE_EMAIL="${WORKER_LE_EMAIL:-}"
 HOSTED_ZONE="${WORKER_HOSTED_ZONE:-}"
@@ -110,7 +107,6 @@ eks_managed_node_groups = {
 create_gp3_storage_class = true
 
 #── Backend Services ──────────────────────────────────────────────────────────
-redis_source      = "${REDIS_SOURCE}"
 postgres_deletion_protection = false
 postgres_skip_final_snapshot = true
 clickhouse_source = "in-cluster"

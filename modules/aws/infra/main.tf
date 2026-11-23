@@ -63,8 +63,8 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = var.redis_source != "external" || (var.redis_auth_token != "" && length(var.redis_auth_token) >= 16)
-      error_message = "redis_auth_token is required (min 16 chars) when redis_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_redis_auth_token."
+      condition     = var.redis_auth_token != "" && length(var.redis_auth_token) >= 16
+      error_message = "redis_auth_token is required (min 16 chars). Run: source ./scripts/setup-env.sh, or set TF_VAR_redis_auth_token."
     }
 
     precondition {
@@ -135,23 +135,6 @@ resource "terraform_data" "validate_inputs" {
     precondition {
       condition     = var.create_vpc || var.alb_scheme == "internal" || length(var.public_subnets) > 0
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
-    }
-
-    # External Fleet storage uses a dedicated database and logical Redis index on
-    # the shared RDS and ElastiCache instances.
-    precondition {
-      condition     = !var.enable_fleet || var.fleet_storage != "external" || var.redis_source == "external"
-      error_message = "fleet_storage = \"external\" requires redis_source = \"external\"."
-    }
-
-    precondition {
-      condition     = !local.polly_external_storage || var.redis_source == "external"
-      error_message = "External LangSmith Chat storage requires redis_source = \"external\"."
-    }
-
-    precondition {
-      condition     = !local.insights_external_storage || var.redis_source == "external"
-      error_message = "External Insights storage requires redis_source = \"external\"."
     }
 
     precondition {
@@ -293,7 +276,8 @@ moved {
 
 module "redis" {
   source = "./modules/redis"
-  count  = var.redis_source == "external" ? 1 : 0
+  # Always 1, like module.postgres; the count keeps the [0] address in state.
+  count = var.redis_source == "external" ? 1 : 0
 
   name                 = local.redis_name
   vpc_id               = local.vpc_id
@@ -714,15 +698,9 @@ resource "time_sleep" "wait_for_alb_webhook" {
 }
 
 # ── Connection Secrets ────────────────────────────────────────────────────────
-# When redis runs in-cluster (deployed by the LangSmith Helm chart), Terraform
-# still creates the k8s Secret so backend pods can connect without manual
-# patching after deploy.
-
 locals {
   postgres_connection_url = module.postgres[0].connection_url
-  redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
-    "redis://langsmith-redis:6379"
-  )
+  redis_connection_url    = module.redis[0].connection_url
 
   # DB 0 is reserved for the main LangSmith install.
   redis_db_fleet    = 1
@@ -813,9 +791,8 @@ locals {
   standalone_insights_pg_url = "${local.standalone_pg_base}/langsmith_insights?sslmode=require"
 
   # Shared ElastiCache base URL (rediss://:<token>@<endpoint>:6379). Append the
-  # per-feature logical DB index. Guarded so module.redis[0] is only referenced
-  # when it exists.
-  standalone_redis_base = var.redis_source == "external" ? module.redis[0].connection_url : ""
+  # per-feature logical DB index.
+  standalone_redis_base = module.redis[0].connection_url
 
   standalone_fleet_redis_url    = "${local.standalone_redis_base}/${local.redis_db_fleet}"
   standalone_polly_redis_url    = "${local.standalone_redis_base}/${local.redis_db_polly}"
@@ -953,7 +930,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.fleet_storage == "external" && var.redis_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -979,7 +956,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = local.polly_external_storage && var.redis_source == "external" ? 1 : 0
+  count = local.polly_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -1005,7 +982,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = local.insights_external_storage && var.redis_source == "external" ? 1 : 0
+  count = local.insights_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace

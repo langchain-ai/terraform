@@ -60,7 +60,6 @@ smithdb_metastore_deletion_protection = true
 # IAM auth for no-password pod→RDS connections.
 postgres_iam_database_authentication_enabled = true
 
-redis_source        = "external"
 redis_instance_type = "cache.m6g.xlarge"   # 4 vCPU, 13 GB — production grade
 
 #------------------------------------------------------------------------------

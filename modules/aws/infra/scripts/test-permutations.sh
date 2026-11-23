@@ -30,7 +30,6 @@
 #
 # Prerequisites (set in terraform.tfvars before running):
 #   - name_prefix, environment, region
-#   - redis_source (external or in-cluster)
 #   - For destructive external-RDS tests: postgres_skip_final_snapshot = true
 #   - For a managed SmithDB metastore: smithdb_metastore_skip_final_snapshot = true
 #   - For permutations 2-6: langsmith_domain (must be Route 53 delegated)

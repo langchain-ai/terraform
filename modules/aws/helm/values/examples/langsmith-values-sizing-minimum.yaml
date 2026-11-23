@@ -198,16 +198,6 @@ fleetTriggerServer:
 # ClickHouse is the one component that actually uses its resources.
 # Don't go below this or queries will time out.
 
-redis:
-  statefulSet:
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "64Mi"
-      limits:
-        cpu: "200m"
-        memory: "128Mi"
-
 clickhouse:
   statefulSet:
     resources:

@@ -59,7 +59,6 @@ postgres_skip_final_snapshot = true
 smithdb_metastore_deletion_protection = false
 smithdb_metastore_skip_final_snapshot = true
 
-redis_source        = "external"
 redis_instance_type = "cache.t3.medium"    # 2 vCPU, 3 GB — fine for dev
 
 #------------------------------------------------------------------------------
