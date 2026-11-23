@@ -170,7 +170,7 @@ resource "terraform_data" "validate_inputs" {
     }
 
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
-    # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
+    # and requires a dedicated metastore Postgres.
     precondition {
       condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
       error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
@@ -225,7 +225,7 @@ module "vpc" {
 
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
-  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+  extra_private_subnet_tags = var.enable_smithdb && var.smithdb_transition_mode ? { "karpenter.sh/discovery" = local.cluster_name } : {}
 
   pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
@@ -270,7 +270,7 @@ module "eks" {
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
   eks_managed_node_groups         = var.eks_managed_node_groups
   extra_eks_managed_node_groups   = local.extra_eks_managed_node_groups
-  enable_karpenter                = var.enable_smithdb
+  enable_karpenter                = var.enable_smithdb && var.smithdb_transition_mode
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
@@ -1107,16 +1107,10 @@ resource "kubernetes_secret" "smithdb_local" {
 }
 
 #------------------------------------------------------------------------------
-# SmithDB Karpenter provisioning
+# Legacy SmithDB Karpenter provisioning (transition mode only)
 #
-# The Karpenter controller is installed by module.eks (blueprints add-on). Here
-# we tag the discovery targets and create the SmithDB NodePools/EC2NodeClasses:
-#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (instanceStorePolicy)
-#     for the SmithDB emptyDir caches. Hosts query / ingestion / compaction-worker.
-#   - compute: no local NVMe. Hosts compaction / cluster-manager and the transient
-#     metastore-migration job.
-# Labels/taints (smithdb-local/instance-store, smithdb-local/compute) match the
-# nodeSelectors/tolerations in langsmith-values-smithdb.yaml.
+# Preserve resource addresses and labels so existing pools remain available
+# until workloads have moved and their nodes can terminate.
 #------------------------------------------------------------------------------
 
 locals {
@@ -1137,7 +1131,7 @@ locals {
 # Terraform-created VPC the tag is applied at creation via the vpc module's
 # extra_private_subnet_tags (above).
 resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
-  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
+  for_each = var.enable_smithdb && var.smithdb_transition_mode && !var.create_vpc ? toset(var.private_subnets) : toset([])
 
   resource_id = each.value
   key         = "karpenter.sh/discovery"
@@ -1145,7 +1139,7 @@ resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
 }
 
 resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.k8s.aws/v1"
@@ -1180,7 +1174,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
 }
 
 resource "kubectl_manifest" "smithdb_ec2nc_compute" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.k8s.aws/v1"
@@ -1213,7 +1207,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
 }
 
 resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.sh/v1"
@@ -1257,7 +1251,7 @@ resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
 }
 
 resource "kubectl_manifest" "smithdb_nodepool_compute" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.sh/v1"
