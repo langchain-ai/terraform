@@ -63,6 +63,8 @@ variable "data_planes" {
       # The egress that you attach to the AKS subnet: NAT_GATEWAY, or
       # USER_DEFINED_ROUTING for a route table with a 0.0.0.0/0 route.
       outbound_type = optional(string, "NAT_GATEWAY")
+      # The route table of the AKS subnet. Set it only with USER_DEFINED_ROUTING.
+      route_table_id = optional(string)
     }))
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
@@ -97,10 +99,12 @@ variable "data_planes" {
         can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/virtualNetworks/[^/]+$", data_plane.byo_vnet.vnet_id)) &&
         startswith(data_plane.byo_vnet.aks_subnet_id, "${data_plane.byo_vnet.vnet_id}/subnets/") &&
         startswith(data_plane.byo_vnet.private_endpoints_subnet_id, "${data_plane.byo_vnet.vnet_id}/subnets/") &&
-        contains(["NAT_GATEWAY", "USER_DEFINED_ROUTING"], data_plane.byo_vnet.outbound_type)
+        contains(["NAT_GATEWAY", "USER_DEFINED_ROUTING"], data_plane.byo_vnet.outbound_type) &&
+        (data_plane.byo_vnet.outbound_type == "USER_DEFINED_ROUTING") == (data_plane.byo_vnet.route_table_id != null) &&
+        (data_plane.byo_vnet.route_table_id == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/routeTables/[^/]+$", data_plane.byo_vnet.route_table_id)))
       ) if data_plane.byo_vnet != null
     ])
-    error_message = "byo_vnet needs byo_iam = true, no flow_logs and no dedicated_deployments. vnet_id must be a VNet resource ID, the two subnets must be in that VNet, and outbound_type must be NAT_GATEWAY or USER_DEFINED_ROUTING."
+    error_message = "byo_vnet needs byo_iam = true, no flow_logs and no dedicated_deployments. vnet_id must be a VNet resource ID, the two subnets must be in that VNet, outbound_type must be NAT_GATEWAY or USER_DEFINED_ROUTING, and route_table_id must be a route table resource ID with USER_DEFINED_ROUTING only."
   }
 }
 

@@ -56,3 +56,14 @@ resource "azurerm_role_assignment" "aks_subnet" {
   principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/aks"].principal_id
   principal_type       = "ServicePrincipal"
 }
+
+# With USER_DEFINED_ROUTING, AKS checks the route table of the AKS subnet. The
+# table can be in another resource group, so the subnet grant does not reach it.
+resource "azurerm_role_assignment" "aks_route_table" {
+  for_each = { for key, network in local.byo_vnets : key => network if network.route_table_id != null }
+
+  scope                = each.value.route_table_id
+  role_definition_name = "Network Contributor"
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.key}/aks"].principal_id
+  principal_type       = "ServicePrincipal"
+}

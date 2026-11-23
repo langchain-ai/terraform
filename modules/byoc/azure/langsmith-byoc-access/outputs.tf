@@ -10,7 +10,12 @@ output "data_planes" {
       resource_group_id = rg.id
       region            = rg.location
       key_vault_name    = azurerm_key_vault.data_plane[key].name
-      byovnet           = var.data_planes[key].byo_vnet
+      byovnet = var.data_planes[key].byo_vnet == null ? null : {
+        vnet_id                     = var.data_planes[key].byo_vnet.vnet_id
+        aks_subnet_id               = var.data_planes[key].byo_vnet.aks_subnet_id
+        private_endpoints_subnet_id = var.data_planes[key].byo_vnet.private_endpoints_subnet_id
+        outbound_type               = var.data_planes[key].byo_vnet.outbound_type
+      }
     }
   }
 }
