@@ -34,15 +34,15 @@ smithdb_external_metastore_username = "smithdb"
 Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file.
 The Postgres database and S3 bucket must be dedicated to SmithDB.
 
-SmithDB services and TaskDB run on their own EKS managed node group. The module
-does not pick its size from `sizing_profile`: the defaults fit the Small tier, and
-you raise them for a larger tier.
+SmithDB services and TaskDB run on their own EKS managed node group. Every sizing
+profile runs the SmithDB small tier, and the defaults below fit it. For the medium
+or large tier, see [Scaling up](#scaling-up).
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `smithdb_node_instance_type` | `m6a.4xlarge` | Small tier. Medium needs `m6a.8xlarge`, Large needs `m6a.16xlarge`. |
+| `smithdb_node_instance_type` | `m6a.4xlarge` | Fits the small tier. The medium tier needs `m6a.8xlarge`, the large tier `m6a.16xlarge`. |
 | `smithdb_node_min_count` | `2` | At least 1, for the Helm migration hooks. |
-| `smithdb_node_max_count` | `5` | Must exceed the minimum. Raise it for Medium and Large. |
+| `smithdb_node_max_count` | `5` | Must exceed the minimum, so a rolling update has room. Raise it for medium and large. |
 
 Set them in `infra/terraform.tfvars`. QuickStart asks for the two counts.
 LangSmith uses its own group, defaulting to `m6a.2xlarge`.
@@ -65,12 +65,11 @@ migration Job and TaskDB. `make deploy` does not add them. If
 Karpenter pools, `make init-values` replaces it with the current example and keeps
 the old copy as `langsmith-values-smithdb.legacy.yaml`.
 
-**Tier and node size.** The sizing files set `smithdb.resourceTier`: `production` is
-Medium and `production-large` is Large, and the other profiles use Small. The module
-does not size the nodes from the tier. Medium needs `m6a.8xlarge` and Large needs
-`m6a.16xlarge`, so set `smithdb_node_instance_type` to match. `make plan` warns when
-the profile's tier needs larger nodes than `smithdb_node_instance_type`; pods that do
-not fit stay Pending.
+**Tier and node size.** `langsmith-values-smithdb.yaml` sets
+`smithdb.resourceTier: small`, and no sizing profile changes it, so every profile
+runs the small tier on the default nodes. `make deploy` stops when the tier's
+largest pod does not fit a SmithDB node. To move to a larger tier, follow
+[Scaling up](#scaling-up).
 
 **One pool.** To run SmithDB on the LangSmith nodes instead of its own group, delete
 the `nodeSelector` and `tolerations` blocks under each SmithDB key in
@@ -127,6 +126,72 @@ Once the Job is Complete, run `make smithdb-migration-job-end`, then the same th
 An external TaskDB Postgres is not deleted.
 If migration pods are OOMKilled, raise their memory in `langsmith-values-smithdb-migration.yaml` (keep requests equal to limits).
 Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `make deploy`. Kubernetes cannot update an existing Job's pod template; the recreated Job resumes from progress saved in TaskDB.
+
+## Scaling up
+
+Terraform sizes the SmithDB node group for the small tier. The medium and large
+tiers need larger nodes, and the large tier also starts with more replicas. The
+per-replica sizes below come from the chart's tier table.
+[Configure SmithDB for scale](https://docs.langchain.com/langsmith/self-host-smithdb-scale)
+lists the load each tier was tested at.
+
+| Tier | Largest pod | Node type | Starting replicas |
+| --- | --- | --- | --- |
+| `small` | compaction worker: 8 vCPU, 16 GiB | `m6a.4xlarge` (default) | 1 of each |
+| `medium` | query: 28 vCPU, 48 GiB | `m6a.8xlarge` | 1 of each |
+| `large` | ingestion: 56 vCPU, 150 GiB | `m6a.16xlarge` | query 4, ingestion 2, compaction worker 4 |
+
+Each replica also gets a gp3 cache volume of the tier's cache size, up to
+1,000 GiB in the large tier. Put the Helm settings in
+`helm/values/langsmith-values-smithdb.yaml`: it loads after the base and sizing
+files, so its values win, and `make init-values` keeps your copy.
+
+To move to the medium tier:
+
+1. In `infra/terraform.tfvars`, set `smithdb_node_instance_type = "m6a.8xlarge"`
+   and `smithdb_node_min_count = 3`. One `m6a.8xlarge` holds one medium query pod,
+   so the medium workloads need three nodes. Raise `smithdb_node_max_count` to at
+   least 4, so a rolling update has a free node, and above that for the replicas
+   the autoscalers add. Run `make apply`.
+2. In `helm/values/langsmith-values-smithdb.yaml`, set `smithdb.resourceTier: medium`.
+3. Run `make deploy`.
+
+To move to the large tier:
+
+1. In `infra/terraform.tfvars`, set `smithdb_node_instance_type = "m6a.16xlarge"`
+   and `smithdb_node_min_count = 7`. At the starting replicas, the large pods need
+   seven `m6a.16xlarge` nodes. Raise `smithdb_node_max_count` to at least 8, and
+   above that for the replicas the autoscalers add. Run `make apply`.
+2. In `helm/values/langsmith-values-smithdb.yaml`, set the tier and the starting
+   replicas:
+
+   ```yaml
+   smithdb:
+     resourceTier: large
+     query:
+       autoscaling:
+         hpa:
+           minReplicas: 4
+     ingestion:
+       autoscaling:
+         hpa:
+           minReplicas: 2
+     compactionWorker:
+       autoscaling:
+         keda:
+           minReplicaCount: 4
+   ```
+
+3. Run `make deploy`.
+
+`make deploy` compares the tier with the SmithDB nodes before it upgrades the
+release. It stops when no SmithDB node can hold the tier's largest pod, and it
+names the input to change. It also stops when your sizing file still sets
+`smithdb.resourceTier` to another tier, as a copy from an earlier build of this
+module can: the SmithDB values file loads later and would replace that tier
+without notice. Move the tier into `helm/values/langsmith-values-smithdb.yaml`. In the unified layout (`smithdb.topology: unified`,
+chart 0.18 or later), one pod runs every role and the tier sizes it; the same node
+types fit it, and the check covers it too.
 
 ## Production notes
 

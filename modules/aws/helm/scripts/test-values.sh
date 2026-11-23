@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Renders the LangSmith chart with the AWS example values, in deploy.sh's order,
 # for every sizing profile with SmithDB off and on, and checks which scaler the
-# queue services get. No cluster and no AWS calls.
+# queue services get and that SmithDB runs the small tier. No cluster and no AWS
+# calls.
 # Requires helm, and network access to fetch the chart unless LANGSMITH_CHART
 # names a local chart directory or archive.
 # Usage: bash modules/aws/helm/scripts/test-values.sh
@@ -24,8 +25,11 @@ default          keda:1:10  keda:3:6   keda:1:10
 minimum          keda:1:2   keda:1:2   keda:1:10
 dev              keda:1:5   keda:1:5   keda:1:10
 production       keda:3:10  keda:3:10  keda:1:10
-production-large keda:6:24  keda:6:24  keda:4:10
+production-large keda:6:24  keda:6:24  keda:1:10
 "
+# The small tier's per-replica requests in the chart's tier table, as
+# workload:cpu:memory. No sizing profile changes them.
+SMALL_TIER="query:4:8Gi ingestion:4:8Gi compaction:2:4Gi compaction-worker:8:16Gi cluster-manager:250m:256Mi"
 
 command -v helm >/dev/null 2>&1 || { echo "ERROR: helm is not installed" >&2; exit 2; }
 
@@ -173,6 +177,21 @@ expect_cache_class() {
     { echo "$name: cache volume does not use StorageClass $want"; return 1; }
 }
 
+# The CPU and memory of the first requests block that has a CPU: the container's,
+# not the cache volume claim's, which requests only storage.
+expect_requests() {
+  local out="$1" name="$2" cpu="$3" memory="$4" got
+  got=$(manifest "$out" Deployment "$name" | awk '
+    /^ *$/ { next }
+    /^ *requests:$/ { r = 1; ind = match($0, /[^ ]/); c = ""; m = ""; next }
+    r && match($0, /[^ ]/) <= ind { if (c != "") { found = 1; exit } r = 0 }
+    r && $1 == "cpu:" { c = $2; gsub(/"/, "", c) }
+    r && $1 == "memory:" { m = $2; gsub(/"/, "", m) }
+    END { if (c != "" && (found || r)) print c ":" m }
+  ')
+  [[ "$got" == "$cpu:$memory" ]] || { echo "$name: requests ${got:-none}, want $cpu:$memory (small tier)"; return 1; }
+}
+
 failures=0
 while read -r profile queue ingest compaction; do
   [[ -n "$profile" ]] || continue
@@ -196,6 +215,10 @@ while read -r profile queue ingest compaction; do
       msg=$(expect_pool "$out" Job langsmith-smithdb-metastore-migration) || problems+=("$msg")
       for workload in query ingestion compaction-worker; do
         msg=$(expect_cache_class "$out" "langsmith-smithdb-$workload" smithdb-cache) || problems+=("$msg")
+      done
+      for spec in $SMALL_TIER; do
+        IFS=: read -r workload cpu memory <<< "$spec"
+        msg=$(expect_requests "$out" "langsmith-smithdb-$workload" "$cpu" "$memory") || problems+=("$msg")
       done
     else
       [[ -z "$(manifest "$out" Deployment langsmith-smithdb-compaction-worker)" ]] ||
@@ -241,6 +264,26 @@ if (( overlay_failures )); then
   failures=$((failures + overlay_failures))
 else
   echo "PASS: no feature overlay sets queue, ingest-queue, or compaction-worker autoscaling"
+fi
+
+# SmithDB sizing is not part of the sizing profiles: the SmithDB overlay sets the
+# tier once, and an operator changes it there with the node inputs.
+tier_failures=0
+for sizing in "$EXAMPLES_DIR"/langsmith-values-sizing-*.yaml; do
+  found=$(key_paths "$sizing" | grep -E '^smithdb(\.|$)' | head -1) || true
+  if [[ -n "$found" ]]; then
+    echo "FAIL: ${sizing##*/} sets $found; SmithDB sizing belongs in langsmith-values-smithdb.yaml"
+    tier_failures=$((tier_failures + 1))
+  fi
+done
+if ! grep -qE '^  resourceTier: "?small"?$' "$EXAMPLES_DIR/langsmith-values-smithdb.yaml"; then
+  echo "FAIL: langsmith-values-smithdb.yaml does not set smithdb.resourceTier: small"
+  tier_failures=$((tier_failures + 1))
+fi
+if (( tier_failures )); then
+  failures=$((failures + tier_failures))
+else
+  echo "PASS: no sizing profile sets SmithDB keys, and the SmithDB overlay sets the small tier"
 fi
 
 if (( failures )); then

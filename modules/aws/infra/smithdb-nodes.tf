@@ -1,13 +1,7 @@
-# Dedicated SmithDB nodes, scaled independently by Cluster Autoscaler.
+# Dedicated SmithDB nodes, scaled independently by Cluster Autoscaler. The defaults
+# fit the small tier, which every sizing profile runs; ../SMITHDB.md covers medium
+# and large.
 locals {
-  # The sizing files set smithdb.resourceTier: production is Medium and
-  # production-large is Large. Medium pods need m6a.8xlarge nodes and Large needs
-  # m6a.16xlarge, whereas the node default fits the Small tier.
-  smithdb_tier_min_xlarge = { production = 8, production-large = 16 }
-  # The size multiple in the instance type: m6a.4xlarge is 4, and a type with no
-  # number (xlarge, large) counts as 1. A metal type is always big enough.
-  smithdb_node_xlarge = can(regex("\\.metal", var.smithdb_node_instance_type)) ? 1000 : try(tonumber(regex("\\.(\\d+)xlarge$", var.smithdb_node_instance_type)[0]), 1)
-
   smithdb_node_group = {
     name           = "node-group-smithdb"
     instance_types = [var.smithdb_node_instance_type]
@@ -34,7 +28,7 @@ locals {
 
 variable "smithdb_node_instance_type" {
   type        = string
-  description = "SmithDB EC2 instance type. The default, m6a.4xlarge, fits the Small tier. The Medium tier needs m6a.8xlarge nodes and the Large tier m6a.16xlarge. The module does not derive it from sizing_profile."
+  description = "SmithDB EC2 instance type. The default, m6a.4xlarge, fits the small tier that every sizing profile runs. The medium tier needs m6a.8xlarge nodes and the large tier m6a.16xlarge (SMITHDB.md, Scaling up)."
   default     = "m6a.4xlarge"
   nullable    = false
 
@@ -57,13 +51,13 @@ variable "smithdb_node_min_count" {
 
 variable "smithdb_node_max_count" {
   type        = number
-  description = "Maximum SmithDB nodes. Must exceed the minimum. Raise it for the Medium and Large tiers."
+  description = "Maximum SmithDB nodes. Must exceed the minimum, so that a rolling update has room for its extra pod. Raise it for the medium and large tiers."
   default     = 5
   nullable    = false
 
   validation {
     condition     = var.smithdb_node_max_count > var.smithdb_node_min_count && floor(var.smithdb_node_max_count) == var.smithdb_node_max_count
-    error_message = "smithdb_node_max_count must be a whole number greater than smithdb_node_min_count."
+    error_message = "smithdb_node_max_count must be a whole number greater than smithdb_node_min_count. SmithDB rolls out one extra pod at a time, and a full pool at its maximum cannot place it."
   }
 }
 
@@ -98,18 +92,5 @@ variable "smithdb_transition_mode" {
   validation {
     condition     = !var.smithdb_transition_mode || var.enable_smithdb
     error_message = "smithdb_transition_mode requires enable_smithdb = true."
-  }
-}
-
-# A warning, not an error: Terraform cannot know the nodes' real capacity, but a
-# profile whose tier is larger than the node type leaves pods Pending.
-check "smithdb_nodes_fit_the_sizing_profile" {
-  assert {
-    condition = (
-      !var.enable_smithdb ||
-      !contains(keys(local.smithdb_tier_min_xlarge), var.sizing_profile) ||
-      local.smithdb_node_xlarge >= local.smithdb_tier_min_xlarge[var.sizing_profile]
-    )
-    error_message = "sizing_profile = ${var.sizing_profile} gives SmithDB a tier that needs ${try(local.smithdb_tier_min_xlarge[var.sizing_profile], 0)}xlarge nodes or larger, but smithdb_node_instance_type is ${var.smithdb_node_instance_type}. SmithDB pods that do not fit stay Pending. Set smithdb_node_instance_type to m6a.8xlarge for production or m6a.16xlarge for production-large."
   }
 }

@@ -15,6 +15,8 @@ The dev profile (`queue`) and the minimum profile (`queue` and `ingestQueue`) se
 
 The chart allows one scaler per service. To run the compaction worker on its CPU HPA instead, set `smithdb.compactionWorker.autoscaling.hpa.enabled: true` and `smithdb.compactionWorker.autoscaling.keda.enabled: false`.
 
+The profiles do not size SmithDB. Every profile runs the SmithDB small tier that `langsmith-values-smithdb.yaml` sets, with the chart's replica defaults and the compaction-worker range from the base values. The medium and large tiers need larger SmithDB nodes; see [Scaling up](../../../SMITHDB.md#scaling-up).
+
 `make init-values` preserves existing sizing files; merge template updates manually. When disabling an autoscaler, also set the component's fixed replica count.
 
 ### Product workloads (Insights, LangSmith Chat (formerly Polly), Fleet)

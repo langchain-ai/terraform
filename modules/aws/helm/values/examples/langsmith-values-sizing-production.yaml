@@ -206,35 +206,10 @@ fleetTriggerServer:
         memory: "2Gi"
 
 # -- SmithDB ---------------------------------------------------------------
-
-smithdb:
-  resourceTier: medium
-  query:
-    autoscaling:
-      hpa:
-        minReplicas: 1
-
-  ingestion:
-    autoscaling:
-      hpa:
-        minReplicas: 1
-
-  compaction:
-    deployment:
-      replicas: 1
-
-  compactionWorker:
-    autoscaling:
-      hpa:
-        enabled: false
-      keda:
-        enabled: true
-        minReplicaCount: 1
-        maxReplicaCount: 10
-
-  clusterManager:
-    deployment:
-      replicas: 1
+# No profile sizes SmithDB. Every profile runs the small tier that
+# langsmith-values-smithdb.yaml sets, with the chart's replica defaults and the
+# compaction-worker KEDA range from langsmith-values.yaml. For the medium or
+# large tier, see SMITHDB.md, "Scaling up".
 
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 

@@ -53,6 +53,7 @@ jq -e --slurpfile before "$TEST_DIR/legacy.json" '
   .migration.taskdb.postgres.statefulSet.resources.requests.memory == "12Gi" and
   .migration.taskdb.postgres.auth.existingSecretName == "existing-taskdb"
 ' "$TEST_DIR/values.json" >/dev/null
+[[ "$SMITHDB_RESOURCE_TIER" == small ]] || { echo "FAIL: the resolved tier is $SMITHDB_RESOURCE_TIER, want small"; exit 1; }
 echo "PASS: EBS clears legacy service overrides, uses the small tier when no values file sets one, and preserves migration, TaskDB, and customer volumes"
 
 VALUES_ARGS=(--set smithdb.enabled=true --set smithdb.resourceTier=large)
@@ -61,6 +62,7 @@ _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
 jq -e '.resourceTier == "large" and .query.deployment.resources == {} and .query.deployment.volumes == []' "$TEST_DIR/values.json" >/dev/null
+[[ "$SMITHDB_RESOURCE_TIER" == large ]] || { echo "FAIL: the resolved tier is $SMITHDB_RESOURCE_TIER, want large"; exit 1; }
 echo "PASS: new EBS deployments preserve an explicitly selected resource tier"
 
 # Exercise the generated override after chart defaults and older customer values.
@@ -302,3 +304,50 @@ for CASE in new_install on_smithdb staged without_smithdb list_failure; do
   fi
   echo "PASS: query cutover $CASE"
 done
+
+# deploy.sh stops when the tier's largest pod fits no SmithDB node. The fake kubectl
+# is on PATH only inside the subshell, and reports approximate EKS allocatable values
+# for each instance type. An unknown tier is left to the chart, without a node lookup.
+mkdir "$TEST_DIR/tier-bin"
+cat > "$TEST_DIR/tier-bin/kubectl" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+node() { printf '{"items":[{"status":{"allocatable":{"cpu":"%s","memory":"%s"}}}]}\n' "$1" "$2"; }
+case "$NODES" in
+  m6a.4xlarge) node 15890m 60612856Ki ;;
+  m6a.8xlarge) node 31850m 126495224Ki ;;
+  m6a.16xlarge) node 63770m 256000000Ki ;;
+  c6a.16xlarge) node 63770m 125000000Ki ;;
+  none) echo '{"items":[]}' ;;
+  *) exit 1 ;;
+esac
+MOCK
+chmod +x "$TEST_DIR/tier-bin/kubectl"
+for spec in small:m6a.4xlarge:pass medium:m6a.4xlarge:refuse medium:m6a.8xlarge:pass \
+    large:m6a.8xlarge:refuse large:m6a.16xlarge:pass large:c6a.16xlarge:refuse \
+    small:none:refuse small:failure:refuse custom:failure:pass; do
+  IFS=: read -r tier NODES want <<< "$spec"
+  export NODES
+  if (PATH="$TEST_DIR/tier-bin:$PATH" _smithdb_tier_fits "$tier") 2> "$TEST_DIR/tier.err"; then
+    [[ "$want" == pass ]] || { echo "FAIL: the $tier tier was accepted on $NODES"; exit 1; }
+  elif [[ "$want" == pass ]] || ! grep -qE 'needs a SmithDB node|could not list the SmithDB nodes' "$TEST_DIR/tier.err"; then
+    echo "FAIL: the $tier tier was refused on $NODES"; cat "$TEST_DIR/tier.err"; exit 1
+  fi
+  echo "PASS: tier check, $tier on $NODES: $want"
+done
+
+# A tier left in an earlier sizing file must be the deployed one, because the SmithDB
+# overlay loads after it and wins. Only the top-level smithdb block counts.
+printf 'queue:\n  autoscaling: {}\nsmithdb:\n  resourceTier: "medium"  # copied earlier\n' > "$TEST_DIR/sizing-medium.yaml"
+printf 'smithdb:\n  query:\n    autoscaling:\n      hpa:\n        minReplicas: 1\n' > "$TEST_DIR/sizing-no-tier.yaml"
+printf 'polly:\n  resourceTier: large\n' > "$TEST_DIR/sizing-other-key.yaml"
+_smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" medium
+_smithdb_sizing_tier_check "$TEST_DIR/sizing-no-tier.yaml" small
+_smithdb_sizing_tier_check "$TEST_DIR/sizing-other-key.yaml" small
+_smithdb_sizing_tier_check "" small
+_smithdb_sizing_tier_check "$TEST_DIR/no-such-file.yaml" small
+if _smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" small 2> "$TEST_DIR/sizing.err"; then
+  echo "FAIL: a sizing-file tier that the SmithDB overlay replaces was accepted"; exit 1
+fi
+grep -q 'sizing-medium.yaml sets smithdb.resourceTier: medium' "$TEST_DIR/sizing.err"
+echo "PASS: a sizing-file tier other than the deployed one stops the deploy, and a matching or absent one does not"

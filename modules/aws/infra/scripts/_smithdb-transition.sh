@@ -65,16 +65,68 @@ _smithdb_query_cutover_check() {
 # --set-json replaces a map, whereas another YAML overlay merges it, so the legacy
 # service resources are cleared here: the chart tier controls EBS workloads, while
 # migration and TaskDB keep their own sizing. The tier is smithdb.resourceTier from
-# the values files (the sizing files set it per profile), and small when none does.
+# the values files (langsmith-values-smithdb.yaml sets small), and small when none
+# does. The resolved tier is left in SMITHDB_RESOURCE_TIER for _smithdb_tier_fits.
 _smithdb_managed_values() {
   local path values setting tier=small
   for path in query mutations runRules statsQuery ingestion compactionWorker compaction clusterManager; do
     VALUES_ARGS+=(--set-json "smithdb.$path.deployment.resources={}")
   done
   values=$(_smithdb_cache_values "$tier" "${VALUES_ARGS[@]}") || return 1
+  # deploy.sh reads the tier after this returns.
+  # shellcheck disable=SC2034
+  SMITHDB_RESOURCE_TIER=$(jq -er '."smithdb.resourceTier"' <<< "$values") || return 1
   while IFS= read -r setting; do
     VALUES_ARGS+=(--set-json "$setting")
   done < <(jq -r 'to_entries[] | "\(.key)=\(.value | tojson)"' <<< "$values")
+}
+
+# The tier comes from the Helm values and the node size from Terraform, so only a
+# deploy can compare them. Each size is the tier's largest pod in the chart's tier
+# table, over both layouts (cluster, and from chart 0.18 unified), so the check
+# holds for either smithdb.topology. Returns 1, with the reason, when no SmithDB
+# node can hold that pod.
+_smithdb_tier_fits() {
+  local tier="$1" cpu mem nodes
+  case "$tier" in
+    small) cpu=8 mem=16 ;;
+    medium) cpu=28 mem=64 ;;
+    large) cpu=56 mem=150 ;;
+    *) return 0 ;;
+  esac
+  nodes=$(kubectl get nodes -l langsmith-nodepool/smithdb=true -o json) || {
+    echo "ERROR: could not list the SmithDB nodes, so the SmithDB tier check cannot run." >&2
+    return 1
+  }
+  jq -e --argjson cpu "$cpu" --argjson mem "$mem" '
+    def cores: if endswith("m") then (rtrimstr("m") | tonumber / 1000) else tonumber end;
+    def gib: if endswith("Ki") then (rtrimstr("Ki") | tonumber / 1048576)
+      elif endswith("Mi") then (rtrimstr("Mi") | tonumber / 1024)
+      elif endswith("Gi") then (rtrimstr("Gi") | tonumber)
+      else (tonumber / 1073741824) end;
+    any(.items[]; (.status.allocatable.cpu | cores) >= $cpu and (.status.allocatable.memory | gib) >= $mem)
+  ' <<< "$nodes" >/dev/null && return 0
+  echo "ERROR: smithdb.resourceTier $tier needs a SmithDB node with $cpu vCPU and $mem GiB allocatable, and node-group-smithdb has none." >&2
+  echo "       Set smithdb_node_instance_type for that tier in terraform.tfvars and run make apply," >&2
+  echo "       or set a smaller tier in langsmith-values-smithdb.yaml. See SMITHDB.md, \"Scaling up\"." >&2
+  return 1
+}
+
+# make init-values keeps an existing sizing file, so one copied earlier can still set
+# smithdb.resourceTier. langsmith-values-smithdb.yaml loads after it, so a different
+# tier there would replace the sizing file's tier without notice. Returns 1, with the
+# fix, when the sizing file sets a tier other than the deployed one.
+_smithdb_sizing_tier_check() {
+  local file="$1" deployed="$2" tier
+  [[ -n "$file" && -f "$file" ]] || return 0
+  tier=$(awk '
+    /^[^ #]/ { s = ($1 == "smithdb:") }
+    s && /^  resourceTier:/ { v = $2; gsub(/["\047]/, "", v); print v; exit }
+  ' "$file")
+  [[ -z "$tier" || "$tier" == "$deployed" ]] && return 0
+  echo "ERROR: ${file##*/} sets smithdb.resourceTier: $tier, but langsmith-values-smithdb.yaml loads after it, so the release would run the $deployed tier." >&2
+  echo "       Set the tier in langsmith-values-smithdb.yaml and remove it from ${file##*/}. See SMITHDB.md, \"Scaling up\"." >&2
+  return 1
 }
 
 # Use Helm's YAML merge to replace only cache overrides, preserving unrelated
