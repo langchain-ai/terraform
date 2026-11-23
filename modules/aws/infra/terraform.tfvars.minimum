@@ -58,7 +58,6 @@ eks_managed_node_groups = {
 #------------------------------------------------------------------------------
 # External Postgres + Redis (smallest managed instances)
 #------------------------------------------------------------------------------
-postgres_source        = "external"
 postgres_username      = "langsmith"
 postgres_instance_type = "db.t3.small"    # 2 vCPU, 2 GB — bare minimum
 postgres_storage_gb    = 20

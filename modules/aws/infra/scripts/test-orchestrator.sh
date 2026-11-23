@@ -82,7 +82,8 @@ fi
 
 export WORKER_REGION;         WORKER_REGION="${WORKER_REGION:-$(_parse_tfvar "region" 2>/dev/null || echo "us-west-2")}"
 export WORKER_EKS_VERSION;    WORKER_EKS_VERSION="${WORKER_EKS_VERSION:-$(_parse_tfvar "eks_cluster_version" 2>/dev/null || echo "1.34")}"
-# Workers always use in-cluster Postgres/Redis — cheap, fast, no per-worker RDS/ElastiCache
+# Workers use in-cluster Redis. PostgreSQL is always RDS from 0.18, so each worker
+# creates its own RDS instance, made deletable by test-worker.sh.
 # Env var overrides take precedence over terraform.tfvars (useful for one-off domain/email overrides)
 export WORKER_DOMAIN;         WORKER_DOMAIN="${WORKER_DOMAIN:-$(_parse_tfvar "langsmith_domain" 2>/dev/null || echo "")}"
 export WORKER_LE_EMAIL;       WORKER_LE_EMAIL="${WORKER_LE_EMAIL:-$(_parse_tfvar "letsencrypt_email" 2>/dev/null || echo "")}"
@@ -105,7 +106,8 @@ printf "  %-22s %s\n" "Permutations:"    "${SELECTED_PERMS[*]}"
 printf "  %-22s %s\n" "Max parallel:"    "${MAX_PARALLEL}"
 printf "  %-22s %s\n" "Region:"          "${WORKER_REGION}"
 printf "  %-22s %s\n" "EKS version:"     "${WORKER_EKS_VERSION}"
-printf "  %-22s %s\n" "Postgres/Redis:"  "in-cluster (light deploy)"
+printf "  %-22s %s\n" "Postgres:"        "RDS per worker (deletable)"
+printf "  %-22s %s\n" "Redis:"           "in-cluster"
 printf "  %-22s %s\n" "Domain:"          "${WORKER_DOMAIN:-<not set>}"
 printf "  %-22s %s\n" "Results dir:"     "${RESULTS_DIR}"
 printf "  %-22s %s\n" "Your cluster:"    "untouched (workers: tst1–tst7)"

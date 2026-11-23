@@ -34,15 +34,15 @@
 #
 # Before filling this out, decide which tier fits your needs:
 #
-#   Tier 1 — All internal (simplest, not recommended for production)
-#     postgres_source    = "in-cluster"
+#   PostgreSQL is always RDS from 0.18: SmithDB needs it outside the cluster.
+#
+#   Tier 1 — Internal Redis and ClickHouse (simplest, not recommended for production)
 #     redis_source       = "in-cluster"
 #     clickhouse_source  = "in-cluster"
-#     → Everything runs as pods inside EKS. No RDS, no ElastiCache.
+#     → Redis and ClickHouse run as pods inside EKS. No ElastiCache.
 #     → Good for: quick demos, dev/test environments.
 #
-#   Tier 2 — External Postgres + Redis, internal ClickHouse (recommended)
-#     postgres_source    = "external"    ← RDS instance
+#   Tier 2 — External Redis, internal ClickHouse (recommended)
 #     redis_source       = "external"    ← ElastiCache cluster
 #     clickhouse_source  = "in-cluster"  ← pod in EKS
 #     → Best balance of reliability and simplicity. RDS handles backups,
@@ -50,7 +50,6 @@
 #     → Good for: production deployments.
 #
 #   Tier 3 — All external (fully managed)
-#     postgres_source    = "external"
 #     redis_source       = "external"
 #     clickhouse_source  = "external"
 #     → Requires a ClickHouse Cloud subscription or self-managed ClickHouse.
@@ -232,20 +231,10 @@ create_gp3_storage_class = true
 #------------------------------------------------------------------------------
 # POSTGRESQL (RDS)
 #------------------------------------------------------------------------------
-# Controls where PostgreSQL runs. This is the primary database for LangSmith
-# metadata (projects, runs, users, API keys, etc.).
-#
-#   "external"   — (recommended) Provisions an RDS PostgreSQL instance in a
-#                  private subnet. Terraform manages backups, encryption, and
-#                  security groups. Only accessible from within the VPC.
-#
-#   "in-cluster" — PostgreSQL runs as a pod inside EKS. No RDS is created.
-#                  Simpler, but you lose automated backups, failover, and
-#                  point-in-time recovery. Not recommended for production.
-#                  Skip the rest of this section if using in-cluster.
-postgres_source = "external"
-
-# --- The settings below only apply when postgres_source = "external" ---
+# The primary database for LangSmith metadata (projects, runs, users, API keys,
+# etc.). Terraform provisions an RDS PostgreSQL instance in a private subnet and
+# manages backups, encryption, and security groups. Only accessible from within
+# the VPC. In-cluster PostgreSQL was removed in 0.18.
 
 # Database username. This is the master user for the RDS instance.
 # "langsmith" is conventional but any valid PostgreSQL identifier works.

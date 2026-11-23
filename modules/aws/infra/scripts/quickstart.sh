@@ -577,12 +577,13 @@ if [[ "$PROFILE" == "prod" ]]; then
   printf "  $(_dim "Production: external RDS + ElastiCache recommended.")\n"
 fi
 
-_pg_source_default=1; [[ "$_ex_pg" == "in-cluster" ]] && _pg_source_default=2
-_ask_choice "$(_choice_arg "postgres_source")" "$_pg_source_default" --recommended 1 "$(_numbered_prompt "5.1" "Where should PostgreSQL run?")" \
-  "Amazon RDS — external and managed by AWS" \
-  "In-cluster — runs as Kubernetes pods"
-PG_SOURCE="external"; [[ "$_CHOICE" == "2" ]] && PG_SOURCE="in-cluster"
-_confirm_storage_change "PostgreSQL" "$_ex_pg" "$PG_SOURCE"
+# PostgreSQL is always Amazon RDS from 0.18; SmithDB needs it outside the cluster.
+if [[ "$_ex_pg" == "in-cluster" ]]; then
+  _red "  ERROR: postgres_source = \"in-cluster\" was removed in 0.18."
+  printf "  Back up the database before you remove the line: the next apply points LangSmith\n"
+  printf "  at a new, empty RDS instance. See \"Move an in-cluster PostgreSQL to RDS\" in README.md.\n"
+  exit 1
+fi
 
 PG_INSTANCE="$(_existing "postgres_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "db.r6g.xlarge" || echo "db.t3.large")")"
 PG_STORAGE="$(_existing "postgres_storage_gb" "$([[ "$PROFILE" == "prod" ]] && echo "50" || echo "20")")"
@@ -599,15 +600,13 @@ if [[ "$UPDATE_MODE" == "true" ]]; then
   PG_SKIP_FINAL_SNAPSHOT="$(_existing "postgres_skip_final_snapshot" "$PG_SKIP_FINAL_SNAPSHOT")"
 fi
 
-if [[ "$PG_SOURCE" == "external" ]]; then
-  echo ""
-  _ask "$(_choice_arg "postgres_instance_type")" "$(_numbered_prompt "5.2" "RDS instance type")" "$PG_INSTANCE"; PG_INSTANCE="$_REPLY"
-  _ask_int "$(_choice_arg "postgres_storage_gb")" "$(_numbered_prompt "5.3" "RDS initial storage (GB)")" "$PG_STORAGE"; PG_STORAGE="$_REPLY"
-  _ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.4" "RDS max storage (GB)")" "$PG_MAX_STORAGE"; PG_MAX_STORAGE="$_REPLY"
-fi
+echo ""
+_ask "$(_choice_arg "postgres_instance_type")" "$(_numbered_prompt "5.1" "RDS PostgreSQL instance type")" "$PG_INSTANCE"; PG_INSTANCE="$_REPLY"
+_ask_int "$(_choice_arg "postgres_storage_gb")" "$(_numbered_prompt "5.2" "RDS initial storage (GB)")" "$PG_STORAGE"; PG_STORAGE="$_REPLY"
+_ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.3" "RDS max storage (GB)")" "$PG_MAX_STORAGE"; PG_MAX_STORAGE="$_REPLY"
 
 _redis_source_default=1; [[ "$_ex_redis" == "in-cluster" ]] && _redis_source_default=2
-_ask_choice "$(_choice_arg "redis_source")" "$_redis_source_default" --recommended 1 "$(_numbered_prompt "5.5" "Where should Redis run?")" \
+_ask_choice "$(_choice_arg "redis_source")" "$_redis_source_default" --recommended 1 "$(_numbered_prompt "5.4" "Where should Redis run?")" \
   "Amazon ElastiCache — external and managed by AWS" \
   "In-cluster — runs as Kubernetes pods"
 REDIS_SOURCE="external"; [[ "$_CHOICE" == "2" ]] && REDIS_SOURCE="in-cluster"
@@ -616,7 +615,7 @@ _confirm_storage_change "Redis" "$_ex_redis" "$REDIS_SOURCE"
 REDIS_INSTANCE="$(_existing "redis_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "cache.m6g.xlarge" || echo "cache.m6g.large")")"
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   echo ""
-  _ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.6" "ElastiCache instance type")" "$REDIS_INSTANCE"
+  _ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.5" "ElastiCache instance type")" "$REDIS_INSTANCE"
   REDIS_INSTANCE="$_REPLY"
 fi
 
@@ -1151,13 +1150,13 @@ _select_feature_storage() {
   if [[ "$existing_enabled" == "true" && "$existing_external" == "true" ]]; then
     default=2
     current="external"
-  elif [[ "$existing_enabled" != "true" && "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
+  elif [[ "$existing_enabled" != "true" && "$REDIS_SOURCE" == "external" ]]; then
     default=2
   fi
 
   local storage_choice_arg recommended=""
   storage_choice_arg=$(_choice_arg "$storage_key")
-  if [[ "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
+  if [[ "$REDIS_SOURCE" == "external" ]]; then
     recommended=2
   fi
   _ask_choice "$storage_choice_arg" "$default" --recommended "$recommended" "$(_numbered_prompt "$question_number" "$feature storage (Postgres and Redis):")" \
@@ -1171,9 +1170,9 @@ _select_feature_storage() {
     printf "  Keep the current %s storage here and migrate it separately.\n" "$current"
     exit 1
   fi
-  if [[ "$selected" == "external" && ( "$PG_SOURCE" != "external" || "$REDIS_SOURCE" != "external" ) ]]; then
-    _red "  ERROR: External $feature storage requires external Postgres and Redis."
-    printf "  Re-run QuickStart and choose both external services in Section 5.\n"
+  if [[ "$selected" == "external" && "$REDIS_SOURCE" != "external" ]]; then
+    _red "  ERROR: External $feature storage requires external Redis."
+    printf "  Re-run QuickStart and choose external Redis in Section 5.\n"
     exit 1
   fi
 
@@ -1294,11 +1293,9 @@ _show_summary() {
   _summary_row "Node maximum:" "$NODE_MAX"
 
   _summary_section "5. Backend Services"
-  _summary_row "Postgres:" "$PG_SOURCE"
-  if [[ "$PG_SOURCE" == "external" ]]; then
-    _summary_row "RDS instance type:" "$PG_INSTANCE"
-    _summary_row "RDS storage:" "${PG_STORAGE}-${PG_MAX_STORAGE} GB"
-  fi
+  _summary_row "Postgres:" "external (RDS)"
+  _summary_row "RDS instance type:" "$PG_INSTANCE"
+  _summary_row "RDS storage:" "${PG_STORAGE}-${PG_MAX_STORAGE} GB"
   _summary_row "Redis:" "$REDIS_SOURCE"
   [[ "$REDIS_SOURCE" == "external" ]] && _summary_row "ElastiCache instance type:" "$REDIS_INSTANCE"
 
@@ -1448,12 +1445,7 @@ create_gp3_storage_class = true
 #------------------------------------------------------------------------------
 # Backend Services
 #------------------------------------------------------------------------------
-postgres_source = "${PG_SOURCE}"
-redis_source    = "${REDIS_SOURCE}"
-TFVARS
-
-if [[ "$PG_SOURCE" == "external" ]]; then
-  cat >> "$OUTPUT" << TFVARS
+redis_source = "${REDIS_SOURCE}"
 
 # PostgreSQL (RDS)
 postgres_instance_type       = "${PG_INSTANCE}"
@@ -1462,7 +1454,6 @@ postgres_max_storage_gb      = ${PG_MAX_STORAGE}
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
 postgres_skip_final_snapshot = ${PG_SKIP_FINAL_SNAPSHOT}
 TFVARS
-fi
 
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS

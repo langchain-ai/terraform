@@ -713,19 +713,6 @@ run "external_postgres_is_planned" {
   }
 }
 
-run "in_cluster_postgres_plans_nothing" {
-  command = plan
-
-  variables {
-    postgres_source = "in-cluster"
-  }
-
-  assert {
-    condition     = length(module.postgres) == 0
-    error_message = "postgres_source = in-cluster still planned RDS"
-  }
-}
-
 run "external_redis_is_planned" {
   command = plan
 

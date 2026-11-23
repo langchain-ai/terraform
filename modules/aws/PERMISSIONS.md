@@ -23,7 +23,7 @@ A custom policy needs these services. The **Required when** column is the config
 | CloudWatch Logs | `logs:CreateLogGroup`, `logs:PutRetentionPolicy`, `logs:TagResource`, `logs:DescribeLogGroups`, `logs:DeleteLogGroup` | The EKS control plane log group | Always |
 | S3 | `s3:*` on the deployment's buckets | LangSmith bucket, bucket policy, encryption, lifecycle | Always |
 | Elastic Load Balancing | `elasticloadbalancing:*` | ALB, listeners, target group | Always |
-| RDS | `rds:*` | PostgreSQL instance and subnet group | `postgres_source = "external"` (the default), or `enable_smithdb = true` |
+| RDS | `rds:*` | PostgreSQL instance and subnet group | Always |
 | ElastiCache | `elasticache:*` | Redis replication group | `redis_source = "external"` (the default), or `enable_sandboxes = true` |
 | ACM | `acm:*` | The LangSmith certificate and its validation | `langsmith_domain` is set and `acm_certificate_arn` is not |
 | Route 53 | `route53:*` | Hosted zone and records | `langsmith_domain` is set and `acm_certificate_arn` is not |
