@@ -1,0 +1,81 @@
+modules/aws/infra/scripts/test-quickstart-dns.sh
+  s_c161e3bea7e1f6::t_9372bbf3083597 265
+  s_c161e3bea7e1f6::t_121fa27218481a 273
+  s_c161e3bea7e1f6::t_d978ebf86b18dc 283
+modules/aws/SMITHDB.md
+  s_c161e3bea7e1f6::t_06c22b9993ecbf 200-270
+  s_c161e3bea7e1f6::t_f613fc1ce63429 280
+  s_c161e3bea7e1f6::t_7552d09fcbce53 59
+  s_c161e3bea7e1f6::t_e3c4787cbabd5d 84-86
+  s_c161e3bea7e1f6::t_9bdae8097363d2 16-17
+  s_c161e3bea7e1f6::t_0eeea88abce84f 47
+modules/aws/helm/scripts/smithdb-migration-job-start.sh
+  s_c161e3bea7e1f6::t_433fb2d8dd8c59 129
+modules/aws/infra/scripts/test-smithdb-transition.sh
+  s_c161e3bea7e1f6::t_5c7816db0d7a77 207-208
+  s_c161e3bea7e1f6::t_532906ec9ea1c8 337-346
+  s_c161e3bea7e1f6::t_2cbbaf2206f7b4 419-432
+  s_c161e3bea7e1f6::t_ed5d456317e01b 298-315
+  s_c161e3bea7e1f6::t_05dff2ab0e3991 64,68-111
+  s_c161e3bea7e1f6::t_faecf95498ade6 233
+  s_c161e3bea7e1f6::t_f54d1c1d2b4954 386-387,392,394-400
+  s_c161e3bea7e1f6::t_90be31d0112db9 112
+modules/aws/helm/scripts/deploy.sh
+  s_c161e3bea7e1f6::t_e419d61addbe2d 647,649-650
+  s_c161e3bea7e1f6::t_0582a9e8c5a4b1 645-646
+modules/aws/helm/scripts/test-values.sh
+  s_c161e3bea7e1f6::t_d3ecb5dd3fc34a 251-257,260-286
+  s_c161e3bea7e1f6::t_23486e99197ab6 195-206
+  s_c161e3bea7e1f6::t_3ad4fc0f2b005a 258-259
+modules/aws/infra/terraform.tfvars.example
+  s_c161e3bea7e1f6::t_b404c5e5e8b6d4 876-878,880
+modules/aws/infra/tests/validation.tftest.hcl
+  s_c161e3bea7e1f6::t_bff919c9f0449e 76
+  s_c161e3bea7e1f6::t_cf58c7d6838abe 59
+modules/aws/infra/scripts/apply.sh
+  s_c161e3bea7e1f6::t_0b4f03f83cbef4 66,69
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_c161e3bea7e1f6::t_6377d88780f1f1 499-577
+modules/aws/README.md
+  s_c161e3bea7e1f6::t_eb804cbd690133 1244
+modules/aws/infra/scripts/_smithdb-transition.sh
+  s_c161e3bea7e1f6::t_21bfc8e3aaccbd 258
+  s_c161e3bea7e1f6::t_91141ac38dd160 256
+  s_c161e3bea7e1f6::t_a5dff9b2723588 73
+  s_c161e3bea7e1f6::t_4e9ef30ede85d0 20-21,23-24
+  s_c161e3bea7e1f6::t_3f8f06d5ab15bb 114-116,118,125-131,136,142-143,145-147
+  s_c161e3bea7e1f6::t_327195fd3f72ff 104
+  s_c161e3bea7e1f6::t_1987b943855a61 75,79
+  s_c161e3bea7e1f6::t_560cc805310745 281-282,286-287,289
+  s_c161e3bea7e1f6::t_98ddd1a0665fa9 88-103,105-110
+  s_c161e3bea7e1f6::t_9e685351535bbb 283,288,290-293
+  s_c161e3bea7e1f6::t_6144e80cb445e7 172-175,185-214,222-227
+  s_c161e3bea7e1f6::t_f8e92a0e1f726f 229-236,238
+modules/aws/infra/scripts/quickstart.sh
+  s_c161e3bea7e1f6::t_a00dcd5fca4efc 1468
+  s_c161e3bea7e1f6::t_ce3c168f277489 657-658
+  s_c161e3bea7e1f6::t_9e62a9a09d02e0 1302
+modules/aws/SERVICES.md
+  s_c161e3bea7e1f6::t_3da5472a3c5752 150
+modules/aws/infra/smithdb-nodes.tf
+  s_c161e3bea7e1f6::t_89ccb11f340e64 5-25
+  s_c161e3bea7e1f6::t_f56ea113464323 46-50,52-57,61-78
+  s_c161e3bea7e1f6::t_85235ddf904cb3 51
+  s_c161e3bea7e1f6::t_50a6ee8fcba146 79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ded7fd94c65cc929e1b853e411997268074cd0ac",
+  "prompts": {},
+  "sessions": {
+    "s_c161e3bea7e1f6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a37e189e-119a-411b-8ffc-c1c0585560e8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
