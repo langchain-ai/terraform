@@ -282,40 +282,25 @@ Remove `flow_logs` before you delete the data plane.
 
 ### Use your own encryption keys (optional)
 
-LangSmith can encrypt the Blob storage accounts, the PostgreSQL servers, and the AKS disks of a data plane with keys in your Key Vaults. As on AWS, use one key for every service, a key per service, or both. Azure accepts a key only when it creates the resource, so set `cmk` before you create the data plane:
+Encrypt Blob storage, PostgreSQL, and the AKS disks with keys from your Key Vaults. Set `cmk` before you create the data plane:
 
 ```hcl
 data_planes = {
   prod = {
     location = "eastus"
     cmk = {
-      # Every service without a service_key_ids entry.
-      key_id = azurerm_key_vault_key.langsmith.resource_versionless_id
-      # Optional: blob, postgres, or disks. Each overrides key_id.
-      service_key_ids = {
-        postgres = azurerm_key_vault_key.langsmith_postgres.resource_versionless_id
-      }
+      key_id          = azurerm_key_vault_key.langsmith.resource_versionless_id
+      service_key_ids = { postgres = azurerm_key_vault_key.postgres.resource_versionless_id }
     }
   }
 }
 ```
 
-Without `key_id`, services without a `service_key_ids` entry keep Microsoft-managed keys. Each value is a key resource ID: `<Key Vault ID>/keys/<name>`.
-
-Each vault must:
-
-- Be in the subscription of this module and in the region of the data plane.
-- Use Azure RBAC and have purge protection.
-- Let trusted Microsoft services through its firewall, if it has one.
-
-Terraform creates, in the data plane resource group:
-
-- When blob or postgres uses a key: the identity `langsmith-cmk-identity`, with `Key Vault Crypto Service Encryption User` on those keys only.
-- When disks uses a key: the disk encryption set `langsmith-cmk`, with the same role on that key only. With `byo_iam`, `langsmith-aks-identity` also gets `Reader` on the disk encryption set.
-
-LangSmith gets no access to the keys. Copy `data_planes.prod.customer_managed_keys` from the Terraform output into the create request. Azure uses the newest version of each key, so you can rotate them without a change. Do not change or remove `cmk` while the data plane exists. If you disable or delete a key, the services that use it stop.
-
-Geo-redundant PostgreSQL backups are not supported with a postgres key.
+- `key_id` is for all services. `service_key_ids` (`blob`, `postgres`, `disks`) overrides it per service. Without `key_id`, other services use Microsoft-managed keys.
+- Each vault must be in this subscription and the data plane region, use Azure RBAC, have purge protection, and allow trusted Microsoft services through its firewall.
+- Terraform creates `langsmith-cmk-identity` for blob and postgres, and the disk encryption set `langsmith-cmk` for disks. Each gets `Key Vault Crypto Service Encryption User` on its keys only.
+- Put the output `data_planes.prod.customer_managed_keys` in the create request.
+- Azure uses the newest key version, so rotation needs no change. Do not change `cmk` while the data plane exists.
 
 ### Remove a data plane
 
@@ -351,7 +336,7 @@ Fields of each `data_planes` entry:
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
 | `deployment_builds` | `bool` | no | `false` | With `byo_iam`, create the identities and roles that deployment builds and `langgraph deploy` need. Set it after the data plane is active. See [Deployment builds](#deployment-builds-optional). |
-| `cmk` | `object` | no | `null` | Your Key Vault keys: `key_id` for every service and `service_key_ids` for `blob`, `postgres`, or `disks`. Set it before you create the data plane. See [Use your own encryption keys](#use-your-own-encryption-keys-optional). |
+| `cmk` | `object` | no | `null` | `key_id` for all services, `service_key_ids` per service. See [Use your own encryption keys](#use-your-own-encryption-keys-optional). |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.

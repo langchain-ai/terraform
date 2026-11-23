@@ -1,4 +1,4 @@
-# Mocked providers: checks the cmk key selection, preconditions, role scopes, and output without Azure.
+# Mocked providers: cmk keys, vault checks, role scopes, and output.
 mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
     defaults = { tenant_id = "11111111-1111-1111-1111-111111111111" }
@@ -221,4 +221,37 @@ run "no_cmk" {
     condition     = length(azurerm_disk_encryption_set.cmk) == 0 && output.data_planes["prod"].customer_managed_keys == null
     error_message = "no cmk resources"
   }
+}
+
+run "public_vault_without_acls" {
+  command = plan
+  override_data {
+    target = data.azurerm_key_vault.cmk["prod|/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/security/providers/Microsoft.KeyVault/vaults/contoso-keys"]
+    values = {
+      id                            = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/security/providers/Microsoft.KeyVault/vaults/contoso-keys"
+      vault_uri                     = "https://contoso-keys.vault.azure.net/"
+      location                      = "eastus"
+      purge_protection_enabled      = true
+      rbac_authorization_enabled    = true
+      public_network_access_enabled = true
+      network_acls                  = []
+    }
+  }
+}
+
+run "private_vault_without_acls" {
+  command = plan
+  override_data {
+    target = data.azurerm_key_vault.cmk["prod|/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/security/providers/Microsoft.KeyVault/vaults/contoso-keys"]
+    values = {
+      id                            = "/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/security/providers/Microsoft.KeyVault/vaults/contoso-keys"
+      vault_uri                     = "https://contoso-keys.vault.azure.net/"
+      location                      = "eastus"
+      purge_protection_enabled      = true
+      rbac_authorization_enabled    = true
+      public_network_access_enabled = false
+      network_acls                  = []
+    }
+  }
+  expect_failures = [terraform_data.cmk_key_vault["prod|/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/security/providers/Microsoft.KeyVault/vaults/contoso-keys"]]
 }

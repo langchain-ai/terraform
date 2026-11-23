@@ -54,17 +54,10 @@ variable "data_planes" {
     # active. Without byo_iam, LangSmith creates them itself and this setting
     # changes nothing.
     deployment_builds = optional(bool, false)
-    # Customer-managed keys, like customer_managed_keys on AWS. key_id
-    # encrypts the Blob storage accounts, the PostgreSQL servers, and the AKS
-    # disks. service_key_ids sets a key for blob, postgres, or disks; each
-    # overrides key_id. Without key_id, services not listed keep
-    # Microsoft-managed keys. Values are key resource IDs
-    # (azurerm_key_vault_key.<name>.resource_versionless_id). See cmk.tf. Set
-    # it before you create the data plane, and pass output
-    # data_planes.<key>.customer_managed_keys to LangSmith. Do not change or
-    # remove it while the data plane exists. Each vault must be in this
-    # subscription and the data plane region, use Azure RBAC, and have purge
-    # protection.
+    # Customer-managed keys. See cmk.tf. key_id is for all services.
+    # service_key_ids (blob, postgres, disks) overrides it per service.
+    # Values are key IDs: <Key Vault ID>/keys/<name>. Set before you create
+    # the data plane. Do not change while it exists.
     cmk = optional(object({
       key_id          = optional(string)
       service_key_ids = optional(map(string), {})
@@ -103,7 +96,7 @@ variable "data_planes" {
         ])
       )
     ])
-    error_message = "cmk needs key_id or service_key_ids. service_key_ids takes blob, postgres, or disks. Each key must be a versionless key resource ID: <Key Vault ID>/keys/<name>. Managed HSM keys are not supported."
+    error_message = "cmk needs key_id or service_key_ids (blob, postgres, disks). Each key must be <Key Vault ID>/keys/<name>."
   }
 }
 
