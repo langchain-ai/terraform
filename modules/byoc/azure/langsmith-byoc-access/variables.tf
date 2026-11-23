@@ -54,15 +54,20 @@ variable "data_planes" {
     # active. Without byo_iam, LangSmith creates them itself and this setting
     # changes nothing.
     deployment_builds = optional(bool, false)
-    # Encrypt the Blob storage accounts, the PostgreSQL servers, and the AKS
-    # disks with a key in your Key Vault. See cmk.tf. Set it before you create
-    # the data plane, and pass output data_planes.<key>.customer_managed_keys
-    # to LangSmith. Do not change or remove it while the data plane exists.
-    # The vault must be in this subscription and the data plane region, use
-    # Azure RBAC, and have purge protection.
+    # Customer-managed keys, like customer_managed_keys on AWS. key_id
+    # encrypts the Blob storage accounts, the PostgreSQL servers, and the AKS
+    # disks. service_key_ids sets a key for blob, postgres, or disks; each
+    # overrides key_id. Without key_id, services not listed keep
+    # Microsoft-managed keys. Values are key resource IDs
+    # (azurerm_key_vault_key.<name>.resource_versionless_id). See cmk.tf. Set
+    # it before you create the data plane, and pass output
+    # data_planes.<key>.customer_managed_keys to LangSmith. Do not change or
+    # remove it while the data plane exists. Each vault must be in this
+    # subscription and the data plane region, use Azure RBAC, and have purge
+    # protection.
     cmk = optional(object({
-      key_vault_id = string
-      key_name     = string
+      key_id          = optional(string)
+      service_key_ids = optional(map(string), {})
     }))
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
@@ -90,11 +95,15 @@ variable "data_planes" {
   validation {
     condition = alltrue([
       for dp in values(var.data_planes) : dp.cmk == null || (
-        can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.KeyVault/vaults/[a-zA-Z0-9-]{3,24}$", dp.cmk.key_vault_id)) &&
-        can(regex("^[a-zA-Z0-9-]{1,127}$", dp.cmk.key_name))
+        (dp.cmk.key_id != null || length(dp.cmk.service_key_ids) > 0) &&
+        alltrue([for service in keys(dp.cmk.service_key_ids) : contains(["blob", "postgres", "disks"], service)]) &&
+        alltrue([
+          for id in concat(dp.cmk.key_id == null ? [] : [dp.cmk.key_id], values(dp.cmk.service_key_ids)) :
+          can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.KeyVault/vaults/[a-zA-Z0-9-]{3,24}/keys/[a-zA-Z0-9-]{1,127}$", id))
+        ])
       )
     ])
-    error_message = "cmk.key_vault_id must be a Key Vault resource ID, and cmk.key_name a key name of letters, digits, and hyphens. Managed HSM keys are not supported."
+    error_message = "cmk needs key_id or service_key_ids. service_key_ids takes blob, postgres, or disks. Each key must be a versionless key resource ID: <Key Vault ID>/keys/<name>. Managed HSM keys are not supported."
   }
 }
 
