@@ -335,3 +335,19 @@ for spec in small:m6a.4xlarge:pass medium:m6a.4xlarge:refuse medium:m6a.8xlarge:
   fi
   echo "PASS: tier check, $tier on $NODES: $want"
 done
+
+# A tier left in an earlier sizing file must be the deployed one, because the SmithDB
+# overlay loads after it and wins. Only the top-level smithdb block counts.
+printf 'queue:\n  autoscaling: {}\nsmithdb:\n  resourceTier: "medium"  # copied earlier\n' > "$TEST_DIR/sizing-medium.yaml"
+printf 'smithdb:\n  query:\n    autoscaling:\n      hpa:\n        minReplicas: 1\n' > "$TEST_DIR/sizing-no-tier.yaml"
+printf 'polly:\n  resourceTier: large\n' > "$TEST_DIR/sizing-other-key.yaml"
+_smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" medium
+_smithdb_sizing_tier_check "$TEST_DIR/sizing-no-tier.yaml" small
+_smithdb_sizing_tier_check "$TEST_DIR/sizing-other-key.yaml" small
+_smithdb_sizing_tier_check "" small
+_smithdb_sizing_tier_check "$TEST_DIR/no-such-file.yaml" small
+if _smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" small 2> "$TEST_DIR/sizing.err"; then
+  echo "FAIL: a sizing-file tier that the SmithDB overlay replaces was accepted"; exit 1
+fi
+grep -q 'sizing-medium.yaml sets smithdb.resourceTier: medium' "$TEST_DIR/sizing.err"
+echo "PASS: a sizing-file tier other than the deployed one stops the deploy, and a matching or absent one does not"

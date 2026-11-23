@@ -112,6 +112,23 @@ _smithdb_tier_fits() {
   return 1
 }
 
+# make init-values keeps an existing sizing file, so one copied earlier can still set
+# smithdb.resourceTier. langsmith-values-smithdb.yaml loads after it, so a different
+# tier there would replace the sizing file's tier without notice. Returns 1, with the
+# fix, when the sizing file sets a tier other than the deployed one.
+_smithdb_sizing_tier_check() {
+  local file="$1" deployed="$2" tier
+  [[ -n "$file" && -f "$file" ]] || return 0
+  tier=$(awk '
+    /^[^ #]/ { s = ($1 == "smithdb:") }
+    s && /^  resourceTier:/ { v = $2; gsub(/["\047]/, "", v); print v; exit }
+  ' "$file")
+  [[ -z "$tier" || "$tier" == "$deployed" ]] && return 0
+  echo "ERROR: ${file##*/} sets smithdb.resourceTier: $tier, but langsmith-values-smithdb.yaml loads after it, so the release would run the $deployed tier." >&2
+  echo "       Set the tier in langsmith-values-smithdb.yaml and remove it from ${file##*/}. See SMITHDB.md, \"Scaling up\"." >&2
+  return 1
+}
+
 # Use Helm's YAML merge to replace only cache overrides, preserving unrelated
 # volumes and mounts. This also handles existing values files during transition.
 _smithdb_cache_values() (

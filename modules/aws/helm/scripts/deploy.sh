@@ -643,6 +643,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   VALUES_ARGS+=(-f "$_smithdb_overrides")
   source "$INFRA_DIR/scripts/_smithdb-transition.sh"
   _smithdb_managed_values
+  _smithdb_sizing_tier_check "${_sizing_file:-}" "$SMITHDB_RESOURCE_TIER" || exit 1
   _smithdb_tier_fits "$SMITHDB_RESOURCE_TIER" || exit 1
   echo "  ✔ SmithDB ${SMITHDB_RESOURCE_TIER} tier fits node-group-smithdb"
 fi
