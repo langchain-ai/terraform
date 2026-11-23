@@ -127,7 +127,7 @@ run "disks_only" {
     }
   }
   assert {
-    condition     = length(azurerm_user_assigned_identity.cmk) == 0 && output.data_planes["prod"].customer_managed_keys.identity_id == null && output.data_planes["prod"].customer_managed_keys.key_id == null
+    condition     = length(azurerm_user_assigned_identity.cmk) == 0 && output.data_planes["prod"].customer_managed_keys.identity_id == null && output.data_planes["prod"].customer_managed_keys.key_id == null && output.data_planes["prod"].customer_managed_keys.service_key_ids == {}
     error_message = "no identity without blob or postgres"
   }
   assert {
