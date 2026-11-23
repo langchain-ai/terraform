@@ -54,8 +54,8 @@ variable "data_planes" {
     # active. Without byo_iam, LangSmith creates them itself and this setting
     # changes nothing.
     deployment_builds = optional(bool, false)
-    # Let LangSmith put an Azure Firewall on the outbound traffic of the data
-    # plane. Adds the actions in local.langsmith_byoc_firewall_actions.
+    # Let LangSmith add an Azure Firewall for outbound traffic. Adds
+    # local.langsmith_byoc_firewall_actions to the LangSmith role.
     egress_firewall = optional(bool, false)
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.

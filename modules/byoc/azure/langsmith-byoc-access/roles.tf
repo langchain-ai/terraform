@@ -183,8 +183,7 @@ locals {
     "Microsoft.Insights/dataCollectionRuleAssociations/delete",
   ])
 
-  # Added with egress_firewall: Azure Firewall, its policy, and the route
-  # table that sends the AKS subnet traffic to the firewall.
+  # egress_firewall: Azure Firewall, its policy, and the route table to it.
   langsmith_byoc_firewall_actions = [
     "Microsoft.Network/azureFirewalls/write",
     "Microsoft.Network/azureFirewalls/delete",
