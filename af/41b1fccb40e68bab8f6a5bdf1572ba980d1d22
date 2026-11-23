@@ -1,0 +1,26 @@
+modules/aws/helm/scripts/init-values.sh
+  s_c161e3bea7e1f6::t_6e6a17e1699dcc 86-92
+modules/aws/infra/scripts/_smithdb-transition.sh
+  s_c161e3bea7e1f6::t_43aa2e6cb0d04d 41-48,50-63
+  s_c161e3bea7e1f6::t_fd1be27526d24f 49
+modules/aws/infra/scripts/test-smithdb-transition.sh
+  s_c161e3bea7e1f6::t_cab7b6e832e94f 269-304
+modules/aws/SMITHDB.md
+  s_c161e3bea7e1f6::t_0f010a855ab190 157-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "af41b1fccb40e68bab8f6a5bdf1572ba980d1d22",
+  "prompts": {},
+  "sessions": {
+    "s_c161e3bea7e1f6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a37e189e-119a-411b-8ffc-c1c0585560e8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
