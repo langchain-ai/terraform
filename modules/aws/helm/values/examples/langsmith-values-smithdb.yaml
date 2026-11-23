@@ -4,5 +4,10 @@
 
 smithdb:
   enabled: true
+  # The one place the tier is set: no sizing profile changes it, and the default
+  # SmithDB nodes fit small. For medium or large, raise the node inputs in
+  # terraform.tfvars first (SMITHDB.md, "Scaling up"). make deploy stops when the
+  # tier's largest pod does not fit a SmithDB node.
+  resourceTier: small
   config:
     existingSecretName: "smithdb-local"

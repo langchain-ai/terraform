@@ -299,11 +299,8 @@ for sizing in dev production-large; do
   has_line "SmithDB initial capacity for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
   has_line "SmithDB ceiling is 5 for $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"
   log_lacks "no claim that the sizing profile picks the SmithDB node type for $sizing" "$TMP/$sizing.log" "selects the instance type automatically"
-  if [[ "$sizing" == production-large ]]; then
-    log_has "production-large warns that the SmithDB node type is too small" "$TMP/$sizing.log" "gives SmithDB a tier that needs 16xlarge nodes or larger"
-  else
-    log_lacks "$sizing does not warn about the SmithDB node type" "$TMP/$sizing.log" "gives SmithDB a tier that needs"
-  fi
+  log_lacks "$sizing does not warn about the SmithDB node type" "$TMP/$sizing.log" "gives SmithDB a tier that needs"
+  log_has "QuickStart points $sizing to the SmithDB scale-up steps" "$TMP/$sizing.log" "describes scaling up to the medium or large tier"
   has_line "SmithDB enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
   has_line "ingestion enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
   has_line "migration remains disabled for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_migration_enabled             = false'

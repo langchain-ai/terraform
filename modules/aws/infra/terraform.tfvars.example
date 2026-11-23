@@ -896,9 +896,10 @@ enable_bedrock_access = false
 # smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
 
 # ── SmithDB nodes (includes TaskDB) ─────────────────────────────
-# The defaults fit the Small tier. Medium needs m6a.8xlarge nodes and Large needs
-# m6a.16xlarge; raise the maximum count with the tier. These do not follow
-# sizing_profile. Caches are gp3 volumes (7,000 IOPS, 1,000 MiB/s).
+# Every sizing_profile runs the SmithDB small tier, and these defaults fit it. The
+# medium tier needs m6a.8xlarge nodes and the large tier m6a.16xlarge, with higher
+# counts: see ../SMITHDB.md, "Scaling up". Caches are gp3 volumes (7,000 IOPS,
+# 1,000 MiB/s).
 # smithdb_node_instance_type = "m6a.4xlarge"
 # smithdb_node_min_count     = 2
 # smithdb_node_max_count     = 5
