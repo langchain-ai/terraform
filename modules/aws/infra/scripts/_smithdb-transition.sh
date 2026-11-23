@@ -38,6 +38,29 @@ _smithdb_refresh_legacy_overlay() {
   cp "$file" "${file%.yaml}.legacy.yaml" && cp "$example" "$file"
 }
 
+# Switching SmithDB query on for a release that serves reads from ClickHouse
+# hides that release's traces in the UI until they are migrated. Returns 0 for a
+# new install (no release yet) or a release that already queries SmithDB, and 1,
+# with the reason, otherwise. A failed lookup returns 1.
+_smithdb_query_cutover_check() {
+  local release="$1" namespace="$2" found live
+  found=$(helm list -a -n "$namespace" --filter "^${release}\$" -q) || {
+    echo "ERROR: could not list the Helm releases in $namespace, so the SmithDB query check cannot run." >&2
+    echo "       Check cluster access (make kubeconfig), or set smithdb_query_enabled = true in terraform.tfvars for a new install." >&2
+    return 1
+  }
+  [[ -n "$found" ]] || return 0
+  live=$(helm get values "$release" -n "$namespace" --all -o json |
+    jq -r '.smithdb.langsmith.query.enabled // false') || live=""
+  [[ "$live" == "true" ]] && return 0
+  echo "ERROR: release $release serves reads from ClickHouse, and these values would switch them to SmithDB." >&2
+  echo "       The UI would stop showing its existing traces until they are migrated." >&2
+  echo "       Set smithdb_query_enabled = false in terraform.tfvars (enable_smithdb = false keeps SmithDB off)," >&2
+  echo "       or set it to true to confirm, then run make apply and make init-values." >&2
+  echo "       See SMITHDB.md, \"Upgrading from 0.17\"." >&2
+  return 1
+}
+
 # Node scheduling comes from the generated overrides (see _smithdb_pool_scheduling).
 # --set-json replaces a map, whereas another YAML overlay merges it, so the legacy
 # service resources are cleared here: the chart tier controls EBS workloads, while

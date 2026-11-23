@@ -154,6 +154,11 @@ history. Before the first 0.18 apply, write them explicitly:
 set (`infra/scripts/upgrade-guard.sh`). Installs written by the QuickStart
 wizard already carry them.
 
+`make init-values` also checks the live Helm release, so it covers an apply run
+outside `make apply` too, such as a plain `terraform apply` or a CI pipeline. It
+refuses to switch a release that serves reads from ClickHouse to SmithDB unless
+`terraform.tfvars` sets `smithdb_query_enabled = true`.
+
 ### Existing Karpenter deployments
 
 Finish and disable any historical migration on the current version before upgrading.
