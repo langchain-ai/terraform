@@ -608,7 +608,9 @@ _ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.3" "R
 # Redis is always Amazon ElastiCache (OSS mode) from 0.18.
 if [[ "$_ex_redis" == "in-cluster" ]]; then
   _red "  ERROR: redis_source = \"in-cluster\" was removed in 0.18."
-  printf "  Move to ElastiCache first: https://docs.langchain.com/langsmith/self-host-external-redis\n"
+  printf "  Let the LangSmith queues drain before you remove the line: the next apply points\n"
+  printf "  LangSmith at a new, empty ElastiCache instance. See \"Move an in-cluster Redis to\n"
+  printf "  ElastiCache\" in README.md.\n"
   exit 1
 fi
 REDIS_INSTANCE="$(_existing "redis_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "cache.m6g.xlarge" || echo "cache.m6g.large")")"

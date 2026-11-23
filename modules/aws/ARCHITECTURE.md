@@ -250,13 +250,12 @@ Discovered during the gateway permutation test run (April 2026, all four modes v
 | # | Area | Constraint / Fix |
 |---|------|-----------------|
 | 1 | **ACM wildcard SANs** | `langchain.com` root zone has `0 issue "amazon.com"` CAA but **not** `0 issuewild "amazon.com"`. Wildcard SANs (`*.subdomain.langchain.com`) always fail with `CAA_ERROR`. The `dns` module requests only the apex domain cert — no wildcard SAN. |
-| 2 | **In-cluster Redis** | The LangSmith Helm chart deploys Redis **without** `requirepass`. The Terraform `k8s_bootstrap` module writes `redis://langsmith-redis:6379` (no password). Do not add an auth token unless you also configure the Helm chart Redis values. |
-| 3 | **`name_prefix` length** | Maximum 15 characters (not 11). Names like `dz-nginx-tst` (12) are valid. |
-| 4 | **Istio port** | Istio 1.23+ ingressgateway listens on port **80** directly via `NET_BIND_SERVICE` capability — not port `8080`. ALB TGB health check and SG rules must target port 80. |
-| 5 | **NGINX TGB port** | NGINX ingress-nginx controller pods listen on port **80**. The TargetGroupBinding target type is `ip`. |
-| 6 | **Envoy proxy port** | Envoy proxy pods listen on port **10080** (not 80) when running as non-root. The TGB `servicePort` must be `10080`. |
-| 7 | **Destroy order** | Always run `terraform destroy` first and let Terraform handle namespace + Helm release lifecycle. Pre-deleting namespaces causes the `helm_release` Terraform resource to timeout (~5m) because Helm cannot uninstall cleanly into a terminating namespace. |
-| 8 | **Stuck Terminating namespaces** | KEDA's stale `external.metrics.k8s.io/v1beta1` API group causes `NamespaceDeletionDiscoveryFailure`. Clear with: `kubectl get namespace $ns -o json \| python3 -c "import sys,json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" \| kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f -` |
+| 2 | **`name_prefix` length** | Maximum 15 characters (not 11). Names like `dz-nginx-tst` (12) are valid. |
+| 3 | **Istio port** | Istio 1.23+ ingressgateway listens on port **80** directly via `NET_BIND_SERVICE` capability — not port `8080`. ALB TGB health check and SG rules must target port 80. |
+| 4 | **NGINX TGB port** | NGINX ingress-nginx controller pods listen on port **80**. The TargetGroupBinding target type is `ip`. |
+| 5 | **Envoy proxy port** | Envoy proxy pods listen on port **10080** (not 80) when running as non-root. The TGB `servicePort` must be `10080`. |
+| 6 | **Destroy order** | Always run `terraform destroy` first and let Terraform handle namespace + Helm release lifecycle. Pre-deleting namespaces causes the `helm_release` Terraform resource to timeout (~5m) because Helm cannot uninstall cleanly into a terminating namespace. |
+| 7 | **Stuck Terminating namespaces** | KEDA's stale `external.metrics.k8s.io/v1beta1` API group causes `NamespaceDeletionDiscoveryFailure`. Clear with: `kubectl get namespace $ns -o json \| python3 -c "import sys,json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" \| kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f -` |
 
 ---
 

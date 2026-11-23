@@ -340,7 +340,7 @@ variable "redis_source" {
 
   validation {
     condition     = var.redis_source == "external"
-    error_message = "redis_source = \"in-cluster\" was removed in 0.18: LangSmith needs an external Redis (ElastiCache, the default). Remove the line from terraform.tfvars. See https://docs.langchain.com/langsmith/self-host-external-redis."
+    error_message = "redis_source = \"in-cluster\" was removed in 0.18: LangSmith needs an external Redis (ElastiCache, the default). Stop sending traces and let the LangSmith queues drain before you remove this line from terraform.tfvars, because the next apply points LangSmith at a new, empty ElastiCache instance. See \"Move an in-cluster Redis to ElastiCache\" in modules/aws/README.md."
   }
 }
 

@@ -276,7 +276,7 @@ moved {
 
 module "redis" {
   source = "./modules/redis"
-  # ponytail: always 1, as module.postgres's count, kept for the [0] address in state.
+  # Always 1, like module.postgres; the count keeps the [0] address in state.
   count = var.redis_source == "external" ? 1 : 0
 
   name                 = local.redis_name

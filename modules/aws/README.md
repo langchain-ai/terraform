@@ -21,7 +21,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
-| **Dev** | RDS PostgreSQL (small instance) | In-cluster pod | In-cluster pod | Demo / POC |
+| **Dev** | RDS PostgreSQL (small instance) | ElastiCache Redis (small instance) | In-cluster pod | Demo / POC |
 | **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster ClickHouse | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
@@ -322,6 +322,19 @@ namespace and release name, `langsmith`.
    ```bash
    kubectl delete pvc -n langsmith data-langsmith-postgres-0
    ```
+
+### Move an in-cluster Redis to ElastiCache
+
+From 0.18 the module always creates ElastiCache, and `redis_source = "in-cluster"`
+fails at plan. Redis holds LangSmith's queues and caches, so there is no data to copy.
+But runs that LangSmith accepted and has not processed yet wait in the in-cluster
+queue, and the first 0.18 apply points LangSmith at a new, empty ElastiCache instance.
+Runs still in the old queue are not processed.
+
+1. Stop sending traces, and wait until the last ones show in LangSmith.
+2. Remove `redis_source = "in-cluster"` from `infra/terraform.tfvars`, then run
+   `make apply`. It creates the ElastiCache instance.
+3. Run `make init-values` and `make deploy`. The deploy removes the in-cluster Redis.
 
 ---
 
@@ -1171,7 +1184,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `postgres_existing_security_group_id` | `null` | no | Attach an existing SG to RDS instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `redis_source` | `external` | no | Only `external` (ElastiCache, OSS mode) from 0.18; `in-cluster` fails at plan |
+| `redis_source` | `external` | no | Only `external` (ElastiCache, OSS mode) from 0.18; `in-cluster` fails at plan. See [Move an in-cluster Redis to ElastiCache](#move-an-in-cluster-redis-to-elasticache) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |

@@ -84,13 +84,13 @@ output "redis_source" {
 }
 
 output "redis_connection_url" {
-  description = "Redis connection URL (null if using in-cluster Redis)"
+  description = "Redis connection URL"
   value       = module.redis[0].connection_url
   sensitive   = true
 }
 
 output "redis_security_group_id" {
-  description = "Security group ID attached to ElastiCache (null if using in-cluster Redis)"
+  description = "Security group ID attached to ElastiCache"
   value       = module.redis[0].security_group_id
 }
 
