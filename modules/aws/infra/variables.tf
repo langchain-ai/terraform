@@ -220,7 +220,7 @@ variable "postgres_source" {
 
   validation {
     condition     = var.postgres_source == "external"
-    error_message = "postgres_source = \"in-cluster\" was removed in 0.18: LangSmith needs an external PostgreSQL (RDS, the default). Remove the line from terraform.tfvars. To move an in-cluster database to RDS, see https://docs.langchain.com/langsmith/self-host-external-postgres."
+    error_message = "postgres_source = \"in-cluster\" was removed in 0.18: LangSmith needs an external PostgreSQL (RDS, the default). Back up the in-cluster database before you remove this line from terraform.tfvars, because the next apply points LangSmith at a new, empty RDS instance. See \"Move an in-cluster PostgreSQL to RDS\" in modules/aws/README.md."
   }
 }
 

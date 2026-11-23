@@ -21,7 +21,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
-| **Dev** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
+| **Dev** | RDS PostgreSQL (small instance) | In-cluster pod | In-cluster pod | Demo / POC |
 | **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster ClickHouse | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
@@ -259,6 +259,70 @@ terraform {
   }
 }
 ```
+
+### Move an in-cluster PostgreSQL to RDS
+
+From 0.18 the module always creates RDS, and `postgres_source = "in-cluster"` fails at
+plan. Move the data before the first 0.18 apply. That apply points the
+`langsmith-postgres` Secret at a new, empty RDS instance, and it removes the keys that
+the in-cluster PostgreSQL pod needs to start again. Writes made after the dump are not
+copied, so stop using LangSmith until the move is done. The commands use the default
+namespace and release name, `langsmith`.
+
+1. Dump the in-cluster database to your machine. The password stays inside the pod:
+
+   ```bash
+   kubectl exec -n langsmith langsmith-postgres-0 -c postgres -- \
+     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+     > langsmith.dump
+   ```
+
+2. Remove `postgres_source = "in-cluster"` from `infra/terraform.tfvars`, then run
+   `make apply`. It creates the RDS instance.
+3. Restore the dump before `make deploy`, which runs the LangSmith database migrations.
+   RDS is reachable only from inside the VPC, so restore from a pod that reads the new
+   connection URL from the Secret. Save this as `pg-restore.yaml`, with the image at
+   your RDS engine version:
+
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: pg-restore
+     namespace: langsmith
+   spec:
+     restartPolicy: Never
+     containers:
+       - name: pg-restore
+         image: postgres:18
+         command: ["sleep", "3600"]
+         env:
+           - name: DATABASE_URL
+             valueFrom:
+               secretKeyRef:
+                 name: langsmith-postgres
+                 key: connection_url
+   ```
+
+   Then copy the dump into the pod and restore it:
+
+   ```bash
+   kubectl apply -f pg-restore.yaml
+   kubectl wait -n langsmith --for=condition=Ready pod/pg-restore --timeout=180s
+   kubectl cp langsmith.dump langsmith/pg-restore:/tmp/langsmith.dump
+   kubectl exec -n langsmith pg-restore -- \
+     sh -c 'pg_restore --no-owner --no-privileges -d "$DATABASE_URL" /tmp/langsmith.dump'
+   kubectl delete pod -n langsmith pg-restore
+   ```
+
+4. Run `make init-values` and `make deploy`. The deploy removes the in-cluster
+   PostgreSQL StatefulSet and keeps its volume.
+5. When LangSmith shows your organizations, projects, and datasets, delete the old
+   volume. This cannot be undone, so keep `langsmith.dump` until you no longer need it:
+
+   ```bash
+   kubectl delete pvc -n langsmith data-langsmith-postgres-0
+   ```
 
 ---
 
@@ -1096,7 +1160,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
-| `postgres_source` | `external` | no | Only `external` (RDS) from 0.18; `in-cluster` fails at plan |
+| `postgres_source` | `external` | no | Only `external` (RDS) from 0.18; `in-cluster` fails at plan. See [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
 | `postgres_max_storage_gb` | `100` | no | Maximum RDS storage in GB (autoscaling) |

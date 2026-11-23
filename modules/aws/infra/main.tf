@@ -355,9 +355,9 @@ module "storage" {
 
 module "postgres" {
   source = "./modules/postgres"
-  # ponytail: always 1 since postgres_source admits only "external"; the count
-  # keeps the module.postgres[0] address every install's state already holds.
-  # Drop it with a moved block when the [0] references are rewritten.
+  # Always 1, because postgres_source admits only "external". The count keeps the
+  # module.postgres[0] address that every install's state already holds; drop it
+  # with a moved block when the [0] references are rewritten.
   count = var.postgres_source == "external" ? 1 : 0
 
   identifier     = local.postgres_name
@@ -829,7 +829,7 @@ locals {
 # Jobs do not rerun when Secret data changes, so a Job that failed on a broken
 # (unencoded) URL would otherwise stay failed. SQL in the Job is idempotent.
 resource "terraform_data" "postgres_connection_url_revision" {
-  # ponytail: the same always-1 count as module.postgres, kept for its [0] address.
+  # Always 1, like module.postgres; the count keeps the [0] address in state.
   count = var.postgres_source == "external" ? 1 : 0
   input = sha256(local.postgres_connection_url)
 }

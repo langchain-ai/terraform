@@ -60,18 +60,18 @@ output "postgres_source" {
 }
 
 output "postgres_connection_url" {
-  description = "PostgreSQL connection URL (null if using in-cluster PostgreSQL)"
+  description = "PostgreSQL connection URL"
   value       = module.postgres[0].connection_url
   sensitive   = true
 }
 
 output "postgres_iam_connection_url" {
-  description = "Connection URL for IAM authentication — no password (null if using in-cluster PostgreSQL)"
+  description = "Connection URL for IAM authentication — no password"
   value       = module.postgres[0].iam_connection_url
 }
 
 output "postgres_security_group_id" {
-  description = "Security group ID attached to the RDS instance (null if using in-cluster PostgreSQL)"
+  description = "Security group ID attached to the RDS instance"
   value       = module.postgres[0].security_group_id
 }
 

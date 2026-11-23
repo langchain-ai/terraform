@@ -571,7 +571,8 @@ fi
 # PostgreSQL is always Amazon RDS from 0.18; SmithDB needs it outside the cluster.
 if [[ "$_ex_pg" == "in-cluster" ]]; then
   _red "  ERROR: postgres_source = \"in-cluster\" was removed in 0.18."
-  printf "  Move the database to RDS first: https://docs.langchain.com/langsmith/self-host-external-postgres\n"
+  printf "  Back up the database before you remove the line: the next apply points LangSmith\n"
+  printf "  at a new, empty RDS instance. See \"Move an in-cluster PostgreSQL to RDS\" in README.md.\n"
   exit 1
 fi
 
