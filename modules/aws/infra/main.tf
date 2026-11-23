@@ -1316,8 +1316,12 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 #     runs/delta/stream: /api/v1/platform/datasets
 #   - The same delta stream on shared links: /api/v1/platform/public
 #   - The prompt canvas: /api/v1/prompts/canvas, /api/v1/platform/prompt-canvas
-# The route exists on every Envoy Gateway install that has a domain, which
-# suits the playground and experiments because they are always on. The name
+# The route exists on every Envoy Gateway install, which suits the playground
+# and experiments because they are always on. Its hostname is the chart
+# route's: langsmith_domain when set, otherwise the ALB's DNS name, which
+# deploy.sh writes into config.hostname. A different hostname would put the
+# two routes in different Envoy virtual hosts, and the chart's "/" would keep
+# every request. The name
 # stays langsmith-fleet-streams, as on existing installs and in the Azure
 # module, so an upgrade updates the route in place. Behind Envoy these
 # requests are still bounded: the chart's nginx reads with a 300s timeout,
@@ -1334,7 +1338,7 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 # terraform plan succeeds even before the Gateway API CRDs are installed
 # (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
 resource "kubectl_manifest" "fleet_stream_httproute" {
-  count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
+  count = local.enable_envoy_gateway ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
@@ -1345,7 +1349,7 @@ resource "kubectl_manifest" "fleet_stream_httproute" {
     }
     spec = {
       parentRefs = [{ name = "langsmith-gateway" }]
-      hostnames  = [var.langsmith_domain]
+      hostnames  = [var.langsmith_domain != "" ? var.langsmith_domain : module.alb.alb_dns_name]
       rules = [{
         matches = [
           { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },

@@ -430,21 +430,27 @@ run "a_certificate_arn_plans_no_dns" {
 }
 
 # ── Long-running streams under Envoy Gateway ─────────────────────────────────
-# Envoy Gateway is the default controller, so a domain alone plans the
-# supplemental route that lifts the 15s timeout. Every stream prefix must be on
-# it with the timeout at 0s; without a domain or without Envoy Gateway there is
-# no route.
+# Envoy Gateway plans the supplemental route that lifts the 15s timeout on
+# every install. Every stream prefix must be on it with the timeout at 0s, and
+# its hostname must match the chart route's: the domain when set, the ALB's DNS
+# name otherwise. Without Envoy Gateway there is no route. Each run pins the
+# variables it depends on, so a local terraform.tfvars cannot flip it.
 
 run "envoy_gateway_streams_route_carries_the_playground_prefixes" {
   command = plan
 
   variables {
-    langsmith_domain = "plan-tests.example.com"
+    langsmith_domain     = "plan-tests.example.com"
+    enable_envoy_gateway = true
   }
 
   assert {
     condition     = length(kubectl_manifest.fleet_stream_httproute) == 1
     error_message = "Envoy Gateway with a domain did not plan the langsmith-fleet-streams route"
+  }
+  assert {
+    condition     = yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.hostnames == ["plan-tests.example.com"]
+    error_message = "langsmith-fleet-streams does not carry langsmith_domain as its only hostname"
   }
   assert {
     condition     = yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].timeouts.request == "0s"
@@ -467,12 +473,33 @@ run "envoy_gateway_streams_route_carries_the_playground_prefixes" {
   }
 }
 
-run "no_domain_plans_no_streams_route" {
+run "no_domain_streams_route_uses_the_alb_hostname" {
   command = plan
 
+  variables {
+    langsmith_domain     = ""
+    enable_envoy_gateway = true
+  }
+
+  # deploy.sh writes this DNS name into config.hostname when there is no
+  # domain; a mock provider leaves it unknown at plan time. The override
+  # generates every other computed attribute, so the listeners need a real ARN.
+  override_resource {
+    target          = module.alb.aws_lb.this
+    override_during = plan
+    values = {
+      arn      = "arn:aws:elasticloadbalancing:us-east-2:123456789012:loadbalancer/app/plantest-alb/0123456789abcdef"
+      dns_name = "plantest-alb-0123456789.us-east-2.elb.amazonaws.com"
+    }
+  }
+
   assert {
-    condition     = length(kubectl_manifest.fleet_stream_httproute) == 0
-    error_message = "langsmith-fleet-streams was planned with no langsmith_domain to put in its hostnames"
+    condition     = length(kubectl_manifest.fleet_stream_httproute) == 1
+    error_message = "Envoy Gateway with no langsmith_domain did not plan the langsmith-fleet-streams route"
+  }
+  assert {
+    condition     = yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.hostnames == ["plantest-alb-0123456789.us-east-2.elb.amazonaws.com"]
+    error_message = "with no langsmith_domain, langsmith-fleet-streams does not carry the ALB's DNS name, so it cannot share the chart route's virtual host"
   }
 }
 
@@ -482,6 +509,7 @@ run "nginx_ingress_plans_no_streams_route" {
   variables {
     langsmith_domain     = "plan-tests.example.com"
     enable_nginx_ingress = true
+    enable_envoy_gateway = false
   }
 
   assert {
