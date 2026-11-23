@@ -38,7 +38,7 @@ resource "azurerm_role_assignment" "langsmith_byoc_network" {
 
   scope              = each.value.vnet_id
   role_definition_id = azurerm_role_definition.langsmith_byoc_network[each.key].role_definition_resource_id
-  principal_id       = azuread_service_principal.langsmith.object_id
+  principal_id       = local.langsmith_service_principal_object_id
   principal_type     = "ServicePrincipal"
   description        = var.external_id
 }
