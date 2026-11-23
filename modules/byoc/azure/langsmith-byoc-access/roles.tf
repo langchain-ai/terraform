@@ -196,6 +196,8 @@ locals {
     "Microsoft.Network/routeTables/write",
     "Microsoft.Network/routeTables/join/action",
     "Microsoft.Network/routeTables/delete",
+    "Microsoft.Network/routeTables/routes/write",
+    "Microsoft.Network/routeTables/routes/delete",
   ]
 
   # With byo_iam, the customer creates and deletes the identities.

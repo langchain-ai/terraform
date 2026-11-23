@@ -8,9 +8,13 @@ locals {
   # LangSmith expects the name langsmith-<short>-identity.
   byo_iam_identity_shorts = ["aks", "cert-manager", "external-secrets", "workload", "postgres-setup", "smithdb", "sandbox", "deployment-metrics-collector"]
 
+  # host-backend manages dedicated deployment databases and CLI build push
+  # tokens as its own identity.
+  host_backend_data_planes = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments || dp.deployment_builds }
+
   byo_iam_identities = merge([
     for key, dp in local.byo_iam_data_planes : {
-      for short in local.byo_iam_identity_shorts : "${key}/${short}" => {
+      for short in concat(local.byo_iam_identity_shorts, contains(keys(local.host_backend_data_planes), key) ? ["host-backend"] : [], dp.deployment_builds ? ["deployment-builds"] : []) : "${key}/${short}" => {
         data_plane = key
         short      = short
         tags       = dp.tags
@@ -158,6 +162,53 @@ resource "azurerm_role_assignment" "metrics_collector_publisher" {
   principal_type       = "ServicePrincipal"
 }
 
+resource "azurerm_role_definition" "dedicated_deployments" {
+  for_each = { for key, dp in local.byo_iam_data_planes : key => dp if dp.dedicated_deployments }
+
+  name              = "langsmith-byoc-${each.key}-deployment-postgres-${random_string.key_vault_suffix[each.key].result}"
+  scope             = azurerm_resource_group.data_plane[each.key].id
+  description       = "Create, configure, resize, delete, and chart the PostgreSQL servers of LangSmith dedicated deployments."
+  assignable_scopes = [azurerm_resource_group.data_plane[each.key].id]
+
+  permissions {
+    actions = [
+      "Microsoft.DBforPostgreSQL/flexibleServers/read",
+      "Microsoft.DBforPostgreSQL/flexibleServers/write",
+      "Microsoft.DBforPostgreSQL/flexibleServers/delete",
+      "Microsoft.DBforPostgreSQL/flexibleServers/restart/action",
+      "Microsoft.DBforPostgreSQL/flexibleServers/configurations/read",
+      "Microsoft.DBforPostgreSQL/flexibleServers/configurations/write",
+      "Microsoft.Insights/metrics/read",
+      "Microsoft.Network/virtualNetworks/subnets/read",
+      "Microsoft.Network/virtualNetworks/subnets/join/action",
+      "Microsoft.Network/privateDnsZones/read",
+      "Microsoft.Network/privateDnsZones/join/action",
+    ]
+  }
+}
+
+resource "azurerm_role_assignment" "host_backend_dedicated_deployments" {
+  for_each = azurerm_role_definition.dedicated_deployments
+
+  scope              = azurerm_resource_group.data_plane[each.key].id
+  role_definition_id = each.value.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.data_plane["${each.key}/host-backend"].principal_id
+  principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "host_backend_observability" {
+  for_each = merge([
+    for key in keys(local.host_backend_data_planes) : {
+      for role in ["Log Analytics Reader", "Monitoring Data Reader"] : "${key}/${role}" => { data_plane = key, role = role }
+    }
+  ]...)
+
+  scope                = azurerm_resource_group.data_plane[each.value.data_plane].id
+  role_definition_name = each.value.role
+  principal_id         = azurerm_user_assigned_identity.data_plane["${each.value.data_plane}/host-backend"].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # LangSmith runs the cluster workloads. The cluster does not exist yet, so the
 # scope is the resource group.
 resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
@@ -165,7 +216,7 @@ resource "azurerm_role_assignment" "langsmith_aks_rbac_cluster_admin" {
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "Azure Kubernetes Service RBAC Cluster Admin"
-  principal_id         = azuread_service_principal.langsmith.object_id
+  principal_id         = local.langsmith_service_principal_object_id
   principal_type       = "ServicePrincipal"
   description          = var.external_id
 }

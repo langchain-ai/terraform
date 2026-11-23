@@ -85,7 +85,7 @@ resource "azurerm_role_assignment" "langsmith_byoc" {
 
   scope              = azurerm_resource_group.data_plane[each.key].id
   role_definition_id = azurerm_role_definition.langsmith_byoc[each.key].role_definition_resource_id
-  principal_id       = azuread_service_principal.langsmith.object_id
+  principal_id       = local.langsmith_service_principal_object_id
   principal_type     = "ServicePrincipal"
   description        = var.external_id
 }
@@ -97,7 +97,7 @@ resource "azurerm_role_assignment" "langsmith_user_access_administrator" {
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "User Access Administrator"
-  principal_id         = azuread_service_principal.langsmith.object_id
+  principal_id         = local.langsmith_service_principal_object_id
   principal_type       = "ServicePrincipal"
   description          = var.external_id
 }

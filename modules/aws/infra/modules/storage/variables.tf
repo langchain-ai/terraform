@@ -39,7 +39,7 @@ variable "versioning_enabled" {
 
 variable "s3_ttl_enabled" {
   type        = bool
-  description = "Enable lifecycle rules to automatically delete trace blobs after a set number of days."
+  description = "Enable lifecycle rules to automatically delete trace blobs (ttl_s/, ttl_l/) and redaction raw values (ttl_1d/). When false, no lifecycle configuration is created and you manage all rules yourself, including ttl_1d/."
   default     = true
 }
 
