@@ -1241,6 +1241,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for the small tier that every sizing profile runs, `m6a.8xlarge` for medium, `m6a.16xlarge` for large. See [SMITHDB.md](SMITHDB.md#scaling-up) |
+| `smithdb_cache_storage` | `network-disk` | no | SmithDB cache storage: `network-disk` (gp3 volumes) or `local-ssd` (the nodes' instance-store NVMe as RAID0, which needs a type such as `m6id.4xlarge`). See [SMITHDB.md](SMITHDB.md#local-ssd-cache) |
 | `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes, including TaskDB |
 | `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes; must exceed the minimum |
 | `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |

@@ -192,6 +192,18 @@ expect_requests() {
   [[ "$got" == "$cpu:$memory" ]] || { echo "$name: requests ${got:-none}, want $cpu:$memory (small tier)"; return 1; }
 }
 
+# A local-ssd cache: an emptyDir of the tier's cache size, no volume claim, and an
+# ephemeral-storage request and limit of the same size.
+expect_local_cache() {
+  local out="$1" name="$2" size="$3" m
+  m=$(manifest "$out" Deployment "$name")
+  [[ -n "$m" ]] || { echo "$name: no Deployment rendered"; return 1; }
+  grep -q "sizeLimit: \"\?$size\"\?" <<< "$m" || { echo "$name: no emptyDir cache of $size"; return 1; }
+  ! grep -q 'volumeClaimTemplate' <<< "$m" || { echo "$name: the cache still claims an EBS volume"; return 1; }
+  (( $(grep -c "ephemeral-storage: \"\?$size\"\?" <<< "$m") >= 2 )) ||
+    { echo "$name: no ephemeral-storage request and limit of $size"; return 1; }
+}
+
 failures=0
 while read -r profile queue ingest compaction; do
   [[ -n "$profile" ]] || continue
@@ -235,6 +247,42 @@ while read -r profile queue ingest compaction; do
     fi
   done
 done <<< "$EXPECTED"
+
+# smithdb_cache_storage = "local-ssd", with the values deploy.sh adds for the small
+# tier. The chart needs an ephemeral-storage limit for an emptyDir cache, so a
+# missing one fails the render. From chart 0.18 the unified layout is checked too.
+local_args=(-f "$EXAMPLES_DIR/langsmith-values.yaml" -f "$TEST_TMP/overrides.yaml"
+  -f "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" -f "$TEST_TMP/smithdb-overrides.yaml"
+  --set polly.enabled=false --set insights.enabled=false)
+local_specs="cluster:langsmith-smithdb-query:200Gi cluster:langsmith-smithdb-ingestion:100Gi cluster:langsmith-smithdb-compaction-worker:100Gi"
+helm show values "$chart" > "$TEST_TMP/chart-values.yaml"
+if grep -qE '^  topology:' "$TEST_TMP/chart-values.yaml"; then
+  local_specs="$local_specs unified:langsmith-smithdb:100Gi"
+fi
+for topology in cluster unified; do
+  [[ " $local_specs" == *" $topology:"* ]] || continue
+  VALUES_ARGS=("${local_args[@]}")
+  [[ "$topology" == cluster ]] || VALUES_ARGS+=(--set smithdb.topology=unified)
+  _smithdb_managed_values local-ssd
+  out="$TEST_TMP/smithdb-local-ssd-$topology.yaml"
+  problems=()
+  if ! helm template langsmith "$chart" --namespace langsmith "${VALUES_ARGS[@]}" > "$out" 2> "$out.err"; then
+    problems+=("the chart rejected the values: $(head -1 "$out.err")")
+  else
+    for spec in $local_specs; do
+      IFS=: read -r layout name size <<< "$spec"
+      [[ "$layout" == "$topology" ]] || continue
+      msg=$(expect_local_cache "$out" "$name" "$size") || problems+=("$msg")
+    done
+  fi
+  if (( ${#problems[@]} )); then
+    echo "FAIL: local-ssd cache, $topology layout"
+    printf '      %s\n' "${problems[@]}"
+    failures=$((failures + 1))
+  else
+    echo "PASS: local-ssd cache, $topology layout"
+  fi
+done
 
 # Feature overlays load after the base values, and some after the sizing file,
 # so a queue autoscaling key in one would override both without notice.

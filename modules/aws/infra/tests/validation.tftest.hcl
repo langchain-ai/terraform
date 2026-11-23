@@ -56,6 +56,7 @@ run "enums_reject_an_unlisted_value" {
     sizing_profile           = "small"
     smithdb_metastore_source = "import"
     smithdb_node_arch        = "x86_64"
+    smithdb_cache_storage    = "nvme"
     fleet_storage            = "rds"
     insights_storage         = "rds"
     polly_storage            = "rds"
@@ -72,6 +73,7 @@ run "enums_reject_an_unlisted_value" {
     var.sizing_profile,
     var.smithdb_metastore_source,
     var.smithdb_node_arch,
+    var.smithdb_cache_storage,
     var.fleet_storage,
     var.insights_storage,
     var.polly_storage,

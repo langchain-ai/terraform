@@ -126,7 +126,7 @@ pass "Parallelism: $_parallelism"
 
 # The migration pods run on the SmithDB nodes; see _smithdb_migration_disk_check.
 _root_gb=$(_parse_tfvar "smithdb_node_root_volume_size_gb") || _root_gb=100
-_smithdb_migration_disk_check "$_root_gb" || exit 1
+_smithdb_migration_disk_check "$_root_gb" "$(_parse_tfvar "smithdb_cache_storage" || true)" || exit 1
 # Same rule of thumb, solved for time, without headroom: the plain estimate for the pod count chosen.
 _hours=$(awk -v r="$_runs" -v p="$_parallelism" 'BEGIN { printf "%.1f", r / (5000000 * 8 * p) * 24 }')
 info "Estimated time for $_runs runs with $_parallelism pod(s): about $_hours hours (LangSmith rule of thumb; actual time varies with your data)"

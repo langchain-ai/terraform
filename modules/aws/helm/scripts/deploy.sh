@@ -642,10 +642,12 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   fi
   VALUES_ARGS+=(-f "$_smithdb_overrides")
   source "$INFRA_DIR/scripts/_smithdb-transition.sh"
-  _smithdb_managed_values
+  _smithdb_cache_storage=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage 2>/dev/null) || _smithdb_cache_storage=""
+  _smithdb_cache_storage=$(_smithdb_cache_mode "$_smithdb_cache_storage" "$(_parse_tfvar "smithdb_cache_storage" || true)") || exit 1
+  _smithdb_managed_values "$_smithdb_cache_storage"
   _smithdb_sizing_tier_check "${_sizing_file:-}" "$SMITHDB_RESOURCE_TIER" || exit 1
-  _smithdb_tier_fits "$SMITHDB_RESOURCE_TIER" || exit 1
-  echo "  ✔ SmithDB ${SMITHDB_RESOURCE_TIER} tier fits node-group-smithdb"
+  _smithdb_tier_fits "$SMITHDB_RESOURCE_TIER" "$_smithdb_cache_storage" || exit 1
+  echo "  ✔ SmithDB ${SMITHDB_RESOURCE_TIER} tier fits node-group-smithdb (${_smithdb_cache_storage} cache)"
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────

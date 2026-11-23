@@ -13,7 +13,8 @@ With `enable_smithdb = true` (the default), the infrastructure pass creates:
 - a dedicated PostgreSQL 18 RDS metastore, or wiring for dedicated BYO Postgres;
 - a dedicated S3 object-store bucket;
 - a SmithDB-specific IRSA role with bucket-scoped access;
-- a dedicated EKS managed node group and a gp3 cache StorageClass;
+- a dedicated EKS managed node group and a gp3 cache StorageClass (or caches on
+  the nodes' local NVMe, see [Local SSD cache](#local-ssd-cache));
 - the `smithdb-local` Kubernetes Secret containing metastore connection fields.
 
 The existing S3 Gateway VPC endpoint is associated with the VPC route tables,
@@ -43,6 +44,7 @@ or large tier, see [Scaling up](#scaling-up).
 | `smithdb_node_instance_type` | `m6a.4xlarge` | Fits the small tier. The medium tier needs `m6a.8xlarge`, the large tier `m6a.16xlarge`. |
 | `smithdb_node_min_count` | `2` | At least 1, for the Helm migration hooks. |
 | `smithdb_node_max_count` | `5` | Must exceed the minimum, so a rolling update has room. Raise it for medium and large. |
+| `smithdb_cache_storage` | `network-disk` | `local-ssd` puts the caches on the nodes' instance-store NVMe. See [Local SSD cache](#local-ssd-cache). |
 
 Set them in `infra/terraform.tfvars`. QuickStart asks for the two counts.
 LangSmith uses its own group, defaulting to `m6a.2xlarge`.
@@ -54,7 +56,7 @@ the next `make apply`, and each node has half the vCPU and memory. Set
 QuickStart already names the instance type.
 
 Nodes keep the 100 GiB boot-disk default. `smithdb.resourceTier` sets service
-resources and cache sizes. Caches use gp3
+resources and cache sizes. By default, caches use gp3
 (7,000 IOPS, 1,000 MiB/s), set through `smithdb.cache.storageClassName`.
 
 **Scheduling.** `make init-values` writes the node selector and tolerations for the
@@ -79,7 +81,9 @@ repeat the edit after each run. The SmithDB node group is still created.
 **Migration.** The migration Job (`make smithdb-migration-job-start`) runs on the SmithDB
 nodes. Each pod requests 100Gi of ephemeral storage, so raise
 `smithdb_node_root_volume_size_gb` and run `make apply` before you enable migration.
-The script warns when the boot disk is under 150 GiB.
+The script stops when the boot disk is under 150 GiB. With the
+[local SSD cache](#local-ssd-cache), ephemeral storage is on the instance store, and
+the boot disk size does not count.
 
 ## Deploy SmithDB services
 
@@ -193,6 +197,77 @@ without notice. Move the tier into `helm/values/langsmith-values-smithdb.yaml`. 
 chart 0.18 or later), one pod runs every role and the tier sizes it; the same node
 types fit it, and the check covers it too.
 
+## Local SSD cache
+
+By default, each SmithDB cache is a gp3 volume. With
+`smithdb_cache_storage = "local-ssd"`, the caches use the instance-store NVMe disks
+of the SmithDB nodes instead. Local NVMe has lower latency and higher throughput
+than gp3, and no EBS volume is created for each pod. The
+[SmithDB infrastructure guide](https://docs.langchain.com/langsmith/self-host-smithdb-infrastructure#local-ssd)
+recommends local SSD for production.
+
+The SmithDB node type must have instance store. Each type below has the vCPU and
+memory of the `m6a` type for the same tier, so the node counts in
+[Scaling up](#scaling-up) do not change.
+
+| Tier | Node type | Instance store | Largest cache |
+| --- | --- | --- | --- |
+| `small` | `m6id.4xlarge` | 1 × 950 GB | 200 GiB |
+| `medium` | `m6id.8xlarge` | 1 × 1,900 GB | 300 GiB (unified layout) |
+| `large` | `m6id.16xlarge` | 2 × 1,900 GB | 1,000 GiB |
+
+With `local-ssd`, the module does these steps:
+
+- Terraform adds a `nodeadm` `NodeConfig` to `node-group-smithdb`. It joins the
+  instance-store disks as RAID0 and moves the kubelet, containerd, and pod-log
+  directories onto the array, so the node reports the array as allocatable
+  `ephemeral-storage`. This is the configuration in
+  [Provision EKS managed node groups](https://docs.langchain.com/langsmith/self-host-smithdb-infrastructure#provision-eks-managed-node-groups).
+- The plan fails when `smithdb_node_instance_type` has no instance store.
+- `make deploy` writes each cache as an `emptyDir` named `cache`, with a
+  `sizeLimit` of the tier's cache size. It sets requests equal to limits for CPU,
+  memory, and `ephemeral-storage`, as in the guide's local SSD values. The tier is
+  the one in `langsmith-values-smithdb.yaml`. Other volumes on those services stay.
+- `make deploy` stops when no SmithDB node can hold the tier's largest pod, or its
+  largest cache in allocatable `ephemeral-storage`.
+- The gp3 StorageClass stays, so you can switch back.
+
+A local SSD cache lasts as long as its pod, as a gp3 cache volume does.
+
+To move the caches to the local SSD:
+
+1. In `infra/terraform.tfvars`, set the cache storage and the node type for your
+   tier:
+
+   ```hcl
+   smithdb_cache_storage      = "local-ssd"
+   smithdb_node_instance_type = "m6id.4xlarge"
+   ```
+
+2. Run `make apply`. EKS replaces the SmithDB nodes. The caches stay on gp3 until
+   the next step.
+3. Run `make deploy`. The caches move to the local SSD.
+
+`make deploy` uses the local SSD only when `terraform.tfvars` and the applied node
+group both have it. To move the caches back to gp3, keep this order:
+
+1. In `infra/terraform.tfvars`, set `smithdb_cache_storage = "network-disk"`, and
+   the `m6a` node type if you want it.
+2. Run `make deploy`. The caches move to gp3 volumes on the current nodes.
+3. Run `make apply`. EKS replaces the SmithDB nodes without the RAID0 array.
+
+Do step 2 before step 3. A node without the array cannot hold a local SSD cache,
+so the pods would stay Pending until the next deploy.
+
+To verify, check the allocatable ephemeral storage of each SmithDB node and the
+cache filesystem of a query pod:
+
+```sh
+kubectl get nodes -l langsmith-nodepool/smithdb=true \
+  -o custom-columns='NAME:.metadata.name,EPHEMERAL:.status.allocatable.ephemeral-storage'
+kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
+```
+
 ## Production notes
 
 - Keep RDS deletion protection, backups, and final snapshots enabled.
@@ -202,6 +277,7 @@ types fit it, and the check covers it too.
 - Do not place object-store credentials in Helm values. Pods use IRSA.
 - Verify SmithDB workloads schedule on the dedicated managed group and can
   reach PostgreSQL and S3.
+- For the best cache performance, use the [local SSD cache](#local-ssd-cache).
 
 ## Upgrading from 0.17
 

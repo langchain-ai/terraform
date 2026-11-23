@@ -147,7 +147,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 ### SmithDB
 - **What**: In-chart trace ingestion and query services
 - **Cloud dependencies**: Dedicated PostgreSQL 18, dedicated S3, and SmithDB-specific IRSA
-- **Scheduling**: Dedicated EKS managed node group for SmithDB services and TaskDB; gp3 cache volumes
+- **Scheduling**: Dedicated EKS managed node group for SmithDB services and TaskDB; gp3 cache volumes, or the nodes' local NVMe with `smithdb_cache_storage = "local-ssd"`
 - **Autoscaling**: query and ingestion use HPAs; the compaction worker uses KEDA on pending compaction jobs and CPU (1–10 replicas by default)
 - **Network**: Same-region S3 traffic uses the shared Gateway VPC endpoint
 - **Rollout**: on by default, with ingestion and query on and migration off; an install with traces in ClickHouse enables them in separate stages
