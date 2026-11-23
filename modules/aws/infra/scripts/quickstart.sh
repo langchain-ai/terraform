@@ -654,6 +654,8 @@ SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
 SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
 [[ "$SMITHDB_NODE_TYPE" == "null" ]] && SMITHDB_NODE_TYPE="m6a.4xlarge"
 SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
+SMITHDB_CACHE_STORAGE="$(_existing smithdb_cache_storage network-disk)"
+[[ "$SMITHDB_CACHE_STORAGE" == "null" ]] && SMITHDB_CACHE_STORAGE="network-disk"
 SMITHDB_NODE_MIN="$(_existing smithdb_node_min_count 2)"
 SMITHDB_NODE_MAX="$(_existing smithdb_node_max_count 5)"
 [[ "$SMITHDB_NODE_MAX" == "null" ]] && SMITHDB_NODE_MAX=5
@@ -1297,6 +1299,7 @@ _show_summary() {
   _summary_bool_row "SmithDB:" "$ENABLE_SMITHDB"
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
     _summary_row "  Node pool:" "${SMITHDB_NODE_TYPE}  min=$SMITHDB_NODE_MIN  max=$SMITHDB_NODE_MAX"
+    _summary_row "  Cache:" "$SMITHDB_CACHE_STORAGE"
     _summary_bool_row "  Ingestion:" "$SMITHDB_INGESTION"
     _summary_bool_row "  Migration:" "$SMITHDB_MIGRATION"
     _summary_bool_row "  Query:" "$SMITHDB_QUERY"
@@ -1462,6 +1465,7 @@ clickhouse_source = "${CH_SOURCE}"
 enable_smithdb                           = ${ENABLE_SMITHDB}
 smithdb_transition_mode                  = ${SMITHDB_TRANSITION}
 smithdb_node_instance_type               = ${SMITHDB_NODE_TYPE_HCL}
+smithdb_cache_storage                    = "${SMITHDB_CACHE_STORAGE}"
 smithdb_node_min_count                   = ${SMITHDB_NODE_MIN}
 smithdb_node_max_count                   = ${SMITHDB_NODE_MAX}
 smithdb_node_root_volume_size_gb          = ${SMITHDB_NODE_DISK}

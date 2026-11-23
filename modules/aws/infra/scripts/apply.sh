@@ -63,8 +63,9 @@ if [[ "$_cleanup" == true ]]; then
   _namespace=$(jq -er '.variables.langsmith_namespace.value' "$_tmp/plan.json")
   _release=$(jq -er '.variables.langsmith_release_name.value' "$_tmp/plan.json")
   _cache=$(jq -er '.planned_values.outputs.smithdb_cache_storage_class_name.value' "$_tmp/plan.json")
+  _cache_storage=$(jq -er '.planned_values.outputs.smithdb_cache_storage.value // "network-disk"' "$_tmp/plan.json")
   export KUBECONFIG="$_tmp/kubeconfig"
   aws eks update-kubeconfig --region "$_region" --name "$_cluster" --kubeconfig "$KUBECONFIG" >/dev/null
-  _smithdb_cleanup "$_namespace" "$_release" "$_region" "$_cache" "$_cluster"
+  _smithdb_cleanup "$_namespace" "$_release" "$_region" "$_cache" "$_cluster" "$_cache_storage"
 fi
 terraform -chdir="$INFRA_DIR" apply "$_plan"

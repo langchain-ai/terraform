@@ -496,6 +496,85 @@ run "smithdb_node_type_and_counts_are_plain_inputs" {
   }
 }
 
+# The cache mode changes only the SmithDB node group and the cache values. The
+# network-disk default adds no node user data and reads no instance type.
+run "smithdb_cache_defaults_to_network_disk" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  assert {
+    condition = (
+      output.smithdb_cache_storage == "network-disk" &&
+      length(data.aws_ec2_instance_type.smithdb) == 0 &&
+      length(try(module.eks.eks_managed_node_group_inputs["smithdb"].cloudinit_pre_nodeadm, [])) == 0 &&
+      length(kubernetes_storage_class_v1.smithdb_cache) == 1
+    )
+    error_message = "the network-disk default must add no SmithDB node user data, read no instance type, and keep the gp3 StorageClass"
+  }
+}
+
+run "smithdb_local_ssd_joins_the_instance_store_as_raid0" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    smithdb_cache_storage      = "local-ssd"
+    smithdb_node_instance_type = "m6id.4xlarge"
+  }
+
+  override_data {
+    target = data.aws_ec2_instance_type.smithdb
+    values = { instance_storage_supported = true, total_instance_storage = 950 }
+  }
+
+  assert {
+    condition = (
+      output.smithdb_cache_storage == "local-ssd" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6id.4xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].cloudinit_pre_nodeadm[0].content_type == "application/node.eks.aws" &&
+      strcontains(module.eks.eks_managed_node_group_inputs["smithdb"].cloudinit_pre_nodeadm[0].content, "strategy: RAID0")
+    )
+    error_message = "local-ssd must give the SmithDB node group a nodeadm NodeConfig that joins the instance store as RAID0"
+  }
+  assert {
+    condition     = length(kubernetes_storage_class_v1.smithdb_cache) == 1 && length(try(module.eks.eks_managed_node_group_inputs["default"].cloudinit_pre_nodeadm, [])) == 0
+    error_message = "local-ssd must change only the SmithDB node group: the StorageClass stays and the LangSmith group gets no user data"
+  }
+}
+
+run "smithdb_local_ssd_rejects_a_type_without_instance_store" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    smithdb_cache_storage = "local-ssd"
+  }
+
+  override_data {
+    target = data.aws_ec2_instance_type.smithdb
+    values = { instance_storage_supported = false }
+  }
+
+  expect_failures = [data.aws_ec2_instance_type.smithdb]
+}
+
+run "smithdb_local_ssd_without_smithdb_reads_nothing" {
+  command = plan
+
+  variables {
+    enable_smithdb        = false
+    smithdb_cache_storage = "local-ssd"
+  }
+
+  assert {
+    condition     = length(data.aws_ec2_instance_type.smithdb) == 0 && output.smithdb_cache_storage == null
+    error_message = "with SmithDB off, local-ssd must not read an instance type or report a cache mode"
+  }
+}
+
 run "smithdb_transition_retains_both_old_pools_and_adds_managed_capacity" {
   command = plan
 

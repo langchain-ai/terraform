@@ -17,8 +17,11 @@ _smithdb_pool_scheduling() {
 # Each migration pod requests 100Gi of ephemeral storage, and the pods run on the
 # SmithDB nodes. A node with the default 100 GiB boot disk cannot hold one, so the
 # pods would stay Pending and the deploy would hang. Stop before anything is written.
+# With the local-ssd cache, ephemeral storage is on the instance store, so the boot
+# disk size does not count.
 _smithdb_migration_disk_check() {
-  local gb="$1"
+  local gb="$1" cache_storage="${2:-network-disk}"
+  [[ "$cache_storage" != "local-ssd" ]] || return 0
   [[ "$gb" =~ ^[0-9]+$ ]] || return 0
   (( gb >= 150 )) && return 0
   echo "ERROR: each migration pod requests 100Gi of ephemeral storage, and the SmithDB nodes have a ${gb} GiB boot disk, so the pods would stay Pending." >&2
@@ -67,12 +70,13 @@ _smithdb_query_cutover_check() {
 # migration and TaskDB keep their own sizing. The tier is smithdb.resourceTier from
 # the values files (langsmith-values-smithdb.yaml sets small), and small when none
 # does. The resolved tier is left in SMITHDB_RESOURCE_TIER for _smithdb_tier_fits.
+# <cache_storage> is the mode from _smithdb_cache_mode, network-disk by default.
 _smithdb_managed_values() {
-  local path values setting tier=small
+  local cache_storage="${1:-network-disk}" path values setting tier=small
   for path in query mutations runRules statsQuery ingestion compactionWorker compaction clusterManager; do
     VALUES_ARGS+=(--set-json "smithdb.$path.deployment.resources={}")
   done
-  values=$(_smithdb_cache_values "$tier" "${VALUES_ARGS[@]}") || return 1
+  values=$(_smithdb_cache_values "$tier" "${VALUES_ARGS[@]}" --set-string "cacheStorage=$cache_storage") || return 1
   # deploy.sh reads the tier after this returns.
   # shellcheck disable=SC2034
   SMITHDB_RESOURCE_TIER=$(jq -er '."smithdb.resourceTier"' <<< "$values") || return 1
@@ -81,32 +85,66 @@ _smithdb_managed_values() {
   done < <(jq -r 'to_entries[] | "\(.key)=\(.value | tojson)"' <<< "$values")
 }
 
+# Prints the cache mode for this deploy. <applied> is the smithdb_cache_storage
+# output and <wanted> the terraform.tfvars value; either may be empty. The local-ssd
+# cache needs nodes that have the RAID0 array, so it is used only when both say
+# local-ssd. That makes make deploy, make apply, make deploy safe for a switch in
+# either direction.
+_smithdb_cache_mode() {
+  local applied="${1:-network-disk}" wanted="${2:-network-disk}"
+  case "$applied" in
+    network-disk|local-ssd) ;;
+    *) echo "ERROR: unknown smithdb_cache_storage output \"$applied\"." >&2; return 1 ;;
+  esac
+  if [[ "$applied" == local-ssd && "$wanted" == local-ssd ]]; then
+    echo local-ssd
+    return 0
+  fi
+  if [[ "$wanted" == local-ssd ]]; then
+    echo "NOTE: the SmithDB caches stay on EBS until make apply adds the local SSD. Then run make deploy again." >&2
+  elif [[ "$applied" == local-ssd ]]; then
+    echo "NOTE: the SmithDB caches move to EBS now. Run make apply next to roll the SmithDB nodes." >&2
+  fi
+  echo network-disk
+}
+
 # The tier comes from the Helm values and the node size from Terraform, so only a
 # deploy can compare them. Each size is the tier's largest pod in the chart's tier
 # table, over both layouts (cluster, and from chart 0.18 unified), so the check
-# holds for either smithdb.topology. Returns 1, with the reason, when no SmithDB
-# node can hold that pod.
+# holds for either smithdb.topology. With the local-ssd cache, the largest cache
+# must also fit the node's allocatable ephemeral-storage. Returns 1, with the
+# reason, when no SmithDB node can hold that pod.
 _smithdb_tier_fits() {
-  local tier="$1" cpu mem nodes
+  local tier="$1" cache_storage="${2:-network-disk}" cpu mem disk=0 nodes need
   case "$tier" in
     small) cpu=8 mem=16 ;;
     medium) cpu=28 mem=64 ;;
     large) cpu=56 mem=150 ;;
     *) return 0 ;;
   esac
+  if [[ "$cache_storage" == "local-ssd" ]]; then
+    case "$tier" in
+      small) disk=200 ;;
+      medium) disk=300 ;;
+      large) disk=1000 ;;
+    esac
+  fi
   nodes=$(kubectl get nodes -l langsmith-nodepool/smithdb=true -o json) || {
     echo "ERROR: could not list the SmithDB nodes, so the SmithDB tier check cannot run." >&2
     return 1
   }
-  jq -e --argjson cpu "$cpu" --argjson mem "$mem" '
+  jq -e --argjson cpu "$cpu" --argjson mem "$mem" --argjson disk "$disk" '
     def cores: if endswith("m") then (rtrimstr("m") | tonumber / 1000) else tonumber end;
     def gib: if endswith("Ki") then (rtrimstr("Ki") | tonumber / 1048576)
       elif endswith("Mi") then (rtrimstr("Mi") | tonumber / 1024)
       elif endswith("Gi") then (rtrimstr("Gi") | tonumber)
       else (tonumber / 1073741824) end;
-    any(.items[]; (.status.allocatable.cpu | cores) >= $cpu and (.status.allocatable.memory | gib) >= $mem)
+    any(.items[]; (.status.allocatable.cpu | cores) >= $cpu and (.status.allocatable.memory | gib) >= $mem and
+      ($disk == 0 or ((.status.allocatable["ephemeral-storage"] // "0") | gib) >= $disk))
   ' <<< "$nodes" >/dev/null && return 0
-  echo "ERROR: smithdb.resourceTier $tier needs a SmithDB node with $cpu vCPU and $mem GiB allocatable, and node-group-smithdb has none." >&2
+  need="$cpu vCPU and $mem GiB"
+  [[ "$disk" == 0 ]] || need="$cpu vCPU, $mem GiB, and $disk GiB of ephemeral-storage"
+  echo "ERROR: smithdb.resourceTier $tier needs a SmithDB node with $need allocatable, and node-group-smithdb has none." >&2
   echo "       Set smithdb_node_instance_type for that tier in terraform.tfvars and run make apply," >&2
   echo "       or set a smaller tier in langsmith-values-smithdb.yaml. See SMITHDB.md, \"Scaling up\"." >&2
   return 1
@@ -131,6 +169,10 @@ _smithdb_sizing_tier_check() {
 
 # Use Helm's YAML merge to replace only cache overrides, preserving unrelated
 # volumes and mounts. This also handles existing values files during transition.
+# The network-disk cache drops every cache volume, so the chart generates its gp3
+# claim. The local-ssd cache (--set-string cacheStorage=local-ssd) replaces it with
+# an emptyDir named cache and sets the tier's CPU and memory with a matching
+# ephemeral-storage, which the chart needs for an emptyDir cache.
 _smithdb_cache_values() (
   set -euo pipefail
   local chart tier="$1"
@@ -140,8 +182,36 @@ _smithdb_cache_values() (
   mkdir "$chart/templates"
   printf 'apiVersion: v2\nname: smithdb-cache\nversion: 0.1.0\n' > "$chart/Chart.yaml"
   cat > "$chart/templates/values.yaml" <<'TEMPLATE'
-{{- $settings := dict "smithdb.resourceTier" (default .Values.fallbackTier .Values.smithdb.resourceTier) -}}
-{{- range $name := list "query" "mutations" "runRules" "statsQuery" "ingestion" "compactionWorker" -}}
+{{- $tier := default .Values.fallbackTier .Values.smithdb.resourceTier -}}
+{{- $settings := dict "smithdb.resourceTier" $tier -}}
+{{- $localSsd := eq (default "network-disk" .Values.cacheStorage) "local-ssd" -}}
+{{- /* CPU, memory, and cache per replica of the disk-using components, copied
+       from the chart's tier table (the same in chart 0.17.61 and 0.18.1). The
+       dedicated query services use the query sizes. */ -}}
+{{- $sizes := dict
+  "small" (dict
+    "query" (list "4" "8Gi" "200Gi")
+    "ingestion" (list "4" "8Gi" "100Gi")
+    "compactionWorker" (list "8" "16Gi" "100Gi")
+    "unified" (list "4" "16Gi" "100Gi"))
+  "medium" (dict
+    "query" (list "28" "48Gi" "200Gi")
+    "ingestion" (list "16" "32Gi" "100Gi")
+    "compactionWorker" (list "16" "32Gi" "100Gi")
+    "unified" (list "16" "64Gi" "300Gi"))
+  "large" (dict
+    "query" (list "28" "50Gi" "1000Gi")
+    "ingestion" (list "56" "150Gi" "1000Gi")
+    "compactionWorker" (list "28" "50Gi" "300Gi")
+    "unified" (list "32" "128Gi" "1000Gi")) -}}
+{{- if and $localSsd (not (hasKey $sizes $tier)) -}}
+  {{- fail (printf "the local-ssd cache has no sizes for smithdb.resourceTier %q" $tier) -}}
+{{- end -}}
+{{- $components := list "query" "mutations" "runRules" "statsQuery" "ingestion" "compactionWorker" -}}
+{{- if $localSsd -}}
+  {{- $components = append $components "unified" -}}
+{{- end -}}
+{{- range $name := $components -}}
   {{- $deployment := default (dict) (dig $name "deployment" (dict) $.Values.smithdb) -}}
   {{- $volumes := list -}}
   {{- range $deployment.volumes -}}
@@ -149,15 +219,24 @@ _smithdb_cache_values() (
       {{- $volumes = append $volumes . -}}
     {{- end -}}
   {{- end -}}
+  {{- if $localSsd -}}
+    {{- $size := index (index $sizes $tier) (ternary "query" $name (has $name (list "mutations" "runRules" "statsQuery"))) -}}
+    {{- $volumes = append $volumes (dict "name" "cache" "emptyDir" (dict "sizeLimit" (index $size 2))) -}}
+    {{- $resources := dict "cpu" (index $size 0) "memory" (index $size 1) "ephemeral-storage" (index $size 2) -}}
+    {{- $_ := set $settings (printf "smithdb.%s.deployment.resources" $name) (dict "requests" $resources "limits" $resources) -}}
+  {{- end -}}
   {{- $_ := set $settings (printf "smithdb.%s.deployment.volumes" $name) $volumes -}}
-  {{- with $deployment.volumeMounts -}}
-    {{- range . -}}
-      {{- if has .name (list "cache" "local-ssd-storage") -}}
-        {{- $_ := set . "name" "cache" -}}
-        {{- $_ := set . "mountPath" (ternary "/tmp" "/data" (eq $name "compactionWorker")) -}}
+  {{- /* The unified pod mounts the cache twice (/data and /tmp), so its mounts stay as the chart sets them. */ -}}
+  {{- if ne $name "unified" -}}
+    {{- with $deployment.volumeMounts -}}
+      {{- range . -}}
+        {{- if has .name (list "cache" "local-ssd-storage") -}}
+          {{- $_ := set . "name" "cache" -}}
+          {{- $_ := set . "mountPath" (ternary "/tmp" "/data" (eq $name "compactionWorker")) -}}
+        {{- end -}}
       {{- end -}}
+      {{- $_ := set $settings (printf "smithdb.%s.deployment.volumeMounts" $name) . -}}
     {{- end -}}
-    {{- $_ := set $settings (printf "smithdb.%s.deployment.volumeMounts" $name) . -}}
   {{- end -}}
 {{- end -}}
 {{- toJson (dict "apiVersion" "v1" "kind" "ConfigMap" "metadata" (dict "name" "smithdb-cache") "data" (dict "values" (toJson $settings))) -}}
@@ -174,8 +253,9 @@ _smithdb_old_instances() {
     --query 'Reservations[].Instances[].InstanceId' --output text
 }
 
+# <cache_storage> is the planned smithdb_cache_storage output, network-disk by default.
 _smithdb_cleanup() {
-  local namespace="$1" release="$2" region="$3" cache_class="$4" cluster="$5"
+  local namespace="$1" release="$2" region="$3" cache_class="$4" cluster="$5" cache_storage="${6:-network-disk}"
   local workloads nodes claims pods pools node_names claim_names instance_ids ec2_ids
   workloads=$(kubectl get deployments,statefulsets -n "$namespace" -l "app.kubernetes.io/instance=$release" -o json) || return 1
   # Check the complete rollout, including TaskDB. A ready old replica alone
@@ -198,12 +278,19 @@ _smithdb_cleanup() {
     echo "Set smithdb_transition_mode = true, make apply, make init-values, then make deploy." >&2
     return 1
   fi
-  if ! jq -e --arg sc "$cache_class" '[.items[] |
+  # With local-ssd, the caches stay on EBS until the nodes that have the RAID0
+  # array run, so both kinds pass.
+  if ! jq -e --arg sc "$cache_class" --arg mode "$cache_storage" '[.items[] |
       select(.spec.template.spec.nodeSelector["langsmith-nodepool/smithdb"] == "true") |
       .spec.template.spec.volumes[]? | select(.name == "cache")] |
-      length > 0 and all(.[]; .ephemeral.volumeClaimTemplate.spec.storageClassName == $sc)' <<< "$workloads" >/dev/null; then
-    echo "ERROR: SmithDB caches must use the generated EBS StorageClass." >&2
-    echo "Run make deploy to apply the tier resources and EBS caches." >&2
+      length > 0 and all(.[]; .ephemeral.volumeClaimTemplate.spec.storageClassName == $sc or
+        ($mode == "local-ssd" and .emptyDir != null))' <<< "$workloads" >/dev/null; then
+    if [[ "$cache_storage" == "local-ssd" ]]; then
+      echo "ERROR: SmithDB caches must use the generated EBS StorageClass or an emptyDir on the local SSD." >&2
+    else
+      echo "ERROR: SmithDB caches must use the generated EBS StorageClass." >&2
+    fi
+    echo "Run make deploy to apply the tier resources and caches." >&2
     return 1
   fi
 

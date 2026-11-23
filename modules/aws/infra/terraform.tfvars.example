@@ -873,8 +873,11 @@ enable_bedrock_access = false
 # Every sizing_profile runs the SmithDB small tier, and these defaults fit it. The
 # medium tier needs m6a.8xlarge nodes and the large tier m6a.16xlarge, with higher
 # counts: see ../SMITHDB.md, "Scaling up". Caches are gp3 volumes (7,000 IOPS,
-# 1,000 MiB/s).
+# 1,000 MiB/s). "local-ssd" puts them on the nodes' instance-store NVMe instead,
+# which needs a type with instance store, such as m6id.4xlarge for the small tier:
+# see ../SMITHDB.md, "Local SSD cache".
 # smithdb_node_instance_type = "m6a.4xlarge"
+# smithdb_cache_storage      = "network-disk"
 # smithdb_node_min_count     = 2
 # smithdb_node_max_count     = 5
 # smithdb_node_root_volume_size_gb = 100

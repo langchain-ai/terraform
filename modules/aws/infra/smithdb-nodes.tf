@@ -2,7 +2,27 @@
 # fit the small tier, which every sizing profile runs; ../SMITHDB.md covers medium
 # and large.
 locals {
-  smithdb_node_group = {
+  smithdb_local_ssd = var.enable_smithdb && var.smithdb_cache_storage == "local-ssd"
+
+  # nodeadm joins the instance-store NVMe disks as RAID0 and moves the kubelet,
+  # containerd, and pod-log directories onto it, so emptyDir caches use it and the
+  # node reports it as allocatable ephemeral-storage. The network-disk group gets no
+  # extra user data, which keeps its launch template unchanged.
+  smithdb_local_ssd_nodeadm = local.smithdb_local_ssd ? {
+    cloudinit_pre_nodeadm = [{
+      content_type = "application/node.eks.aws"
+      content      = <<-EOT
+        apiVersion: node.eks.aws/v1alpha1
+        kind: NodeConfig
+        spec:
+          instance:
+            localStorage:
+              strategy: RAID0
+      EOT
+    }]
+  } : {}
+
+  smithdb_node_group = merge({
     name           = "node-group-smithdb"
     instance_types = [var.smithdb_node_instance_type]
     min_size       = var.smithdb_node_min_count
@@ -23,7 +43,38 @@ locals {
         }
       }
     }
+  }, local.smithdb_local_ssd_nodeadm)
+}
+
+variable "smithdb_cache_storage" {
+  type        = string
+  description = "SmithDB cache storage. \"network-disk\" (default): a gp3 volume per pod from the smithdb-cache StorageClass. \"local-ssd\": an emptyDir on the nodes' instance-store NVMe, which nodeadm joins as RAID0; it needs a smithdb_node_instance_type with instance store, such as m6id.4xlarge. A change replaces the SmithDB nodes, so follow the order in SMITHDB.md, \"Local SSD cache\"."
+  default     = "network-disk"
+  nullable    = false
+
+  validation {
+    condition     = contains(["network-disk", "local-ssd"], var.smithdb_cache_storage)
+    error_message = "smithdb_cache_storage must be \"network-disk\" or \"local-ssd\"."
   }
+}
+
+# Read only in local-ssd mode: a node type without instance store would put the
+# caches on the boot disk.
+data "aws_ec2_instance_type" "smithdb" {
+  count         = local.smithdb_local_ssd ? 1 : 0
+  instance_type = var.smithdb_node_instance_type
+
+  lifecycle {
+    postcondition {
+      condition     = self.instance_storage_supported
+      error_message = "smithdb_cache_storage = \"local-ssd\" needs a smithdb_node_instance_type with instance-store NVMe, such as m6id.4xlarge for the small tier. ${var.smithdb_node_instance_type} has none."
+    }
+  }
+}
+
+output "smithdb_cache_storage" {
+  description = "SmithDB cache storage: network-disk or local-ssd (null when enable_smithdb = false). deploy.sh writes the matching Helm cache values."
+  value       = var.enable_smithdb ? var.smithdb_cache_storage : null
 }
 
 variable "smithdb_node_instance_type" {
