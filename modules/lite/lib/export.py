@@ -22,6 +22,7 @@ Standard library only.
 import json
 import os
 import sys
+from pathlib import Path
 
 
 def helm_line(name: str, release: dict, base: str) -> str:
@@ -37,8 +38,8 @@ def helm_line(name: str, release: dict, base: str) -> str:
 
 def main() -> int:
     out, values_path, export_path = sys.argv[1:4]
-    releases = json.load(open(values_path))
-    export = json.load(open(export_path))
+    releases = json.loads(Path(values_path).read_text())
+    export = json.loads(Path(export_path).read_text())
     os.makedirs(os.path.join(out, "values"), exist_ok=True)
 
     lines = [

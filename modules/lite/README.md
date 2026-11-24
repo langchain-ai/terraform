@@ -97,7 +97,7 @@ every pod, volume and cost, and how each follows from the load and the TTLs.
 | Path | Holds |
 |:--|:--|
 | `Makefile`, `bin/lite` | the front door, and the one command behind it |
-| `lib/` | what the verbs do (`deploy.sh`, `operate.sh`, `prove.sh`, `develop.sh`, `versions.sh`), shared plumbing (`common.sh`, `ui.sh`), and their Python (`settings.py`: the questions; `summary.py`: the plan; `export.py`; `prove.py`: the key for verify and soak) |
+| `lib/` | what the verbs do (`deploy.sh`, `operate.sh`, `prove.sh`, `develop.sh`, `versions.sh`), shared plumbing (`common.sh`, `ui.sh`), and their Python (`settings.py`: the questions; `summary.py`: the plan; `export.py`; `prove.py`: the key for verify and soak), its tests (`tests/`) and its gate (`quality.py`: complexity under 15, CRAP under 30) |
 | `box/` | what runs on the box: `checks.sh` (also `make preflight`) and `install.sh` |
 | `infra/` | Terraform: `sizing.tf` with `sizes.yaml`, `releases.tf` and `values.tf`, `health.yaml` (the alerts and the health dashboard), `secrets.tf`, `bundle.tf`, `pins.yaml`, `hosts/aws/`, `tests/` |
 | `../baremetal/charts/datastores` | the Postgres, Redis and RustFS chart, shared with the bare-metal module |

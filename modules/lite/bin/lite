@@ -49,7 +49,7 @@ Inspect and change|secrets|change the license key or the tunnel token (infra/.se
 |values|every release's chart and values, as the box gets them
 |pins|each pinned chart line against its live repo
 |render|render every release through its real chart (network)
-|check|offline, as CI: fmt, validate, tflint, plan tests, shellcheck
+|check|offline: fmt, validate, tflint, plan tests, shellcheck, Python tests and quality
 |tf|any terraform command in infra/: make tf ARGS="state list"
 EOF
   printf '\n  %sSettings on the command line are saved in infra/terraform.tfvars: make up box=m ssh_host=lab1.%s\n' "$DIM" "$OFF"

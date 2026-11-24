@@ -68,31 +68,18 @@ render_one() {
 
 # Offline, as CI runs it: the repo's own gates for this module, and this folder's shell.
 cmd_check() {
-  need terraform python3 shellcheck
+  need terraform python3 shellcheck uv
   heading "check" "offline, as CI runs it"
   start_log "$BUILD/logs"
   run fmt "terraform fmt" terraform -chdir="$INFRA" fmt -check -recursive
   run validate "validate and tflint (scripts/check.sh)" bash "$LITE/../../scripts/check.sh" modules/lite
   run tests "the plan tests (scripts/plan-tests.sh)" bash "$LITE/../../scripts/plan-tests.sh" modules/lite
   run shell "shellcheck" shellcheck -S style -x "$LITE/bin/lite" "$LITE"/lib/*.sh "$LITE"/box/*.sh
-  run python "every Python file parses" python3 -c 'import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' "$LITE"/lib/*.py
-  run settings "the questions refuse a missing ssh_host" check_settings
   run iam "the AWS policy covers every resource the AWS host makes" check_iam_policy
+  run quality "Python: tests, cc < 15, crap < 30, no dead code" check_python
   printf '\n'
 }
 
-# Without a terminal nothing is asked: a missing required setting must fail, and one given as NAME=value
-# must be saved. A fleet runs make up this way, and a prompt there would hang it.
-check_settings() {
-  local dir
-  dir="$(mktemp -d)"
-  ! python3 "$LITE/lib/settings.py" "$dir/t.tfvars" </dev/null || return 1
-  ssh_host=lab1 box=m python3 "$LITE/lib/settings.py" "$dir/t.tfvars" </dev/null || return 1
-  grep -q '^box = "m"$' "$dir/t.tfvars" && grep -q '^ssh_host = "lab1"$' "$dir/t.tfvars"
-  local ok=$?
-  rm -rf "$dir"
-  return "$ok"
-}
 
 # infra/hosts/aws/iam-policy.json has one statement a resource type, its Sid the type in CamelCase
 # (aws_ebs_volume -> AwsEbsVolume): a resource added to the host without its permissions would fail
@@ -107,4 +94,21 @@ missing = sorted(t for t in types if "".join(w.capitalize() for w in t.split("_"
 print("every resource type has its statement" if not missing else "no statement for: " + ", ".join(missing))
 sys.exit(1 if missing else 0)
 PY
+}
+
+# lib/'s tests under coverage, then each function's complexity and CRAP (lib/quality.py) and vulture's
+# dead code. radon, coverage and vulture come from uv's cache, never installed into the system.
+check_python() {
+  local q="$BUILD/quality" tools=(uv run --quiet --no-project --with radon --with coverage --with vulture)
+  mkdir -p "$q"
+  # Every tool from lib/, so coverage and radon name each file alike; run from two places, every file
+  # read as untested.
+  (
+    cd "$LITE/lib" || exit 1
+    PYTHONPATH=. "${tools[@]}" coverage run --data-file="$q/.coverage" --source=. --omit='tests/*' -m unittest discover -s tests -q &&
+      "${tools[@]}" coverage json --data-file="$q/.coverage" -o "$q/coverage.json" -q &&
+      "${tools[@]}" radon cc -j -e 'tests/*' . >"$q/radon.json" &&
+      "${tools[@]}" vulture . --exclude tests --min-confidence 80 &&
+      python3 quality.py "$q/radon.json" "$q/coverage.json"
+  )
 }

@@ -69,8 +69,8 @@ on the box before it changes anything:
 | RHEL, Rocky, Alma, Fedora, Amazon Linux | untested; with SELinux enforcing, k3s needs `k3s-selinux` |
 | Alpine, or anything without systemd | not supported |
 
-A system becomes tested when `make up`, `make verify` and `make soak` have passed on it, and this table
-says so with the date.
+A system counts as tested once `make up`, `make verify` and `make soak` have passed on it; its row then
+carries the date.
 
 ## Reaching it
 
@@ -100,7 +100,9 @@ An application traces to LangSmith with the SDK's usual settings: `LANGSMITH_END
 address above with `/api/v1` (for `localhost`, `http://localhost:8080/api/v1`, reachable only while
 `make access` runs on the same machine), `LANGSMITH_API_KEY` a key made in LangSmith (Settings, API Keys),
 and `LANGSMITH_TRACING=true`. A trace then shows in its project within seconds; `make verify` checks the
-same path end to end.
+same path end to end. Reading traces back from SmithDB takes the SDK's newer query methods (Python
+`langsmith` 0.10.15 or later, TypeScript 0.8.9): they call LangSmith's `/v2` endpoints from the same
+`/api/v1` address ([the SmithDB SDK migration](https://docs.langchain.com/langsmith/smithdb-sdk-migration)).
 
 ### A real endpoint: DNS, certificates, SSO
 

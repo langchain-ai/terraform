@@ -102,7 +102,7 @@ what it decides.
 | Read at the installed release, never copied | Decided here, as data |
 |:--|:--|
 | Each chart's exact version, resolved from its pinned line (`infra/pins.yaml`) before every plan; a plan without it is refused | The chart lines, and k3s's exact version |
-| Mission Control's image tag: the chart's appVersion | Which products run: tracing only (`infra/values.tf`) |
+| Mission Control's image tag: the chart's `appVersion` | Which products run: tracing only (`infra/values.tf`) |
 | LangSmith's metrics ports: the chart's `prometheus-values.yaml`, applied as a second values layer | Every pod's and volume's size (`infra/sizes.yaml`, SIZING.md) |
 | The official dashboard, from the chart's repo at the release tag | The stores' layout: one Postgres, one Redis, one RustFS |
 | k3s's installer, from its release's own tag | Retention, payload and access settings (`infra/variables.tf`) |
