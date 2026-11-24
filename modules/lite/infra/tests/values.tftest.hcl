@@ -74,6 +74,14 @@ run "every_langsmith_service_runs_the_one_replica_the_plan_sized" {
   }
 }
 
+run "the_metastore_migration_retries" {
+  command = plan
+  assert {
+    condition     = output.values.langsmith.values.smithdb.metastoreMigration.job.backoffLimit == 4
+    error_message = "the metastore migration should retry, not fail on its first refused connection."
+  }
+}
+
 run "payload_and_redis_knobs_reach_the_chart" {
   command = plan
   variables {

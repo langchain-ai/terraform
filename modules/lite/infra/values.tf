@@ -96,6 +96,9 @@ locals {
         enabled   = true
         topology  = "unified"
         langsmith = { ingestion = { enabled = true }, query = { enabled = true } }
+        # Retried, not one-shot: its first connection to Postgres, milliseconds after it starts during the
+        # install, was refused on every attempt on magus (2026-11-24) while Postgres took others.
+        metastoreMigration = { job = { backoffLimit = 4 } }
         config = {
           existingSecretName = "smithdb-config"
           metastore = {
