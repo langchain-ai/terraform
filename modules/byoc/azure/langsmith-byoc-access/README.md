@@ -329,6 +329,7 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 
 - **Service principal:** no Microsoft Graph permissions and no role on the subscription.
 - **Role assignments:** on each data plane resource group only, with the `external_id` as description. The custom role ([`roles.tf`](roles.tf)), and with full access `User Access Administrator`. LangSmith uses it to assign roles to its workload identities, one blob role, and, with CLI builds, two custom roles and `AcrDelete`.
+- **Azure Policy:** on each data plane resource group, two deny policies that also apply to LangSmith: storage accounts keep shared key access off, and federated identity credentials trust only an AKS OIDC issuer in your tenant ([`policies.tf`](policies.tf)).
 - **Key Vault:** Azure RBAC, no public network access, a deny-all network ACL, soft delete for 90 days, and purge protection. Terraform writes nothing into the vault.
 
 ## Operational notes
