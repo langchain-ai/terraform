@@ -148,14 +148,29 @@ check_ports() {
     check FAIL ports "in use:$held; stop what holds them (ss -ltnp shows it, with sudo)"; fi
 }
 
-# A host firewall drops k3s's own pod and service traffic unless opened (docs.k3s.io, requirements).
+# A host firewall drops k3s's own pod and service traffic unless opened: everything from the pod and
+# service ranges, 10.42.0.0/16 and 10.43.0.0/16 (docs.k3s.io, requirements). Not 6443 from outside: the
+# docs open it for agents on other machines, and on one box it would only show k3s's API to the network.
+UFW_RULES="ufw allow from 10.42.0.0/16 to any; ufw allow from 10.43.0.0/16 to any"
 check_firewall() {
   if systemctl is-active -q firewalld 2>/dev/null; then
-    check warn firewall "firewalld is on: allow 6443/tcp, 10250/tcp, 8472/udp and the pod and service ranges, or turn it off"
-  elif command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q 'Status: active'; then
-    check warn firewall "ufw is on: allow 6443/tcp, 10250/tcp, 8472/udp and the pod and service ranges"
+    check warn firewall "firewalld is on: allow the 10.42.0.0/16 and 10.43.0.0/16 ranges into the trusted zone, or turn it off"
+  # ufw.conf, not ufw status: status needs root, and read as the ssh user its error passed for off
+  # (magus, 2026-11-24, where the install then found it on).
+  elif grep -qs '^ENABLED=yes' /etc/ufw/ufw.conf; then
+    check_ufw_rules
   else
     check ok firewall "no firewalld or ufw running"
+  fi
+}
+
+check_ufw_rules() {
+  if ((EUID != 0)); then
+    check warn firewall "ufw is on; its rules need root to read, so the install checks them. If k3s's are missing, as root: $UFW_RULES"
+  elif ufw status | grep -q '10.42.0.0/16' && ufw status | grep -q '10.43.0.0/16'; then
+    check ok firewall "ufw is on and allows k3s's pod and service ranges"
+  else
+    check FAIL firewall "ufw is on and would drop k3s's pod and service traffic; as root: $UFW_RULES"
   fi
 }
 
@@ -165,10 +180,12 @@ check_docker() {
     check warn docker "running beside k3s: if pods cannot reach each other, Docker's FORWARD DROP is why"
 }
 
-# What the install downloads: k3s, the charts, the images, the dashboards.
+# What the install downloads: k3s's installer (raw.githubusercontent.com, at the pinned tag) and binary
+# (github.com), the charts, the images, the dashboards. Never get.k3s.io, which the install does not use:
+# checked, it failed one install on a host that reached everything the install needs (magus, 2026-11-24).
 check_internet() {
   local unreachable="" url code
-  for url in https://get.k3s.io https://github.com https://registry-1.docker.io/v2/ https://quay.io \
+  for url in https://github.com https://registry-1.docker.io/v2/ https://quay.io \
     https://registry.k8s.io https://langchain-ai.github.io/helm/index.yaml https://raw.githubusercontent.com \
     https://prometheus-community.github.io/helm-charts/index.yaml https://grafana-community.github.io/helm-charts/index.yaml; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" 2>/dev/null || true)"

@@ -170,9 +170,9 @@ install_bundle() {
   cp "$BUILD/charts/$tgz" "$LITE/lib/ui.sh" "$LITE/box/install.sh" "$LITE/box/checks.sh" "$work/bundle/"
   run ssh "reach $SSH_TARGET over ssh" wait_for_ssh
   run send "send it to $SSH_TARGET" send_bundle "$work"
-  printf '\n  %son the box (sudo asks once; a first install takes 10 to 20 minutes)%s\n' "$DIM" "$OFF"
   # shellcheck disable=SC2016  # $? and $status expand on the box
-  ssh_root 'sudo bash ~/.langsmith-lite/bundle/install.sh ~/.langsmith-lite/bundle; status=$?; rm -rf ~/.langsmith-lite; exit $status' \
+  ssh_root "k3s installs as a system service, and the data disk mounts: asked once, then the install runs (10 to 20 minutes the first time)" \
+    'sudo bash ~/.langsmith-lite/bundle/install.sh ~/.langsmith-lite/bundle; status=$?; rm -rf ~/.langsmith-lite; exit $status' \
     || fail "the install on the box stopped" "its message is above; make status shows the box."
   next "make access"
 }
@@ -212,13 +212,13 @@ cmd_down() {
   start_log "$BUILD/logs"
   if [[ "$cloud" == baremetal ]]; then
     ssh_from_outputs
-    printf '  %son the box (sudo asks once)%s\n' "$DIM" "$OFF"
     # Only a k3s Lite installed (its marker): never someone else's cluster.
     # k3s's uninstaller removes its own storage folder; a data_path is outside it, so its volume folders
     # go too, and nothing else on that disk (security review, 2026-11-24: the data stayed behind).
     data_path="$(tf_eval var.data_path)"
     # shellcheck disable=SC2016  # expands on the box
-    ssh_root 'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then sudo /usr/local/bin/k3s-uninstall.sh >/dev/null; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi; sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml" /etc/systemd/system/k3s.service.d/langsmith-lite-data.conf'"${data_path:+; sudo find '$data_path' -maxdepth 1 -name 'pvc-*' -exec rm -rf {} +}" \
+    ssh_root "k3s's uninstaller removes the service and every volume: asked once" \
+      'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then sudo /usr/local/bin/k3s-uninstall.sh >/dev/null; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi; sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml" /etc/systemd/system/k3s.service.d/langsmith-lite-data.conf'"${data_path:+; sudo find '$data_path' -maxdepth 1 -name 'pvc-*' -exec rm -rf {} +}" \
       || fail "the uninstall on the box failed" "nothing else was removed."
     printf '  %-18s %sk3s and every volume removed from %s%s %sok%s\n' uninstall "$DIM" "$SSH_TARGET" "$OFF" "$GREEN" "$OFF"
   fi

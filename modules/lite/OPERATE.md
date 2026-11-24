@@ -56,7 +56,7 @@ on the box before it changes anything:
 | the data disk | on AWS the volume attached; with `data_path`, mounted and of `data_disk_gi` | FAIL |
 | k3s | none, or one Lite installed | FAIL on an agent of another cluster, or a server Lite did not install |
 | ports 6443, 10250; 80 and 443 for `ip` and `dns` | free | FAIL |
-| firewalld or ufw | off, or open for k3s (6443/tcp, 10250/tcp, 8472/udp, the pod and service ranges) | warn |
+| firewalld or ufw | off, or allowing k3s's pod and service ranges (`ufw allow from 10.42.0.0/16 to any`, and `10.43.0.0/16`) | warn; with ufw on, the install reads its rules as root and FAILs without them |
 | Docker | not needed; may run beside k3s | warn: its FORWARD DROP can block pod traffic |
 | internet | k3s's release, the Helm repos, the image registries, GitHub | FAIL: a proxy or an air gap is not supported yet |
 | sudo for the ssh user | to install and remove k3s only | asked once a command, so a password or a security key's touch works |

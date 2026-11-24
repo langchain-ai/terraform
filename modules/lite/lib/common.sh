@@ -141,8 +141,12 @@ wait_for_ssh() {
 # A command on the box as root: only installing, upgrading and removing k3s, a system service. -t
 # gives sudo a terminal and sudo -v asks once, up front, so sudo that wants a password or a security
 # key's touch works as well as passwordless sudo (one that needed a touch failed every call without it).
+# ssh_root WHY COMMAND: says why root is asked for before it is, and that it was granted once it is, so
+# a long install after a key's touch is not a silent wait (magus, 2026-11-24).
 ssh_root() {
-  ssh -t "${SSH_OPTS[@]}" "$SSH_TARGET" "sudo -v && $1"
+  printf '\n  %-18s %s%s%s\n' root "$DIM" "$1" "$OFF"
+  ssh -t "${SSH_OPTS[@]}" "$SSH_TARGET" \
+    "sudo -v && printf '  %-18s %s %sgranted%s\n\n' root 'on \$(hostname)' '$GREEN' '$OFF' && $2"
 }
 
 # Defines k on the box: kubectl as the ssh user with the kubeconfig the install gave it. Reading the
