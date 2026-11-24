@@ -19,6 +19,7 @@ resource "google_redis_instance" "langsmith" {
   # Network
   authorized_network = var.network_id
   connect_mode       = "PRIVATE_SERVICE_ACCESS"
+  auth_enabled       = var.auth_enabled
 
   # Redis configuration
   redis_configs = {
@@ -79,6 +80,7 @@ resource "google_redis_instance" "langsmith_protected" {
   # Network
   authorized_network = var.network_id
   connect_mode       = "PRIVATE_SERVICE_ACCESS"
+  auth_enabled       = var.auth_enabled
 
   # Redis configuration
   redis_configs = {

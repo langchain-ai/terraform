@@ -55,3 +55,26 @@ output "router_name" {
   value       = google_compute_router.router.name
 }
 
+
+output "sandbox_subnet_id" {
+  description = "Sandbox subnet ID (null unless create_sandbox_subnet)"
+  value       = try(google_compute_subnetwork.sandbox[0].id, null)
+}
+
+output "sandbox_pods_range_name" {
+  description = "Name of the sandbox subnet's secondary range for pods"
+  value       = "sbox-pods"
+}
+
+output "sandbox_services_range_name" {
+  description = "Name of the sandbox subnet's secondary range for services"
+  value       = "sbox-services"
+}
+
+output "private_service_range_cidr" {
+  description = "CIDR of the range reserved for private services (Cloud SQL, Memorystore); null if private networking is disabled"
+  value = try(
+    "${google_compute_global_address.private_ip_range[0].address}/${google_compute_global_address.private_ip_range[0].prefix_length}",
+    null,
+  )
+}

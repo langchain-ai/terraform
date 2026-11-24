@@ -123,16 +123,51 @@ resource "helm_release" "envoy_gateway" {
 # Envoy Gateway Class
 #------------------------------------------------------------------------------
 locals {
-  gateway_class_yaml = var.ingress_type == "envoy" ? yamlencode({
+  # An internal load balancer gets a private VPC address instead of a public one.
+  # Envoy Gateway takes Service annotations from an EnvoyProxy that the
+  # GatewayClass names in parametersRef; it comes first in the same file so it
+  # exists when the GatewayClass is applied.
+  envoy_proxy_internal = var.ingress_type == "envoy" && var.load_balancer_type == "internal"
+
+  envoy_proxy_yaml = local.envoy_proxy_internal ? yamlencode({
+    apiVersion = "gateway.envoyproxy.io/v1alpha1"
+    kind       = "EnvoyProxy"
+    metadata = {
+      name      = "internal-load-balancer"
+      namespace = "envoy-gateway-system"
+    }
+    spec = {
+      provider = {
+        type = "Kubernetes"
+        kubernetes = {
+          envoyService = {
+            annotations = {
+              "networking.gke.io/load-balancer-type" = "Internal"
+            }
+          }
+        }
+      }
+    }
+  }) : ""
+
+  gateway_class_yaml = var.ingress_type == "envoy" ? join("---\n", compact([local.envoy_proxy_yaml, yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
     kind       = "GatewayClass"
     metadata = {
       name = "envoy-gateway-class"
     }
-    spec = {
-      controllerName = "gateway.envoyproxy.io/gatewayclass-controller"
-    }
-  }) : ""
+    spec = merge(
+      { controllerName = "gateway.envoyproxy.io/gatewayclass-controller" },
+      local.envoy_proxy_internal ? {
+        parametersRef = {
+          group     = "gateway.envoyproxy.io"
+          kind      = "EnvoyProxy"
+          name      = "internal-load-balancer"
+          namespace = "envoy-gateway-system"
+        }
+      } : {},
+    )
+  })])) : ""
 }
 
 resource "local_file" "gateway_class" {
