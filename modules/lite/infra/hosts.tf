@@ -1,6 +1,5 @@
 #------------------------------------------------------------------------------
 # The box: an EC2 instance this module makes, or a machine named by ssh_host.
-# Either way the rest is the same: an address, a user, a machine of a size.
 #------------------------------------------------------------------------------
 
 locals {

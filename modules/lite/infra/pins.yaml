@@ -1,12 +1,12 @@
 # Every version Lite installs, in one place.
 #
 # Charts are pinned to a line, as every other module pins LangSmith (CHART_VERSION:-~0.17.0 in their
-# deploy.sh): make plan resolves each line against its live Helm repo (lib/versions.sh) and
-# writes the exact versions to infra/resolved.auto.tfvars.json (gitignored), so the plan, the box and
-# the dashboard all name one exact version, and the plan prints it. Lite is chart 0.18 only.
+# deploy.sh): make plan resolves each line against its live Helm repo (lib/versions.sh) into
+# infra/resolved.auto.tfvars.json (gitignored), so the plan, the box and the dashboard name one exact
+# version. Lite is chart 0.18 only.
 #
-# k3s is exact: it is the box's operating layer, moved on purpose. make pins prints what each line
-# resolves to now and the k3s stable channel's version beside this one.
+# k3s is exact: the box's operating layer, moved on purpose. make pins prints what each line resolves to
+# now and the k3s stable channel's version beside this one.
 k3s: v1.36.6+k3s1
 
 charts:
@@ -24,9 +24,9 @@ charts:
 images:
   cloudflared: docker.io/cloudflare/cloudflared:2026.10.0
 
-# The chart's observability bundle, read at the installed langsmith release ({release}): its Grafana 13
-# dashboard, which Grafana downloads, and its Prometheus scrape annotations, which make plan fetches and
-# the bundle applies as a second values layer. Both move with the chart.
+# The chart's observability bundle at the installed langsmith release ({release}): its Grafana 13
+# dashboard, which Grafana downloads, and its scrape annotations, which make plan fetches and the bundle
+# applies as a second values layer. Both move with the chart.
 observability:
   dashboard: https://raw.githubusercontent.com/langchain-ai/helm/langsmith-{release}/charts/langsmith/examples/langsmith-observability/grafana-dashboard.json
   scrape_values: https://raw.githubusercontent.com/langchain-ai/helm/langsmith-{release}/charts/langsmith/examples/langsmith-observability/components/smithdb/prometheus-values.yaml

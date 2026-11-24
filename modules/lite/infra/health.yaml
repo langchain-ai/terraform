@@ -2,7 +2,7 @@
 # panel on the health dashboard's tab (with both levels), so the two never disagree (values.tf renders
 # both). The SmithDB signals are Steffen Hausmann's "Recommended SmithDB alerts" (LangSmith docs,
 # self-host-smithdb-alerts, 2026-11), numbered as there; their metric names are checked against SmithDB's
-# critical export list (crates/smithdb-common/src/metrics_export.rs) and the chart's own dashboard at 0.18.2.
+# critical export list (crates/smithdb-common/src/metrics_export.rs) and the chart's dashboard at 0.18.2.
 # Capacity signals are the bounds Lite's plan sizes (SIZING.md).
 #
 #   expr      PromQL; {ns} matches LangSmith's namespaces, {data} the stores', {mount} the data disk's mount.

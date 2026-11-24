@@ -1,10 +1,6 @@
 #------------------------------------------------------------------------------
-# Terraform and providers. Lite talks to no cluster: the box installs itself
-# from the bundle, so there is no kubernetes or helm provider.
-#   aws     the instance, with cloud = aws (hosts/aws)
-#   random  the generated credentials (secrets.tf)
-#   tls     an AWS instance's ssh host key (hosts/aws)
-#------------------------------------------------------------------------------
+# Terraform and providers. Lite talks to no cluster: the box installs itself from the bundle, so there is
+# no kubernetes or helm provider.
 
 terraform {
   required_version = ">= 1.11.0"
@@ -25,9 +21,9 @@ terraform {
   }
 }
 
-# Configured whatever the cloud. The provider looks for credentials when it starts even when nothing
-# uses it, and a bare-metal plan failed for want of AWS credentials it never needed; with cloud =
-# baremetal it is given placeholders and told to check nothing, so it never calls AWS.
+# Configured whatever the cloud: the provider looks for credentials at start, and a bare-metal plan failed
+# for want of AWS credentials it never needed. With cloud = baremetal it gets placeholders and checks
+# nothing, so it never calls AWS.
 provider "aws" {
   region                      = var.aws_region
   access_key                  = var.cloud == "aws" ? null : "unused"

@@ -4,11 +4,10 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# Using a box: preflight, access, status, values. Sourced by bin/lite. None of these needs root on
-# the box.
+# Using a box: preflight, access, status, values. Sourced by bin/lite. None needs root on the box.
 
-# Whether the machine can be the box, before anything is installed: box/checks.sh over ssh, as the ssh
-# user. make up runs the same checks on the box first, so a box passes or fails the same way either way.
+# box/checks.sh over ssh as the ssh user, before anything is installed; make up runs the same checks
+# on the box first, so a box passes or fails the same way either way.
 cmd_preflight() {
   heading "preflight" "can this machine be the box? read-only, no root"
   settings
@@ -35,9 +34,8 @@ cmd_preflight() {
   next "make up"
 }
 
-# Print every login, and hold the tunnels to the box's private UIs open until Ctrl-C. One ssh session
-# carries them all: on the box kubectl port-forwards each Service to the box's own loopback, and ssh
-# forwards those ports here.
+# One ssh session carries every tunnel: on the box kubectl port-forwards each Service to its loopback,
+# and ssh forwards those ports here.
 cmd_access() {
   need terraform python3 ssh
   local url logins ns forwards remote
@@ -73,8 +71,6 @@ for name, l in json.load(sys.stdin).items():
   ssh "${SSH_OPTS[@]}" -o ExitOnForwardFailure=yes "${forwards[@]}" "$SSH_TARGET" "$remote"
 }
 
-# Where the box stands, read-only: each release's install, every pod, what the node and the pods use,
-# and the volumes.
 cmd_status() {
   need terraform python3 ssh
   ssh_from_outputs

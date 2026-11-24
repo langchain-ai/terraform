@@ -7,26 +7,23 @@
 # Versions: each chart line in infra/pins.yaml resolved against its live Helm repo, and the bare-metal
 # module's datastores chart packaged. Sourced by bin/lite.
 #
-# The other modules pin LangSmith to a line (CHART_VERSION:-~0.17.0 in their deploy.sh) and resolve it
-# when they deploy; Lite resolves before the plan instead, so the plan, the box and the dashboard tag all
-# name the same exact version, and the plan shows it. helm show chart --repo reads a repo's index
-# without adding the repo to anyone's helm configuration.
+# Other modules resolve LangSmith's line at deploy; Lite resolves before the plan, so the plan, the box
+# and the dashboard tag name the same exact version. helm show chart --repo reads a repo's index
+# without adding it to anyone's helm configuration.
 
 # A top-level key of a Chart.yaml. Anchored at the line's start: dependencies carry their own indented
 # version keys, and an unanchored match read prometheus's alertmanager subchart as the chart (2.5.1).
 chart_field() { awk -v f="^$1:" '$0 ~ f { gsub(/["\047]/, "", $2); print $2; exit }'; }
 
-# pins.yaml as JSON, through Terraform's own YAML reader, so no YAML library is needed here.
+# pins.yaml as JSON, through Terraform's YAML reader, so no YAML library is needed.
 pins_json() { tf_eval 'yamldecode(file("pins.yaml"))' || fail "could not read infra/pins.yaml" "check infra/pins.yaml is valid YAML."; }
 
-# One "name repo chart line" line a chart.
 pinned_charts() {
   python3 -c 'import json,sys
 for n, c in json.loads(sys.argv[1])["charts"].items(): print(n, c["repo"], c["chart"], c["version"])' "$1"
 }
 
-# resolve_versions: write infra/resolved.auto.tfvars.json and build/charts/datastores-*.tgz. Its steps
-# print through run, so it reads as part of the command that called it.
+# Writes infra/resolved.auto.tfvars.json and build/charts/datastores-*.tgz.
 resolve_versions() {
   local pins lines="" name repo chart line meta version release scrape_url tmp
   pins="$(pins_json)"
@@ -76,7 +73,6 @@ package_datastores() {
     printf '%s' "$ds_version-$ds_digest" >"$out/name"
 }
 
-# make pins: what each line resolves to now, each chart's newest release, and k3s's stable channel.
 cmd_pins() {
   local pins name repo chart line version newest stable
   need terraform helm python3 curl

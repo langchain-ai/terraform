@@ -1,8 +1,7 @@
 #------------------------------------------------------------------------------
-# How the releases reach a box: every file k3s needs, as one sensitive output.
-# make up streams it over ssh; box/install.sh installs it with
-# k3s's own controllers (k3s applies its manifests folder, and helm-controller
-# installs each HelmChart there). Nothing on the laptop talks to the box's API.
+# How the releases reach a box: every file k3s needs, as one sensitive output that make up streams over
+# ssh and box/install.sh installs through k3s's own controllers (k3s applies its manifests folder,
+# helm-controller installs each HelmChart there). Nothing on the laptop talks to the box's API.
 #
 #   lite.env                    what box/install.sh checks and uses
 #   k3s-config.yaml             /etc/rancher/k3s/config.yaml
@@ -29,8 +28,7 @@ locals {
           failurePolicy = "abort"
         })
       })}"],
-      # helm-controller merges a HelmChartConfig of the same name into the HelmChart's values, as a second
-      # -f layer.
+      # A HelmChartConfig of the same name is helm-controller's second -f values layer.
       r.layer == "" ? [] : ["---\n${yamlencode({
         apiVersion = "helm.cattle.io/v1"
         kind       = "HelmChartConfig"
@@ -58,11 +56,11 @@ locals {
     },
   ], local.operator)
 
-  # The ssh user's access to the cluster: a ServiceAccount allowed what make status, access, verify and
-  # soak use, and nothing else. It was k3s's own admin kubeconfig, which made the ssh user cluster-admin
-  # without sudo (on a box whose sudo needs a security key's touch, a way around it), and make verify
-  # copied it to the laptop (security review, 2026-11-24). Left out on purpose: nodes/proxy, whose GET
-  # opens a kubelet exec; the load test then reads each pod's CPU as unread, and Prometheus has it.
+  # The ssh user's access: a ServiceAccount allowed what make status, access, verify and soak use. It was
+  # k3s's admin kubeconfig, which made the ssh user cluster-admin without sudo (a way around a sudo that
+  # needs a security key's touch) and which make verify copied to the laptop (security review, 2026-11-24).
+  # nodes/proxy is left out: its GET opens a kubelet exec. The load test reads each pod's CPU as unread;
+  # Prometheus has it.
   operator_name = "langsmith-lite-operator"
   operator = concat(
     [
@@ -115,8 +113,8 @@ locals {
     } if n.name != local.ns.tunnel],
   )
 
-  # cloudflared connects out to Cloudflare and hands every request to Traefik; the public hostname and
-  # its service (http://traefik.kube-system.svc.cluster.local:80) are set on the tunnel in Cloudflare.
+  # The public hostname and its service (http://traefik.kube-system.svc.cluster.local:80) are set on the
+  # tunnel in Cloudflare.
   tunnel = {
     apiVersion = "apps/v1"
     kind       = "Deployment"
@@ -146,8 +144,7 @@ locals {
       "write-kubeconfig-mode" = "0600"
       "node-name"             = var.name
       "node-label"            = ["langsmith-lite/instance=${var.name}"]
-      # Secrets are encrypted in k3s's datastore, not only base64 in it.
-      "secrets-encryption" = true
+      "secrets-encryption"    = true
       "kubelet-arg" = [
         "system-reserved=cpu=${local.preset.reserved.cpu_m}m,memory=${local.preset.reserved.mem_mi}Mi",
         # Evict pods before a disk fills, rather than let a store fill the disk the system needs.
@@ -156,7 +153,6 @@ locals {
         "image-gc-low-threshold=70",
       ]
     },
-    # A bare-metal data_path holds every volume; an AWS data volume is mounted at k3s's own folder.
     var.data_path != "" ? { "default-local-storage-path" = var.data_path } : {},
   )
 

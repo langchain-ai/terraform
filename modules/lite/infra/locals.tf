@@ -5,17 +5,16 @@
 locals {
   pins = yamldecode(file("${path.module}/pins.yaml"))
 
-  # The exact version each chart line resolved to (lib/versions.sh, at every make plan); the line itself in the offline
-  # tests, which helm-controller would also accept but which would let the box resolve later than the plan.
+  # The exact version each chart line resolved to (lib/versions.sh, at every make plan). The offline tests
+  # use the line, which would let the box resolve later than the plan.
   chart_version = {
     for name, c in local.pins.charts : name => try(var.resolved.charts[name], c.version)
   }
   # The official dashboard at the release tag of the chart that runs; the line's base in the tests.
   langsmith_release = trimprefix(local.chart_version.langsmith, "~")
   dashboard_url     = replace(local.pins.observability.dashboard, "{release}", local.langsmith_release)
-  # The chart's own scrape annotations (examples/langsmith-observability/components/smithdb/
-  # prometheus-values.yaml at the installed release), applied as a second values layer: the chart's
-  # maintainers keep its metrics ports, not Lite. Empty in the offline tests.
+  # The chart's own scrape annotations at the installed release, applied as a second values layer: the
+  # chart's maintainers keep its metrics ports, not Lite. Empty in the offline tests.
   scrape_values       = try(var.resolved.scrape_values, "")
   mission_control_tag = try(var.resolved.app_versions["mission-control"], trimprefix(local.chart_version["mission-control"], "~"))
 

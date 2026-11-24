@@ -1,7 +1,6 @@
 #------------------------------------------------------------------------------
-# What each release is: its chart, its namespace, its values, and the order it
-# installs in. The box bundle (bundle.tf) and make export both read this, so a
-# box and an install on a cluster of one's own run the same releases.
+# What each release is: its chart, namespace, values and install order. The box bundle (bundle.tf) and
+# make export both read it, so a box and a cluster of one's own run the same releases.
 #------------------------------------------------------------------------------
 
 locals {
@@ -9,8 +8,7 @@ locals {
     for name, c in local.pins.charts : name => { repo = c.repo, chart = c.chart, version = local.chart_version[name] }
   }
 
-  # In install order: the stores before LangSmith, whose migrations need them. A feature that is off has no
-  # release at all.
+  # In install order: the stores before LangSmith, whose migrations need them.
   release_order = concat(
     ["datastores", "langsmith"],
     local.features.observability ? ["prometheus", "grafana", "redis-exporter", "postgres-exporter"] : [],
@@ -36,7 +34,6 @@ locals {
   }
   releases = { for name in local.release_order : name => local.release_defs[name] }
 
-  # Every namespace the releases use, and what they need before any release installs.
   namespaces = concat(
     [
       { name = local.ns.langsmith, labels = local.instance_label },
@@ -47,12 +44,12 @@ locals {
     local.features.tunnel ? [{ name = local.ns.tunnel, labels = merge(local.instance_label, { "pod-security.kubernetes.io/enforce" = "restricted" }) }] : [],
   )
 
-  # Every namespace refuses traffic in, but from where it is needed: LangSmith from itself, its
-  # observability (scrapes), the tunnel and the ingress controller; observability from itself; the
-  # tunnel from nowhere (cloudflared only dials out). The stores'
-  # namespace has the datastores chart's own policies (datastores_values.allowedNamespaces). Without these
-  # any pod on a shared cluster reached Prometheus, Grafana, Mission Control and LangSmith's services
-  # (security review, 2026-11-24). Egress stays open: the pods call the registries and the license server.
+  # Every namespace refuses traffic in but from where it is needed: LangSmith from itself, its
+  # observability, the tunnel and the ingress controller; observability from itself; the tunnel from
+  # nowhere (cloudflared only dials out). The stores' namespace has the datastores chart's own policies.
+  # Without these any pod on a shared cluster reached Prometheus, Grafana, Mission Control and LangSmith's
+  # services (security review, 2026-11-24). Egress stays open: the pods call the registries and the
+  # license server.
   allowed_in = {
     (local.ns.langsmith) = concat([local.ns.langsmith, local.ns.observe, local.ns.tunnel], var.ingress_namespaces)
     (local.ns.observe)   = [local.ns.observe]

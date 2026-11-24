@@ -8,16 +8,9 @@
 #
 #   sudo bash install.sh <bundle folder>
 #
-# 1. checks.sh: refuses a machine that cannot be this box (the same checks make preflight runs).
-# 2. k3s at the pinned version with the bundle's config, or a restart when only the config changed.
-# 3. The namespaces, the Retain storage class and Traefik's settings, then the Secrets, whose file is
-#    deleted once applied.
-# 4. Each release handed to k3s's helm-controller in order, the stores before LangSmith, waiting for
-#    each install Job and for the stores to be ready before LangSmith's migrations run.
-# 5. The ssh user's own kubeconfig, so reading the cluster needs no root.
-# 6. Any release an earlier bundle had and this one does not, removed.
-#
-# A second run changes only what differs. Each step's output goes to /var/lib/langsmith-lite/logs/.
+# Checks the machine, installs k3s, hands each release to k3s's helm-controller in order, and removes
+# what an earlier bundle had and this one lacks. A second run changes only what differs. Each step's
+# output goes to /var/lib/langsmith-lite/logs/.
 set -euo pipefail
 
 SRC="${1:?usage: install.sh <bundle folder>}"
@@ -25,16 +18,16 @@ LITE_HOME=/var/lib/langsmith-lite
 MANIFESTS=/var/lib/rancher/k3s/server/manifests
 STATIC=/var/lib/rancher/k3s/server/static/charts
 K3S_CONFIG=/etc/rancher/k3s/config.yaml
-# Marks k3s as Lite's. Readable without root (checks.sh runs as the ssh user), so preflight and the
-# install refuse a k3s server someone else installed, and make down removes only Lite's.
+# Marks k3s as Lite's. Readable without root (checks.sh runs as the ssh user), so a k3s server someone
+# else installed is refused and make down removes only Lite's.
 MARKER=/etc/rancher/k3s/installed-by-langsmith-lite
 
 # shellcheck source=lib/ui.sh
 source "$SRC/ui.sh"
 [[ $EUID -eq 0 ]] || fail "install.sh runs as root" "make up runs it with sudo."
 
-# lite.env: KEY=value lines Terraform wrote. Split at the first = by hand: IFS='=' read drops a value's
-# trailing =, which cut the padding off a base64 token.
+# lite.env, KEY=value lines. Split at the first = by hand: IFS='=' read drops a value's trailing =, which
+# cut the padding off a base64 token.
 while IFS= read -r line; do
   [[ -n "$line" ]] && printf -v "${line%%=*}" '%s' "${line#*=}"
 done <"$SRC/lite.env"
@@ -58,10 +51,9 @@ install -d -m 700 "$LITE_HOME" "$LITE_HOME/logs"
 start_log "$LITE_HOME/logs"
 
 #--- 2. The data volume -------------------------------------------------------------------------------
-# On AWS the data volume is mounted at k3s's own storage folder before k3s starts, so every store's
-# volume lands on it. It is formatted only if it has no filesystem: a reattached volume keeps its data.
-# The device is found by the volume's id (Nitro instances name NVMe devices in attach order, not by
-# the device name Terraform asked for).
+# On AWS the data volume is mounted at k3s's storage folder before k3s starts. It is formatted only if it
+# has no filesystem: a reattached volume keeps its data. Found by the volume's id, as Nitro instances
+# name NVMe devices in attach order, not by the name Terraform asked for.
 mount_data_volume() {
   local dev uuid found
   found=(/dev/disk/by-id/*"${DATA_VOLUME_ID//-/}"*)
@@ -80,9 +72,9 @@ if [[ -n "${DATA_VOLUME_ID:-}" ]]; then
   run data "the data volume at $DATA_MOUNT" mount_data_volume
 fi
 
-# A data disk of its own, the AWS volume or a data_path: k3s starts only with it mounted. Without this,
-# a disk missing at boot (fstab's nofail keeps the box bootable) left k3s to start on the empty folder of
-# the root disk, where Postgres initialised a new, empty database.
+# k3s starts only with its own data disk (the AWS volume or a data_path) mounted: a disk missing at boot
+# (fstab's nofail keeps the box bootable) once left k3s on the root disk's empty folder, where Postgres
+# initialised a new, empty database.
 require_data_mount() {
   mountpoint -q "$DATA_MOUNT" || { echo "$DATA_MOUNT is not a mounted filesystem: mount the data disk there first"; return 1; }
   install -d -m 755 /etc/systemd/system/k3s.service.d
@@ -101,9 +93,8 @@ if ! cmp -s "$SRC/k3s-config.yaml" "$K3S_CONFIG" 2>/dev/null; then
   config_changed=1
 fi
 
-# k3s's installer at the pinned release's own tag, not get.k3s.io's latest script; it checks the
-# binary's sha256 against the release's checksums.
-# Marked before k3s starts: a failed first install is still Lite's to retry or remove.
+# k3s's installer at the pinned release's own tag, not get.k3s.io's latest script; it checks the binary's
+# sha256. Marked first: a failed first install is still Lite's to retry or remove.
 install_k3s() {
   install -m 644 /dev/null "$MARKER"
   curl -sfL "https://raw.githubusercontent.com/k3s-io/k3s/${K3S_VERSION//+/%2B}/install.sh" |
@@ -141,13 +132,12 @@ run secrets "every credential, as Secrets" \
 rm -f "$SRC/secrets.yaml"
 
 #--- 5. The releases ----------------------------------------------------------------------------------
-# A HelmChart's install Job is helm-install-<name>, replaced when its HelmChart changes. A release whose
-# manifest changed waits for a Job other than the one it had before (by uid); an unchanged release's
-# last Job stands. Tracked per release: one time for the whole run made an upgrade of LangSmith wait out
-# every unchanged release's timeout, then fail.
+# A HelmChart's install Job (helm-install-<name>) is replaced when the HelmChart changes. A changed
+# release waits for a Job with a new uid; an unchanged one's last Job stands. Tracked per release: one
+# time for the whole run made an upgrade of LangSmith wait out every unchanged release's timeout.
 job_uid() { kubectl -n kube-system get job "helm-install-$1" -o jsonpath='{.metadata.uid}' 2>/dev/null || true; }
 
-# place FILE RELEASE...: install the manifest if it changed, remembering each release's Job before.
+# place FILE RELEASE...: install the manifest if it changed, noting each release's Job beforehand.
 place() {
   local file="$1" release
   shift
@@ -156,14 +146,13 @@ place() {
   install -m 600 "$SRC/$file" "$MANIFESTS/$file"
 }
 
-# wait_release NAME SECONDS: its install Job succeeded (a new one, if its manifest changed). helm-controller
-# retries a failed Job, as when the stores are still starting; three failures are not transient.
+# wait_release NAME SECONDS: helm-controller retries a failed Job (the stores may still be starting);
+# three failures are not transient.
 wait_release() {
   local name="$1" deadline=$((SECONDS + $2)) var uid failed
   var="before_${name//-/_}"
   while :; do
     uid="$(job_uid "$name")"
-    # A Job exists and, if the manifest changed, it is not the one from before.
     if [[ -n "$uid" && (-z "${!var+set}" || "$uid" != "${!var:-}") ]]; then
       [[ "$(kubectl -n kube-system get job "helm-install-$name" -o jsonpath='{.status.succeeded}')" == 1 ]] && return 0
       failed="$(kubectl -n kube-system get job "helm-install-$name" -o jsonpath='{.status.failed}')"
@@ -189,8 +178,8 @@ stores_ready() {
   done
 }
 
-# One manifest a release (lite-NN-<release>.yaml), in install order: the stores first, waited for before
-# LangSmith's migrations need them; then every other release.
+# One manifest a release (lite-NN-<release>.yaml): the stores first, ready before LangSmith's migrations
+# need them, then the rest.
 declare -A labels=(
   [datastores]="Postgres, Redis, RustFS" [langsmith]="LangSmith (a first install pulls every image)"
   [prometheus]="Prometheus" [grafana]="Grafana and its dashboards" [redis-exporter]="the Redis exporter"
@@ -211,8 +200,8 @@ run available "every LangSmith deployment available" \
   kubectl -n "$NS" wait --for=condition=Available deployment --all --timeout=900s
 
 #--- 6. The ssh user's kubeconfig ---------------------------------------------------------------------
-# k3s's admin kubeconfig stays root-only (write-kubeconfig-mode 0600). The ssh user's is the operator
-# ServiceAccount's (bundle.tf): what make status, access, verify and soak use, not cluster-admin.
+# k3s's admin kubeconfig stays root-only. The ssh user's is the operator ServiceAccount's (bundle.tf),
+# not cluster-admin: what make status, access, verify and soak use.
 user_kubeconfig() {
   local home token="" ca tmp
   home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
@@ -249,9 +238,8 @@ if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
 fi
 
 #--- 7. What this bundle no longer has ----------------------------------------------------------------
-# A manifest file this bundle lacks is removed; the objects in it are deleted only when no file in this
-# bundle carries the same release. Deleting by file alone would uninstall a release whose manifest was
-# only renamed (its HelmChart deleted, helm-controller uninstalls it, and the stores with it).
+# A manifest this bundle lacks is removed, but its objects only when no file here carries the same
+# release: deleting by file alone would uninstall a merely renamed release, stores included.
 retire() {
   local old release
   for old in "$MANIFESTS"/lite-*.yaml; do

@@ -24,7 +24,7 @@ check() {
 
 gib_of() { df -Pk "$1" | awk -v col="$2" 'NR == 2 { printf "%d", $col / 1048576 }'; }
 
-# The systems the install is written against; others with systemd usually work, and say so.
+# The systems the install is written against; others with systemd usually work.
 check_os() {
   # shellcheck source=/dev/null  # the box's own
   . /etc/os-release 2>/dev/null || true
@@ -92,8 +92,7 @@ check_disk() {
   fi
 }
 
-# The data disk, when the volumes have one of their own: an AWS data volume (attached, not yet mounted on
-# a first install) or a bare-metal data_path (mounted, apart from /).
+# An AWS data volume is attached but not yet mounted on a first install; a data_path is mounted apart from /.
 check_data() {
   if [[ -n "${DATA_VOLUME_ID:-}" ]]; then
     if ls /dev/disk/by-id/*"${DATA_VOLUME_ID//-/}"* >/dev/null 2>&1; then
@@ -114,8 +113,7 @@ check_data() {
     check FAIL data "$DATA_MOUNT has $data_gi GiB, the plan needs ${DATA_DISK_GI:-0}"; fi
 }
 
-# k3s already here: ours (an update) or an agent of another cluster, whose certificates a server would
-# inherit.
+# An agent of another cluster is refused: a server would inherit its certificates.
 check_k3s() {
   if [[ -e /etc/systemd/system/k3s-agent.service ]]; then
     check FAIL k3s "an agent of another cluster: remove it first with /usr/local/bin/k3s-agent-uninstall.sh"
@@ -129,7 +127,7 @@ check_k3s() {
   fi
 }
 
-# Ports k3s needs: its API and kubelet always; 80 and 443 when Traefik serves the box's address.
+# 80 and 443 only when Traefik serves the box's address.
 check_ports() {
   local ports="6443 10250" held="" p
   [[ "$ACCESS" != ip && "$ACCESS" != dns ]] || ports="$ports 80 443"
@@ -148,9 +146,9 @@ check_ports() {
     check FAIL ports "in use:$held; stop what holds them (ss -ltnp shows it, with sudo)"; fi
 }
 
-# A host firewall drops k3s's own pod and service traffic unless opened: everything from the pod and
-# service ranges, 10.42.0.0/16 and 10.43.0.0/16 (docs.k3s.io, requirements). Not 6443 from outside: the
-# docs open it for agents on other machines, and on one box it would only show k3s's API to the network.
+# A host firewall drops k3s's pod and service traffic unless those ranges are opened (docs.k3s.io,
+# requirements). Not 6443: the docs open it for agents on other machines, and on one box it would only
+# expose k3s's API to the network.
 UFW_RULES="ufw allow from 10.42.0.0/16 to any; ufw allow from 10.43.0.0/16 to any"
 check_firewall() {
   if systemctl is-active -q firewalld 2>/dev/null; then
@@ -180,9 +178,9 @@ check_docker() {
     check warn docker "running beside k3s: if pods cannot reach each other, Docker's FORWARD DROP is why"
 }
 
-# What the install downloads: k3s's installer (raw.githubusercontent.com, at the pinned tag) and binary
-# (github.com), the charts, the images, the dashboards. Never get.k3s.io, which the install does not use:
-# checked, it failed one install on a host that reached everything the install needs (magus, 2026-11-24).
+# What the install downloads: k3s's installer and binary, the charts, the images, the dashboards. Never
+# get.k3s.io, which the install does not use: checking it failed an install on a host that reached
+# everything needed (magus, 2026-11-24).
 check_internet() {
   local unreachable="" url code
   for url in https://github.com https://registry-1.docker.io/v2/ https://quay.io \

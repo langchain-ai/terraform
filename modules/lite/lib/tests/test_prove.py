@@ -1,6 +1,7 @@
 """make verify and make soak's driver: the admin's login makes a key, the key is revoked pass or fail, and
 the right load test command runs with it. LangSmith is a local stub; the load test is not run."""
 
+import base64
 import io
 import json
 import os
@@ -15,6 +16,8 @@ from unittest import mock
 import prove
 
 CALLS: list[tuple[str, str]] = []
+# The test admin's Basic auth header, built here so the expected login reads as what it is.
+GOOD_LOGIN = "Basic " + base64.b64encode(b"a@b.co:pw").decode()
 
 
 class Stub(BaseHTTPRequestHandler):
@@ -32,7 +35,8 @@ class Stub(BaseHTTPRequestHandler):
         CALLS.append(("POST", self.path))
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
         if self.path == "/api/v1/login":
-            self._send({"access_token": "t"} if self.headers["Authorization"] == "Basic YUBiLmNvOnB3" else {}, 200 if self.headers["Authorization"] == "Basic YUBiLmNvOnB3" else 401)
+            ok = self.headers["Authorization"] == GOOD_LOGIN
+            self._send({"access_token": "t"} if ok else {}, 200 if ok else 401)
         else:
             self._send({"id": "k1", "key": "lsv2_test"})
 

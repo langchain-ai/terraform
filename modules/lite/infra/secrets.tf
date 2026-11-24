@@ -1,8 +1,7 @@
 #------------------------------------------------------------------------------
-# Generated credentials. They live in Terraform's state (local and gitignored,
-# as in the bare-metal module) and reach the box inside the bundle, which the
-# install streams over ssh; box/install.sh applies them and deletes the file.
-# Nothing here is written to the laptop's disk outside the state.
+# Generated credentials. They live in Terraform's state (local, gitignored, as in the bare-metal module)
+# and reach the box inside the bundle, which box/install.sh applies and deletes. Nothing is written to
+# the laptop's disk outside the state.
 #------------------------------------------------------------------------------
 
 # URL-safe: the Postgres and Redis passwords sit inside connection URLs.
@@ -76,8 +75,7 @@ locals {
   }
 }
 
-# The Secrets every release reads by name, in the format each chart takes. Shared by the box bundle and
-# make export; a feature that is off has none.
+# The Secrets every release reads by name, shared by the box bundle and make export.
 locals {
   secret_list = concat(
     [

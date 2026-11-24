@@ -5,14 +5,7 @@
 # See LICENSE at the root of this repository for full license text.
 
 # How every Lite command reads, on the laptop and on the box (install.sh ships this file with box/):
-#
-#   heading   what the command is doing, once
-#   run       one line a step, ending ok or FAILED; the step's output goes to the run's log, and the
-#             end of the log is shown only when it fails
-#   field     a fact, aligned under the heading
-#   row       one line of a table of checks: ok, warn or FAIL
-#   next      the command to run after this one
-#   fail      what failed, then why and what to do; exits 1
+# a heading, one line a step ending ok or FAILED, aligned fields, rows of checks, and the next command.
 #
 # Colour only on a terminal, and never with NO_COLOR set (no-color.org); FORCE_COLOR=1 keeps it on the
 # box when the laptop's own output is a terminal but ssh's is a pipe. Works on bash 3.2 (macOS).
@@ -49,19 +42,18 @@ row() {
   printf '  %s%-5s%s %-12s %s%s%s\n' "$colour" "$1" "$OFF" "$2" "$DIM" "$3" "$OFF"
 }
 
-# The folder this run's step logs go in. Set once per command (start_log), read by run.
 LOG_DIR=""
 start_log() {
   LOG_DIR="$1/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$LOG_DIR"
 }
 
-# run LABEL "what it does" COMMAND [ARG ...]
+# run LABEL "what it does" COMMAND [ARG ...]: the step's output goes to its log, shown only on failure.
 run() {
   local label="$1" what="$2" log
   shift 2
   log="${LOG_DIR:?start_log first}/$label.log"
-  # A label run again in the same command (one a render case) keeps every log, numbered.
+  # A label repeated in one command (a render case) keeps every log.
   local n=2
   while [[ -e "$log" ]]; do log="$LOG_DIR/$label.$((n++)).log"; done
   printf '  %-18s %s%s%s ' "$label" "$DIM" "$what" "$OFF"

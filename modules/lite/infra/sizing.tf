@@ -4,7 +4,6 @@
 # cluster is read: the plan sizes the box before it exists. Data: sizes.yaml.
 #------------------------------------------------------------------------------
 
-# Inputs: the preset, and what overrides it.
 locals {
   sizes   = yamldecode(file("${path.module}/sizes.yaml"))
   preset  = local.sizes.boxes[var.box]
@@ -70,8 +69,6 @@ locals {
   object_store_gi  = ceil(local.runs_a_day * 1000 * (local.kb.smithdb * local.smithdb_days + local.kb.blob * local.blob_days) * var.storage_factor * local.st.headroom / local.gib)
   smithdb_cache_gi = max(local.st.cache_min_gi, ceil(local.runs_a_day * 1000 * local.kb.smithdb * var.query_hot_days * local.st.headroom / local.gib))
 
-  # Redis holds a stalled ingest at the peak for the whole run expiry, with headroom; its limit leaves a
-  # quarter more for the fork of a save, and its volume holds a snapshot of its memory.
   rd                 = local.sizes.redis
   redis_maxmemory_mi = max(local.rd.min_maxmemory_mi, ceil(local.peak * local.kb.redis * 1000 * var.redis_runs_expiry_hours * 3600 * local.rd.headroom / pow(1024, 2)))
   redis_limit_mi     = ceil(local.redis_maxmemory_mi / local.rd.maxmemory_share)
@@ -86,12 +83,10 @@ locals {
   volumes_gi = sum(values(local.volumes))
 }
 
-# SIZING.md's computation, the stores: Redis and Postgres reserve their memory (request equals limit), since they hold
-# the runs waiting to be ingested and every install's metadata; SmithDB and RustFS ask what they use and
-# may burst. All four run at the stores' priority, above the app's.
+# SIZING.md's computation, the stores: Redis and Postgres reserve their memory (request equals limit);
+# SmithDB and RustFS ask what they use and may burst. All four run at the stores' priority.
 locals {
-  pg = local.sizes.postgres
-  # Connections the pods may open, and max_connections keeping them within the budget.
+  pg                       = local.sizes.postgres
   postgres_connections     = 2 * local.pg.pool_api_pod + 2 * local.pg.pool_worker_pod + local.pg.others
   postgres_max_connections = coalesce(var.postgres_max_connections, max(local.pg.min_connections, ceil(local.postgres_connections / local.pg.budget / local.pg.round_to) * local.pg.round_to))
 
@@ -149,7 +144,6 @@ locals {
     local.peak <= local.max_peak ? "" : "${local.peak} runs/s is past what one machine was measured to hold (${local.max_peak} runs/s at peak): that is a full deployment, a cloud module (../aws, ../gcp, ../azure)",
   ])
 
-  # Kubernetes quantities for the charts.
   k8s = {
     for name, p in local.pods : name => {
       requests = { cpu = "${p.cpu_m}m", memory = "${p.mem_mi}Mi" }

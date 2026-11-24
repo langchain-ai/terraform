@@ -4,9 +4,8 @@
 # diffed, tested and exported freely (make values, make export).
 #------------------------------------------------------------------------------
 
-# Ingress: how Traefik (k3s's own) carries LangSmith in each access mode. localhost and tunnel: plain HTTP
-# inside the box, which ssh or the tunnel encrypts. ip: HTTPS with Traefik's self-signed certificate.
-# dns: HTTPS with Let's Encrypt.
+# Ingress through k3s's Traefik. localhost and tunnel stay plain HTTP inside the box, which ssh or the
+# tunnel encrypts; ip uses Traefik's self-signed certificate, dns Let's Encrypt.
 locals {
   ingress_annotations = {
     localhost = { "traefik.ingress.kubernetes.io/router.entrypoints" = "web" }
@@ -22,10 +21,9 @@ locals {
     }
   }[var.access]
 
-  # localhost and tunnel take Traefik's Service off the host's ports (ClusterIP); ip and dns keep k3s's
-  # servicelb on 80 and 443 and send 80 to 443.
-  # Traefik chart 40 (k3s 1.36's) takes the redirect under ports.web.http; make render checks it against
-  # the chart k3s bundles, which refused the older ports.web.redirections.
+  # localhost and tunnel take Traefik's Service off the host's ports; ip and dns keep k3s's servicelb on
+  # 80 and 443 and send 80 to 443. Traefik chart 40 (k3s 1.36's) takes the redirect under ports.web.http;
+  # make render checks it against the chart k3s bundles, which refused ports.web.redirections.
   https_redirect = { ports = { web = { http = { redirections = { entryPoint = { to = "websecure", scheme = "https", permanent = true } } } } } }
   traefik_values = {
     localhost = { service = { type = "ClusterIP" } }
@@ -41,16 +39,14 @@ locals {
 
 # LangSmith, tracing only.
 locals {
-  # A service Lite does not run gets no pod: the chart has no switch for playground (prompts against
-  # model providers, not tracing, so Lite never runs it) or ace-backend (code evaluators, only when
-  # code_evaluators is set). (Through JSON: a conditional's two branches must
-  # otherwise be objects of the same shape.)
+  # The chart has no switch for playground (prompts against model providers, not tracing) or ace-backend
+  # (code evaluators), so a service Lite does not run gets replicas = 0. Built through JSON because a
+  # conditional's two branches must be objects of the same shape.
   services = ["platformBackend", "ingestQueue", "queue", "playground", "aceBackend"]
 
   langsmith_values = merge(
-    # One replica each, said here: the chart's defaults are 3 platform-backends, 3 ingest-queues and 2
-    # backends, which rendered three times the pods the plan sized and fitted (found rendering 0.18.2
-    # with Lite's values, 2026-11-24).
+    # One replica each, said here: the chart's defaults rendered three times the pods the plan sized
+    # (3 platform-backends, 3 ingest-queues, 2 backends; found rendering 0.18.2, 2026-11-24).
     { for c in local.services : c => { deployment = jsondecode(contains(keys(local.k8s), c) ? jsonencode({ replicas = 1, resources = local.k8s[c] }) : jsonencode({ replicas = 0 })) } },
     {
       commonLabels = local.instance_label
@@ -68,8 +64,8 @@ locals {
           s3UsePathStyle       = true
           minBlobStorageSizeKb = tostring(var.blob_min_kb)
         }
-        # One pair of TTLs drives LangSmith, SmithDB's long-term retention (the chart reads longlived) and
-        # the blob bucket's expiry rules (datastores_values).
+        # One pair of TTLs drives LangSmith, SmithDB's retention (the chart reads longlived) and the blob
+        # bucket's expiry.
         ttl = {
           enabled            = true
           ttl_period_seconds = { longlived = tostring(local.long_ttl * 86400), shortlived = tostring(local.short_ttl * 86400) }
@@ -136,8 +132,7 @@ locals {
   )
 }
 
-# The stores: the bare-metal module's datastores chart. One Postgres holding LangSmith's database and
-# SmithDB's metastore, one Redis, one RustFS with both buckets, at the stores' priority.
+# The stores: the bare-metal module's datastores chart, at the stores' priority.
 locals {
   datastores_values = {
     runtime           = "statefulset"
@@ -188,10 +183,9 @@ locals {
   }
 }
 
-# Observability: Prometheus finds LangSmith's metrics from the chart's own scrape annotations (a second
-# values layer, releases.tf) through its default pod job, which also carries every pod label, the
-# instance's among them, onto the series. Its other default jobs add the kubelet's cAdvisor and every
-# Service annotated prometheus.io/scrape (the two exporters).
+# Prometheus finds LangSmith's metrics from the chart's scrape annotations (a second values layer,
+# releases.tf) through its default pod job, which carries the instance's pod label onto the series; its
+# default jobs cover cAdvisor and the two exporters.
 locals {
   prometheus_values = {
     alertmanager             = { enabled = false }
@@ -237,16 +231,14 @@ locals {
   }
 }
 
-# Grafana: the chart's own dashboard (every SmithDB and LangSmith metric, in depth), three community
-# dashboards, and Lite's health dashboard with an alert rule on every signal in health.yaml: SmithDB's
-# recommended alerts and the bounds the plan sized. A rule fires at its critical level and shows in
-# Grafana's alert list; where it is sent is the operator's to set in Grafana.
+# Grafana: the chart's own dashboard, three community dashboards, and Lite's health dashboard with an
+# alert rule on every signal in health.yaml. A rule fires at its critical level and shows in Grafana's
+# alert list; where it is sent is the operator's to set.
 locals {
   health = yamldecode(file("${path.module}/health.yaml"))
 
   # Each signal twice: for its alert, on this install's namespaces; for the dashboard, on the namespaces
-  # its picker selects (this install's by default), so one Grafana can show many installs. The data disk's
-  # only when the data has a disk of its own.
+  # its picker selects, so one Grafana can show many installs. The data disk's only with a disk of its own.
   dash_ns = { "{ns}|{data}" = "(${"$"}{namespace:regex})(-data)?", "{data}" = "(${"$"}{namespace:regex})-data", "{ns}" = "${"$"}{namespace:regex}" }
   signals = [for sig in local.health.signals : merge(sig, {
     expr      = replace(replace(replace(sig.expr, "{ns}", local.ns.langsmith), "{data}", local.ns.data), "{mount}", local.data_mount)
@@ -258,7 +250,6 @@ locals {
   alerting_signals = [for sig in local.signals : sig if sig.crit != null]
 
   datasource = { name = "prometheus" }
-  # Green below the warning level, orange to the critical, red above it.
   steps = { for sig in local.signals : sig.id => concat(
     [{ color = "green", value = null }],
     sig.warn == null ? [] : [{ color = "orange", value = sig.warn }],
@@ -270,7 +261,6 @@ locals {
     query = { kind = "DataQuery", group = "prometheus", version = "v0", datasource = local.datasource, spec = { expr = sig.dash_expr, legendFormat = "__auto" } }
   } }] } } }
 
-  # One tile a signal on Red flags, coloured by its levels; one graph a signal on its tab, its levels as lines.
   health_elements = merge(
     { intro = { kind = "Panel", spec = {
       id = 1, title = "", description = "", links = [], transparent = true, data = { kind = "QueryGroup", spec = { queries = [], transformations = [], queryOptions = {} } }
@@ -339,8 +329,7 @@ locals {
     }
   }
 
-  # Grafana's unified alerting, provisioned: one rule a signal with a critical level. A guard (a minimum
-  # count) applies to the alert only: the dashboard shows the share at any traffic.
+  # A guard (a minimum count) applies to the alert only: the dashboard shows the share at any traffic.
   alert_rules = { apiVersion = 1, groups = [{
     orgId    = 1
     name     = "health"
@@ -397,9 +386,8 @@ locals {
   }
 }
 
-# Mission Control: read-only but for its diagnostics. The features that write (delete pods, patch
-# ownership, save drafts, alert config, value overrides, deploy) are off, and with them their RBAC verbs;
-# its login is made by Lite (bundle.tf), so it never writes its own auth Secret.
+# Mission Control, read-only but for its diagnostics: the features that write are off, with their RBAC
+# verbs, and its login is made by Lite (bundle.tf), so it never writes its own auth Secret.
 locals {
   mission_control_values = {
     commonLabels = local.instance_label
@@ -413,9 +401,9 @@ locals {
       strictReadOnly     = true
       auth               = { enabled = true, existingSecret = "mission-control-auth", jwtSecretKey = "jwt-secret" }
       discoverNamespaces = "${local.ns.langsmith},${local.ns.data}"
-      # One switch for every write and disclosure endpoint, and for every write verb in its RBAC: with
-      # auth on, the chart otherwise granted a Role create on Secrets, enough to mint a token (security
-      # review, 2026-11-24). It also turns off the database tools, discover and chat (which calls out).
+      # One switch for every write and disclosure endpoint and every write verb in its RBAC: with auth on,
+      # the chart granted a Role create on Secrets, enough to mint a token (security review, 2026-11-24).
+      # It also turns off the database tools, discover and chat (which calls out).
       features = { chat = false }
     }
     backend  = { resources = try(local.k8s["mission-control-backend"], null) }

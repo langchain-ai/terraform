@@ -5,15 +5,14 @@
 # See LICENSE at the root of this repository for full license text.
 
 # Proving a running install: verify and soak. Sourced by bin/lite. The judging is the load test's
-# (utils/langsmith-load-test: load-test-verify, load-test-judge, load-test-step), the same for every
-# install; lib/prove.py adds the API key; this file reaches the install.
+# (utils/langsmith-load-test), the same for every install; lib/prove.py adds the API key; this file
+# reaches the install:
 #
-#   a box      ssh forwards the box's Kubernetes API to a free port here, and the ssh user's
-#              kubeconfig, pointed at that port, is copied into the run's folder (mode 600) and
-#              deleted with it: the load test reads the install through kubectl
+#   a box      ssh forwards the box's Kubernetes API to a free port here; the ssh user's kubeconfig,
+#              pointed at it, lives in the run's folder (mode 600) and goes with it
 #   a cluster  the kubectl context in use (cloud = cluster)
-#   both       kubectl port-forwards LangSmith's frontend to a free port here, so the traces take
-#              the same path whatever the access mode, with no certificate to trust
+#   both       kubectl port-forwards LangSmith's frontend to a free port here, so traces take the same
+#              path whatever the access mode, with no certificate to trust
 
 cmd_verify() {
   heading "verify" "traces go in, and come back out: every hop, about two minutes"
@@ -51,9 +50,8 @@ prove() {
     ssh "${SSH_OPTS[@]}" -N -o ExitOnForwardFailure=yes -L "$kport:127.0.0.1:6443" "$SSH_TARGET" &
     run kube "reach the box's Kubernetes API over ssh" wait_for kubectl get --raw /readyz
   fi
-  # Port 0: kubectl binds a free port itself and prints it. A port picked here and bound later could be
-  # taken first by another local user, who would then receive the admin's login (security review,
-  # 2026-11-24).
+  # Port 0: kubectl binds a free port itself. One picked here and bound later could be taken first by
+  # another local user, who would receive the admin's login (security review, 2026-11-24).
   kubectl -n "$(json_get langsmith <<<"$ns")" port-forward svc/langsmith-frontend "0:$(frontend_port "$ns")" >"$work/port-forward.log" 2>&1 &
   run forward "a tunnel to LangSmith's frontend" wait_for grep -q '^Forwarding from 127.0.0.1:' "$work/port-forward.log"
   wport="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$work/port-forward.log" | head -1)"

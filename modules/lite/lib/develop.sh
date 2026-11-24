@@ -6,9 +6,9 @@
 
 # Changing Lite itself: render and check. Sourced by bin/lite.
 
-# Render every release the plan would install through its real chart, at the resolved versions and with
-# the values layers helm-controller applies, for each infra/tests/render-*.tfvars case. What terraform
-# test cannot see: whether the charts accept the values. Needs the Helm repos, so it is not in check.
+# Every release through its real chart, at the resolved versions with helm-controller's values layers,
+# per infra/tests/render-*.tfvars case: what terraform test cannot see is whether the charts accept the
+# values. Needs the Helm repos, so it is not in check.
 cmd_render() {
   need terraform helm python3 curl
   heading "render" "every release through its real chart, for each case in infra/tests/render-*.tfvars"
@@ -16,7 +16,7 @@ cmd_render() {
   resolve_versions
   local vars label work
   work="$(mktemp -d)"
-  # Expanded now: a local is gone by the time EXIT runs, and set -u stopped the cleanup on it.
+  # Expanded now: a local is gone by the time EXIT runs (see install_bundle).
   # shellcheck disable=SC2064
   trap "rm -rf '$work'" EXIT
   for vars in "$INFRA"/tests/render-*.tfvars; do
@@ -42,17 +42,15 @@ for name, r in json.load(sys.stdin)["planned_values"]["outputs"]["values"]["valu
   printf '\n'
 }
 
-# Lite's Traefik settings over k3s's own, against the Traefik chart the pinned k3s release bundles: its
-# manifest names the chart (traefik-<version>.tgz, k3s's own build, published in k3s's chart repo) and
-# carries k3s's values. k3s's build, not upstream's: upstream 40.1.0 refuses the newer Traefik image k3s
-# runs with it.
+# Lite's Traefik settings over k3s's own, against the chart the pinned k3s release bundles (its manifest
+# names it and carries k3s's values). k3s's build, not upstream's: upstream 40.1.0 refuses the newer
+# Traefik image k3s runs with it.
 render_traefik() {
   local work="$1" plan="$2" k3s manifest version
   k3s="$(json_get k3s_version <<<"$(tf show -json "$plan" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["planned_values"]["outputs"]["box"]["value"]))')")"
   manifest="$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/k3s-io/k3s/${k3s//+/%2B}/manifests/traefik.yaml")" || return 1
   version="$(sed -n 's|.*/static/charts/traefik-\([0-9][^/]*\)\.tgz|\1|p' <<<"$manifest" | tail -1)"
   [[ -n "$version" ]] || { echo "no Traefik chart version in k3s $k3s's manifest"; return 1; }
-  # k3s's valuesContent: the indented block under the traefik HelmChart's valuesContent.
   awk '/name: traefik$/ { t = 1 } t && /valuesContent: \|-/ { v = 1; next } v && /^  [a-z]/ { exit } v { sub(/^    /, ""); print }' <<<"$manifest" >"$work/traefik.k3s.yaml"
   tf show -json "$plan" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["planned_values"]["outputs"]["box"]["value"]["traefik_values"], open(sys.argv[1], "w"))' "$work/traefik.lite.json"
   echo "k3s $k3s bundles Traefik chart $version"
@@ -66,7 +64,6 @@ render_one() {
   helm template "$name" "${args[@]}" -n "$ns" -f "$work/$name.json" -f "$work/$name.layer.yaml"
 }
 
-# Offline, as CI runs it: the repo's own gates for this module, and this folder's shell.
 cmd_check() {
   need terraform python3 shellcheck uv
   heading "check" "offline, as CI runs it"
@@ -96,13 +93,12 @@ sys.exit(1 if missing else 0)
 PY
 }
 
-# lib/'s tests under coverage, then each function's complexity and CRAP (lib/quality.py) and vulture's
-# dead code. radon, coverage and vulture come from uv's cache, never installed into the system.
+# radon, coverage and vulture come from uv's cache, never installed into the system.
 check_python() {
   local q="$BUILD/quality" tools=(uv run --quiet --no-project --with radon --with coverage --with vulture)
   mkdir -p "$q"
-  # Every tool from lib/, so coverage and radon name each file alike; run from two places, every file
-  # read as untested.
+  # Every tool runs from lib/: from two places, coverage and radon name files differently and every
+  # file read as untested.
   (
     cd "$LITE/lib" || exit 1
     PYTHONPATH=. "${tools[@]}" coverage run --data-file="$q/.coverage" --source=. --omit='tests/*' -m unittest discover -s tests -q &&

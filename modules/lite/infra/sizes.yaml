@@ -1,14 +1,14 @@
-# How big each pod and volume on the box is, and what the box costs. Data, read by sizing.tf, whose
-# blocks follow SIZING.md's computation in order; SIZING.md explains every number.
+# How big each pod and volume on the box is, and what the box costs. Read by sizing.tf, whose blocks
+# follow SIZING.md's computation in order; SIZING.md explains every number.
 #
 # Units: cpu_m millicores, mem_mi MiB, *_gi GiB, kb decimal kilobytes, usd US dollars. A request is
-# what the scheduler reserves and what the fit adds up; a limit is the ceiling a pod may burst to.
+# what the scheduler reserves and the fit adds up; a limit is the ceiling a pod may burst to.
 
-# LangSmith's own services follow a model measured on the bare-metal lab: cores at idle (base) plus
-# cores per unit of work (per_unit), times headroom, never below min_cpu_m. Work is the design rate in
-# runs a second (offered: what clients send; processed: what the workers drain), or the readers at once,
-# or nothing (fixed). Memory is the sampled peak times mem_headroom: a peak sampled at one lab load had
-# no buffer as a request, while CPU had half again (the sizing calculator's lite.measured, the same two).
+# LangSmith's services follow a model measured on the bare-metal lab: cores at idle (base) plus cores per
+# unit of work (per_unit), times headroom, never below min_cpu_m. Work is the design rate in runs a second
+# (offered: what clients send; processed: what the workers drain), the readers at once, or nothing (fixed).
+# Memory is the sampled peak times mem_headroom: a peak sampled at one lab load had no buffer as a
+# request, where CPU had half again.
 # Source: bare-metal lab runs at 3 runs a trace and about 180 KiB a run, 5 s samples over ten minutes,
 # 2026-10-31 and 2026-11-01 (Reed Bender); the sizing calculator's lite.measured parameters.
 model:
@@ -16,23 +16,21 @@ model:
   mem_headroom: 1.2
   min_cpu_m: 50
   workloads:
-    # Go services keep a 2-CPU limit: Go sets GOMAXPROCS to the limit, and under a 1-CPU limit
-    # ingest-queue was throttled in 98% of periods at 4.3 traces/s on the lab (2026-10-22;
-    # terraform#513, Michael Frederick).
+    # Go services keep a 2-CPU limit: Go sets GOMAXPROCS to the limit, and at 1 CPU ingest-queue was
+    # throttled in 98% of periods at 4.3 traces/s (lab, 2026-10-22; terraform#513, Michael Frederick).
     platformBackend: { work: offered, base: 0.003, per_unit: 0.0045, mem_mi: 512, lim_cpu_m: 2000 }
     ingestQueue: { work: processed, base: 0.025, per_unit: 0.035, mem_mi: 1126, lim_cpu_m: 2000 }
     queue: { work: processed, base: 0.082, per_unit: 0.0058, mem_mi: 1638, lim_cpu_m: 1000 }
     frontend: { work: readers, base: 0.001, per_unit: 0.0214, mem_mi: 128, lim_cpu_m: 500 }
-    # backend imports many Python modules at start: a higher CPU limit lets them start
-    # inside their startup probes.
+    # backend imports many Python modules at start: a higher CPU limit fits it inside its startup probes.
     backend: { work: readers, base: 0.013, per_unit: 0.0012, mem_mi: 973, lim_cpu_m: 2000 }
-    # Not tracing: each runs only when its feature is on.
+    # Not tracing: runs only with code_evaluators.
     aceBackend: { work: fixed, base: 0.001, per_unit: 0, mem_mi: 128, lim_cpu_m: 250, feature: code_evaluators }
   mem_limit_factor: 2
   mem_limit_floor_mi: 256
 
-# What a run costs the stores, and how long they keep it. Source: LangChain trace payload measurements
-# and load tests of LangSmith 0.17.6 with SmithDB, 2026-11 (Dzmitry Dubarau), the sizing calculator's
+# What a run costs the stores, and how long they keep it. Source: LangChain trace payload measurements and
+# load tests of LangSmith 0.17.6 with SmithDB, 2026-11 (Dzmitry Dubarau); the sizing calculator's
 # payload.* and retention.* parameters.
 storage:
   # Run sizes: small 4 + 4 KiB, medium 32 + 32 KiB, large about 1.5 MB (inputs + outputs).
@@ -49,22 +47,20 @@ storage:
   # SmithDB's query cache holds the hot window, never less than this.
   cache_min_gi: 10
 
-# Redis holds each run until ingest-queue drains it. Its maxmemory holds a stalled ingest at the peak
-# for the whole run expiry, with headroom (headroom.redis); its limit leaves a quarter more for the fork
-# of a save, and its request equals its limit, so the memory is reserved.
+# Redis holds each run until ingest-queue drains it. Its maxmemory holds a stalled ingest at the peak for
+# the whole run expiry, with headroom; its limit adds a quarter for the fork of a save, and its request
+# equals its limit, so the memory is reserved.
 redis:
   headroom: 1.3
   maxmemory_share: 0.75
   min_maxmemory_mi: 256
-  # CPU: little at rest; a 2-CPU limit, since every drain step goes through it and it throttled in 25% of
-  # periods at 1 CPU on the bare-metal lab.
+  # A 2-CPU limit: every drain step goes through Redis, and it throttled in 25% of periods at 1 CPU (lab).
   cpu_m: 50
   lim_cpu_m: 2000
 
-# Postgres connections: an API pod (platform-backend, backend) opens up to pool_api_pod (postgres.
-# pool_api_pod); a worker (queue, ingest-queue) the chart's ASYNCPG_POOL_MAX_SIZE; others are SmithDB's
-# metastore, migrations and the exporter. max_connections keeps them within the budget
-# (postgres.connection_budget), rounded up to round_to.
+# Postgres connections: an API pod (platform-backend, backend) opens up to pool_api_pod; a worker (queue,
+# ingest-queue) the chart's ASYNCPG_POOL_MAX_SIZE; others are SmithDB's metastore, migrations and the
+# exporter. max_connections keeps them within budget, rounded up to round_to.
 postgres:
   pool_api_pod: 50
   pool_worker_pod: 3
@@ -73,23 +69,21 @@ postgres:
   round_to: 50
   min_connections: 100
 
-# One machine holds up to this peak: the sizing calculator's extra-lite regime ends at 5 traces/s (50 runs
-# a second at 10 runs a trace). Past it, the plan refuses and names the cloud modules.
+# The most one machine holds: the sizing calculator's extra-lite regime ends at 5 traces/s (50 runs a
+# second at 10 runs a trace). Past it, the plan refuses and names the cloud modules.
 single_machine_max_runs_per_second: 50
 
 # The box presets. machine is the box Lite plans for; design the load its pods and stores are sized for,
-# the most each machine's CPU holds; reserved what k3s, the kubelet and the OS keep (given to the kubelet
-# as system-reserved). features turns the observability stack and Mission Control on or off for the
-# preset: xs runs neither, as an instance a fleet watches from one shared stack. aws is the instance
-# type with the machine's vCPUs and memory.
+# the most its CPU holds; reserved what k3s, the kubelet and the OS keep (given to the kubelet as
+# system-reserved); features the observability stack and Mission Control, off on xs, an instance a fleet
+# watches from one shared stack; aws the instance type with the machine's vCPUs and memory.
 #
-# SmithDB runs as one unified pod (chart 0.18), whose smallest chart tier asks 4 CPU and 16 GiB. Its
-# sizes here are the bare-metal module's tested minimal tier for the pods it replaces, not yet measured
-# as one pod. ponytail: unmeasured unified SmithDB; the first install of each box measures it.
+# SmithDB runs as one unified pod (chart 0.18) whose smallest chart tier asks 4 CPU and 16 GiB. Its sizes
+# here are the bare-metal module's tested minimal tier for the pods it replaces, not yet measured as one
+# pod. ponytail: unmeasured unified SmithDB; the first install of each box measures it.
 # Memory binds before CPU (Redis holds a stalled ingest, SmithDB and the stores keep their working sets,
-# the services carry a 1.2 buffer), so xs, s and m are memory-optimized, 8 GiB a vCPU (r7i on AWS). On
-# 4 GiB a vCPU, s with Mission Control overran its allowed memory and m sat at 98% (2026-11-24); l, at
-# 4 GiB a vCPU, holds its load at 84%.
+# the services carry a 1.2 buffer), so xs, s and m take 8 GiB a vCPU (r7i on AWS). At 4 GiB a vCPU, s with
+# Mission Control overran its allowed memory and m sat at 98% (2026-11-24); l holds its load at 84%.
 boxes:
   xs:
     machine: { cpu: 2, memory_gi: 16, disk_gi: 100 }
@@ -119,8 +113,8 @@ boxes:
     features: { observability: true, mission_control: true }
     smithdb: { cpu_m: 2000, mem_mi: 8192, lim_cpu_m: 4000, lim_mem_mi: 12288 }
     postgres: { cpu_m: 250, mem_mi: 1536, lim_cpu_m: 2000, volume_gi: 20 }
-    # 6 GiB limit, as the bare-metal lab profile: RustFS was OOM-killed 9 times at 2 GiB under about
-    # 70 to 80 traces/s of SmithDB flushes, and each kill failed SmithDB's writes.
+    # 6 GiB limit, as the bare-metal lab profile: RustFS was OOM-killed 9 times at 2 GiB under about 70 to
+    # 80 traces/s of SmithDB flushes, and each kill failed SmithDB's writes.
     rustfs: { cpu_m: 250, mem_mi: 2048, lim_cpu_m: 4000, lim_mem_mi: 6144 }
     prometheus: { volume_gi: 20 }
   l:
@@ -134,9 +128,9 @@ boxes:
     rustfs: { cpu_m: 500, mem_mi: 4096, lim_cpu_m: 4000, lim_mem_mi: 8192 }
     prometheus: { volume_gi: 40 }
 
-# Pods whose size does not move with the load, each under the feature that runs it: the observability
-# stack, Mission Control (its chart's own requests), cloudflared for a tunnel, and what k3s runs with
-# requests (CoreDNS and metrics-server, from k3s's packaged manifests; Traefik and local-path ask nothing).
+# Pods whose size does not move with the load, each under the feature that runs it. Mission Control's are
+# its chart's own requests; k3s's are CoreDNS and metrics-server from its packaged manifests (Traefik and
+# local-path ask nothing).
 fixed:
   prometheus: { cpu_m: 100, mem_mi: 512, lim_cpu_m: 1000, lim_mem_mi: 1536, feature: observability }
   kube-state-metrics: { cpu_m: 10, mem_mi: 64, lim_cpu_m: 100, lim_mem_mi: 128, feature: observability }
@@ -150,18 +144,16 @@ fixed:
   k3s-coredns: { cpu_m: 100, mem_mi: 70, lim_cpu_m: 0, lim_mem_mi: 170, feature: k3s }
   k3s-metrics-server: { cpu_m: 100, mem_mi: 70, lim_cpu_m: 0, lim_mem_mi: 0, feature: k3s }
 
-# Disk the box needs beyond the volumes: the operating system, the images and the logs. On AWS it is the
-# root volume's size; the volumes go on a data volume of their own.
+# Disk beyond the volumes: the operating system, images and logs. On AWS, the root volume's size.
 system_disk_gi: 40
 
-# How full a disk may be planned to get once every store holds its retention. k3s's kubelet evicts pods
-# under 15% free on the disk its images live on and cleans images from 80% used, and the health dashboard
-# turns orange at 80%: the volumes plus the system filled the presets' one disk to 92 to 96% (2026-11-24).
+# How full a disk may be planned to get once every store holds its retention. The kubelet evicts pods
+# under 15% free on the images' disk and cleans images from 80% used, and the health dashboard turns
+# orange at 80%: the volumes plus the system filled the presets' one disk to 92 to 96% (2026-11-24).
 disk_fill_max: 0.8
 
-# What the box costs a month, for the plan's estimate: AWS's on-demand list prices for Linux in
-# us-east-1 (us-west-2 is the same for these). Not fetched by the plan: a region, a reservation or a
-# discount changes them; aws_hourly_usd overrides the instance's.
+# The plan's monthly estimate: AWS's on-demand Linux list prices in us-east-1 (us-west-2 is the same for
+# these). Not fetched: a region, a reservation or a discount changes them; aws_hourly_usd overrides.
 aws_prices:
   hours_a_month: 730
   instance_hourly_usd: { r7i.large: 0.1323, r7i.xlarge: 0.2646, r7i.2xlarge: 0.5292, m7i.4xlarge: 0.8064 }

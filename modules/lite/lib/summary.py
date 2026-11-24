@@ -4,10 +4,6 @@
 
 """What a plan does, in the form every Lite command prints: read from `terraform show -json` on stdin.
 
-    the box and the load it is sized for; its requests against what it allows; the data it keeps and
-    where; the retention, loudly when it is still the default; the cost on AWS; what is not running;
-    the versions; where LangSmith answers; and the count of changes
-
 Standard library only. Colour as lib/ui.sh decides it: on a terminal, never with NO_COLOR.
 """
 

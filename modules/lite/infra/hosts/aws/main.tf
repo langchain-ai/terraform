@@ -1,9 +1,7 @@
 #------------------------------------------------------------------------------
-# One EC2 instance for Lite: Ubuntu 24.04 LTS, one encrypted gp3 volume, a
-# fixed public address, and a security group that admits ssh from the
-# operator and HTTPS only when LangSmith is served on the address. k3s and
-# everything on it are installed over ssh by scripts/install.sh, the same way
-# as on any other box, so this module makes a machine and nothing more.
+# One EC2 instance for Lite: Ubuntu 24.04 LTS, one encrypted gp3 volume, a fixed public address, and a
+# security group that admits ssh from the operator and HTTPS only when LangSmith is served on the address.
+# k3s and everything on it are installed over ssh, so this module makes a machine and nothing more.
 #------------------------------------------------------------------------------
 
 terraform {
@@ -95,8 +93,8 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 }
 
 # The instance's ssh host key, made here and given to it at boot, so the first ssh, which carries every
-# credential, checks the key it is shown instead of trusting it (accept-new took any key the first
-# time: security review, 2026-11-24). Like every credential, it lives in Terraform's state.
+# credential, checks the key it is shown (accept-new took any key; security review, 2026-11-24). Like
+# every credential, it lives in Terraform's state.
 resource "tls_private_key" "host" {
   algorithm = "ED25519"
 }
@@ -108,7 +106,6 @@ resource "aws_instance" "this" {
   key_name               = aws_key_pair.this.key_name
   vpc_security_group_ids = [aws_security_group.this.id]
 
-  # The system: the operating system, k3s, the images and the logs. The data has a volume of its own.
   root_block_device {
     volume_type           = "gp3"
     volume_size           = var.root_disk_gi
@@ -144,8 +141,7 @@ resource "aws_eip" "this" {
 }
 
 # Every store's volume, apart from the system. It outlives the instance (a new image, a replaced or
-# resized instance reattaches it); make down deletes it, after the install's name is typed. gp3 grows in
-# place, and the install grows its filesystem.
+# resized instance reattaches it); make down deletes it after the install's name is typed.
 resource "aws_ebs_volume" "data" {
   availability_zone = data.aws_subnet.chosen.availability_zone
   type              = "gp3"
@@ -162,8 +158,7 @@ resource "aws_volume_attachment" "data" {
   stop_instance_before_detaching = true
 }
 
-# Daily snapshots of the data volume, kept backup_snapshot_days: crash-consistent copies Postgres and
-# RustFS recover from, restorable to a new volume.
+# Daily snapshots of the data volume: crash-consistent copies Postgres and RustFS recover from.
 resource "aws_iam_role" "snapshots" {
   count = var.backup_snapshot_days > 0 ? 1 : 0
   name  = "${var.name}-snapshots"
