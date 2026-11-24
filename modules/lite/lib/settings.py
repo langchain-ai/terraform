@@ -56,7 +56,7 @@ QUESTIONS = [
     Question("storage_class", "the cluster's storage class for the stores", when=lambda a: a["cloud"] == "cluster"),
     Question("scratch_storage_class", "the storage class for caches", when=lambda a: a["cloud"] == "cluster"),
     Question("box", "the size", "s", ("xs", "s", "m", "l"),
-             note="xs 2 vCPU 16 GiB 1 run/s; s 4/16 5; m 8/32 25; l 16/64 50 (README.md, Sizes)"),
+             note="xs 2 vCPU 16 GiB 1 run/s; s 4/32 5; m 8/64 25; l 16/64 50 (README.md, Sizes)"),
     Question("short_ttl_days", "days a trace is kept", "14", kind="number", pattern=r"^[1-9][0-9]*$",
              note="Retention sizes the disk more than anything else: choose what you must keep."),
     Question("long_ttl_days", "days an extended trace is kept, 14 or more", "30", kind="number", pattern=r"^[1-9][0-9]*$"),

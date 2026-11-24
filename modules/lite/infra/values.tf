@@ -41,8 +41,9 @@ locals {
 
 # LangSmith, tracing only.
 locals {
-  # A service whose feature is off runs no pod: the chart has no switch for playground or ace-backend,
-  # and nothing on the tracing path calls either. (Through JSON: a conditional's two branches must
+  # A service Lite does not run gets no pod: the chart has no switch for playground (prompts against
+  # model providers, not tracing, so Lite never runs it) or ace-backend (code evaluators, only when
+  # code_evaluators is set). (Through JSON: a conditional's two branches must
   # otherwise be objects of the same shape.)
   services = ["platformBackend", "ingestQueue", "queue", "playground", "aceBackend"]
 

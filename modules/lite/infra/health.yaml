@@ -187,7 +187,7 @@ signals:
     tab: Stores and pods
     title: Deployments with no available pod (alert 11)
     # Every LangSmith Deployment that should run, not SmithDB's alone: on one box any of them down is an outage.
-    # One scaled to zero on purpose (playground off) is left out.
+    # One scaled to zero on purpose (playground, ace-backend) is left out.
     expr: count by (namespace) ((kube_deployment_status_replicas_available{namespace=~"{ns}"} < 1) unless on (namespace, deployment) (kube_deployment_spec_replicas{namespace=~"{ns}"} == 0)) or on (namespace) (0 * count by (namespace) (kube_deployment_spec_replicas{namespace=~"{ns}"}))
     unit: short
     crit: 0

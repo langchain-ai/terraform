@@ -228,7 +228,7 @@ run "a_data_disk_gets_its_own_alert" {
   command = plan
   variables {
     data_path = "/srv/data"
-    machine   = { cpu = 8, memory_gi = 32, disk_gi = 40, data_disk_gi = 600 }
+    machine   = { cpu = 8, memory_gi = 64, disk_gi = 40, data_disk_gi = 600 }
   }
   assert {
     condition     = contains([for r in output.values.grafana.values.alerting["rules.yaml"].groups[0].rules : r.uid], "lite-data-disk")

@@ -32,8 +32,8 @@ variables {
 run "each_preset_picks_its_instance" {
   command = plan
   assert {
-    condition     = module.aws[0].instance_type == "m7i.xlarge"
-    error_message = "box s should run on m7i.xlarge (4 vCPU, 16 GiB)."
+    condition     = module.aws[0].instance_type == "r7i.xlarge"
+    error_message = "box s should run on r7i.xlarge (4 vCPU, 32 GiB)."
   }
 }
 
@@ -46,12 +46,12 @@ run "xs_runs_on_two_vcpus_and_sixteen_gib" {
   }
 }
 
-# The data volume holds the plan's volumes plus a fifth, rounded up to 10 GiB; the system keeps 40.
+# The data volume holds the plan's volumes at 80% full at most, rounded up to 10 GiB; the system keeps 40.
 run "the_data_has_a_volume_of_its_own" {
   command = plan
   assert {
-    condition     = output.plan.disks.data_separate && output.plan.disks.system_gi == 40 && output.plan.disks.data_gi >= output.plan.disks.volumes_gi * 1.2
-    error_message = "on AWS the volumes should be on a data volume of their own, sized to the plan's volumes plus a fifth."
+    condition     = output.plan.disks.data_separate && output.plan.disks.system_gi == 40 && output.plan.disks.data_gi * 0.8 >= output.plan.disks.volumes_gi
+    error_message = "on AWS the volumes should be on a data volume of their own, at most 80% full."
   }
   assert {
     condition     = output.plan.disks.data_mount == "/var/lib/rancher/k3s/storage" && output.plan.disks.snapshot_days == 7
@@ -68,12 +68,12 @@ run "snapshots_can_be_turned_off" {
   }
 }
 
-# m7i.xlarge at $0.2016 x 730 h, 40 + 130 GiB of gp3 at $0.08, snapshots of 107 GiB at $0.05, an address.
+# r7i.xlarge at $0.2646 x 730 h, 40 + 130 GiB of gp3 at $0.08, snapshots of 107 GiB at $0.05, an address.
 run "the_cost_is_the_instance_the_disks_the_snapshots_and_the_address" {
   command = plan
   assert {
-    condition     = output.plan.cost_usd_a_month.total >= 160 && output.plan.cost_usd_a_month.total <= 180
-    error_message = "box s on AWS should cost about $170 a month at list prices; got ${output.plan.cost_usd_a_month.total}."
+    condition     = output.plan.cost_usd_a_month.total >= 205 && output.plan.cost_usd_a_month.total <= 225
+    error_message = "box s on AWS should cost about $216 a month at list prices; got ${output.plan.cost_usd_a_month.total}."
   }
 }
 

@@ -43,7 +43,7 @@ policy has no statement for; the policy itself is first exercised by the first A
 
 On GCP or Azure, make a VM of the size's shape and use `baremetal` until their hosts land. k3s needs
 Linux, so on a Mac or Windows machine the box is a Linux VM (Lima, OrbStack, UTM, Hyper-V), for example
-`limactl start --cpus 8 --memory 32 --disk 600 template://ubuntu-lts`.
+`limactl start --cpus 8 --memory 64 --disk 640 template://ubuntu-lts`.
 
 `make preflight` checks the machine over ssh, read-only and without root; `make up` runs the same checks
 on the box before it changes anything:
@@ -150,7 +150,7 @@ Grafana's "LangSmith Lite" folder holds the two dashboards that matter most:
 | Dashboard | Tabs | Read it for |
 |:--|:--|:--|
 | LangSmith Lite health | Red flags; Ingestion; Writes and queries; Compaction; Stores and pods; Capacity | is anything wrong: one tile a signal, green, orange (the early signal) or red (an alert fires); each tab graphs its signals with their levels as lines, one line an install |
-| LangSmith Self-Hosted (the chart's own) | SmithDB; Sandboxes | why: every SmithDB and LangSmith metric in depth |
+| LangSmith Self-Hosted (the chart's own, from its [observability bundle](https://docs.langchain.com/langsmith/self-host-observability-dashboards)) | SmithDB; Sandboxes, empty on Lite, which runs none | why: every SmithDB and LangSmith metric in depth |
 
 Node Exporter, Redis and PostgreSQL dashboards are there too. Every signal on the health dashboard is
 one alert rule in Grafana (Alerting, Alert rules), from one list, `infra/health.yaml`: LangSmith's

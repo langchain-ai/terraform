@@ -25,7 +25,7 @@ run "s_fits" {
   command = plan
   variables { box = "s" }
   assert {
-    condition     = output.plan.used_pct.cpu <= 100 && output.plan.used_pct.memory <= 100 && output.plan.disks.used_pct <= 100
+    condition     = output.plan.used_pct.cpu <= 100 && output.plan.used_pct.memory <= 100 && output.plan.disks.used_pct <= 80
     error_message = "box s does not fit at its design load: ${jsonencode(output.plan.used_pct)}, disk ${output.plan.disks.used_pct}%."
   }
 }
@@ -34,7 +34,7 @@ run "m_fits" {
   command = plan
   variables { box = "m" }
   assert {
-    condition     = output.plan.used_pct.cpu <= 100 && output.plan.used_pct.memory <= 100 && output.plan.disks.used_pct <= 100
+    condition     = output.plan.used_pct.cpu <= 100 && output.plan.used_pct.memory <= 100 && output.plan.disks.used_pct <= 80
     error_message = "box m does not fit at its design load."
   }
 }
@@ -43,7 +43,7 @@ run "l_fits_at_the_single_machine_limit" {
   command = plan
   variables { box = "l" }
   assert {
-    condition     = output.plan.runs_per_second == 50 && output.plan.used_pct.cpu <= 100 && output.plan.disks.used_pct <= 100
+    condition     = output.plan.runs_per_second == 50 && output.plan.used_pct.cpu <= 100 && output.plan.disks.used_pct <= 80
     error_message = "box l should be designed for 50 runs/s and fit."
   }
 }
@@ -58,13 +58,17 @@ run "past_l_is_a_full_deployment" {
   expect_failures = [terraform_data.fit]
 }
 
-# ingest-queue at 5 runs/s: (0.025 + 0.035 x 5) x 1.5 = 300m.
+# ingest-queue at 5 runs/s: (0.025 + 0.035 x 5) x 1.5 = 300m; its sampled peak of 1126 MiB x 1.2 = 1352 MiB.
 run "the_model_sizes_the_services_from_the_rate" {
   command = plan
   variables { box = "s" }
   assert {
     condition     = output.plan.pods.ingestQueue.cpu_m == 300 && output.plan.pods.backend.cpu_m == 50
     error_message = "ingestQueue should ask 300m at 5 runs/s, and backend sit at the 50m floor."
+  }
+  assert {
+    condition     = output.plan.pods.ingestQueue.mem_mi == 1352 && output.plan.pods.ingestQueue.lim_mem_mi == 2704
+    error_message = "a service's memory request should be its sampled peak x 1.2, its limit twice that."
   }
 }
 
@@ -83,7 +87,7 @@ run "longer_ttls_and_more_extended_retention_need_more" {
   command = plan
   variables {
     box                    = "s"
-    machine                = { cpu = 4, memory_gi = 16, disk_gi = 4000 }
+    machine                = { cpu = 4, memory_gi = 32, disk_gi = 4000 }
     short_ttl_days         = 30
     long_ttl_days          = 400
     extended_retention_pct = 50
@@ -98,7 +102,7 @@ run "attachments_go_to_the_blob_bucket" {
   command = plan
   variables {
     box                    = "s"
-    machine                = { cpu = 4, memory_gi = 16, disk_gi = 4000 }
+    machine                = { cpu = 4, memory_gi = 32, disk_gi = 4000 }
     attachment_kib_per_run = 100
   }
   assert {
@@ -169,7 +173,7 @@ run "a_data_path_holds_the_volumes_apart_from_the_system" {
   variables {
     box       = "s"
     data_path = "/srv/data"
-    machine   = { cpu = 4, memory_gi = 16, disk_gi = 40, data_disk_gi = 200 }
+    machine   = { cpu = 4, memory_gi = 32, disk_gi = 40, data_disk_gi = 200 }
   }
   assert {
     condition     = output.plan.disks.data_separate && output.plan.disks.data_mount == "/srv/data"
@@ -225,19 +229,19 @@ run "tracing_runs_no_playground_or_code_evaluators" {
   variables { box = "s" }
   assert {
     condition     = !contains(keys(output.plan.pods), "playground") && output.values.langsmith.values.playground.deployment.replicas == 0 && output.values.langsmith.values.aceBackend.deployment.replicas == 0
-    error_message = "playground and ace-backend should run no pod when their features are off."
+    error_message = "playground should never run, and ace-backend not unless code_evaluators is set."
   }
 }
 
-run "a_feature_turned_on_is_sized_and_runs" {
+run "code_evaluators_turned_on_is_sized_and_runs" {
   command = plan
   variables {
-    box        = "m"
-    playground = true
+    box             = "l"
+    code_evaluators = true
   }
   assert {
-    condition     = contains(keys(output.plan.pods), "playground") && output.values.langsmith.values.playground.deployment.resources.requests.memory == "922Mi"
-    error_message = "playground on should be sized and given its resources."
+    condition     = contains(keys(output.plan.pods), "aceBackend") && output.values.langsmith.values.aceBackend.deployment.replicas == 1
+    error_message = "code_evaluators on should size ace-backend and run one replica."
   }
 }
 

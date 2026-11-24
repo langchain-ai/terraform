@@ -4,7 +4,7 @@
 # infra/.secrets.env (make secrets changes them).
 
 name = "langsmith-lite"
-box  = "s" # xs (2 vCPU, 16 GiB), s (4, 16), m (8, 32), l (16, 64): README.md, Sizes
+box  = "s" # xs (2 vCPU, 16 GiB), s (4, 32), m (8, 64), l (16, 64): README.md, Sizes
 
 # Any Linux machine reached over ssh: a server, a VM in any cloud, a VM on a laptop (OPERATE.md, The machine).
 # The user needs sudo only to install and remove k3s. ssh_user and ssh_port default to your ssh config's.
@@ -20,7 +20,7 @@ ssh_host = "lite.example.internal"
 # ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 # admin_cidrs    = ["203.0.113.7/32"] # your address
 # aws_subnet_id  = "subnet-..."       # unset: the region's default VPC
-# aws_instance_type = "m7i.2xlarge"   # a machine of another shape: set it with machine
+# aws_instance_type = "r7i.4xlarge"   # a machine of another shape: set it with machine
 # data_disk_gi         = 200 # the data volume; unset, the plan's volumes plus a fifth
 # backup_snapshot_days = 7   # daily snapshots of the data volume kept; 0 for none
 
@@ -57,7 +57,6 @@ long_ttl_days  = 30 # 14 or more
 # max_payload_mb  = 25
 
 # Beyond tracing, each off by default.
-# playground      = true # the UI's prompt playground and experiments
 # code_evaluators = true # custom code evaluators (ace-backend)
 
 admin_email = "admin@example.com"

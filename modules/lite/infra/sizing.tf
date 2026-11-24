@@ -19,7 +19,6 @@ locals {
   retention_set = var.short_ttl_days != null && var.long_ttl_days != null
 
   features = {
-    playground      = var.playground
     code_evaluators = var.code_evaluators
     # On a cluster of one's own both are off unless asked for: several installs sharing a cluster would
     # collide on their cluster-wide roles, and a fleet watches its installs from one stack.
@@ -37,11 +36,11 @@ locals {
   service_pods = {
     for name, w in local.model.workloads : name => {
       cpu_m  = max(local.model.min_cpu_m, ceil((w.base + w.per_unit * local.work[w.work]) * local.model.headroom * 1000))
-      mem_mi = w.mem_mi
+      mem_mi = ceil(w.mem_mi * local.model.mem_headroom)
       # Past the measured rates a request can exceed the usual limit, which Kubernetes refuses, so the
       # limit rises with it.
       lim_cpu_m  = max(w.lim_cpu_m, ceil((w.base + w.per_unit * local.work[w.work]) * local.model.headroom * 1000))
-      lim_mem_mi = max(w.mem_mi * local.model.mem_limit_factor, w.mem_mi + local.model.mem_limit_floor_mi)
+      lim_mem_mi = max(ceil(w.mem_mi * local.model.mem_headroom) * local.model.mem_limit_factor, ceil(w.mem_mi * local.model.mem_headroom) + local.model.mem_limit_floor_mi)
     } if try(local.features[w.feature], true)
   }
   fixed_pods = { for name, p in local.sizes.fixed : name => p if local.features[p.feature] }
@@ -128,8 +127,9 @@ locals {
   # Where the volumes live: on AWS a data volume of their own; on bare metal data_path if set; else the
   # system's disk.
   data_disk_separate = var.cloud == "aws" || var.data_path != ""
+  fill               = local.sizes.disk_fill_max
   data_disk_gi = (
-    var.cloud == "aws" ? coalesce(var.data_disk_gi, ceil(local.volumes_gi * 1.2 / 10) * 10) :
+    var.cloud == "aws" ? coalesce(var.data_disk_gi, ceil(local.volumes_gi / local.fill / 10) * 10) :
     var.data_path != "" ? try(local.machine.data_disk_gi, 0) : 0
   )
   system_disk_gi = var.cloud == "aws" ? local.sizes.system_disk_gi : local.machine.disk_gi
@@ -142,9 +142,9 @@ locals {
     !local.machine_fit || local.requested.cpu_m <= local.allowed.cpu_m ? "" : "the pods request ${local.requested.cpu_m}m CPU; the machine allows ${local.allowed.cpu_m}m ((${local.machine.cpu} vCPU - ${local.preset.reserved.cpu_m}m reserved) x ${var.max_request_ratio})",
     !local.machine_fit || local.requested.mem_mi <= local.allowed.mem_mi ? "" : "the pods request ${local.requested.mem_mi}Mi memory; the machine allows ${local.allowed.mem_mi}Mi ((${local.machine.memory_gi} GiB - ${local.preset.reserved.mem_mi}Mi reserved) x ${var.max_request_ratio})",
     !local.machine_fit ? "" : local.data_disk_separate ? (
-      local.volumes_gi <= local.data_disk_gi ? "" : "the volumes need ${local.volumes_gi} GiB; the data disk has ${local.data_disk_gi}${var.data_path != "" ? " (machine.data_disk_gi)" : ""}"
+      local.volumes_gi <= local.data_disk_gi * local.fill ? "" : "the volumes need ${local.volumes_gi} GiB, which may fill the data disk to ${local.fill * 100}%: it needs ${ceil(local.volumes_gi / local.fill)} GiB, and has ${local.data_disk_gi}${var.data_path != "" ? " (machine.data_disk_gi)" : ""}"
       ) : (
-      local.volumes_gi + local.sizes.system_disk_gi <= local.machine.disk_gi ? "" : "the volumes and the system need ${local.volumes_gi + local.sizes.system_disk_gi} GiB; the disk has ${local.machine.disk_gi} (the object store alone ${local.volumes.object_store} GiB for ${floor(local.runs_a_day)} runs a day kept ${local.short_ttl} days)"
+      local.volumes_gi + local.sizes.system_disk_gi <= local.machine.disk_gi * local.fill ? "" : "the volumes and the system need ${local.volumes_gi + local.sizes.system_disk_gi} GiB, which may fill the disk to ${local.fill * 100}%: it needs ${ceil((local.volumes_gi + local.sizes.system_disk_gi) / local.fill)} GiB, and has ${local.machine.disk_gi} (the object store alone ${local.volumes.object_store} GiB for ${floor(local.runs_a_day)} runs a day kept ${local.short_ttl} days)"
     ),
     local.peak <= local.max_peak ? "" : "${local.peak} runs/s is past what one machine was measured to hold (${local.max_peak} runs/s at peak): that is a full deployment, a cloud module (../aws, ../gcp, ../azure)",
   ])

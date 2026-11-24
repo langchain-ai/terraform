@@ -13,9 +13,9 @@ refuses a machine that cannot hold it, before any machine exists.
 inputs   peak runs/s, readers, short and long TTL, extended %, payload mix, storage_factor, the machine
 
 # pods: LangSmith's from the measured model; the rest per box, or fixed
-for each LangSmith service s:                               # playground, ace-backend: only when asked
+for each LangSmith service s:                               # ace-backend only with code_evaluators
     s.cpu = max(50m, (s.idle + s.per_unit x s.work) x 1.5)  # work: runs/s, or readers
-    s.mem = s.measured_peak                                 # limit: 2x, at least 256 MiB above
+    s.mem = s.measured_peak x 1.2                           # limit: 2x, at least 256 MiB above
 SmithDB, Postgres, RustFS = per box                         # Redis below; observability, Mission Control fixed
 
 # what a run costs (decimal KB), weighted by the mix: 70% small, 25% medium, 5% large
@@ -35,7 +35,8 @@ postgres.max_connections = round up to 50 of (2 API pods x 50 + 2 workers x 3 + 
 allowed   = (machine - reserved for k3s) x 0.85             # CPU and memory
 requested = every pod's request                            <= allowed
 volumes   = object_store + cache + Redis + Postgres + Prometheus
-          <= the data disk, or the one disk minus 40 GiB for the system
+          <= 80% of the data disk, or volumes + 40 GiB system <= 80% of the one disk
+                                                            # k3s evicts under 15% free, cleans images at 80%
 peak      <= 50 runs/s                                      # past it: a full deployment
 ```
 
@@ -45,12 +46,15 @@ At the default TTLs (14 days, 30 extended), each size at its design rate:
 
 | `box` | Machine | Peak runs/s | Runs a day | Requests of allowed | Volumes | Object store | Redis maxmemory |
 |:--|:--|--:|--:|:--|--:|--:|--:|
-| `xs` | 2 vCPU, 16 GiB, 80 GiB | 1 | 28,800 | 1.27 of 1.36 vCPU, 7.7 of 12.8 GiB | 36 GiB | 15 GiB | 256 MiB |
-| `s` | 4 vCPU, 16 GiB, 160 GiB | 5 | 144,000 | 2.37 of 2.98 vCPU, 11.6 of 12.3 GiB | 107 GiB | 71 GiB | 1.1 GiB |
-| `m` | 8 vCPU, 32 GiB, 600 GiB | 25 | 720,000 | 5.37 of 6.16 vCPU, 24.2 of 25.5 GiB | 468 GiB | 354 GiB | 5.3 GiB |
-| `l` | 16 vCPU, 64 GiB, 1,024 GiB | 50 | 1,440,000 | 9.73 of 12.75 vCPU, 42.8 of 51.8 GiB | 944 GiB | 708 GiB | 10.6 GiB |
+| `xs` | 2 vCPU, 16 GiB, 100 GiB | 1 | 28,800 | 1.27 of 1.36 vCPU, 8.6 of 12.8 GiB | 36 GiB | 15 GiB | 256 MiB |
+| `s` | 4 vCPU, 32 GiB, 200 GiB | 5 | 144,000 | 2.37 of 2.98 vCPU, 12.4 of 25.9 GiB | 107 GiB | 71 GiB | 1.1 GiB |
+| `m` | 8 vCPU, 64 GiB, 640 GiB | 25 | 720,000 | 5.37 of 6.16 vCPU, 25.1 of 52.7 GiB | 468 GiB | 354 GiB | 5.3 GiB |
+| `l` | 16 vCPU, 64 GiB, 1,280 GiB | 50 | 1,440,000 | 9.73 of 12.75 vCPU, 43.7 of 51.8 GiB | 944 GiB | 708 GiB | 10.6 GiB |
 
-A run is one span: a trace of 10 LLM and tool calls at one trace a second is 10 runs/s. `l` stops at
+LangSmith's services ask their sampled memory peak x 1.2 and their CPU x 1.5, and the box lets requests
+reach 85% of what k3s leaves allocatable, so a request is the buffer on a measurement and the box keeps
+15% more on top. Memory binds before CPU, so `s` and `m` are memory-optimized machines (8 GiB a vCPU); on
+4 GiB a vCPU, `s` could not hold Mission Control beside the buffered services. A run is one span: a trace of 10 LLM and tool calls at one trace a second is 10 runs/s. `l` stops at
 50 runs/s, LangChain's sizing calculator's limit for one machine; past it the plan refuses and points at
 a full deployment (`../aws`, `../gcp`, `../azure`, `../baremetal`). `xs` runs no observability stack or
 Mission Control of its own (an install a fleet watches from one stack), which is what fits it in 2 vCPU.
@@ -61,7 +65,7 @@ On AWS, at us-east-1 on-demand list prices (`infra/sizes.yaml`, read 2026-11), a
 
 ```
 instance  = the size's type, hourly x 730               # or aws_hourly_usd, a negotiated price
-disks     = (40 GiB system + data disk) x $0.08 gp3     # data disk = the volumes x 1.2, rounded up to 10 GiB
+disks     = (40 GiB system + data disk) x $0.08 gp3     # data disk = the volumes / 0.8, rounded up to 10 GiB
 snapshots = the volumes x $0.05                         # incremental; the volumes bound them
 address   = $0.005 x 730                                # the instance's fixed public address
 ```
@@ -69,9 +73,9 @@ address   = $0.005 x 730                                # the instance's fixed p
 | `box` | Instance | Instance | Disks | Snapshots | Address | Total |
 |:--|:--|--:|--:|--:|--:|--:|
 | `xs` | r7i.large | $96.58 | $7.20 | $1.80 | $3.65 | about $110 |
-| `s` | m7i.xlarge | $147.17 | $13.60 | $5.35 | $3.65 | about $170 |
-| `m` | m7i.2xlarge | $294.34 | $48.80 | $23.40 | $3.65 | about $371 |
-| `l` | m7i.4xlarge | $588.67 | $94.40 | $47.20 | $3.65 | about $734 |
+| `s` | r7i.xlarge | $193.16 | $14.40 | $5.35 | $3.65 | about $217 |
+| `m` | r7i.2xlarge | $386.32 | $50.40 | $23.40 | $3.65 | about $464 |
+| `l` | m7i.4xlarge | $588.67 | $97.60 | $47.20 | $3.65 | about $738 |
 
 `make plan` prints the same for the box it plans, rounded up to the dollar. A machine of your own, or one in another cloud, costs
 what you pay for it.
@@ -80,20 +84,20 @@ what you pay for it.
 
 | Pod | What it does | CPU | Memory (limit) |
 |:--|:--|--:|--:|
-| platform-backend | Go: the ingest API and auth | 50m | 512 MiB (1 GiB) |
-| ingest-queue | Go: runs from Redis into SmithDB | 300m | 1.1 GiB (2.2 GiB) |
-| queue | Python: LangSmith's background worker | 167m | 1.6 GiB (3.2 GiB) |
-| backend | Python: the API the UI reads | 50m | 973 MiB (1.9 GiB) |
-| frontend | the UI, and the nginx in front of every request | 66m | 128 MiB (384 MiB) |
+| platform-backend | Go: the ingest API and auth | 50m | 615 MiB (1.2 GiB) |
+| ingest-queue | Go: runs from Redis into SmithDB | 300m | 1.3 GiB (2.6 GiB) |
+| queue | Python: LangSmith's background worker | 167m | 1.9 GiB (3.8 GiB) |
+| backend | Python: the API the UI reads | 50m | 1.1 GiB (2.3 GiB) |
+| frontend | the UI, and the nginx in front of every request | 66m | 154 MiB (410 MiB) |
 | SmithDB | one pod: ingestion, queries, compaction | 750m | 3 GiB (6 GiB) |
 | Redis | runs waiting for ingest-queue, the queues | 50m | 1.4 GiB, reserved |
 | Postgres | LangSmith's database and SmithDB's metastore | 100m | 768 MiB, reserved |
 | RustFS | the object store: SmithDB's bucket and the blob bucket | 100m | 768 MiB (3 GiB) |
 | Prometheus, Grafana, 4 collectors | observability | 190m | 880 MiB |
-| Mission Control (2 pods) | health, preflight, diagnostics; read-only | 350m | 384 MiB |
+| Mission Control (2 pods) | health and diagnostics; strictly read-only | 350m | 384 MiB |
 | CoreDNS, metrics-server | k3s's own | 200m | 140 MiB |
-| **Total** | | **2.37 vCPU** | **11.6 GiB** |
-| playground, ace-backend | prompt playground; code evaluators | off: `playground`, `code_evaluators` | |
+| **Total** | | **2.37 vCPU** | **12.4 GiB** |
+| ace-backend | custom code evaluators | off: `code_evaluators = true` runs it | |
 
 The other sizes scale the same rows; `make plan` lists every pod.
 
@@ -107,7 +111,7 @@ Chart 0.18.2 by default, against what Lite renders (`make render`; the plan list
 | ClickHouse | off | SmithDB is the trace store at 0.18 |
 | SmithDB as separate services (ingestion, query, compaction and its workers, a cluster manager, and stats-query, mutations and run rules where enabled) at the `small` tier | one unified pod, below that tier | one process for one machine's load; not yet measured (below) |
 | Insights and Polly, each with its own Postgres and Redis | off | products beyond tracing |
-| playground | 0 replicas; `playground = true` runs it | the prompt playground, not tracing |
+| playground | 0 replicas, always | prompts against model providers, not tracing |
 | ace-backend | 0 replicas; `code_evaluators = true` runs it | runs custom code evaluators only; nothing on the tracing path calls it |
 | the operator, Fleet's tool and trigger servers | off | LangGraph deployments and Fleet |
 | the chart's e2e test pod | off | the chart's own CI |
@@ -118,7 +122,7 @@ Kept and worth watching once a box has been measured, in order of what they woul
 - **Mission Control** (350m, 384 MiB, about 15% of `s`'s CPU requests): strictly read-only now, it is a
   health view and a diagnostics bundle. `mission_control = false` drops it; the health dashboard covers
   the same signals.
-- **queue** (167m, 1.6 GiB): LangSmith's Python background worker. The chart has no switch for it, so it
+- **queue** (167m, 1.9 GiB): LangSmith's Python background worker. The chart has no switch for it, so it
   stays; its memory, measured at the lab's load, is the largest app request after ingest-queue and the
   first to revisit once `make soak` reads it at `s`.
 - **The observability stack** (190m, 880 MiB): what makes the alerts. `observability = false` drops it, as
@@ -138,7 +142,7 @@ Kept and worth watching once a box has been measured, in order of what they woul
 | Prometheus | metrics | `prometheus_retention_days` | `retentionSize`, four fifths of its volume | per box: none, 10, 20, 40 GiB |
 
 Every volume is a folder on the data disk (k3s's local-path), not a quota; the plan keeps their sum
-within the disk, the kubelet evicts before the disk fills, and the health dashboard turns orange at 80% of each disk and alerts at 90% (OPERATE.md, Watching it).
+within 80% of the disk (the computation, the fit), and the health dashboard turns orange at 80% of each disk and alerts at 90% (OPERATE.md, Watching it).
 
 ## The retention
 
@@ -190,5 +194,5 @@ lists the pods) or `volumes`, with the run cited beside it in the tfvars.
 | `max_payload_mb`, `blob_min_kb` | 25, 20 | the largest request; the size a payload goes to RustFS at |
 | `prometheus_retention_days` | 15 | days of metrics |
 | `observability`, `mission_control` | on, but off at `xs` and on a cluster | the stack on the box |
-| `playground`, `code_evaluators` | off | the two services beyond tracing |
+| `code_evaluators` | off | ace-backend, for custom code evaluators |
 | `resources`, `volumes`, `max_request_ratio` | none, none, 0.85 | a measured size in place of a computed one; the share of the machine pods may request |

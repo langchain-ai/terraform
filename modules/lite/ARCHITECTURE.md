@@ -73,7 +73,7 @@ app pod, which restarts with no loss, is evicted before a store.
 | Piece | Why this one |
 |:--|:--|
 | k3s | One binary with an ingress (Traefik), a load balancer (servicelb), storage (local-path), metrics-server, and a controller that installs Helm charts from files. On one machine, these replace the MetalLB, Envoy Gateway, local-path and metrics-server the bare-metal module installs |
-| LangSmith chart, tracing only | The supported chart at 0.18, with SmithDB as one unified pod and every other product off; the playground and ace-backend run no pod unless turned on |
+| LangSmith chart, tracing only | The supported chart at 0.18, with SmithDB as one unified pod and every other product off; playground never runs, and ace-backend only with `code_evaluators` |
 | The bare-metal module's `charts/datastores` | Postgres, Redis and RustFS as StatefulSets on their official images, already proven under load with that module: NetworkPolicies, PodDisruptionBudgets, Redis at `noeviction`, Postgres's buffers from its limit, the buckets and their expiry rules made by Jobs. Shared, not copied |
 | One Postgres | LangSmith's database and SmithDB's metastore as two databases on one instance |
 | RustFS | S3 on the box's disk: SmithDB's segments and the payload blobs (blob storage is required from chart 0.18) |
@@ -91,7 +91,8 @@ app pod, which restarts with no loss, is evicted before a store.
 The stores' volumes use `local-path-retain` (`storage_class`), so a deleted claim never deletes data;
 SmithDB's cache and Prometheus use k3s's `local-path` (`scratch_storage_class`), since both rebuild.
 Every volume is a folder on one data disk, with no cloud disk per volume and no CSI driver (OPERATE.md,
-The machine, says which disk), and k3s's kubelet evicts pods before that disk fills.
+The machine, says which disk). The plan keeps every disk at most 80% full once the stores hold their
+retention: on a one-disk box that disk also holds the images, and k3s's kubelet evicts pods under 15% free.
 
 ## What Lite decides, and what it reads
 
@@ -192,7 +193,7 @@ named load:
 | platform-backend, frontend | HPA, 2 to 10 | one, sized for the rate or the readers |
 | backend | HPA, 3 to 10 | one, sized for the readers |
 | ingest-queue, queue | KEDA, 3 to 10 | one, sized for the rate |
-| playground, ace-backend | HPA, 1 to 5 | none, unless turned on |
+| playground, ace-backend | HPA, 1 to 5 | playground none; ace-backend one with `code_evaluators` |
 | SmithDB | query, ingestion and compaction pods at a chart tier, each with an HPA | one pod, below the chart's smallest tier |
 
 There is no second node to scale onto, and an autoscaler on one box only takes memory from the stores.

@@ -77,10 +77,10 @@ goes to `build/logs/`, shown only when it fails. `VERBOSE=1 make plan` prints th
 
 | `box` | Machine | Peak runs/s | On AWS, a month |
 |:--|:--|--:|:--|
-| `xs` | 2 vCPU, 16 GiB, 80 GiB | 1 | r7i.large, about $110 |
-| `s` | 4 vCPU, 16 GiB, 160 GiB | 5 | m7i.xlarge, about $170 |
-| `m` | 8 vCPU, 32 GiB, 600 GiB | 25 | m7i.2xlarge, about $371 |
-| `l` | 16 vCPU, 64 GiB, 1,024 GiB | 50 | m7i.4xlarge, about $734 |
+| `xs` | 2 vCPU, 16 GiB, 100 GiB | 1 | r7i.large, about $110 |
+| `s` | 4 vCPU, 32 GiB, 200 GiB | 5 | r7i.xlarge, about $217 |
+| `m` | 8 vCPU, 64 GiB, 640 GiB | 25 | r7i.2xlarge, about $464 |
+| `l` | 16 vCPU, 64 GiB, 1,280 GiB | 50 | m7i.4xlarge, about $738 |
 
 A run is one span: a trace of 10 calls at one trace a second is 10 runs/s. **Retention is your choice
 to make:** the TTLs size the disk more than anything else, so `make up` asks for them. SIZING.md has

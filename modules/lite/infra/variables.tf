@@ -113,12 +113,6 @@ variable "storage_factor" {
 
 #--- What runs beyond tracing ------------------------------------------------
 
-variable "playground" {
-  type        = bool
-  default     = false
-  description = "Run the playground service: prompt playground and experiments from the UI, which call model providers. Off: Lite is tracing, and the pod's 0.9 GiB goes to the stores."
-}
-
 variable "code_evaluators" {
   type        = bool
   default     = false

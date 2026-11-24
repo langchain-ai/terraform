@@ -7,11 +7,13 @@
 # LangSmith's own services follow a model measured on the bare-metal lab: cores at idle (base) plus
 # cores per unit of work (per_unit), times headroom, never below min_cpu_m. Work is the design rate in
 # runs a second (offered: what clients send; processed: what the workers drain), or the readers at once,
-# or nothing (fixed). Memory is the sampled peak.
+# or nothing (fixed). Memory is the sampled peak times mem_headroom: a peak sampled at one lab load had
+# no buffer as a request, while CPU had half again (the sizing calculator's lite.measured, the same two).
 # Source: bare-metal lab runs at 3 runs a trace and about 180 KiB a run, 5 s samples over ten minutes,
 # 2026-10-31 and 2026-11-01 (Reed Bender); the sizing calculator's lite.measured parameters.
 model:
   headroom: 1.5
+  mem_headroom: 1.2
   min_cpu_m: 50
   workloads:
     # Go services keep a 2-CPU limit: Go sets GOMAXPROCS to the limit, and under a 1-CPU limit
@@ -21,11 +23,10 @@ model:
     ingestQueue: { work: processed, base: 0.025, per_unit: 0.035, mem_mi: 1126, lim_cpu_m: 2000 }
     queue: { work: processed, base: 0.082, per_unit: 0.0058, mem_mi: 1638, lim_cpu_m: 1000 }
     frontend: { work: readers, base: 0.001, per_unit: 0.0214, mem_mi: 128, lim_cpu_m: 500 }
-    # backend and playground import many Python modules at start: a higher CPU limit lets them start
+    # backend imports many Python modules at start: a higher CPU limit lets them start
     # inside their startup probes.
     backend: { work: readers, base: 0.013, per_unit: 0.0012, mem_mi: 973, lim_cpu_m: 2000 }
     # Not tracing: each runs only when its feature is on.
-    playground: { work: fixed, base: 0.005, per_unit: 0, mem_mi: 922, lim_cpu_m: 1000, feature: playground }
     aceBackend: { work: fixed, base: 0.001, per_unit: 0, mem_mi: 128, lim_cpu_m: 250, feature: code_evaluators }
   mem_limit_factor: 2
   mem_limit_floor_mi: 256
@@ -85,9 +86,13 @@ single_machine_max_runs_per_second: 50
 # SmithDB runs as one unified pod (chart 0.18), whose smallest chart tier asks 4 CPU and 16 GiB. Its
 # sizes here are the bare-metal module's tested minimal tier for the pods it replaces, not yet measured
 # as one pod. ponytail: unmeasured unified SmithDB; the first install of each box measures it.
+# Memory binds before CPU (Redis holds a stalled ingest, SmithDB and the stores keep their working sets,
+# the services carry a 1.2 buffer), so xs, s and m are memory-optimized, 8 GiB a vCPU (r7i on AWS). On
+# 4 GiB a vCPU, s with Mission Control overran its allowed memory and m sat at 98% (2026-11-24); l, at
+# 4 GiB a vCPU, holds its load at 84%.
 boxes:
   xs:
-    machine: { cpu: 2, memory_gi: 16, disk_gi: 80 }
+    machine: { cpu: 2, memory_gi: 16, disk_gi: 100 }
     aws: r7i.large
     design: { runs_per_second: 1, readers: 1 }
     reserved: { cpu_m: 400, mem_mi: 1024 }
@@ -97,8 +102,8 @@ boxes:
     rustfs: { cpu_m: 100, mem_mi: 512, lim_cpu_m: 1000, lim_mem_mi: 2048 }
     prometheus: { volume_gi: 10 }
   s:
-    machine: { cpu: 4, memory_gi: 16, disk_gi: 160 }
-    aws: m7i.xlarge
+    machine: { cpu: 4, memory_gi: 32, disk_gi: 200 }
+    aws: r7i.xlarge
     design: { runs_per_second: 5, readers: 2 }
     reserved: { cpu_m: 500, mem_mi: 1536 }
     features: { observability: true, mission_control: true }
@@ -107,8 +112,8 @@ boxes:
     rustfs: { cpu_m: 100, mem_mi: 768, lim_cpu_m: 2000, lim_mem_mi: 3072 }
     prometheus: { volume_gi: 10 }
   m:
-    machine: { cpu: 8, memory_gi: 32, disk_gi: 600 }
-    aws: m7i.2xlarge
+    machine: { cpu: 8, memory_gi: 64, disk_gi: 640 }
+    aws: r7i.2xlarge
     design: { runs_per_second: 25, readers: 5 }
     reserved: { cpu_m: 750, mem_mi: 2048 }
     features: { observability: true, mission_control: true }
@@ -119,7 +124,7 @@ boxes:
     rustfs: { cpu_m: 250, mem_mi: 2048, lim_cpu_m: 4000, lim_mem_mi: 6144 }
     prometheus: { volume_gi: 20 }
   l:
-    machine: { cpu: 16, memory_gi: 64, disk_gi: 1024 }
+    machine: { cpu: 16, memory_gi: 64, disk_gi: 1280 }
     aws: m7i.4xlarge
     design: { runs_per_second: 50, readers: 10 }
     reserved: { cpu_m: 1000, mem_mi: 3072 }
@@ -149,12 +154,17 @@ fixed:
 # root volume's size; the volumes go on a data volume of their own.
 system_disk_gi: 40
 
+# How full a disk may be planned to get once every store holds its retention. k3s's kubelet evicts pods
+# under 15% free on the disk its images live on and cleans images from 80% used, and the health dashboard
+# turns orange at 80%: the volumes plus the system filled the presets' one disk to 92 to 96% (2026-11-24).
+disk_fill_max: 0.8
+
 # What the box costs a month, for the plan's estimate: AWS's on-demand list prices for Linux in
 # us-east-1 (us-west-2 is the same for these). Not fetched by the plan: a region, a reservation or a
 # discount changes them; aws_hourly_usd overrides the instance's.
 aws_prices:
   hours_a_month: 730
-  instance_hourly_usd: { r7i.large: 0.1323, m7i.xlarge: 0.2016, m7i.2xlarge: 0.4032, m7i.4xlarge: 0.8064 }
+  instance_hourly_usd: { r7i.large: 0.1323, r7i.xlarge: 0.2646, r7i.2xlarge: 0.5292, m7i.4xlarge: 0.8064 }
   gp3_gb_month_usd: 0.08
   snapshot_gb_month_usd: 0.05
   public_ipv4_hourly_usd: 0.005
