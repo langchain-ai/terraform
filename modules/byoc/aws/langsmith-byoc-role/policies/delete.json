@@ -241,6 +241,20 @@
       }
     },
     {
+      "Sid": "ELBv2IngressLoadBalancerDelete",
+      "Effect": "Allow",
+      "Action": ["elasticloadbalancing:DeleteLoadBalancer"],
+      "Resource": [
+        "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*-sm-istio/*",
+        "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/app/*-sm-alb/*"
+      ],
+      "Condition": {
+        "Null": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+        }
+      }
+    },
+    {
       "Sid": "ELBv2TargetGroupDelete",
       "Effect": "Allow",
       "Action": ["elasticloadbalancing:DeleteTargetGroup"],
