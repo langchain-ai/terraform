@@ -1,0 +1,500 @@
+modules/aws/infra/locals.tf
+  s_82fc735a9ded12::t_0997c1f27159e9 203-205
+  s_82fc735a9ded12::t_230465f0770b9e 206-207
+.github/scripts/changed-providers.sh
+  s_82fc735a9ded12::t_31a4d8f275615f 16
+.github/scripts/chart-line.sh
+  s_82fc735a9ded12::t_b8a4857412f007 16
+AGENTS.md
+  s_82fc735a9ded12::t_e37a41f668136d 56-62
+MIGRATION-0.16-to-0.17.md
+  s_82fc735a9ded12::t_1facddb9deb1f4 146-147
+README.md
+  s_82fc735a9ded12::t_d1de1e347e4119 7-15,35-44,151,179
+modules/README.md
+  s_82fc735a9ded12::t_59839a45eb4ccb 49-56
+modules/aws/.gitignore
+  s_82fc735a9ded12::t_a7b88bbcad979f 17
+modules/aws/ARCHITECTURE.md
+  s_82fc735a9ded12::t_42512a4069ab1f 30,42-43,72,91-93,96,253-258,356,358-362
+modules/aws/Makefile
+  s_82fc735a9ded12::t_c958303b794c27 19,86,171-173
+modules/aws/PERMISSIONS.md
+  s_82fc735a9ded12::t_7377580afa67af 26-27,30,167
+modules/aws/SERVICES.md
+  s_82fc735a9ded12::t_a2fc6c70eb6289 38,43,130-133,147-148,150-151,153
+modules/aws/SMITHDB.md
+  s_82fc735a9ded12::t_60045936e4af6f 4-7,11,16-17,25-27,38-87,93,97,103-104,110,114,117-123,134-270,278-318
+modules/aws/TEARDOWN.md
+  s_82fc735a9ded12::t_3e552ea611a5a8 163
+modules/aws/TEST_CYCLE.md
+  s_82fc735a9ded12::t_e7a2388e58d44d 75-77,282-318,337,358,361
+modules/aws/TROUBLESHOOTING.md
+  s_82fc735a9ded12::t_4c5cf7390a40db 497,499,505,514,518,520,528,530,537
+modules/aws/helm/scripts/deploy.sh
+  s_82fc735a9ded12::t_a26d802470dfae 456,495-497,692,716-727
+modules/aws/helm/scripts/init-values.sh
+  s_82fc735a9ded12::t_dfb524e5a772c5 45,68-76,79-81,87-93,1066,1069-1070,1079-1081,1088-1090,1102,1104-1105,1126-1156
+modules/aws/helm/scripts/smithdb-migration-job-start.sh
+  s_82fc735a9ded12::t_78c9df985908b1 21,57,126-129,199
+modules/aws/helm/scripts/test-e2e.sh
+  s_82fc735a9ded12::t_131808bcbcfd69 22-23,54,234-249
+modules/aws/helm/scripts/test-values.sh
+  s_82fc735a9ded12::t_9ee77816ffd71b 1-340
+modules/aws/helm/values/examples/SIZING.md
+  s_82fc735a9ded12::t_df0da7a41f563c 12-18
+modules/aws/helm/values/examples/langsmith-values-sizing-dev.yaml
+  s_82fc735a9ded12::t_940c90125be510 109-111,225-228,231
+modules/aws/helm/values/examples/langsmith-values-sizing-minimum.yaml
+  s_82fc735a9ded12::t_90d16a87968cb2 8,78-85,97-103,192-195
+modules/aws/helm/values/examples/langsmith-values-sizing-production-large.yaml
+  s_82fc735a9ded12::t_87b32e8b81f9d6 204-208
+modules/aws/helm/values/examples/langsmith-values-sizing-production.yaml
+  s_82fc735a9ded12::t_a5df15f2ea4be3 4-5,21,209-212
+modules/aws/helm/values/examples/langsmith-values-smithdb.yaml
+  s_82fc735a9ded12::t_16f4b14d57c557 1-3,7-11
+modules/aws/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_82fc735a9ded12::t_a554bdc5a2f8e7 22-23
+modules/aws/helm/values/examples/langsmith-values.yaml
+  s_82fc735a9ded12::t_5ea0c09ea9b9c7 73-104
+modules/aws/infra/main.tf
+  s_82fc735a9ded12::t_3d0f1f8d95b514 78-79,83-84,225,231-232,234,239,277,322,408-409,469-472,912,914-915,928,1065,1072-1073,1084,1100,1198,1211,1224,1237,1250,1263,1325,1351,1353-1354,1375,1383,1418,1451,1495
+modules/aws/infra/modules/k8s-bootstrap/main.tf
+  s_82fc735a9ded12::t_30593995c8ffd1 28-31,49-51
+modules/aws/infra/modules/k8s-bootstrap/outputs.tf
+  s_82fc735a9ded12::t_8be838944c1004 5-9
+modules/aws/infra/modules/k8s-bootstrap/variables.tf
+  s_82fc735a9ded12::t_311a27e1c7d5e9 9,15
+modules/aws/infra/modules/postgres/variables.tf
+  s_82fc735a9ded12::t_d20007fa7f2b4e 33
+modules/aws/infra/outputs.tf
+  s_82fc735a9ded12::t_4cd48642852b27 88,93-94,99-100,104-105,112,117-118,123-124,225-242,439,441,474-475
+modules/aws/infra/scripts/_common.sh
+  s_82fc735a9ded12::t_b9012d95e6d015 13,99-101,103-106,108-109,112
+modules/aws/infra/scripts/_smithdb-transition.sh
+  s_82fc735a9ded12::t_44caa1d873b66d 1-354
+modules/aws/infra/scripts/apply.sh
+  s_82fc735a9ded12::t_3cf87da8eccf2c 1-71
+modules/aws/infra/scripts/quickdeploy.sh
+  s_82fc735a9ded12::t_72950e449e9544 107,113
+modules/aws/infra/scripts/quickstart.sh
+  s_82fc735a9ded12::t_06be2b8931ad8c 179-187,554,559,580-586,603-614,617-619,641-651,654-662,681,683-694,699-707,1090-1096,1154,1158,1289-1293,1301-1302,1452-1453,1466-1471
+modules/aws/infra/scripts/setup-env.sh
+  s_82fc735a9ded12::t_ae8ef7a50bf287 18-21,123-124,135,140,144-145,148,150-156,160-189,191,195-199,202-209,212-221,223-224,226,228-247,249,265-267,269-287,300,302-305,307,309,312-314,368-369,373-374,379-380,386-387,389-390,393-394,411-415,417,419-420,424-425,427-428,430-431,433-434,442-446
+modules/aws/infra/scripts/test-orchestrator.sh
+  s_82fc735a9ded12::t_f939e062622a60 85-86,109-110
+modules/aws/infra/scripts/test-permutations.sh
+  s_82fc735a9ded12::t_bb51270465c11e 93,98
+modules/aws/infra/scripts/test-quickstart-dns.sh
+  s_82fc735a9ded12::t_29c100c5a60693 79-80,94-97,99,116-124,138,149-152,154-155,162-164,201-206,208,219-231,259-329
+modules/aws/infra/scripts/test-setup-env-ssm.sh
+  s_82fc735a9ded12::t_7212208e0b6640 1-242
+modules/aws/infra/scripts/test-smithdb-transition.sh
+  s_82fc735a9ded12::t_18d686704b0456 1-447
+modules/aws/infra/scripts/test-upgrade-guard.sh
+  s_82fc735a9ded12::t_045e9d8e37808e 1-70
+modules/aws/infra/scripts/test-worker.sh
+  s_82fc735a9ded12::t_2a50436e52e92c 52-53,110-111
+modules/aws/infra/scripts/upgrade-guard.sh
+  s_82fc735a9ded12::t_7e25ebf191c714 1-51
+modules/aws/infra/smithdb-nodes.tf
+  s_82fc735a9ded12::t_95dae10c3f56d0 1-147
+modules/aws/infra/terraform.tfvars.example
+  s_82fc735a9ded12::t_6fbdc0a0ab3384 37-40,44,193-195,207,225-228,285-289,775-777,789-790,879,881-882,886,891-894,896-897,899,929-943
+modules/aws/infra/tests/validation.tftest.hcl
+  s_82fc735a9ded12::t_f0d5e6b3e0d91f 21-38,59,76,227-248
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_82fc735a9ded12::t_e54ddb0c20d806 69-93,396-442,450-466,468,470-603,780-781
+modules/aws/infra/variables.tf
+  s_82fc735a9ded12::t_290149c0ba0b92 195,213-215,218,222-223,263-264,273-279,332-335,338,342-343,349,355,1111,1117-1118,1123-1124,1129-1130,1141-1142,1280-1281,1358
+modules/azure/ARCHITECTURE.md
+  s_82fc735a9ded12::t_cd1352fa60f56a 45,306-308,381-382
+modules/azure/INGRESS_CONTROLLERS.md
+  s_82fc735a9ded12::t_fe1b38605efc5c 95-96
+modules/azure/README.md
+  s_82fc735a9ded12::t_bb9c2277506189 231,310,312,899,908,1028-1029,1073-1102,1110-1112,1523-1528
+modules/azure/SERVICES.md
+  s_82fc735a9ded12::t_c51f7617a3ddba 108
+modules/azure/SMITHDB.md
+  s_82fc735a9ded12::t_ba2af3717eec76 66-72,155-156,198-201,285,288-290,302-303,337
+modules/azure/TEARDOWN.md
+  s_82fc735a9ded12::t_04b42bb71c8bc0 67
+modules/azure/TEST_CYCLE.md
+  s_82fc735a9ded12::t_408a53f8de2e8a 113
+modules/azure/TROUBLESHOOTING.md
+  s_82fc735a9ded12::t_40db1c060741a5 1195
+modules/azure/helm/scripts/deploy.sh
+  s_82fc735a9ded12::t_0e7f0ca3dd4ec9 976-984,1028-1062,1246-1276,1278-1281,1283-1284,1287-1313,1321-1322,1327,1329,1333-1336,1460-1463
+modules/azure/helm/scripts/smithdb-migration-job-end.sh
+  s_82fc735a9ded12::t_4d6e8db1cd0c00 10,67,69
+modules/azure/helm/scripts/smithdb-migration-job-start.sh
+  s_82fc735a9ded12::t_c3006a1719ac3a 10,13,194,231,233
+modules/azure/helm/values/examples/SIZING.md
+  s_82fc735a9ded12::t_a6bbcaba8cea68 35,37,39,41
+modules/azure/helm/values/examples/langsmith-values-agent-deploys.yaml
+  s_82fc735a9ded12::t_d84fd2e0490e40 64-73,75-77
+modules/azure/helm/values/examples/langsmith-values-fleet.yaml
+  s_82fc735a9ded12::t_fa6193244213ca 49-71,81-82,96-97
+modules/azure/helm/values/examples/langsmith-values-sizing-production-large.yaml
+  s_82fc735a9ded12::t_1fbaa3cdb930ce 12-13
+modules/azure/helm/values/examples/langsmith-values-sizing-production.yaml
+  s_82fc735a9ded12::t_9cb0e311dfea08 20
+modules/azure/helm/values/examples/langsmith-values-smithdb-migration.yaml
+  s_82fc735a9ded12::t_616c294e4339dd 9
+modules/azure/infra/main.tf
+  s_82fc735a9ded12::t_96eb9a47c65580 69-100,520,1089-1105,1107-1108,1923,2118,2138-2164,2429,2472-2473,2481,2486-2493
+modules/azure/infra/modules/k8s-bootstrap/main.tf
+  s_82fc735a9ded12::t_a022b4804a383b 58-63,192-197,308-343,528-785
+modules/azure/infra/modules/k8s-bootstrap/outputs.tf
+  s_82fc735a9ded12::t_f6339a8e543b8d 46-51,64-73,108-135
+modules/azure/infra/modules/k8s-bootstrap/variables.tf
+  s_82fc735a9ded12::t_558b9f3582deb2 277,306-342
+modules/azure/infra/outputs.tf
+  s_82fc735a9ded12::t_6eaf28394f3bf9 404-414
+modules/azure/infra/terraform.tfvars.example
+  s_82fc735a9ded12::t_5daeabe83c8640 147,181-190
+modules/azure/infra/tests/keda_registry.tftest.hcl
+  s_82fc735a9ded12::t_5713a803fc7745 10-11,233-254
+modules/azure/infra/tests/sandboxes.tftest.hcl
+  s_82fc735a9ded12::t_24d7da81f92a15 60-61,108-109,369,376,383-729
+modules/azure/infra/tests/validation.tftest.hcl
+  s_82fc735a9ded12::t_e4385f6919f66e 62,75,344-394
+modules/azure/infra/tests/wiring.tftest.hcl
+  s_82fc735a9ded12::t_0ab1274dc22ed8 514,556
+modules/azure/infra/variables.tf
+  s_82fc735a9ded12::t_86542e70debef4 1381,1399,1486,1543,1549,1555,1561,1565-1615,2143-2148
+modules/azure/infra/versions.tf
+  s_82fc735a9ded12::t_bfc8bddece246e 35-39
+modules/baremetal/.gitignore
+  s_82fc735a9ded12::t_de9fe0f5b56096 1-40
+modules/baremetal/.tflint.hcl
+  s_82fc735a9ded12::t_a5b15a2ea529ac 1-7
+modules/baremetal/ARCHITECTURE.md
+  s_82fc735a9ded12::t_bc50cb22768375 1-178
+modules/baremetal/ENGINE.md
+  s_82fc735a9ded12::t_c75ece3b74c597 1-152
+modules/baremetal/LICENSE
+  s_82fc735a9ded12::t_d09a979d3f5121 1-27
+modules/baremetal/Makefile
+  s_82fc735a9ded12::t_bbef98b71e8655 1-61
+modules/baremetal/README.md
+  s_82fc735a9ded12::t_398740eb5df562 1-433
+modules/baremetal/SIZING.md
+  s_82fc735a9ded12::t_c3c0916a15da16 1-103
+modules/baremetal/SMITHDB.md
+  s_82fc735a9ded12::t_d3cedbb3af146c 1-131
+modules/baremetal/TEARDOWN.md
+  s_82fc735a9ded12::t_5a6e16829bb2d3 1-64
+modules/baremetal/TROUBLESHOOTING.md
+  s_82fc735a9ded12::t_300176cbef4fb0 1-76
+modules/baremetal/charts/datastores/.helmignore
+  s_82fc735a9ded12::t_48c2199ee4cde0 1
+modules/baremetal/charts/datastores/Chart.yaml
+  s_82fc735a9ded12::t_50da9ce960a405 1-8
+modules/baremetal/charts/datastores/README.md
+  s_82fc735a9ded12::t_949f05543132f4 1-114
+modules/baremetal/charts/datastores/ci/existing-secrets-values.yaml
+  s_82fc735a9ded12::t_e9ab25ebe5c639 1-11
+modules/baremetal/charts/datastores/ci/operator-values.yaml
+  s_82fc735a9ded12::t_b19d5e9287714b 1-15
+modules/baremetal/charts/datastores/ci/shared-namespace-values.yaml
+  s_82fc735a9ded12::t_dc8b6f49585c05 1-18
+modules/baremetal/charts/datastores/ci/statefulset-values.yaml
+  s_82fc735a9ded12::t_294e39f933f1bb 1-16
+modules/baremetal/charts/datastores/templates/_helpers.tpl
+  s_82fc735a9ded12::t_4d6b26a57ef6a8 1-84
+modules/baremetal/charts/datastores/templates/namespaces.yaml
+  s_82fc735a9ded12::t_192d2948ee3a8a 1-44
+modules/baremetal/charts/datastores/templates/postgres.yaml
+  s_82fc735a9ded12::t_f281cfb75e5b1b 1-313
+modules/baremetal/charts/datastores/templates/redis.yaml
+  s_82fc735a9ded12::t_9e392991f3258a 1-281
+modules/baremetal/charts/datastores/templates/rustfs.yaml
+  s_82fc735a9ded12::t_003daf90845020 1-246
+modules/baremetal/charts/datastores/values.schema.json
+  s_82fc735a9ded12::t_383ba0cd1642fd 1-143
+modules/baremetal/charts/datastores/values.yaml
+  s_82fc735a9ded12::t_3d38d15549049d 1-142
+modules/baremetal/helm/scripts/deploy.sh
+  s_82fc735a9ded12::t_bba38e35af1fe0 1-437
+modules/baremetal/helm/scripts/init-values.sh
+  s_82fc735a9ded12::t_1c770a089a6622 1-234
+modules/baremetal/helm/values/examples/langsmith-values-agent-deploys.yaml
+  s_82fc735a9ded12::t_db0d051ead3148 1-41
+modules/baremetal/helm/values/examples/langsmith-values-fleet.yaml
+  s_82fc735a9ded12::t_074eb3a1cd764c 1-95
+modules/baremetal/helm/values/examples/langsmith-values-sizing-dev.yaml
+  s_82fc735a9ded12::t_30f2af6c50549b 1-189
+modules/baremetal/helm/values/examples/langsmith-values-sizing-minimum.yaml
+  s_82fc735a9ded12::t_4dd996ae377f90 1-226
+modules/baremetal/helm/values/examples/langsmith-values-sizing-production-large.yaml
+  s_82fc735a9ded12::t_b2c48ae87b93e0 1-179
+modules/baremetal/helm/values/examples/langsmith-values-sizing-production.yaml
+  s_82fc735a9ded12::t_e8622cd224f14e 1-178
+modules/baremetal/helm/values/examples/langsmith-values-sso.yaml
+  s_82fc735a9ded12::t_c455f7cfb81908 1-10
+modules/baremetal/helm/values/examples/langsmith-values-standalone-insights.yaml
+  s_82fc735a9ded12::t_3605d92ab50f3f 1-76
+modules/baremetal/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_82fc735a9ded12::t_d8175cb0972baf 1-56
+modules/baremetal/helm/values/langsmith-values-local.yaml.example
+  s_82fc735a9ded12::t_ab497e06a0c6e8 1-47
+modules/baremetal/helm/values/values.yaml
+  s_82fc735a9ded12::t_8c6199edda9ad7 1-41
+modules/baremetal/infra/backend.tf
+  s_82fc735a9ded12::t_27c2434ca505d7 1-10
+modules/baremetal/infra/budget.tf
+  s_82fc735a9ded12::t_d03986e3defafc 1-58
+modules/baremetal/infra/datastores.tf
+  s_82fc735a9ded12::t_01fa160484e410 1-177
+modules/baremetal/infra/helm_values.tf
+  s_82fc735a9ded12::t_ee07123430c654 1-55
+modules/baremetal/infra/main.tf
+  s_82fc735a9ded12::t_0e9f6d389a7f67 1-471
+modules/baremetal/infra/modules/cloudflared/main.tf
+  s_82fc735a9ded12::t_0aaa33cde18db1 1-157
+modules/baremetal/infra/modules/cloudflared/outputs.tf
+  s_82fc735a9ded12::t_6876be352fe286 1-9
+modules/baremetal/infra/modules/cloudflared/variables.tf
+  s_82fc735a9ded12::t_bb3a33bee16ad0 1-36
+modules/baremetal/infra/modules/cloudflared/versions.tf
+  s_82fc735a9ded12::t_4bd0d045dc8459 1-14
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/Chart.yaml
+  s_82fc735a9ded12::t_7b19db43031e5d 1-5
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/templates/backend-traffic-policy.yaml
+  s_82fc735a9ded12::t_706020e1d09e17 1-26
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/templates/gateway.yaml
+  s_82fc735a9ded12::t_6aaf09ef11c719 1-72
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/templates/lan-route.yaml
+  s_82fc735a9ded12::t_c0700c92900478 1-22
+modules/baremetal/infra/modules/envoy-gateway/charts/gateway-config/values.yaml
+  s_82fc735a9ded12::t_9d6ba5ebcf76fb 1-20
+modules/baremetal/infra/modules/envoy-gateway/main.tf
+  s_82fc735a9ded12::t_25c945019cca27 1-70
+modules/baremetal/infra/modules/envoy-gateway/outputs.tf
+  s_82fc735a9ded12::t_621e03a6f4341c 1-32
+modules/baremetal/infra/modules/envoy-gateway/variables.tf
+  s_82fc735a9ded12::t_15679111a2e47e 1-106
+modules/baremetal/infra/modules/envoy-gateway/versions.tf
+  s_82fc735a9ded12::t_fe43bf977e2886 1-14
+modules/baremetal/infra/modules/local-path/main.tf
+  s_82fc735a9ded12::t_831592cbb61091 1-277
+modules/baremetal/infra/modules/local-path/outputs.tf
+  s_82fc735a9ded12::t_d6fc14efe875bc 1-20
+modules/baremetal/infra/modules/local-path/variables.tf
+  s_82fc735a9ded12::t_c43c57e55cda87 1-42
+modules/baremetal/infra/modules/local-path/versions.tf
+  s_82fc735a9ded12::t_efd527bd62aa2a 1-14
+modules/baremetal/infra/modules/metallb/charts/metallb-config/Chart.yaml
+  s_82fc735a9ded12::t_2997eac306cb0a 1-5
+modules/baremetal/infra/modules/metallb/charts/metallb-config/templates/pool.yaml
+  s_82fc735a9ded12::t_c785ff414ec7a2 1-40
+modules/baremetal/infra/modules/metallb/charts/metallb-config/values.yaml
+  s_82fc735a9ded12::t_166832d7c5205e 1-4
+modules/baremetal/infra/modules/metallb/main.tf
+  s_82fc735a9ded12::t_11413d294fd559 1-72
+modules/baremetal/infra/modules/metallb/outputs.tf
+  s_82fc735a9ded12::t_e455e7ad55f417 1-14
+modules/baremetal/infra/modules/metallb/variables.tf
+  s_82fc735a9ded12::t_a1da787386bf8a 1-41
+modules/baremetal/infra/modules/metallb/versions.tf
+  s_82fc735a9ded12::t_ff9cd85db54e42 1-17
+modules/baremetal/infra/modules/metrics-server/main.tf
+  s_82fc735a9ded12::t_cb96bb7ee1bf6c 1-28
+modules/baremetal/infra/modules/metrics-server/outputs.tf
+  s_82fc735a9ded12::t_861a9847f19ffa 1-13
+modules/baremetal/infra/modules/metrics-server/variables.tf
+  s_82fc735a9ded12::t_54b40ccbf4293b 1-35
+modules/baremetal/infra/modules/metrics-server/versions.tf
+  s_82fc735a9ded12::t_aa872877e59682 1-13
+modules/baremetal/infra/modules/values/datastore-sizes.yaml
+  s_82fc735a9ded12::t_b5adc132953c8f 1-58
+modules/baremetal/infra/modules/values/datastores.tf
+  s_82fc735a9ded12::t_9818c4b3eb828f 1-232
+modules/baremetal/infra/modules/values/helm_values.tf
+  s_82fc735a9ded12::t_194b98d8a33bf7 1-200
+modules/baremetal/infra/modules/values/outputs.tf
+  s_82fc735a9ded12::t_79cb03e227fad7 1-192
+modules/baremetal/infra/modules/values/platform.tf
+  s_82fc735a9ded12::t_0686949390c9e8 1-39
+modules/baremetal/infra/modules/values/sandboxes.tf
+  s_82fc735a9ded12::t_ad1c7908a86114 1-76
+modules/baremetal/infra/modules/values/sizing.tf
+  s_82fc735a9ded12::t_9255e9a605947b 1-430
+modules/baremetal/infra/modules/values/trace_store.tf
+  s_82fc735a9ded12::t_f4203472a177b9 1-116
+modules/baremetal/infra/modules/values/variables.tf
+  s_82fc735a9ded12::t_2d408b946b36f8 1-413
+modules/baremetal/infra/modules/values/versions.tf
+  s_82fc735a9ded12::t_88ebe0084226af 1-8
+modules/baremetal/infra/outputs.tf
+  s_82fc735a9ded12::t_aa33e5acbe298b 1-139
+modules/baremetal/infra/platform.tf
+  s_82fc735a9ded12::t_4153119c4c16fe 1-129
+modules/baremetal/infra/providers.tf
+  s_82fc735a9ded12::t_427fd20d811df0 1-15
+modules/baremetal/infra/sandboxes.tf
+  s_82fc735a9ded12::t_afe8c98a6c099a 1-162
+modules/baremetal/infra/scripts/_common.sh
+  s_82fc735a9ded12::t_a82abf6bac9119 1-272
+modules/baremetal/infra/scripts/setup-env.sh
+  s_82fc735a9ded12::t_e7667e2afab3a3 1-169
+modules/baremetal/infra/scripts/terraform.sh
+  s_82fc735a9ded12::t_295457c4fd7d30 1-37
+modules/baremetal/infra/smithdb_nodes.tf
+  s_82fc735a9ded12::t_bc402760bd40c0 1-69
+modules/baremetal/infra/terraform.tfvars.example
+  s_82fc735a9ded12::t_5641916e6d47cc 1-146
+modules/baremetal/infra/tests/budget.tftest.hcl
+  s_82fc735a9ded12::t_9f76f01e3dd63b 1-926
+modules/baremetal/infra/tests/datastores.tftest.hcl
+  s_82fc735a9ded12::t_377cbaf2e429c5 1-239
+modules/baremetal/infra/tests/fixtures/values-local-measured.yaml
+  s_82fc735a9ded12::t_673cb74d2670bd 1-15
+modules/baremetal/infra/tests/fixtures/values-local-replicas.yaml
+  s_82fc735a9ded12::t_92400163c70f7b 1-3
+modules/baremetal/infra/tests/platform.tftest.hcl
+  s_82fc735a9ded12::t_a91894ff222152 1-198
+modules/baremetal/infra/tests/sandboxes.tftest.hcl
+  s_82fc735a9ded12::t_ee038462d636a5 1-363
+modules/baremetal/infra/tests/trace_store.tftest.hcl
+  s_82fc735a9ded12::t_127105d098fdfe 1-178
+modules/baremetal/infra/tests/values.tftest.hcl
+  s_82fc735a9ded12::t_4b10f5b25f1efc 1-180
+modules/baremetal/infra/trace_store.tf
+  s_82fc735a9ded12::t_7b9a53c66cac4e 1-147
+modules/baremetal/infra/values.tf
+  s_82fc735a9ded12::t_a5bba555fee8bb 1-90
+modules/baremetal/infra/variables.tf
+  s_82fc735a9ded12::t_19d5991eacae9c 1-526
+modules/baremetal/infra/versions.tf
+  s_82fc735a9ded12::t_3a3fb72704adac 1-28
+modules/byoc/README.md
+  s_82fc735a9ded12::t_01f1dba87cb070 16-19
+modules/byoc/aws/byoiam/README.md
+  s_82fc735a9ded12::t_8f357b1080d5ed 30
+modules/byoc/aws/byoiam/policies.tf
+  s_82fc735a9ded12::t_cb740d3f626391 2-26,213,267-276,325-347,350-351,373,378-379
+modules/byoc/aws/byoiam/roles.tf
+  s_82fc735a9ded12::t_f19c100a66a8fd 21,44
+modules/byoc/aws/byoiam/variables.tf
+  s_82fc735a9ded12::t_05d09f74ec3ae2 21,54-64
+modules/byoc/aws/langsmith-byoc-role/README.md
+  s_82fc735a9ded12::t_a8122e16f9a9ca 222
+modules/byoc/aws/langsmith-byoc-role/policies.tf
+  s_82fc735a9ded12::t_f6aebca49477ff 13,64-65
+modules/byoc/aws/langsmith-byoc-role/policies/delete.json
+  s_82fc735a9ded12::t_8bcf0865dbd028 376-389
+modules/byoc/aws/langsmith-byoc-role/policies/ecr.json
+  s_82fc735a9ded12::t_d4d931a8e699d7 1-48
+modules/byoc/aws/langsmith-byoc-role/policies/s3.json
+  s_82fc735a9ded12::t_df711153111d03 20,49
+modules/byoc/azure/langsmith-byoc-access/README.md
+  s_82fc735a9ded12::t_2d597a011fe693 1-311
+modules/byoc/azure/langsmith-byoc-access/data_planes.tf
+  s_82fc735a9ded12::t_9d70a2814fb3d9 1-102
+modules/byoc/azure/langsmith-byoc-access/engine.tf
+  s_82fc735a9ded12::t_423403890a6b8e 1-29
+modules/byoc/azure/langsmith-byoc-access/flow_logs.tf
+  s_82fc735a9ded12::t_6db00a4018e745 1-65
+modules/byoc/azure/langsmith-byoc-access/identities.tf
+  s_82fc735a9ded12::t_92179b8779db2d 1-171
+modules/byoc/azure/langsmith-byoc-access/main.tf
+  s_82fc735a9ded12::t_90f2efccb712c0 1-10
+modules/byoc/azure/langsmith-byoc-access/outputs.tf
+  s_82fc735a9ded12::t_56493df351fc86 1-15
+modules/byoc/azure/langsmith-byoc-access/roles.tf
+  s_82fc735a9ded12::t_27c21a3d7a516e 1-191
+modules/byoc/azure/langsmith-byoc-access/variables.tf
+  s_82fc735a9ded12::t_3a4a940ca5743a 1-67
+modules/byoc/azure/langsmith-byoc-access/versions.tf
+  s_82fc735a9ded12::t_92bfca5f5b1558 1-21
+modules/byoc/gcp/langsmith-byoc-service-account/README.md
+  s_82fc735a9ded12::t_33c0442902d3dc 11-12,14,19-20,68,70-73,75-77,81-127,129-151,166,172-176,186,190-209,221
+modules/byoc/gcp/langsmith-byoc-service-account/main.tf
+  s_82fc735a9ded12::t_6991d34653fca0 4-10,12-13,15,17,45,68-69,71,73,115,140-157,169-328,331-332,334-337,348-366,378,432-437,457-483,534-615,654-655,659,682-709,729-765
+modules/byoc/gcp/langsmith-byoc-service-account/outputs.tf
+  s_82fc735a9ded12::t_f577a33f621611 10-14
+modules/byoc/gcp/langsmith-byoc-service-account/tests/name_fence.tftest.hcl
+  s_82fc735a9ded12::t_66e5138f326b10 1-204
+modules/byoc/gcp/langsmith-byoc-service-account/variables.tf
+  s_82fc735a9ded12::t_d95cdebb5d019e 39,50,54-64
+modules/byoc/gcp/langsmith-byoc-service-account/versions.tf
+  s_82fc735a9ded12::t_101b0ce52a9bdb 7
+modules/gcp/README.md
+  s_82fc735a9ded12::t_4372f27f3d0255 56,195-202,550
+modules/gcp/SMITHDB.md
+  s_82fc735a9ded12::t_613c89196384c1 60-61,333,336-339,357-358,557
+modules/gcp/helm/scripts/init-values.sh
+  s_82fc735a9ded12::t_9319dcf3bed9e7 749,798-799
+modules/gcp/helm/scripts/smithdb-migration-job-end.sh
+  s_82fc735a9ded12::t_4452d5f59580da 10,69
+modules/gcp/helm/scripts/smithdb-migration-job-start.sh
+  s_82fc735a9ded12::t_65968df74ed36e 10,13,185,221
+modules/gcp/helm/values/examples/langsmith-values-fleet.yaml
+  s_82fc735a9ded12::t_c0043107f52bd6 36-37
+modules/gcp/helm/values/examples/langsmith-values-sizing-production.yaml
+  s_82fc735a9ded12::t_f435073eacd18a 24
+modules/gcp/helm/values/examples/langsmith-values-smithdb-migration.yaml
+  s_82fc735a9ded12::t_25c6357efcca7b 9
+modules/gcp/helm/values/examples/langsmith-values-smithdb.yaml
+  s_82fc735a9ded12::t_2c1dfefe7ac876 19-20,41
+modules/gcp/helm/values/examples/langsmith-values-standalone-insights.yaml
+  s_82fc735a9ded12::t_05273daae5be02 44-45
+modules/gcp/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_82fc735a9ded12::t_b844805c4bcebf 36-37
+modules/gcp/infra/locals.tf
+  s_82fc735a9ded12::t_3e15de7d2f92d8 62-63
+modules/gcp/infra/main.tf
+  s_82fc735a9ded12::t_490fd7d2a719cb 727-728
+modules/gcp/infra/modules/k8s-bootstrap/main.tf
+  s_82fc735a9ded12::t_da16cc91c3c3a1 211,235-238
+modules/gcp/infra/modules/k8s-bootstrap/outputs.tf
+  s_82fc735a9ded12::t_141ed6672db6d8 95-99
+modules/gcp/infra/scripts/quickstart.sh
+  s_82fc735a9ded12::t_295b2a24efe74d 636-637
+modules/gcp/infra/scripts/setup-env.sh
+  s_82fc735a9ded12::t_dc56e1ce9e9633 18-20,25,34,116-118,122-127,132-133,135,139,141-148,150-152,169-170,188-189,214-215,220-226,228,230,284-285,295,297-299,356,360,364,367,371,442,445,448,451
+modules/gcp/infra/scripts/test-setup-env-sm.sh
+  s_82fc735a9ded12::t_80287a1fc88ed9 1-185
+modules/gcp/infra/terraform.tfvars.example
+  s_82fc735a9ded12::t_0602a32867254f 196-198,425
+modules/gcp/infra/tests/validation.tftest.hcl
+  s_82fc735a9ded12::t_05e2dd9b0d2bea 266,268
+modules/gcp/infra/tests/wiring.tftest.hcl
+  s_82fc735a9ded12::t_0924f5d023ec10 313,336-337,405,407,440,452-453,487-488,575-576,607-608,643-644,665,684-685,707,711,736-766,783,785
+modules/gcp/infra/variables.tf
+  s_82fc735a9ded12::t_01d3ba301ca33f 438
+scripts/check.sh
+  s_82fc735a9ded12::t_b3e26fa44e3915 6,9-13,56-63,86-137,139,178,239-243,245
+scripts/plan-tests.sh
+  s_82fc735a9ded12::t_db8bec27e2a4b5 103,130,135-146,150,155
+utils/langsmith-load-test/README.md
+  s_82fc735a9ded12::t_e5b53052f732a2 75
+utils/langsmith-load-test/pyproject.toml
+  s_82fc735a9ded12::t_07f0a75a993147 10
+utils/langsmith-load-test/src/loadtest/cli.py
+  s_82fc735a9ded12::t_ba21e09b5e1096 63-64
+utils/langsmith-load-test/src/loadtest/runner.py
+  s_82fc735a9ded12::t_23c839722a6856 6,9,21-23,36,39,98-116,162-165,168-171,187-198,200
+utils/langsmith-load-test/uv.lock
+  s_82fc735a9ded12::t_0dc4efdf33bd08 351,361,363,394,403,405,450
+modules/aws/README.md
+  s_82fc735a9ded12::t_49dcfe30b02bb3 24,208,211,262-338,377,620,794-802,808,810-811,1276,1281,1288,1336-1339,1344-1349
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e9946836ca818123984b2ea18ad9e64e218ba345",
+  "prompts": {},
+  "sessions": {
+    "s_82fc735a9ded12": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "b67adcbd-b0b0-4ffd-87d8-ac4b72e14ccd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
