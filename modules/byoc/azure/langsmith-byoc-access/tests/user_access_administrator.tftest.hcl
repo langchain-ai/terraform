@@ -32,6 +32,11 @@ mock_provider "azurerm" {
       principal_id = "66666666-6666-6666-6666-666666666666"
     }
   }
+  mock_resource "azurerm_policy_definition" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/policyDefinitions/langsmith-byoc-guardrail"
+    }
+  }
   mock_resource "azurerm_role_definition" {
     defaults = {
       role_definition_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/77777777-7777-7777-7777-777777777777"
