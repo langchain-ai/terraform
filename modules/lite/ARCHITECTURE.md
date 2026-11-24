@@ -25,9 +25,9 @@ one it is, and how it differs from the other modules.
                                                        4  namespaces and their network policies, priority
                                                           class, storage class, Traefik, the operator's
                                                           ServiceAccount, Secrets
-                                                       5  each HelmChart into k3s's manifests folder,
+                                                       5  the ssh user's kubeconfig: the operator's, not admin
+                                                       6  each HelmChart into k3s's manifests folder,
                                                           the stores first; wait for each install Job
-                                                       6  the ssh user's kubeconfig: the operator's, not admin
                                                        7  remove what this bundle no longer has
 
  cloud = cluster  terraform apply           (credentials only: there is no machine)

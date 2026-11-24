@@ -136,7 +136,7 @@ wait_for_ssh() {
 ssh_root() {
   printf '\n  %-18s %s%s%s\n' root "$DIM" "$1" "$OFF"
   ssh -t "${SSH_OPTS[@]}" "$SSH_TARGET" \
-    "sudo -v && printf '  %-18s %s %sgranted%s\n\n' root 'on \$(hostname)' '$GREEN' '$OFF' && $2"
+    "sudo -v && printf '  %-18s %s %sgranted%s\n\n' root \"on \$(hostname)\" '$GREEN' '$OFF' && $2"
 }
 
 # Defines k on the box: kubectl as the ssh user, with the kubeconfig the install gave it.

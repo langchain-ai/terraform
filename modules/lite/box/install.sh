@@ -131,7 +131,45 @@ run secrets "every credential, as Secrets" \
   kubectl apply --server-side --force-conflicts --field-manager=langsmith-lite -f "$SRC/secrets.yaml"
 rm -f "$SRC/secrets.yaml"
 
-#--- 5. The releases ----------------------------------------------------------------------------------
+#--- 5. The ssh user's kubeconfig ---------------------------------------------------------------------
+# The operator ServiceAccount's (bundle.tf), not k3s's admin one, which stays root-only. Written before
+# the releases: written after them, a release that failed left nothing to read it with but root (magus).
+user_kubeconfig() {
+  local home token="" ca tmp
+  home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+  [[ -n "$home" ]] || home="$(awk -F: -v u="$SUDO_USER" '$1 == u { print $6 }' /etc/passwd)"
+  # The token controller fills the Secret a moment after it is created.
+  for _ in $(seq 1 30); do
+    token="$(kubectl -n kube-system get secret langsmith-lite-operator -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)"
+    [[ -n "$token" ]] && break
+    sleep 1
+  done
+  [[ -n "$token" ]] || { echo "the operator ServiceAccount's token was never issued"; return 1; }
+  ca="$(awk '/certificate-authority-data:/ { print $2; exit }' /etc/rancher/k3s/k3s.yaml)"
+  install -d -m 700 -o "$SUDO_USER" "$home/.kube"
+  tmp="$(mktemp)"
+  cat >"$tmp" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: langsmith-lite
+    cluster: { server: "https://127.0.0.1:6443", certificate-authority-data: "$ca" }
+users:
+  - name: langsmith-lite-operator
+    user: { token: "$token" }
+contexts:
+  - name: langsmith-lite
+    context: { cluster: langsmith-lite, user: langsmith-lite-operator }
+current-context: langsmith-lite
+EOF
+  install -m 600 -o "$SUDO_USER" "$tmp" "$home/.kube/langsmith-lite.yaml"
+  rm -f "$tmp"
+}
+if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
+  run kubeconfig "a kubeconfig for $SUDO_USER" user_kubeconfig
+fi
+
+#--- 6. The releases ----------------------------------------------------------------------------------
 # A HelmChart's install Job (helm-install-<name>) is replaced when the HelmChart changes. A changed
 # release waits for a Job with a new uid; an unchanged one's last Job stands. Tracked per release: one
 # time for the whole run made an upgrade of LangSmith wait out every unchanged release's timeout.
@@ -198,44 +236,6 @@ for r in $RELEASES; do
 done
 run available "every LangSmith deployment available" \
   kubectl -n "$NS" wait --for=condition=Available deployment --all --timeout=900s
-
-#--- 6. The ssh user's kubeconfig ---------------------------------------------------------------------
-# k3s's admin kubeconfig stays root-only. The ssh user's is the operator ServiceAccount's (bundle.tf),
-# not cluster-admin: what make status, access, verify and soak use.
-user_kubeconfig() {
-  local home token="" ca tmp
-  home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
-  [[ -n "$home" ]] || home="$(awk -F: -v u="$SUDO_USER" '$1 == u { print $6 }' /etc/passwd)"
-  # The token controller fills the Secret a moment after it is created.
-  for _ in $(seq 1 30); do
-    token="$(kubectl -n kube-system get secret langsmith-lite-operator -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)"
-    [[ -n "$token" ]] && break
-    sleep 1
-  done
-  [[ -n "$token" ]] || { echo "the operator ServiceAccount's token was never issued"; return 1; }
-  ca="$(awk '/certificate-authority-data:/ { print $2; exit }' /etc/rancher/k3s/k3s.yaml)"
-  install -d -m 700 -o "$SUDO_USER" "$home/.kube"
-  tmp="$(mktemp)"
-  cat >"$tmp" <<EOF
-apiVersion: v1
-kind: Config
-clusters:
-  - name: langsmith-lite
-    cluster: { server: "https://127.0.0.1:6443", certificate-authority-data: "$ca" }
-users:
-  - name: langsmith-lite-operator
-    user: { token: "$token" }
-contexts:
-  - name: langsmith-lite
-    context: { cluster: langsmith-lite, user: langsmith-lite-operator }
-current-context: langsmith-lite
-EOF
-  install -m 600 -o "$SUDO_USER" "$tmp" "$home/.kube/langsmith-lite.yaml"
-  rm -f "$tmp"
-}
-if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
-  run kubeconfig "a kubeconfig for $SUDO_USER" user_kubeconfig
-fi
 
 #--- 7. What this bundle no longer has ----------------------------------------------------------------
 # A manifest this bundle lacks is removed, but its objects only when no file here carries the same

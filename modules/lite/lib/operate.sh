@@ -89,8 +89,14 @@ k top node || true
 k top pods -A --sort-by=memory 2>/dev/null | head -25 || true
 echo "## volumes"
 k get pvc -A
-df -h /var/lib/rancher 2>/dev/null || df -h /' |
-    awk -v b="$BOLD" -v o="$OFF" '/^## / { print ""; print "  " b substr($0, 4) o; next } { print "  " $0 }'
+df -h /var/lib/rancher 2>/dev/null || df -h /
+echo "## what is failing (the last lines of each pod neither running nor done)"
+for n in $NAMESPACES; do
+  k get pods -n "$n" --no-headers 2>/dev/null | awk '"'"'$3 !~ /^(Running|Completed)$/ { print $1 }'"'"' |
+    while read -r p; do echo "-- $n/$p"; k -n "$n" logs "$p" --all-containers --tail=15 2>&1; done
+done' |
+    awk -v b="$BOLD" -v o="$OFF" '/^## / { print ""; print "  " b substr($0, 4) o; next } { print "  " $0 }' ||
+    fail "the box could not be read" "the line above says why"
   printf '\n'
 }
 
