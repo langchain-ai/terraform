@@ -446,7 +446,6 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
-_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
@@ -454,7 +453,7 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
-_tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
+_enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
 
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
 if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
@@ -493,9 +492,9 @@ fi
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
 # hostname resolution below to the Ingress status instead of the Terraform ALB.
-_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
-_enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
-_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
+_enable_envoy_gateway=$(_read_applied_flag "enable_envoy_gateway" false)
+_enable_istio_gateway=$(_read_applied_flag "enable_istio_gateway" false)
+_enable_nginx_ingress=$(_read_applied_flag "enable_nginx_ingress" false)
 
 # Classic ALB Ingress mode = none of the gateway/nginx routing modes are enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB, so the
@@ -690,7 +689,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
   if [[ -f "$_smithdb_base" && -f "$_smithdb_overrides" ]]; then
-    VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+    VALUES_ARGS+=(-f "$_smithdb_base")
     echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml (chart line: ${CHART_VERSION})"
   else
     echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
@@ -714,6 +713,18 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     VALUES_ARGS+=(-f "$_smithdb_migration")
     echo "  ✔ langsmith-values-smithdb-migration.yaml"
   fi
+  if ! grep -q '^    storageClassName:' "$_smithdb_overrides"; then
+    echo "ERROR: SmithDB cache storage is missing. Run make init-values." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(-f "$_smithdb_overrides")
+  source "$INFRA_DIR/scripts/_smithdb-transition.sh"
+  _smithdb_cache_storage=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage 2>/dev/null) || _smithdb_cache_storage=""
+  _smithdb_cache_storage=$(_smithdb_cache_mode "$_smithdb_cache_storage" "$(_parse_tfvar "smithdb_cache_storage" || true)") || exit 1
+  _smithdb_managed_values "$_smithdb_cache_storage"
+  _smithdb_sizing_tier_check "${_sizing_file:-}" "$SMITHDB_RESOURCE_TIER" || exit 1
+  _smithdb_tier_fits "$SMITHDB_RESOURCE_TIER" "$_smithdb_cache_storage" || exit 1
+  echo "  ✔ SmithDB ${SMITHDB_RESOURCE_TIER} tier fits node-group-smithdb (${_smithdb_cache_storage} cache)"
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────

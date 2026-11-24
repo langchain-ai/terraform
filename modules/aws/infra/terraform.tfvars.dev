@@ -47,7 +47,6 @@ eks_managed_node_groups = {
 #------------------------------------------------------------------------------
 # External Postgres + Redis (recommended even for dev)
 #------------------------------------------------------------------------------
-postgres_source        = "external"
 postgres_username      = "langsmith"
 postgres_instance_type = "db.t3.medium"    # 2 vCPU, 4 GB — fine for dev
 postgres_storage_gb    = 20
@@ -60,7 +59,6 @@ postgres_skip_final_snapshot = true
 smithdb_metastore_deletion_protection = false
 smithdb_metastore_skip_final_snapshot = true
 
-redis_source        = "external"
 redis_instance_type = "cache.t3.medium"    # 2 vCPU, 3 GB — fine for dev
 
 #------------------------------------------------------------------------------

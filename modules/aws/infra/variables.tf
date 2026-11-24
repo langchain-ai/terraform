@@ -192,7 +192,7 @@ variable "eks_managed_node_groups" {
   default = {
     default = {
       name           = "node-group-default"
-      instance_types = ["m5.4xlarge"]
+      instance_types = ["m6a.2xlarge"]
       min_size       = 3
       max_size       = 10
     }
@@ -210,14 +210,17 @@ variable "eks_managed_node_groups" {
 #------------------------------------------------------------------------------
 # PostgreSQL (RDS) Configuration
 #------------------------------------------------------------------------------
+# Only "external" since 0.18: SmithDB, part of every install, needs PostgreSQL
+# that outlives the cluster. The variable stays so a 0.17 tfvars file that still
+# says in-cluster fails at plan instead of silently getting a new RDS instance.
 variable "postgres_source" {
   type        = string
-  description = "PostgreSQL deployment type: 'external' (default, RDS with private access) or 'in-cluster' (deployed via Helm)"
+  description = "PostgreSQL deployment type. Only 'external' (RDS with private access) is supported from 0.18."
   default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.postgres_source)
-    error_message = "postgres_source must be one of: external, in-cluster."
+    condition     = var.postgres_source == "external"
+    error_message = "postgres_source = \"in-cluster\" was removed in 0.18: LangSmith needs an external PostgreSQL (RDS, the default). Back up the in-cluster database before you remove this line from terraform.tfvars, because the next apply points LangSmith at a new, empty RDS instance. See \"Move an in-cluster PostgreSQL to RDS\" in modules/aws/README.md."
   }
 }
 
@@ -257,8 +260,8 @@ variable "postgres_username" {
 
 variable "postgres_engine_version" {
   type        = string
-  description = "PostgreSQL engine version for the RDS instance. PG 14 reaches EOL Nov 2026; 16 is recommended for new deployments."
-  default     = "16"
+  description = "PostgreSQL engine version for the RDS instance."
+  default     = "18"
 }
 
 variable "postgres_password" {
@@ -267,10 +270,13 @@ variable "postgres_password" {
     Password for the postgres database. Required when postgres_source = 'external'.
     Set via TF_VAR_postgres_password env var.
 
-    When using setup-env.sh: auto-generated on first run (openssl rand -hex 32) and stored
-    in SSM Parameter Store (/langsmith/{base_name}/postgres-password). On subsequent runs,
-    the value is read from SSM. Local .pg_password files are only a bootstrap fallback when
-    SSM is unreachable. To rotate, update SSM and run terraform apply -target=module.postgres.
+    When using setup-env.sh: reuse SSM (/langsmith/{base_name}/postgres-password).
+    Existing SSM values replace shell values. If the parameter is confirmed missing,
+    use the shell value or generate a password (openssl rand -hex 32), then persist
+    it in SSM before exporting it. Read/write failures stop setup. If a legacy
+    .pg_password path exists without its SSM parameter, stop for explicit recovery.
+    Local password backups are never read, created, or refreshed.
+    Intentional password rotation requires a separate SSM update and database change.
 
     RDS forbids '/', '@', double quote, single quote, and space. Connection URLs percent-encode
     the password so other reserved URI characters still parse.
@@ -323,26 +329,30 @@ variable "postgres_existing_security_group_id" {
 #------------------------------------------------------------------------------
 # Redis (ElastiCache) Configuration
 #------------------------------------------------------------------------------
+# Only "external" since 0.18, kept for the same reason as postgres_source: a 0.17
+# tfvars file that says in-cluster fails at plan. ElastiCache runs in OSS mode, not
+# cluster mode, because the chart needs several DB indexes (DB 0 for LangSmith,
+# 1-3 for Fleet, Chat and Insights on external storage).
 variable "redis_source" {
   type        = string
-  description = "Redis deployment type: 'external' (default, ElastiCache with private access) or 'in-cluster' (deployed via Helm)"
+  description = "Redis deployment type. Only 'external' (ElastiCache with private access) is supported from 0.18."
   default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.redis_source)
-    error_message = "redis_source must be one of: external, in-cluster."
+    condition     = var.redis_source == "external"
+    error_message = "redis_source = \"in-cluster\" was removed in 0.18: LangSmith needs an external Redis (ElastiCache, the default). Stop sending traces and let the LangSmith queues drain before you remove this line from terraform.tfvars, because the next apply points LangSmith at a new, empty ElastiCache instance. See \"Move an in-cluster Redis to ElastiCache\" in modules/aws/README.md."
   }
 }
 
 variable "redis_instance_type" {
   type        = string
-  description = "Instance type for the redis cache. Required when redis_source = 'external'."
+  description = "Instance type for the redis cache."
   default     = "cache.m6g.xlarge"
 }
 
 variable "redis_auth_token" {
   type        = string
-  description = "Auth token for Redis. Auto-generated by setup-env.sh and stored in SSM. Required when redis_source = 'external'."
+  description = "Auth token for Redis. Auto-generated by setup-env.sh and stored in SSM."
   default     = ""
   sensitive   = true
 }
@@ -1098,26 +1108,26 @@ variable "langsmith_polly_encryption_key" {
 }
 
 #------------------------------------------------------------------------------
-# SmithDB (chart 0.16+)
+# SmithDB (chart 0.17+)
 #
 # SmithDB is the columnar store/query engine shipped in-chart with LangSmith.
 # It shares the LangSmith namespace and release (it cannot run in a separate
 # namespace or cluster). Enabling it provisions a dedicated metastore Postgres,
 # a dedicated object-store S3 bucket, an IRSA role for the SmithDB service
-# account, and instance-store + compute node groups (SmithDB requires local
-# NVMe SSD instances). The Helm side is enabled in Pass 2 (helm/ or app/).
+# account, a dedicated managed node group, and an EBS cache StorageClass.
+# The Helm side is enabled in Pass 2 (helm/ or app/).
 #
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Pass 2 uses the repository's compatible 0.17.x chart pin. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
-  default     = false
+  description = "Provision the SmithDB metastore, S3 bucket, IRSA role, managed node group, and EBS cache storage. On by default: SmithDB is part of every install from 0.18. An install upgraded from 0.17 without SmithDB must set this to false, or follow SMITHDB.md, before it applies."
+  default     = true
 }
 
 variable "smithdb_ingestion_enabled" {
   type        = bool
-  description = "Route new LangSmith writes to SmithDB after service validation."
-  default     = false
+  description = "Write new LangSmith runs to SmithDB (and to ClickHouse too while ClickHouse is on). On by default for a new install."
+  default     = true
 }
 
 variable "smithdb_migration_enabled" {
@@ -1128,8 +1138,8 @@ variable "smithdb_migration_enabled" {
 
 variable "smithdb_query_enabled" {
   type        = bool
-  description = "Serve LangSmith queries from SmithDB after ingestion and migration validation."
-  default     = false
+  description = "Serve LangSmith queries from SmithDB. On by default for a new install, which has no history to migrate. An install with traces in ClickHouse keeps this false until they are migrated (SMITHDB.md)."
+  default     = true
 }
 
 variable "langsmith_release_name" {
@@ -1267,8 +1277,8 @@ variable "smithdb_s3_force_destroy" {
   default     = false
 }
 
-# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
-# Karpenter (installed by the eks module when enable_smithdb = true) provisions
+# ── Legacy Karpenter pools (transition mode only) ────────────────────────────
+# Karpenter is retained only during smithdb_transition_mode. It provisions
 # the SmithDB pools on demand. The instance-store pool uses instanceStorePolicy
 # RAID0, so no launch-template userdata is needed. Both amd64 and arm64 work;
 # amd64 is the default to match core LangSmith and avoid multi-arch job issues.
@@ -1345,7 +1355,7 @@ variable "smithdb_compute_limits" {
 
 variable "smithdb_node_root_volume_size_gb" {
   type        = number
-  description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
+  description = "Root EBS volume size (GiB) for SmithDB nodes."
   default     = 100
 }
 

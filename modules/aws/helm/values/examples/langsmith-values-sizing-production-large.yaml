@@ -201,86 +201,11 @@ fleetTriggerServer:
         memory: "4Gi"
 
 # -- SmithDB ---------------------------------------------------------------
-
-smithdb:
-  query:
-    deployment:
-      resources:
-        requests:
-          cpu: "28"
-          memory: "50Gi"
-          ephemeral-storage: "1000Gi"
-        limits:
-          cpu: "28"
-          memory: "50Gi"
-          ephemeral-storage: "1000Gi"
-      volumes:
-        - name: cache
-          emptyDir:
-            sizeLimit: "1000Gi"
-    autoscaling:
-      hpa:
-        minReplicas: 4
-
-  ingestion:
-    deployment:
-      resources:
-        requests:
-          cpu: "56"
-          memory: "150Gi"
-          ephemeral-storage: "1000Gi"
-        limits:
-          cpu: "56"
-          memory: "150Gi"
-          ephemeral-storage: "1000Gi"
-      volumes:
-        - name: cache
-          emptyDir:
-            sizeLimit: "1000Gi"
-    autoscaling:
-      hpa:
-        minReplicas: 2
-
-  compaction:
-    deployment:
-      replicas: 1
-      resources:
-        requests:
-          cpu: "8"
-          memory: "16Gi"
-        limits:
-          cpu: "8"
-          memory: "16Gi"
-
-  compactionWorker:
-    deployment:
-      resources:
-        requests:
-          cpu: "28"
-          memory: "50Gi"
-          ephemeral-storage: "300Gi"
-        limits:
-          cpu: "28"
-          memory: "50Gi"
-          ephemeral-storage: "300Gi"
-      volumes:
-        - name: cache
-          emptyDir:
-            sizeLimit: "300Gi"
-    autoscaling:
-      hpa:
-        minReplicas: 4
-
-  clusterManager:
-    deployment:
-      replicas: 1
-      resources:
-        requests:
-          cpu: "2"
-          memory: "2Gi"
-        limits:
-          cpu: "2"
-          memory: "2Gi"
+# No profile sizes SmithDB. Every profile runs the small tier that
+# langsmith-values-smithdb.yaml sets, with the chart's replica defaults and the
+# compaction-worker KEDA range from langsmith-values.yaml. The large tier's
+# starting replicas (query 4, ingestion 2, compaction worker 4) come with the
+# large tier: see SMITHDB.md, "Scaling up".
 
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 # High/High pattern: 14+ CPU / 24+ Gi per node, 3-node cluster recommended.

@@ -252,77 +252,6 @@ run "pod_subnets_in_another_vpc_are_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-# ── Add-on storage ───────────────────────────────────────────────────────────
-# External add-on storage means a dedicated database on the shared RDS and a
-# logical index on the shared ElastiCache, so both services have to be external.
-# Chart v0.16 moved these interlocks off enable_deployments, which the root no
-# longer reads at all, and onto the per-add-on storage mode.
-#
-# Fleet reads var.fleet_storage directly. Chat and Insights each go through a
-# local that is an OR of two arms, so each one takes two runs: the storage mode
-# here, and the enable_standalone_* compatibility flag below.
-
-run "external_fleet_storage_with_in_cluster_postgres_is_rejected" {
-  command = plan
-
-  variables {
-    enable_fleet    = true
-    fleet_storage   = "external"
-    postgres_source = "in-cluster"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
-run "external_polly_storage_with_in_cluster_redis_is_rejected" {
-  command = plan
-
-  variables {
-    enable_polly  = true
-    polly_storage = "external"
-    redis_source  = "in-cluster"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
-run "external_insights_storage_with_in_cluster_postgres_is_rejected" {
-  command = plan
-
-  variables {
-    enable_insights  = true
-    insights_storage = "external"
-    postgres_source  = "in-cluster"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
-# The enable_standalone_* arm. These flags force external storage on their own,
-# whatever the matching *_storage value says.
-
-run "standalone_polly_with_in_cluster_redis_is_rejected" {
-  command = plan
-
-  variables {
-    enable_standalone_polly = true
-    redis_source            = "in-cluster"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
-run "standalone_insights_with_in_cluster_postgres_is_rejected" {
-  command = plan
-
-  variables {
-    enable_standalone_insights = true
-    postgres_source            = "in-cluster"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
 # ── SmithDB ──────────────────────────────────────────────────────────────────
 
 run "external_smithdb_metastore_without_connection_details_is_rejected" {
@@ -331,17 +260,6 @@ run "external_smithdb_metastore_without_connection_details_is_rejected" {
   variables {
     enable_smithdb           = true
     smithdb_metastore_source = "external"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
-run "smithdb_integration_gates_without_smithdb_are_rejected" {
-  command = plan
-
-  variables {
-    enable_smithdb            = false
-    smithdb_ingestion_enabled = true
   }
 
   expect_failures = [terraform_data.validate_inputs]

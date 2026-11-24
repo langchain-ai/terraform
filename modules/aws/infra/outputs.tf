@@ -85,43 +85,43 @@ output "sandbox_service_account_name" {
 # PostgreSQL (RDS)
 #------------------------------------------------------------------------------
 output "postgres_source" {
-  description = "PostgreSQL deployment type: external (RDS) or in-cluster (Helm)"
+  description = "PostgreSQL deployment type: always external (RDS) from 0.18"
   value       = var.postgres_source
 }
 
 output "postgres_connection_url" {
-  description = "PostgreSQL connection URL (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].connection_url : null
+  description = "PostgreSQL connection URL"
+  value       = module.postgres[0].connection_url
   sensitive   = true
 }
 
 output "postgres_iam_connection_url" {
-  description = "Connection URL for IAM authentication — no password (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].iam_connection_url : null
+  description = "Connection URL for IAM authentication — no password"
+  value       = module.postgres[0].iam_connection_url
 }
 
 output "postgres_security_group_id" {
-  description = "Security group ID attached to the RDS instance (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].security_group_id : null
+  description = "Security group ID attached to the RDS instance"
+  value       = module.postgres[0].security_group_id
 }
 
 #------------------------------------------------------------------------------
 # Redis (ElastiCache)
 #------------------------------------------------------------------------------
 output "redis_source" {
-  description = "Redis deployment type: external (ElastiCache) or in-cluster (Helm)"
+  description = "Redis deployment type: always external (ElastiCache) from 0.18"
   value       = var.redis_source
 }
 
 output "redis_connection_url" {
-  description = "Redis connection URL (null if using in-cluster Redis)"
-  value       = var.redis_source == "external" ? module.redis[0].connection_url : null
+  description = "Redis connection URL"
+  value       = module.redis[0].connection_url
   sensitive   = true
 }
 
 output "redis_security_group_id" {
-  description = "Security group ID attached to ElastiCache (null if using in-cluster Redis)"
-  value       = var.redis_source == "external" ? module.redis[0].security_group_id : null
+  description = "Security group ID attached to ElastiCache"
+  value       = module.redis[0].security_group_id
 }
 
 output "sandbox_juicefs_csi_config_secret_name" {
@@ -220,6 +220,24 @@ output "engine_irsa_role_arn" {
 output "enable_smithdb" {
   description = "Whether SmithDB cloud dependencies were provisioned"
   value       = var.enable_smithdb
+}
+
+# The applied LangSmith gates, read by init-values.sh: a gate left out of
+# terraform.tfvars takes its variable default, which the tfvars file cannot show.
+# A gate is on only with SmithDB on.
+output "smithdb_ingestion_enabled" {
+  description = "Whether LangSmith writes runs to SmithDB"
+  value       = var.enable_smithdb && var.smithdb_ingestion_enabled
+}
+
+output "smithdb_migration_enabled" {
+  description = "Whether the historical ClickHouse-to-SmithDB migration is on"
+  value       = var.enable_smithdb && var.smithdb_migration_enabled
+}
+
+output "smithdb_query_enabled" {
+  description = "Whether LangSmith queries SmithDB"
+  value       = var.enable_smithdb && var.smithdb_query_enabled
 }
 
 output "smithdb_object_store_bucket" {
@@ -418,9 +436,9 @@ output "resource_summary" {
   value = {
     cluster          = module.eks.cluster_name
     postgres_source  = var.postgres_source
-    postgres         = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
+    postgres         = "external (RDS)"
     redis_source     = var.redis_source
-    redis            = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
+    redis            = "external (ElastiCache)"
     storage_bucket   = local.bucket_name
     namespace        = var.langsmith_namespace
     tls              = var.tls_certificate_source
@@ -453,8 +471,8 @@ output "next_steps" {
 
     Resources:
     - EKS Cluster:  ${module.eks.cluster_name}
-    - PostgreSQL:   ${var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"}
-    - Redis:        ${var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"}
+    - PostgreSQL:   external (RDS)
+    - Redis:        external (ElastiCache)
     - S3 Bucket:    ${local.bucket_name}
     - ALB:          ${module.alb.alb_dns_name}
     - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (${var.dns_create_zone ? "new" : "existing"} Route 53 zone + ACM)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}

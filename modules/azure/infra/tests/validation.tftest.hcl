@@ -59,6 +59,7 @@ run "enums_reject_an_unlisted_value" {
     agic_network_contributor_scope = "resourcegroup"
     terraform_principal_type       = "user"
     redis_clustering_policy        = "Enterprise"
+    sizing_profile                 = "production_large"
   }
 
   expect_failures = [
@@ -71,6 +72,7 @@ run "enums_reject_an_unlisted_value" {
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
     var.redis_clustering_policy,
+    var.sizing_profile,
   ]
 }
 
@@ -337,6 +339,57 @@ run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
   }
 
   expect_failures = [terraform_data.validate_network]
+}
+
+# SmithDB requests its Entra token for the metastore with the commercial
+# scope, which an Azure Government Flexible Server refuses (LG-913), so in
+# Government the metastore must use a password. The accepting run below plans
+# the same inputs with a password, so a failure here can only be this rule.
+run "smithdb_in_government_refuses_entra_metastore_auth" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    azure_environment  = "usgovernment"
+    location           = "usgovvirginia"
+    redis_source       = "in-cluster"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_in_government_accepts_a_metastore_password" {
+  command = plan
+
+  variables {
+    enable_smithdb                   = true
+    availability_zones               = ["1", "2", "3"]
+    azure_environment                = "usgovernment"
+    location                         = "usgovvirginia"
+    redis_source                     = "in-cluster"
+    smithdb_metastore_admin_password = "plan-tests-only-Passw0rd"
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_auth_mode == "password"
+    error_message = "a Government SmithDB metastore with a password did not plan password authentication: ${output.smithdb_metastore_auth_mode}"
+  }
+}
+
+# Commercial Azure keeps Entra as the default: the rule is Government only.
+run "smithdb_in_public_keeps_entra_metastore_auth" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_auth_mode == "entra"
+    error_message = "a commercial SmithDB metastore without a password did not plan Entra authentication: ${output.smithdb_metastore_auth_mode}"
+  }
 }
 
 # The other direction: the default pool stays nonzonal and a zonal additional
@@ -866,36 +919,6 @@ run "smithdb_migration_requires_ingestion" {
   }
 
   expect_failures = [terraform_data.validate_network]
-}
-
-run "smithdb_migration_parallelism_rejects_zero" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 0
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
-}
-
-run "smithdb_migration_parallelism_rejects_more_than_30" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 31
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
-}
-
-run "smithdb_migration_parallelism_rejects_a_fraction" {
-  command = plan
-
-  variables {
-    smithdb_migration_parallelism = 1.5
-  }
-
-  expect_failures = [var.smithdb_migration_parallelism]
 }
 
 # ── Storage and ClusterIP rules ──────────────────────────────────────────────

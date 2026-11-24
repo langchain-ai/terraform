@@ -201,7 +201,10 @@ locals {
   # Passed outside the typed eks_managed_node_groups input, which would drop
   # metadata_options and any override attribute the object type doesn't declare.
   # With an external runtime the same group goes to module.sandbox_eks instead.
-  extra_eks_managed_node_groups = local.in_cluster_sandbox_runtime ? { sandbox_host = local.sandbox_host_node_group } : {}
+  extra_eks_managed_node_groups = merge(
+    local.in_cluster_sandbox_runtime ? { sandbox_host = local.sandbox_host_node_group } : {},
+    var.enable_smithdb ? { smithdb = local.smithdb_node_group } : {},
+  )
 
   sandbox_juicefs_bucket_url = "https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com"
 

@@ -13,4 +13,8 @@ These modules provision customer-owned resources used with LangSmith Bring Your 
 | --- | --- |
 | [`gcp/langsmith-byoc-service-account`](gcp/langsmith-byoc-service-account/README.md) | **Beta.** Customer-side service account that the LangSmith control plane impersonates to provision BYOC data planes. Optional customer-managed service accounts (BYOIAM). |
 
+| Azure module | Purpose |
+| --- | --- |
+| [`azure/langsmith-byoc-access`](azure/langsmith-byoc-access/README.md) | LangSmith service principal, and one resource group, Key Vault, and set of role assignments per data plane. |
+
 Use the BYOVPC module when supplying your own network for a BYOC data plane. You own the network lifecycle, and provide VPC and subnet IDs when creating the data plane in LangSmith.

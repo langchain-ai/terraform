@@ -61,9 +61,20 @@ operator:
       limits:
         cpu: "500m"
         memory: "512Mi"
+    # The operator writes this as timeouts.request on every HTTPRoute it creates
+    # for an agent deployment (/lgp/<deployment>/...); 0s turns the timeout off,
+    # as on langsmith-fleet-streams. Without it those routes keep Envoy
+    # Gateway's 15 s default and cut runs/stream mid-response. Read only
+    # when the operator creates HTTPRoutes (envoy-gateway); other ingress
+    # controllers ignore it. Helm replaces lists, so this list replaces any
+    # operator.deployment.extraEnv set in values-overrides.yaml.
+    extraEnv:
+      - name: HTTPROUTE_REQUEST_TIMEOUT
+        value: "0s"
   # Deployment template for operator-spawned agent pods.
-  # Agent pods run as langsmith-ksa (created by deploy.sh with WI annotation).
-  # Workload Identity is used for blob storage access — no static credentials needed.
+  # Agent pods run as langsmith-ksa, which carries the image pull Secret. They
+  # have no Azure identity: no azure.workload.identity/use label here, and no
+  # federated credential for langsmith-ksa. The agent server needs none.
   templates:
     deployment: |
       apiVersion: apps/v1

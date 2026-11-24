@@ -18,6 +18,24 @@ mock_provider "kubectl" {}
 mock_provider "random" {}
 mock_provider "time" {}
 
+run "transition_requires_smithdb" {
+  command = plan
+  variables {
+    enable_smithdb          = false
+    smithdb_transition_mode = true
+  }
+  expect_failures = [var.smithdb_transition_mode]
+}
+
+run "smithdb_capacity_requires_headroom" {
+  command = plan
+  variables {
+    smithdb_node_min_count = 2
+    smithdb_node_max_count = 2
+  }
+  expect_failures = [var.smithdb_node_max_count]
+}
+
 variables {
   name_prefix         = "plantest"
   postgres_password   = "fixture-not-a-real-secret-Aa1"
@@ -38,6 +56,7 @@ run "enums_reject_an_unlisted_value" {
     sizing_profile           = "small"
     smithdb_metastore_source = "import"
     smithdb_node_arch        = "x86_64"
+    smithdb_cache_storage    = "nvme"
     fleet_storage            = "rds"
     insights_storage         = "rds"
     polly_storage            = "rds"
@@ -54,6 +73,7 @@ run "enums_reject_an_unlisted_value" {
     var.sizing_profile,
     var.smithdb_metastore_source,
     var.smithdb_node_arch,
+    var.smithdb_cache_storage,
     var.fleet_storage,
     var.insights_storage,
     var.polly_storage,
@@ -202,6 +222,28 @@ run "sizes_and_counts_reject_a_value_above_the_ceiling" {
     var.postgres_max_storage_gb,
     var.sandbox_juicefs_redis_snapshot_retention_limit,
   ]
+}
+
+# A 0.17 tfvars file that still runs PostgreSQL in the cluster must fail at plan,
+# not silently get a new RDS instance.
+run "postgres_source_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    postgres_source = "in-cluster"
+  }
+
+  expect_failures = [var.postgres_source]
+}
+
+run "redis_source_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    redis_source = "in-cluster"
+  }
+
+  expect_failures = [var.redis_source]
 }
 
 # RDS rejects these characters in a master password, and the ones that survive

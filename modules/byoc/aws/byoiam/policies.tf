@@ -1,4 +1,29 @@
 locals {
+  bedrock_assume_role_statements = [
+    {
+      Sid      = "AssumeBedrockRoles"
+      Effect   = "Allow"
+      Action   = ["sts:AssumeRole"]
+      Resource = ["arn:${local.partition}:iam::*:role/*"]
+      Condition = {
+        StringEquals = { "iam:ResourceTag/LangSmithBedrock" = "true" }
+        Null         = { "sts:ExternalId" = "false" }
+      }
+    },
+    {
+      Sid      = "TagBedrockRoleSessions"
+      Effect   = "Allow"
+      Action   = ["sts:TagSession"]
+      Resource = ["arn:${local.partition}:iam::*:role/*"]
+      Condition = {
+        StringEquals = { "iam:ResourceTag/LangSmithBedrock" = "true" }
+        "ForAllValues:StringEquals" = { "aws:TagKeys" = [
+          "eks-cluster-arn", "eks-cluster-name", "kubernetes-namespace",
+          "kubernetes-service-account", "kubernetes-pod-name", "kubernetes-pod-uid"
+        ] }
+      }
+    }
+  ]
   regional_condition = { StringEquals = { "aws:RequestedRegion" = sort(tolist(var.regions)) } }
   s3_condition       = { StringEquals = { "s3:ResourceAccount" = local.account_id } }
   rds_secret_arns = [for region in sort(tolist(var.regions)) :
@@ -185,7 +210,7 @@ locals {
           "arn:${local.partition}:bedrock:*:${local.account_id}:inference-profile/*",
           "arn:${local.partition}:bedrock:*:${local.account_id}:application-inference-profile/*"
         ]
-    }], local.migration_source_blob_statements)
+    }], local.bedrock_assume_role_statements, local.migration_source_blob_statements)
     postgres-setup-iam-role = local.setup_statements["postgres-setup-iam-role"]
     smithdb-setup-iam-role  = local.setup_statements["smithdb-setup-iam-role"]
     smithdb-iam-role = concat(local.s3_statements["smithdb-iam-role"], [
@@ -239,7 +264,16 @@ locals {
         StringLike = { "s3:prefix" = ["clickhouse", "clickhouse/*"] }
       })
     }])
-    juicefs-csi-iam-role = local.s3_statements["juicefs-csi-iam-role"]
+    juicefs-csi-iam-role = concat(local.s3_statements["juicefs-csi-iam-role"], [{
+      Sid    = "JuiceFSRedisIAMAuthentication"
+      Effect = "Allow"
+      Action = ["elasticache:Connect"]
+      Resource = flatten([for region in sort(tolist(var.regions)) : [
+        "arn:${local.partition}:elasticache:${region}:${local.account_id}:replicationgroup:*-smith-redis",
+        "arn:${local.partition}:elasticache:${region}:${local.account_id}:user:*-smith-juicefs-redis-user"
+      ]])
+    }])
+    playground-iam-role = local.bedrock_assume_role_statements
     privatelink-lambda-role = [
       {
         Sid    = "ManageEKSAPITargets"
@@ -288,9 +322,33 @@ locals {
     node_role_arn         = local.role_arns["karpenter-node-role"]
     instance_profile_name = var.karpenter_instance_profile_name
   }
+  karpenter_policy_base = jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars))
+  ebs_kms_condition = {
+    StringEquals = { "kms:ViaService" = [for region in sort(tolist(var.regions)) : "ec2.${region}.amazonaws.com"] }
+  }
+  ebs_kms_statements = [for statement in [
+    {
+      Sid       = "AllowVolumeKMS"
+      Effect    = "Allow"
+      Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext"]
+      Resource  = var.ebs_kms_key_arns
+      Condition = local.ebs_kms_condition
+    },
+    {
+      Sid       = "AllowVolumeKMSGrants"
+      Effect    = "Allow"
+      Action    = ["kms:CreateGrant", "kms:ListGrants", "kms:RevokeGrant"]
+      Resource  = var.ebs_kms_key_arns
+      Condition = merge(local.ebs_kms_condition, { Bool = { "kms:GrantIsForAWSResource" = "true" } })
+    }
+  ] : statement if length(var.ebs_kms_key_arns) > 0]
+  karpenter_policy = jsonencode(merge(local.karpenter_policy_base, {
+    Statement = concat(local.karpenter_policy_base.Statement, local.ebs_kms_statements)
+  }))
   inline_policies = merge(
     { for key, statements in local.inline_statements : key => jsonencode({ Version = "2012-10-17", Statement = statements }) },
-    { lbc-role = jsonencode(jsondecode(templatefile("${path.module}/policies/load_balancer_controller.json.tftpl", local.template_vars))) }
+    { lbc-role = jsonencode(jsondecode(templatefile("${path.module}/policies/load_balancer_controller.json.tftpl", local.template_vars))) },
+    { for key, statements in { ebs-csi-role = local.ebs_kms_statements } : key => jsonencode({ Version = "2012-10-17", Statement = statements }) if length(statements) > 0 }
   )
 }
 
@@ -312,13 +370,13 @@ resource "aws_iam_policy" "karpenter" {
   name        = var.karpenter_controller_policy_name
   path        = "/"
   description = "Customer-owned shared LangSmith Karpenter policy for a pre-created instance profile"
-  policy      = jsonencode(jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars)))
+  policy      = local.karpenter_policy
   tags        = local.tags
 
   lifecycle {
     precondition {
-      condition     = length(jsonencode(jsondecode(templatefile("${path.module}/policies/karpenter.json.tftpl", local.template_vars)))) <= 6144
-      error_message = "Karpenter policy exceeds IAM's 6,144-character managed-policy limit. Reduce configured regions."
+      condition     = length(local.karpenter_policy) <= 6144
+      error_message = "Karpenter policy exceeds IAM's 6,144-character managed-policy limit. Reduce configured regions or KMS keys."
     }
   }
 }

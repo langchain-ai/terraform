@@ -160,7 +160,7 @@ source ./scripts/setup-env.sh
 terraform apply
 ```
 
-For `postgres_source = "external"`, verify deletion protection is off:
+Verify RDS deletion protection is off:
 
 ```bash
 aws rds describe-db-instances \

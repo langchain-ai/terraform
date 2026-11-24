@@ -72,8 +72,9 @@ source ./infra/scripts/setup-env.sh
 This script:
 - Reads `name_prefix` and `environment` from `terraform.tfvars` to build the SSM path prefix
 - Reads existing secrets from SSM Parameter Store (no prompts on re-runs)
-- Prompts for new values on first run: `postgres_password`, `license_key`, `admin_password`
-- Auto-generates stable secrets on first run: `redis_auth_token`, `api_key_salt`, `jwt_secret`
+- Prompts for new values on first run: `license_key`, `admin_password`
+- Auto-generates stable secrets on first run, including `postgres_password`, `redis_auth_token`, `api_key_salt`, and `jwt_secret`
+- Persists credentials in SSM before exporting; creates no separate local password backups
 - Exports `TF_VAR_*` environment variables for Terraform
 
 **Critical invariants — never violate on a live deployment:**
@@ -278,6 +279,43 @@ make quickdeploy-auto     # same, non-interactive (auto-approves all prompts)
 
 Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tfvars` existing before proceeding.
 
+### Queue autoscaling checks
+
+Every install scales `queue`, `ingest-queue`, and, with SmithDB, the compaction worker with KEDA. After `make deploy`:
+
+```bash
+kubectl get scaledobjects -n langsmith   # READY True for each of them
+kubectl get hpa -n langsmith             # KEDA owns these HPAs; TARGETS must show values, not <unknown>
+make test-e2e                            # Test 7 fails when one of them is not Ready
+```
+
+To check a scale-up under a queued load, send a burst of traces and watch `ingest-queue` grow above its minimum. KEDA adds about one replica for each 10 pending items in a queue.
+
+```python
+# burst.py: needs LANGSMITH_TRACING=true, LANGSMITH_ENDPOINT=<LangSmith URL>/api/v1,
+# and LANGSMITH_API_KEY in the environment.
+from concurrent.futures import ThreadPoolExecutor
+
+from langsmith import traceable
+from langsmith.run_trees import get_cached_client
+
+
+@traceable(name="keda-burst")
+def step(i: int) -> int:
+    return i
+
+
+with ThreadPoolExecutor(max_workers=32) as pool:
+    list(pool.map(step, range(20_000)))
+get_cached_client().flush()
+```
+
+```bash
+kubectl get hpa langsmith-ingest-queue -n langsmith -w
+```
+
+Scale-down waits 30 minutes after the backlog clears (the chart's 1800 s stabilization window).
+
 ---
 
 ## Known Issues & Fixes — Pass 2 (Helm)
@@ -296,7 +334,7 @@ Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tf
 |-------|---------|-----|
 | Precondition failed: postgres_password / redis_auth_token is required | `terraform plan` fails with "Resource precondition failed" | Re-source setup-env.sh in the SAME shell before running terraform: `source ./infra/scripts/setup-env.sh` — TF_VAR_* do not persist across shell sessions |
 | Secrets Manager "secret scheduled for deletion" | `apply` fails with `InvalidRequestException: You can't create this secret because a secret with this name is already scheduled for deletion` | **No longer applicable** — `modules/secrets/` has been removed. Secrets are managed exclusively via SSM Parameter Store + ESO. If you still have a lingering Secrets Manager secret from a prior deploy, force-delete it: `aws secretsmanager delete-secret --region <region> --secret-id <name_prefix>-<environment>-langsmith --force-delete-without-recovery` |
-| `setup-env.sh` keeps showing "Migrating postgres-password → SSM" on every run | Migration message on each source | The IAM user may lack `ssm:PutParameter` — the value loads from the local `.pg_password` file as a fallback; safe for testing but fix permissions for production |
+| `setup-env.sh` cannot save a missing parameter to SSM | Setup reports an SSM write error and stops | Check `ssm:PutParameter` permission and AWS access, then rerun setup. A shell value does not bypass an SSM write failure. |
 | EBS CSI addon not ready when StorageClass is created | `Error: Failed to create StorageClass` | Re-run `terraform apply` — EKS addon becomes active asynchronously |
 | ESO or KEDA Helm release times out | `context deadline exceeded` on k8s_bootstrap module | Uninstall the stuck release, then re-apply: `helm uninstall external-secrets -n external-secrets` |
 | Node group not yet scheduled | StorageClass or pods stuck Pending | Wait 2–3 min for cluster autoscaler to provision the first node, then re-apply |
@@ -317,10 +355,10 @@ For an applied environment, verify:
 ```bash
 terraform -chdir=infra output smithdb_s3_vpc_endpoint_id
 kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
-kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+kubectl get nodes -L langsmith-nodepool/smithdb
 ```
 
-Render the v16 chart with all integration gates disabled first. Confirm the
+Render the pinned Helm chart with all integration gates disabled first. Confirm the
 metastore migration succeeds and SmithDB can write to S3 through the endpoint
 before testing ingestion, historical migration, or query cutover.
 

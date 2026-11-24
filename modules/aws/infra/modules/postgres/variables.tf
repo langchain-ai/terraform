@@ -30,7 +30,7 @@ variable "max_storage_gb" {
 variable "engine_version" {
   type        = string
   description = "Engine version"
-  default     = "14"
+  default     = "18"
 }
 
 variable "vpc_id" {

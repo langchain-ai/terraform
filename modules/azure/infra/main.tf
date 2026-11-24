@@ -66,8 +66,38 @@ locals {
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
   # The chart names sandbox-host's service account <fullname>-sandbox-host.
-  sandbox_host_service_account = "${local.langsmith_release_fullname}-sandbox-host"
-  sandbox_juicefs_redis_name   = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+  sandbox_host_service_account     = "${local.langsmith_release_fullname}-sandbox-host"
+  sandbox_juicefs_redis_name       = var.sandbox_juicefs_redis_name != "" ? var.sandbox_juicefs_redis_name : "${local.name_base}-jfs${local.name_suffix}${local.uniq_suffix}"
+  sandbox_juicefs_redis_amr        = var.enable_sandboxes && var.sandbox_juicefs_redis_source == "amr"
+  sandbox_juicefs_redis_in_cluster = var.enable_sandboxes && var.sandbox_juicefs_redis_source == "in-cluster"
+  # The in-cluster Redis's Service, in the LangSmith namespace. sandbox-host
+  # resolves it through cluster DNS (dnsPolicy ClusterFirstWithHostNet).
+  sandbox_juicefs_redis_service = "sandbox-juicefs-redis"
+  sandbox_juicefs_metaurl = !var.enable_sandboxes ? null : (
+    var.sandbox_juicefs_redis_source == "amr" ? "${module.sandbox_juicefs_redis[0].connection_url}/0" :
+    var.sandbox_juicefs_redis_source == "in-cluster" ? "redis://:${random_password.sandbox_juicefs_redis[0].result}@${local.sandbox_juicefs_redis_service}.${var.langsmith_namespace}.svc.cluster.local:6379/1" :
+    var.sandbox_juicefs_redis_url
+  )
+  # Replaces the write-only JuiceFS config Secret when the Redis behind it
+  # changes: the AMR resource ID, or a digest of the URL for the other sources,
+  # so a new password or a new external URL is written without a revision bump.
+  sandbox_juicefs_redis_id = !var.enable_sandboxes ? null : (
+    local.sandbox_juicefs_redis_amr ? module.sandbox_juicefs_redis[0].id : "${var.sandbox_juicefs_redis_source}:${try(sha256(local.sandbox_juicefs_metaurl), "unset")}"
+  )
+  # deploy.sh puts this digest on sandbox-host's pod template, because the chart
+  # hashes only the name of an existing JuiceFS Secret: without it a new password
+  # or URL reaches the Secret and never restarts sandbox-host. Not for amr, whose
+  # URL changes only with a new Redis, so existing deployments see no restart.
+  sandbox_juicefs_redis_config_digest = var.enable_sandboxes && !local.sandbox_juicefs_redis_amr ? try(nonsensitive(sha256(local.sandbox_juicefs_metaurl)), null) : null
+  # A StorageClass is cluster-scoped, so it is suffixed like the SmithDB class.
+  sandbox_juicefs_redis_storage_class = "sandbox-juicefs-redis-retain${local.name_suffix}${local.uniq_suffix}"
+  # The chart's own Redis image, through the LangSmith mirror when one is set and
+  # in the layout init-values.sh writes for images.redisImage.
+  sandbox_juicefs_redis_image = var.sandbox_juicefs_redis_image != "" ? var.sandbox_juicefs_redis_image : (
+    var.langsmith_image_registry == "" ? "docker.io/redis:7" :
+    var.langsmith_image_registry_keeps_source_host ? "${trimsuffix(var.langsmith_image_registry, "/")}/docker.io/redis:7" :
+    "${trimsuffix(var.langsmith_image_registry, "/")}/redis:7"
+  )
 
   # JuiceFS reads the container from the first label of the bucket host and the
   # account from access-key, so the bucket is https://<container>.core.windows.net,
@@ -487,7 +517,7 @@ locals {
     !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24) ? "" : "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly.",
     length(local.postgres_name) <= 63 ? "" : "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly.",
     length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
-    !var.enable_sandboxes || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
+    !local.sandbox_juicefs_redis_amr || length(local.sandbox_juicefs_redis_name) <= 60 ? "" : "JuiceFS Redis name '${local.sandbox_juicefs_redis_name}' is ${length(local.sandbox_juicefs_redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.sandbox_juicefs_redis_name explicitly.",
     !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
   ])
 }
@@ -1056,11 +1086,26 @@ resource "terraform_data" "validate_network" {
       error_message = "additional_node_pools.sandboxhost replaces the generated sandbox-host pool, so it needs node_labels \"sandbox.langsmith.com/host\" = \"true\" and node_taints \"sandbox.langsmith.com/host=true:NoSchedule\". Without them sandbox-host never schedules."
     }
 
-    # JuiceFS metadata lives in Azure Managed Redis, which Azure Government does
-    # not offer; see redis_source.
+    # sandbox_juicefs_redis_source = amr provisions Azure Managed Redis for the
+    # JuiceFS metadata, which Azure Government does not offer; see redis_source.
+    # The in-cluster and external sources need no AMR.
     precondition {
-      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment")
-      error_message = "enable_sandboxes = true provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer."
+      condition     = !(var.enable_sandboxes && var.azure_environment == "usgovernment" && var.sandbox_juicefs_redis_source == "amr")
+      error_message = "enable_sandboxes = true with sandbox_juicefs_redis_source = amr provisions Azure Managed Redis for JuiceFS metadata, which Azure Government does not offer. Set sandbox_juicefs_redis_source = in-cluster for a Redis in the cluster, or external with sandbox_juicefs_redis_url for one you run."
+    }
+
+    precondition {
+      condition     = !(var.enable_sandboxes && var.sandbox_juicefs_redis_source == "external" && nonsensitive(var.sandbox_juicefs_redis_url == null))
+      error_message = "sandbox_juicefs_redis_source = external needs sandbox_juicefs_redis_url, the JuiceFS metadata URL of your Redis. Set TF_VAR_sandbox_juicefs_redis_url or put it in secrets.auto.tfvars."
+    }
+
+    # SmithDB requests its Entra token for the metastore with the commercial
+    # scope, https://ossrdbms-aad.database.windows.net/.default, which an Azure
+    # Government Flexible Server does not accept (LG-913). Only the password
+    # path works there until the product reads the cloud's scope.
+    precondition {
+      condition     = !(var.enable_smithdb && var.azure_environment == "usgovernment" && nonsensitive(var.smithdb_metastore_admin_password == null))
+      error_message = "enable_smithdb = true in Azure Government needs smithdb_metastore_admin_password. Without it the SmithDB metastore uses Microsoft Entra authentication, and SmithDB requests its PostgreSQL token for the commercial Azure scope, so every login fails (LG-913). Set TF_VAR_smithdb_metastore_admin_password to a strong password to use password authentication."
     }
 
     # A flag rather than lifecycle prevent_destroy, which takes only a literal:
@@ -1875,7 +1920,7 @@ resource "terraform_data" "postgres_customer_managed_key_guard" {
 
 # ── SmithDB sizing ───────────────────────────────────────────────────────────
 # One size sets the chart resource tier, the replicas, the default metastore
-# SKU, the namespace quota headroom, and the smithdb_helm_values output.
+# SKU, and the smithdb_helm_values output.
 
 locals {
   smithdb_sizing_by_profile = {
@@ -1886,42 +1931,12 @@ locals {
     "production-large" = "large"
   }
 
-  # sizing_profile has no validation of its own, so an unlisted profile falls
-  # back to small, the same tier the chart picks when nothing is set.
   smithdb_sizing  = coalesce(var.smithdb_sizing, lookup(local.smithdb_sizing_by_profile, var.sizing_profile, "small"))
   smithdb_minimal = local.smithdb_sizing == "minimal"
 
   # The chart has the small, medium, and large tiers. minimal uses small with
   # explicit resources.
   smithdb_resource_tier = local.smithdb_minimal ? "small" : local.smithdb_sizing
-
-  # Per-replica resources for each chart tier. Copied from chart 0.17.0-rc.42,
-  # templates/_helpers.tpl, "langsmith.smithdb.tierResources". The chart sets
-  # requests equal to limits. Update this table with the chart.
-  smithdb_tiers = {
-    small = {
-      query            = { cpu = "4", memory = "8Gi" }
-      ingestion        = { cpu = "4", memory = "8Gi" }
-      compactionWorker = { cpu = "8", memory = "16Gi" }
-      compaction       = { cpu = "2", memory = "4Gi" }
-      clusterManager   = { cpu = "250m", memory = "256Mi" }
-    }
-    medium = {
-      query            = { cpu = "28", memory = "48Gi" }
-      ingestion        = { cpu = "16", memory = "32Gi" }
-      compactionWorker = { cpu = "16", memory = "32Gi" }
-      compaction       = { cpu = "4", memory = "8Gi" }
-      clusterManager   = { cpu = "250m", memory = "256Mi" }
-    }
-    large = {
-      query            = { cpu = "28", memory = "50Gi" }
-      ingestion        = { cpu = "56", memory = "150Gi" }
-      compactionWorker = { cpu = "28", memory = "50Gi" }
-      compaction       = { cpu = "8", memory = "16Gi" }
-      clusterManager   = { cpu = "2", memory = "2Gi" }
-    }
-  }
-  smithdb_tier = local.smithdb_tiers[local.smithdb_resource_tier]
 
   # Replicas for each tier, from the SmithDB sizing table in the LangSmith
   # self-hosted docs. The chart tier sets only the per-replica resources, so the
@@ -1965,66 +1980,6 @@ locals {
     large   = "MO_Standard_E8ds_v5"
   }
   smithdb_metastore_sku_name = coalesce(var.smithdb_metastore_sku_name, local.smithdb_metastore_sku_defaults[local.smithdb_sizing])
-
-  # SmithDB namespace quota headroom, from the resolved resources. It covers the
-  # tier replicas of each component, one surge copy of the largest pod (a
-  # rolling update starts the new pod first), and, with the backfill, each
-  # migration pod (smithdb_migration_parallelism) and the taskdb. HPA scale-out
-  # above the tier replicas has only the surge room. CPU is in millicores and
-  # memory in MiB, so the sums are exact.
-  smithdb_quota_inputs = merge(
-    {
-      for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
-        requests = { cpu = t.cpu, memory = t.memory }
-        limits   = { cpu = t.cpu, memory = t.memory }
-      }
-    },
-    {
-      # Chart values.yaml defaults for smithdb.migration.job.resources and
-      # smithdb.migration.taskdb.postgres.statefulSet.resources.
-      migration_job = local.smithdb_minimal ? local.smithdb_minimal_resources.migration_job : {
-        requests = { cpu = "8", memory = "32Gi" }
-        limits   = { cpu = "8", memory = "32Gi" }
-      }
-      taskdb = {
-        requests = { cpu = "2", memory = "4Gi" }
-        limits   = { cpu = "4", memory = "8Gi" }
-      }
-    },
-  )
-
-  # "250m" and "4" to millicores, "256Mi" and "8Gi" to MiB.
-  smithdb_quota_numbers = {
-    for name, r in local.smithdb_quota_inputs : name => merge([
-      for side in ["requests", "limits"] : {
-        "${side}_cpu_m"     = tonumber(trimsuffix(r[side].cpu, "m")) * (endswith(r[side].cpu, "m") ? 1 : 1000)
-        "${side}_memory_mi" = tonumber(trimsuffix(trimsuffix(r[side].memory, "Gi"), "Mi")) * (endswith(r[side].memory, "Gi") ? 1024 : 1)
-      }
-    ]...)
-  }
-  smithdb_quota_total = {
-    for k in ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"] : k => (
-      sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * local.smithdb_quota_numbers[c][k]]) +
-      max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) +
-      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
-    )
-  }
-
-  # k8s-bootstrap adds the extra once to requests and twice to limits, so it
-  # must cover the requests total and half of the limits total.
-  smithdb_quota_extra_cpu = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_cpu_m / 1000), ceil(local.smithdb_quota_total.limits_cpu_m / 2000)
-  ) : 0
-  smithdb_quota_extra_memory_gi = var.enable_smithdb ? max(
-    ceil(local.smithdb_quota_total.requests_memory_mi / 1024), ceil(local.smithdb_quota_total.limits_memory_mi / 2048)
-  ) : 0
-
-  # The SmithDB pods at the tier replicas plus the metastore migration hook,
-  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
-  # and its taskdb StatefulSet, plus 1 for each further migration pod.
-  smithdb_quota_extra_pods = var.enable_smithdb ? (
-    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
-  ) : 0
 
   # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
   # to helm/values/langsmith-values-smithdb-sizing.yaml. The cache StorageClass,
@@ -2160,7 +2115,7 @@ check "sandbox_pool_on_attached_cluster" {
 }
 
 module "sandbox_juicefs_redis" {
-  count                   = var.enable_sandboxes ? 1 : 0
+  count                   = local.sandbox_juicefs_redis_amr ? 1 : 0
   source                  = "./modules/redis"
   name                    = local.sandbox_juicefs_redis_name
   location                = var.location
@@ -2178,6 +2133,33 @@ module "sandbox_juicefs_redis" {
   cluster_location        = var.redis_location
 
   tags = local.common_tags
+}
+
+# The source the JuiceFS Redis had when sandbox_juicefs_redis_prevent_destroy
+# was turned on. ignore_changes keeps it, so a plan that changes the source,
+# which deletes the Redis behind it, fails the postcondition while the flag is
+# true. Turning the flag off removes the pin; turning it on again records the
+# source of that moment.
+resource "terraform_data" "sandbox_juicefs_redis_source_pin" {
+  count = var.enable_sandboxes && var.sandbox_juicefs_redis_prevent_destroy ? 1 : 0
+  input = var.sandbox_juicefs_redis_source
+
+  lifecycle {
+    ignore_changes = [input]
+
+    postcondition {
+      condition     = self.output == var.sandbox_juicefs_redis_source
+      error_message = "sandbox_juicefs_redis_prevent_destroy = true refuses changing sandbox_juicefs_redis_source from ${self.output} to ${var.sandbox_juicefs_redis_source}: the change deletes the JuiceFS metadata Redis it uses now, and JuiceFS then starts from an empty one, which loses every sandbox filesystem. Copy the metadata first (README, Sandboxes), then set sandbox_juicefs_redis_prevent_destroy = false in the same edit as the source."
+    }
+  }
+}
+
+# With sandbox_juicefs_redis_source = in-cluster, k8s-bootstrap runs the Redis
+# and requires this password. It is in state, as the AMR access key is.
+resource "random_password" "sandbox_juicefs_redis" {
+  count   = local.sandbox_juicefs_redis_in_cluster ? 1 : 0
+  length  = 40
+  special = false
 }
 
 # JuiceFS data goes in its own container in the LangSmith Blob account, and
@@ -2444,7 +2426,7 @@ module "keyvault" {
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
 # Connects to the AKS cluster and:
-#   1. Creates the langsmith namespace, service account, resource quota, network policies
+#   1. Creates the langsmith namespace, service account, network policies
 #   2. Installs cert-manager (TLS automation) and KEDA (autoscaling)
 #   3. Creates K8s secrets for PostgreSQL and Redis connection URLs
 #
@@ -2486,13 +2468,9 @@ module "k8s_bootstrap" {
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
   tags                             = local.common_tags
 
-  # SmithDB's pods on top of the base namespace quota. Zero when disabled.
-  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
-  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
-  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
-
   # Sandboxes. No account key: the format Job and sandbox-host reach Blob
-  # through workload identity. AMR serves database 0 only.
+  # through workload identity. AMR serves database 0 only; the in-cluster Redis
+  # is dedicated, so database 1 keeps JuiceFS off the default database anyway.
   enable_sandboxes            = var.enable_sandboxes
   platform_backend_component  = "${local.langsmith_release_fullname}-platform-backend"
   network_policy_engine       = module.aks.network_policy_engine
@@ -2500,13 +2478,19 @@ module "k8s_bootstrap" {
   sandbox_juicefs_secret_name = var.sandbox_juicefs_csi_config_secret_name
   sandbox_juicefs_config = var.enable_sandboxes ? {
     name         = var.sandbox_juicefs_name
-    metaurl      = "${module.sandbox_juicefs_redis[0].connection_url}/0"
+    metaurl      = local.sandbox_juicefs_metaurl
     storage      = "wasb"
     bucket       = local.sandbox_juicefs_bucket
     "access-key" = module.blob.storage_account_name
   } : {}
-  sandbox_juicefs_config_revision = var.sandbox_juicefs_csi_config_secret_revision
-  sandbox_juicefs_redis_id        = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].id : null
+  sandbox_juicefs_config_revision          = var.sandbox_juicefs_csi_config_secret_revision
+  sandbox_juicefs_redis_id                 = local.sandbox_juicefs_redis_id
+  sandbox_juicefs_redis_in_cluster         = local.sandbox_juicefs_redis_in_cluster
+  sandbox_juicefs_redis_password           = local.sandbox_juicefs_redis_in_cluster ? random_password.sandbox_juicefs_redis[0].result : null
+  sandbox_juicefs_redis_image              = local.sandbox_juicefs_redis_image
+  sandbox_juicefs_redis_storage_class_name = local.sandbox_juicefs_redis_storage_class
+  sandbox_juicefs_redis_storage_gb         = var.sandbox_juicefs_redis_storage_gb
+  sandbox_juicefs_redis_memory_mb          = var.sandbox_juicefs_redis_memory_mb
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace and
   # cert-manager's Gateway API support.

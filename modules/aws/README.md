@@ -21,7 +21,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
-| **Dev** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
+| **Dev** | RDS PostgreSQL (small instance) | ElastiCache Redis (small instance) | In-cluster pod | Demo / POC |
 | **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster ClickHouse | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
@@ -205,12 +205,10 @@ eks_managed_node_groups = {
   }
 }
 
-# RDS PostgreSQL (required when postgres_source = "external")
-postgres_source   = "external"
+# RDS PostgreSQL
 postgres_password = "<strong-password>"   # or: export TF_VAR_postgres_password=...
 
-# ElastiCache Redis (required when redis_source = "external")
-redis_source     = "external"
+# ElastiCache Redis
 redis_auth_token = "<min-16-char-token>"  # or: export TF_VAR_redis_auth_token=...
 
 # TLS — "acm" (default), "letsencrypt", or "none"
@@ -261,6 +259,83 @@ terraform {
 }
 ```
 
+### Move an in-cluster PostgreSQL to RDS
+
+From 0.18 the module always creates RDS, and `postgres_source = "in-cluster"` fails at
+plan. Move the data before the first 0.18 apply. That apply points the
+`langsmith-postgres` Secret at a new, empty RDS instance, and it removes the keys that
+the in-cluster PostgreSQL pod needs to start again. Writes made after the dump are not
+copied, so stop using LangSmith until the move is done. The commands use the default
+namespace and release name, `langsmith`.
+
+1. Dump the in-cluster database to your machine. The password stays inside the pod:
+
+   ```bash
+   kubectl exec -n langsmith langsmith-postgres-0 -c postgres -- \
+     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+     > langsmith.dump
+   ```
+
+2. Remove `postgres_source = "in-cluster"` from `infra/terraform.tfvars`, then run
+   `make apply`. It creates the RDS instance.
+3. Restore the dump before `make deploy`, which runs the LangSmith database migrations.
+   RDS is reachable only from inside the VPC, so restore from a pod that reads the new
+   connection URL from the Secret. Save this as `pg-restore.yaml`, with the image at
+   your RDS engine version:
+
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: pg-restore
+     namespace: langsmith
+   spec:
+     restartPolicy: Never
+     containers:
+       - name: pg-restore
+         image: postgres:18
+         command: ["sleep", "3600"]
+         env:
+           - name: DATABASE_URL
+             valueFrom:
+               secretKeyRef:
+                 name: langsmith-postgres
+                 key: connection_url
+   ```
+
+   Then copy the dump into the pod and restore it:
+
+   ```bash
+   kubectl apply -f pg-restore.yaml
+   kubectl wait -n langsmith --for=condition=Ready pod/pg-restore --timeout=180s
+   kubectl cp langsmith.dump langsmith/pg-restore:/tmp/langsmith.dump
+   kubectl exec -n langsmith pg-restore -- \
+     sh -c 'pg_restore --no-owner --no-privileges -d "$DATABASE_URL" /tmp/langsmith.dump'
+   kubectl delete pod -n langsmith pg-restore
+   ```
+
+4. Run `make init-values` and `make deploy`. The deploy removes the in-cluster
+   PostgreSQL StatefulSet and keeps its volume.
+5. When LangSmith shows your organizations, projects, and datasets, delete the old
+   volume. This cannot be undone, so keep `langsmith.dump` until you no longer need it:
+
+   ```bash
+   kubectl delete pvc -n langsmith data-langsmith-postgres-0
+   ```
+
+### Move an in-cluster Redis to ElastiCache
+
+From 0.18 the module always creates ElastiCache, and `redis_source = "in-cluster"`
+fails at plan. Redis holds LangSmith's queues and caches, so there is no data to copy.
+But runs that LangSmith accepted and has not processed yet wait in the in-cluster
+queue, and the first 0.18 apply points LangSmith at a new, empty ElastiCache instance.
+Runs still in the old queue are not processed.
+
+1. Stop sending traces, and wait until the last ones show in LangSmith.
+2. Remove `redis_source = "in-cluster"` from `infra/terraform.tfvars`, then run
+   `make apply`. It creates the ElastiCache instance.
+3. Run `make init-values` and `make deploy`. The deploy removes the in-cluster Redis.
+
 ---
 
 ## Pod networking
@@ -299,7 +374,7 @@ callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configure
 add-on with one ENIConfig per AZ and holds node group creation for two minutes
 after the cluster is active, so the add-on is configured before the first
 nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
-into that add-on. When `enable_smithdb = true`, it also sets Karpenter's
+into that add-on. With `smithdb_transition_mode = true`, it also sets Karpenter's
 `settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
 node's primary ENI.
 
@@ -542,7 +617,7 @@ make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 
 `init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
-Pod autoscaling is built into the `dev`, `production`, and `production-large` sizing templates; `minimum` keeps core services fixed while retaining SmithDB HPAs. These settings do not enable node autoscaling. Existing sizing files are preserved, so merge template updates into your current values when upgrading. See [sizing guidance](helm/values/examples/SIZING.md).
+Queue autoscaling is on by default: the base values turn on KEDA for `queue`, `ingest-queue`, and the SmithDB compaction worker, and every sizing template keeps it on with its own ranges. The `dev`, `production`, and `production-large` templates also add HPAs for the other core services; `minimum` keeps those fixed while retaining the SmithDB query and ingestion HPAs. These settings do not enable node autoscaling. Existing sizing files are preserved, so merge template updates into your current values when upgrading. See [sizing guidance](helm/values/examples/SIZING.md).
 
 ---
 
@@ -716,18 +791,24 @@ source infra/scripts/setup-env.sh
 Builds the SSM path prefix from `terraform.tfvars`: `/langsmith/{name_prefix}-{environment}/`
 
 For each secret it follows this priority order:
-1. Already exported in the shell (`TF_VAR_*` or `LANGSMITH_*`) — use it, backfill SSM if missing
-2. Exists in SSM Parameter Store — read it (no prompt)
-3. Has an auto-generator — generate it (`openssl rand`), store in SSM
-4. Interactive terminal — prompt you, store in SSM
-5. No terminal (CI) — error with instructions to pre-export
+
+1. SSM Parameter Store — read and decrypt it; a read error stops setup
+2. Exported shell value (`TF_VAR_*` or `LANGSMITH_*`) — import it only if SSM confirms the parameter is missing
+3. No value in any source — generate it where supported, otherwise prompt
+4. No terminal (CI) and an input is still required — stop with instructions to supply it
+
+SSM is the persistent credential store. Setup exports each resolved credential to the shell without creating or refreshing local password backup files. Existing SSM values replace shell values. Legacy local password files are never read or updated and are left untouched. If SSM is missing a credential and its legacy backup path exists, setup stops before generating or saving a replacement. Import the existing credential into SSM with `infra/scripts/manage-ssm.sh`, then rerun setup. Once verified in SSM, legacy files can be deleted. Setup never overwrites an existing SSM parameter. Use `infra/scripts/manage-ssm.sh` for intentional SSM changes.
+
+**Changed setup requirements:** SSM read/decryption access is required even when the shell already contains credentials. SSM write failures, empty credentials, and concurrent parameter creation stop setup. Existing SSM names, shell variables, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials; this change removes separate setup password backups, not every local copy.
 
 **SSM parameters it manages (`/langsmith/{name_prefix}-{environment}/`):**
 
 | SSM key | How it's set | Notes |
 |---|---|---|
-| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. Override with `TF_VAR_postgres_password`; setup-env.sh rejects a value RDS will not accept. |
+| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. An initial value can come from `TF_VAR_postgres_password` when SSM is missing. |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
+| `sandbox-juicefs-redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | Created only when Sandboxes are enabled |
+| `sandbox-callback-signing-jwk` | Auto-generated (Ed25519 private JWK) | Created only when Sandboxes are enabled |
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
 | `langsmith-license-key` | You enter it | From your LangChain account |
@@ -1192,19 +1273,19 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
 | `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
 | `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.17.x or 0.18.x chart version; empty deploys the latest 0.17.x. An external sandbox runtime requires an exact version on 0.18 or later |
-| `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
+| `postgres_source` | `external` | no | Only `external` (RDS) from 0.18; `in-cluster` fails at plan. See [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
 | `postgres_max_storage_gb` | `100` | no | Maximum RDS storage in GB (autoscaling) |
 | `postgres_username` | `langsmith` | no | RDS database username |
-| `postgres_engine_version` | `16` | no | PostgreSQL engine version for RDS |
+| `postgres_engine_version` | `18` | no | PostgreSQL engine version for RDS |
 | `postgres_password` | `""` | when external | RDS password — use `TF_VAR_postgres_password` |
 | `postgres_iam_database_authentication_enabled` | `true` | no | Enable IAM database authentication on RDS |
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
 | `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `postgres_existing_security_group_id` | `null` | no | Attach an existing SG to RDS instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
+| `redis_source` | `external` | no | Only `external` (ElastiCache, OSS mode) from 0.18; `in-cluster` fails at plan. See [Move an in-cluster Redis to ElastiCache](#move-an-in-cluster-redis-to-elasticache) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
@@ -1252,15 +1333,20 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3, IRSA, a managed node group, and EBS caches. An install upgraded from 0.17 without SmithDB sets `false` first. See [SMITHDB.md](SMITHDB.md). |
+| `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
+| `smithdb_migration_enabled` | `false` | no | Migrate historical ClickHouse data to SmithDB. Set by `make smithdb-migration-job-start` |
+| `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
-| `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
-| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
-| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
+| `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for the small tier that every sizing profile runs, `m6a.8xlarge` for medium, `m6a.16xlarge` for large. See [SMITHDB.md](SMITHDB.md#scaling-up) |
+| `smithdb_cache_storage` | `network-disk` | no | SmithDB cache storage: `network-disk` (gp3 volumes) or `local-ssd` (the nodes' instance-store NVMe as RAID0, which needs a type such as `m6id.4xlarge`). See [SMITHDB.md](SMITHDB.md#local-ssd-cache) |
+| `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes, including TaskDB |
+| `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes; must exceed the minimum |
+| `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |
+| `smithdb_transition_mode` | `false` | no | Retain Karpenter during an existing deployment's transition. See [SMITHDB.md](SMITHDB.md#existing-karpenter-deployments) |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |

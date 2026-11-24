@@ -1,0 +1,72 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: {{ .Values.envoyProxyName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: {{ .Values.proxyReplicas }}
+        container:
+          resources:
+            {{- toYaml .Values.proxyResources | nindent 12 }}
+        {{- with .Values.proxyNodeSelector }}
+        pod:
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+      envoyService:
+        # Local (Envoy Gateway's default) lets MetalLB L2 announce the IP only from a node
+        # running a proxy pod and a speaker; Cluster answers from any speaker node.
+        externalTrafficPolicy: Cluster
+        {{- with .Values.loadBalancerIP }}
+        annotations:
+          # MetalLB hands this exact IP to the proxy Service, so DNS can point
+          # at it permanently. Set only with our MetalLB.
+          metallb.io/loadBalancerIPs: {{ . | quote }}
+        {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.gatewayClassName }}
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: {{ .Values.envoyProxyName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gatewayName }}
+  namespace: {{ required "gatewayNamespace is required" .Values.gatewayNamespace }}
+spec:
+  gatewayClassName: {{ .Values.gatewayClassName }}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- with .Values.tls }}
+    # TLS for the domain only: the LAN IP keeps plain HTTP on :80 (lanRoute), so nothing that
+    # reaches LangSmith by IP changes. Routes without a sectionName attach to both listeners.
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: {{ required "tls.hostname is required" .hostname | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: {{ required "tls.secretName is required" .secretName }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}

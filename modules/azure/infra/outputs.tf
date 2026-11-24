@@ -166,20 +166,6 @@ output "smithdb_helm_values" {
   value       = local.smithdb_helm_values
 }
 
-output "smithdb_migration_parallelism" {
-  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
-  value       = var.smithdb_migration_parallelism
-}
-
-output "smithdb_quota_extra" {
-  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
-  value = {
-    cpu       = local.smithdb_quota_extra_cpu
-    memory_gi = local.smithdb_quota_extra_memory_gi
-    pods      = local.smithdb_quota_extra_pods
-  }
-}
-
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true
@@ -415,5 +401,15 @@ output "sandbox_juicefs_container_name" {
 
 output "sandbox_juicefs_redis_name" {
   description = "Azure Managed Redis cluster holding JuiceFS metadata."
-  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+  value       = local.sandbox_juicefs_redis_amr ? local.sandbox_juicefs_redis_name : null
+}
+
+output "sandbox_juicefs_redis_source" {
+  description = "Where the JuiceFS metadata Redis runs (amr, in-cluster or external), or null when sandboxes are off. helm/scripts/deploy.sh reads it to apply the Cilium policy for the in-cluster Redis."
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_redis_source : null
+}
+
+output "sandbox_juicefs_redis_config_digest" {
+  description = "sha256 of the JuiceFS metadata URL for sandbox_juicefs_redis_source = in-cluster or external, null otherwise. deploy.sh sets it as a sandbox-host pod annotation so a new password or URL restarts sandbox-host."
+  value       = local.sandbox_juicefs_redis_config_digest
 }

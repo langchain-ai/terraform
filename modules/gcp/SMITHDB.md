@@ -57,9 +57,8 @@ use the LangSmith application database or blob-storage bucket.
 ## Sizing
 
 `smithdb_sizing` sets the chart `resourceTier`, the explicit resources, the
-replicas, the node pool shapes, the namespace quota headroom, and the default
-tier of a created metastore. When it is unset, it follows `sizing_profile`:
-`minimum` gives `minimal`, `dev` and `default` give `small`, `production` gives
+replicas, the node pool shapes, and the default tier of a created metastore.
+When it is unset, it follows `sizing_profile`: `minimum` gives `minimal`, `dev` and `default` give `small`, `production` gives
 `medium`, and `production-large` gives `large`.
 
 The component rows are per replica, as CPU / memory / cache size:
@@ -82,8 +81,6 @@ The component rows are per replica, as CPU / memory / cache size:
 | Cache pool, `network-disk` (boot disk) | no pool; `standard-rwo` | c3-standard-22 (300 GB) | c3-standard-44 (300 GB) | c3-standard-88 (300 GB) |
 | Compute pool | no pool | n2-standard-8 | n2-standard-8 | n2-standard-16 |
 | Metastore: docs vCPU / memory; default Cloud SQL tier (vCPU / memory) | not in the docs; `db-custom-2-8192` (2 / 8Gi) | 2 / 16Gi; `db-custom-4-16384` (4 / 16Gi) | 4 / 32Gi; `db-custom-6-32768` (6 / 32Gi) | 8 / 64Gi; `db-custom-10-65536` (10 / 64Gi) |
-| Quota headroom: CPU / memory / pods | 7 / 11Gi / 12 | 27 / 53Gi / 12 | 93 / 169Gi / 12 | 404 / 870Gi / 26 |
-| Quota headroom with the backfill | 10 / 19Gi / 20 | 37 / 90Gi / 20 | 103 / 206Gi / 20 | 414 / 906Gi / 34 |
 
 - The throughput and replica rows come from the SmithDB sizing table in the
   [LangSmith self-hosted docs](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
@@ -102,12 +99,6 @@ The component rows are per replica, as CPU / memory / cache size:
 - A backfill on a test cluster ran with the `minimal` resources of the five
   components and of the backfill Job. The taskdb had the chart default
   resources.
-- The quota rows include the Auth Proxy sidecar
-  (`terraform -chdir=infra output smithdb_quota_extra`).
-- The backfill quota row is for one migration pod. Each further migration pod
-  (`smithdb_migration_parallelism`) adds its resources, its Auth Proxy
-  sidecar, and 1 pod. For `small`, 3 migration pods give 54 CPU / 154 GiB / 22
-  pods.
 - The metastore row is for a created metastore
   (`smithdb_metastore_source = "create"`). The docs values come from the
   section "Metastore capacity" in
@@ -292,9 +283,6 @@ later file wins:
 - `smithdb_migration_enabled = true`, and
   `langsmith-values-smithdb-migration.yaml` is missing. `deploy.sh` tells you
   to run `make smithdb-migration-job-start`.
-- The `parallelism` in `langsmith-values-smithdb-migration.yaml` is not equal
-  to the `smithdb_migration_parallelism` of the last `make apply`. Terraform
-  sizes the namespace quota from that value.
 - The migration gate in `langsmith-values-smithdb-overrides.yaml` is not equal
   to `smithdb_migration_enabled`. `deploy.sh` tells you to run
   `make init-values`.
@@ -342,14 +330,13 @@ migration:
 - For the size, the script asks for the number of historical runs and the
   target days. It suggests a migration pod count from the docs formula (runs /
   5,000,000 / days / 8 vCPU per pod), plus 50%, with a maximum of 20. For
-  `minimal`, it suggests 1. It does not accept more than 30 pods.
+  `minimal`, it suggests 1.
 
 The script writes `helm/values/langsmith-values-smithdb-migration.yaml`. It
-sets `smithdb_migration_enabled = true` and `smithdb_migration_parallelism` in
-`infra/terraform.tfvars`. `make apply` then grants the read access in
-[Backfill access](#backfill-access-to-the-traces-bucket) and adds the
-migration pods and TaskDB to the namespace quota. `make deploy` starts the
-migration Job on the cache pool.
+sets `smithdb_migration_enabled = true` in `infra/terraform.tfvars`.
+`make apply` then grants the read access in
+[Backfill access](#backfill-access-to-the-traces-bucket). `make deploy` starts
+the migration Job on the cache pool.
 
 A backfill that an earlier module version started has no
 `langsmith-values-smithdb-migration.yaml`, so `deploy.sh` stops. Run
@@ -367,9 +354,8 @@ Job continues.
   `smithdb_instance_store_max_nodes`. Above about 20 pods, raise the TaskDB
   resources instead of adding pods. For `minimal`, each pod requests 1 vCPU,
   4 GiB, and 10 GiB on the general pool.
-- Resources. The SmithDB size sets the migration pod and TaskDB resources,
-  and Terraform sizes the namespace quota for them. The migration values file
-  does not set resources. See
+- Resources. The SmithDB size sets the migration pod and TaskDB resources.
+  The migration values file does not set resources. See
   [OOMKilled migration pods](#oomkilled-migration-pods).
 - Duration. On a test cluster, about 10,000 rows took about 2 hours, with more
   than 30 minutes near 95%. That plateau is not a stall. A task whose window
@@ -524,28 +510,6 @@ helm upgrade langsmith langchain/langsmith -n langsmith --version <0.17 version>
 A rename of the volume on `query` only is not enough: `ingestion` and
 `compactionWorker` then get PVCs on the default class, with no error.
 
-## Namespace quota headroom
-
-`modules/k8s-bootstrap` puts the `langsmith-quota` ResourceQuota on the
-namespace. Terraform adds SmithDB headroom from the resolved size for:
-
-- the replicas of each component in the [sizing table](#sizing);
-- one surge copy of the largest pod, for a rolling update;
-- the Auth Proxy sidecars;
-- the migration pods (`smithdb_migration_parallelism`) and the taskdb, in the
-  backfill stage.
-
-Some SmithDB pods have limits above requests, so the extra covers both sides.
-The quota rows of the [sizing table](#sizing) show the results.
-
-Without surge room, an upgrade stops with no clear error: the quota refuses the
-new pod (a `FailedCreate` event on the ReplicaSet), and Helm waits.
-
-The headroom limits HPA scale-out above the minimum replicas. A scale-out gets
-only the surge room and the unused part of the base quota. The quota then
-refuses the next pod, with a `FailedCreate` event on the ReplicaSet. To check the
-quota, run `kubectl describe resourcequota langsmith-quota -n langsmith`.
-
 ## Troubleshooting
 
 ### taskdb Pending on a zonal PVC
@@ -590,9 +554,7 @@ smithdb:
 ```
 
 Keep TaskDB and its PVC. Delete only the failed migration Job, then run
-`make deploy`. The new Job continues from the progress in TaskDB. The namespace
-quota covers the default resources. If the quota refuses the pod, the Job shows
-a `FailedCreate` event.
+`make deploy`. The new Job continues from the progress in TaskDB.
 
 ### Slow backfill on in-cluster ClickHouse
 

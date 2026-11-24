@@ -75,13 +75,13 @@ provider "kubectl" {
 resource "terraform_data" "validate_inputs" {
   lifecycle {
     precondition {
-      condition     = var.postgres_source != "external" || var.postgres_password != ""
-      error_message = "postgres_password is required when postgres_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_postgres_password."
+      condition     = var.postgres_password != ""
+      error_message = "postgres_password is required. Run: source ./scripts/setup-env.sh, or set TF_VAR_postgres_password."
     }
 
     precondition {
-      condition     = var.redis_source != "external" || (var.redis_auth_token != "" && length(var.redis_auth_token) >= 16)
-      error_message = "redis_auth_token is required (min 16 chars) when redis_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_redis_auth_token."
+      condition     = var.redis_auth_token != "" && length(var.redis_auth_token) >= 16
+      error_message = "redis_auth_token is required (min 16 chars). Run: source ./scripts/setup-env.sh, or set TF_VAR_redis_auth_token."
     }
 
     precondition {
@@ -206,23 +206,6 @@ resource "terraform_data" "validate_inputs" {
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
 
-    # External Fleet storage uses a dedicated database and logical Redis index on
-    # the shared RDS and ElastiCache instances.
-    precondition {
-      condition     = !var.enable_fleet || var.fleet_storage != "external" || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
-    }
-
-    precondition {
-      condition     = !local.polly_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "External LangSmith Chat storage requires postgres_source = \"external\" and redis_source = \"external\"."
-    }
-
-    precondition {
-      condition     = !local.insights_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "External Insights storage requires postgres_source = \"external\" and redis_source = \"external\"."
-    }
-
     precondition {
       condition     = !(var.tls_certificate_source == "letsencrypt" && var.create_cert_manager_irsa)
       error_message = "tls_certificate_source = 'letsencrypt' (HTTP-01 via ALB) and create_cert_manager_irsa = true (DNS-01 via Route 53) are mutually exclusive. Both create ClusterIssuer/letsencrypt-prod. Use DNS-01 for Istio Gateway, HTTP-01 for ALB."
@@ -239,24 +222,21 @@ resource "terraform_data" "validate_inputs" {
     }
 
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
-    # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
+    # and requires a dedicated metastore Postgres.
     precondition {
       condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
       error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
     }
 
+    # The gates default to true, so they count only with SmithDB on: opting
+    # out takes enable_smithdb = false alone (outputs.tf reports them the same way).
     precondition {
-      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
-      error_message = "SmithDB integration gates require enable_smithdb = true."
-    }
-
-    precondition {
-      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      condition     = !var.enable_smithdb || !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
     }
 
     precondition {
-      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      condition     = !var.enable_smithdb || !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
 
@@ -294,7 +274,7 @@ module "vpc" {
 
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
-  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+  extra_private_subnet_tags = var.enable_smithdb && var.smithdb_transition_mode ? { "karpenter.sh/discovery" = local.cluster_name } : {}
 
   pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
@@ -339,7 +319,7 @@ module "eks" {
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
   eks_managed_node_groups         = var.eks_managed_node_groups
   extra_eks_managed_node_groups   = local.extra_eks_managed_node_groups
-  enable_karpenter                = var.enable_smithdb
+  enable_karpenter                = var.enable_smithdb && var.smithdb_transition_mode
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
@@ -425,7 +405,8 @@ moved {
 
 module "redis" {
   source = "./modules/redis"
-  count  = var.redis_source == "external" ? 1 : 0
+  # Always 1, like module.postgres; the count keeps the [0] address in state.
+  count = var.redis_source == "external" ? 1 : 0
 
   name                       = local.redis_name
   vpc_id                     = local.vpc_id
@@ -485,7 +466,10 @@ module "storage" {
 
 module "postgres" {
   source = "./modules/postgres"
-  count  = var.postgres_source == "external" ? 1 : 0
+  # Always 1, because postgres_source admits only "external". The count keeps the
+  # module.postgres[0] address that every install's state already holds; drop it
+  # with a moved block when the [0] references are rewritten.
+  count = var.postgres_source == "external" ? 1 : 0
 
   identifier                 = local.postgres_name
   engine_version             = var.postgres_engine_version
@@ -925,26 +909,10 @@ resource "time_sleep" "wait_for_alb_webhook" {
   create_duration = "30s"
 }
 
-# ── In-cluster credentials ────────────────────────────────────────────────────
-# When postgres or redis runs in-cluster (deployed by the LangSmith Helm chart),
-# Terraform still creates the k8s Secret so the chart can initialize the DB and
-# backend pods can connect without manual patching after deploy.
-# Passwords are generated here so they are stable across re-applies.
-
-resource "random_password" "in_cluster_postgres" {
-  count   = var.postgres_source == "in-cluster" ? 1 : 0
-  length  = 32
-  special = false
-}
-
-
+# ── Connection Secrets ────────────────────────────────────────────────────────
 locals {
-  postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : (
-    "postgresql://langsmith:${random_password.in_cluster_postgres[0].result}@langsmith-postgres:5432/langsmith"
-  )
-  redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
-    "redis://langsmith-redis:6379"
-  )
+  postgres_connection_url = module.postgres[0].connection_url
+  redis_connection_url    = module.redis[0].connection_url
 
   # DB 0 is reserved for the main LangSmith install.
   redis_db_fleet    = 1
@@ -957,10 +925,7 @@ module "k8s_bootstrap" {
 
   namespace = var.langsmith_namespace
 
-  postgres_connection_url  = local.postgres_connection_url
-  postgres_in_cluster_user = var.postgres_source == "in-cluster" ? "langsmith" : ""
-  postgres_in_cluster_db   = var.postgres_source == "in-cluster" ? "langsmith" : ""
-  postgres_in_cluster_pass = var.postgres_source == "in-cluster" ? random_password.in_cluster_postgres[0].result : ""
+  postgres_connection_url = local.postgres_connection_url
 
   redis_connection_url = local.redis_connection_url
 
@@ -1097,18 +1062,15 @@ locals {
   # Encoded admin URL for the shared RDS instance, without a database name.
   # Spaces are rejected by postgres_password validation, so urlencode() cannot
   # emit "+" for a space in URI userinfo.
-  standalone_pg_base = var.postgres_source == "external" ? (
-    "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
-  ) : ""
+  standalone_pg_base = "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
 
   standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
   standalone_polly_pg_url    = "${local.standalone_pg_base}/langsmith_polly?sslmode=require"
   standalone_insights_pg_url = "${local.standalone_pg_base}/langsmith_insights?sslmode=require"
 
   # Shared ElastiCache base URL (rediss://:<token>@<endpoint>:6379). Append the
-  # per-feature logical DB index. Guarded so module.redis[0] is only referenced
-  # when it exists.
-  standalone_redis_base = var.redis_source == "external" ? module.redis[0].connection_url : ""
+  # per-feature logical DB index.
+  standalone_redis_base = module.redis[0].connection_url
 
   standalone_fleet_redis_url    = "${local.standalone_redis_base}/${local.redis_db_fleet}"
   standalone_polly_redis_url    = "${local.standalone_redis_base}/${local.redis_db_polly}"
@@ -1119,6 +1081,7 @@ locals {
 # Jobs do not rerun when Secret data changes, so a Job that failed on a broken
 # (unencoded) URL would otherwise stay failed. SQL in the Job is idempotent.
 resource "terraform_data" "postgres_connection_url_revision" {
+  # Always 1, like module.postgres; the count keeps the [0] address in state.
   count = var.postgres_source == "external" ? 1 : 0
   input = sha256(local.postgres_connection_url)
 }
@@ -1134,7 +1097,7 @@ resource "terraform_data" "standalone_db" {
       fleet    = var.enable_fleet && var.fleet_storage == "external"
       polly    = local.polly_external_storage
       insights = local.insights_external_storage
-    } : k => v if v && var.postgres_source == "external"
+    } : k => v if v
   }
 
   triggers_replace = jsonencode({
@@ -1232,7 +1195,7 @@ removed {
 # apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -1245,7 +1208,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.fleet_storage == "external" && var.redis_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -1258,7 +1221,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = local.polly_external_storage && var.postgres_source == "external" ? 1 : 0
+  count = local.polly_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -1271,7 +1234,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = local.polly_external_storage && var.redis_source == "external" ? 1 : 0
+  count = local.polly_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -1284,7 +1247,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = local.insights_external_storage && var.postgres_source == "external" ? 1 : 0
+  count = local.insights_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -1297,7 +1260,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = local.insights_external_storage && var.redis_source == "external" ? 1 : 0
+  count = local.insights_external_storage ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace
@@ -1359,7 +1322,7 @@ module "smithdb" {
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
 
-  migration_source_bucket_arn = var.smithdb_migration_enabled ? module.storage.bucket_arn : ""
+  migration_source_bucket_arn = var.enable_smithdb && var.smithdb_migration_enabled ? module.storage.bucket_arn : ""
 
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
@@ -1385,16 +1348,10 @@ resource "kubernetes_secret" "smithdb_local" {
 }
 
 #------------------------------------------------------------------------------
-# SmithDB Karpenter provisioning
+# Legacy SmithDB Karpenter provisioning (transition mode only)
 #
-# The Karpenter controller is installed by module.eks (blueprints add-on). Here
-# we tag the discovery targets and create the SmithDB NodePools/EC2NodeClasses:
-#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (instanceStorePolicy)
-#     for the SmithDB emptyDir caches. Hosts query / ingestion / compaction-worker.
-#   - compute: no local NVMe. Hosts compaction / cluster-manager and the transient
-#     metastore-migration job.
-# Labels/taints (smithdb-local/instance-store, smithdb-local/compute) match the
-# nodeSelectors/tolerations in langsmith-values-smithdb.yaml.
+# Preserve resource addresses and labels so existing pools remain available
+# until workloads have moved and their nodes can terminate.
 #------------------------------------------------------------------------------
 
 locals {
@@ -1415,7 +1372,7 @@ locals {
 # Terraform-created VPC the tag is applied at creation via the vpc module's
 # extra_private_subnet_tags (above).
 resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
-  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
+  for_each = var.enable_smithdb && var.smithdb_transition_mode && !var.create_vpc ? toset(var.private_subnets) : toset([])
 
   resource_id = each.value
   key         = "karpenter.sh/discovery"
@@ -1423,7 +1380,7 @@ resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
 }
 
 resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.k8s.aws/v1"
@@ -1458,7 +1415,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
 }
 
 resource "kubectl_manifest" "smithdb_ec2nc_compute" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.k8s.aws/v1"
@@ -1491,7 +1448,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
 }
 
 resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.sh/v1"
@@ -1535,7 +1492,7 @@ resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
 }
 
 resource "kubectl_manifest" "smithdb_nodepool_compute" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.sh/v1"
