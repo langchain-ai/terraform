@@ -48,6 +48,12 @@ variable "ingress_cidrs" {
   description = "Ingress CIDR blocks"
 }
 
+variable "ingress_security_group_ids" {
+  type        = list(string)
+  description = "Security groups allowed to reach tcp/5432, in addition to ingress_cidrs"
+  default     = []
+}
+
 variable "username" {
   type        = string
   description = "Username for the database"
@@ -107,6 +113,6 @@ variable "skip_final_snapshot" {
 
 variable "existing_security_group_id" {
   type        = string
-  description = "ID of an existing security group to attach to the RDS instance instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/5432 from ingress_cidrs and outbound within the VPC CIDR."
+  description = "ID of an existing security group to attach to the RDS instance instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/5432 from ingress_cidrs and ingress_security_group_ids, and outbound within the VPC CIDR."
   default     = null
 }

@@ -18,6 +18,12 @@ variable "ingress_cidrs" {
   type        = list(string)
 }
 
+variable "ingress_security_group_ids" {
+  description = "Security groups allowed to reach tcp/6379, in addition to ingress_cidrs"
+  type        = list(string)
+  default     = []
+}
+
 variable "instance_type" {
   description = "The instance type of the redis instance"
   type        = string
@@ -49,7 +55,7 @@ variable "snapshot_retention_limit" {
 }
 
 variable "existing_security_group_id" {
-  description = "ID of an existing security group to attach to the Redis replication group instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/6379 from ingress_cidrs and outbound within the VPC CIDR."
+  description = "ID of an existing security group to attach to the Redis replication group instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/6379 from ingress_cidrs and ingress_security_group_ids, and outbound within the VPC CIDR."
   type        = string
   default     = null
 }
