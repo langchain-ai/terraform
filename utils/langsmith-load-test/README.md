@@ -64,6 +64,25 @@ reports, so `compare` can say whether it is the one the plan was sized for.
 
 The first `uv run` creates `.venv` here and installs the dependencies.
 
+## Does it work, and what does it hold
+
+Three commands answer the questions an install's owner asks after a deploy, for any install the test can
+reach through `kubectl`: a cloud module's, a bare-metal cluster's, LangSmith Lite's (whose `make verify`
+and `make soak` run these).
+
+| Command | Asks | Exit 1 when |
+|:--|:--|:--|
+| `make verify NAMESPACE=langsmith` (`load-test-verify`) | Do traces flow end to end? Ten traces, each polled until readable, the install read as they go; then one line a hop: accepted by the API, Redis's ingestion queue drained, SmithDB flushed, readable by a query. On the first hop that fails, that workload's last log lines. | a hop failed |
+| `make soak NAMESPACE=langsmith TPS=5` (`load-test` then `load-test-judge`) | Does it hold this load? The rate with reads for `DURATION`, then every target, whether ingestion kept up, and each watch item against its alarm level. | it did not hold |
+| `make step NAMESPACE=langsmith TPS=5` (`load-test-step`) | What does it hold? The rate x 0.5, 1, 1.5, 2, 3 and 4 in turn, until one does not hold, and what crossed its alarm level there. | never; it reports |
+
+A run holds its load when every target passed, nothing was lost, and the ingestion backlog was not still
+climbing at the window's end. A watch item past its level is observed, not failed: an autoscaler scales on
+a backlog over its target, so crossing says where to look. The levels are a sizing's (`--plan`), or
+without one those `params.yaml` sets itself; a level read from a chart or a plan is unknown without them,
+and that item is observed. A hop or a level not read is shown as not read, never as passing.
+`--data-namespace` (Redis and Postgres in a namespace of their own) and `--kube-context` pass through.
+
 ## What it sends
 
 Each trace is a root run with child runs, `runs_per_trace` of them (a fractional value alternates, so 7.5
@@ -118,7 +137,9 @@ With `--namespace` the test also reads the install while it runs, through `kubec
 - every SmithDB pod's `/metrics`, the families the plan watches;
 - the age of the oldest queued task (platform-backend `/metrics`, `langsmith_asynq_queue_latency_seconds`);
 - Redis `INFO` (memory, evictions, connected clients) and Postgres's connections in use, when each runs
-  in the cluster (a managed one is read through its cloud's monitoring);
+  in the cluster (a managed one is read through its cloud's monitoring), found by component label or, as
+  the bare-metal datastores chart labels them, by name; `--data-namespace` reads them where they run when
+  that is not LangSmith's namespace (LangSmith Lite runs them in `<namespace>-data`);
 - each autoscaler's replicas against its maximum, restarts and OOM kills;
 - each container's CPU and throttling from its node's cAdvisor;
 - at the end, the runs ingest-queue logged as skipped because their payload had expired in Redis.
@@ -281,6 +302,7 @@ Every module under `src/loadtest/` is listed here; `tests/test_readme.py` fails 
 - `reads.py`: the read classes.
 - `lag.py`: the send-to-readable lag.
 - `verify.py`: runs stored against runs sent.
+- `judge.py`: verify, judge and step: each hop a trace crosses, whether a run held its load, and the rate an install holds.
 - `results.py`: the results document and target verdicts.
 - `cluster.py`: reads the install through kubectl while the load runs, and turns the samples into watch readings and cores used.
 - `plot.py`: draws a run's samples as one HTML page (`load-test-plot`).

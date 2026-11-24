@@ -33,6 +33,15 @@ class SampleTest(unittest.TestCase):
         self.assertEqual({e["workload"] for e in s["cpu"].values()}, {"ingest-queue", "platform-backend", "smithdb-ingestion"})
         self.assertEqual(s["unread"], [])
 
+    def test_stores_in_their_own_namespace_labelled_by_name_are_read_there(self) -> None:
+        fake = FakeCluster(data_namespace="ls-data")
+        s = cluster.Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t, data_namespace="ls-data").sample()
+        self.assertEqual((s["redis"]["maxmemory"], s["postgres"]["max_connections"]), (100 * 2**20, 100))
+        execs = [c for c in fake.calls if c[0] == "exec"]
+        self.assertEqual({c[2] for c in execs}, {"ls-data"})
+        self.assertIn('psql -U "${POSTGRES_USER:-postgres}"', next(c[-1] for c in execs if c[-2] == "-c"))
+        self.assertEqual(s["unread"], [])
+
     def test_a_failed_read_is_named_and_left_out_never_zero(self) -> None:
         s = samples(2, unreadable=("platform-backend:1984", "cadvisor", "redis-cli", "psql"))[1]
         self.assertNotIn("ingestion_queue.pending", s["queues"])

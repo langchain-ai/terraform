@@ -81,6 +81,7 @@ def build_parser(defaults: LoadSettings) -> argparse.ArgumentParser:
     verify.add_argument("--settle-seconds", type=float, default=defaults.settle_seconds, help="after the load, how long to wait for stored runs to reach runs sent")
     cluster = parser.add_argument_group("the install's own metrics (read through kubectl while the load runs)")
     cluster.add_argument("--namespace", help="the namespace LangSmith runs in; without it only the client side is measured")
+    cluster.add_argument("--data-namespace", help="the namespace Redis and Postgres run in, when not LangSmith's (the datastores chart can run them apart)")
     cluster.add_argument("--release", default="langsmith", help="the Helm release name, the prefix of every workload's name")
     cluster.add_argument("--kube-context", help="the kubectl context; the current one when omitted")
     cluster.add_argument("--sample-seconds", type=float, default=15, help="seconds between samples; raise it on a cluster of hundreds of nodes, where each sample reads every node's cAdvisor")
@@ -93,7 +94,7 @@ def build_parser(defaults: LoadSettings) -> argparse.ArgumentParser:
     return parser
 
 
-CLUSTER_OPTIONS = ("namespace", "release", "kube_context", "sample_seconds")
+CLUSTER_OPTIONS = ("namespace", "data_namespace", "release", "kube_context", "sample_seconds")
 
 
 def cluster_options(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -253,7 +254,7 @@ def _collector(watch: dict[str, Any], results_path: Path | None) -> cluster.Coll
         series.unlink(missing_ok=True)
     kube = cluster.kubectl(watch["kube_context"], timeout_seconds=max(10.0, watch["sample_seconds"]))
     ui.note(f"reading the install's metrics in namespace {watch['namespace']} every {watch['sample_seconds']:g} s" + (f" into {series}" if series else ""))
-    return cluster.Collector(kube, watch["namespace"], watch["release"], watch["sample_seconds"], series)
+    return cluster.Collector(kube, watch["namespace"], watch["release"], watch["sample_seconds"], series, data_namespace=watch["data_namespace"])
 
 
 def _cluster(samples: list[dict[str, Any]], watch: dict[str, Any], outcome: Any, settings: LoadSettings, profile: Profile) -> tuple[dict[str, Any], dict[str, Any]]:

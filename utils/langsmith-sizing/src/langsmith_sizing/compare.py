@@ -101,15 +101,19 @@ def _app(plan: dict[str, Any], results: dict[str, Any]) -> dict[str, Any]:
     return {"item": "app-version", "verdict": OBSERVED, "detail": f"the install runs LangSmith {have}; the plan read chart {plan['chart']}, which deploys {want}: size again with the chart that ships {have}"}
 
 
-def compare(plan: dict[str, Any], results: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every verdict, in order: the app version, the rate, the results' targets, then each of the plan's watch items."""
+def run_verdicts(results: dict[str, Any], watch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What a run says on its own: the results' targets, then each watch item against its level. The load
+    test's judge uses it without a plan, with the levels params.yaml sets itself."""
     targets = results["targets"]
-    out = [_app(plan, results), _rate(plan, results)]
-    out += [_target(name, targets[name]) for name in TARGETS]
+    out = [_target(name, targets[name]) for name in TARGETS]
     out.append(_missing(targets["no_missing_runs"]))
     metrics = results.get("metrics", {})
-    out += [_watch(item, metrics) for item in plan["watch"]]
-    return out
+    return out + [_watch(item, metrics) for item in watch]
+
+
+def compare(plan: dict[str, Any], results: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every verdict, in order: the app version, the rate, the results' targets, then each of the plan's watch items."""
+    return [_app(plan, results), _rate(plan, results), *run_verdicts(results, plan["watch"])]
 
 
 def failed(verdicts: list[dict[str, Any]]) -> bool:

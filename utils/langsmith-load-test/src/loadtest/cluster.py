@@ -34,11 +34,19 @@ Kube = Callable[[Sequence[str]], str | None]
 Sample = dict[str, Any]
 
 COMPONENT = "app.kubernetes.io/component"
+# The datastores chart (modules/baremetal/charts/datastores, which LangSmith Lite also runs) labels its
+# pods by name, not component, and can run them in a namespace of their own: read by component alone,
+# its Redis and Postgres were never found, and the results said "not measured" as if they were managed.
+NAME = "app.kubernetes.io/name"
+STORES = ("redis", "postgres")
 QUEUES = ("ingestion_queue", "feedback_queue", "adhoc_queue")
 REDIS_FIELDS = ("used_memory", "maxmemory", "evicted_keys", "connected_clients")
 QUEUE_LATENCY = "langsmith_asynq_queue_latency_seconds"
 EXPIRED_LINE = "Skipping run as it has expired"
 POSTGRES_QUERY = "select count(*), current_setting('max_connections') from pg_stat_activity"
+# The image's own user and database: the chart's Postgres runs as postgres, the datastores chart's as the
+# user it was given, and psql -U postgres failed there.
+POSTGRES_COMMAND = 'psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -tAc "' + POSTGRES_QUERY + '"'
 # Labels a reading keeps apart: a pending compaction job is not an in-flight one, and an l1 segment
 # waits up to 13 minutes for its flush by design where an l0 one waiting says ingestion is behind
 # (Ben Nagengast's load test watched l0 only).
@@ -135,8 +143,10 @@ def _add_cpu(out: dict[str, dict[str, Any]], text: str, marker: str, owners: dic
 class Collector:
     """Samples the install on a thread until stopped; each sample is also appended to series_path."""
 
-    def __init__(self, kube: Kube, namespace: str, release: str, interval_seconds: float, series_path: Path | None = None, clock: Callable[[], float] = time.time) -> None:
+    def __init__(self, kube: Kube, namespace: str, release: str, interval_seconds: float, series_path: Path | None = None,
+                 clock: Callable[[], float] = time.time, data_namespace: str | None = None) -> None:
         self.kube, self.ns, self.release = kube, namespace, release
+        self.data_ns = data_namespace or namespace
         self.interval = interval_seconds
         self.series_path = series_path
         self.clock = clock
@@ -190,23 +200,27 @@ class Collector:
             sample["queues"]["compaction.pending"] = float(jobs["pending"])
 
     def _pods(self, sample: Sample) -> list[dict[str, Any]]:
-        doc = self._json("get", "pods", "-n", self.ns, "-o", "json")
-        if doc is None:
-            sample["unread"].append("pods")
-            return []
-        pods = []
+        pods: list[dict[str, Any]] = []
         oom = restarts = 0
-        for item in doc.get("items", []):
-            component = item["metadata"].get("labels", {}).get(COMPONENT)
-            if not component:
+        for ns in dict.fromkeys((self.ns, self.data_ns)):
+            doc = self._json("get", "pods", "-n", ns, "-o", "json")
+            if doc is None:
+                sample["unread"].append("pods" if ns == self.ns else f"pods in {ns}")
                 continue
-            statuses = item.get("status", {}).get("containerStatuses", [])
-            restarts += sum(c.get("restartCount", 0) for c in statuses)
-            oom += sum(c.get("lastState", {}).get("terminated", {}).get("reason") == "OOMKilled" for c in statuses)
-            ports = {p.get("name"): p["containerPort"] for c in item["spec"].get("containers", []) for p in c.get("ports", [])}
-            running = item.get("status", {}).get("phase") == "Running"
-            pods.append({"name": item["metadata"]["name"], "workload": self.workload(component), "node": item["spec"].get("nodeName"), "http": ports.get("http"), "running": running})
-            sample["replicas"][self.workload(component)] = sample["replicas"].get(self.workload(component), 0) + running
+            for item in doc.get("items", []):
+                labels = item["metadata"].get("labels", {})
+                component = labels.get(COMPONENT) or (labels.get(NAME) if labels.get(NAME) in STORES else None)
+                if not component:
+                    continue
+                statuses = item.get("status", {}).get("containerStatuses", [])
+                restarts += sum(c.get("restartCount", 0) for c in statuses)
+                oom += sum(c.get("lastState", {}).get("terminated", {}).get("reason") == "OOMKilled" for c in statuses)
+                ports = {p.get("name"): p["containerPort"] for c in item["spec"].get("containers", []) for p in c.get("ports", [])}
+                running = item.get("status", {}).get("phase") == "Running"
+                workload = self.workload(component)
+                pods.append({"name": item["metadata"]["name"], "namespace": ns, "workload": workload, "node": item["spec"].get("nodeName"),
+                             "http": ports.get("http"), "running": running})
+                sample["replicas"][workload] = sample["replicas"].get(workload, 0) + running
         sample["oom_killed"], sample["restarts"] = oom, restarts
         return pods
 
@@ -228,7 +242,7 @@ class Collector:
         pod = next((p for p in pods if p["workload"] == "redis" and p["running"]), None)
         if pod is None:
             return  # an external Redis: its cloud's monitoring reads it, and the results say not measured
-        text = self.kube(["exec", "-n", self.ns, pod["name"], "--", "redis-cli", "INFO"])
+        text = self.kube(["exec", "-n", pod["namespace"], pod["name"], "--", "redis-cli", "INFO"])
         if text is None:
             sample["unread"].append("redis INFO")
         else:
@@ -238,7 +252,7 @@ class Collector:
         pod = next((p for p in pods if p["workload"] == "postgres" and p["running"]), None)
         if pod is None:
             return  # a managed Postgres: its cloud's monitoring reads it
-        text = self.kube(["exec", "-n", self.ns, pod["name"], "--", "psql", "-U", "postgres", "-tAc", POSTGRES_QUERY])
+        text = self.kube(["exec", "-n", pod["namespace"], pod["name"], "--", "sh", "-c", POSTGRES_COMMAND])
         used, _, top = (text or "").strip().partition("|")
         if used.isdigit() and top.isdigit():
             sample["postgres"] = {"connections": float(used), "max_connections": float(top)}

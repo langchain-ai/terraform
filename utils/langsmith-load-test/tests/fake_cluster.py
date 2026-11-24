@@ -25,7 +25,9 @@ BACKLOG = (0, 40, 80, 60, 20, 10, 10)
 
 
 class FakeCluster:
-    def __init__(self, *, unreadable: Sequence[str] = ()) -> None:
+    def __init__(self, *, unreadable: Sequence[str] = (), data_namespace: str | None = None) -> None:
+        # With data_namespace the stores run there, labelled by name as the datastores chart labels them.
+        self.data_namespace = data_namespace
         self.n = 0
         self.unreadable = tuple(unreadable)
         self.calls: list[list[str]] = []
@@ -43,7 +45,7 @@ class FakeCluster:
         if any(u in joined for u in self.unreadable):
             return None
         for needle, answer in (
-            ("get pods", self._pods), ("get services", self._services), ("get hpa", self._hpa),
+            ("get pods", lambda: self._pods(args[args.index("-n") + 1])), ("get services", self._services), ("get hpa", self._hpa),
             ("platform-backend:1984/proxy/metrics?format=json", self._queues), ("backend:1984/proxy/metrics/queue", lambda: json.dumps({"queued": 0})),
             ("smithdb-compaction:8070/proxy/metrics/jobs", lambda: json.dumps({"pending": BACKLOG[min(self.n, len(BACKLOG) - 1)] // 10})),
             ("/proxy/metrics/cadvisor", self._cadvisor), ("redis-cli", self._redis), ("psql", lambda: f"{12 + self.n}|100\n"),
@@ -54,12 +56,16 @@ class FakeCluster:
                 return answer()
         return None
 
-    def _pods(self) -> str:
+    def _pods(self, ns: str) -> str:
         items: list[dict[str, Any]] = []
         for name, component, port in PODS:
+            store = component.removeprefix(f"{RELEASE}-") in ("redis", "postgres")
+            if self.data_namespace and (ns == self.data_namespace) != store:
+                continue
+            labels = {"app.kubernetes.io/name": component.removeprefix(f"{RELEASE}-")} if self.data_namespace and store else {"app.kubernetes.io/component": component}
             ports = [{"name": "http", "containerPort": port}] if port else []
             items.append({
-                "metadata": {"name": name, "labels": {"app.kubernetes.io/component": component}},
+                "metadata": {"name": name, "labels": labels},
                 "spec": {"nodeName": "node-1", "containers": [{"name": "main", "ports": ports}]},
                 "status": {"phase": "Running", "containerStatuses": [{"restartCount": 1 if name.endswith("redis-0") and self.n > 3 else 0,
                                                                       "lastState": {"terminated": {"reason": "OOMKilled"}} if name.endswith("redis-0") and self.n > 3 else {}}]},
@@ -114,7 +120,7 @@ def samples(steps: int = 7, **kw: Any) -> list[dict[str, Any]]:
     from loadtest.cluster import Collector
 
     fake = FakeCluster(**kw)
-    collector = Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t)
+    collector = Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t, data_namespace=kw.get("data_namespace"))
     out = []
     for _ in range(steps):
         out.append(collector.sample())
