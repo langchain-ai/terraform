@@ -46,7 +46,10 @@ locals {
   app_components = ["platformBackend", "ingestQueue", "queue", "playground", "aceBackend"]
 
   langsmith_values = merge(
-    { for c in local.app_components : c => { deployment = { resources = local.k8s[c] } } },
+    # A service whose feature is off runs no pod: the chart has no switch for playground or ace-backend,
+    # and nothing on the tracing path calls either (only the UI's playground and code evaluators do).
+    # (Through JSON: a conditional's two branches must otherwise be objects of the same shape.)
+    { for c in local.app_components : c => { deployment = jsondecode(contains(keys(local.k8s), c) ? jsonencode({ resources = local.k8s[c] }) : jsonencode({ replicas = 0 })) } },
     {
       config = {
         existingSecretName   = "langsmith-config"

@@ -48,7 +48,15 @@ def main() -> int:
     field("memory", share(req["mem_mi"] / 1024, allowed["mem_mi"] / 1024, "GiB requested"))
     disk = sum(sizing["volumes_gi"].values())
     field("volumes", f"{disk} GiB, {sizing['used_pct']['disk']}% of the disk with images")
+    data = sizing["data"]
+    kb = data["per_run_kb"]
+    field("data", f"{data['runs_per_day']:,} runs a day at the average rate, {kb['smithdb'] + kb['blob']:.1f} KB a run stored")
+    field("object store", f"{data['object_store_gi']} GiB to keep them for the TTLs below")
+    field("redis", f"{data['redis_limit_mi'] / 1024:.1f} GiB limit: {data['redis_stall_hours']} h of stalled ingest at the peak")
     field("retention", "{short} days, extended {long}; metrics {metrics}".format(**sizing["retention_days"]))
+    off = [name.replace("_", " ") for name, on in sizing["features"].items() if not on]
+    if off:
+        field("not running", ", ".join(off) + f"  {DIM}(tracing only){OFF}")
     field("versions", f"langsmith {versions['langsmith']}, k3s {versions['k3s']}, mission-control {versions['mission-control']}")
     field("langsmith at", url + (f"  {DIM}(while make access runs){OFF}" if url.startswith("http://localhost") else ""))
 

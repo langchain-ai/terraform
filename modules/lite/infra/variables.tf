@@ -73,6 +73,46 @@ variable "readers" {
   }
 }
 
+variable "payload_mix_pct" {
+  type = object({
+    small  = number
+    medium = number
+    large  = number
+  })
+  default     = null
+  description = "Share of runs at each measured size, in percent: small (4 + 4 KiB), medium (32 + 32 KiB), large (about 1.5 MB). Sizes the object store and Redis. Default: 70, 25, 5 (sizes.yaml, storage)."
+
+  validation {
+    condition     = var.payload_mix_pct == null || try(var.payload_mix_pct.small + var.payload_mix_pct.medium + var.payload_mix_pct.large > 0 && min(var.payload_mix_pct.small, var.payload_mix_pct.medium, var.payload_mix_pct.large) >= 0, false)
+    error_message = "payload_mix_pct needs shares of at least 0 that sum to more than 0."
+  }
+}
+
+variable "storage_factor" {
+  type        = number
+  default     = 1
+  description = "How many times the measured storage your runs take. 1 for the measured payloads, which compress well; real text can need 2 to 5. Scales the object store's volume."
+
+  validation {
+    condition     = var.storage_factor >= 0.5 && var.storage_factor <= 10
+    error_message = "storage_factor must be from 0.5 to 10."
+  }
+}
+
+#--- What runs beyond tracing ------------------------------------------------
+
+variable "playground" {
+  type        = bool
+  default     = false
+  description = "Run the playground service: prompt playground and experiments from the UI, which call model providers. Off: Lite is tracing, and the pod's 0.9 GiB goes to the stores."
+}
+
+variable "code_evaluators" {
+  type        = bool
+  default     = false
+  description = "Run ace-backend, which executes custom code evaluators. Off: Lite is tracing."
+}
+
 variable "resources" {
   type = map(object({
     cpu_m      = number

@@ -26,7 +26,15 @@ output "plan" {
       memory = floor(100 * local.requested.mem_mi / local.ceiling.mem_mi)
       disk   = floor(100 * local.disk_needed_gi / local.machine.disk_gi)
     }
-    volumes_gi     = local.volumes
+    volumes_gi = local.volumes
+    data = {
+      runs_per_day      = floor(local.runs_per_day)
+      per_run_kb        = { for k, v in local.per_run_kb : trimsuffix(k, "_kb") => v }
+      object_store_gi   = local.volumes.object_store
+      redis_limit_mi    = local.pods.redis.lim_mem_mi
+      redis_stall_hours = var.redis_runs_expiry_hours
+    }
+    features       = local.features
     pods           = local.pods
     versions       = merge(local.chart_version, { k3s = local.pins.k3s, mission_control_images = local.mission_control_tag })
     retention_days = { short = var.short_ttl_days, long = var.long_ttl_days, metrics = var.prometheus_retention_days }

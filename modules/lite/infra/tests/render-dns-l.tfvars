@@ -8,4 +8,6 @@ acme_email            = "ops@example.com"
 short_ttl_days        = 7
 long_ttl_days         = 90
 max_payload_mb        = 50
+playground            = true
+code_evaluators       = true
 langsmith_license_key = "render-only"

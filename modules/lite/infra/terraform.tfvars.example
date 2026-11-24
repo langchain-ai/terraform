@@ -24,11 +24,18 @@ access = "localhost"
 # acme_email   = "ops@example.com" # dns
 # access_cidrs = ["0.0.0.0/0"]     # aws with ip or dns
 
-# The load it is sized for, and how long traces are kept.
+# The load it is sized for, and how long traces are kept: the object store's volume follows from them
+# (SIZING.md, How much data a box keeps).
 # runs_per_second = 5
 # readers         = 2
 # short_ttl_days  = 14
 # long_ttl_days   = 30
+# payload_mix_pct = { small = 70, medium = 25, large = 5 }
+# storage_factor  = 1 # 2 to 5 for real text, which compresses worse than the measured payloads
 # max_payload_mb  = 25
+
+# Beyond tracing, each off by default.
+# playground      = true # the UI's prompt playground and experiments
+# code_evaluators = true # custom code evaluators (ace-backend)
 
 admin_email = "admin@example.com"
