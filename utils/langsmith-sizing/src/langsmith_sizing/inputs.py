@@ -135,6 +135,15 @@ def validate(i: Inputs) -> None:
 BLOB_REQUIRED_FROM = "0.18"
 
 
+def _rate(i: Inputs, p: dict[str, Any]) -> tuple[float, str]:
+    """The average traces/s and the input it came from; refuses a peak below it."""
+    tps = i.traces_per_second if i.traces_per_second is not None else i.traces_per_month / p["time.seconds_per_month"]
+    if i.peak_traces_per_second is not None and i.peak_traces_per_second < tps:
+        # A flag that replaces a preset's average left the preset's own peak below it, and the plan was sized for the lower.
+        raise ValueError(f"the peak of {i.peak_traces_per_second:g} traces/s is below the average of {tps:g}: give --peak-traces-per-second at least the average (a flag that replaces a preset's rate leaves its peak behind)")
+    return tps, "input:traces_per_second" if i.traces_per_second is not None else "input:traces_per_month"
+
+
 def resolve(i: Inputs, chart: Chart, p: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     """The inputs with every default filled and clamped, and where each value came from
     ("input:<name>", "param:<id>" or "chart:<key>")."""
@@ -148,15 +157,7 @@ def resolve(i: Inputs, chart: Chart, p: dict[str, Any]) -> tuple[dict[str, Any],
         return out[name]
 
     out["users"], src["users"] = i.users, "input:users"
-    tps = (
-        i.traces_per_second if i.traces_per_second is not None
-        else i.traces_per_month / p["time.seconds_per_month"]
-    )
-    if i.peak_traces_per_second is not None and i.peak_traces_per_second < tps:
-        # A flag that replaces a preset's average left the preset's own peak below it, and the plan was sized for the lower.
-        raise ValueError(f"the peak of {i.peak_traces_per_second:g} traces/s is below the average of {tps:g}: give --peak-traces-per-second at least the average (a flag that replaces a preset's rate leaves its peak behind)")
-    out["traces_per_second"] = tps
-    src["traces_per_second"] = "input:traces_per_second" if i.traces_per_second is not None else "input:traces_per_month"
+    out["traces_per_second"], src["traces_per_second"] = _rate(i, p)
     out["peak_traces_per_second"], src["peak_traces_per_second"] = i.peak_traces_per_second, "input:peak_traces_per_second"
     rpt = pick("runs_per_trace", i.runs_per_trace, p["load.runs_per_trace"], "param:load.runs_per_trace")
     out["runs_per_trace"] = clamp(rpt, lim["runs_per_trace"], p["load.runs_per_trace"])

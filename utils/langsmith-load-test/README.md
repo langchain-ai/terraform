@@ -161,7 +161,7 @@ The results gain two sections:
     `runs_per_core` is the runs sent a second over those cores, on the ingest path only. Set ingest-queue's
     against the field curve `langsmith-sizing` sizes from (params `ingest.runs_per_core_points`) and the
     plan's `regime.measured.ingest_cores_by`: that is the figure the two ingest models disagree on.
-  - `smithdb_rows_flushed_per_second` is the rate SmithDB actually wrote, to set beside the rate sent.
+  - `smithdb_rows_flushed_per_second` is the rate SmithDB wrote, to set beside the rate sent.
   - `unread` names what could not be read in some sample; a missing reading is unknown, never zero.
 
 Every sample is kept beside the results (`<results>.metrics.jsonl`). `uv run load-test-plot <results>.json

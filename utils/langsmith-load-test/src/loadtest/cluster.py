@@ -181,19 +181,34 @@ class Collector:
         return None if port is None else self._json("get", "--raw", f"/api/v1/namespaces/{self.ns}/services/{service}:{port}/proxy{path}")
 
     def _queues(self, sample: Sample) -> None:
+        """Every backlog an autoscaler reads, and the age of the oldest queued task."""
+        self._ingest_queues(sample)
+        self._oldest_task(sample)
+        self._backend_queue(sample)
+        self._compaction_jobs(sample)
+
+    def _ingest_queues(self, sample: Sample) -> None:
         go = self._proxy(f"{self.release}-platform-backend", "/metrics?format=json")
         if go is None:
             sample["unread"].append("platform-backend queues")
-        else:
-            sample["queues"].update({f"{q}.pending": float(go[q]["pending"]) for q in QUEUES if q in go})
+            return
+        sample["queues"].update({f"{q}.pending": float(go[q]["pending"]) for q in QUEUES if q in go})
+
+    def _oldest_task(self, sample: Sample) -> None:
         port = self.services().get(f"{self.release}-platform-backend")
-        text = self.kube(["get", "--raw", f"/api/v1/namespaces/{self.ns}/services/{self.release}-platform-backend:{port}/proxy/metrics"]) if port else None
+        if not port:
+            return
+        text = self.kube(["get", "--raw", f"/api/v1/namespaces/{self.ns}/services/{self.release}-platform-backend:{port}/proxy/metrics"])
         ages = [v for _, _, v in parse_prometheus(text or "", (QUEUE_LATENCY,))]
         if ages:
             sample["queues"]["oldest_task_seconds"] = max(ages)
+
+    def _backend_queue(self, sample: Sample) -> None:
         py = self._proxy(f"{self.release}-backend", "/metrics/queue/default")
         if py is not None and "queued" in py:
             sample["queues"]["queue.queued"] = float(py["queued"])
+
+    def _compaction_jobs(self, sample: Sample) -> None:
         compaction = next((s for s in self.services() if s.endswith("smithdb-compaction")), None)
         jobs = self._proxy(compaction, "/metrics/jobs") if compaction else None
         if jobs is not None and "pending" in jobs:

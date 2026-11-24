@@ -161,11 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     watch = cluster_options(arguments)
     results_path = arguments.pop("results")
     profile_path = arguments.pop("profile")
-    try:
-        profile, arguments = resolve(arguments, from_file(profile_path) if profile_path else None)
-        settings = LoadSettings(**arguments)
-    except (ValueError, ProfileError) as error:
-        parser.error(str(error))
+    profile, settings = _settings(parser, arguments, profile_path)
 
     # "local" traces without uploading: nothing reaches an instance, so nothing can be counted or read.
     tracing_enabled = tracing_is_enabled() is True
@@ -191,15 +187,7 @@ def main(argv: list[str] | None = None) -> int:
     app_version = None
     try:
         if tracing_enabled:
-            # The SDK reads its cap on runs a request from here once, when it first sends.
-            os.environ[BATCH_RUNS_ENV] = str(profile.shape.batch_runs)
-            client = Client(
-                api_url=os.environ["LANGSMITH_ENDPOINT"], api_key=os.environ["LANGSMITH_API_KEY"],
-                workspace_id=workspace_id, max_batch_size_bytes=6 * 1024 * 1024, tracing_error_callback=upload_errors.put,
-            )
-            projects = _projects(client, project_name, profile.shape)
-            app_version = _app_version(client)
-            ui.note(f"{len(projects.names)} project(s) from {projects.names[0]}, LangSmith {app_version or 'version not read'}")
+            client, projects, app_version = _connect(profile, project_name, workspace_id, upload_errors)
         else:
             ui.note("tracing is off: payloads are generated locally and nothing is uploaded")
         outcome, samples = _load_while_reading(watch, results_path, lambda: asyncio.run(run_load_test(settings, profile, client, projects, report_progress)))
@@ -218,6 +206,29 @@ def main(argv: list[str] | None = None) -> int:
 
 
 BATCH_RUNS_ENV = "LANGSMITH_BATCH_INGEST_SIZE_LIMIT"
+
+
+def _settings(parser: argparse.ArgumentParser, arguments: dict[str, Any], profile_path: Path | None) -> tuple[Profile, LoadSettings]:
+    """The profile and the run's settings, from the profile file and the flags; a contradiction is a usage error."""
+    try:
+        profile, rest = resolve(arguments, from_file(profile_path) if profile_path else None)
+        return profile, LoadSettings(**rest)
+    except (ValueError, ProfileError) as error:
+        parser.error(str(error))
+
+
+def _connect(profile: Profile, project_name: str, workspace_id: str | None, upload_errors: SimpleQueue[Exception]) -> tuple[Client, Projects, str | None]:
+    """The SDK client, the test's projects, and the version the install reports."""
+    # The SDK reads its cap on runs a request from here once, when it first sends.
+    os.environ[BATCH_RUNS_ENV] = str(profile.shape.batch_runs)
+    client = Client(
+        api_url=os.environ["LANGSMITH_ENDPOINT"], api_key=os.environ["LANGSMITH_API_KEY"],
+        workspace_id=workspace_id, max_batch_size_bytes=6 * 1024 * 1024, tracing_error_callback=upload_errors.put,
+    )
+    projects = _projects(client, project_name, profile.shape)
+    app_version = _app_version(client)
+    ui.note(f"{len(projects.names)} project(s) from {projects.names[0]}, LangSmith {app_version or 'version not read'}")
+    return client, projects, app_version
 
 
 def _projects(client: Client, base: str, shape: Shape) -> Projects:

@@ -308,6 +308,34 @@ async def run_load_test(
     return await _Run(settings, profile, client, projects, on_progress).go()
 
 
+def _write_section(write: Any, settings: LoadSettings, profile: Profile, tracing_enabled: bool, first_upload_error: str | None) -> dict[str, Any]:
+    send = summarize(write.send_latencies_seconds)
+    schedule = summarize(write.schedule_lags_seconds)
+    return {
+        "mode": write.mode, "tracing_enabled": tracing_enabled,
+        "target_traces_per_second": write.target_traces_per_second,
+        "achieved_traces_per_second": write.traces_sent / write.duration_seconds if write.duration_seconds else 0,
+        "steady_traces_per_second": write.steady_traces_sent / settings.duration_seconds if write.mode == "open-loop" and settings.duration_seconds else None,
+        "duration_seconds": write.duration_seconds, "traces_started": write.traces_started,
+        "traces_sent": write.traces_sent, "runs_sent": write.runs_sent, "run_errors": write.run_errors,
+        "dropped_starts": write.dropped_starts,
+        "send_latency_seconds": {key: send[key] for key in ("p50", "p95", "p99", "max")},
+        "schedule_lag_seconds": {key: schedule[key] for key in ("p50", "p95", "p99", "max")},
+        "first_error": write.first_error or first_upload_error,
+        "payload_shape": dataclasses.asdict(profile.shape),
+    }
+
+
+def _stored_section(outcome: LoadOutcome, settings: LoadSettings) -> dict[str, Any]:
+    write, stored = outcome.write, outcome.stored
+    return {
+        "settle_seconds": settings.settle_seconds, "traces_sent": write.traces_sent, "traces_stored": stored.traces,
+        "traces_missing": None if stored.traces is None else max(0, write.traces_sent - stored.traces),
+        "runs_sent": write.runs_sent, "runs_stored": stored.runs,
+        "missing_runs": None if stored.runs is None else max(0, write.runs_sent - stored.runs), "error": stored.error,
+    }
+
+
 def build_report(
     outcome: LoadOutcome, settings: LoadSettings, profile: Profile, project_name: str, tracing_enabled: bool,
     upload_errors: int, first_upload_error: str | None, app_version: str | None = None,
@@ -316,32 +344,16 @@ def build_report(
     """cluster is (metrics keyed by watch item id, the cluster section)."""
     write = outcome.write
     send = summarize(write.send_latencies_seconds)
-    schedule = summarize(write.schedule_lags_seconds)
     limit = settings.latency_limit_seconds
     limit_passed = None if limit is None else (send["p95"] is not None and send["p95"] <= limit)
     lag = summarize(outcome.lag.lags_seconds)
     reads = outcome.reader.stats if outcome.reader else {}
     read_count = sum(len(entry.latencies_seconds) + entry.errors for entry in reads.values())
-    stored = outcome.stored
-    missing_runs = None if stored.runs is None else max(0, write.runs_sent - stored.runs)
-    missing_traces = None if stored.traces is None else max(0, write.traces_sent - stored.traces)
     return results.assemble(
         server={"app_version": app_version},
         profile=profile.document, settings=dataclasses.asdict(settings), test_id=outcome.test_id, project=project_name,
         started_at=outcome.started_at.isoformat(), ended_at=outcome.ended_at.isoformat(),
-        write={
-            "mode": write.mode, "tracing_enabled": tracing_enabled,
-            "target_traces_per_second": write.target_traces_per_second,
-            "achieved_traces_per_second": write.traces_sent / write.duration_seconds if write.duration_seconds else 0,
-            "steady_traces_per_second": write.steady_traces_sent / settings.duration_seconds if write.mode == "open-loop" and settings.duration_seconds else None,
-            "duration_seconds": write.duration_seconds, "traces_started": write.traces_started,
-            "traces_sent": write.traces_sent, "runs_sent": write.runs_sent, "run_errors": write.run_errors,
-            "dropped_starts": write.dropped_starts,
-            "send_latency_seconds": {key: send[key] for key in ("p50", "p95", "p99", "max")},
-            "schedule_lag_seconds": {key: schedule[key] for key in ("p50", "p95", "p99", "max")},
-            "first_error": write.first_error or first_upload_error,
-            "payload_shape": dataclasses.asdict(profile.shape),
-        },
+        write=_write_section(write, settings, profile, tracing_enabled, first_upload_error),
         feedback={"per_trace": profile.feedback_per_trace, "sent": write.feedback_sent, "errors": write.feedback_errors},
         reads={
             "enabled": outcome.reader is not None, "target_requests_per_second": settings.reads_per_second,
@@ -354,11 +366,7 @@ def build_report(
             "poll_errors": outcome.lag_poll_errors, "p50_seconds": lag["p50"], "p95_seconds": lag["p95"],
             "p99_seconds": lag["p99"], "max_seconds": lag["max"],
         },
-        stored={
-            "settle_seconds": settings.settle_seconds, "traces_sent": write.traces_sent, "traces_stored": stored.traces,
-            "traces_missing": missing_traces, "runs_sent": write.runs_sent, "runs_stored": stored.runs,
-            "missing_runs": missing_runs, "error": stored.error,
-        },
+        stored=_stored_section(outcome, settings),
         targets=profile.targets, upload_errors=upload_errors, latency_limit_passed=limit_passed,
         cluster=cluster,
     )
