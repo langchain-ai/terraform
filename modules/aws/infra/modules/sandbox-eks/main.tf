@@ -13,6 +13,33 @@ locals {
   # cluster runs sandbox-host and CoreDNS only.
   core_addon_names = toset(["vpc-cni", "kube-proxy", "coredns"])
 
+  # Every node in this cluster carries the sandbox-host taint, so CoreDNS must
+  # tolerate it or it never schedules: the add-on stays DEGRADED and the apply
+  # times out. The tolerations follow the node group's own taints, after the
+  # EKS defaults or any tolerations given in var.cluster_addons, and the rest
+  # of a configuration_values given there is kept. A taint's value is optional
+  # upstream; one without a value is tolerated with operator Exists.
+  k8s_taint_effects = {
+    NO_SCHEDULE        = "NoSchedule"
+    NO_EXECUTE         = "NoExecute"
+    PREFER_NO_SCHEDULE = "PreferNoSchedule"
+  }
+  coredns_configuration = try(jsondecode(var.cluster_addons.coredns.configuration_values), {})
+  coredns_configuration_values = jsonencode(merge(local.coredns_configuration, {
+    tolerations = concat(
+      try(local.coredns_configuration.tolerations, [
+        { key = "CriticalAddonsOnly", operator = "Exists" },
+        { key = "node-role.kubernetes.io/control-plane", effect = "NoSchedule" },
+      ]),
+      [
+        for taint in values(try(var.managed_node_group.taints, {})) : merge(
+          { key = taint.key, effect = local.k8s_taint_effects[taint.effect] },
+          try(taint.value, null) == null ? { operator = "Exists" } : { operator = "Equal", value = taint.value },
+        )
+      ],
+    )
+  }))
+
   addons = {
     for name in local.core_addon_names : name => merge(
       {
@@ -25,7 +52,7 @@ locals {
         resolve_conflicts_on_create = var.cluster_addons[name].resolve_conflicts
         resolve_conflicts_on_update = var.cluster_addons[name].resolve_conflicts
       } : {},
-      name == "coredns" ? {} : { before_compute = true },
+      name == "coredns" ? { configuration_values = local.coredns_configuration_values } : { before_compute = true },
     )
   }
 
