@@ -171,7 +171,7 @@ def _from_measured(c: _Ctx, workloads: dict[str, Any], rates: dict[str, Any]) ->
     lm = c.p["lite.measured"]
     for name, rule in lm["workloads"].items():
         if name in workloads:
-            rq = lite.request(rule, runs_per_second=rates["runs_per_second_peak"], readers=c.r["users"], headroom=lm["headroom"], min_cpu=lm["min_cpu"])
+            rq = lite.request(rule, runs_per_second=rates["runs_per_second_peak"], readers=c.r["users"], headroom=lm["headroom"], min_cpu=lm["min_cpu"], memory_headroom=lm["memory_headroom"])
             workloads[name] = workloads[name] | {"requests": rq, "limits": lite.at_least(workloads[name]["limits"], rq)}
             c.prov.extend(f"workloads.{name}", "param:lite.measured")
 

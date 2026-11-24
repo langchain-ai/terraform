@@ -798,6 +798,7 @@ params:
   lite.measured:
     value:
       headroom: 1.5
+      memory_headroom: 1.2
       min_cpu: 0.05
       workloads:
         platform-backend: {work: offered, base: 0.003, per_unit: 0.0045, memory_gib: 0.5}
@@ -811,9 +812,9 @@ params:
         postgres: {work: processed, base: 0.005, per_unit: 0.00015, memory_gib: 0.85}
         smithdb_metastore: {work: processed, base: 0.031, per_unit: 0.0021, memory_gib: 0.3}
         object_store: {work: processed, base: 0.025, per_unit: 0.02, memory_gib: 7.2}
-    unit: "cores idle (base) and per unit of work (offered or processed runs/s, concurrent readers); GiB a pod; headroom x"
+    unit: "cores idle (base) and per unit of work (offered or processed runs/s, concurrent readers); GiB a pod at its sampled peak; headroom and memory_headroom x"
     chart_has_no_key: "what a pod uses at a small load; the chart's requests are sized for its default tier and the docs' for managed services"
-    why: "On one node the chart's requests and the docs' managed-store sizes, not what runs, set the floor: 17 vCPU and 63 GiB where a lab install used 1.6 of 8.4 cores requested at 3.9 traces/s, Postgres asked 11 GiB and used 0.4, and Redis 14.4 and used 0.02. In the extra-lite regime each pod asks what it was measured to use at the plan's load, CPU x headroom and memory at its sampled peak x 1.5, never below min_cpu; Redis asks its payload's memory without the scale guide's 8 GiB floor. SmithDB keeps the chart's tier: one unified SmithDB pod has not been measured at this load."
+    why: "On one node the chart's requests and the docs' managed-store sizes, not what runs, set the floor: 17 vCPU and 63 GiB where a lab install used 1.6 of 8.4 cores requested at 3.9 traces/s, Postgres asked 11 GiB and used 0.4, and Redis 14.4 and used 0.02. In the extra-lite regime each pod asks what it was measured to use at the plan's load, CPU x headroom and memory at its sampled peak x memory_headroom (a peak sampled at one load, so it gets a buffer as a request), never below min_cpu; Redis asks its payload's memory without the scale guide's 8 GiB floor. SmithDB keeps the chart's tier: one unified SmithDB pod has not been measured at this load."
     source: {kind: lab, ref: "bare-metal lab runs at 3 runs a trace and about 180 KiB a run, 5 s samples over ten minutes, 2026-10-31 and 2026-11-01 (the bootstrap's spec/capacity.yaml rules); the object store's memory is its peak at 93 traces/s"}
     by: Reed Bender
     since: 2026-11-18

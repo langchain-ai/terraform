@@ -180,5 +180,5 @@ self-hosted installs and never named. How each is used: [how-it-sizes.md](how-it
 | `pools.sandbox_node` | {cpu: 16, memory_gib: 64} | vCPU, GiB per node | decision | Reed Bender |
 | `sandboxes.juicefs_redis` | {cpu: 2, memory_gib: 5} | vCPU, GiB | decision | Dzmitry Dubarau |
 | `scale_out.measured` | (a table: see params.yaml) | requested vCPU per 1,000 runs/s; runs/s per pod or partition; connections per pod; runs/s | load-test | Ben Nagengast |
-| `lite.measured` | (a table: see params.yaml) | cores idle (base) and per unit of work (offered or processed runs/s, concurrent readers); GiB a pod; headroom x | lab | Reed Bender |
+| `lite.measured` | (a table: see params.yaml) | cores idle (base) and per unit of work (offered or processed runs/s, concurrent readers); GiB a pod at its sampled peak; headroom and memory_headroom x | lab | Reed Bender |
 <!-- /generated:params -->

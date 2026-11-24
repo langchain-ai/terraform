@@ -42,7 +42,7 @@ def _stores(body: dict[str, Any], r: Mapping[str, Any], p: Mapping[str, Any], ci
     def measured(store: str, spec: dict[str, Any]) -> dict[str, Any]:
         if lm is None or "per_instance" not in spec:
             return spec
-        rq = lite.request(lm["stores"][store], runs_per_second=body["rates"]["runs_per_second_peak"], readers=r["users"], headroom=lm["headroom"], min_cpu=lm["min_cpu"])
+        rq = lite.request(lm["stores"][store], runs_per_second=body["rates"]["runs_per_second_peak"], readers=r["users"], headroom=lm["headroom"], min_cpu=lm["min_cpu"], memory_headroom=lm["memory_headroom"])
         one = spec["per_instance"]
         return spec | {"per_instance": one | {"requests": rq, "limits": lite.at_least(one["limits"], rq)}}
 
