@@ -29,6 +29,8 @@
 #   - values/langsmith-values-engine.yaml        (if Engine is enabled)
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
+#   - values/langsmith-sandbox-values-overrides.yaml (langsmith-sandbox chart, if
+#                                                     sandbox_runtime_source = external)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -40,6 +42,7 @@ INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 EXAMPLES_DIR="$VALUES_DIR/examples"
 source "$INFRA_DIR/scripts/_common.sh"
+source "$INFRA_DIR/scripts/_smithdb-transition.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
@@ -54,36 +57,39 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
 _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
-_postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
-_redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
 # Envoy still deploys it. Reading the applied state keeps this script in agreement with
 # what Terraform actually built.
-_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
-_enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
-_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
+_enable_envoy_gateway=$(_read_applied_flag "enable_envoy_gateway" false)
+_enable_istio_gateway=$(_read_applied_flag "enable_istio_gateway" false)
+_enable_nginx_ingress=$(_read_applied_flag "enable_nginx_ingress" false)
 
-_enable_smithdb=false
-_tfvar_is_true "enable_smithdb" && _enable_smithdb=true
-_smithdb_ingestion_enabled=false
-_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
-_smithdb_migration_enabled=false
-_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
-_smithdb_query_enabled=false
-_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+# The defaults match variables.tf, for a run before the first apply.
+_enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
+_smithdb_ingestion_enabled=$(_read_applied_flag "smithdb_ingestion_enabled" true)
+_smithdb_migration_enabled=$(_read_applied_flag "smithdb_migration_enabled" false)
+_smithdb_query_enabled=$(_read_applied_flag "smithdb_query_enabled" true)
 _smithdb_metastore_use_ssl=$(_parse_tfvar "smithdb_metastore_use_ssl") || _smithdb_metastore_use_ssl="true"
 
-if [[ "$_enable_smithdb" != "true" && ( "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
-  echo "ERROR: SmithDB integration gates require enable_smithdb = true." >&2
-  exit 1
+# The gates default to true and count only with SmithDB on (as in outputs.tf).
+if [[ "$_enable_smithdb" != "true" ]]; then
+  _smithdb_ingestion_enabled=false; _smithdb_migration_enabled=false; _smithdb_query_enabled=false
 fi
 if [[ "$_smithdb_ingestion_enabled" != "true" && ( "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
   echo "ERROR: SmithDB migration/query require smithdb_ingestion_enabled = true." >&2
   exit 1
+fi
+# upgrade-guard.sh covers only make apply, and an unset query gate defaults to on,
+# so confirm it against the live release before writing it.
+if [[ "$_smithdb_query_enabled" == "true" ]] && ! _tfvar_is_true "smithdb_query_enabled"; then
+  _tf_release_name=$(_parse_tfvar "langsmith_release_name") || _tf_release_name="langsmith"
+  _tf_namespace=$(_parse_tfvar "langsmith_namespace") || _tf_namespace="langsmith"
+  _smithdb_query_cutover_check "${RELEASE_NAME:-$_tf_release_name}" "${NAMESPACE:-$_tf_namespace}" || exit 1
 fi
 
 _gateway_modes=0
@@ -115,6 +121,7 @@ else
 fi
 
 OUT_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
+SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 _first_run="false"
 [[ ! -f "$OUT_FILE" ]] && _first_run="true"
 
@@ -124,6 +131,7 @@ echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
 echo "  sizing_profile         = $_sizing_profile"
+echo "  sandbox_runtime_source = $_sandbox_runtime_source"
 echo ""
 
 # ── Terraform outputs ─────────────────────────────────────────────────────────
@@ -364,6 +372,10 @@ fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_JUICEFS_CACHE_DIRS=""
+SANDBOX_CLUSTER_NAME=""
+SANDBOX_IRSA_ROLE_ARN=""
+SANDBOX_RUNTIME_SECRET_NAME=""
+SANDBOX_SERVICE_ACCOUNT_NAME=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
   # Instance-store NVMe mounts on the sandbox-host nodes, e.g. /mnt/juicefs-cache0.
@@ -376,6 +388,33 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
       SANDBOX_JUICEFS_CACHE_DIRS+="${SANDBOX_JUICEFS_CACHE_DIRS:+ }${_dir}"
     fi
   done
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
+    if [[ -z "$HOSTNAME" ]]; then
+      echo "ERROR: an external sandbox runtime requires a resolvable LangSmith hostname." >&2
+      echo "       Set langsmith_domain or deploy the main ingress once, then re-run init-values." >&2
+      exit 1
+    fi
+    SANDBOX_CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || {
+      echo "ERROR: Could not read sandbox_cluster_name. Is terraform apply complete?" >&2
+      exit 1
+    }
+    SANDBOX_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_irsa_role_arn 2>/dev/null) || {
+      echo "ERROR: Could not read sandbox_irsa_role_arn. Is terraform apply complete?" >&2
+      exit 1
+    }
+    SANDBOX_RUNTIME_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_runtime_secret_name 2>/dev/null) || SANDBOX_RUNTIME_SECRET_NAME="langsmith-sandbox-runtime"
+    # The sandbox IRSA role trusts exactly one ServiceAccount. Read that name
+    # back from Terraform rather than hardcoding it here: the chart defaults
+    # sandboxHost.serviceAccount.name to the sandbox-host fullname, which would
+    # not match the trust policy and would fail IRSA at runtime with a
+    # WebIdentityErr that points nowhere near this file.
+    SANDBOX_SERVICE_ACCOUNT_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_service_account_name 2>/dev/null) || SANDBOX_SERVICE_ACCOUNT_NAME=""
+    if [[ -z "$SANDBOX_SERVICE_ACCOUNT_NAME" ]]; then
+      echo "ERROR: Could not read sandbox_service_account_name. Upgrade the infra module and re-apply;" >&2
+      echo "       without it the generated values cannot be matched to the sandbox IRSA trust policy." >&2
+      exit 1
+    fi
+  fi
 fi
 
 echo "Product addons (from terraform.tfvars):"
@@ -546,7 +585,7 @@ else
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
+  echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
 else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
@@ -677,25 +716,6 @@ fi
 if [[ ! -f "$VALUES_DIR/langsmith-values.yaml" ]]; then
   cp "$EXAMPLES_DIR/langsmith-values.yaml" "$VALUES_DIR/langsmith-values.yaml"
   echo "Created: langsmith-values.yaml (base)"
-fi
-
-# ── In-cluster overrides for postgres/redis ──────────────────────────────────
-# The base langsmith-values.yaml hardcodes postgres.external.enabled: true and
-# redis.external.enabled: true. When using in-cluster sources, we must override
-# those to false so the chart deploys its own pods instead of looking for the
-# (non-existent) external connection secrets.
-_external_services_block=""
-if [[ "$_postgres_source" == "in-cluster" ]]; then
-  _external_services_block+="
-postgres:
-  external:
-    enabled: false"
-fi
-if [[ "$_redis_source" == "in-cluster" ]]; then
-  _external_services_block+="
-redis:
-  external:
-    enabled: false"
 fi
 
 # ── Standalone agent feature overrides (chart v0.15+) ────────────────────────
@@ -856,19 +876,77 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
-  _sandbox_cache_dirs_block=""
-  if [[ -n "$SANDBOX_JUICEFS_CACHE_DIRS" ]]; then
-    _sandbox_cache_dirs_block="
+  if [[ "$_sandbox_runtime_source" == "external" ]]; then
+    # The sandbox cluster runs untrusted code, so sandbox service auth uses a
+    # dedicated key in langsmith-config (synced from SSM by apply-eso.sh), never
+    # api_key_salt. Terraform writes the same value into the runtime Secret.
+    _sandbox_config_block="
+sandboxes:
+  enabled: true
+  external:
+    enabled: true${_sandbox_service_url_block}
+  serviceAuth:
+    secretKey: \"sandbox_service_auth_secret\""
+
+    # The runtime chart's own default is /var/cache/juicefs on the root volume.
+    _sandbox_cache_dirs_block=""
+    for _dir in ${SANDBOX_JUICEFS_CACHE_DIRS:-/var/cache/juicefs}; do
+      _sandbox_cache_dirs_block+="
+      - \"${_dir}\""
+    done
+
+    cat > "$SANDBOX_VALUES_FILE" << YAML
+# Auto-generated by init-values.sh for the dedicated sandbox cluster.
+# Terraform writes the runtime Secret (config.existingSecretName) in the
+# sandbox cluster. The keys are the chart defaults, spelled out because the
+# Secret depends on them. Both values match the same keys in langsmith-config;
+# neither is the API key salt.
+config:
+  endpoint: "${_protocol}://${HOSTNAME}/api"
+  existingSecretName: "${SANDBOX_RUNTIME_SECRET_NAME}"
+  callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+serviceAuth:
+  secretKey: "sandbox_service_auth_secret"
+
+# IRSA for sandbox-host and the JuiceFS formatter. The chart annotates the
+# ServiceAccount from this block.
+workloadIdentity:
+  provider: aws
+  aws:
+    roleArn: "${SANDBOX_IRSA_ROLE_ARN}"
+
+juicefs:
+  existingSecretName: "${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}"
+  hostMount:
+    cacheDirs:${_sandbox_cache_dirs_block}
+
+sandboxHost:
+  enabled: true
+  deployment:
+    nodeSelector:
+      sandbox.langsmith.com/host: "true"
+  # serviceAccount.name is the IRSA contract with the sandbox IAM role's OIDC
+  # 'sub' condition (Terraform: sandbox_service_account_name). Do not rename it
+  # here alone — change the tfvar and re-run init-values so both sides move
+  # together, or sandbox-host loses access to the trace bucket.
+  serviceAccount:
+    name: "${SANDBOX_SERVICE_ACCOUNT_NAME}"
+YAML
+    echo "Written: $SANDBOX_VALUES_FILE (cluster: $SANDBOX_CLUSTER_NAME, serviceAccount: $SANDBOX_SERVICE_ACCOUNT_NAME)"
+  else
+    _sandbox_cache_dirs_block=""
+    if [[ -n "$SANDBOX_JUICEFS_CACHE_DIRS" ]]; then
+      _sandbox_cache_dirs_block="
     hostMount:
       cacheDirs:"
-    for _dir in $SANDBOX_JUICEFS_CACHE_DIRS; do
-      _sandbox_cache_dirs_block+="
+      for _dir in $SANDBOX_JUICEFS_CACHE_DIRS; do
+        _sandbox_cache_dirs_block+="
         - \"${_dir}\""
-    done
-  fi
-  # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
-  # under the same ServiceAccount, so the bucket role goes on sandboxHost.
-  _sandbox_config_block="
+      done
+    fi
+    # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
+    # under the same ServiceAccount, so the bucket role goes on sandboxHost.
+    _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
   juicefs:
@@ -880,6 +958,7 @@ sandboxes:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+  fi
 fi
 
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────
@@ -978,17 +1057,17 @@ playground:
 #   kubectl annotate serviceaccount langsmith-ksa -n langsmith \
 #     eks.amazonaws.com/role-arn=<irsa_role_arn> --overwrite
 ${_routing_block}
-${_external_services_block}
 ${_standalone_block}
 YAML
 
 echo "Written: $OUT_FILE"
 echo ""
 
-# ── SmithDB (chart 0.16+) ─────────────────────────────────────────────────────
+# ── SmithDB (chart 0.17+) ─────────────────────────────────────────────────────
 # Copies the SmithDB overlay and generates langsmith-values-smithdb-overrides.yaml
 # with the object-store bucket, region, IRSA role ARN, and metastore secret-key
-# mapping from the infra outputs. All LangSmith integration gates start disabled;
+# mapping from the infra outputs, and the node selector and tolerations that put
+# SmithDB and TaskDB on their own node group. All LangSmith integration gates start disabled;
 # operators enable ingestion, migration, and query in separate validated stages.
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
@@ -997,14 +1076,18 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   if [[ ! -f "$_smithdb_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
     echo "SmithDB: created langsmith-values-smithdb.yaml"
+  elif _smithdb_refresh_legacy_overlay "$_smithdb_file" "$EXAMPLES_DIR/langsmith-values-smithdb.yaml"; then
+    echo "SmithDB: replaced langsmith-values-smithdb.yaml, which still pinned the old Karpenter pools"
+    echo "         (the old copy is kept as langsmith-values-smithdb.legacy.yaml)"
   else
     echo "SmithDB: langsmith-values-smithdb.yaml (existing)"
   fi
 
   SMITHDB_BUCKET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null) || SMITHDB_BUCKET=""
   SMITHDB_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_irsa_role_arn 2>/dev/null) || SMITHDB_IRSA_ROLE_ARN=""
-  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_IRSA_ROLE_ARN" ]]; then
-    echo "ERROR: enable_smithdb = true but smithdb_object_store_bucket / smithdb_irsa_role_arn outputs are empty." >&2
+  SMITHDB_CACHE_STORAGE_CLASS=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage_class_name 2>/dev/null) || SMITHDB_CACHE_STORAGE_CLASS=""
+  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_IRSA_ROLE_ARN" || -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
+    echo "ERROR: enable_smithdb = true but smithdb_object_store_bucket / smithdb_irsa_role_arn / smithdb_cache_storage_class_name outputs are empty." >&2
     echo "       Is 'terraform apply' complete in $INFRA_DIR with enable_smithdb = true?" >&2
     exit 1
   fi
@@ -1016,8 +1099,10 @@ if [[ "$_enable_smithdb" == "true" ]]; then
 # Re-run init-values.sh to refresh from Terraform outputs.
 #
 # Advance these flags one stage at a time by following the SmithDB installation
-# guide. Keep ClickHouse enabled throughout version 16.
+# guide.
 smithdb:
+  cache:
+    storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
   serviceAccount:
     annotations:
       eks.amazonaws.com/role-arn: "${SMITHDB_IRSA_ROLE_ARN}"
@@ -1038,6 +1123,37 @@ smithdb:
       useSsl: ${_smithdb_metastore_use_ssl}
   metastoreMigration:
     useSsl: ${_smithdb_metastore_use_ssl}
+    job:
+$(_smithdb_pool_scheduling "      ")
+  query:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  mutations:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  runRules:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  statsQuery:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  ingestion:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  compactionWorker:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  compaction:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  clusterManager:
+    deployment:
+$(_smithdb_pool_scheduling "      ")
+  migration:
+    taskdb:
+      postgres:
+        statefulSet:
+$(_smithdb_pool_scheduling "          ")
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}

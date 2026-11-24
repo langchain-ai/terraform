@@ -53,6 +53,13 @@ before the PR does, not a separate standard.
     for every root at or beneath the directory you name.
   - Shell edit → `bash scripts/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
+  - Helm values edit → `bash scripts/check.sh modules/<provider>` also runs
+    `modules/<provider>/helm/scripts/test-values.sh` where one exists (AWS
+    today). It renders the published chart at the `deploy.sh` pin for every
+    sizing profile, SmithDB off and on, and checks which scaler each queue
+    service gets. It needs `helm` and network access; `make test-values` runs
+    it alone. A change to a default must also change the expectation table at
+    the top of the script.
   - No argument → both, across every root.
   - Conditional wiring, a `validation` block, or a precondition →
     `bash scripts/plan-tests.sh modules/<provider>`: `terraform test` plans the

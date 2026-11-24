@@ -66,6 +66,31 @@ run "optional_modules_absent_when_flags_are_false" {
   }
 }
 
+# ── Core components ──────────────────────────────────────────────────────────
+# The chart's queue ScaledObjects need KEDA on every install, so no feature
+# flag may gate it.
+
+run "keda_is_planned_with_every_feature_flag_off" {
+  command = plan
+
+  variables {
+    enable_deployments         = false
+    enable_engine              = false
+    enable_fleet               = false
+    enable_insights            = false
+    enable_polly               = false
+    enable_standalone_insights = false
+    enable_standalone_polly    = false
+    enable_sandboxes           = false
+    enable_smithdb             = false
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.keda_release_name == "keda"
+    error_message = "KEDA was not planned with every feature flag off; the chart's queue ScaledObjects need it on every install"
+  }
+}
+
 # ── Optional modules, one flag at a time ─────────────────────────────────────
 # Every run flips exactly one flag, so a run that also plans a sibling module
 # means two gates read the same variable.
@@ -368,7 +393,53 @@ run "sandbox_host_nested_virt_true_rejects_bare_metal" {
   ]
 }
 
-run "enable_smithdb_adds_only_smithdb" {
+# SmithDB is part of every install from 0.18: a default install plans it, on its
+# own node group with its EBS cache class and no Karpenter pools, writing and
+# serving reads, with no historical migration.
+run "default_install_smithdb_state" {
+  command = plan
+
+  assert {
+    condition     = length(module.smithdb) == 1 && output.enable_smithdb
+    error_message = "a default install did not plan SmithDB"
+  }
+  assert {
+    condition     = length(module.bastion) == 0
+    error_message = "a default install with SmithDB also planned the bastion"
+  }
+  assert {
+    condition     = length(kubernetes_storage_class_v1.smithdb_cache) == 1 && module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2
+    error_message = "SmithDB must have managed capacity and its own EBS cache class"
+  }
+  assert {
+    condition     = length(kubectl_manifest.smithdb_nodepool_instance_store) == 0 && length(kubectl_manifest.smithdb_nodepool_compute) == 0
+    error_message = "new SmithDB installations must not provision Karpenter pools"
+  }
+  assert {
+    condition     = output.smithdb_ingestion_enabled && output.smithdb_query_enabled && !output.smithdb_migration_enabled
+    error_message = "a default install must have SmithDB ingestion and query on and migration off"
+  }
+}
+
+# An install upgraded from 0.17 without SmithDB opts out with one variable.
+run "enable_smithdb_false_opts_out" {
+  command = plan
+
+  variables {
+    enable_smithdb = false
+  }
+
+  assert {
+    condition     = length(module.smithdb) == 0 && !contains(keys(module.eks.eks_managed_node_group_inputs), "smithdb") && length(kubernetes_storage_class_v1.smithdb_cache) == 0
+    error_message = "enable_smithdb = false still planned SmithDB, its node group or its cache class"
+  }
+  assert {
+    condition     = !output.smithdb_ingestion_enabled && !output.smithdb_query_enabled && !output.smithdb_migration_enabled
+    error_message = "enable_smithdb = false must report every SmithDB gate off"
+  }
+}
+
+run "smithdb_node_group_defaults_fit_the_small_tier" {
   command = plan
 
   variables {
@@ -376,12 +447,160 @@ run "enable_smithdb_adds_only_smithdb" {
   }
 
   assert {
-    condition     = length(module.smithdb) == 1
-    error_message = "enable_smithdb = true did not plan SmithDB"
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.4xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 5
+    )
+    error_message = "the SmithDB node group should default to m6a.4xlarge, minimum 2, maximum 5"
+  }
+}
+
+# Every sizing profile runs the SmithDB small tier, so the largest profile keeps the
+# default SmithDB nodes.
+run "smithdb_node_group_does_not_follow_the_sizing_profile" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+    sizing_profile = "production-large"
+  }
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.4xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 5
+    )
+    error_message = "sizing_profile must not change the SmithDB node type or counts"
+  }
+}
+
+run "smithdb_node_type_and_counts_are_plain_inputs" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    smithdb_node_instance_type = "m6a.16xlarge"
+    smithdb_node_min_count     = 3
+    smithdb_node_max_count     = 12
+  }
+
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.16xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 3 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 12
+    )
+    error_message = "the SmithDB node type and counts should reach the node group as set"
+  }
+}
+
+# The cache mode changes only the SmithDB node group and the cache values. The
+# network-disk default adds no node user data and reads no instance type.
+run "smithdb_cache_defaults_to_network_disk" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  assert {
+    condition = (
+      output.smithdb_cache_storage == "network-disk" &&
+      length(data.aws_ec2_instance_type.smithdb) == 0 &&
+      length(try(module.eks.eks_managed_node_group_inputs["smithdb"].cloudinit_pre_nodeadm, [])) == 0 &&
+      length(kubernetes_storage_class_v1.smithdb_cache) == 1
+    )
+    error_message = "the network-disk default must add no SmithDB node user data, read no instance type, and keep the gp3 StorageClass"
+  }
+}
+
+run "smithdb_local_ssd_joins_the_instance_store_as_raid0" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    smithdb_cache_storage      = "local-ssd"
+    smithdb_node_instance_type = "m6id.4xlarge"
+  }
+
+  override_data {
+    target = data.aws_ec2_instance_type.smithdb
+    values = { instance_storage_supported = true, total_instance_storage = 950 }
+  }
+
+  assert {
+    condition = (
+      output.smithdb_cache_storage == "local-ssd" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6id.4xlarge" &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].cloudinit_pre_nodeadm[0].content_type == "application/node.eks.aws" &&
+      strcontains(module.eks.eks_managed_node_group_inputs["smithdb"].cloudinit_pre_nodeadm[0].content, "strategy: RAID0")
+    )
+    error_message = "local-ssd must give the SmithDB node group a nodeadm NodeConfig that joins the instance store as RAID0"
   }
   assert {
-    condition     = length(module.bastion) == 0
-    error_message = "enable_smithdb = true also planned the bastion"
+    condition     = length(kubernetes_storage_class_v1.smithdb_cache) == 1 && length(try(module.eks.eks_managed_node_group_inputs["default"].cloudinit_pre_nodeadm, [])) == 0
+    error_message = "local-ssd must change only the SmithDB node group: the StorageClass stays and the LangSmith group gets no user data"
+  }
+}
+
+run "smithdb_local_ssd_rejects_a_type_without_instance_store" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    smithdb_cache_storage = "local-ssd"
+  }
+
+  override_data {
+    target = data.aws_ec2_instance_type.smithdb
+    values = { instance_storage_supported = false }
+  }
+
+  expect_failures = [data.aws_ec2_instance_type.smithdb]
+}
+
+run "smithdb_local_ssd_without_smithdb_reads_nothing" {
+  command = plan
+
+  variables {
+    enable_smithdb        = false
+    smithdb_cache_storage = "local-ssd"
+  }
+
+  assert {
+    condition     = length(data.aws_ec2_instance_type.smithdb) == 0 && output.smithdb_cache_storage == null
+    error_message = "with SmithDB off, local-ssd must not read an instance type or report a cache mode"
+  }
+}
+
+run "smithdb_transition_retains_both_old_pools_and_adds_managed_capacity" {
+  command = plan
+
+  variables {
+    enable_smithdb          = true
+    smithdb_transition_mode = true
+    smithdb_node_min_count  = 3
+    smithdb_node_max_count  = 7
+  }
+
+  assert {
+    condition = (
+      length(kubectl_manifest.smithdb_nodepool_instance_store) == 1 &&
+      length(kubectl_manifest.smithdb_nodepool_compute) == 1 &&
+      length(kubectl_manifest.smithdb_ec2nc_instance_store) == 1 &&
+      length(kubectl_manifest.smithdb_ec2nc_compute) == 1
+    )
+    error_message = "transition mode must preserve both old pools and their node classes"
+  }
+  assert {
+    condition = (
+      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 3 &&
+      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 7 &&
+      module.eks.eks_managed_node_group_inputs["default"].min_size == 3
+    )
+    error_message = "SmithDB capacity settings must reach its managed pool independently of LangSmith"
   }
 }
 
@@ -558,7 +777,8 @@ run "byo_custom_networking_uses_the_supplied_pod_subnets" {
 }
 
 # ── Data plane source switches ───────────────────────────────────────────────
-# in-cluster means the chart runs it, so Terraform must plan nothing.
+# PostgreSQL and Redis are always external from 0.18 (validation.tftest.hcl
+# rejects in-cluster), so each one is always planned.
 
 run "external_postgres_is_planned" {
   command = plan
@@ -573,19 +793,6 @@ run "external_postgres_is_planned" {
   }
 }
 
-run "in_cluster_postgres_plans_nothing" {
-  command = plan
-
-  variables {
-    postgres_source = "in-cluster"
-  }
-
-  assert {
-    condition     = length(module.postgres) == 0
-    error_message = "postgres_source = in-cluster still planned RDS"
-  }
-}
-
 run "external_redis_is_planned" {
   command = plan
 
@@ -596,19 +803,6 @@ run "external_redis_is_planned" {
   assert {
     condition     = length(module.redis) == 1
     error_message = "redis_source = external did not plan ElastiCache"
-  }
-}
-
-run "in_cluster_redis_plans_nothing" {
-  command = plan
-
-  variables {
-    redis_source = "in-cluster"
-  }
-
-  assert {
-    condition     = length(module.redis) == 0
-    error_message = "redis_source = in-cluster still planned ElastiCache"
   }
 }
 

@@ -176,6 +176,15 @@ _ask_int() {
   done
 }
 
+_ask_int_at_least() {
+  local minimum="$1"; shift
+  while true; do
+    _ask_int "$@"
+    (( 10#$_REPLY >= minimum )) && return
+    _red "  ERROR: enter at least $minimum."
+  done
+}
+
 _ask_required() {
   while true; do
     _ask "$@"
@@ -542,12 +551,12 @@ else
   fi
 fi
 
-NODE_INSTANCE="$(_existing "instance_types" "$([[ "$PROFILE" == "prod" ]] && echo "m5.4xlarge" || echo "m5.2xlarge")")"
+NODE_INSTANCE="$(_existing "instance_types" "m6a.2xlarge")"
 NODE_MIN="$(_existing "min_size" "$([[ "$PROFILE" == "prod" ]] && echo "3" || echo "2")")"
 NODE_MAX="$(_existing "max_size" "$([[ "$PROFILE" == "prod" ]] && echo "10" || echo "5")")"
 
 echo ""
-_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "Node group instance type")" "$NODE_INSTANCE"
+_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "LangSmith node group instance type")" "$NODE_INSTANCE"
 NODE_INSTANCE="$_REPLY"
 _ask_int "$(_choice_arg "min_size")" "$(_numbered_prompt "4.5" "Node group min size")" "$NODE_MIN"
 NODE_MIN="$_REPLY"
@@ -568,12 +577,13 @@ if [[ "$PROFILE" == "prod" ]]; then
   printf "  $(_dim "Production: external RDS + ElastiCache recommended.")\n"
 fi
 
-_pg_source_default=1; [[ "$_ex_pg" == "in-cluster" ]] && _pg_source_default=2
-_ask_choice "$(_choice_arg "postgres_source")" "$_pg_source_default" --recommended 1 "$(_numbered_prompt "5.1" "Where should PostgreSQL run?")" \
-  "Amazon RDS — external and managed by AWS" \
-  "In-cluster — runs as Kubernetes pods"
-PG_SOURCE="external"; [[ "$_CHOICE" == "2" ]] && PG_SOURCE="in-cluster"
-_confirm_storage_change "PostgreSQL" "$_ex_pg" "$PG_SOURCE"
+# PostgreSQL is always Amazon RDS from 0.18; SmithDB needs it outside the cluster.
+if [[ "$_ex_pg" == "in-cluster" ]]; then
+  _red "  ERROR: postgres_source = \"in-cluster\" was removed in 0.18."
+  printf "  Back up the database before you remove the line: the next apply points LangSmith\n"
+  printf "  at a new, empty RDS instance. See \"Move an in-cluster PostgreSQL to RDS\" in README.md.\n"
+  exit 1
+fi
 
 PG_INSTANCE="$(_existing "postgres_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "db.r6g.xlarge" || echo "db.t3.large")")"
 PG_STORAGE="$(_existing "postgres_storage_gb" "$([[ "$PROFILE" == "prod" ]] && echo "50" || echo "20")")"
@@ -590,26 +600,23 @@ if [[ "$UPDATE_MODE" == "true" ]]; then
   PG_SKIP_FINAL_SNAPSHOT="$(_existing "postgres_skip_final_snapshot" "$PG_SKIP_FINAL_SNAPSHOT")"
 fi
 
-if [[ "$PG_SOURCE" == "external" ]]; then
-  echo ""
-  _ask "$(_choice_arg "postgres_instance_type")" "$(_numbered_prompt "5.2" "RDS instance type")" "$PG_INSTANCE"; PG_INSTANCE="$_REPLY"
-  _ask_int "$(_choice_arg "postgres_storage_gb")" "$(_numbered_prompt "5.3" "RDS initial storage (GB)")" "$PG_STORAGE"; PG_STORAGE="$_REPLY"
-  _ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.4" "RDS max storage (GB)")" "$PG_MAX_STORAGE"; PG_MAX_STORAGE="$_REPLY"
+echo ""
+_ask "$(_choice_arg "postgres_instance_type")" "$(_numbered_prompt "5.1" "RDS PostgreSQL instance type")" "$PG_INSTANCE"; PG_INSTANCE="$_REPLY"
+_ask_int "$(_choice_arg "postgres_storage_gb")" "$(_numbered_prompt "5.2" "RDS initial storage (GB)")" "$PG_STORAGE"; PG_STORAGE="$_REPLY"
+_ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.3" "RDS max storage (GB)")" "$PG_MAX_STORAGE"; PG_MAX_STORAGE="$_REPLY"
+
+# Redis is always Amazon ElastiCache (OSS mode) from 0.18.
+if [[ "$_ex_redis" == "in-cluster" ]]; then
+  _red "  ERROR: redis_source = \"in-cluster\" was removed in 0.18."
+  printf "  Let the LangSmith queues drain before you remove the line: the next apply points\n"
+  printf "  LangSmith at a new, empty ElastiCache instance. See \"Move an in-cluster Redis to\n"
+  printf "  ElastiCache\" in README.md.\n"
+  exit 1
 fi
-
-_redis_source_default=1; [[ "$_ex_redis" == "in-cluster" ]] && _redis_source_default=2
-_ask_choice "$(_choice_arg "redis_source")" "$_redis_source_default" --recommended 1 "$(_numbered_prompt "5.5" "Where should Redis run?")" \
-  "Amazon ElastiCache — external and managed by AWS" \
-  "In-cluster — runs as Kubernetes pods"
-REDIS_SOURCE="external"; [[ "$_CHOICE" == "2" ]] && REDIS_SOURCE="in-cluster"
-_confirm_storage_change "Redis" "$_ex_redis" "$REDIS_SOURCE"
-
 REDIS_INSTANCE="$(_existing "redis_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "cache.m6g.xlarge" || echo "cache.m6g.large")")"
-if [[ "$REDIS_SOURCE" == "external" ]]; then
-  echo ""
-  _ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.6" "ElastiCache instance type")" "$REDIS_INSTANCE"
-  REDIS_INSTANCE="$_REPLY"
-fi
+echo ""
+_ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.4" "ElastiCache instance type")" "$REDIS_INSTANCE"
+REDIS_INSTANCE="$_REPLY"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. ClickHouse
@@ -631,12 +638,28 @@ _confirm_storage_change "ClickHouse" "$_ex_ch" "$CH_SOURCE"
 
 _section "7. SmithDB"
 
-_ex_smithdb=$(_existing "enable_smithdb" "false")
-_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
-_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
-_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
+# An existing install's SmithDB state as applied, read from the Terraform
+# outputs: its tfvars may leave a key to its default, and the defaults changed
+# in 0.18. Before a 0.18 apply there are no gate outputs, and an unset key keeps
+# 0.17's meaning, off. A new setup defaults to SmithDB on.
+_ex_smithdb="true"; _ex_smithdb_ingestion="false"; _ex_smithdb_migration="false"; _ex_smithdb_query="false"
+if [[ "$UPDATE_MODE" == "true" ]]; then
+  _ex_smithdb=$(_read_applied_flag "enable_smithdb" false)
+  _ex_smithdb_ingestion=$(_read_applied_flag "smithdb_ingestion_enabled" false)
+  _ex_smithdb_migration=$(_read_applied_flag "smithdb_migration_enabled" false)
+  _ex_smithdb_query=$(_read_applied_flag "smithdb_query_enabled" false)
+fi
 ENABLE_SMITHDB="false"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
+[[ "$SMITHDB_NODE_TYPE" == "null" ]] && SMITHDB_NODE_TYPE="m6a.4xlarge"
+SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
+SMITHDB_CACHE_STORAGE="$(_existing smithdb_cache_storage network-disk)"
+[[ "$SMITHDB_CACHE_STORAGE" == "null" ]] && SMITHDB_CACHE_STORAGE="network-disk"
+SMITHDB_NODE_MIN="$(_existing smithdb_node_min_count 2)"
+SMITHDB_NODE_MAX="$(_existing smithdb_node_max_count 5)"
+[[ "$SMITHDB_NODE_MAX" == "null" ]] && SMITHDB_NODE_MAX=5
+SMITHDB_NODE_DISK="$(_existing smithdb_node_root_volume_size_gb 100)"
 
 if [[ "$PROFILE" == "prod" ]]; then
   SMITHDB_DELETION_PROTECTION="true"
@@ -655,20 +678,33 @@ fi
 
 echo ""
 printf "  ${DIM}SmithDB is LangChain's purpose-built trace database for LangSmith.${RESET}\n"
-printf "  ${DIM}Enabling it adds:${RESET}\n"
+printf "  ${DIM}SmithDB is enabled by default. SmithDB adds:${RESET}\n"
 printf "  ${DIM}  - A dedicated RDS PostgreSQL metastore${RESET}\n"
-printf "  ${DIM}  - A dedicated S3 object-store bucket${RESET}\n"
-printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes ServiceAccount${RESET}\n"
-printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection${RESET}\n"
-printf "  ${DIM}  - Karpenter with two EC2 node pools: local NVMe storage and general compute${RESET}\n"
-printf "  ${DIM}Ingestion, migration, and query cutover stay disabled initially.${RESET}\n"
+printf "  ${DIM}  - A dedicated S3 bucket for object storage${RESET}\n"
+printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes service account${RESET}\n"
+printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection details${RESET}\n"
+printf "  ${DIM}  - A dedicated general-purpose managed node pool${RESET}\n"
+printf "  ${DIM}  - A SmithDB cache storage class (smithdb-cache) for per-pod gp3${RESET}\n"
+printf "  ${DIM}    EBS volumes, each configured with 7,000 IOPS and 1,000 MiB/s${RESET}\n"
+printf "  ${DIM}    of throughput${RESET}\n"
+printf "  ${DIM}Every sizing profile runs the SmithDB small tier, on m6a.4xlarge nodes by${RESET}\n"
+printf "  ${DIM}default. ../SMITHDB.md describes scaling up to the medium or large tier.${RESET}\n"
+printf "  ${DIM}A new install writes to and queries SmithDB from the start. An existing${RESET}\n"
+printf "  ${DIM}install that turns SmithDB on starts with ingestion, migration, and query${RESET}\n"
+printf "  ${DIM}off, because its traces are in ClickHouse; ../SMITHDB.md stages them.${RESET}\n"
 echo ""
 if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
   "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SMITHDB="true"
-  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
-  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
-  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
+  if [[ "$UPDATE_MODE" == "true" ]]; then
+    # Keep an existing install's gates: turning query on before its ClickHouse
+    # history is migrated would hide that history from the UI.
+    SMITHDB_INGESTION="$_ex_smithdb_ingestion"
+    SMITHDB_MIGRATION="$_ex_smithdb_migration"
+    SMITHDB_QUERY="$_ex_smithdb_query"
+  else
+    SMITHDB_INGESTION="true"; SMITHDB_QUERY="true"
+  fi
 fi
 if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" != "true" ]]; then
   echo ""
@@ -1051,6 +1087,13 @@ case "$((_CHOICE - _size_offset))" in
   4) SIZING="production-large" ;;
 esac
 
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  _ask_int_at_least 1 "$(_choice_arg smithdb_node_min_count)" "SmithDB minimum nodes" "$SMITHDB_NODE_MIN"; SMITHDB_NODE_MIN="$_REPLY"
+  (( SMITHDB_NODE_MAX > SMITHDB_NODE_MIN )) || SMITHDB_NODE_MAX=$((SMITHDB_NODE_MIN + 1))
+  _ask_int_at_least "$((SMITHDB_NODE_MIN + 1))" "$(_choice_arg smithdb_node_max_count)" "SmithDB maximum nodes (must exceed minimum)" "$SMITHDB_NODE_MAX"; SMITHDB_NODE_MAX="$_REPLY"
+  _ask_int_at_least 1 "$(_choice_arg smithdb_node_root_volume_size_gb)" "SmithDB boot disk size (GiB)" "$SMITHDB_NODE_DISK"; SMITHDB_NODE_DISK="$_REPLY"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 13. Add-on Features
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1108,15 +1151,12 @@ _select_feature_storage() {
   if [[ "$existing_enabled" == "true" && "$existing_external" == "true" ]]; then
     default=2
     current="external"
-  elif [[ "$existing_enabled" != "true" && "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
+  elif [[ "$existing_enabled" != "true" ]]; then
     default=2
   fi
 
-  local storage_choice_arg recommended=""
+  local storage_choice_arg recommended=2
   storage_choice_arg=$(_choice_arg "$storage_key")
-  if [[ "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
-    recommended=2
-  fi
   _ask_choice "$storage_choice_arg" "$default" --recommended "$recommended" "$(_numbered_prompt "$question_number" "$feature storage (Postgres and Redis):")" \
     "In-cluster — dedicated pods with persistent volumes" \
     "External — use the same RDS and ElastiCache as LangSmith; $feature gets a separate Postgres database and Redis index"
@@ -1126,11 +1166,6 @@ _select_feature_storage() {
   if [[ "$UPDATE_MODE" == "true" && "$existing_enabled" == "true" && "$selected" != "$current" ]]; then
     _red "  ERROR: Changing $feature storage requires a separate data migration."
     printf "  Keep the current %s storage here and migrate it separately.\n" "$current"
-    exit 1
-  fi
-  if [[ "$selected" == "external" && ( "$PG_SOURCE" != "external" || "$REDIS_SOURCE" != "external" ) ]]; then
-    _red "  ERROR: External $feature storage requires external Postgres and Redis."
-    printf "  Re-run QuickStart and choose both external services in Section 5.\n"
     exit 1
   fi
 
@@ -1251,13 +1286,11 @@ _show_summary() {
   _summary_row "Node maximum:" "$NODE_MAX"
 
   _summary_section "5. Backend Services"
-  _summary_row "Postgres:" "$PG_SOURCE"
-  if [[ "$PG_SOURCE" == "external" ]]; then
-    _summary_row "RDS instance type:" "$PG_INSTANCE"
-    _summary_row "RDS storage:" "${PG_STORAGE}-${PG_MAX_STORAGE} GB"
-  fi
-  _summary_row "Redis:" "$REDIS_SOURCE"
-  [[ "$REDIS_SOURCE" == "external" ]] && _summary_row "ElastiCache instance type:" "$REDIS_INSTANCE"
+  _summary_row "Postgres:" "external (RDS)"
+  _summary_row "RDS instance type:" "$PG_INSTANCE"
+  _summary_row "RDS storage:" "${PG_STORAGE}-${PG_MAX_STORAGE} GB"
+  _summary_row "Redis:" "external (ElastiCache)"
+  _summary_row "ElastiCache instance type:" "$REDIS_INSTANCE"
 
   _summary_section "6. ClickHouse"
   _summary_row "ClickHouse:" "$CH_SOURCE"
@@ -1265,6 +1298,8 @@ _show_summary() {
   _summary_section "7. SmithDB"
   _summary_bool_row "SmithDB:" "$ENABLE_SMITHDB"
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+    _summary_row "  Node pool:" "${SMITHDB_NODE_TYPE}  min=$SMITHDB_NODE_MIN  max=$SMITHDB_NODE_MAX"
+    _summary_row "  Cache:" "$SMITHDB_CACHE_STORAGE"
     _summary_bool_row "  Ingestion:" "$SMITHDB_INGESTION"
     _summary_bool_row "  Migration:" "$SMITHDB_MIGRATION"
     _summary_bool_row "  Query:" "$SMITHDB_QUERY"
@@ -1404,29 +1439,18 @@ create_gp3_storage_class = true
 #------------------------------------------------------------------------------
 # Backend Services
 #------------------------------------------------------------------------------
-postgres_source = "${PG_SOURCE}"
-redis_source    = "${REDIS_SOURCE}"
-TFVARS
-
-if [[ "$PG_SOURCE" == "external" ]]; then
-  cat >> "$OUTPUT" << TFVARS
-
 # PostgreSQL (RDS)
 postgres_instance_type       = "${PG_INSTANCE}"
 postgres_storage_gb          = ${PG_STORAGE}
 postgres_max_storage_gb      = ${PG_MAX_STORAGE}
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
 postgres_skip_final_snapshot = ${PG_SKIP_FINAL_SNAPSHOT}
-TFVARS
-fi
-
-if [[ "$REDIS_SOURCE" == "external" ]]; then
-  cat >> "$OUTPUT" << TFVARS
 
 # Redis (ElastiCache)
 redis_instance_type = "${REDIS_INSTANCE}"
 TFVARS
-fi
+
+SMITHDB_NODE_TYPE_HCL="\"${SMITHDB_NODE_TYPE}\""
 
 cat >> "$OUTPUT" << TFVARS
 
@@ -1439,6 +1463,12 @@ clickhouse_source = "${CH_SOURCE}"
 # SmithDB
 #------------------------------------------------------------------------------
 enable_smithdb                           = ${ENABLE_SMITHDB}
+smithdb_transition_mode                  = ${SMITHDB_TRANSITION}
+smithdb_node_instance_type               = ${SMITHDB_NODE_TYPE_HCL}
+smithdb_cache_storage                    = "${SMITHDB_CACHE_STORAGE}"
+smithdb_node_min_count                   = ${SMITHDB_NODE_MIN}
+smithdb_node_max_count                   = ${SMITHDB_NODE_MAX}
+smithdb_node_root_volume_size_gb          = ${SMITHDB_NODE_DISK}
 smithdb_ingestion_enabled                = ${SMITHDB_INGESTION}
 smithdb_migration_enabled                = ${SMITHDB_MIGRATION}
 smithdb_query_enabled                    = ${SMITHDB_QUERY}
