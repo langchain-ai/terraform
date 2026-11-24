@@ -115,6 +115,24 @@ _tf_out() {
   printf '%s' "$val"
 }
 
+# ── external ClickHouse: which signal makes the Secret Terraform's ──────────
+# Prints the detail init-values.sh shows beside its verdict: the
+# clickhouse_secret_name output when set (what the last apply did), else the
+# clickhouse_host read from terraform.tfvars (what the next apply will do).
+# Exactly one of the two, never both, which is what a bare ${x:+a}${x:-b}
+# got wrong. Returns 1 when neither is set, so the caller prompts instead.
+#   _clickhouse_owner_detail <secret_name_output> <clickhouse_host_tfvar>
+_clickhouse_owner_detail() {
+  local secret="$1" host="$2"
+  if [[ -n "$secret" ]]; then
+    printf 'clickhouse_secret_name output = %s' "$secret"
+  elif [[ -n "$host" ]]; then
+    printf 'clickhouse_host = %s in terraform.tfvars' "$host"
+  else
+    return 1
+  fi
+}
+
 # ── Azure cloud ──────────────────────────────────────────────────────────────
 # The cloud this deployment targets. Once applied, the azure_environment output
 # is the value Terraform actually used, whichever of terraform.tfvars,
@@ -281,7 +299,7 @@ _validate_license_key() {
 # enable_sso_oidc is the exception: it is baked into the generated auth block
 # (basicAuth off, oauth on), so a flip after init-values would deploy the old
 # login path.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source clickhouse_cluster langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
 # The chart line deploy.sh installs when neither CHART_VERSION in the
 # environment nor langsmith_helm_chart_version in terraform.tfvars names one:
@@ -537,13 +555,73 @@ _deployment_templates_block() {
 EOF
 }
 
+# The clickhouse_cluster Terraform resolved: the clickhouse_cluster output when
+# the last apply set one, which reflects *.auto.tfvars and
+# TF_VAR_clickhouse_cluster as well as terraform.tfvars; else terraform.tfvars.
+# The fallback covers a run before the first apply, state from a module version
+# without the output, and a name added to terraform.tfvars since the last apply
+# (a null output must not drop it, or the first migration creates standalone
+# tables). Returns 1 when neither source names a cluster.
+_clickhouse_cluster_resolved() {
+  local raw
+  if raw=$(terraform -chdir="$INFRA_DIR" output -json clickhouse_cluster 2>/dev/null); then
+    raw="${raw//$'\n'/}"
+    if [[ "$raw" =~ ^\"([A-Za-z0-9_.-]+)\"$ ]]; then
+      printf '%s' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  fi
+  _parse_tfvar clickhouse_cluster
+}
+
+# The clickhouse: block init-values.sh writes. External: the pointer to the
+# langsmith-clickhouse Secret (the chart reads every connection field from it),
+# plus cluster: when Terraform resolved a clickhouse_cluster. clickhouse_cluster
+# is a value, not a Secret key: the chart passes it to the pods as
+# CLICKHOUSE_CLUSTER and the first migration creates tables ON CLUSTER. It comes
+# from the clickhouse_cluster output, so a name set in *.auto.tfvars or
+# TF_VAR_clickhouse_cluster reaches the chart (terraform.tfvars before the first
+# apply). Anything else: a comment, and the chart runs its own ClickHouse.
+_clickhouse_values_block() {
+  local cluster
+  if [[ "$1" == "external" ]]; then
+    printf '%s' 'clickhouse:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-clickhouse"'
+    cluster=$(_clickhouse_cluster_resolved) || cluster=""
+    [[ -z "$cluster" ]] || printf '\n    cluster: "%s"' "$cluster"
+  else
+    printf '%s' '# clickhouse: in-cluster (managed by Helm chart)'
+  fi
+}
+
+# One stamped input as init-values.sh resolves it: the tfvars value, except
+# clickhouse_cluster, which comes from Terraform (_clickhouse_cluster_resolved).
+_values_input_value() {
+  if [[ "$1" == "clickhouse_cluster" ]]; then
+    _clickhouse_cluster_resolved
+  else
+    _parse_tfvar "$1"
+  fi
+}
+
+# Where _values_input_value reads a key, for the drift message.
+_values_input_source() {
+  if [[ "$1" == "clickhouse_cluster" ]]; then
+    printf 'Terraform'
+  else
+    printf 'terraform.tfvars'
+  fi
+}
+
 # Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
 # leaves it empty when the key is absent — never the default a caller substitutes,
 # so both sides of the comparison are reading the same thing.
 _values_input_stamp() {
   local key val
   for key in $_VALUES_INPUT_KEYS; do
-    val=$(_parse_tfvar "$key") || val=""
+    val=$(_values_input_value "$key") || val=""
     printf '#   %s = %s\n' "$key" "$val"
   done
 }
@@ -576,14 +654,14 @@ _values_stamp_drift() {
   for key in $_VALUES_INPUT_KEYS; do
     if was=$(_read_values_stamp "$file" "$key"); then
       stamped="true"
-      now=$(_parse_tfvar "$key") || now=""
+      now=$(_values_input_value "$key") || now=""
       [[ "$was" == "$now" ]] && continue
-      printf "%s: generated with '%s', terraform.tfvars now says '%s'\n" "$key" "$was" "$now"
+      printf "%s: generated with '%s', %s now says '%s'\n" "$key" "$was" "$(_values_input_source "$key")" "$now"
       drift="true"
     else
-      now=$(_parse_tfvar "$key") || now=""
+      now=$(_values_input_value "$key") || now=""
       [[ -n "$now" ]] || continue
-      printf "%s: not stamped (the file predates this key), terraform.tfvars now says '%s'\n" "$key" "$now"
+      printf "%s: not stamped (the file predates this key), %s now says '%s'\n" "$key" "$(_values_input_source "$key")" "$now"
       drift="true"
     fi
   done

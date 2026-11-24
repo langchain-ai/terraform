@@ -24,6 +24,13 @@ locals {
     "compute.addresses.setLabels",
     "compute.addresses.use",
     "compute.addresses.useInternal",
+    # The optional deny-by-default egress firewall: a global network firewall
+    # policy, its rules (policy updates) and its association with the VPC.
+    "compute.firewallPolicies.create",
+    "compute.firewallPolicies.delete",
+    "compute.firewallPolicies.get",
+    "compute.firewallPolicies.update",
+    "compute.firewallPolicies.use",
     "compute.forwardingRules.create",
     "compute.forwardingRules.delete",
     "compute.forwardingRules.get",
@@ -48,11 +55,17 @@ locals {
     "compute.networks.delete",
     "compute.networks.get",
     "compute.networks.removePeering",
+    "compute.networks.setFirewallPolicy",
     "compute.networks.update",
     "compute.networks.updatePeering",
     "compute.networks.updatePolicy",
     "compute.networks.use",
     "compute.regionOperations.get",
+    # Routes that keep Google API traffic on private.googleapis.com when the
+    # data plane VPC imports a default route, for example from a peered hub.
+    "compute.routes.create",
+    "compute.routes.delete",
+    "compute.routes.get",
     "compute.routers.create",
     "compute.routers.delete",
     "compute.routers.get",
@@ -150,9 +163,20 @@ locals {
     "logging.sinks.update",
   ]
 
+  # With regional_container_logs, each data plane also excludes its cluster's
+  # container logs from the _Default sink, so the global _Default bucket does
+  # not store them.
+  regional_container_logs_provisioner_permissions = [
+    "logging.exclusions.create",
+    "logging.exclusions.delete",
+    "logging.exclusions.get",
+    "logging.exclusions.update",
+  ]
+
   all_provisioner_permissions = concat(
     local.base_provisioner_permissions,
     var.deployment_observability ? local.observability_provisioner_permissions : [],
+    var.regional_container_logs ? local.regional_container_logs_provisioner_permissions : [],
   )
 
   # With byo_iam, this module creates the data plane service accounts, so the
@@ -182,7 +206,9 @@ locals {
   # provisioner has no database permissions: the Postgres setup Job creates
   # the databases over SQL.
   #
-  # Creating a subnet or Cloud Router checks compute.networks.updatePolicy on
+  # Routes were checked the same way on 2026-11-13.
+  #
+  # Creating a subnet, route or Cloud Router checks compute.networks.updatePolicy on
   # its network, and creating a global address checks compute.networks.use, so
   # the network fence also keeps the provisioner from adding them to a network
   # that is not LangSmith's. The use permissions are checked against the
@@ -237,6 +263,7 @@ locals {
         "compute.networks.create",
         "compute.networks.delete",
         "compute.networks.removePeering",
+        "compute.networks.setFirewallPolicy",
         "compute.networks.update",
         "compute.networks.updatePeering",
         "compute.networks.updatePolicy",
@@ -253,6 +280,22 @@ locals {
         "compute.subnetworks.update",
         "compute.subnetworks.use",
       ]
+    }
+    # Creating a route also checks compute.networks.updatePolicy on its
+    # network, so the network fence keeps routes out of other networks too.
+    Routes = {
+      title       = "routes"
+      expression  = "resource.name.extract(\"/routes/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["compute.routes.create", "compute.routes.delete"]
+    }
+    # Global network firewall policies (the egress firewall). Their rules are
+    # policy updates, and associating one with a network checks use on the
+    # policy and compute.networks.setFirewallPolicy on the network, which the
+    # network fence covers.
+    FirewallPolicies = {
+      title       = "firewall policies"
+      expression  = "resource.name.extract(\"/firewallPolicies/{name}\").startsWith(\"langsmith-\")"
+      permissions = ["compute.firewallPolicies.create", "compute.firewallPolicies.delete", "compute.firewallPolicies.update", "compute.firewallPolicies.use"]
     }
     # Cloud Routers, and the Cloud NAT configured on them.
     Routers = {
@@ -341,15 +384,18 @@ locals {
     # The app logs in to Cloud SQL as its IAM database user.
     "roles/cloudsql.instanceUser",
     "roles/container.defaultNodeServiceAccount",
+    # The app reads its Cloud SQL and Memorystore metrics from Cloud Monitoring
+    # for LangSmith's health alerts, and, with deployment observability,
+    # deployment metrics through Managed Prometheus.
+    "roles/monitoring.viewer",
     "roles/redis.dbConnectionUser",
     "roles/secretmanager.secretAccessor",
   ]
 
   # The app reads its data plane's log bucket through one log view (an IAM
-  # condition on the grant), and deployment metrics through Managed Prometheus.
+  # condition on the grant).
   observability_granted_roles = [
     "roles/logging.viewAccessor",
-    "roles/monitoring.viewer",
   ]
 
   granted_roles = concat(
@@ -369,13 +415,14 @@ locals {
     "dns.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "monitoring.googleapis.com",
     "networkconnectivity.googleapis.com",
     "redis.googleapis.com",
     "secretmanager.googleapis.com",
     "servicedirectory.googleapis.com",
     "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
-  ], var.deployment_observability ? ["logging.googleapis.com", "monitoring.googleapis.com"] : []))
+  ], var.deployment_observability ? ["logging.googleapis.com"] : []))
 }
 
 resource "google_project_service" "apis" {
@@ -629,11 +676,11 @@ resource "google_project_iam_member" "crossplane_cluster_connect" {
 # ---------------------------------------------------------------------------
 
 locals {
-  byo_iam_service_accounts = var.byo_iam ? {
+  byo_iam_base_service_accounts = var.byo_iam ? {
     "langsmith-workload" = {
       display_name = "LangSmith workload"
       description  = "LangSmith application workloads in the data plane GKE clusters"
-      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/redis.dbConnectionUser"]
+      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser", "roles/monitoring.viewer", "roles/redis.dbConnectionUser"]
       act_as       = false
     }
     # Secret Manager access is the conditional grant below.
@@ -672,6 +719,32 @@ locals {
       act_as       = true
     }
   } : {}
+
+  # LangSmith creates each data plane's Artifact Registry repository and
+  # grants this account roles/artifactregistry.writer on that repository only.
+  byo_iam_deployment_builds_service_account = var.byo_iam && var.deployment_builds ? {
+    "langsmith-deployment-builds" = {
+      display_name = "LangSmith deployment builds"
+      description  = "In-cluster deployment build Jobs in the data plane GKE clusters"
+      roles        = []
+      act_as       = false
+    }
+  } : {}
+
+  byo_iam_scale_to_zero_service_account = var.byo_iam && var.scale_to_zero ? {
+    "langsmith-cell-operator" = {
+      display_name = "LangSmith cell operator"
+      description  = "The scale-to-zero cell's operator in the data plane GKE clusters"
+      roles        = ["roles/cloudsql.client", "roles/cloudsql.instanceUser"]
+      act_as       = false
+    }
+  } : {}
+
+  byo_iam_service_accounts = merge(
+    local.byo_iam_base_service_accounts,
+    local.byo_iam_deployment_builds_service_account,
+    local.byo_iam_scale_to_zero_service_account,
+  )
 
   # Keyed "<account ID>/<role>".
   byo_iam_project_roles = merge([
@@ -779,6 +852,20 @@ resource "google_project_iam_member" "byo_iam_external_secrets" {
     title       = "langsmith-data-plane-secrets"
     description = "LangSmith data plane secrets"
     expression  = "resource.name.extract(\"/secrets/{name}/\").startsWith(\"ls-\")"
+  }
+}
+
+resource "google_project_iam_member" "byo_iam_dedicated_deployments" {
+  count = var.byo_iam && var.dedicated_deployments ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/cloudsql.admin"
+  member  = "serviceAccount:${google_service_account.byo_iam["langsmith-workload"].email}"
+
+  condition {
+    title       = "langsmith-dedicated-deployment-instances"
+    description = "Cloud SQL instances of LangSmith dedicated deployments"
+    expression  = "resource.name.extract(\"/instances/{name}\").startsWith(\"lg-\")"
   }
 }
 

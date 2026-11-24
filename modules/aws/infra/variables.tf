@@ -681,7 +681,7 @@ variable "create_waf" {
 #------------------------------------------------------------------------------
 variable "s3_ttl_enabled" {
   type        = bool
-  description = "Enable S3 lifecycle rules to automatically expire trace blobs. Mirrors Azure Blob TTL pattern."
+  description = "Enable S3 lifecycle rules to automatically expire trace blobs (ttl_s/ and ttl_l/) and the raw values kept for redaction rules (ttl_1d/). Mirrors Azure Blob TTL pattern. When false, the module creates no lifecycle configuration: you manage all lifecycle rules yourself, including a 1-day expiry on ttl_1d/."
   default     = true
 }
 
