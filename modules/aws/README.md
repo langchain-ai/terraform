@@ -525,6 +525,55 @@ The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmi
 
 ---
 
+## LLM Gateway
+
+`enable_llm_gateway = true` deploys the chart's `agentGateway`, the
+[LLM Gateway](https://docs.langchain.com/langsmith/llm-gateway) (beta; on self-hosted, chart 0.17 only). It lets one
+LangSmith API key call models across the providers an organization configures, traces every call, and applies spend and
+rate policies centrally. It adds one Deployment and a `/gateway` path on the LangSmith hostname:
+
+| Client format | Base URL |
+|---|---|
+| OpenAI Chat Completions, Responses | `https://<langsmith host>/gateway/v1` |
+| Anthropic Messages | `https://<langsmith host>/gateway` |
+
+```hcl
+# infra/terraform.tfvars
+enable_llm_gateway           = true
+enable_gateway_pii_redaction = false  # Presidio PII redaction; requires enable_llm_gateway
+```
+
+To deploy it:
+
+1. With Envoy Gateway as the routing mode (the default), run `make apply`. It adds the `/gateway` path to the streams
+   route; without it, model calls longer than 15 s fail. Skip this step with Istio, NGINX, or classic ALB Ingress.
+2. Run `make init-values`.
+3. Run `make deploy`.
+
+After the deploy, an organization admin turns the gateway on for workspaces, adds provider secrets, and grants access, as
+in [Admin setup](https://docs.langchain.com/langsmith/llm-gateway-admin-setup).
+
+- **IRSA.** `init-values.sh` writes `langsmith-values-llm-gateway.yaml` with the LangSmith IRSA role on the gateway's
+  service account. The role already trusts every service account in the namespace, so the gateway needs no IAM change.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway` for long model calls. In front of it:
+  - Envoy Gateway: Terraform adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute, which removes Envoy's 15 s
+    request timeout on that path. Terraform creates the route only when `langsmith_domain` is set. Without a domain,
+    model calls longer than 15 s fail, so set `langsmith_domain` and run `make apply`.
+  - Istio: no request timeout.
+  - NGINX: `init-values.sh` sets 3600 s read and send timeouts.
+  - Classic ALB Ingress: `init-values.sh` sets the idle timeout of the ALB that the AWS Load Balancer Controller creates
+    to 900 s. The setting applies to every path on that ALB.
+
+  In every mode except classic ALB Ingress, the Terraform-managed ALB idles at 3600 s.
+- **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer (chart `presidioAnalyzer`, its own
+  `langsmith-values-gateway-pii.yaml`) and turns redaction on for new organizations. It requires
+  `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone. Presidio pulls
+  `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage.tag`). On a cluster without
+  egress to Microsoft's registry, mirror that image and set `images.presidioAnalyzerImage.repository` to the mirror in
+  `helm/values/langsmith-values.yaml`, which `init-values.sh` never overwrites.
+
+---
+
 ## Private Cluster with Bastion Host
 
 For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. A bastion host provides the access point.
@@ -781,6 +830,7 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
    - `enable_insights = true` → copies `langsmith-values-insights.yaml`
    - `enable_polly = true` → copies `langsmith-values-polly.yaml`
    - `enable_engine = true` → copies `langsmith-values-engine.yaml`, and writes the Engine IRSA role annotation into the overrides file
+   - `enable_llm_gateway = true` → writes `langsmith-values-llm-gateway.yaml`, and `langsmith-values-gateway-pii.yaml` with `enable_gateway_pii_redaction = true` (see [LLM Gateway](#llm-gateway))
 5. Copies the appropriate sizing file if `sizing_profile` is set
 
 Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
@@ -812,6 +862,8 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 -f langsmith-values-fleet.yaml                (enable_fleet = true)
 -f langsmith-values-standalone-polly.yaml     (enable_standalone_polly = true)
 -f langsmith-values-standalone-insights.yaml  (enable_standalone_insights = true)
+-f langsmith-values-llm-gateway.yaml          (enable_llm_gateway = true)
+-f langsmith-values-gateway-pii.yaml          (enable_gateway_pii_redaction = true)
 -f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default)
 -f langsmith-values-smithdb.yaml              (enable_smithdb = true)
 -f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
@@ -1157,6 +1209,8 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
+| `enable_llm_gateway` | `false` | no | Enable the LLM Gateway (chart `agentGateway`, beta, chart 0.17). With Envoy Gateway, adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute. See [LLM Gateway](#llm-gateway) |
+| `enable_gateway_pii_redaction` | `false` | no | Add Presidio PII redaction for gateway traffic. Requires `enable_llm_gateway` |
 | `enable_smithdb` | `false` | no | Provision SmithDB v17 dependencies: dedicated/BYO PostgreSQL, dedicated S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |

@@ -406,6 +406,18 @@ redis_instance_type = "cache.m6g.xlarge"
 # engine_intelligence_base_url = "https://beacon.aws.langchain.com/intelligence"
 
 #------------------------------------------------------------------------------
+# LLM GATEWAY (chart 0.17, beta): see ../README.md#llm-gateway
+#------------------------------------------------------------------------------
+# One LangSmith API key for models across providers, with tracing and spend and
+# rate policies. Clients call https://<host>/gateway/v1 (OpenAI formats) or
+# https://<host>/gateway (Anthropic). With Envoy Gateway, Terraform adds /gateway
+# to the langsmith-fleet-streams route, so run make apply before make deploy.
+# enable_llm_gateway = true
+#
+# Presidio PII redaction for gateway traffic. Requires enable_llm_gateway.
+# enable_gateway_pii_redaction = true
+
+#------------------------------------------------------------------------------
 # CLICKHOUSE
 #------------------------------------------------------------------------------
 # Controls where ClickHouse runs. ClickHouse is the analytics database for

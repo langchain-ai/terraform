@@ -16,9 +16,11 @@
 #   7. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
 #   8. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
 #   9. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
-#  10. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
-#  11. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
-#  12. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
+#  10. langsmith-values-llm-gateway.yaml    : LLM Gateway (if enable_llm_gateway)
+#  11. langsmith-values-gateway-pii.yaml    : gateway PII redaction (if enable_gateway_pii_redaction)
+#  12. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
+#  13. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#  14. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -370,6 +372,8 @@ _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_smithdb=false
+_enable_llm_gateway=false
+_enable_gateway_pii_redaction=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
@@ -378,6 +382,8 @@ _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
 _tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
+_tfvar_is_true "enable_llm_gateway"   && _enable_llm_gateway=true
+_tfvar_is_true "enable_gateway_pii_redaction" && _enable_gateway_pii_redaction=true
 
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
 if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
@@ -475,6 +481,8 @@ _addon_gate=(
   "fleet:fleet:$_enable_fleet"
   "standalone-polly:standalone_polly:$_enable_standalone_polly"
   "standalone-insights:standalone_insights:$_enable_standalone_insights"
+  "llm-gateway:llm_gateway:$_enable_llm_gateway"
+  "gateway-pii:gateway_pii_redaction:$_enable_gateway_pii_redaction"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
