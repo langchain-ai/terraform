@@ -47,7 +47,10 @@ locals {
   services = ["platformBackend", "ingestQueue", "queue", "playground", "aceBackend"]
 
   langsmith_values = merge(
-    { for c in local.services : c => { deployment = jsondecode(contains(keys(local.k8s), c) ? jsonencode({ resources = local.k8s[c] }) : jsonencode({ replicas = 0 })) } },
+    # One replica each, said here: the chart's defaults are 3 platform-backends, 3 ingest-queues and 2
+    # backends, which rendered three times the pods the plan sized and fitted (found rendering 0.18.2
+    # with Lite's values, 2026-11-24).
+    { for c in local.services : c => { deployment = jsondecode(contains(keys(local.k8s), c) ? jsonencode({ replicas = 1, resources = local.k8s[c] }) : jsonencode({ replicas = 0 })) } },
     {
       commonLabels = local.instance_label
       config = {
@@ -75,11 +78,11 @@ locals {
       backend = {
         # The chart's own CI smoke test: a pod nobody reads here.
         e2eTest    = { enabled = false }
-        deployment = { resources = local.k8s.backend }
+        deployment = { replicas = 1, resources = local.k8s.backend }
       }
       frontend = {
         maxBodySize = "${var.max_payload_mb}M"
-        deployment  = { resources = local.k8s.frontend }
+        deployment  = { replicas = 1, resources = local.k8s.frontend }
       }
       postgres = { external = { enabled = true, existingSecretName = "langsmith-postgres" } }
       redis    = { external = { enabled = true, existingSecretName = "langsmith-redis" } }
@@ -197,7 +200,9 @@ locals {
     # address the box has.
     "prometheus-node-exporter" = { resources = try(local.k8s["node-exporter"], null), hostNetwork = false }
     server = {
-      retention = "${var.prometheus_retention_days}d"
+      # Without the chart's web.enable-lifecycle: it let any pod that reached Prometheus shut it down.
+      extraFlags = []
+      retention  = "${var.prometheus_retention_days}d"
       # And by size: a volume is not a quota, so metrics could otherwise fill the disk.
       retentionSize    = "${floor(local.volumes.prometheus * 0.8)}GB"
       resources        = try(local.k8s.prometheus, null)
@@ -231,87 +236,129 @@ locals {
   }
 }
 
-# Grafana: the chart's dashboard and three community dashboards, and Lite's own capacity dashboard with an
-# alert rule on every bound the plan sized (SIZING.md, each store). A rule fires at 80% of its bound and
-# shows in Grafana's alert list; where it is sent is the operator's to set in Grafana.
+# Grafana: the chart's own dashboard (every SmithDB and LangSmith metric, in depth), three community
+# dashboards, and Lite's health dashboard with an alert rule on every signal in health.yaml: SmithDB's
+# recommended alerts and the bounds the plan sized. A rule fires at its critical level and shows in
+# Grafana's alert list; where it is sent is the operator's to set in Grafana.
 locals {
-  ns_regex = join("|", [local.ns.langsmith, local.ns.data, local.ns.observe])
+  health = yamldecode(file("${path.module}/health.yaml"))
 
-  # Each bound: what is used over what it may use, as one PromQL expression per row.
-  # The data disk's row only when the data has a disk of its own; otherwise the system disk's row is it.
-  bounds = merge(local.data_mount == "/" ? {} : {
-    data_disk = {
-      title = "Data disk used"
-      expr  = "1 - node_filesystem_avail_bytes{mountpoint=\"${local.data_mount}\"} / node_filesystem_size_bytes{mountpoint=\"${local.data_mount}\"}"
-    }
-    }, {
-    system_disk = {
-      title = "System disk used"
-      expr  = "1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}"
-    }
-    redis_memory = {
-      title = "Redis memory of maxmemory"
-      expr  = "max(redis_memory_used_bytes) / max(redis_memory_max_bytes)"
-    }
-    postgres_connections = {
-      title = "Postgres connections of max_connections"
-      expr  = "sum(pg_stat_activity_count) / max(pg_settings_max_connections)"
-    }
-    pod_memory = {
-      title = "Pod memory of its limit (the highest pod)"
-      expr  = "max(max by (pod) (container_memory_working_set_bytes{namespace=~\"${local.ns_regex}\",container!=\"\"}) / max by (pod) (kube_pod_container_resource_limits{namespace=~\"${local.ns_regex}\",resource=\"memory\"}))"
-    }
-  })
+  # Each signal twice: for its alert, on this install's namespaces; for the dashboard, on the namespaces
+  # its picker selects (this install's by default), so one Grafana can show many installs. The data disk's
+  # only when the data has a disk of its own.
+  dash_ns = { "{ns}|{data}" = "(${"$"}{namespace:regex})(-data)?", "{data}" = "(${"$"}{namespace:regex})-data", "{ns}" = "${"$"}{namespace:regex}" }
+  signals = [for sig in local.health.signals : merge(sig, {
+    expr      = replace(replace(replace(sig.expr, "{ns}", local.ns.langsmith), "{data}", local.ns.data), "{mount}", local.data_mount)
+    dash_expr = replace(replace(replace(replace(sig.expr, "{ns}|{data}", local.dash_ns["{ns}|{data}"]), "{data}", local.dash_ns["{data}"]), "{ns}", local.dash_ns["{ns}"]), "{mount}", local.data_mount)
+    guard     = try(replace(sig.guard, "{ns}", local.ns.langsmith), null)
+    warn      = try(sig.warn, null)
+    crit      = try(sig.crit, null)
+  }) if try(sig.when, "") != "data_disk" || local.data_mount != "/"]
+  alerting_signals = [for sig in local.signals : sig if sig.crit != null]
 
-  capacity_dashboard = {
-    title       = "Capacity"
-    uid         = "lite-capacity"
-    tags        = ["langsmith-lite"]
-    timezone    = "utc"
-    refresh     = "1m"
-    time        = { from = "now-24h", to = "now" }
-    annotations = { list = [] }
-    panels = concat(
-      [for i, k in keys(local.bounds) : {
-        id          = i + 1
-        type        = "timeseries"
-        title       = local.bounds[k].title
-        datasource  = { type = "prometheus", uid = "prometheus" }
-        gridPos     = { x = (i % 2) * 12, y = floor(i / 2) * 8, w = 12, h = 8 }
-        targets     = [{ refId = "A", expr = local.bounds[k].expr }]
-        fieldConfig = { defaults = { unit = "percentunit", min = 0, max = 1, thresholds = { mode = "absolute", steps = [{ color = "green", value = null }, { color = "orange", value = 0.8 }, { color = "red", value = 0.9 }] } }, overrides = [] }
-      }],
-      [{
-        id          = length(local.bounds) + 1
-        type        = "timeseries"
-        title       = "CPU throttled, by pod"
-        datasource  = { type = "prometheus", uid = "prometheus" }
-        gridPos     = { x = 0, y = ceil(length(local.bounds) / 2) * 8, w = 24, h = 8 }
-        targets     = [{ refId = "A", expr = "sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=~\"${local.ns_regex}\"}[5m])) / sum by (pod) (rate(container_cpu_cfs_periods_total{namespace=~\"${local.ns_regex}\"}[5m]))", legendFormat = "{{pod}}" }]
-        fieldConfig = { defaults = { unit = "percentunit", min = 0 }, overrides = [] }
-      }],
-    )
-    schemaVersion = 39
+  datasource = { name = "prometheus" }
+  # Green below the warning level, orange to the critical, red above it.
+  steps = { for sig in local.signals : sig.id => concat(
+    [{ color = "green", value = null }],
+    sig.warn == null ? [] : [{ color = "orange", value = sig.warn }],
+    sig.crit == null ? [] : [{ color = "red", value = sig.crit }],
+  ) }
+
+  query = { for sig in local.signals : sig.id => { kind = "QueryGroup", spec = { transformations = [], queryOptions = {}, queries = [{ kind = "PanelQuery", spec = {
+    refId = "A", hidden = false
+    query = { kind = "DataQuery", group = "prometheus", version = "v0", datasource = local.datasource, spec = { expr = sig.dash_expr, legendFormat = "__auto" } }
+  } }] } } }
+
+  # One tile a signal on Red flags, coloured by its levels; one graph a signal on its tab, its levels as lines.
+  health_elements = merge(
+    { intro = { kind = "Panel", spec = {
+      id = 1, title = "", description = "", links = [], transparent = true, data = { kind = "QueryGroup", spec = { queries = [], transformations = [], queryOptions = {} } }
+      vizConfig = { kind = "VizConfig", group = "text", version = "", spec = { fieldConfig = { defaults = {}, overrides = [] }, options = { mode = "markdown", content = join("", [
+        "**${var.name}: red flags.** Green is healthy, orange is the early signal, red fires an alert (Alerting, Alert rules). ",
+        "The SmithDB signals and their levels are LangSmith's [recommended SmithDB alerts](https://docs.langchain.com/langsmith/self-host-smithdb-alerts), numbered as there; ",
+        "the rest are the bounds Lite's plan sized. Each tab graphs its signals over time, one line an install (the picker above); the LangSmith dashboard has every metric in depth.",
+      ]) } } }
+    } } },
+    # A tile only for a signal with a level: an element no tab places is dropped when Grafana converts the
+    # dashboard (it logged "data loss detected" for the throttling tile, 2026-11-24, Grafana 13.3.1).
+    { for i, sig in local.alerting_signals : "flag-${sig.id}" => { kind = "Panel", spec = {
+      id = 100 + i, title = sig.title, description = sig.action, links = [], transparent = false, data = local.query[sig.id]
+      vizConfig = { kind = "VizConfig", group = "stat", version = "", spec = {
+        options     = { reduceOptions = { calcs = ["lastNotNull"], fields = "", values = false }, colorMode = "background", graphMode = "area", textMode = "value", justifyMode = "center", orientation = "auto" }
+        fieldConfig = { defaults = { unit = sig.unit, decimals = 1, noValue = try(sig.zero_when_absent, false) ? "0" : "not read", color = { mode = "thresholds" }, thresholds = { mode = "absolute", steps = local.steps[sig.id] } }, overrides = [] }
+      } }
+    } } },
+    { for i, sig in local.signals : "graph-${sig.id}" => { kind = "Panel", spec = {
+      id = 200 + i, title = sig.title, description = sig.action, links = [], transparent = false, data = local.query[sig.id]
+      vizConfig = { kind = "VizConfig", group = "timeseries", version = "", spec = {
+        options = { legend = { displayMode = "list", placement = "bottom", showLegend = true }, tooltip = { mode = "multi", sort = "desc" } }
+        fieldConfig = { defaults = {
+          unit   = sig.unit, min = 0, color = { mode = "fixed", fixedColor = "blue" }, thresholds = { mode = "absolute", steps = local.steps[sig.id] }
+          custom = { drawStyle = "line", lineWidth = 2, fillOpacity = 10, gradientMode = "opacity", showPoints = "never", thresholdsStyle = { mode = "dashed" } }
+        }, overrides = [] }
+      } }
+    } } },
+  )
+
+  tab_items = { for tab in local.health.tabs : tab => [for i, sig in [for s in local.signals : s if s.tab == tab] : { kind = "GridLayoutItem", spec = {
+    x = (i % 2) * 12, y = floor(i / 2) * 8, width = 12, height = 8, element = { kind = "ElementReference", name = "graph-${sig.id}" }
+  } }] }
+
+  health_dashboard = {
+    apiVersion = "dashboard.grafana.app/v2beta1"
+    kind       = "Dashboard"
+    metadata   = { name = "lite-health" }
+    spec = {
+      title       = "LangSmith Lite health"
+      description = "Red flags first: SmithDB's recommended alerts and the bounds the plan sized, for ${var.name}."
+      annotations = []
+      cursorSync  = "Crosshair"
+      editable    = true
+      links       = []
+      preload     = false
+      tags        = ["langsmith-lite"]
+      # The installs shown: this one by default; every namespace where SmithDB reports, to pick from.
+      variables = [{ kind = "QueryVariable", spec = {
+        name    = "namespace", label = "Install (namespace)", hide = "dontHide", skipUrlSync = false, refresh = "onTimeRangeChanged", regex = "", options = []
+        multi   = true, includeAll = true, allValue = ".*", allowCustomValue = true, sort = "alphabeticalAsc", definition = "label_values(sys_jemalloc_resident_bytes, namespace)"
+        current = { text = [local.ns.langsmith], value = [local.ns.langsmith] }
+        query   = { kind = "DataQuery", group = "prometheus", version = "v0", datasource = local.datasource, spec = { query = "label_values(sys_jemalloc_resident_bytes, namespace)", refId = "namespace" } }
+      } }]
+      timeSettings = { timezone = "utc", from = "now-6h", to = "now", autoRefresh = "1m", autoRefreshIntervals = ["30s", "1m", "5m", "15m", "1h"], hideTimepicker = false, fiscalYearStartMonth = 0 }
+      elements     = local.health_elements
+      layout = { kind = "TabsLayout", spec = { tabs = concat(
+        [{ kind = "TabsLayoutTab", spec = { title = "Red flags", layout = { kind = "GridLayout", spec = { items = concat(
+          [{ kind = "GridLayoutItem", spec = { x = 0, y = 0, width = 24, height = 3, element = { kind = "ElementReference", name = "intro" } } }],
+          [for i, sig in local.alerting_signals : { kind = "GridLayoutItem", spec = {
+            x = (i % 4) * 6, y = 3 + floor(i / 4) * 5, width = 6, height = 5, element = { kind = "ElementReference", name = "flag-${sig.id}" }
+          } }],
+        ) } } } }],
+        [for tab in local.health.tabs : { kind = "TabsLayoutTab", spec = { title = tab, layout = { kind = "GridLayout", spec = { items = local.tab_items[tab] } } } }],
+      ) } }
+    }
   }
 
-  # Grafana's unified alerting, provisioned: one rule a bound, firing when it holds above 80% for 10 minutes.
+  # Grafana's unified alerting, provisioned: one rule a signal with a critical level. A guard (a minimum
+  # count) applies to the alert only: the dashboard shows the share at any traffic.
   alert_rules = { apiVersion = 1, groups = [{
     orgId    = 1
-    name     = "capacity"
+    name     = "health"
     folder   = "LangSmith Lite"
     interval = "1m"
-    rules = [for k, b in local.bounds : {
-      uid          = "lite-${replace(k, "_", "-")}"
-      title        = "${b.title} above 80%"
+    rules = [for sig in local.alerting_signals : {
+      uid          = "lite-${sig.id}"
+      title        = sig.title
       condition    = "C"
-      for          = "10m"
-      noDataState  = "OK"
+      for          = sig.for
+      noDataState  = try(sig.no_data, false) ? "Alerting" : "OK"
       execErrState = "Error"
-      labels       = { langsmith_lite_instance = var.name }
-      annotations  = { summary = "${b.title} is above 80% of what the plan sized: raise it with make plan, or find what grew (OPERATE.md)." }
+      labels       = { severity = sig.severity, langsmith_lite_instance = var.name }
+      annotations  = { summary = sig.title, description = sig.action, runbook_url = "https://docs.langchain.com/langsmith/self-host-smithdb-alerts" }
       data = [
-        { refId = "A", relativeTimeRange = { from = 600, to = 0 }, datasourceUid = "prometheus", model = { refId = "A", expr = b.expr, instant = true } },
-        { refId = "C", datasourceUid = "__expr__", model = { refId = "C", type = "threshold", expression = "A", conditions = [{ evaluator = { type = "gt", params = [0.8] } }] } },
+        { refId = "A", relativeTimeRange = { from = 600, to = 0 }, datasourceUid = "prometheus", model = {
+          refId = "A", instant = true, expr = sig.guard == null ? sig.expr : "(${sig.expr}) and on () (${sig.guard})"
+        } },
+        { refId = "C", datasourceUid = "__expr__", model = { refId = "C", type = "threshold", expression = "A", conditions = [{ evaluator = { type = "gt", params = [sig.crit] } }] } },
       ]
     }]
   }] }
@@ -342,7 +389,7 @@ locals {
       options         = { path = "/var/lib/grafana/dashboards/lite" }
     }] } }
     dashboards = { lite = merge(
-      { langsmith = { url = local.dashboard_url }, capacity = { json = jsonencode(local.capacity_dashboard) } },
+      { langsmith = { url = local.dashboard_url }, health = { json = jsonencode(local.health_dashboard) } },
       { for name, d in local.pins.dashboards : name => { gnetId = d.id, revision = d.revision, datasource = "Prometheus" } },
     ) }
     alerting = { "rules.yaml" = local.alert_rules }
@@ -362,21 +409,13 @@ locals {
       frontendImage    = { tag = local.mission_control_tag }
     }
     config = {
+      strictReadOnly     = true
       auth               = { enabled = true, existingSecret = "mission-control-auth", jwtSecretKey = "jwt-secret" }
       discoverNamespaces = "${local.ns.langsmith},${local.ns.data}"
-      features = {
-        fixIssue       = false
-        adopt          = false
-        alerts         = false
-        configSave     = false
-        valuesOverride = false
-        deploy         = false
-        contention     = false
-        diagnostics    = true
-        discover       = true
-        dbTools        = true
-        chat           = true
-      }
+      # One switch for every write and disclosure endpoint, and for every write verb in its RBAC: with
+      # auth on, the chart otherwise granted a Role create on Secrets, enough to mint a token (security
+      # review, 2026-11-24). It also turns off the database tools, discover and chat (which calls out).
+      features = { chat = false }
     }
     backend  = { resources = try(local.k8s["mission-control-backend"], null) }
     frontend = { resources = try(local.k8s["mission-control-frontend"], null) }

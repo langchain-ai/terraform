@@ -128,7 +128,7 @@ locals {
     local.features.mission_control ? [
       { name = "mission-control-auth", namespace = local.ns.langsmith, data = { username = "admin", password = local.secret.mission_control, jwt-secret = local.secret.mission_control_jwt } },
     ] : [],
-    local.features.tunnel ? [{ name = "cloudflared", namespace = local.ns.langsmith, data = { token = var.tunnel_token } }] : [],
+    local.features.tunnel ? [{ name = "cloudflared", namespace = local.ns.tunnel, data = { token = var.tunnel_token } }] : [],
   )
 
   secret_manifests = {

@@ -7,19 +7,23 @@
 # Setting up, installing and removing an install: secrets, plan, up, export, down. Sourced by bin/lite.
 
 # What plan, up and preflight need before anything else: the settings an install cannot run without
-# (lib/settings.py asks for the missing ones at a terminal, and takes NAME=value from the command line),
-# and the license key. YES=1, or no terminal, asks nothing: what is missing fails, naming what to pass.
+# (lib/settings.py asks for the missing ones at a terminal, and takes NAME=value from the command line).
+# YES=1, or no terminal, asks nothing: what is missing fails, naming what to pass.
 settings() {
   need terraform python3
   local interactive=() colour=""
   [[ -t 0 && "${YES:-}" != 1 ]] && interactive=(--interactive)
   [[ -n "$GREEN" ]] && colour=1
   LITE_COLOR="$colour" python3 "$LITE/lib/settings.py" "$INFRA/terraform.tfvars" "${interactive[@]+"${interactive[@]}"}" || exit 1
-  if [[ -z "$(saved_secret LANGSMITH_LICENSE_KEY || true)" && -z "${TF_VAR_langsmith_license_key:-}" ]]; then
-    ((${#interactive[@]})) || fail "no license key" "make secrets saves one, or set TF_VAR_langsmith_license_key."
-    printf '\n'
-    save_secrets
-  fi
+}
+
+# The license key, for plan and up: asked at a terminal when none is saved. preflight never needs it,
+# and asking for it there stopped a read-only check of a machine.
+license() {
+  [[ -z "$(saved_secret LANGSMITH_LICENSE_KEY || true)" && -z "${TF_VAR_langsmith_license_key:-}" ]] || return 0
+  [[ -t 0 && "${YES:-}" != 1 ]] || fail "no license key" "make secrets saves one, or set TF_VAR_langsmith_license_key."
+  printf '\n'
+  save_secrets
 }
 
 # The secrets Lite cannot generate, kept in infra/.secrets.env (mode 600, gitignored, where every module
@@ -62,6 +66,7 @@ ask_secret() {
 # Shared by plan and up. PLAN_CHANGES is how many resources the plan adds, changes or destroys.
 plan_and_summarise() {
   settings
+  license
   need helm curl
   start_log "$BUILD/logs"
   resolve_versions
@@ -81,7 +86,9 @@ print(sum(a in ("create", "update", "delete") for c in json.load(sys.stdin).get(
 cmd_plan() {
   heading "plan" "versions, sizes, and what would change; nothing is changed"
   plan_and_summarise "$@"
-  [[ "${VERBOSE:-}" == 1 ]] && tf show "$PLAN_FILE"
+  if [[ "${VERBOSE:-}" == 1 ]]; then tf show "$PLAN_FILE"; fi
+  # The plan file holds the license key and every generated password; make up writes its own.
+  rm -f "$PLAN_FILE"
   next "make up"
 }
 
@@ -94,9 +101,11 @@ cmd_up() {
   [[ "$cloud" == cluster ]] && question="${question/install it/write its files}"
   if [[ "${YES:-}" != 1 ]]; then
     local answer
+    [[ -t 0 ]] || { rm -f "$PLAN_FILE"; fail "no terminal to ask: nothing changed" "YES=1 make up applies without asking."; }
     printf '\n'
     read -r -p "  $question [y/N] " answer
-    [[ "$answer" == [yY]* ]] || fail "nothing changed." "make plan VERBOSE=1 shows every change."
+    # The plan file holds the license key and every generated password: not left behind on a no.
+    [[ "$answer" == [yY]* ]] || { rm -f "$PLAN_FILE"; fail "nothing changed." "make plan VERBOSE=1 shows every change."; }
   fi
   printf '\n'
   # The plan file holds the license key: applied and then removed.
@@ -124,7 +133,8 @@ export_files() {
   mkdir -p "$out"
   run write "the releases into $out" write_export "$out"
   printf '\n'
-  field "apply" "kubectl apply -f $out/cluster.yaml -f $out/secrets.yaml"
+  # Server-side: a client-side apply writes every Secret's value into its last-applied annotation.
+  field "apply" "kubectl apply --server-side -f $out/cluster.yaml -f $out/secrets.yaml"
   field "then" "each line of $out/install.sh, in order"
   field "secrets" "$out/secrets.yaml holds every credential: mode 600, delete it once applied"
   next "bash $out/install.sh   (or the same releases through your own Helm or Argo CD)"
@@ -187,14 +197,16 @@ send_bundle() {
 #              which forgets the generated credentials
 cmd_down() {
   need terraform python3 ssh
-  local name cloud typed
+  local name cloud typed data_path
   name="$(tf_eval var.name)" || fail "could not read the install's name" "is anything installed? make up installs."
   cloud="$(tf_eval var.cloud)"
   heading "down" "delete $name and every trace in it"
   field "install" "$name"
   field "cloud" "$cloud"
   printf '\n'
-  read -r -p "  Type the install's name to delete it: " typed
+  # A script confirms with CONFIRM=<name>; a person types it. YES=1 is not enough to delete data.
+  typed="${CONFIRM:-}"
+  [[ -n "$typed" ]] || read -r -p "  Type the install's name to delete it: " typed
   [[ "$typed" == "$name" ]] || fail "nothing deleted" "the name did not match."
   printf '\n'
   start_log "$BUILD/logs"
@@ -202,12 +214,25 @@ cmd_down() {
     ssh_from_outputs
     printf '  %son the box (sudo asks once)%s\n' "$DIM" "$OFF"
     # Only a k3s Lite installed (its marker): never someone else's cluster.
+    # k3s's uninstaller removes its own storage folder; a data_path is outside it, so its volume folders
+    # go too, and nothing else on that disk (security review, 2026-11-24: the data stayed behind).
+    data_path="$(tf_eval var.data_path)"
     # shellcheck disable=SC2016  # expands on the box
-    ssh_root 'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then sudo /usr/local/bin/k3s-uninstall.sh >/dev/null; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi; sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml"' \
+    ssh_root 'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then sudo /usr/local/bin/k3s-uninstall.sh >/dev/null; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi; sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml" /etc/systemd/system/k3s.service.d/langsmith-lite-data.conf'"${data_path:+; sudo find '$data_path' -maxdepth 1 -name 'pvc-*' -exec rm -rf {} +}" \
       || fail "the uninstall on the box failed" "nothing else was removed."
     printf '  %-18s %sk3s and every volume removed from %s%s %sok%s\n' uninstall "$DIM" "$SSH_TARGET" "$OFF" "$GREEN" "$OFF"
   fi
+  local volume=""
+  [[ "$cloud" == aws ]] && volume="$(tf output -raw data_volume_id 2>/dev/null || true)"
   run destroy "terraform destroy" tf destroy -input=false -auto-approve
   rm -f "$PLAN_FILE" "$INFRA/resolved.auto.tfvars.json"
+  # The daily snapshots outlive the policy that took them: kept, as the last copy of the data, and
+  # still billed until deleted (the docs said nothing was kept: docs review, 2026-11-24).
+  if [[ -n "$volume" ]]; then
+    printf '\n'
+    warn "the data volume's snapshots are kept, the last copy of every trace, and billed until deleted:"
+    field "list them" "aws ec2 describe-snapshots --owner-ids self --filters Name=volume-id,Values=$volume --query 'Snapshots[].SnapshotId'"
+    field "delete each" "aws ec2 delete-snapshot --snapshot-id <id>"
+  fi
   printf '\n'
 }

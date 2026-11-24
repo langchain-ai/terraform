@@ -111,10 +111,19 @@ ssh_to() {
   [[ -z "$3" || "$3" == None ]] || SSH_OPTS+=(-p "$3")
 }
 
+# An instance Lite made has a host key Terraform generated: trusted for its address and nothing else,
+# checked strictly, in a known_hosts file of its own. A machine of your own keeps accept-new: its key is
+# yours to know.
 ssh_from_outputs() {
-  local s
+  local s key
   s="$(tf_output ssh)"
   ssh_to "$(json_get user <<<"$s" | sed 's/^None$//')" "$(json_get host <<<"$s")" "$(json_get port <<<"$s")"
+  key="$(json_get host_key <<<"$s" | sed 's/^None$//')"
+  if [[ -n "$key" ]]; then
+    mkdir -p "$BUILD"
+    printf '%s %s\n' "$(json_get host <<<"$s")" "$key" >"$BUILD/known_hosts"
+    SSH_OPTS=("${SSH_OPTS[@]/StrictHostKeyChecking=accept-new/StrictHostKeyChecking=yes}" -o UserKnownHostsFile="$BUILD/known_hosts")
+  fi
 }
 
 # A new instance boots for a minute or two before its sshd answers; the install's first ssh failed

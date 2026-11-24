@@ -16,7 +16,7 @@ output "instance" {
 }
 
 output "ssh" {
-  value       = { host = local.host, user = var.ssh_user != "" ? var.ssh_user : (var.cloud == "aws" ? "ubuntu" : null), port = var.ssh_port }
+  value       = { host = local.host, user = var.ssh_user != "" ? var.ssh_user : (var.cloud == "aws" ? "ubuntu" : null), port = var.ssh_port, host_key = try(module.aws[0].host_public_key, null) }
   description = "Where the commands reach the box."
 }
 
@@ -123,6 +123,8 @@ output "box" {
     k3s_config     = local.k3s_config
     traefik_values = local.traefik_values
     releases       = local.release_order
+    # The objects made before any release, by kind, namespace and name: what to look for on a box.
+    objects = [for o in local.box_objects : "${o.kind}/${try(o.metadata.namespace, "-")}/${o.metadata.name}"]
   }
-  description = "What a k3s box gets beside the releases: k3s's version and config, and Traefik's settings (make render checks them against k3s's bundled Traefik chart)."
+  description = "What a k3s box gets beside the releases: k3s's version and config, Traefik's settings (make render checks them against k3s's bundled Traefik chart), and the objects made before any release."
 }

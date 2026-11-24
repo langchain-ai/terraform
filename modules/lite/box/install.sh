@@ -80,6 +80,19 @@ if [[ -n "${DATA_VOLUME_ID:-}" ]]; then
   run data "the data volume at $DATA_MOUNT" mount_data_volume
 fi
 
+# A data disk of its own, the AWS volume or a data_path: k3s starts only with it mounted. Without this,
+# a disk missing at boot (fstab's nofail keeps the box bootable) left k3s to start on the empty folder of
+# the root disk, where Postgres initialised a new, empty database.
+require_data_mount() {
+  mountpoint -q "$DATA_MOUNT" || { echo "$DATA_MOUNT is not a mounted filesystem: mount the data disk there first"; return 1; }
+  install -d -m 755 /etc/systemd/system/k3s.service.d
+  printf '[Unit]\nRequiresMountsFor=%s\n' "$DATA_MOUNT" >/etc/systemd/system/k3s.service.d/langsmith-lite-data.conf
+  systemctl daemon-reload
+}
+if [[ "$DATA_MOUNT" != / ]]; then
+  run mounted "k3s starts only with $DATA_MOUNT mounted" require_data_mount
+fi
+
 #--- 3. k3s -------------------------------------------------------------------------------------------
 config_changed=0
 install -d -m 755 /etc/rancher/k3s
@@ -198,14 +211,38 @@ run available "every LangSmith deployment available" \
   kubectl -n "$NS" wait --for=condition=Available deployment --all --timeout=900s
 
 #--- 6. The ssh user's kubeconfig ---------------------------------------------------------------------
-# k3s's own copy stays root-only (write-kubeconfig-mode 0600); this one is the ssh user's alone, so make
-# status and make access read the cluster without root.
+# k3s's admin kubeconfig stays root-only (write-kubeconfig-mode 0600). The ssh user's is the operator
+# ServiceAccount's (bundle.tf): what make status, access, verify and soak use, not cluster-admin.
 user_kubeconfig() {
-  local home
+  local home token="" ca tmp
   home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
   [[ -n "$home" ]] || home="$(awk -F: -v u="$SUDO_USER" '$1 == u { print $6 }' /etc/passwd)"
+  # The token controller fills the Secret a moment after it is created.
+  for _ in $(seq 1 30); do
+    token="$(kubectl -n kube-system get secret langsmith-lite-operator -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)"
+    [[ -n "$token" ]] && break
+    sleep 1
+  done
+  [[ -n "$token" ]] || { echo "the operator ServiceAccount's token was never issued"; return 1; }
+  ca="$(awk '/certificate-authority-data:/ { print $2; exit }' /etc/rancher/k3s/k3s.yaml)"
   install -d -m 700 -o "$SUDO_USER" "$home/.kube"
-  install -m 600 -o "$SUDO_USER" /etc/rancher/k3s/k3s.yaml "$home/.kube/langsmith-lite.yaml"
+  tmp="$(mktemp)"
+  cat >"$tmp" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: langsmith-lite
+    cluster: { server: "https://127.0.0.1:6443", certificate-authority-data: "$ca" }
+users:
+  - name: langsmith-lite-operator
+    user: { token: "$token" }
+contexts:
+  - name: langsmith-lite
+    context: { cluster: langsmith-lite, user: langsmith-lite-operator }
+current-context: langsmith-lite
+EOF
+  install -m 600 -o "$SUDO_USER" "$tmp" "$home/.kube/langsmith-lite.yaml"
+  rm -f "$tmp"
 }
 if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
   run kubeconfig "a kubeconfig for $SUDO_USER" user_kubeconfig

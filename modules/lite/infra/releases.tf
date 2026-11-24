@@ -44,7 +44,31 @@ locals {
       { name = local.ns.data, labels = merge(local.instance_label, { "pod-security.kubernetes.io/enforce" = "baseline" }) },
     ],
     local.features.observability ? [{ name = local.ns.observe, labels = local.instance_label }] : [],
+    local.features.tunnel ? [{ name = local.ns.tunnel, labels = merge(local.instance_label, { "pod-security.kubernetes.io/enforce" = "restricted" }) }] : [],
   )
+
+  # Every namespace refuses traffic in, but from where it is needed: LangSmith from itself, its
+  # observability (scrapes), the tunnel and the ingress controller; observability from itself; the
+  # tunnel from nowhere (cloudflared only dials out). The stores'
+  # namespace has the datastores chart's own policies (datastores_values.allowedNamespaces). Without these
+  # any pod on a shared cluster reached Prometheus, Grafana, Mission Control and LangSmith's services
+  # (security review, 2026-11-24). Egress stays open: the pods call the registries and the license server.
+  allowed_in = {
+    (local.ns.langsmith) = concat([local.ns.langsmith, local.ns.observe, local.ns.tunnel], var.ingress_namespaces)
+    (local.ns.observe)   = [local.ns.observe]
+    (local.ns.tunnel)    = []
+  }
+  network_policies = [for ns, from in local.allowed_in : {
+    apiVersion = "networking.k8s.io/v1"
+    kind       = "NetworkPolicy"
+    metadata   = { name = "langsmith-lite-ingress", namespace = ns, labels = local.instance_label }
+    spec = {
+      podSelector = {}
+      policyTypes = ["Ingress"]
+      # No rule at all, not a rule with no sources: an empty "from" admits everyone.
+      ingress = length(from) == 0 ? [] : [{ from = [for n in from : { namespaceSelector = { matchLabels = { "kubernetes.io/metadata.name" = n } } }] }]
+    } } if contains([for n in local.namespaces : n.name], ns)
+  ]
 
   cluster_objects = concat(
     [for n in local.namespaces : { apiVersion = "v1", kind = "Namespace", metadata = { name = n.name, labels = n.labels } }],
@@ -57,5 +81,6 @@ locals {
       globalDefault = false
       description   = "LangSmith Lite's stores: Postgres, Redis, RustFS and SmithDB."
     }],
+    local.network_policies,
   )
 }

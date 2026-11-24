@@ -23,16 +23,20 @@ locals {
   # digest of its files, so any change to it is a new chart URL and helm-controller upgrades it.
   datastores_tgz = try("datastores-${var.resolved.charts.datastores}.tgz", "datastores.tgz")
 
-  # One install's namespaces, from var.namespace, so many installs can share a cluster (make export).
+  # One install's namespaces, from its name unless given, so many installs can share a cluster (make
+  # export). cloudflared, the one pod that takes requests from the internet, runs apart from the stores.
+  namespace = coalesce(var.namespace, var.name)
   ns = {
-    langsmith = var.namespace
-    data      = "${var.namespace}-data"
-    observe   = "${var.namespace}-observe"
+    langsmith = local.namespace
+    data      = "${local.namespace}-data"
+    observe   = "${local.namespace}-observe"
+    tunnel    = "${local.namespace}-tunnel"
   }
 
   # On every object Lite makes, so a fleet can find, watch and account each install by its name.
-  instance_label        = { "langsmith-lite/instance" = var.name }
-  stores_priority_class = "langsmith-lite-stores"
+  instance_label = { "langsmith-lite/instance" = var.name }
+  # Cluster-scoped, so named for the install: one install's make down must not remove another's.
+  stores_priority_class = "langsmith-lite-stores-${var.name}"
 
   # Where every store's volume lives on the box: an AWS data volume is mounted at k3s's own storage folder;
   # a bare-metal data_path is given to k3s as that folder; otherwise the root filesystem holds them.

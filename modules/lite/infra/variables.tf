@@ -17,11 +17,11 @@ variable "name" {
 
 variable "namespace" {
   type        = string
-  default     = "langsmith"
-  description = "LangSmith's namespace; the stores go in <namespace>-data and the observability stack in <namespace>-observe. One box runs one install; on a shared cluster (make export), give each instance its own."
+  default     = null
+  description = "LangSmith's namespace; the stores go in <namespace>-data and the observability stack in <namespace>-observe. Unset: the install's name, so two installs on one cluster never share a namespace (whose Secrets each would overwrite)."
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{0,40}$", var.namespace))
+    condition     = var.namespace == null || can(regex("^[a-z][a-z0-9-]{0,40}$", var.namespace))
     error_message = "namespace must be lowercase letters, digits and hyphens, at most 41 characters."
   }
 }
@@ -169,7 +169,7 @@ variable "max_request_ratio" {
 variable "short_ttl_days" {
   type        = number
   default     = null
-  description = "Days a trace is kept: the default for every project. With the long TTL it is the largest lever on the disk (SIZING.md, What a box keeps). Unset, the plan uses 14 and says so on every plan: set it to what you must keep."
+  description = "Days a trace is kept: the default for every project. With the long TTL it is the largest lever on the disk (SIZING.md, The retention). Unset, the plan uses 14 and says so on every plan: set it to what you must keep."
 
   validation {
     condition     = var.short_ttl_days == null || try(var.short_ttl_days >= 1 && floor(var.short_ttl_days) == var.short_ttl_days, false)
@@ -231,6 +231,12 @@ variable "volumes" {
   })
   default     = {}
   description = "Volume sizes in GiB, each defaulting to the preset's. object_store_gi holds every trace for its TTL; smithdb_cache_gi is SmithDB's disposable query cache."
+}
+
+variable "ingress_namespaces" {
+  type        = list(string)
+  default     = ["kube-system"]
+  description = "Namespaces allowed to reach LangSmith's pods beside the install's own: the ingress controller's. k3s's Traefik is in kube-system; on a cluster of one's own (cloud = cluster), name its ingress controller's, for example ingress-nginx."
 }
 
 variable "storage_class" {
@@ -372,8 +378,8 @@ variable "data_path" {
 
 variable "aws_region" {
   type        = string
-  default     = "us-west-2"
-  description = "cloud = aws: the region."
+  default     = "us-east-1"
+  description = "cloud = aws: the region. The plan's cost is at us-east-1's list prices; elsewhere set aws_hourly_usd."
 }
 
 variable "aws_subnet_id" {
@@ -423,8 +429,8 @@ variable "admin_cidrs" {
   description = "cloud = aws: who may reach ssh (port 22). Your address, as a /32."
 
   validation {
-    condition     = alltrue([for c in var.admin_cidrs : can(cidrhost(c, 0))])
-    error_message = "admin_cidrs must be CIDR blocks, such as 203.0.113.7/32."
+    condition     = alltrue([for c in var.admin_cidrs : can(cidrhost(c, 0)) && !endswith(c, "/0")])
+    error_message = "admin_cidrs must be CIDR blocks, such as 203.0.113.7/32, and never the whole internet: ssh to the box is root through sudo."
   }
 }
 

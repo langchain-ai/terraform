@@ -10,7 +10,7 @@ mock_provider "aws" {
     defaults = { ids = ["subnet-0123456789abcdef0"] }
   }
   mock_data "aws_subnet" {
-    defaults = { id = "subnet-0123456789abcdef0", vpc_id = "vpc-0123456789abcdef0", availability_zone = "us-west-2a" }
+    defaults = { id = "subnet-0123456789abcdef0", vpc_id = "vpc-0123456789abcdef0", availability_zone = "us-east-1a" }
   }
   mock_data "aws_vpc" {
     defaults = { id = "vpc-0123456789abcdef0" }
@@ -121,6 +121,12 @@ run "a_custom_machine_on_aws_needs_its_instance_type" {
     machine = { cpu = 32, memory_gi = 128, disk_gi = 512 }
   }
   expect_failures = [terraform_data.host]
+}
+
+run "ssh_to_the_instance_trusts_only_its_generated_host_key" {
+  command = plan
+  variables { admin_cidrs = ["0.0.0.0/0"] }
+  expect_failures = [var.admin_cidrs]
 }
 
 run "aws_ssh_defaults_to_ubuntu" {

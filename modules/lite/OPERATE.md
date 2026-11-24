@@ -1,34 +1,65 @@
-# Operating a Lite box
+# Operating Lite
 
-> **Status:** current · **Last verified:** 2026-11-24
+> **Status:** current · **Last verified:** 2026-11-24 (dashboards and alerts on Grafana 13.3.1 locally; not yet installed on a box)
 
-Choosing and checking a machine, reaching the box, watching it, changing and upgrading it, keeping its
-data, removing it, and what to do when an install stops. Every command is a `make` target in this
-folder.
+Choosing and checking a machine, reaching it, proving it works, watching it, changing it, keeping its
+data, handing an install to a cluster, and what to do when an install stops. Every command is a `make`
+target in this folder, run from your laptop.
 
 ## The machine
 
-Any Linux machine with systemd, amd64 or arm64, reached over ssh: a server, a VM in any cloud, a VM on
-a laptop. `cloud = "baremetal"` takes any of them by `ssh_host`; `cloud = "aws"` also makes the EC2
-instance (`infra/hosts/aws`), with one gp3 disk of the plan's size. Native GCP and Azure hosts are to
-come; until then, make a VM of the preset's size there and use `baremetal`. k3s needs a Linux kernel,
-so on a Mac or Windows machine Lite runs in a Linux VM (Lima, OrbStack, UTM, Hyper-V) that is the
-`baremetal` box, for example `limactl start --cpus 8 --memory 32 --disk 512 template://ubuntu-lts`.
+Any Linux machine with systemd, amd64 or arm64, that your laptop can ssh to: a server, a VM in any
+cloud, a VM on a laptop. Nothing is copied to it by hand: `make up` sends what it needs over ssh.
 
-`make preflight` checks the machine over ssh, read-only and without root; `make up` runs the same
-checks on the box before it installs anything:
+| `cloud` | The machine | Its data |
+|:--|:--|:--|
+| `baremetal` | `ssh_host` (an address, or an alias in `~/.ssh/config`) and `ssh_user` (one with sudo) | on the system disk, or `data_path`: a mounted disk of its own, with `machine.data_disk_gi` its size |
+| `aws` | an EC2 instance of the size's type (`infra/hosts/aws`), reached as `ubuntu` | a gp3 volume of its own, mounted at k3s's storage folder, kept when the instance is replaced, snapshotted daily |
+| `cluster` | none: the releases for a Kubernetes cluster you run (Handing it to a cluster) | the cluster's storage classes |
+
+### AWS permissions
+
+With `cloud = "aws"`, the credentials `make up` and `make down` run with need what
+[`infra/hosts/aws/iam-policy.json`](infra/hosts/aws/iam-policy.json) grants, and no more:
+
+| For | Allowed |
+|:--|:--|
+| the instance, its data volume, address, security group and key pair | the EC2 actions that create, change and delete each, and every `ec2:Describe*` |
+| the daily snapshots | Data Lifecycle Manager's policy actions, and `ec2:DeleteSnapshot` for removing them after `make down` |
+| the snapshot policy's role | IAM actions on roles named `*-snapshots` only, attaching only AWS's `AWSDataLifecycleManagerServiceRole` policy, passed to `dlm.amazonaws.com` only |
+
+Attach it to the user or role that runs Lite:
+
+```bash
+aws iam create-policy --policy-name langsmith-lite --policy-document file://infra/hosts/aws/iam-policy.json
+aws iam attach-user-policy --user-name <user> --policy-arn arn:aws:iam::<account>:policy/langsmith-lite
+```
+
+Or in your own Terraform: `resource "aws_iam_policy" "langsmith_lite" { policy = file("<path>/iam-policy.json") }`.
+To hold it to one region, add `"Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }` to
+each EC2 and DLM statement. The instance goes in the region's default VPC, or the subnet `aws_subnet_id`
+names, which must give it a public address. `make check` fails when the AWS host makes a resource the
+policy has no statement for; the policy itself is first exercised by the first AWS install.
+
+On GCP or Azure, make a VM of the size's shape and use `baremetal` until their hosts land. k3s needs
+Linux, so on a Mac or Windows machine the box is a Linux VM (Lima, OrbStack, UTM, Hyper-V), for example
+`limactl start --cpus 8 --memory 32 --disk 600 template://ubuntu-lts`.
+
+`make preflight` checks the machine over ssh, read-only and without root; `make up` runs the same checks
+on the box before it changes anything:
 
 | Check | Needed | Otherwise |
 |:--|:--|:--|
-| Linux, amd64 or arm64, systemd | k3s runs on Linux as a systemd service | FAIL |
+| Linux, amd64 or arm64, systemd | k3s runs as a systemd service | FAIL |
 | cgroup v2 with cpu and memory | pod limits are enforced | FAIL without the controllers; warn on v1 |
-| vCPUs, memory, disk under `/var/lib` | the plan's `machine`, less a tenth of the memory and disk for what the kernel and filesystem keep | FAIL: set `machine` to what it is, or use a bigger one |
+| vCPUs, memory, disks | the plan's `machine`: every vCPU, and the memory and disks less a tenth for what the kernel and filesystem keep | FAIL: set `machine` to what it is, or a larger box |
+| the data disk | on AWS the volume attached; with `data_path`, mounted and of `data_disk_gi` | FAIL |
 | k3s | none, or one Lite installed | FAIL on an agent of another cluster, or a server Lite did not install |
-| ports 6443, 10250, and 80, 443 for `ip` and `dns` | free | FAIL |
+| ports 6443, 10250; 80 and 443 for `ip` and `dns` | free | FAIL |
 | firewalld or ufw | off, or open for k3s (6443/tcp, 10250/tcp, 8472/udp, the pod and service ranges) | warn |
 | Docker | not needed; may run beside k3s | warn: its FORWARD DROP can block pod traffic |
 | internet | k3s's release, the Helm repos, the image registries, GitHub | FAIL: a proxy or an air gap is not supported yet |
-| sudo for the ssh user | to install and remove k3s only | asked once per command, so a password or a key's touch works |
+| sudo for the ssh user | to install and remove k3s only | asked once a command, so a password or a security key's touch works |
 
 | System | Status |
 |:--|:--|
@@ -38,8 +69,8 @@ checks on the box before it installs anything:
 | RHEL, Rocky, Alma, Fedora, Amazon Linux | untested; with SELinux enforcing, k3s needs `k3s-selinux` |
 | Alpine, or anything without systemd | not supported |
 
-A system becomes tested when `make up`, `make verify` and `make soak` at its box's design rate have run
-on it, and this table says so with the date.
+A system becomes tested when `make up`, `make verify` and `make soak` have passed on it, and this table
+says so with the date.
 
 ## Reaching it
 
@@ -51,104 +82,179 @@ on it, and this table says so with the date.
 | http://localhost:3000 | Grafana | `admin`, generated password |
 | http://localhost:3001 | Mission Control | `admin`, generated password |
 
-With `access = ip`, `dns` or `tunnel`, LangSmith is at the `url` output, and `make access` still carries
-Grafana and Mission Control.
+| `access` | LangSmith at | Before `make up` |
+|:--|:--|:--|
+| `localhost` (default) | http://localhost:8080, while `make access` runs | nothing |
+| `ip` | `https://<box address>`, a self-signed certificate | on AWS, `access_cidrs`: who may reach 443 |
+| `dns` | `https://<domain>`, Let's Encrypt | an A record for `domain` (on AWS, after the first apply, then `make up` again); port 80 reachable for the certificate |
+| `tunnel` | `https://<domain>` through a Cloudflare Tunnel | a tunnel whose public hostname is `domain`, service `http://traefik.kube-system.svc.cluster.local:80`; `make up` asks for its token |
 
-| `access` | Before `make up` |
-|:--|:--|
-| `localhost` | Nothing. |
-| `ip` | Nothing; browsers warn about the self-signed certificate. On AWS, set `access_cidrs` to who may reach 443. |
-| `dns` | An A record for `domain` pointing at the box (on AWS, the `ssh` output's `host` after the first apply, then `make up` again once it resolves). Port 80 must be reachable from the internet for Let's Encrypt. |
-| `tunnel` | A Cloudflare Tunnel whose public hostname is `domain`, with the service `http://traefik.kube-system.svc.cluster.local:80`; `make secrets` saves its token. |
+What listens on the box's addresses: ssh (22); k3s's API (6443, client certificates), kubelet (10250,
+authenticated) and flannel's overlay (8472/udp), which a host firewall should close as the AWS security
+group does; Traefik on 80 (a redirect) and 443 for `ip` and `dns`. Nothing else: Grafana, Mission
+Control, Prometheus and the stores have no port there.
 
-The chart creates the organization and its first admin (`admin_email`) at install. Create an API key
-in LangSmith (Settings, API Keys) for the SDK; `make verify` and `make soak` make and revoke their own.
+### Sending traces
 
-What listens on the box's addresses: ssh (22); k3s's API (6443, TLS with client certificates) and
-kubelet (10250, authenticated), which a host firewall should close as the AWS security group does; and
-Traefik on 443 for `ip`, or 80 and 443 for `dns`. Nothing else: Grafana, Mission Control, Prometheus
-and the stores have no port there, and node-exporter runs off the host's network.
+An application traces to LangSmith with the SDK's usual settings: `LANGSMITH_ENDPOINT` is LangSmith's
+address above with `/api/v1` (for `localhost`, `http://localhost:8080/api/v1`, reachable only while
+`make access` runs on the same machine), `LANGSMITH_API_KEY` a key made in LangSmith (Settings, API Keys),
+and `LANGSMITH_TRACING=true`. A trace then shows in its project within seconds; `make verify` checks the
+same path end to end.
+
+### A real endpoint: DNS, certificates, SSO
+
+What a team-wide LangSmith on a web address needs, what Lite does today, and what it leaves to you. Lite's
+scope is the box and its four access modes; the rest are noted here so an install can grow into them.
+
+| Need | Lite today | Otherwise |
+|:--|:--|:--|
+| A name | `dns`: you make the A record for `domain`; `tunnel`: Cloudflare makes it | private DNS, or a load balancer in front: point it at the box's 80 and 443 |
+| A trusted certificate | `dns`: Let's Encrypt through Traefik (HTTP-01, so port 80 must reach the box); `tunnel`: Cloudflare's | your own certificate or an internal CA's: not yet; with `ip`, clients must trust Traefik's self-signed one ([self-signed certificates](https://docs.langchain.com/langsmith/self-host-usage#self-signed-certificates)) |
+| Reachable only inside a network | `localhost` (ssh only), or `ip` with `access_cidrs` on AWS; `tunnel` with [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/applications/) in front | a VPN or private subnet the box sits in |
+| Single sign-on | not yet: logins are LangSmith's own (email and password, the first admin's generated) | [SSO with OAuth 2.0 and OIDC](https://docs.langchain.com/langsmith/self-host-sso), below |
+| Outbound through a proxy, or to services an internal CA signed | not supported: the box needs the internet (The machine) | [custom TLS certificates](https://docs.langchain.com/langsmith/self-host-custom-tls-certificates) |
+
+SSO, when it lands, follows the chart's own path, and an install made today is ready for it: Lite already
+runs LangSmith with `authType: mixed` (which SSO needs) and sets its hostname. The order matters and is
+one-way:
+
+1. Use `access = dns` or `tunnel`: SSO works only over HTTPS on a stable name.
+2. Log in once as the first admin with the generated password, and give that same email an account in
+   your identity provider.
+3. Register the redirect URI `https://<domain>/api/v1/oauth/custom-oidc/callback` with any OIDC provider
+   (Entra ID, Okta, Auth0, Google Workspace), then turn SSO on with its issuer URL, client id and client
+   secret. Basic auth goes off; LangSmith does not move an install back from SSO to passwords.
+4. Keep a [recovery admin login](https://docs.langchain.com/langsmith/self-host-sso-recovery) for when the
+   identity provider is down.
+
+Every LangSmith sign-in option is on [Authentication methods](https://docs.langchain.com/langsmith/authentication-methods#self-hosted).
+
+## Proving it works
+
+| Command | Answers | Takes |
+|:--|:--|:--|
+| `make verify` | Do traces flow? Ten traces followed hop by hop: accepted by the API, Redis's ingestion queue drained, SmithDB flushed, readable by a query. Where they stop, that workload's last log lines. | about 2 minutes |
+| `make soak` | Does the box hold its design load, with reads? Every target (nothing lost, readable in time), whether ingestion kept up, and each watch item against its alarm level. | `DURATION` (900 s) plus a 120 s ramp |
+| `STEP=1 make soak` | What does it hold? The design rate x 0.5, 1, 1.5, 2, 3 and 4 in turn, until a step does not hold, and what crossed its level there. | up to six soaks |
+
+Both log in as the first admin, make an API key for the run and revoke it after; they reach the box's
+Kubernetes API and LangSmith through ssh, with no port opened. Results, and every sample of the install
+taken during the run, are in `build/verify/` and `build/soak/`. They are the load test's own commands
+(`utils/langsmith-load-test`), which run the same way against a cloud or bare-metal install.
 
 ## Watching it
 
-Grafana's "LangSmith Lite" folder:
+Grafana's "LangSmith Lite" folder holds the two dashboards that matter most:
 
-| Dashboard | Read it for |
-|:--|:--|
-| LangSmith (the chart's own) | SmithDB's ingestion and compaction backlogs, query latency, the ingest queue's depth and latency |
-| Node Exporter Full | CPU, memory, disk use and IO; a filling object store shows on the disk panel first |
-| Redis | memory against `maxmemory`: at `noeviction` a full Redis refuses writes and ingestion stops |
-| PostgreSQL | connections against `max_connections`, and the databases' size |
+| Dashboard | Tabs | Read it for |
+|:--|:--|:--|
+| LangSmith Lite health | Red flags; Ingestion; Writes and queries; Compaction; Stores and pods; Capacity | is anything wrong: one tile a signal, green, orange (the early signal) or red (an alert fires); each tab graphs its signals with their levels as lines, one line an install |
+| LangSmith Self-Hosted (the chart's own) | SmithDB; Sandboxes | why: every SmithDB and LangSmith metric in depth |
 
-`make status` gives the same from the shell: each release's install, every pod, what the node and the
-pods use, and the volumes. Mission Control adds LangSmith's health view, preflight and database checks,
-and a diagnostics bundle for a support case.
+Node Exporter, Redis and PostgreSQL dashboards are there too. Every signal on the health dashboard is
+one alert rule in Grafana (Alerting, Alert rules), from one list, `infra/health.yaml`: LangSmith's
+[recommended SmithDB alerts](https://docs.langchain.com/langsmith/self-host-smithdb-alerts) (runs lost,
+an old backlog, Redis nearly full, failed or slow writes and queries, a saturated metastore, compaction
+behind or stopped, a component with no pods, restarts) and the bounds the plan sized (the disks, each
+pod's memory). A rule shows in Grafana's alert list; where it is sent (email, Slack, a pager) is a
+contact point you add in Grafana. SmithDB's panics are read from logs, which Lite does not collect.
+
+The LangSmith and SmithDB signals are grouped by namespace and the dashboard has an install picker, so
+the same dashboard serves a Grafana that scrapes many installs (ARCHITECTURE.md, Many installs); Redis,
+Postgres and the disks come from the box's own exporters and stay one a box.
+
+`make status` gives the shell's view: each release's install, every pod, what the node and the pods use,
+and the volumes. Mission Control adds LangSmith's health view and a diagnostics bundle for a support
+case.
 
 ## Changing and upgrading it
 
-Every setting is a variable (`infra/variables.tf`, SIZING.md lists them); a change is `make plan` then
-`make up`, which reinstalls only the releases whose manifests changed. A larger volume is not grown in
-place: local-path volumes are folders, so the plan's disk check is what holds them.
+Change a setting in `infra/terraform.tfvars`, or on the command line (`make up box=m`), then `make up`:
+it shows the plan, asks, applies what changed and reinstalls only the releases whose manifests changed.
+`make plan` shows the same without changing anything. Volumes are folders on the data disk, not
+resizable claims, so a larger size needs a disk that holds it, which the plan checks.
 
 ```bash
 make pins    # what each chart line resolves to now, and what is newer
-make plan    # resolves the lines again: a new LangSmith patch shows as a changed HelmChart
-make up
+make up      # resolves the lines again: a new LangSmith patch shows as a changed HelmChart
 ```
 
-A patch inside a pinned line arrives with any plan. A new line (LangSmith 0.19, k3s 1.37) is an edit to
-`infra/pins.yaml`, made on purpose: read the chart's changelog, then `make render` before any box gets it.
+A patch inside a pinned line arrives with any `make up`. A new line (LangSmith 0.19, k3s 1.37) is an edit
+to `infra/pins.yaml`, made on purpose: read the chart's changelog, then `make render` before any box gets it.
 
 ## Keeping its data
 
-ponytail: backups are not automated; one box is one failure domain, and the upgrade path is snapshots
-of the box's disk, or a cloud module with managed stores (PROPOSALS.md, Backups).
-
-| What | Where | How to copy it |
+| What | Where | Copy |
 |:--|:--|:--|
-| Traces, payloads, SmithDB's segments | RustFS's volume, under `/var/lib/rancher/k3s/storage/` on the box | a disk snapshot (EBS on AWS), or any S3 client through a port-forward |
-| Users, projects, SmithDB's metastore | Postgres's volume, the same folder | `pg_dumpall` in the Postgres pod, or the disk snapshot |
-| Every credential | `infra/terraform.tfstate` on the laptop | beside the box's backups; without it the stores' passwords are lost |
+| Traces, payloads, SmithDB's segments; users, projects, the metastore | the data disk: on AWS its own volume, else `data_path` or the system disk, under k3s's storage folder | on AWS, the daily snapshots (`backup_snapshot_days`, 7 by default); elsewhere a disk snapshot, or `pg_dumpall` in the Postgres pod and any S3 client through a port-forward |
+| Every credential | `infra/terraform.tfstate` on the laptop | beside the box's backups: without it the stores' passwords are lost |
 | The license key | `infra/.secrets.env` on the laptop | where licenses live |
 
-A disk snapshot is consistent only with the box stopped, or taken by a tool that freezes the filesystem.
+On AWS the data volume outlives the instance: replacing the instance (a new type, a new image) keeps the
+data on it. A new k3s on the new instance makes new volume folders beside the old ones (local-path names
+each after its claim's id), so its stores start empty until the old folders are moved into place. A
+snapshot is crash-consistent: what a power cut would leave, which Postgres and SmithDB recover from.
+Limit: no restore or reattach command yet; one box is one failure domain, and the upgrade path is a
+cloud module with managed stores.
 
-`make down` asks for the install's name, then on AWS destroys the instance and its disk, and on any
-other box runs k3s's uninstaller (k3s, every volume, the manifests, the kubeconfig) if that k3s is
-Lite's, and forgets the credentials. Nothing is kept.
+`make down` asks for the install's name, then on AWS destroys the instance, its volume and its
+snapshot policy, and on any other box runs k3s's uninstaller (k3s, every volume, the bundle, the
+kubeconfig, and the volumes under `data_path`), only if that k3s is Lite's, and forgets the credentials.
+On AWS the snapshots already taken are kept, as the last copy of the data, and billed until deleted:
+`make down` prints the commands that list and delete them. A script confirms with
+`CONFIRM=<name> make down`.
+
+## Handing it to a cluster
+
+With `cloud = "cluster"` there is no box: `make up` (or `make export`, again at any time) writes the same
+releases, values and Secrets to `build/export/<name>/` for a Kubernetes cluster you run, one install a
+namespace on the cluster's own storage classes (`storage_class`, `scratch_storage_class`):
+
+```bash
+kubectl apply --server-side -f build/export/<name>/cluster.yaml -f build/export/<name>/secrets.yaml
+bash build/export/<name>/install.sh       # helm upgrade --install, each release in order
+rm build/export/<name>/secrets.yaml       # every credential; mode 600 until then
+```
+
+Lite makes no Ingress there: route your ingress controller to the Service `langsmith-frontend`, port 80, in
+the install's namespace, and set `ingress_namespaces` to the controller's namespace.
+
+Or hand `values/` to Helm or Argo CD as they are. Installs on one cluster are independent
+(ARCHITECTURE.md, Many installs): the cluster's CNI must enforce NetworkPolicies, and
+`ingress_namespaces` names its ingress controller's namespace. Observability and Mission Control are off
+by default there, since a cluster runs one stack for all of them.
 
 ## When an install stops
 
 The install stops at the first step that fails, prints the end of its log, and keeps every step's log
-under `/var/lib/langsmith-lite/logs/` on the box (root only). Then, on the box, as the ssh user:
+under `/var/lib/langsmith-lite/logs/` on the box (root only). `make up` again resumes it. On the box, as
+the ssh user:
 
 ```bash
 export KUBECONFIG=~/.kube/langsmith-lite.yaml       # written at the end of an install; before it, sudo k3s kubectl
 k3s kubectl -n kube-system get helmcharts           # each release
-k3s kubectl -n kube-system logs job/helm-install-langsmith
-k3s kubectl -n langsmith get pods
-k3s kubectl -n langsmith describe pod <pod>
-journalctl -u k3s --since -30min
+k3s kubectl -n <name> get pods                      # the install's namespace: its name, unless namespace is set
+sudo k3s kubectl -n kube-system logs job/helm-install-langsmith   # a release's install log: kube-system's logs need root
+sudo journalctl -u k3s --since -30min
 ```
 
 | Symptom | Usual cause |
 |:--|:--|
 | A pod `Pending`, "Insufficient cpu" or "memory" | the machine is smaller than the plan's `machine`, or a `resources` override outgrew it: `make plan` says |
 | `helm-install-<release>` failing on a value | the chart refused it: `make render` shows which, without a box |
-| An install Job failed three times | the install stops and prints its log; fewer are retried, as while the stores start |
 | A pod `OOMKilled` | raise its memory with `resources`, citing what Grafana showed it use |
 | Pods that cannot reach each other, with Docker on the box | Docker's FORWARD policy: allow the pod range (10.42.0.0/16), or stop Docker |
 | No certificate with `access = dns` | the A record does not resolve to the box, or port 80 is closed: Traefik's log says which |
+| `make verify` stops at a hop | that hop's workload printed its last log lines; the health dashboard's tab for it shows since when |
 
 ## What the first install confirms
 
-What only a running box can show, each read on the first install of each box size (PROPOSALS.md,
-Measure what is not measured):
+What only a running box can show, each read on the first install of each size:
 
-1. SmithDB as one pod at each preset's size: its use at the design load, and whether it is killed.
+1. SmithDB as one pod at each size: its use at the design load (`make soak`), and whether it is killed.
 2. Traefik's HTTPS redirect and Let's Encrypt resolver, as k3s's bundled Traefik chart takes them.
-3. Grafana 13 provisioning the chart's v2 dashboard from a file.
+3. The health dashboard's signals reading data. Three LangSmith metric names (`langsmith_ingest_task_failures_total`, `langsmith_asynq_queue_latency_seconds`, `langsmith_asynq_ingestion_queue_retry`) come from the alerts page, not yet read from a 0.18 install; SmithDB's are checked against its source. Grafana 13.3.1 provisioning both dashboards and every rule was checked locally (2026-11-24).
 4. Postgres connections in use, and the metastore's growth.
 5. Mission Control taking the pre-created login rather than its first-run setup token.
-6. The install's waits on a first install, and on an upgrade that changes one release.
-7. k3s beside Docker on an Arch-family machine, then Ubuntu (AWS) and Debian.
+6. k3s beside Docker on an Arch-family machine, then Ubuntu (AWS) and Debian.

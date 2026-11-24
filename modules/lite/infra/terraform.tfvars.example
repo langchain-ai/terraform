@@ -1,5 +1,5 @@
-# Every setting an install can have. make up writes terraform.tfvars (gitignored) from its questions;
-# add any of these to it, or copy this file and edit it. Every default: variables.tf.
+# The settings most installs change. make up writes terraform.tfvars (gitignored) from its questions;
+# add any of these to it, or copy this file and edit it. variables.tf has every setting and its default.
 # The license key and a tunnel token never go here: make up asks for them and keeps them in
 # infra/.secrets.env (make secrets changes them).
 
@@ -16,9 +16,11 @@ ssh_host = "lite.example.internal"
 
 # Or an EC2 instance this module makes (reached as ubuntu).
 # cloud          = "aws"
-# aws_region     = "us-west-2"
+# aws_region     = "us-east-1"
 # ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 # admin_cidrs    = ["203.0.113.7/32"] # your address
+# aws_subnet_id  = "subnet-..."       # unset: the region's default VPC
+# aws_instance_type = "m7i.2xlarge"   # a machine of another shape: set it with machine
 # data_disk_gi         = 200 # the data volume; unset, the plan's volumes plus a fifth
 # backup_snapshot_days = 7   # daily snapshots of the data volume kept; 0 for none
 
@@ -29,11 +31,12 @@ ssh_host = "lite.example.internal"
 # Or no machine: the releases, values and Secrets for a Kubernetes cluster you run, one install a
 # namespace, on the cluster's own storage classes (make up writes them; make export again).
 # cloud                 = "cluster"
-# namespace             = "acme-langsmith"
+# namespace             = "acme-langsmith"         # unset: the install's name
+# ingress_namespaces    = ["ingress-nginx"]        # who may reach LangSmith: the cluster's ingress controller
 # storage_class         = "gp3"
 # scratch_storage_class = "gp3"
 
-# How LangSmith is reached: localhost (default), ip, dns or tunnel (README.md, Access).
+# How LangSmith is reached: localhost (default), ip, dns or tunnel (OPERATE.md, Reaching it).
 access = "localhost"
 # domain       = "langsmith.example.com"
 # acme_email   = "ops@example.com" # dns

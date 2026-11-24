@@ -53,8 +53,8 @@ run "the_stores_run_at_their_priority_and_carry_the_instance" {
   command = plan
   assert {
     condition = (
-      output.values.datastores.values.priorityClassName == "langsmith-lite-stores" &&
-      output.values.langsmith.values.smithdb.unified.deployment.priorityClassName == "langsmith-lite-stores" &&
+      output.values.datastores.values.priorityClassName == "langsmith-lite-stores-langsmith-lite" &&
+      output.values.langsmith.values.smithdb.unified.deployment.priorityClassName == "langsmith-lite-stores-langsmith-lite" &&
       output.values.datastores.values.datastoreLabel["langsmith-lite/instance"] == "langsmith-lite"
     )
     error_message = "the stores and SmithDB should run at the stores' priority, labelled with the instance."
@@ -62,6 +62,15 @@ run "the_stores_run_at_their_priority_and_carry_the_instance" {
   assert {
     condition     = output.values.datastores.values.postgres.instances.langsmith.databases == ["smithdb_metastore"] && output.values.datastores.values.postgres.instances.langsmith.maxConnections == 200
     error_message = "one Postgres should hold the metastore, with the derived max_connections."
+  }
+}
+
+# The plan sizes one pod a service; the chart's defaults run 3, 3 and 2 of them.
+run "every_langsmith_service_runs_the_one_replica_the_plan_sized" {
+  command = plan
+  assert {
+    condition     = alltrue([for c in ["platformBackend", "ingestQueue", "queue", "backend", "frontend"] : output.values.langsmith.values[c].deployment.replicas == 1])
+    error_message = "every LangSmith service should run exactly one replica, as the plan sized it."
   }
 }
 
@@ -151,11 +160,33 @@ run "the_plan_installs_the_versions_resolve_wrote" {
   }
 }
 
-run "mission_control_writes_nothing" {
+run "mission_control_is_strictly_read_only" {
   command = plan
   assert {
-    condition     = alltrue([for f in ["fixIssue", "adopt", "alerts", "configSave", "valuesOverride", "deploy", "contention"] : !output.values["mission-control"].values.config.features[f]])
-    error_message = "Mission Control's write features should be off."
+    condition     = output.values["mission-control"].values.config.strictReadOnly && !output.values["mission-control"].values.config.features.chat
+    error_message = "Mission Control should run strictly read-only (no write verb, no Secret create), with chat off."
+  }
+}
+
+# Security review, 2026-11-24: one install's namespaces refuse traffic but from that install and its
+# ingress; installs on one cluster never share a namespace or a priority class.
+run "each_namespace_refuses_traffic_from_other_installs" {
+  command = plan
+  assert {
+    condition     = alltrue([for ns in ["langsmith-lite", "langsmith-lite-observe"] : contains(output.box.objects, "NetworkPolicy/${ns}/langsmith-lite-ingress")])
+    error_message = "LangSmith's and observability's namespaces should each have a default-deny ingress policy."
+  }
+  assert {
+    condition     = output.namespaces.langsmith == "langsmith-lite"
+    error_message = "the namespace should default to the install's name."
+  }
+}
+
+run "prometheus_cannot_be_shut_down_by_a_pod" {
+  command = plan
+  assert {
+    condition     = length(output.values.prometheus.values.server.extraFlags) == 0
+    error_message = "Prometheus should run without web.enable-lifecycle."
   }
 }
 
@@ -167,11 +198,29 @@ run "node_exporter_stays_off_the_hosts_network" {
   }
 }
 
-run "every_bound_has_an_alert" {
+# health.yaml is the one list: SmithDB's recommended alerts (Steffen Hausmann's page) and the plan's bounds.
+run "every_signal_with_a_level_has_an_alert_and_a_tile" {
   command = plan
   assert {
-    condition     = length(output.values.grafana.values.alerting["rules.yaml"].groups[0].rules) == 4
-    error_message = "with the data on the system disk, the alerts should cover that disk, Redis, Postgres and pod memory."
+    condition = alltrue([for uid in ["lite-runs-lost", "lite-backlog-age", "lite-write-failures", "lite-query-failures", "lite-compaction-stopped", "lite-no-pods", "lite-system-disk"] :
+    contains([for r in output.values.grafana.values.alerting["rules.yaml"].groups[0].rules : r.uid], uid)])
+    error_message = "the SmithDB alerts and the system disk should each have a rule."
+  }
+  assert {
+    condition     = !contains([for r in output.values.grafana.values.alerting["rules.yaml"].groups[0].rules : r.uid], "lite-cpu-throttled")
+    error_message = "throttling has no level: shown on the dashboard, never alerted."
+  }
+  assert {
+    condition     = jsondecode(output.values.grafana.values.dashboards.lite.health.json).spec.layout.kind == "TabsLayout"
+    error_message = "the health dashboard should be organized in tabs."
+  }
+}
+
+run "the_write_failure_alert_waits_for_fifty_failures" {
+  command = plan
+  assert {
+    condition     = strcontains(one([for r in output.values.grafana.values.alerting["rules.yaml"].groups[0].rules : r.data[0].model.expr if r.uid == "lite-write-failures"]), ">= 50")
+    error_message = "write failures should page only past 50 failed requests, as the alerts page asks."
   }
 }
 
@@ -182,7 +231,7 @@ run "a_data_disk_gets_its_own_alert" {
     machine   = { cpu = 8, memory_gi = 32, disk_gi = 40, data_disk_gi = 600 }
   }
   assert {
-    condition     = length(output.values.grafana.values.alerting["rules.yaml"].groups[0].rules) == 5
+    condition     = contains([for r in output.values.grafana.values.alerting["rules.yaml"].groups[0].rules : r.uid], "lite-data-disk")
     error_message = "a data disk of its own should add its alert."
   }
 }

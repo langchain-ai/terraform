@@ -1,0 +1,126 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Read",
+      "Effect": "Allow",
+      "Action": ["ec2:Describe*", "sts:GetCallerIdentity"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsInstance",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:TerminateInstances",
+        "ec2:StopInstances",
+        "ec2:StartInstances",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifyInstanceMetadataOptions",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsEbsVolume",
+      "Effect": "Allow",
+      "Action": ["ec2:CreateVolume", "ec2:DeleteVolume", "ec2:ModifyVolume", "ec2:DeleteSnapshot"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsVolumeAttachment",
+      "Effect": "Allow",
+      "Action": ["ec2:AttachVolume", "ec2:DetachVolume"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsEip",
+      "Effect": "Allow",
+      "Action": ["ec2:AllocateAddress", "ec2:AssociateAddress", "ec2:DisassociateAddress", "ec2:ReleaseAddress"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsKeyPair",
+      "Effect": "Allow",
+      "Action": ["ec2:ImportKeyPair", "ec2:DeleteKeyPair"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsSecurityGroup",
+      "Effect": "Allow",
+      "Action": ["ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsVpcSecurityGroupIngressRule",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:UpdateSecurityGroupRuleDescriptionsIngress"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsVpcSecurityGroupEgressRule",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:UpdateSecurityGroupRuleDescriptionsEgress"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AwsIamRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:GetRole",
+        "iam:DeleteRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRoleTags",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/*-snapshots"
+    },
+    {
+      "Sid": "AwsIamRolePolicyAttachment",
+      "Effect": "Allow",
+      "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
+      "Resource": "arn:aws:iam::*:role/*-snapshots",
+      "Condition": {
+        "ArnEquals": { "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole" }
+      }
+    },
+    {
+      "Sid": "AwsDlmLifecyclePolicy",
+      "Effect": "Allow",
+      "Action": [
+        "dlm:CreateLifecyclePolicy",
+        "dlm:GetLifecyclePolicy",
+        "dlm:GetLifecyclePolicies",
+        "dlm:UpdateLifecyclePolicy",
+        "dlm:DeleteLifecyclePolicy",
+        "dlm:TagResource",
+        "dlm:UntagResource",
+        "dlm:ListTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassTheSnapshotRoleToDlmOnly",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::*:role/*-snapshots",
+      "Condition": { "StringEquals": { "iam:PassedToService": "dlm.amazonaws.com" } }
+    }
+  ]
+}

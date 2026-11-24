@@ -3,6 +3,7 @@
 # from the bundle, so there is no kubernetes or helm provider.
 #   aws     the instance, with cloud = aws (hosts/aws)
 #   random  the generated credentials (secrets.tf)
+#   tls     an AWS instance's ssh host key (hosts/aws)
 #------------------------------------------------------------------------------
 
 terraform {
@@ -16,6 +17,10 @@ terraform {
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
     }
   }
 }

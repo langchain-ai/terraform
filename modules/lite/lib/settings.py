@@ -33,6 +33,7 @@ class Question:
     kind: str = "string"  # string, number or list (a list of strings, typed comma-separated)
     pattern: str = ""
     note: str = ""  # printed once before the question is asked
+    optional: bool = False  # Enter keeps Terraform's default, saved as empty so it is not asked again
 
 
 def ssh_key() -> Optional[str]:
@@ -47,11 +48,11 @@ QUESTIONS = [
     Question("name", "the install's name", "langsmith-lite", pattern=r"^[a-z][a-z0-9-]{0,40}$"),
     Question("cloud", "where it runs", "baremetal", ("baremetal", "aws", "cluster"),
              note="baremetal: a Linux machine you ssh to; aws: an instance this makes; cluster: files for your own Kubernetes"),
-    Question("ssh_host", "the machine's ssh host or alias", when=lambda a: a["cloud"] == "baremetal"),
+    Question("ssh_host", "the machine's address, or an alias in ~/.ssh/config", when=lambda a: a["cloud"] == "baremetal"),
+    Question("ssh_user", "the ssh user, with sudo (Enter: your ssh config's, or your own name)", "", when=lambda a: a["cloud"] == "baremetal", optional=True),
     Question("aws_region", "AWS region", "us-east-1", when=lambda a: a["cloud"] == "aws"),
     Question("ssh_public_key", "the ssh public key for the instance", ssh_key(), when=lambda a: a["cloud"] == "aws"),
     Question("admin_cidrs", "addresses allowed to ssh, comma-separated CIDRs", when=lambda a: a["cloud"] == "aws", kind="list"),
-    Question("namespace", "the namespace", "langsmith", when=lambda a: a["cloud"] == "cluster", pattern=r"^[a-z][a-z0-9-]{0,40}$"),
     Question("storage_class", "the cluster's storage class for the stores", when=lambda a: a["cloud"] == "cluster"),
     Question("scratch_storage_class", "the storage class for caches", when=lambda a: a["cloud"] == "cluster"),
     Question("box", "the size", "s", ("xs", "s", "m", "l"),
@@ -60,7 +61,7 @@ QUESTIONS = [
              note="Retention sizes the disk more than anything else: choose what you must keep."),
     Question("long_ttl_days", "days an extended trace is kept, 14 or more", "30", kind="number", pattern=r"^[1-9][0-9]*$"),
     Question("access", "how LangSmith is reached", "localhost", ("localhost", "ip", "dns", "tunnel"),
-             when=lambda a: a["cloud"] != "cluster", note="README.md, Access"),
+             when=lambda a: a["cloud"] != "cluster", note="OPERATE.md, Reaching it"),
     Question("domain", "LangSmith's domain", when=lambda a: a.get("access") in ("dns", "tunnel")),
     Question("acme_email", "email for Let's Encrypt", when=lambda a: a.get("access") == "dns"),
     Question("admin_email", "the first admin's login email", "admin@langsmith.lite", pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
@@ -105,7 +106,7 @@ def ask(q: Question, answers: Answers) -> str:
     shown = f" {DIM}[{default if len(default or '') < 40 else default[:37] + '...'}]{OFF}" if default else ""
     while True:
         value = input(f"  {CYAN}{q.key:<22}{OFF} {q.prompt}{hint}{shown}: ").strip() or (default or "")
-        if value and valid(q, value):
+        if (value or q.optional) and (not value or valid(q, value)):
             return value
         print(f"  {RED}not a valid {q.key}{OFF}" if value else f"  {RED}{q.key} is required{OFF}", file=sys.stderr)
 

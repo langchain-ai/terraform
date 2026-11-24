@@ -51,9 +51,13 @@ prove() {
     ssh "${SSH_OPTS[@]}" -N -o ExitOnForwardFailure=yes -L "$kport:127.0.0.1:6443" "$SSH_TARGET" &
     run kube "reach the box's Kubernetes API over ssh" wait_for kubectl get --raw /readyz
   fi
-  wport="$(free_port)"
-  kubectl -n "$(json_get langsmith <<<"$ns")" port-forward svc/langsmith-frontend "$wport:$(frontend_port "$ns")" >"$work/port-forward.log" 2>&1 &
-  run frontend "reach LangSmith's frontend" wait_for curl -sf -o /dev/null "http://127.0.0.1:$wport/api/v1/info"
+  # Port 0: kubectl binds a free port itself and prints it. A port picked here and bound later could be
+  # taken first by another local user, who would then receive the admin's login (security review,
+  # 2026-11-24).
+  kubectl -n "$(json_get langsmith <<<"$ns")" port-forward svc/langsmith-frontend "0:$(frontend_port "$ns")" >"$work/port-forward.log" 2>&1 &
+  run forward "a tunnel to LangSmith's frontend" wait_for grep -q '^Forwarding from 127.0.0.1:' "$work/port-forward.log"
+  wport="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$work/port-forward.log" | head -1)"
+  run frontend "LangSmith answers through it" wait_for curl -sf -o /dev/null "http://127.0.0.1:$wport/api/v1/info"
   printf '\n'
   LITE_ADMIN_EMAIL="$(json_get langsmith user <<<"$logins")" LITE_ADMIN_PASSWORD="$(json_get langsmith password <<<"$logins")" \
     python3 "$LITE/lib/prove.py" "$mode" --endpoint "http://127.0.0.1:$wport" \

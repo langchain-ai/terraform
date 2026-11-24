@@ -27,3 +27,8 @@ output "data_volume_id" {
   value       = aws_ebs_volume.data.id
   description = "The data volume: the install finds its device by this id and mounts it."
 }
+
+output "host_public_key" {
+  value       = trimspace(tls_private_key.host.public_key_openssh)
+  description = "The instance's ssh host key: the commands trust this key for the instance's address and no other."
+}

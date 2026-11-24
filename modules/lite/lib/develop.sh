@@ -77,6 +77,7 @@ cmd_check() {
   run shell "shellcheck" shellcheck -S style -x "$LITE/bin/lite" "$LITE"/lib/*.sh "$LITE"/box/*.sh
   run python "every Python file parses" python3 -c 'import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' "$LITE"/lib/*.py
   run settings "the questions refuse a missing ssh_host" check_settings
+  run iam "the AWS policy covers every resource the AWS host makes" check_iam_policy
   printf '\n'
 }
 
@@ -91,4 +92,19 @@ check_settings() {
   local ok=$?
   rm -rf "$dir"
   return "$ok"
+}
+
+# infra/hosts/aws/iam-policy.json has one statement a resource type, its Sid the type in CamelCase
+# (aws_ebs_volume -> AwsEbsVolume): a resource added to the host without its permissions would fail
+# only at an apply, with someone else's credentials.
+check_iam_policy() {
+  python3 - "$LITE/infra/hosts/aws" <<'PY'
+import json, re, sys
+d = sys.argv[1]
+sids = {s["Sid"] for s in json.load(open(f"{d}/iam-policy.json"))["Statement"]}
+types = set(re.findall(r'^resource "(aws_\w+)"', open(f"{d}/main.tf").read(), re.M))
+missing = sorted(t for t in types if "".join(w.capitalize() for w in t.split("_")) not in sids)
+print("every resource type has its statement" if not missing else "no statement for: " + ", ".join(missing))
+sys.exit(1 if missing else 0)
+PY
 }

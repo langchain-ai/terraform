@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 6.33.0, < 7.0.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
@@ -90,6 +94,13 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   ip_protocol       = "-1"
 }
 
+# The instance's ssh host key, made here and given to it at boot, so the first ssh, which carries every
+# credential, checks the key it is shown instead of trusting it (accept-new took any key the first
+# time: security review, 2026-11-24). Like every credential, it lives in Terraform's state.
+resource "tls_private_key" "host" {
+  algorithm = "ED25519"
+}
+
 resource "aws_instance" "this" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
@@ -106,8 +117,16 @@ resource "aws_instance" "this" {
     tags                  = { Name = "${var.name}-system" }
   }
 
+  user_data = "#cloud-config\n${yamlencode({
+    ssh_deletekeys  = true
+    ssh_genkeytypes = []
+    ssh_keys        = { ed25519_private = tls_private_key.host.private_key_openssh, ed25519_public = trimspace(tls_private_key.host.public_key_openssh) }
+  })}"
+
+  # Instance metadata only from the instance itself: one hop, so no pod reaches it (and the host key above).
   metadata_options {
-    http_tokens = "required"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
   }
 
   tags = { Name = var.name }

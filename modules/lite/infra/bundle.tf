@@ -56,14 +56,71 @@ locals {
       metadata   = { name = "traefik", namespace = "kube-system" }
       spec       = { valuesContent = yamlencode(local.traefik_values) }
     },
-  ])
+  ], local.operator)
+
+  # The ssh user's access to the cluster: a ServiceAccount allowed what make status, access, verify and
+  # soak use, and nothing else. It was k3s's own admin kubeconfig, which made the ssh user cluster-admin
+  # without sudo (on a box whose sudo needs a security key's touch, a way around it), and make verify
+  # copied it to the laptop (security review, 2026-11-24). Left out on purpose: nodes/proxy, whose GET
+  # opens a kubelet exec; the load test then reads each pod's CPU as unread, and Prometheus has it.
+  operator_name = "langsmith-lite-operator"
+  operator = concat(
+    [
+      { apiVersion = "v1", kind = "ServiceAccount", metadata = { name = local.operator_name, namespace = "kube-system", labels = local.instance_label } },
+      {
+        apiVersion = "v1", kind = "Secret", type = "kubernetes.io/service-account-token"
+        metadata   = { name = local.operator_name, namespace = "kube-system", labels = local.instance_label, annotations = { "kubernetes.io/service-account.name" = local.operator_name } }
+      },
+      {
+        apiVersion = "rbac.authorization.k8s.io/v1", kind = "ClusterRole", metadata = { name = "${local.operator_name}-read", labels = local.instance_label }
+        rules = [
+          { apiGroups = [""], resources = ["pods", "services", "persistentvolumeclaims", "persistentvolumes", "nodes", "namespaces", "events"], verbs = ["get", "list", "watch"] },
+          { apiGroups = ["apps"], resources = ["deployments", "statefulsets", "daemonsets", "replicasets"], verbs = ["get", "list", "watch"] },
+          { apiGroups = ["batch"], resources = ["jobs"], verbs = ["get", "list", "watch"] },
+          { apiGroups = ["autoscaling"], resources = ["horizontalpodautoscalers"], verbs = ["get", "list", "watch"] },
+          { apiGroups = ["helm.cattle.io"], resources = ["helmcharts", "helmchartconfigs"], verbs = ["get", "list", "watch"] },
+          { apiGroups = ["metrics.k8s.io"], resources = ["pods", "nodes"], verbs = ["get", "list"] },
+          { nonResourceURLs = ["/readyz", "/livez", "/healthz", "/version"], verbs = ["get"] },
+        ]
+      },
+      {
+        apiVersion = "rbac.authorization.k8s.io/v1", kind = "ClusterRoleBinding", metadata = { name = "${local.operator_name}-read", labels = local.instance_label }
+        roleRef    = { apiGroup = "rbac.authorization.k8s.io", kind = "ClusterRole", name = "${local.operator_name}-read" }
+        subjects   = [{ kind = "ServiceAccount", name = local.operator_name, namespace = "kube-system" }]
+      },
+      # In the install's own namespaces: logs, tunnels, the services' proxy, and exec (the load test reads
+      # Redis INFO and Postgres's connections in their pods).
+      {
+        apiVersion = "rbac.authorization.k8s.io/v1", kind = "ClusterRole", metadata = { name = "${local.operator_name}-operate", labels = local.instance_label }
+        rules = [
+          { apiGroups = [""], resources = ["pods/log", "services/proxy", "pods/proxy"], verbs = ["get"] },
+          { apiGroups = [""], resources = ["pods/portforward", "pods/exec"], verbs = ["create", "get"] },
+        ]
+      },
+      # In kube-system: a tunnel to Traefik, nothing more.
+      {
+        apiVersion = "rbac.authorization.k8s.io/v1", kind = "Role", metadata = { name = "${local.operator_name}-forward", namespace = "kube-system", labels = local.instance_label }
+        rules      = [{ apiGroups = [""], resources = ["pods/portforward"], verbs = ["create", "get"] }]
+      },
+      {
+        apiVersion = "rbac.authorization.k8s.io/v1", kind = "RoleBinding", metadata = { name = "${local.operator_name}-forward", namespace = "kube-system", labels = local.instance_label }
+        roleRef    = { apiGroup = "rbac.authorization.k8s.io", kind = "Role", name = "${local.operator_name}-forward" }
+        subjects   = [{ kind = "ServiceAccount", name = local.operator_name, namespace = "kube-system" }]
+      },
+    ],
+    [for n in local.namespaces : {
+      apiVersion = "rbac.authorization.k8s.io/v1", kind = "RoleBinding", metadata = { name = "${local.operator_name}-operate", namespace = n.name, labels = local.instance_label }
+      roleRef    = { apiGroup = "rbac.authorization.k8s.io", kind = "ClusterRole", name = "${local.operator_name}-operate" }
+      subjects   = [{ kind = "ServiceAccount", name = local.operator_name, namespace = "kube-system" }]
+    } if n.name != local.ns.tunnel],
+  )
 
   # cloudflared connects out to Cloudflare and hands every request to Traefik; the public hostname and
   # its service (http://traefik.kube-system.svc.cluster.local:80) are set on the tunnel in Cloudflare.
   tunnel = {
     apiVersion = "apps/v1"
     kind       = "Deployment"
-    metadata   = { name = "cloudflared", namespace = local.ns.langsmith, labels = local.instance_label }
+    metadata   = { name = "cloudflared", namespace = local.ns.tunnel, labels = local.instance_label }
     spec = {
       replicas = 1
       selector = { matchLabels = { app = "cloudflared" } }

@@ -30,7 +30,7 @@ locals {
   }
 }
 
-# SIZING.md, pods: LangSmith's services from the measured model.
+# SIZING.md's computation, pods: LangSmith's services from the measured model.
 locals {
   model = local.sizes.model
   work  = { offered = local.peak, processed = local.peak, readers = local.readers, fixed = 0 }
@@ -47,7 +47,7 @@ locals {
   fixed_pods = { for name, p in local.sizes.fixed : name => p if local.features[p.feature] }
 }
 
-# SIZING.md, what a run costs: decimal KB in each store, weighted by the payload mix. Attachments go to
+# SIZING.md's computation, what a run costs: decimal KB in each store, weighted by the payload mix. Attachments go to
 # the blob bucket.
 locals {
   st        = local.sizes.storage
@@ -60,7 +60,7 @@ locals {
   }
 }
 
-# SIZING.md, volumes: storage fills at the average rate and keeps each run for its TTL.
+# SIZING.md's computation, volumes: storage fills at the average rate and keeps each run for its TTL.
 locals {
   runs_a_day   = local.peak / local.st.peak_factor * 86400
   extended     = var.extended_retention_pct / 100
@@ -87,7 +87,7 @@ locals {
   volumes_gi = sum(values(local.volumes))
 }
 
-# SIZING.md, the stores: Redis and Postgres reserve their memory (request equals limit), since they hold
+# SIZING.md's computation, the stores: Redis and Postgres reserve their memory (request equals limit), since they hold
 # the runs waiting to be ingested and every install's metadata; SmithDB and RustFS ask what they use and
 # may burst. All four run at the stores' priority, above the app's.
 locals {
@@ -109,7 +109,7 @@ locals {
   unknown_overrides = [for name in keys(var.resources) : name if !contains(keys(local.pods_sized), name)]
 }
 
-# SIZING.md, the fit. Requests within the share of the machine pods may ask; the volumes on the data disk
+# SIZING.md's computation, the fit. Requests within the share of the machine pods may ask; the volumes on the data disk
 # (or with the system on one disk); a single machine only up to the measured single-machine range.
 locals {
   allocatable = {
@@ -158,7 +158,7 @@ locals {
   }
 }
 
-# SIZING.md, the cost: what the box costs a month on AWS's list prices.
+# SIZING.md, The cost: what the box costs a month on AWS's list prices.
 locals {
   prices       = local.sizes.aws_prices
   aws_instance = var.aws_instance_type != "" ? var.aws_instance_type : local.preset.aws
