@@ -1,0 +1,154 @@
+modules/aws/README.md
+  s_82fc735a9ded12::t_27db5f919ffc05 1336
+  s_82fc735a9ded12::t_d4bf9d11ed971f 138,1292
+modules/aws/SMITHDB.md
+  s_82fc735a9ded12::t_6e41c6957e87eb 23-55
+modules/aws/infra/modules/storage/main.tf
+  s_82fc735a9ded12::t_14ffbc368f4a91 61-64,90-108
+modules/aws/infra/modules/storage/outputs.tf
+  s_82fc735a9ded12::t_efc359c8a1c505 17-21
+modules/aws/infra/modules/storage/variables.tf
+  s_82fc735a9ded12::t_efa0ec955260b4 42
+modules/aws/infra/tests/smithdb_bucket.tftest.hcl
+  s_82fc735a9ded12::t_30bc9124d01f08 1-72
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_82fc735a9ded12::t_17bc4fe4a93de8 853-878
+modules/aws/infra/variables.tf
+  s_82fc735a9ded12::t_b32cc42405da61 684
+modules/azure/Makefile
+  s_82fc735a9ded12::t_6a99a65cefbca0 13,65-67
+modules/azure/README.md
+  s_82fc735a9ded12::t_85c141b67d9c40 311,1231,1923-1952,1956-1957,2078-2098
+modules/azure/SMITHDB.md
+  s_82fc735a9ded12::t_8b933ad9846f75 52-59
+modules/azure/helm/scripts/init-values.sh
+  s_82fc735a9ded12::t_6c8e9219644a81 584,1091-1096,1099-1103
+modules/azure/infra/main.tf
+  s_82fc735a9ded12::t_08028bbf90921a 1415-1418,1876,2076-2080,2084-2156,2542-2551,2568-2576,2598-2608
+modules/azure/infra/modules/k8s-bootstrap/main.tf
+  s_82fc735a9ded12::t_6846941f178859 188-189,483-516,588-594
+modules/azure/infra/modules/k8s-bootstrap/outputs.tf
+  s_82fc735a9ded12::t_84a516f8e1299b 136-153
+modules/azure/infra/modules/k8s-bootstrap/variables.tf
+  s_82fc735a9ded12::t_fe9ef36daf37c2 397-458
+modules/azure/infra/modules/k8s-cluster/main.tf
+  s_82fc735a9ded12::t_97ff4f3fd01d53 490,497-514
+modules/azure/infra/modules/k8s-cluster/outputs.tf
+  s_82fc735a9ded12::t_0bfe9695332359 305-309
+modules/azure/infra/modules/k8s-cluster/variables.tf
+  s_82fc735a9ded12::t_f88aa5a71a6012 110-115,498-503
+modules/azure/infra/modules/postgres/main.tf
+  s_82fc735a9ded12::t_07578c12f85c88 73-76,80
+modules/azure/infra/modules/postgres/outputs.tf
+  s_82fc735a9ded12::t_e881d6dec72e06 56-60
+modules/azure/infra/modules/postgres/variables.tf
+  s_82fc735a9ded12::t_1c55ffd9b8f1aa 102-107
+modules/azure/infra/modules/smithdb/main.tf
+  s_82fc735a9ded12::t_97becac681a1e6 42-60,121-139
+modules/azure/infra/modules/smithdb/outputs.tf
+  s_82fc735a9ded12::t_687c285083a12b 70-97
+modules/azure/infra/modules/smithdb/variables.tf
+  s_82fc735a9ded12::t_976ae04629bf8d 76-97
+modules/azure/infra/modules/storage/main.tf
+  s_82fc735a9ded12::t_6d30a664c11643 139-143,187-210
+modules/azure/infra/modules/storage/outputs.tf
+  s_82fc735a9ded12::t_5571cff61623a6 62-66
+modules/azure/infra/modules/storage/variables.tf
+  s_82fc735a9ded12::t_54bf6fb32d102e 23
+modules/azure/infra/outputs.tf
+  s_82fc735a9ded12::t_bd8eeffa23258e 416-430
+modules/azure/infra/scripts/_common.sh
+  s_82fc735a9ded12::t_839562bffb3583 118-135,302,558-617,624,657,659,662,664
+modules/azure/infra/scripts/preflight.sh
+  s_82fc735a9ded12::t_bfbedef308fe6b 2424-2519
+modules/azure/infra/scripts/test-clickhouse-cluster.sh
+  s_82fc735a9ded12::t_3287a68e33ab35 1-103
+modules/azure/infra/scripts/test-clickhouse-owner-detail.sh
+  s_82fc735a9ded12::t_8ae301ae6b40b5 1-41
+modules/azure/infra/scripts/test-preflight-rbac.py
+  s_82fc735a9ded12::t_49fc235f609ce2 1597-1687,1893-1896,1911-1912,1918,1926-1930
+modules/azure/infra/scripts/test-support/kubectl
+  s_82fc735a9ded12::t_cdd5cad55b5e6f 14-19
+modules/azure/infra/terraform.tfvars.example
+  s_82fc735a9ded12::t_8aaaf62d225289 52-66,308-319,459
+modules/azure/infra/tests/byo_network.tftest.hcl
+  s_82fc735a9ded12::t_4000c183469b52 1039-1078
+modules/azure/infra/tests/clickhouse_external.tftest.hcl
+  s_82fc735a9ded12::t_dc23b5ea4db0dd 1-147
+modules/azure/infra/tests/postgres_ha_mode.tftest.hcl
+  s_82fc735a9ded12::t_c485b0520a8026 1-108
+modules/azure/infra/tests/smithdb_customer_managed_keys.tftest.hcl
+  s_82fc735a9ded12::t_37eb9a1c90864a 1-334
+modules/azure/infra/tests/storage_replication.tftest.hcl
+  s_82fc735a9ded12::t_4e270525674c2d 310-337
+modules/azure/infra/variables.tf
+  s_82fc735a9ded12::t_591adadbf43de6 748-839,892,2062-2077,2123-2133,2241-2352
+modules/byoc/aws/byoiam/README.md
+  s_82fc735a9ded12::t_8194a4b8775481 31,36-37,54-80
+modules/byoc/aws/byoiam/outputs.tf
+  s_82fc735a9ded12::t_b12be22a2298e9 3
+modules/byoc/aws/byoiam/policies.tf
+  s_82fc735a9ded12::t_ebcad216483185 91-207,240-297,388,451-452,502,511,518,521,526-529,549-555
+modules/byoc/aws/byoiam/roles.tf
+  s_82fc735a9ded12::t_a134c2d2955750 23-27,29-30,51,108,118-138
+modules/byoc/aws/byoiam/tests/dedicated_deployments.tftest.hcl
+  s_82fc735a9ded12::t_e5744a5bea7429 1-54
+modules/byoc/aws/byoiam/tests/deployment_builds.tftest.hcl
+  s_82fc735a9ded12::t_62355b5e473efe 1-125
+modules/byoc/aws/byoiam/variables.tf
+  s_82fc735a9ded12::t_e42b65c2c7178b 65-75,144-155
+modules/byoc/aws/langsmith-byoc-role/README.md
+  s_82fc735a9ded12::t_01bc71232cc737 127-206,274,302,306
+modules/byoc/aws/langsmith-byoc-role/policies.tf
+  s_82fc735a9ded12::t_491c4b78ce1548 21,149-154,158,163,166-172,193-254
+modules/byoc/aws/langsmith-byoc-role/policies/delete.json
+  s_82fc735a9ded12::t_c714fd7e441e35 414
+modules/byoc/aws/langsmith-byoc-role/policies/observability.json
+  s_82fc735a9ded12::t_234c5180188701 1-115
+modules/byoc/aws/langsmith-byoc-role/policies/route53.json
+  s_82fc735a9ded12::t_5e6e312893a5d2 51
+modules/byoc/aws/langsmith-byoc-role/policies/s3.json
+  s_82fc735a9ded12::t_9c93e3272d17fd 11-12,16,37-40,54-61
+modules/byoc/aws/langsmith-byoc-role/variables.tf
+  s_82fc735a9ded12::t_d4a4069b94a794 139-149
+modules/byoc/azure/langsmith-byoc-access/README.md
+  s_82fc735a9ded12::t_13d17f2cd7462f 3,7,9-11,14,18-28,37-38,132-137,139,141,185,187,189-191,193,210,214,222,224-226,235-255,257,259,289,301,315-316,330-332,337-338
+modules/byoc/azure/langsmith-byoc-access/data_planes.tf
+  s_82fc735a9ded12::t_843358edb7f40e 87,99
+modules/byoc/azure/langsmith-byoc-access/deployment_builds.tf
+  s_82fc735a9ded12::t_8b37bf1724e0f2 1-144
+modules/byoc/azure/langsmith-byoc-access/identities.tf
+  s_82fc735a9ded12::t_1c28a810880160 11-14,17,165-211,219
+modules/byoc/azure/langsmith-byoc-access/main.tf
+  s_82fc735a9ded12::t_8b1c410e322238 5-9,11-12,16-37
+modules/byoc/azure/langsmith-byoc-access/tests/deployment_builds.tftest.hcl
+  s_82fc735a9ded12::t_063333283e99bd 1-191
+modules/byoc/azure/langsmith-byoc-access/variables.tf
+  s_82fc735a9ded12::t_bb67805ada33da 6-11,45-56
+modules/byoc/gcp/langsmith-byoc-service-account/README.md
+  s_82fc735a9ded12::t_87c42a57a963ed 70-71,98,100-101,109,119,152,166,172-173,184,187,189,198-199,207,209,213-248,261-264
+modules/byoc/gcp/langsmith-byoc-service-account/main.tf
+  s_82fc735a9ded12::t_a5aa0390d342e2 27-33,58,64-68,166-175,179,209-211,266,284-299,387-390,396,418,425,679,683,723-748,858-871
+modules/byoc/gcp/langsmith-byoc-service-account/tests/name_fence.tftest.hcl
+  s_82fc735a9ded12::t_9f0d54a3be4ca2 36-41,58,62,69,124,155,174-183,222-380
+modules/byoc/gcp/langsmith-byoc-service-account/variables.tf
+  s_82fc735a9ded12::t_53806a66b96a28 56,65-93
+modules/gcp/infra/modules/storage/main.tf
+  s_82fc735a9ded12::t_a99e66f2b7e518 43-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a1a159c2cc94d2083297522ac1079043d93378c9",
+  "prompts": {},
+  "sessions": {
+    "s_82fc735a9ded12": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "b67adcbd-b0b0-4ffd-87d8-ac4b72e14ccd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
