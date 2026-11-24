@@ -106,6 +106,9 @@ queue:
       enabled: true
       minReplicaCount: 1
       maxReplicaCount: 5
+      # Idle memory is close to the request and does not fall as replicas are
+      # added, so the chart's 80% target would hold extra replicas at idle.
+      targetMemoryUtilizationPercentage: 150
 
 ingestQueue:
   deployment:
@@ -219,101 +222,17 @@ fleetTriggerServer:
 # (langsmith-values-fleet.yaml, -standalone-polly.yaml, -standalone-insights.yaml).
 
 # -- SmithDB ---------------------------------------------------------------
-
-smithdb:
-  query:
-    deployment:
-      resources:
-        requests:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "200Gi"
-        limits:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "200Gi"
-    autoscaling:
-      hpa:
-        minReplicas: 1
-
-  ingestion:
-    deployment:
-      resources:
-        requests:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "100Gi"
-        limits:
-          cpu: "4"
-          memory: "8Gi"
-          ephemeral-storage: "100Gi"
-    autoscaling:
-      hpa:
-        minReplicas: 1
-
-  compaction:
-    deployment:
-      replicas: 1
-      resources:
-        requests:
-          cpu: "2"
-          memory: "4Gi"
-        limits:
-          cpu: "2"
-          memory: "4Gi"
-
-  compactionWorker:
-    deployment:
-      resources:
-        requests:
-          cpu: "8"
-          memory: "16Gi"
-          ephemeral-storage: "100Gi"
-        limits:
-          cpu: "8"
-          memory: "16Gi"
-          ephemeral-storage: "100Gi"
-    autoscaling:
-      hpa:
-        minReplicas: 1
-
-  clusterManager:
-    deployment:
-      replicas: 1
-      resources:
-        requests:
-          cpu: "250m"
-          memory: "256Mi"
-        limits:
-          cpu: "250m"
-          memory: "256Mi"
+# No profile sizes SmithDB. Every profile runs the small tier that
+# langsmith-values-smithdb.yaml sets, with the chart's replica defaults and the
+# compaction-worker KEDA range from langsmith-values.yaml. For the medium or
+# large tier, see SMITHDB.md, "Scaling up".
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
-# These apply when using in-cluster postgres, redis, and clickhouse.
+# These apply when using in-cluster clickhouse.
 # If you're pointing at managed services (RDS, ElastiCache, ClickHouse Cloud),
 # these blocks are ignored — the StatefulSets won't be created.
 #
 # Chart default for ClickHouse is 3.5 CPU / 12Gi — wildly oversized for dev.
-
-postgres:
-  statefulSet:
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
-        cpu: "1"
-        memory: "2Gi"
-
-redis:
-  statefulSet:
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"
 
 clickhouse:
   statefulSet:

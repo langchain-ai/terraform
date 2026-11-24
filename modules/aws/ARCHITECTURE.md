@@ -27,7 +27,7 @@ LangSmith on AWS is deployed in three passes.
 │  Per deployed graph:                                                         │
 │    • api-server, queue, redis, postgres  (operator-managed)                  │
 │                                                                              │
-│  Requires: KEDA (installed in Pass 1 via k8s-bootstrap module)              │
+│  Uses: KEDA, a core component installed in Pass 1 by k8s-bootstrap           │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  Pass 2 — LangSmith Base Platform  (deploy_langsmith = true)                 │
 │                                                                              │
@@ -39,8 +39,8 @@ LangSmith on AWS is deployed in three passes.
 │    • playground     — LLM prompt playground                                  │
 │    • queue          — background job worker                                  │
 │    • clickhouse     — trace analytics store                                  │
-│    • redis          — task queue (in-cluster or ElastiCache)                 │
-│    • postgres       — metadata store (in-cluster or RDS)                     │
+│    • redis          — task queue (ElastiCache)                               │
+│    • postgres       — metadata store (RDS)                                   │
 │                                                                              │
 │  Storage:  RDS PostgreSQL → metadata / S3 → trace blobs (VPC endpoint)      │
 │  Ingress:  AWS ALB | NGINX | Envoy Gateway | Istio  (see Ingress Options)    │
@@ -69,7 +69,7 @@ LangSmith on AWS is deployed in three passes.
 | backend     | RDS PostgreSQL               | Private subnet, security group    |
 | backend     | S3 bucket                    | IRSA + VPC Gateway Endpoint       |
 | clickhouse  | EBS volume (GP3, EKS PVC)   | Local                             |
-| redis       | ElastiCache or in-cluster    | Private subnet, security group    |
+| redis       | ElastiCache (OSS mode)       | Private subnet, security group    |
 | LGP operator| RDS PostgreSQL (shared)      | Private subnet, security group    |
 
 ---
@@ -88,11 +88,12 @@ EKS Cluster (private subnets)
   ├── kube-system namespace
   │     ├── aws-load-balancer-controller
   │     ├── cluster-autoscaler
-  │     ├── ebs-csi-driver
-  │     └── keda
+  │     └── ebs-csi-driver
+  ├── keda namespace
+  │     └── keda (scales queue, ingest-queue, and the SmithDB compaction worker)
   └── langsmith namespace
         ├── backend, frontend, playground, queue, clickhouse
-        └── redis (in-cluster) OR ElastiCache ──► private subnet
+        └── ElastiCache (redis) ──► private subnet
               └── RDS PostgreSQL ──────────────► private subnet
                     └── S3 bucket ──────────────► VPC Gateway Endpoint (no public route)
 ```
@@ -249,13 +250,12 @@ Discovered during the gateway permutation test run (April 2026, all four modes v
 | # | Area | Constraint / Fix |
 |---|------|-----------------|
 | 1 | **ACM wildcard SANs** | `langchain.com` root zone has `0 issue "amazon.com"` CAA but **not** `0 issuewild "amazon.com"`. Wildcard SANs (`*.subdomain.langchain.com`) always fail with `CAA_ERROR`. The `dns` module requests only the apex domain cert — no wildcard SAN. |
-| 2 | **In-cluster Redis** | The LangSmith Helm chart deploys Redis **without** `requirepass`. The Terraform `k8s_bootstrap` module writes `redis://langsmith-redis:6379` (no password). Do not add an auth token unless you also configure the Helm chart Redis values. |
-| 3 | **`name_prefix` length** | Maximum 15 characters (not 11). Names like `dz-nginx-tst` (12) are valid. |
-| 4 | **Istio port** | Istio 1.23+ ingressgateway listens on port **80** directly via `NET_BIND_SERVICE` capability — not port `8080`. ALB TGB health check and SG rules must target port 80. |
-| 5 | **NGINX TGB port** | NGINX ingress-nginx controller pods listen on port **80**. The TargetGroupBinding target type is `ip`. |
-| 6 | **Envoy proxy port** | Envoy proxy pods listen on port **10080** (not 80) when running as non-root. The TGB `servicePort` must be `10080`. |
-| 7 | **Destroy order** | Always run `terraform destroy` first and let Terraform handle namespace + Helm release lifecycle. Pre-deleting namespaces causes the `helm_release` Terraform resource to timeout (~5m) because Helm cannot uninstall cleanly into a terminating namespace. |
-| 8 | **Stuck Terminating namespaces** | KEDA's stale `external.metrics.k8s.io/v1beta1` API group causes `NamespaceDeletionDiscoveryFailure`. Clear with: `kubectl get namespace $ns -o json \| python3 -c "import sys,json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" \| kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f -` |
+| 2 | **`name_prefix` length** | Maximum 15 characters (not 11). Names like `dz-nginx-tst` (12) are valid. |
+| 3 | **Istio port** | Istio 1.23+ ingressgateway listens on port **80** directly via `NET_BIND_SERVICE` capability — not port `8080`. ALB TGB health check and SG rules must target port 80. |
+| 4 | **NGINX TGB port** | NGINX ingress-nginx controller pods listen on port **80**. The TargetGroupBinding target type is `ip`. |
+| 5 | **Envoy proxy port** | Envoy proxy pods listen on port **10080** (not 80) when running as non-root. The TGB `servicePort` must be `10080`. |
+| 6 | **Destroy order** | Always run `terraform destroy` first and let Terraform handle namespace + Helm release lifecycle. Pre-deleting namespaces causes the `helm_release` Terraform resource to timeout (~5m) because Helm cannot uninstall cleanly into a terminating namespace. |
+| 7 | **Stuck Terminating namespaces** | KEDA's stale `external.metrics.k8s.io/v1beta1` API group causes `NamespaceDeletionDiscoveryFailure`. Clear with: `kubectl get namespace $ns -o json \| python3 -c "import sys,json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" \| kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f -` |
 
 ---
 
@@ -353,14 +353,13 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 # Edit namespace: field if using a namespace other than langsmith-agents
 ```
 
-### Optional SmithDB path
+### SmithDB
 
-SmithDB remains disabled by default. When enabled, Pass 1 adds a dedicated
-PostgreSQL 18 metastore, a dedicated S3 object store, SmithDB IRSA, and
-Karpenter-managed local-NVMe/compute pools. S3 data traffic uses the shared
-Gateway VPC endpoint. Pass 2 requires an explicit compatible v16 chart and
-starts with ingestion, migration, and query integration disabled. See
-[SMITHDB.md](SMITHDB.md).
+SmithDB is on by default. Pass 1 adds a dedicated PostgreSQL 18 metastore, a
+dedicated S3 object store, SmithDB IRSA, and a dedicated EKS managed node group
+with EBS caches. S3 data traffic uses the shared Gateway VPC endpoint. Pass 2
+deploys it with ingestion and query on and migration off; an install with
+traces in ClickHouse stages them instead. See [SMITHDB.md](SMITHDB.md).
 
 ---
 

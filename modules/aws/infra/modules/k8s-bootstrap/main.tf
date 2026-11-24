@@ -25,17 +25,10 @@ resource "kubernetes_secret" "postgres" {
     name      = "langsmith-postgres"
     namespace = kubernetes_namespace.langsmith.metadata[0].name
   }
-  # External: connection_url only (chart reads it directly).
-  # In-cluster: also include postgres_db/user/password so the Helm chart's
-  # in-cluster StatefulSet can initialize the database without manual patching.
-  # Updating data does not restart LangSmith pods. Restart the Helm release's
-  # deployments after apply so their pods load the new URL.
-  data = var.postgres_in_cluster_pass != "" ? {
-    connection_url    = var.postgres_connection_url
-    postgres_db       = var.postgres_in_cluster_db
-    postgres_user     = var.postgres_in_cluster_user
-    postgres_password = var.postgres_in_cluster_pass
-    } : {
+  # The chart reads connection_url directly. Updating data does not restart
+  # LangSmith pods. Restart the Helm release's deployments after apply so their
+  # pods load the new URL.
+  data = {
     connection_url = var.postgres_connection_url
   }
   type = "Opaque"
@@ -53,7 +46,9 @@ resource "kubernetes_secret" "redis" {
 }
 
 # ── KEDA (Kubernetes Event-driven Autoscaling) ───────────────────────────────
-# Required for LangSmith Deployments feature.
+# Core: installed on every install, whatever the feature flags. The LangSmith
+# chart renders KEDA ScaledObjects for its queue services, and the Deployments
+# operator scales agents with KEDA; without the CRDs the Helm deploy fails.
 
 resource "helm_release" "keda" {
   name             = "keda"

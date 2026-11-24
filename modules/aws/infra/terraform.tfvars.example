@@ -34,24 +34,14 @@
 #
 # Before filling this out, decide which tier fits your needs:
 #
-#   Tier 1 — All internal (simplest, not recommended for production)
-#     postgres_source    = "in-cluster"
-#     redis_source       = "in-cluster"
-#     clickhouse_source  = "in-cluster"
-#     → Everything runs as pods inside EKS. No RDS, no ElastiCache.
-#     → Good for: quick demos, dev/test environments.
+#   PostgreSQL and Redis are always RDS and ElastiCache from 0.18: SmithDB
+#   and LangSmith need them outside the cluster. ClickHouse is the one choice.
 #
-#   Tier 2 — External Postgres + Redis, internal ClickHouse (recommended)
-#     postgres_source    = "external"    ← RDS instance
-#     redis_source       = "external"    ← ElastiCache cluster
+#   Internal ClickHouse (recommended)
 #     clickhouse_source  = "in-cluster"  ← pod in EKS
-#     → Best balance of reliability and simplicity. RDS handles backups,
-#       failover, and scaling. ElastiCache provides a managed Redis.
 #     → Good for: production deployments.
 #
-#   Tier 3 — All external (fully managed)
-#     postgres_source    = "external"
-#     redis_source       = "external"
+#   External ClickHouse (fully managed)
 #     clickhouse_source  = "external"
 #     → Requires a ClickHouse Cloud subscription or self-managed ClickHouse.
 #       Connection details are configured in Helm values, not here.
@@ -200,11 +190,9 @@ enable_public_eks_cluster = false
 # Node group sizing — controls the EC2 instances that run your pods.
 #
 # Instance type guidance:
-# Full specs: https://aws.amazon.com/ec2/instance-types/m5/
-#   ClickHouse (in-cluster) requires nodes with at least 4 vCPU and 16 GB RAM.
-#   m5.4xlarge  = 16 vCPU, 64 GB RAM  (recommended for production)
-#   m5.2xlarge  =  8 vCPU, 32 GB RAM  (minimum viable for ClickHouse)
-#   m5.xlarge   =  4 vCPU, 16 GB RAM  (tight — only if no in-cluster ClickHouse)
+# General-purpose AMD x86 nodes: m6a.2xlarge = 8 vCPU / 32 GiB for LangSmith.
+# SmithDB has its own pool below; increase LangSmith capacity for larger profiles.
+# ClickHouse (in-cluster) requires at least 4 vCPU / 16 GiB per node.
 #
 # min_size guidance:
 #   3  — base LangSmith with no addons. Enough to schedule all core pods
@@ -213,13 +201,10 @@ enable_public_eks_cluster = false
 #         Insights from the start. All workloads schedule immediately.
 #  10  — max_size ceiling for autoscaler. Adjust based on expected load.
 #
-# Cost estimate (us-east-1, on-demand):
-#   3x m5.4xlarge ≈ $1.38/hr ≈ $1,000/mo
-#   6x m5.4xlarge ≈ $2.76/hr ≈ $2,000/mo
 eks_managed_node_groups = {
   default = {
     name           = "node-group-default"
-    instance_types = ["m5.4xlarge"]
+    instance_types = ["m6a.2xlarge"]
     min_size       = 3
     max_size       = 10
   }
@@ -237,20 +222,10 @@ create_gp3_storage_class = true
 #------------------------------------------------------------------------------
 # POSTGRESQL (RDS)
 #------------------------------------------------------------------------------
-# Controls where PostgreSQL runs. This is the primary database for LangSmith
-# metadata (projects, runs, users, API keys, etc.).
-#
-#   "external"   — (recommended) Provisions an RDS PostgreSQL instance in a
-#                  private subnet. Terraform manages backups, encryption, and
-#                  security groups. Only accessible from within the VPC.
-#
-#   "in-cluster" — PostgreSQL runs as a pod inside EKS. No RDS is created.
-#                  Simpler, but you lose automated backups, failover, and
-#                  point-in-time recovery. Not recommended for production.
-#                  Skip the rest of this section if using in-cluster.
-postgres_source = "external"
-
-# --- The settings below only apply when postgres_source = "external" ---
+# The primary database for LangSmith metadata (projects, runs, users, API keys,
+# etc.). Terraform provisions an RDS PostgreSQL instance in a private subnet and
+# manages backups, encryption, and security groups. Only accessible from within
+# the VPC. In-cluster PostgreSQL was removed in 0.18.
 
 # Database username. This is the master user for the RDS instance.
 # "langsmith" is conventional but any valid PostgreSQL identifier works.
@@ -307,17 +282,11 @@ postgres_skip_final_snapshot = false
 #------------------------------------------------------------------------------
 # REDIS (ElastiCache)
 #------------------------------------------------------------------------------
-# Controls where Redis runs. Redis is used for caching and as a message broker
-# for LangSmith's async task processing.
-#
-#   "external"   — (recommended) Provisions an ElastiCache Redis cluster in a
-#                  private subnet. Managed failover, encryption in transit.
-#
-#   "in-cluster" — Redis runs as a pod inside EKS. No ElastiCache is created.
-#                  Skip the rest of this section if using in-cluster.
-redis_source = "external"
-
-# --- The settings below only apply when redis_source = "external" ---
+# Redis is used for caching and as a message broker for LangSmith's async task
+# processing. Terraform provisions ElastiCache in OSS mode (not cluster mode) in
+# a private subnet, with encryption in transit. OSS mode gives DB indexes 0-15:
+# LangSmith uses DB 0, and Fleet, Chat and Insights on external storage use 1-3.
+# In-cluster Redis was removed in 0.18.
 
 # Instance size.
 # Full specs: https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/CacheNodes.SupportedTypes.html
@@ -342,10 +311,17 @@ redis_instance_type = "cache.m6g.xlarge"
 #------------------------------------------------------------------------------
 # Enables infrastructure prerequisites for LangSmith Sandboxes.
 #
-# Sandboxes use the sandbox-host architecture in the same EKS cluster and
-# namespace as LangSmith. This provisions a dedicated node group with the label
-# and taint expected by the Helm chart:
+# By default, Sandboxes use the sandbox-host architecture in the same EKS
+# cluster and namespace as LangSmith. Set sandbox_runtime_source to
+# "external" to create a dedicated EKS cluster in the same VPC and
+# install the standalone langsmith-sandbox chart there. Both modes provision
+# nodes with the label and taint expected by the Helm chart:
 #   sandbox.langsmith.com/host=true
+#
+# Separate-cluster mode uses private VPC routing from the main EKS worker/pod
+# security group to sandbox node port 19190. The langsmith-sandbox chart is not
+# pinned here: make deploy installs the newest one whose appVersion equals the
+# langsmith chart's, so the two always run the same LangSmith release.
 #
 # Requirements:
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
@@ -364,6 +340,25 @@ redis_instance_type = "cache.m6g.xlarge"
 #     devices 1..N are mounted as JuiceFS cache directories. m5d.metal has 4.
 #
 # enable_sandboxes = true
+# sandbox_runtime_source = "in-cluster" # or "external"
+# sandbox_namespace = "langsmith-sandbox"
+#
+# ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+# This is the IRSA contract: the same name goes into the sandbox IAM role's
+# OIDC trust condition and into sandboxHost.serviceAccount.name in the values
+# init-values.sh generates. Change it here, never only in the values file, or
+# sandbox-host loses access to the trace bucket.
+# sandbox_service_account_name = "sandbox-host"
+#
+# An external runtime requires an exact langsmith chart version on 0.18 or later
+# (the default 0.17 line has no separate-cluster support):
+# langsmith_helm_chart_version = "0.18.0"
+#
+# An external runtime also needs sandbox_service_auth_secret, a dedicated secret
+# that the sandbox cluster holds instead of the API key salt. Do not put it in
+# this file: setup-env.sh generates it into SSM and exports
+# TF_VAR_sandbox_service_auth_secret.
+#
 # sandbox_juicefs_redis_instance_type = "cache.m6g.large"
 # sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
 # Do not put it in this file. Export it manually with:
@@ -607,6 +602,32 @@ langsmith_namespace = "langsmith"
 # alb_existing_security_group_id     = "sg-0123456789abcdef2"
 # bastion_existing_security_group_id = "sg-0123456789abcdef3"
 
+# ── Narrowing the ALB with an external sandbox runtime ────────────────────────
+#
+# Separate-cluster sandboxes call the LangSmith API back through the ALB, so a
+# narrowed alb_allowed_cidr_blocks can cut them off. How that is handled depends
+# on the scheme, and terraform apply fails with instructions if it cannot be:
+#
+#   alb_scheme = "internal"
+#     Handled automatically. The call stays inside the VPC, so Terraform adds an
+#     ALB ingress rule naming the sandbox node security group. Narrow
+#     alb_allowed_cidr_blocks as much as you like. This is the recommended setup.
+#
+#   alb_scheme = "internet-facing"
+#     The call leaves via the NAT gateway and returns as public traffic, so only
+#     alb_allowed_cidr_blocks can match it. Either add your NAT egress address
+#     there yourself, or set the flag below to have Terraform add it.
+#
+# sandbox_alb_allow_nat_egress = true
+#   Appends the NAT gateway Elastic IPs to alb_allowed_cidr_blocks. Read this
+#   before enabling: with a single NAT gateway, every workload in the private
+#   subnets shares that address — including the sandboxes, which run untrusted
+#   user code. Allowing it re-opens the LangSmith API to anything in the VPC,
+#   which is usually the reason you narrowed the allowlist to begin with.
+#   Prefer alb_scheme = "internal". Requires create_vpc = true.
+#
+# sandbox_alb_allow_nat_egress = false
+
 # ALB Access Logs — captures every request that hits the ALB:
 #   client IP, request URI, response latency, HTTP status code.
 #   Docs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
@@ -729,6 +750,11 @@ enable_istio_gateway = false
 # (e.g. LangChain Managed ClickHouse, external model providers, package registries).
 # Default covers the LangSmith beacon/telemetry endpoint only.
 #
+# With sandbox_runtime_source = "external", langsmith_domain is appended
+# automatically: the sandbox cluster shares these private route tables, so its
+# callback to the LangSmith API is inspected here and would otherwise be dropped.
+# You do not need to list it yourself.
+#
 # firewall_allowed_fqdns = ["beacon.langchain.com"]
 
 # CIDR block for the firewall subnet. Must not overlap with existing subnets.
@@ -746,6 +772,9 @@ enable_istio_gateway = false
 # Profiles are based on the LangSmith scale guide:
 #   https://docs.langchain.com/langsmith/self-host-scale
 #
+# Every profile, "default" included, autoscales queue, ingest-queue, and the
+# SmithDB compaction worker with KEDA. Each profile sets its own ranges.
+#
 #   "production"       — Multi-replica with HPA/KEDA autoscaling. Fits the
 #                        Medium/Medium pattern (~20 users, ~100 traces/sec).
 #                        Good starting point for most production deployments.
@@ -757,7 +786,8 @@ enable_istio_gateway = false
 #                        request 1+ CPU per component and 3.5 CPU / 12Gi for
 #                        ClickHouse — without this profile, pods won't schedule
 #                        on small clusters.
-#   "default"          — Chart defaults (no sizing file applied).
+#   "default"          — Chart defaults (no sizing file applied), plus the KEDA
+#                        ranges in the base values.
 sizing_profile = "production"
 
 #------------------------------------------------------------------------------
@@ -846,28 +876,27 @@ enable_bedrock_access = false
 # langsmith_insights_encryption_key      = ""   # set via TF_VAR or setup-env.sh
 
 #------------------------------------------------------------------------------
-# SMITHDB (chart 0.16+)
+# SMITHDB (chart 0.17+)
 #------------------------------------------------------------------------------
-# SmithDB is the in-chart columnar store/query engine used alongside ClickHouse
-# in LangSmith v16. It shares the LangSmith namespace and Helm release. Enabling
-# it provisions:
+# SmithDB is on by default from 0.18. It shares the LangSmith namespace and Helm
+# release, and provisions:
 #   - a dedicated metastore Postgres (RDS) — separate from the LangSmith app DB
 #   - a dedicated object-store S3 bucket for .vortex segments
 #   - an IRSA role for the SmithDB service account (S3 access, no static keys)
-#   - the Karpenter controller + SmithDB instance-store + compute NodePools
-#     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
+#   - a dedicated general-purpose EKS managed group and gp3 cache StorageClass
 #
 # Pass 2 uses the repository's ~0.17.0 pin, which resolves to the latest
 # compatible 0.17.x chart unless CHART_VERSION explicitly overrides it.
 #
-# The generated values initially deploy SmithDB services with ingestion,
-# migration, and query integration disabled. Follow ../SMITHDB.md to enable each
-# stage after validation. Keep ClickHouse enabled throughout LangSmith v16.
+# A new install writes runs to SmithDB and serves reads from it. An install with
+# traces in ClickHouse sets ingestion and query to false and stages them
+# (../SMITHDB.md); one upgraded from 0.17 without SmithDB sets enable_smithdb =
+# false before its first 0.18 apply.
 
-# enable_smithdb = false
-# smithdb_ingestion_enabled = false
+# enable_smithdb            = true
+# smithdb_ingestion_enabled = true
 # smithdb_migration_enabled = false
-# smithdb_query_enabled     = false
+# smithdb_query_enabled     = true
 
 # ── Metastore (dedicated RDS Postgres; set source = "external" to bring your own)
 # smithdb_metastore_source          = "create"
@@ -897,21 +926,18 @@ enable_bedrock_access = false
 # smithdb_s3_versioning_enabled = false
 # smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
 
-# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
-# When enable_smithdb = true, the eks module installs the Karpenter controller
-# and this module creates two SmithDB pools:
-#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (no userdata needed)
-#   - compute: for compaction / cluster-manager / the metastore-migration job
-# Both amd64 and arm64 are supported; amd64 is the default so SmithDB matches
-# core LangSmith. For Graviton set smithdb_node_arch = "arm64".
-# Karpenter version MUST match eks_cluster_version (compatibility matrix:
-# https://karpenter.sh/docs/upgrading/compatibility/). K8s 1.34 -> >= 1.6,
-# 1.35 -> >= 1.9, 1.36 -> 1.13.
-# smithdb_karpenter_chart_version           = "1.6.3"
-# smithdb_node_arch                         = "amd64"
-# smithdb_capacity_type                     = ["on-demand"]
-# smithdb_instance_store_sizes              = ["4xlarge", "8xlarge"]
-# smithdb_instance_store_min_local_nvme_gib = 800
-# smithdb_instance_store_limits             = { cpu = 512, memory = "4096Gi" }
-# smithdb_compute_sizes                     = ["2xlarge", "4xlarge", "8xlarge"]
-# smithdb_compute_limits                    = { cpu = 256, memory = "1024Gi" }
+# ── SmithDB nodes (includes TaskDB) ─────────────────────────────
+# Every sizing_profile runs the SmithDB small tier, and these defaults fit it. The
+# medium tier needs m6a.8xlarge nodes and the large tier m6a.16xlarge, with higher
+# counts: see ../SMITHDB.md, "Scaling up". Caches are gp3 volumes (7,000 IOPS,
+# 1,000 MiB/s). "local-ssd" puts them on the nodes' instance-store NVMe instead,
+# which needs a type with instance store, such as m6id.4xlarge for the small tier:
+# see ../SMITHDB.md, "Local SSD cache".
+# smithdb_node_instance_type = "m6a.4xlarge"
+# smithdb_cache_storage      = "network-disk"
+# smithdb_node_min_count     = 2
+# smithdb_node_max_count     = 5
+# smithdb_node_root_volume_size_gb = 100
+#
+# Existing Karpenter deployments only: follow ../SMITHDB.md before upgrading.
+# smithdb_transition_mode = false

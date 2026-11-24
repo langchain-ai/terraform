@@ -143,9 +143,8 @@ is left, and the upgrade then removes the driver.
 
 ## 3) SmithDB on GCP
 
-This section applies to `enable_smithdb = true` on GCP. The AWS SmithDB overlay is
-not yet fixed for chart 0.17: it still sets `smithdb.migration.deployment`, which
-chart 0.17 rejects, and it sets no cache volume.
+This section applies to `enable_smithdb = true` on GCP. On AWS, follow the
+[existing Karpenter deployment steps](modules/aws/SMITHDB.md#existing-karpenter-deployments).
 
 | chart 0.16 | chart 0.17 |
 |---|---|

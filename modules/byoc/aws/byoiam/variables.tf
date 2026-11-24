@@ -18,7 +18,7 @@ variable "role_names" {
       "eks-cluster-role", "eks-node-role", "ebs-csi-role", "karpenter-node-role", "karpenter-controller-role",
       "postgres-monitoring-role", "smithdb-metastore-monitoring-role", "workload-iam-role", "postgres-setup-iam-role",
       "smithdb-iam-role", "smithdb-setup-iam-role", "external-secrets-iam-role", "lbc-role", "clickhouse-backup-iam-role",
-      "privatelink-lambda-role", "juicefs-csi-iam-role"
+      "privatelink-lambda-role", "juicefs-csi-iam-role", "playground-iam-role"
     ], key)])
     error_message = "role_names keys must be BYOIAM role purposes, such as eks-cluster-role or workload-iam-role."
   }
