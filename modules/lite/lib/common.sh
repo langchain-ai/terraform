@@ -41,12 +41,14 @@ EOF
 need() {
   local tool line min probe have problems=()
   for tool in "$@"; do
-    line="$(grep "^$tool " <<<"$TOOLS")"
+    # A tool with no row (tar) is checked for being installed only. grep found no row for tar, and under
+    # set -e that ended make up in silence, after the apply and before the install (magus, 2026-11-24).
+    line="$(grep "^$tool " <<<"$TOOLS" || true)"
     min="$(awk '{print $2}' <<<"$line")"
     probe="$(cut -d' ' -f3- <<<"$line")"
     if ! command -v "$tool" >/dev/null 2>&1; then
       problems+=("$tool is not installed")
-    elif [[ "$min" != 0 ]]; then
+    elif [[ -n "$min" && "$min" != 0 ]]; then
       have="$(bash -c "$probe" 2>/dev/null || echo 0)"
       version_at_least "${have#v}" "$min" || problems+=("$tool is ${have#v}; Lite needs $min or later")
     fi

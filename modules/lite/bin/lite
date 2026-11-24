@@ -5,13 +5,19 @@
 # See LICENSE at the root of this repository for full license text.
 
 # lite: LangSmith Lite's one command. The Makefile's targets call it; `bin/lite help` lists the verbs.
-set -euo pipefail
+set -Eeuo pipefail
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/ui.sh
 source "$here/lib/ui.sh"
 # shellcheck source=lib/common.sh
 source "$here/lib/common.sh"
+# A command that fails where no step expected it stops the verb; say which and where. A missing row in
+# the tool table once ended make up after the apply with no message at all (magus, 2026-11-24).
+on_error() {
+  ((BASH_SUBSHELL)) || printf '\n  %sERROR%s  stopped unexpectedly: %s\n         at %s line %s\n\n' "$RED" "$OFF" "$1" "${3#"$here/"}" "$2" >&2
+}
+trap 'on_error "$BASH_COMMAND" "$LINENO" "${BASH_SOURCE[0]}"' ERR
 # shellcheck source=lib/versions.sh
 source "$here/lib/versions.sh"
 # shellcheck source=lib/deploy.sh
