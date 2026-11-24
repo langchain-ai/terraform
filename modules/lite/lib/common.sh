@@ -24,7 +24,8 @@ helm 3.12 helm version --template "{{.Version}}"
 python3 3.9 python3 -c "import platform; print(platform.python_version())"
 ssh 0 echo 0
 curl 0 echo 0
-uv 0.5 uv --version | cut -d" " -f2
+uv 0.13.4 uv --version | cut -d" " -f2
+kubectl 1.28 kubectl version --client -o json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"clientVersion\"][\"gitVersion\"])"
 shellcheck 0.9 shellcheck --version | awk "/^version:/ {print \$2}"'
 
 version_at_least() {

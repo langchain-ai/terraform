@@ -25,3 +25,6 @@ PROPOSALS.md
 crash.log
 crash.*.log
 .DS_Store
+
+# Python bytecode from make check.
+__pycache__/

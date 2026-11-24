@@ -4,7 +4,7 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# Using a box: preflight, access, status, values, load. Sourced by bin/lite. None of these needs root on
+# Using a box: preflight, access, status, values. Sourced by bin/lite. None of these needs root on
 # the box.
 
 # Whether the machine can be the box, before anything is installed: box/checks.sh over ssh, as the ssh
@@ -99,15 +99,3 @@ df -h /var/lib/rancher 2>/dev/null || df -h /' |
 }
 
 cmd_values() { tf output -json values; }
-
-# The load test in utils/langsmith-load-test against this box, with an API key made in LangSmith.
-cmd_load() {
-  need terraform uv
-  [[ -n "${LANGSMITH_API_KEY:-}" ]] ||
-    fail "no LANGSMITH_API_KEY" "make one in LangSmith (Settings, API Keys) and export it."
-  local endpoint
-  endpoint="$(tf output -raw url)/api/v1"
-  heading "load" "synthetic traces at $endpoint"
-  [[ "$endpoint" == http://localhost* ]] && printf '  %smake access must be running in another terminal%s\n\n' "$DIM" "$OFF"
-  (cd "$LITE/../../utils/langsmith-load-test" && LANGSMITH_TRACING=true LANGSMITH_ENDPOINT="$endpoint" uv run load-test "$@")
-}

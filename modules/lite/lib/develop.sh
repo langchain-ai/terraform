@@ -75,7 +75,7 @@ cmd_check() {
   run validate "validate and tflint (scripts/check.sh)" bash "$LITE/../../scripts/check.sh" modules/lite
   run tests "the plan tests (scripts/plan-tests.sh)" bash "$LITE/../../scripts/plan-tests.sh" modules/lite
   run shell "shellcheck" shellcheck -S style -x "$LITE/bin/lite" "$LITE"/lib/*.sh "$LITE"/box/*.sh
-  run python "the summary, settings and export parse" python3 -c 'import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' "$LITE"/lib/*.py
+  run python "every Python file parses" python3 -c 'import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' "$LITE"/lib/*.py
   run settings "the questions refuse a missing ssh_host" check_settings
   printf '\n'
 }

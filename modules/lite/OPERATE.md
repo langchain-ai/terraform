@@ -38,7 +38,7 @@ checks on the box before it installs anything:
 | RHEL, Rocky, Alma, Fedora, Amazon Linux | untested; with SELinux enforcing, k3s needs `k3s-selinux` |
 | Alpine, or anything without systemd | not supported |
 
-A system becomes tested when `make up`, `make status` and `make load` at its box's design rate have run
+A system becomes tested when `make up`, `make verify` and `make soak` at its box's design rate have run
 on it, and this table says so with the date.
 
 ## Reaching it
@@ -62,7 +62,7 @@ Grafana and Mission Control.
 | `tunnel` | A Cloudflare Tunnel whose public hostname is `domain`, with the service `http://traefik.kube-system.svc.cluster.local:80`; `make secrets` saves its token. |
 
 The chart creates the organization and its first admin (`admin_email`) at install. Create an API key
-in LangSmith (Settings, API Keys) for the SDK and for `make load`.
+in LangSmith (Settings, API Keys) for the SDK; `make verify` and `make soak` make and revoke their own.
 
 What listens on the box's addresses: ssh (22); k3s's API (6443, TLS with client certificates) and
 kubelet (10250, authenticated), which a host firewall should close as the AWS security group does; and

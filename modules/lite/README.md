@@ -48,7 +48,9 @@ password `make access` prints.
 | `plan` | the same plan, shown and not applied: nothing changes anywhere |
 | `preflight` | whether a machine can be the box, before anything is installed: read-only, no root |
 | `export` | the releases, values and Secrets for a cluster of one's own |
-| `access`, `status`, `load`, `down` | use it, read it, put traces through it, delete it |
+| `verify` | do traces flow? Ten traces, followed hop by hop (accepted, Redis drained, SmithDB flushed, readable); where they stop, that workload's logs. About two minutes |
+| `soak` | does it hold its design load, with reads, for `DURATION` (900 s)? Whether it kept up and what crossed its alarm level. `STEP=1` raises the rate until it breaks: what the box holds |
+| `access`, `status`, `down` | use it, read it, delete it |
 | `secrets`, `values`, `pins`, `render`, `check`, `tf` | change the key; inspect what is installed; the module's own gates; any Terraform command |
 
 Settings can be given on the command line instead of asked, and are saved with the rest:
@@ -56,6 +58,11 @@ Settings can be given on the command line instead of asked, and are saved with t
 what is missing fails, naming what to pass, so a script or a fleet runs `make up` the same way. For a
 cluster you already run, answer `cluster`: `make up` then writes the releases, values and Secrets
 instead of installing a box.
+
+`verify` and `soak` are the load test's own (`utils/langsmith-load-test`: `make verify`, `make soak`,
+`make step`), which a cloud or bare-metal install runs the same way; Lite adds only the way in (an ssh
+tunnel to the box's Kubernetes API and to LangSmith) and an API key it makes from the first admin's login
+and revokes after the run. They need `kubectl` and `uv` here.
 
 Each verb prints a heading, one line a step ending ok or FAILED, and the next command; a step's output
 goes to `build/logs/`, shown only when it fails. `VERBOSE=1 make plan` prints the whole plan; Terraform
