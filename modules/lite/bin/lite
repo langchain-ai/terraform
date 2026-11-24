@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
+# lite: LangSmith Lite's one command. The Makefile's targets call it; `bin/lite help` lists the verbs.
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/ui.sh
+source "$here/lib/ui.sh"
+# shellcheck source=lib/common.sh
+source "$here/lib/common.sh"
+# shellcheck source=lib/versions.sh
+source "$here/lib/versions.sh"
+# shellcheck source=lib/deploy.sh
+source "$here/lib/deploy.sh"
+# shellcheck source=lib/operate.sh
+source "$here/lib/operate.sh"
+# shellcheck source=lib/develop.sh
+source "$here/lib/develop.sh"
+
+usage() {
+  printf '\n%sLangSmith Lite%s  %sone box, everything on it%s\n' "$BOLD" "$OFF" "$DIM" "$OFF"
+  local section verb what
+  while IFS='|' read -r section verb what; do
+    [[ -n "$section" ]] && printf '\n%s%s%s\n' "$BOLD" "$section" "$OFF"
+    printf '  %s%-10s%s %s\n' "$CYAN" "$verb" "$OFF" "$what"
+  done <<'EOF'
+Set up, once|init|check the tools, then terraform init
+|secrets|save the license key (and a tunnel token) in infra/.secrets.env, mode 600
+Install|preflight|check the machine can be the box: read-only, no root
+|plan|resolve the versions, size the box, show what would change
+|up|plan, apply, and install on the box (YES=1 skips the question)
+|install|install the current plan again, without an apply
+Use|access|every login; tunnels to LangSmith, Grafana and Mission Control
+|status|each release, every pod, what the box uses (read-only)
+|load|synthetic traces: LANGSMITH_API_KEY=... make load ARGS="--users 2"
+|down|delete the install and every trace in it
+Inspect and change|values|every release's chart and values, as the box gets them
+|pins|each pinned chart line against its live repo
+|render|render every release through its real chart (network)
+|check|offline, as CI: fmt, validate, tflint, plan tests, shellcheck
+|tf|any terraform command in infra/: make tf ARGS="state list"
+EOF
+  printf '\n  %sTerraform flags pass through ARGS: make plan ARGS="-var box=m". VERBOSE=1 prints the full plan.%s\n\n' "$DIM" "$OFF"
+}
+
+verb="${1:-help}"
+shift || true
+case "$verb" in
+  init | secrets | preflight | plan | up | install | access | status | load | down | values | pins | render | check)
+    "cmd_$verb" "$@" ;;
+  tf) need terraform && tf "$@" ;;
+  help | -h | --help) usage ;;
+  *) usage >&2 && fail "no verb $verb" ;;
+esac

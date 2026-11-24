@@ -41,6 +41,7 @@ infrastructure these examples add.
 | Example | Guide | Cluster | Status |
 |---|---|---|---|
 | Self-managed Kubernetes | [`modules/baremetal/`](modules/baremetal/README.md) | an existing cluster (tested on kubeadm and k3s) | Example |
+| LangSmith Lite, tracing on one box | [`modules/lite/`](modules/lite/README.md) | k3s on one machine it installs, yours or an EC2 instance | Example |
 
 ## What you get
 

@@ -1,0 +1,38 @@
+# Every version Lite installs, in one place.
+#
+# Charts are pinned to a line, as every other module pins LangSmith (CHART_VERSION:-~0.17.0 in their
+# deploy.sh): make plan resolves each line against its live Helm repo (lib/versions.sh) and
+# writes the exact versions to infra/resolved.auto.tfvars.json (gitignored), so the plan, the box and
+# the dashboard all name one exact version, and the plan prints it. Lite is chart 0.18 only.
+#
+# k3s is exact: it is the box's operating layer, moved on purpose. make pins prints what each line
+# resolves to now and the k3s stable channel's version beside this one.
+k3s: v1.36.6+k3s1
+
+charts:
+  langsmith: { repo: https://langchain-ai.github.io/helm, chart: langsmith, version: "~0.18.0" }
+  # Its images are tagged with the chart's appVersion, which make plan records: the chart's own default
+  # tag is latest.
+  mission-control: { repo: https://langchain-ai.github.io/helm, chart: mission-control, version: "~1.2.0" }
+  prometheus: { repo: https://prometheus-community.github.io/helm-charts, chart: prometheus, version: "~30.0.0" }
+  # Grafana 13, because the official LangSmith dashboard is a Grafana 13 (v2) dashboard. The chart moved
+  # from grafana/helm-charts to grafana-community, whose 14.x line ships Grafana 13.
+  grafana: { repo: https://grafana-community.github.io/helm-charts, chart: grafana, version: "~14.5.0" }
+  redis-exporter: { repo: https://prometheus-community.github.io/helm-charts, chart: prometheus-redis-exporter, version: "~6.38.0" }
+  postgres-exporter: { repo: https://prometheus-community.github.io/helm-charts, chart: prometheus-postgres-exporter, version: "~8.3.0" }
+
+images:
+  cloudflared: docker.io/cloudflare/cloudflared:2026.10.0
+
+# The chart's observability bundle, read at the installed langsmith release ({release}): its Grafana 13
+# dashboard, which Grafana downloads, and its Prometheus scrape annotations, which make plan fetches and
+# the bundle applies as a second values layer. Both move with the chart.
+observability:
+  dashboard: https://raw.githubusercontent.com/langchain-ai/helm/langsmith-{release}/charts/langsmith/examples/langsmith-observability/grafana-dashboard.json
+  scrape_values: https://raw.githubusercontent.com/langchain-ai/helm/langsmith-{release}/charts/langsmith/examples/langsmith-observability/components/smithdb/prometheus-values.yaml
+
+# grafana.com dashboards by id and revision (checked 2026-11-23).
+dashboards:
+  node: { id: 1860, revision: 46 }
+  redis: { id: 763, revision: 6 }
+  postgres: { id: 9628, revision: 8 }

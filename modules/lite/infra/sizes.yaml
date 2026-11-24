@@ -1,0 +1,92 @@
+# How big each pod on the box is. Data, read by sizing.tf; SIZING.md explains every number.
+#
+# Units: cpu_m millicores, mem_mi MiB, *_gi GiB. A request is what the scheduler reserves and what the
+# fit check adds up; a limit is the ceiling a pod may burst to and is never counted.
+
+# LangSmith's own pods follow a model measured on the bare-metal lab: cores used at idle (base) plus
+# cores per unit of work (per_unit), times headroom, never below min_cpu_m. Work is the design rate in
+# runs a second (offered: what clients send; processed: what the workers drain, the same in a steady
+# state), or the readers at once, or nothing (fixed). Memory is the sampled peak.
+# Source: bare-metal lab runs at 3 runs a trace and about 180 KiB a run, 5 s samples over ten minutes,
+# 2026-10-31 and 2026-11-01 (Reed Bender).
+model:
+  headroom: 1.5
+  min_cpu_m: 50
+  workloads:
+    # Go services keep a 2-CPU limit: Go sets GOMAXPROCS to the limit, and under a 1-CPU limit two
+    # threads spent the quota in 50 ms and the kernel froze the pod for the rest of each 100 ms
+    # (ingest-queue 98% of periods throttled at 4.3 traces/s on the lab, 2026-10-22; terraform#513,
+    # Michael Frederick).
+    platformBackend: { work: offered, base: 0.003, per_unit: 0.0045, mem_mi: 512, lim_cpu_m: 2000 }
+    ingestQueue: { work: processed, base: 0.025, per_unit: 0.035, mem_mi: 1126, lim_cpu_m: 2000 }
+    queue: { work: processed, base: 0.082, per_unit: 0.0058, mem_mi: 1638, lim_cpu_m: 1000 }
+    frontend: { work: readers, base: 0.001, per_unit: 0.0214, mem_mi: 128, lim_cpu_m: 500 }
+    # backend and playground import many Python modules at start: a higher CPU limit lets them start
+    # inside their startup probes (the bare-metal minimum profile).
+    backend: { work: readers, base: 0.013, per_unit: 0.0012, mem_mi: 973, lim_cpu_m: 2000 }
+    playground: { work: fixed, base: 0.005, per_unit: 0, mem_mi: 922, lim_cpu_m: 1000 }
+    aceBackend: { work: fixed, base: 0.001, per_unit: 0, mem_mi: 128, lim_cpu_m: 250 }
+  # A memory limit is twice the request, and at least this much above it, so a pod that peaks above
+  # its sampled peak is throttled by the kernel's reclaim before it is killed.
+  mem_limit_factor: 2
+  mem_limit_floor_mi: 256
+
+# The box presets. machine is the box Lite plans for; design is the load it sizes LangSmith's pods for,
+# the most each machine holds with the observability stack, Mission Control and an upgrade's hook Jobs
+# counted (make plan prints the margin);
+# reserved is what k3s, the kubelet and the OS keep (passed to the kubelet, so allocatable matches).
+# Everything below can be overridden per install (variables.tf).
+#
+# SmithDB runs as one unified pod (chart 0.18), whose smallest chart tier asks 4 CPU and 16 GiB: the
+# whole of box s. Its sizes here are the bare-metal module's tested minimal tier for the query,
+# ingestion and compaction pods it replaces, not yet measured as one pod. ponytail: unmeasured unified
+# SmithDB, the first lab run on each box sets it.
+boxes:
+  s:
+    machine: { cpu: 4, memory_gi: 16, disk_gi: 128 }
+    design: { runs_per_second: 5, readers: 2 }
+    reserved: { cpu_m: 500, mem_mi: 1536 }
+    smithdb: { cpu_m: 750, mem_mi: 3072, lim_cpu_m: 2000, lim_mem_mi: 6144, cache_gi: 20 }
+    postgres: { cpu_m: 100, mem_mi: 512, lim_cpu_m: 1000, lim_mem_mi: 1536, volume_gi: 10 }
+    redis: { cpu_m: 50, mem_mi: 512, lim_cpu_m: 1000, lim_mem_mi: 1536, volume_gi: 2 }
+    rustfs: { cpu_m: 100, mem_mi: 768, lim_cpu_m: 2000, lim_mem_mi: 3072, volume_gi: 40 }
+    prometheus: { volume_gi: 10 }
+  m:
+    machine: { cpu: 8, memory_gi: 32, disk_gi: 256 }
+    design: { runs_per_second: 25, readers: 5 }
+    reserved: { cpu_m: 750, mem_mi: 2048 }
+    smithdb: { cpu_m: 2000, mem_mi: 8192, lim_cpu_m: 4000, lim_mem_mi: 12288, cache_gi: 50 }
+    postgres: { cpu_m: 250, mem_mi: 1536, lim_cpu_m: 2000, lim_mem_mi: 3072, volume_gi: 20 }
+    redis: { cpu_m: 100, mem_mi: 1024, lim_cpu_m: 2000, lim_mem_mi: 3072, volume_gi: 4 }
+    # 6 GiB limit, as the bare-metal lab profile: RustFS was OOM-killed 9 times at 2 GiB under about
+    # 70 to 80 traces/s of SmithDB flushes, and each kill failed SmithDB's writes.
+    rustfs: { cpu_m: 250, mem_mi: 2048, lim_cpu_m: 4000, lim_mem_mi: 6144, volume_gi: 100 }
+    prometheus: { volume_gi: 20 }
+  l:
+    machine: { cpu: 16, memory_gi: 64, disk_gi: 512 }
+    design: { runs_per_second: 80, readers: 10 }
+    reserved: { cpu_m: 1000, mem_mi: 3072 }
+    smithdb: { cpu_m: 4000, mem_mi: 16384, lim_cpu_m: 8000, lim_mem_mi: 24576, cache_gi: 100 }
+    postgres: { cpu_m: 500, mem_mi: 3072, lim_cpu_m: 4000, lim_mem_mi: 6144, volume_gi: 50 }
+    redis: { cpu_m: 250, mem_mi: 2048, lim_cpu_m: 2000, lim_mem_mi: 6144, volume_gi: 8 }
+    rustfs: { cpu_m: 500, mem_mi: 4096, lim_cpu_m: 4000, lim_mem_mi: 8192, volume_gi: 250 }
+    prometheus: { volume_gi: 40 }
+
+# Pods whose size does not move with the load: the observability stack, Mission Control (its chart's
+# own requests), the exporters, and what k3s itself runs with requests (CoreDNS and metrics-server, from
+# k3s's packaged manifests; Traefik and local-path ask nothing).
+fixed:
+  prometheus: { cpu_m: 100, mem_mi: 512, lim_cpu_m: 1000, lim_mem_mi: 1536 }
+  kube-state-metrics: { cpu_m: 10, mem_mi: 64, lim_cpu_m: 100, lim_mem_mi: 128 }
+  node-exporter: { cpu_m: 10, mem_mi: 32, lim_cpu_m: 200, lim_mem_mi: 64 }
+  grafana: { cpu_m: 50, mem_mi: 192, lim_cpu_m: 500, lim_mem_mi: 512 }
+  redis-exporter: { cpu_m: 10, mem_mi: 32, lim_cpu_m: 100, lim_mem_mi: 64 }
+  postgres-exporter: { cpu_m: 10, mem_mi: 48, lim_cpu_m: 100, lim_mem_mi: 128 }
+  mission-control-backend: { cpu_m: 250, mem_mi: 256, lim_cpu_m: 500, lim_mem_mi: 512 }
+  mission-control-frontend: { cpu_m: 100, mem_mi: 128, lim_cpu_m: 200, lim_mem_mi: 256 }
+  cloudflared: { cpu_m: 50, mem_mi: 64, lim_cpu_m: 500, lim_mem_mi: 256 }
+  k3s-coredns: { cpu_m: 100, mem_mi: 70, lim_cpu_m: 0, lim_mem_mi: 170 }
+  k3s-metrics-server: { cpu_m: 100, mem_mi: 70, lim_cpu_m: 0, lim_mem_mi: 0 }
+
+# Disk the box needs beyond the volumes: images (LangSmith's are several GiB each) and logs.
+disk_overhead_gi: 30

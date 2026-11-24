@@ -1,0 +1,24 @@
+# Terraform state: it holds every generated credential. Back it up; never commit it.
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+
+# Each install's own settings, and the versions make plan resolves. The repo ignores every tfvars; the
+# example and the render cases are the module's own, so they are kept.
+infra/terraform.tfvars
+!infra/terraform.tfvars.example
+!infra/tests/render-*.tfvars
+infra/*.auto.tfvars
+infra/*.auto.tfvars.json
+
+# The license key and tunnel token, mode 600, where every module keeps its secrets.
+infra/.secrets.env
+infra/.secrets.env.*
+
+# The packaged datastores chart, the plan file (it holds the license key), and each run's logs.
+build/
+
+crash.log
+crash.*.log
+.DS_Store

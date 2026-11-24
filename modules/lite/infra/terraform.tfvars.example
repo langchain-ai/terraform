@@ -1,0 +1,34 @@
+# Copy to terraform.tfvars (gitignored) and edit. Every setting and its default: variables.tf.
+# The license key and a tunnel token never go here: make secrets keeps them in infra/.secrets.env.
+
+name = "langsmith-lite"
+box  = "s" # s (4 vCPU, 16 GiB), m (8, 32), l (16, 64): SIZING.md
+
+# Any Linux machine reached over ssh: a server, a VM in any cloud, a VM on a laptop (infra/hosts/README.md).
+# The user needs sudo only to install and remove k3s. ssh_user and ssh_port default to your ssh config's.
+cloud    = "baremetal"
+ssh_host = "lite.example.internal"
+# ssh_user = "ubuntu"
+# The machine as it is, when it is not the preset's size. make preflight and the install refuse less.
+# machine = { cpu = 8, memory_gi = 32, disk_gi = 256 }
+
+# Or an EC2 instance this module makes (reached as ubuntu).
+# cloud          = "aws"
+# aws_region     = "us-west-2"
+# ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
+# admin_cidrs    = ["203.0.113.7/32"] # your address
+
+# How LangSmith is reached: localhost (default), ip, dns or tunnel (README.md, Access).
+access = "localhost"
+# domain       = "langsmith.example.com"
+# acme_email   = "ops@example.com" # dns
+# access_cidrs = ["0.0.0.0/0"]     # aws with ip or dns
+
+# The load it is sized for, and how long traces are kept.
+# runs_per_second = 5
+# readers         = 2
+# short_ttl_days  = 14
+# long_ttl_days   = 30
+# max_payload_mb  = 25
+
+admin_email = "admin@example.com"
