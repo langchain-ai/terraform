@@ -97,13 +97,13 @@ resource "aws_instance" "this" {
   key_name               = aws_key_pair.this.key_name
   vpc_security_group_ids = [aws_security_group.this.id]
 
+  # The system: the operating system, k3s, the images and the logs. The data has a volume of its own.
   root_block_device {
-    volume_type = "gp3"
-    volume_size = var.disk_gi
-    encrypted   = true
-    # The volume holds every store; a terminated instance takes it, as make down intends.
+    volume_type           = "gp3"
+    volume_size           = var.root_disk_gi
+    encrypted             = true
     delete_on_termination = true
-    tags                  = { Name = var.name }
+    tags                  = { Name = "${var.name}-system" }
   }
 
   metadata_options {
@@ -122,4 +122,66 @@ resource "aws_eip" "this" {
   instance = aws_instance.this.id
   domain   = "vpc"
   tags     = { Name = var.name }
+}
+
+# Every store's volume, apart from the system. It outlives the instance (a new image, a replaced or
+# resized instance reattaches it); make down deletes it, after the install's name is typed. gp3 grows in
+# place, and the install grows its filesystem.
+resource "aws_ebs_volume" "data" {
+  availability_zone = data.aws_subnet.chosen.availability_zone
+  type              = "gp3"
+  size              = var.data_disk_gi
+  encrypted         = true
+  tags              = { Name = "${var.name}-data", "langsmith-lite/data" = var.name }
+}
+
+resource "aws_volume_attachment" "data" {
+  device_name = "/dev/sdf"
+  volume_id   = aws_ebs_volume.data.id
+  instance_id = aws_instance.this.id
+  # Stop the instance before detaching, so the stores are not cut off mid-write.
+  stop_instance_before_detaching = true
+}
+
+# Daily snapshots of the data volume, kept backup_snapshot_days: crash-consistent copies Postgres and
+# RustFS recover from, restorable to a new volume.
+resource "aws_iam_role" "snapshots" {
+  count = var.backup_snapshot_days > 0 ? 1 : 0
+  name  = "${var.name}-snapshots"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = "sts:AssumeRole", Principal = { Service = "dlm.amazonaws.com" } }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "snapshots" {
+  count      = var.backup_snapshot_days > 0 ? 1 : 0
+  role       = aws_iam_role.snapshots[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+}
+
+resource "aws_dlm_lifecycle_policy" "snapshots" {
+  count = var.backup_snapshot_days > 0 ? 1 : 0
+  # DLM allows letters, digits, spaces, hyphens and underscores only.
+  description        = "${var.name} LangSmith Lite data volume daily snapshots"
+  execution_role_arn = aws_iam_role.snapshots[0].arn
+  state              = "ENABLED"
+
+  policy_details {
+    resource_types = ["VOLUME"]
+    target_tags    = { "langsmith-lite/data" = var.name }
+
+    schedule {
+      name      = "daily"
+      copy_tags = true
+      create_rule {
+        interval      = 24
+        interval_unit = "HOURS"
+        times         = ["03:00"]
+      }
+      retain_rule {
+        count = var.backup_snapshot_days
+      }
+    }
+  }
 }

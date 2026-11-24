@@ -17,7 +17,7 @@
 chart_field() { awk -v f="^$1:" '$0 ~ f { gsub(/["\047]/, "", $2); print $2; exit }'; }
 
 # pins.yaml as JSON, through Terraform's own YAML reader, so no YAML library is needed here.
-pins_json() { tf_eval 'yamldecode(file("pins.yaml"))' || fail "could not read infra/pins.yaml" "run make init first."; }
+pins_json() { tf_eval 'yamldecode(file("pins.yaml"))' || fail "could not read infra/pins.yaml" "check infra/pins.yaml is valid YAML."; }
 
 # One "name repo chart line" line a chart.
 pinned_charts() {

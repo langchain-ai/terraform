@@ -18,9 +18,19 @@ variable "arch" {
   }
 }
 
-variable "disk_gi" {
+variable "root_disk_gi" {
   type        = number
-  description = "The root volume in GiB: the OS, k3s, the images and every store."
+  description = "The root volume in GiB: the operating system, k3s, the images and the logs."
+}
+
+variable "data_disk_gi" {
+  type        = number
+  description = "The data volume in GiB: every store's volume."
+}
+
+variable "backup_snapshot_days" {
+  type        = number
+  description = "Days of daily data-volume snapshots to keep; 0 for none."
 }
 
 variable "subnet_id" {

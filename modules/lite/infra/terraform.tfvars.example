@@ -1,10 +1,12 @@
-# Copy to terraform.tfvars (gitignored) and edit. Every setting and its default: variables.tf.
-# The license key and a tunnel token never go here: make secrets keeps them in infra/.secrets.env.
+# Every setting an install can have. make up writes terraform.tfvars (gitignored) from its questions;
+# add any of these to it, or copy this file and edit it. Every default: variables.tf.
+# The license key and a tunnel token never go here: make up asks for them and keeps them in
+# infra/.secrets.env (make secrets changes them).
 
 name = "langsmith-lite"
-box  = "s" # s (4 vCPU, 16 GiB), m (8, 32), l (16, 64): SIZING.md
+box  = "s" # xs (2 vCPU, 16 GiB), s (4, 16), m (8, 32), l (16, 64): README.md, Sizes
 
-# Any Linux machine reached over ssh: a server, a VM in any cloud, a VM on a laptop (infra/hosts/README.md).
+# Any Linux machine reached over ssh: a server, a VM in any cloud, a VM on a laptop (OPERATE.md, The machine).
 # The user needs sudo only to install and remove k3s. ssh_user and ssh_port default to your ssh config's.
 cloud    = "baremetal"
 ssh_host = "lite.example.internal"
@@ -17,6 +19,19 @@ ssh_host = "lite.example.internal"
 # aws_region     = "us-west-2"
 # ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
 # admin_cidrs    = ["203.0.113.7/32"] # your address
+# data_disk_gi         = 200 # the data volume; unset, the plan's volumes plus a fifth
+# backup_snapshot_days = 7   # daily snapshots of the data volume kept; 0 for none
+
+# Or a data disk of its own on a machine you ssh to: its mount point and its size.
+# data_path = "/srv/langsmith"
+# machine   = { cpu = 8, memory_gi = 32, disk_gi = 40, data_disk_gi = 600 }
+
+# Or no machine: the releases, values and Secrets for a Kubernetes cluster you run, one install a
+# namespace, on the cluster's own storage classes (make up writes them; make export again).
+# cloud                 = "cluster"
+# namespace             = "acme-langsmith"
+# storage_class         = "gp3"
+# scratch_storage_class = "gp3"
 
 # How LangSmith is reached: localhost (default), ip, dns or tunnel (README.md, Access).
 access = "localhost"
@@ -24,12 +39,16 @@ access = "localhost"
 # acme_email   = "ops@example.com" # dns
 # access_cidrs = ["0.0.0.0/0"]     # aws with ip or dns
 
-# The load it is sized for, and how long traces are kept: the object store's volume follows from them
-# (SIZING.md, How much data a box keeps).
+# How long traces are kept: the largest lever on the disk, and yours to choose. Unset, every plan says
+# it is using these defaults (SIZING.md).
+short_ttl_days = 14
+long_ttl_days  = 30 # 14 or more
+# extended_retention_pct = 5   # the share of traces kept for the long TTL
+# query_hot_days         = 7   # days of SmithDB data the query cache holds
+
+# The load it is sized for; unset, the size's design load.
 # runs_per_second = 5
 # readers         = 2
-# short_ttl_days  = 14
-# long_ttl_days   = 30
 # payload_mix_pct = { small = 70, medium = 25, large = 5 }
 # storage_factor  = 1 # 2 to 5 for real text, which compresses worse than the measured payloads
 # max_payload_mb  = 25

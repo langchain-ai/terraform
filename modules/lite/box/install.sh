@@ -4,7 +4,7 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# Runs on the box, as root, from the bundle make up and make install send:
+# Runs on the box, as root, from the bundle make up sends:
 #
 #   sudo bash install.sh <bundle folder>
 #
@@ -31,7 +31,7 @@ MARKER=/etc/rancher/k3s/installed-by-langsmith-lite
 
 # shellcheck source=lib/ui.sh
 source "$SRC/ui.sh"
-[[ $EUID -eq 0 ]] || fail "install.sh runs as root" "make up and make install run it with sudo."
+[[ $EUID -eq 0 ]] || fail "install.sh runs as root" "make up runs it with sudo."
 
 # lite.env: KEY=value lines Terraform wrote. Split at the first = by hand: IFS='=' read drops a value's
 # trailing =, which cut the padding off a base64 token.
@@ -39,7 +39,8 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && printf -v "${line%%=*}" '%s' "${line#*=}"
 done <"$SRC/lite.env"
 : "${NAME:?} ${K3S_VERSION:?} ${MACHINE_CPU:?} ${MACHINE_MEM_GI:?} ${MACHINE_DISK_GI:?} ${ACCESS:?} ${DATASTORES_TGZ:?}"
-export MACHINE_CPU MACHINE_MEM_GI MACHINE_DISK_GI ACCESS
+: "${DATA_MOUNT:?} ${NS:?} ${NS_DATA:?} ${RELEASES:?}"
+export MACHINE_CPU MACHINE_MEM_GI MACHINE_DISK_GI DATA_DISK_GI DATA_MOUNT DATA_VOLUME_ID ACCESS
 
 heading "$NAME" "k3s $K3S_VERSION on $(hostname)"
 
@@ -56,7 +57,30 @@ printf '\n'
 install -d -m 700 "$LITE_HOME" "$LITE_HOME/logs"
 start_log "$LITE_HOME/logs"
 
-#--- 2. k3s -------------------------------------------------------------------------------------------
+#--- 2. The data volume -------------------------------------------------------------------------------
+# On AWS the data volume is mounted at k3s's own storage folder before k3s starts, so every store's
+# volume lands on it. It is formatted only if it has no filesystem: a reattached volume keeps its data.
+# The device is found by the volume's id (Nitro instances name NVMe devices in attach order, not by
+# the device name Terraform asked for).
+mount_data_volume() {
+  local dev uuid found
+  found=(/dev/disk/by-id/*"${DATA_VOLUME_ID//-/}"*)
+  dev="${found[0]}"
+  [[ -e "$dev" ]] || { echo "the data volume $DATA_VOLUME_ID is not attached"; return 1; }
+  dev="$(readlink -f "$dev")"
+  blkid "$dev" >/dev/null 2>&1 || mkfs.ext4 -q -L langsmith-data "$dev"
+  uuid="$(blkid -s UUID -o value "$dev")"
+  install -d -m 755 "$DATA_MOUNT"
+  grep -q "UUID=$uuid" /etc/fstab || echo "UUID=$uuid $DATA_MOUNT ext4 defaults,nofail 0 2" >>/etc/fstab
+  mountpoint -q "$DATA_MOUNT" || mount "$DATA_MOUNT"
+  # A grown volume: the filesystem follows it.
+  resize2fs "$dev" >/dev/null
+}
+if [[ -n "${DATA_VOLUME_ID:-}" ]]; then
+  run data "the data volume at $DATA_MOUNT" mount_data_volume
+fi
+
+#--- 3. k3s -------------------------------------------------------------------------------------------
 config_changed=0
 install -d -m 755 /etc/rancher/k3s
 if ! cmp -s "$SRC/k3s-config.yaml" "$K3S_CONFIG" 2>/dev/null; then
@@ -94,7 +118,7 @@ node_ready() {
 }
 run node "wait for the node to be Ready" node_ready
 
-#--- 3. Base and Secrets ------------------------------------------------------------------------------
+#--- 4. Base and Secrets ------------------------------------------------------------------------------
 install -d -m 755 "$STATIC"
 install -m 644 "$SRC/$DATASTORES_TGZ" "$STATIC/$DATASTORES_TGZ"
 run base "namespaces, storage class, Traefik" kubectl apply -f "$SRC/lite-00-base.yaml"
@@ -103,7 +127,7 @@ run secrets "every credential, as Secrets" \
   kubectl apply --server-side --force-conflicts --field-manager=langsmith-lite -f "$SRC/secrets.yaml"
 rm -f "$SRC/secrets.yaml"
 
-#--- 4. The releases ----------------------------------------------------------------------------------
+#--- 5. The releases ----------------------------------------------------------------------------------
 # A HelmChart's install Job is helm-install-<name>, replaced when its HelmChart changes. A release whose
 # manifest changed waits for a Job other than the one it had before (by uid); an unchanged release's
 # last Job stands. Tracked per release: one time for the whole run made an upgrade of LangSmith wait out
@@ -148,28 +172,32 @@ wait_release() {
 stores_ready() {
   local sts
   for sts in postgres-langsmith redis-langsmith rustfs; do
-    kubectl -n langsmith-data rollout status "statefulset/$sts" --timeout=600s || return 1
+    kubectl -n "$NS_DATA" rollout status "statefulset/$sts" --timeout=600s || return 1
   done
 }
 
-place lite-10-datastores.yaml datastores
-run datastores "Postgres, Redis, RustFS" wait_release datastores 900
+# One manifest a release (lite-NN-<release>.yaml), in install order: the stores first, waited for before
+# LangSmith's migrations need them; then every other release.
+declare -A labels=(
+  [datastores]="Postgres, Redis, RustFS" [langsmith]="LangSmith (a first install pulls every image)"
+  [prometheus]="Prometheus" [grafana]="Grafana and its dashboards" [redis-exporter]="the Redis exporter"
+  [postgres-exporter]="the Postgres exporter" [mission-control]="Mission Control"
+)
+release_file() { ls "$SRC"/lite-[0-9][0-9]-"$1".yaml; }
+place "$(basename "$(release_file datastores)")" datastores
+run datastores "${labels[datastores]}" wait_release datastores 900
 run stores "the stores ready" stores_ready
-
-place lite-20-langsmith.yaml langsmith
-place lite-30-observe.yaml prometheus grafana redis-exporter postgres-exporter
-place lite-40-mission-control.yaml mission-control
-if [[ -f "$SRC/lite-50-tunnel.yaml" ]]; then place lite-50-tunnel.yaml; fi
-run langsmith "LangSmith (first install pulls every image)" wait_release langsmith 1800
-run prometheus "Prometheus" wait_release prometheus 900
-run grafana "Grafana and its dashboards" wait_release grafana 900
-run redis-exp "the Redis exporter" wait_release redis-exporter 600
-run postgres-exp "the Postgres exporter" wait_release postgres-exporter 600
-run mission "Mission Control" wait_release mission-control 900
+for r in $RELEASES; do
+  [[ "$r" == datastores ]] || place "$(basename "$(release_file "$r")")" "$r"
+done
+if [[ -f "$SRC/lite-90-tunnel.yaml" ]]; then place lite-90-tunnel.yaml; fi
+for r in $RELEASES; do
+  [[ "$r" == datastores ]] || run "$r" "${labels[$r]:-$r}" wait_release "$r" 1800
+done
 run available "every LangSmith deployment available" \
-  kubectl -n langsmith wait --for=condition=Available deployment --all --timeout=900s
+  kubectl -n "$NS" wait --for=condition=Available deployment --all --timeout=900s
 
-#--- 5. The ssh user's kubeconfig ---------------------------------------------------------------------
+#--- 6. The ssh user's kubeconfig ---------------------------------------------------------------------
 # k3s's own copy stays root-only (write-kubeconfig-mode 0600); this one is the ssh user's alone, so make
 # status and make access read the cluster without root.
 user_kubeconfig() {
@@ -183,12 +211,18 @@ if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
   run kubeconfig "a kubeconfig for $SUDO_USER" user_kubeconfig
 fi
 
-#--- 6. What this bundle no longer has ----------------------------------------------------------------
+#--- 7. What this bundle no longer has ----------------------------------------------------------------
+# A manifest file this bundle lacks is removed; the objects in it are deleted only when no file in this
+# bundle carries the same release. Deleting by file alone would uninstall a release whose manifest was
+# only renamed (its HelmChart deleted, helm-controller uninstalls it, and the stores with it).
 retire() {
-  local old
+  local old release
   for old in "$MANIFESTS"/lite-*.yaml; do
     [[ -e "$old" && ! -f "$SRC/$(basename "$old")" ]] || continue
-    kubectl delete -f "$old" --ignore-not-found
+    release="$(basename "$old" .yaml | sed 's/^lite-[0-9][0-9]-//')"
+    if [[ " $RELEASES tunnel base " != *" $release "* ]]; then
+      kubectl delete -f "$old" --ignore-not-found
+    fi
     rm -f "$old"
   done
   for old in "$STATIC"/datastores-*.tgz; do

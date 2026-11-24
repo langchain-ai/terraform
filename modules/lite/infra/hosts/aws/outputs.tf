@@ -22,3 +22,8 @@ output "web_rules" {
   value       = keys(aws_vpc_security_group_ingress_rule.web)
   description = "Each <port>-<cidr> LangSmith is open on."
 }
+
+output "data_volume_id" {
+  value       = aws_ebs_volume.data.id
+  description = "The data volume: the install finds its device by this id and mounts it."
+}

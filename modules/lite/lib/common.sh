@@ -67,6 +67,12 @@ tf() {
       esac
     done <"$SECRETS_FILE"
   fi
+  # A fresh checkout initialises on its first use, so no verb needs a separate init step first.
+  if [[ ! -d "$INFRA/.terraform" && "${1:-}" != init ]]; then
+    mkdir -p "$BUILD"
+    terraform -chdir="$INFRA" init -input=false >"$BUILD/init.log" 2>&1 ||
+      fail "terraform init failed" "its output: build/init.log"
+  fi
   terraform -chdir="$INFRA" "$@"
 }
 
@@ -131,4 +137,4 @@ ssh_root() {
 # cluster needs no root.
 # shellcheck disable=SC2016  # expands on the box
 BOX_K='k() { k3s kubectl --kubeconfig "$HOME/.kube/langsmith-lite.yaml" "$@"; }
-if [ ! -r "$HOME/.kube/langsmith-lite.yaml" ]; then echo "no kubeconfig for $(id -un) on this box: run make install."; exit 1; fi'
+if [ ! -r "$HOME/.kube/langsmith-lite.yaml" ]; then echo "no kubeconfig for $(id -un) on this box: run make up."; exit 1; fi'

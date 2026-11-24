@@ -28,29 +28,29 @@ usage() {
     [[ -n "$section" ]] && printf '\n%s%s%s\n' "$BOLD" "$section" "$OFF"
     printf '  %s%-10s%s %s\n' "$CYAN" "$verb" "$OFF" "$what"
   done <<'EOF'
-Set up, once|init|check the tools, then terraform init
-|secrets|save the license key (and a tunnel token) in infra/.secrets.env, mode 600
-Install|preflight|check the machine can be the box: read-only, no root
-|plan|resolve the versions, size the box, show what would change
-|up|plan, apply, and install on the box (YES=1 skips the question)
-|install|install the current plan again, without an apply
+Install|up|ask what is missing, plan, apply, install; again to change or repair it
+|plan|the same plan, shown and not applied: nothing is changed
+|preflight|check the machine can be the box: read-only, no root
+|export|the releases, values and Secrets for a cluster of one's own (OUT=dir)
 Use|access|every login; tunnels to LangSmith, Grafana and Mission Control
 |status|each release, every pod, what the box uses (read-only)
 |load|synthetic traces: LANGSMITH_API_KEY=... make load ARGS="--users 2"
 |down|delete the install and every trace in it
-Inspect and change|values|every release's chart and values, as the box gets them
+Inspect and change|secrets|change the license key or the tunnel token (infra/.secrets.env, mode 600)
+|values|every release's chart and values, as the box gets them
 |pins|each pinned chart line against its live repo
 |render|render every release through its real chart (network)
 |check|offline, as CI: fmt, validate, tflint, plan tests, shellcheck
 |tf|any terraform command in infra/: make tf ARGS="state list"
 EOF
-  printf '\n  %sTerraform flags pass through ARGS: make plan ARGS="-var box=m". VERBOSE=1 prints the full plan.%s\n\n' "$DIM" "$OFF"
+  printf '\n  %sSettings on the command line are saved in infra/terraform.tfvars: make up box=m ssh_host=lab1.%s\n' "$DIM" "$OFF"
+  printf '  %sYES=1 asks nothing (what is missing fails). VERBOSE=1 prints the full plan. ARGS passes Terraform flags.%s\n\n' "$DIM" "$OFF"
 }
 
 verb="${1:-help}"
 shift || true
 case "$verb" in
-  init | secrets | preflight | plan | up | install | access | status | load | down | values | pins | render | check)
+  secrets | preflight | plan | up | export | access | status | load | down | values | pins | render | check)
     "cmd_$verb" "$@" ;;
   tf) need terraform && tf "$@" ;;
   help | -h | --help) usage ;;

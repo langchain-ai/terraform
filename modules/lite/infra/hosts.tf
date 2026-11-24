@@ -4,9 +4,6 @@
 #------------------------------------------------------------------------------
 
 locals {
-  # The general-purpose instance with each preset's vCPUs and memory (m7i: 4 GiB a vCPU).
-  aws_instance_types = { s = "m7i.xlarge", m = "m7i.2xlarge", l = "m7i.4xlarge" }
-  aws_instance_type  = var.aws_instance_type != "" ? var.aws_instance_type : local.aws_instance_types[var.box]
 
   # ip serves HTTPS only; dns also needs 80 for Let's Encrypt's HTTP challenge and the redirect.
   web_ports = { localhost = [], tunnel = [], ip = [443], dns = [80, 443] }[var.access]
@@ -16,19 +13,21 @@ module "aws" {
   source = "./hosts/aws"
   count  = var.cloud == "aws" ? 1 : 0
 
-  name           = var.name
-  instance_type  = local.aws_instance_type
-  arch           = can(regex("^[a-z][0-9]+g", local.aws_instance_type)) ? "arm64" : "amd64"
-  disk_gi        = local.machine.disk_gi
-  subnet_id      = var.aws_subnet_id
-  ssh_public_key = var.ssh_public_key
-  admin_cidrs    = var.admin_cidrs
-  web_ports      = local.web_ports
-  access_cidrs   = var.access_cidrs
+  name                 = var.name
+  instance_type        = local.aws_instance
+  arch                 = can(regex("^[a-z][0-9]+g", local.aws_instance)) ? "arm64" : "amd64"
+  root_disk_gi         = local.system_disk_gi
+  data_disk_gi         = local.data_disk_gi
+  backup_snapshot_days = var.backup_snapshot_days
+  subnet_id            = var.aws_subnet_id
+  ssh_public_key       = var.ssh_public_key
+  admin_cidrs          = var.admin_cidrs
+  web_ports            = local.web_ports
+  access_cidrs         = var.access_cidrs
 }
 
 locals {
-  host = var.cloud == "aws" ? module.aws[0].host : var.ssh_host
+  host = var.cloud == "aws" ? module.aws[0].host : var.cloud == "cluster" ? "" : var.ssh_host
 }
 
 resource "terraform_data" "host" {

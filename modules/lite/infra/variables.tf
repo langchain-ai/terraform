@@ -15,38 +15,50 @@ variable "name" {
   }
 }
 
+variable "namespace" {
+  type        = string
+  default     = "langsmith"
+  description = "LangSmith's namespace; the stores go in <namespace>-data and the observability stack in <namespace>-observe. One box runs one install; on a shared cluster (make export), give each instance its own."
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,40}$", var.namespace))
+    error_message = "namespace must be lowercase letters, digits and hyphens, at most 41 characters."
+  }
+}
+
 #--- The box ------------------------------------------------------------------
 
 variable "cloud" {
   type        = string
   default     = "baremetal"
-  description = "Where the box comes from. baremetal: a machine you already have, reached over ssh. aws: an EC2 instance this module creates. gcp and azure are coming (infra/hosts/README.md)."
+  description = "Where it runs. baremetal: a machine you have, reached over ssh. aws: an EC2 instance this module makes. cluster: a Kubernetes cluster you already run, one install a namespace: make up writes the releases, values and Secrets for it (make export) instead of installing a box. gcp and azure hosts are to come; until then a VM there with baremetal."
 
   validation {
-    condition     = contains(["baremetal", "aws"], var.cloud)
-    error_message = "cloud must be baremetal or aws; gcp and azure are not built yet (infra/hosts/README.md)."
+    condition     = contains(["baremetal", "aws", "cluster"], var.cloud)
+    error_message = "cloud must be baremetal, aws or cluster."
   }
 }
 
 variable "box" {
   type        = string
   default     = "s"
-  description = "The size preset: s (4 vCPU, 16 GiB), m (8 vCPU, 32 GiB) or l (16 vCPU, 64 GiB). Sets the machine, the design load and every store's size (sizes.yaml)."
+  description = "The size preset: xs (2 vCPU, 16 GiB, 1 run/s), s (4, 16, 5 runs/s), m (8, 32, 25 runs/s) or l (16, 64, 50 runs/s). Sets the machine, the design load, every per-box size and whether the observability stack and Mission Control run (sizes.yaml). Past l is a full deployment: a cloud module."
 
   validation {
-    condition     = contains(["s", "m", "l"], var.box)
-    error_message = "box must be s, m or l."
+    condition     = contains(["xs", "s", "m", "l"], var.box)
+    error_message = "box must be xs, s, m or l; past l, use a cloud module (../aws, ../gcp, ../azure)."
   }
 }
 
 variable "machine" {
   type = object({
-    cpu       = number
-    memory_gi = number
-    disk_gi   = number
+    cpu          = number
+    memory_gi    = number
+    disk_gi      = number
+    data_disk_gi = optional(number)
   })
   default     = null
-  description = "The machine as it is, when it differs from the preset's (a bare-metal box or a VM): vCPUs, GiB of memory and GiB of disk. The install refuses a machine smaller than this."
+  description = "The machine as it is, when it differs from the preset's (a bare-metal box or a VM): vCPUs, GiB of memory, GiB of disk, and with data_path the GiB of that disk. make preflight and the install refuse a machine smaller than this."
 }
 
 #--- The load it is sized for -------------------------------------------------
@@ -113,6 +125,18 @@ variable "code_evaluators" {
   description = "Run ace-backend, which executes custom code evaluators. Off: Lite is tracing."
 }
 
+variable "observability" {
+  type        = bool
+  default     = null
+  description = "Run Prometheus, Grafana and the exporters on the box. Unset: the preset's (on, but off for xs, an instance a fleet watches from one shared stack). Every pod is labelled with the instance, for a shared Prometheus to scrape."
+}
+
+variable "mission_control" {
+  type        = bool
+  default     = null
+  description = "Run Mission Control on the box. Unset: the preset's (on, but off for xs)."
+}
+
 variable "resources" {
   type = map(object({
     cpu_m      = number
@@ -144,23 +168,56 @@ variable "max_request_ratio" {
 
 variable "short_ttl_days" {
   type        = number
-  default     = 14
-  description = "Days a trace is kept on the short tier, the default for every project. Drives LangSmith's TTL and the blob bucket's expiry rule for ttl_s/."
+  default     = null
+  description = "Days a trace is kept: the default for every project. With the long TTL it is the largest lever on the disk (SIZING.md, What a box keeps). Unset, the plan uses 14 and says so on every plan: set it to what you must keep."
 
   validation {
-    condition     = var.short_ttl_days >= 1 && floor(var.short_ttl_days) == var.short_ttl_days
+    condition     = var.short_ttl_days == null || try(var.short_ttl_days >= 1 && floor(var.short_ttl_days) == var.short_ttl_days, false)
     error_message = "short_ttl_days must be a whole number of days, at least 1."
   }
 }
 
 variable "long_ttl_days" {
   type        = number
-  default     = 30
-  description = "Days a trace is kept on the long tier (extended retention). Drives LangSmith's TTL, SmithDB's long-term retention and the blob bucket's expiry rule for ttl_l/. Lower than the chart's 400 so one box's disk stays bounded."
+  default     = null
+  description = "Days a trace is kept on extended retention, and SmithDB's long-term retention. Unset, the plan uses 30 (the chart's own is 400) and says so on every plan."
 
   validation {
-    condition     = var.long_ttl_days >= 14 && floor(var.long_ttl_days) == var.long_ttl_days
+    condition     = var.long_ttl_days == null || try(var.long_ttl_days >= 14 && floor(var.long_ttl_days) == var.long_ttl_days, false)
     error_message = "long_ttl_days must be a whole number of days, at least 14 (the chart refuses less)."
+  }
+}
+
+variable "extended_retention_pct" {
+  type        = number
+  default     = 5
+  description = "Percent of runs kept on extended retention (the long TTL). The rest expire at the short TTL."
+
+  validation {
+    condition     = var.extended_retention_pct >= 0 && var.extended_retention_pct <= 100
+    error_message = "extended_retention_pct must be from 0 to 100."
+  }
+}
+
+variable "attachment_kib_per_run" {
+  type        = number
+  default     = 0
+  description = "Average KiB of attachments a run carries (files, images). Attachments go to the blob bucket and are kept on the run's TTL."
+
+  validation {
+    condition     = var.attachment_kib_per_run >= 0
+    error_message = "attachment_kib_per_run must be 0 or more."
+  }
+}
+
+variable "query_hot_days" {
+  type        = number
+  default     = 7
+  description = "Days of recent traces SmithDB's query cache holds on local disk, so reads of them skip the object store. Sizes the cache."
+
+  validation {
+    condition     = var.query_hot_days >= 1
+    error_message = "query_hot_days must be at least 1."
   }
 }
 
@@ -176,10 +233,22 @@ variable "volumes" {
   description = "Volume sizes in GiB, each defaulting to the preset's. object_store_gi holds every trace for its TTL; smithdb_cache_gi is SmithDB's disposable query cache."
 }
 
+variable "storage_class" {
+  type        = string
+  default     = "local-path-retain"
+  description = "The storage class of the stores' volumes. On a box, k3s's local-path with Retain, which Lite makes. For make export, the cluster's own class (gp3, for example): one that keeps a volume when its claim is deleted."
+}
+
+variable "scratch_storage_class" {
+  type        = string
+  default     = "local-path"
+  description = "The storage class of SmithDB's query cache and Prometheus's volume, both rebuilt if lost. For make export, the cluster's own."
+}
+
 variable "postgres_max_connections" {
   type        = number
-  default     = 200
-  description = "Postgres max_connections. The Grafana Postgres dashboard shows connections in use; raise this before they reach it."
+  default     = null
+  description = "Postgres max_connections. Unset, it is derived from the pods' pools (SIZING.md); set it only from what the PostgreSQL dashboard showed in use."
 }
 
 variable "max_payload_mb" {
@@ -279,13 +348,24 @@ variable "ssh_host" {
 variable "ssh_user" {
   type        = string
   default     = ""
-  description = "The ssh user. Empty: ~/.ssh/config's User for ssh_host on bare metal, ubuntu on AWS. It needs sudo to install and remove k3s (make up, make install, make down), asked once per command; make status and make access run without it."
+  description = "The ssh user. Empty: ~/.ssh/config's User for ssh_host on bare metal, ubuntu on AWS. It needs sudo to install and remove k3s (make up, make down), asked once per command; make status and make access run without it."
 }
 
 variable "ssh_port" {
   type        = number
   default     = null
   description = "The ssh port. Empty: ~/.ssh/config's Port for ssh_host, else 22."
+}
+
+variable "data_path" {
+  type        = string
+  default     = ""
+  description = "cloud = baremetal: a mounted filesystem for every store's volume (a second disk, a RAID, a SAN volume), kept apart from the system. Set machine.data_disk_gi to its size. Empty: the volumes go on the root filesystem."
+
+  validation {
+    condition     = var.data_path == "" || startswith(var.data_path, "/")
+    error_message = "data_path must be an absolute path."
+  }
 }
 
 #--- AWS ----------------------------------------------------------------------
@@ -306,6 +386,29 @@ variable "aws_instance_type" {
   type        = string
   default     = ""
   description = "cloud = aws: the instance type. Empty: the box preset's (hosts/aws). One with the preset's vCPUs and memory or more."
+}
+
+variable "data_disk_gi" {
+  type        = number
+  default     = null
+  description = "cloud = aws: GiB of the data volume, which holds every store's volume apart from the root volume and outlives the instance. Unset: the plan's volumes plus a fifth."
+}
+
+variable "backup_snapshot_days" {
+  type        = number
+  default     = 7
+  description = "cloud = aws: days of daily snapshots of the data volume kept by Data Lifecycle Manager. 0 turns them off."
+
+  validation {
+    condition     = var.backup_snapshot_days >= 0 && floor(var.backup_snapshot_days) == var.backup_snapshot_days
+    error_message = "backup_snapshot_days must be a whole number of days, 0 or more."
+  }
+}
+
+variable "aws_hourly_usd" {
+  type        = number
+  default     = null
+  description = "cloud = aws: the instance's price an hour, for the plan's cost estimate, when it is not the us-east-1 on-demand list price (another region, a reservation, a discount)."
 }
 
 variable "ssh_public_key" {
@@ -343,7 +446,7 @@ variable "langsmith_license_key" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "The LangSmith license key. make secrets saves it in infra/.secrets.env; bin/lite passes it to Terraform as TF_VAR_langsmith_license_key."
+  description = "The LangSmith license key. make up asks for it once and keeps it in infra/.secrets.env (make secrets changes it); bin/lite passes it to Terraform as TF_VAR_langsmith_license_key."
 }
 
 variable "tunnel_token" {

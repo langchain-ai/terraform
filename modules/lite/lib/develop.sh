@@ -34,8 +34,30 @@ for name, r in json.load(sys.stdin)["planned_values"]["outputs"]["values"]["valu
     while read -r name ns repo chart version; do
       run "$name" "helm template, ${label#render-}" render_one "$work" "$name" "$ns" "$repo" "$chart" "$version"
     done <"$work/releases"
+    # A box's Traefik; a cluster of one's own brings its own ingress.
+    if ! grep -q '^cloud *= *"cluster"' "$vars"; then
+      run traefik "k3s's Traefik with Lite's settings, ${label#render-}" render_traefik "$work" "$work/$label.plan"
+    fi
   done
   printf '\n'
+}
+
+# Lite's Traefik settings over k3s's own, against the Traefik chart the pinned k3s release bundles: its
+# manifest names the chart (traefik-<version>.tgz, k3s's own build, published in k3s's chart repo) and
+# carries k3s's values. k3s's build, not upstream's: upstream 40.1.0 refuses the newer Traefik image k3s
+# runs with it.
+render_traefik() {
+  local work="$1" plan="$2" k3s manifest version
+  k3s="$(json_get k3s_version <<<"$(tf show -json "$plan" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["planned_values"]["outputs"]["box"]["value"]))')")"
+  manifest="$(curl -fsS --max-time 30 "https://raw.githubusercontent.com/k3s-io/k3s/${k3s//+/%2B}/manifests/traefik.yaml")" || return 1
+  version="$(sed -n 's|.*/static/charts/traefik-\([0-9][^/]*\)\.tgz|\1|p' <<<"$manifest" | tail -1)"
+  [[ -n "$version" ]] || { echo "no Traefik chart version in k3s $k3s's manifest"; return 1; }
+  # k3s's valuesContent: the indented block under the traefik HelmChart's valuesContent.
+  awk '/name: traefik$/ { t = 1 } t && /valuesContent: \|-/ { v = 1; next } v && /^  [a-z]/ { exit } v { sub(/^    /, ""); print }' <<<"$manifest" >"$work/traefik.k3s.yaml"
+  tf show -json "$plan" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["planned_values"]["outputs"]["box"]["value"]["traefik_values"], open(sys.argv[1], "w"))' "$work/traefik.lite.json"
+  echo "k3s $k3s bundles Traefik chart $version"
+  helm template traefik traefik --repo https://k3s-io.github.io/k3s-charts --version "$version" -n kube-system \
+    -f "$work/traefik.k3s.yaml" -f "$work/traefik.lite.json"
 }
 
 render_one() {
@@ -53,6 +75,20 @@ cmd_check() {
   run validate "validate and tflint (scripts/check.sh)" bash "$LITE/../../scripts/check.sh" modules/lite
   run tests "the plan tests (scripts/plan-tests.sh)" bash "$LITE/../../scripts/plan-tests.sh" modules/lite
   run shell "shellcheck" shellcheck -S style -x "$LITE/bin/lite" "$LITE"/lib/*.sh "$LITE"/box/*.sh
-  run python "the plan summary parses" python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' "$LITE/lib/summary.py"
+  run python "the summary, settings and export parse" python3 -c 'import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' "$LITE"/lib/*.py
+  run settings "the questions refuse a missing ssh_host" check_settings
   printf '\n'
+}
+
+# Without a terminal nothing is asked: a missing required setting must fail, and one given as NAME=value
+# must be saved. A fleet runs make up this way, and a prompt there would hang it.
+check_settings() {
+  local dir
+  dir="$(mktemp -d)"
+  ! python3 "$LITE/lib/settings.py" "$dir/t.tfvars" </dev/null || return 1
+  ssh_host=lab1 box=m python3 "$LITE/lib/settings.py" "$dir/t.tfvars" </dev/null || return 1
+  grep -q '^box = "m"$' "$dir/t.tfvars" && grep -q '^ssh_host = "lab1"$' "$dir/t.tfvars"
+  local ok=$?
+  rm -rf "$dir"
+  return "$ok"
 }

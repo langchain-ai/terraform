@@ -23,11 +23,20 @@ locals {
   # digest of its files, so any change to it is a new chart URL and helm-controller upgrades it.
   datastores_tgz = try("datastores-${var.resolved.charts.datastores}.tgz", "datastores.tgz")
 
+  # One install's namespaces, from var.namespace, so many installs can share a cluster (make export).
   ns = {
-    langsmith = "langsmith"
-    data      = "langsmith-data"
-    observe   = "observe"
+    langsmith = var.namespace
+    data      = "${var.namespace}-data"
+    observe   = "${var.namespace}-observe"
   }
+
+  # On every object Lite makes, so a fleet can find, watch and account each install by its name.
+  instance_label        = { "langsmith-lite/instance" = var.name }
+  stores_priority_class = "langsmith-lite-stores"
+
+  # Where every store's volume lives on the box: an AWS data volume is mounted at k3s's own storage folder;
+  # a bare-metal data_path is given to k3s as that folder; otherwise the root filesystem holds them.
+  data_mount = var.cloud == "aws" ? "/var/lib/rancher/k3s/storage" : var.data_path != "" ? var.data_path : "/"
 
   # Each store at the address the datastores chart gives it (its README, "Two runtimes, one interface").
   postgres = {

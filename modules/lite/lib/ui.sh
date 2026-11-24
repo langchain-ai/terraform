@@ -61,6 +61,9 @@ run() {
   local label="$1" what="$2" log
   shift 2
   log="${LOG_DIR:?start_log first}/$label.log"
+  # A label run again in the same command (one a render case) keeps every log, numbered.
+  local n=2
+  while [[ -e "$log" ]]; do log="$LOG_DIR/$label.$((n++)).log"; done
   printf '  %-18s %s%s%s ' "$label" "$DIM" "$what" "$OFF"
   if "$@" >"$log" 2>&1; then
     printf '%sok%s\n' "$GREEN" "$OFF"

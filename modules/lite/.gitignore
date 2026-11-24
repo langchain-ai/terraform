@@ -19,6 +19,9 @@ infra/.secrets.env.*
 # The packaged datastores chart, the plan file (it holds the license key), and each run's logs.
 build/
 
+# Ideas kept for later, and the comparison with another product: not part of the public module.
+PROPOSALS.md
+
 crash.log
 crash.*.log
 .DS_Store

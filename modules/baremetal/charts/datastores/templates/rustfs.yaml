@@ -78,6 +78,9 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+      {{- with $.Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       affinity:
         podAntiAffinity:
           {{- include "datastores.antiAffinityTerms" $ | nindent 10 }}
@@ -151,10 +154,13 @@ once RustFS is ready.
 {{- $ttlBuckets := .ttlBuckets }}
 {{- $awsCli := .awsCliImage }}
 {{- range (uniq .buckets) }}
-{{- $lifecycle := "" }}
+{{- /* Every bucket drops the parts of a multipart upload abandoned for a week, which otherwise stay
+forever; it deletes no object, so SmithDB's bucket, which manages its own retention, takes it too. */ -}}
+{{- $rules := list (dict "ID" "abandoned-uploads" "Status" "Enabled" "Filter" (dict "Prefix" "") "AbortIncompleteMultipartUpload" (dict "DaysAfterInitiation" 7)) }}
 {{- if has . $ttlBuckets }}
-{{- $lifecycle = dict "Rules" (list (dict "ID" "ttl-short" "Status" "Enabled" "Filter" (dict "Prefix" "ttl_s/") "Expiration" (dict "Days" $ttl.short)) (dict "ID" "ttl-long" "Status" "Enabled" "Filter" (dict "Prefix" "ttl_l/") "Expiration" (dict "Days" $ttl.long))) | toJson }}
+{{- $rules = concat $rules (list (dict "ID" "ttl-short" "Status" "Enabled" "Filter" (dict "Prefix" "ttl_s/") "Expiration" (dict "Days" $ttl.short)) (dict "ID" "ttl-long" "Status" "Enabled" "Filter" (dict "Prefix" "ttl_l/") "Expiration" (dict "Days" $ttl.long))) }}
 {{- end }}
+{{- $lifecycle := dict "Rules" $rules | toJson }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -191,7 +197,7 @@ spec:
               if [ -n "$LIFECYCLE" ]; then
                 aws --endpoint-url "$S3_ENDPOINT" s3api put-bucket-lifecycle-configuration \
                   --bucket "$BUCKET" --lifecycle-configuration "$LIFECYCLE"
-                echo "bucket $BUCKET expires ttl_s/ and ttl_l/ objects"
+                echo "bucket $BUCKET lifecycle: $LIFECYCLE"
               fi
           env:
             - name: S3_ENDPOINT

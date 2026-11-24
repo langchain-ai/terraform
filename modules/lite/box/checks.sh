@@ -7,7 +7,8 @@
 # Whether this machine can be a Lite box, read-only and without root. Run by make preflight (over ssh,
 # before anything is installed) and by box/install.sh first, so a box passes or fails the same way.
 #
-#   MACHINE_CPU MACHINE_MEM_GI MACHINE_DISK_GI   the machine the plan is for (the environment)
+#   MACHINE_CPU MACHINE_MEM_GI MACHINE_DISK_GI   the machine the plan is for; the disk is the system's
+#   DATA_MOUNT DATA_DISK_GI DATA_VOLUME_ID       where the volumes go, when they have a disk of their own
 #   ACCESS                                       localhost, ip, dns or tunnel
 #
 # One row a check: ok, warn (it may work; the detail says what to watch) or FAIL (it will not). Exit 1
@@ -20,7 +21,7 @@ check() {
   [[ "$1" != FAIL ]] || failed=1
 }
 
-# k3s runs on Linux only; a Mac or Windows machine runs Lite inside a Linux VM (infra/hosts/README.md).
+# k3s runs on Linux only; a Mac or Windows machine runs Lite inside a Linux VM (OPERATE.md, The machine).
 if [[ "$(uname -s)" != Linux ]]; then
   check FAIL os "$(uname -s): k3s needs Linux; run Lite in a Linux VM on this machine"
   exit 1
@@ -77,6 +78,24 @@ elif [[ ! -e /etc/rancher/k3s/installed-by-langsmith-lite ]] && ((free_gi * 10 <
   check FAIL disk "$free_gi GiB free of $disk_gi under /var/lib, the plan needs $MACHINE_DISK_GI"
 else
   check ok disk "$disk_gi GiB under /var/lib, $free_gi free (the plan: $MACHINE_DISK_GI)"
+fi
+
+# The data disk, when the volumes have one of their own: an AWS data volume (attached, not yet mounted on
+# a first install) or a bare-metal data_path (mounted, apart from /).
+if [[ -n "${DATA_VOLUME_ID:-}" ]]; then
+  if ls /dev/disk/by-id/*"${DATA_VOLUME_ID//-/}"* >/dev/null 2>&1; then
+    check ok data "volume ${DATA_VOLUME_ID} attached; mounted at ${DATA_MOUNT} by the install"
+  else
+    check FAIL data "volume ${DATA_VOLUME_ID} is not attached to this instance"
+  fi
+elif [[ "${DATA_MOUNT:-/}" != / ]]; then
+  if ! mountpoint -q "$DATA_MOUNT" 2>/dev/null; then
+    check FAIL data "$DATA_MOUNT is not a mounted filesystem: mount the data disk there, or clear data_path"
+  else
+    data_gi="$(df -Pk "$DATA_MOUNT" | awk 'NR == 2 { printf "%d", $2 / 1048576 }')"
+    if ((data_gi * 10 >= ${DATA_DISK_GI:-0} * 9)); then check ok data "$DATA_MOUNT, $data_gi GiB (the plan: ${DATA_DISK_GI:-0})"; else
+      check FAIL data "$DATA_MOUNT has $data_gi GiB, the plan needs ${DATA_DISK_GI:-0}"; fi
+  fi
 fi
 
 # k3s already here: ours (an update) or an agent of another cluster, whose certificates a server would
