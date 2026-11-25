@@ -801,19 +801,16 @@ sizing_profile = "production"
 #
 #   enable_deployments — LangSmith Deployments (listener, operator, host-backend)
 #   enable_fleet       — No-code agents; enables its required host-backend
-#   fleet_storage      — Fleet Postgres/Redis: "external" or "in-cluster"
 #   enable_insights    — AI-powered trace analysis
-#   insights_storage   — Insights Postgres/Redis: "external" or "in-cluster"
 #   enable_polly       — LangSmith Chat (formerly Polly)
-#   polly_storage      — Chat Postgres/Redis: "external" or "in-cluster"
+#
+# Fleet, Chat and Insights each use their own database on the shared RDS and their
+# own DB index on the shared ElastiCache.
 #
 enable_deployments   = false
 enable_fleet         = false
-fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = false
-insights_storage     = "in-cluster" # Or "external"
 enable_polly         = false
-polly_storage        = "in-cluster" # Or "external"
 
 # Extended usage telemetry — sends anonymized usage metrics to LangChain.
 # Default is off. Enable if you want to share usage data.
