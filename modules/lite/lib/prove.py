@@ -72,6 +72,12 @@ def load_test(a: argparse.Namespace, env: Dict[str, str], command: str, *args: s
     return subprocess.run(cmd, cwd=a.out, env=env, check=False).returncode
 
 
+# A reader is a person in the UI: three reads (the trace list, a filtered query, opening a trace) every
+# 5 s, as in the lab bench that measured the frontend's and backend's cores per reader (sizing params,
+# lite.measured). Without a rate the soak's --read refused to start (magus, 2026-11-25).
+READS_PER_READER = 3 / 5
+
+
 def runs_per_trace(a: argparse.Namespace) -> float:
     code = "from loadtest.profile import from_params; print(from_params().runs_per_trace)"
     return float(subprocess.run(["uv", "run", "--quiet", "--project", a.loadtest, "python", "-c", code],
@@ -84,6 +90,7 @@ def main() -> int:
     for flag in ("--endpoint", "--namespace", "--data-namespace", "--loadtest", "--out"):
         p.add_argument(flag, required=True)
     p.add_argument("--runs-per-second", type=float, default=0)
+    p.add_argument("--readers", type=int, default=1)
     p.add_argument("--duration", type=int, default=900)
     p.add_argument("--ramp", type=int, default=120)
     p.add_argument("--step", action="store_true")
@@ -104,11 +111,13 @@ def main() -> int:
         if a.mode == "verify":
             return load_test(a, env, "load-test-verify", *where, "--results", "verify.json")
         load: List[str] = [*where, "--traces-per-second", f"{a.runs_per_second / runs_per_trace(a):.4f}", "--read",
-                           "--duration-seconds", str(a.duration), "--ramp-up-seconds", str(a.ramp)]
+                           "--reads-per-second", f"{a.readers * READS_PER_READER:.2f}", "--duration-seconds", str(a.duration), "--ramp-up-seconds", str(a.ramp)]
         if a.step:
             return load_test(a, env, "load-test-step", *load, "--results", "step.json")
-        load_test(a, env, "load-test", *load, "--results", "soak.json")
-        return load_test(a, env, "load-test-judge", "soak.json")
+        code = load_test(a, env, "load-test", *load, "--results", "soak.json")
+        # A run that did not hold still writes its results, and the judge says why; one that never
+        # started has none to judge, and its own error is the reason.
+        return load_test(a, env, "load-test-judge", "soak.json") if Path(a.out, "soak.json").exists() else code
     finally:
         ls.revoke()
 

@@ -21,10 +21,12 @@ cmd_verify() {
 }
 
 cmd_soak() {
-  local rate
-  rate="${RATE:-$(tf_output plan | json_get runs_per_second)}"
-  heading "soak" "$rate runs/s with reads for ${DURATION:-900} s, the install read every 15 s${STEP:+; raised until a step fails}"
-  local extra=(--runs-per-second "$rate" --duration "${DURATION:-900}" --ramp "${RAMP:-120}")
+  local plan rate readers
+  plan="$(tf_output plan)"
+  rate="${RATE:-$(json_get runs_per_second <<<"$plan")}"
+  readers="$(json_get readers <<<"$plan")"
+  heading "soak" "$rate runs/s and $readers readers for ${DURATION:-900} s, the install read every 15 s${STEP:+; raised until a step fails}"
+  local extra=(--runs-per-second "$rate" --readers "$readers" --duration "${DURATION:-900}" --ramp "${RAMP:-120}")
   [[ "${STEP:-}" == 1 ]] && extra+=(--step)
   prove soak "${extra[@]}"
 }
@@ -66,7 +68,7 @@ prove() {
     python3 "$LITE/lib/prove.py" "$mode" --endpoint "http://127.0.0.1:$wport" \
     --namespace "$(json_get langsmith <<<"$ns")" --data-namespace "$(json_get data <<<"$ns")" \
     --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@" ||
-    fail "the install did not pass $mode" "the hop that failed is above; the run's results: ${work#"$LITE"/}"
+    fail "the install did not pass $mode" "why is above; the run's folder: ${work#"$LITE"/}"
 }
 
 free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }

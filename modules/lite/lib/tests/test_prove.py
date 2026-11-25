@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 from contextlib import redirect_stderr
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
@@ -71,12 +72,19 @@ class Driver(unittest.TestCase):
     def tearDown(self) -> None:
         self.out.cleanup()
 
-    def run_main(self, *args: str, password: str = "pw") -> tuple[int, list[tuple[str, ...]]]:
+    def run_main(self, *args: str, password: str = "pw", writes: bool = True) -> tuple[int, list[tuple[str, ...]]]:
         ran: list[tuple[str, ...]] = []
+
+        def load_test(a: object, e: dict[str, str], cmd: str, *rest: str) -> int:
+            ran.append((cmd, e["LANGSMITH_API_KEY"], *rest))
+            if cmd == "load-test" and writes:
+                Path(self.out.name, "soak.json").write_text("{}")
+            return 0 if writes else 2
+
         argv = ["prove.py", *args, "--endpoint", self.endpoint, "--namespace", "a", "--data-namespace", "a-data", "--loadtest", "/lt", "--out", self.out.name]
         env = {"LITE_ADMIN_EMAIL": "a@b.co", "LITE_ADMIN_PASSWORD": password}
         with mock.patch.object(sys, "argv", argv), mock.patch.dict(os.environ, env), \
-                mock.patch.object(prove, "load_test", lambda a, e, cmd, *rest: ran.append((cmd, e["LANGSMITH_API_KEY"], *rest)) or 0), \
+                mock.patch.object(prove, "load_test", load_test), \
                 mock.patch.object(prove, "runs_per_trace", lambda a: 10.0), redirect_stderr(io.StringIO()):
             return prove.main(), ran
 
@@ -87,10 +95,15 @@ class Driver(unittest.TestCase):
         self.assertIn(("DELETE", "/api/v1/api-key/k1"), CALLS)
 
     def test_soak_sends_traces_at_the_rate_over_runs_a_trace_then_judges(self) -> None:
-        code, ran = self.run_main("soak", "--runs-per-second", "25")
+        code, ran = self.run_main("soak", "--runs-per-second", "25", "--readers", "5")
         self.assertEqual(code, 0)
         self.assertEqual([r[0] for r in ran], ["load-test", "load-test-judge"])
         self.assertIn("2.5000", ran[0])
+        self.assertEqual(ran[0][ran[0].index("--reads-per-second") + 1], "3.00")
+
+    def test_a_load_test_that_never_started_is_not_judged(self) -> None:
+        code, ran = self.run_main("soak", "--runs-per-second", "25", writes=False)
+        self.assertEqual((code, [r[0] for r in ran]), (2, ["load-test"]))
 
     def test_step_runs_the_step_command(self) -> None:
         _, ran = self.run_main("soak", "--runs-per-second", "25", "--step")

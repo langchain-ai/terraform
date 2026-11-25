@@ -163,6 +163,8 @@ def judge_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("results", type=Path)
     parser.add_argument("--plan", type=Path, help="a sizing's plan.json: its watch list and levels; without it, params.yaml's own levels")
     a = parser.parse_args(argv)
+    if not a.results.exists():
+        parser.error(f"no results at {a.results}: the run did not finish, and its own output says why")
     results = json.loads(a.results.read_text())
     verdicts = signals(results, json.loads(a.plan.read_text()) if a.plan else None, samples(a.results))
     ui.heading("Held its load?" if held(results) else "Did not hold its load")
