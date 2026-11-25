@@ -429,6 +429,37 @@ run "a_certificate_arn_plans_no_dns" {
   }
 }
 
+# ── LLM Gateway ──────────────────────────────────────────────────────────────
+# With Envoy Gateway, /gateway joins the langsmith-fleet-streams HTTPRoute only
+# when the gateway is on, so model calls are not cut at Envoy's 15 s default.
+
+run "llm_gateway_adds_its_path_to_the_streams_route" {
+  command = plan
+
+  variables {
+    langsmith_domain   = "plan-tests.example.com"
+    enable_llm_gateway = true
+  }
+
+  assert {
+    condition     = contains([for m in yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].matches : m.path.value], "/gateway")
+    error_message = "enable_llm_gateway did not add /gateway to the langsmith-fleet-streams HTTPRoute"
+  }
+}
+
+run "streams_route_has_no_gateway_path_by_default" {
+  command = plan
+
+  variables {
+    langsmith_domain = "plan-tests.example.com"
+  }
+
+  assert {
+    condition     = !contains([for m in yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].matches : m.path.value], "/gateway")
+    error_message = "the langsmith-fleet-streams HTTPRoute carries /gateway with enable_llm_gateway off"
+  }
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 run "create_vpc_false_plans_no_vpc" {
@@ -654,5 +685,31 @@ run "in_cluster_fleet_storage_plans_no_shared_credentials" {
   assert {
     condition     = length(kubernetes_secret.fleet_redis) == 0
     error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
+  }
+}
+
+run "no_lifecycle_rules_when_ttl_disabled" {
+  command = plan
+
+  variables {
+    s3_ttl_enabled = false
+  }
+
+  assert {
+    condition     = length(module.storage.lifecycle_rule_ids) == 0
+    error_message = "s3_ttl_enabled = false still created a lifecycle configuration"
+  }
+}
+
+run "all_lifecycle_rules_present_when_ttl_enabled" {
+  command = plan
+
+  variables {
+    s3_ttl_enabled = true
+  }
+
+  assert {
+    condition     = toset(module.storage.lifecycle_rule_ids) == toset(["base", "extended", "redaction-raw"])
+    error_message = "s3_ttl_enabled = true did not produce the base, extended and redaction-raw rules"
   }
 }

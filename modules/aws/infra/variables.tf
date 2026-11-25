@@ -267,10 +267,13 @@ variable "postgres_password" {
     Password for the postgres database. Required when postgres_source = 'external'.
     Set via TF_VAR_postgres_password env var.
 
-    When using setup-env.sh: auto-generated on first run (openssl rand -hex 32) and stored
-    in SSM Parameter Store (/langsmith/{base_name}/postgres-password). On subsequent runs,
-    the value is read from SSM. Local .pg_password files are only a bootstrap fallback when
-    SSM is unreachable. To rotate, update SSM and run terraform apply -target=module.postgres.
+    When using setup-env.sh: reuse SSM (/langsmith/{base_name}/postgres-password).
+    Existing SSM values replace shell values. If the parameter is confirmed missing,
+    use the shell value or generate a password (openssl rand -hex 32), then persist
+    it in SSM before exporting it. Read/write failures stop setup. If a legacy
+    .pg_password path exists without its SSM parameter, stop for explicit recovery.
+    Local password backups are never read, created, or refreshed.
+    Intentional password rotation requires a separate SSM update and database change.
 
     RDS forbids '/', '@', double quote, single quote, and space. Connection URLs percent-encode
     the password so other reserved URI characters still parse.
@@ -593,7 +596,7 @@ variable "create_waf" {
 #------------------------------------------------------------------------------
 variable "s3_ttl_enabled" {
   type        = bool
-  description = "Enable S3 lifecycle rules to automatically expire trace blobs. Mirrors Azure Blob TTL pattern."
+  description = "Enable S3 lifecycle rules to automatically expire trace blobs (ttl_s/ and ttl_l/) and the raw values kept for redaction rules (ttl_1d/). Mirrors Azure Blob TTL pattern. When false, the module creates no lifecycle configuration: you manage all lifecycle rules yourself, including a 1-day expiry on ttl_1d/."
   default     = true
 }
 
@@ -906,6 +909,23 @@ variable "fleet_storage" {
   validation {
     condition     = contains(["external", "in-cluster"], var.fleet_storage)
     error_message = "fleet_storage must be one of: external, in-cluster."
+  }
+}
+
+variable "enable_llm_gateway" {
+  type        = bool
+  description = "Enable the LLM Gateway (chart agentGateway, beta, chart 0.17): one LangSmith API key calls models across the configured providers, every call is traced, and spend and rate policies apply centrally. Clients use https://<langsmith host>/gateway/v1 (OpenAI formats) or /gateway (Anthropic Messages). An organization admin still enables providers and grants access in the UI. With Envoy Gateway, Terraform adds /gateway to the langsmith-fleet-streams HTTPRoute so model calls are not cut at Envoy's 15 s default. Read by init-values.sh and deploy.sh."
+  default     = false
+}
+
+variable "enable_gateway_pii_redaction" {
+  type        = bool
+  description = "Run the Presidio analyzer beside the LLM Gateway so it can redact PII (named entities) from gateway traffic, and turn the redaction feature on for new organizations. Requires enable_llm_gateway = true. Read by init-values.sh and deploy.sh."
+  default     = false
+
+  validation {
+    condition     = !var.enable_gateway_pii_redaction || var.enable_llm_gateway
+    error_message = "enable_gateway_pii_redaction = true requires enable_llm_gateway = true: Presidio only serves the gateway."
   }
 }
 

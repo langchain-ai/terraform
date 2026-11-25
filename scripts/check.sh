@@ -3,11 +3,13 @@
 # .github/workflows/checks.yaml, and run locally before handing back:
 #   bash scripts/check.sh                   # every root, plus every script
 #   bash scripts/check.sh modules/aws       # the roots under one dir, terraform only
-#   bash scripts/check.sh --scripts         # every tracked *.sh, no terraform
+#   bash scripts/check.sh --scripts         # shellcheck and AWS/GCP secret tests
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
-# state) and tflint with the provider's pinned ruleset. Scripts are linted
-# repo-wide rather than per root, so naming a directory checks terraform only.
+# state) and tflint with the provider's pinned ruleset. Under each directory
+# named, every local chart with a ci/ directory is linted and rendered with each
+# ci/*-values.yaml. Scripts are linted repo-wide rather than per root, so naming
+# a directory checks terraform and charts only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
@@ -50,6 +52,13 @@ lint_scripts() {
     | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY")
 }
 
+check_scripts() {
+  lint_scripts || return $?
+  bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
+  bash "$REPO_ROOT/modules/aws/helm/scripts/test-init-values-llm-gateway.sh" || return $?
+  bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
+}
+
 # Print the terraform roots at or beneath one repo-relative directory. Roots are
 # discovered rather than listed so a new one cannot be silently missed, and so a
 # CI leg can scope itself to modules/<provider> without carrying a second copy
@@ -72,8 +81,33 @@ $(cd "$REPO_ROOT" && find "$1" -name versions.tf -not -path '*/.terraform/*' | s
 EOF
 }
 
+# A local chart a root installs with helm_release is never rendered by validate
+# or by the plan tests (the helm provider is mocked there), so a template error
+# would first show on a cluster. Each ci/*-values.yaml is one way the chart is
+# meant to render (baremetal's datastores: one per runtime); lint --strict and
+# template both fail on a missing required value or a schema violation.
+check_charts() {
+  command -v helm >/dev/null 2>&1 || {
+    echo "   (helm not installed, skipping chart lint)"; return 0; }
+  local chart values rc=0
+  while IFS= read -r chart; do
+    [ -n "$chart" ] || continue
+    chart=${chart%/ci}
+    for values in "$REPO_ROOT/$chart"/ci/*-values.yaml; do
+      [ -f "$values" ] || continue
+      echo "== helm $chart with ci/${values##*/}"
+      helm lint --strict "$REPO_ROOT/$chart" -f "$values" >/dev/null || {
+        helm lint --strict "$REPO_ROOT/$chart" -f "$values"; rc=1; continue; }
+      helm template ci "$REPO_ROOT/$chart" -f "$values" >/dev/null || rc=1
+    done
+  done <<EOF
+$(cd "$REPO_ROOT" && find "$1" -type d -name ci -path '*/charts/*' -not -path '*/.terraform/*' | sort)
+EOF
+  return "$rc"
+}
+
 case "${1:-}" in
-  --scripts) lint_scripts; exit $? ;;
+  --scripts) check_scripts; exit $? ;;
 esac
 
 lint_all=0
@@ -112,7 +146,7 @@ done
 if ! command -v terraform >/dev/null 2>&1; then
   echo "   (terraform not installed, skipping validate and tflint)"
   if [ "$lint_all" -eq 1 ]; then
-    lint_scripts; exit $?
+    check_scripts; exit $?
   fi
   exit 0
 fi
@@ -173,8 +207,12 @@ for rel in "${roots[@]}"; do
   fi
 done
 
+for arg in "$@"; do
+  check_charts "${arg#"$REPO_ROOT/"}" || fail $?
+done
+
 if [ "$lint_all" -eq 1 ]; then
-  lint_scripts || fail $?
+  check_scripts || fail $?
 fi
 
 exit "$status"

@@ -745,6 +745,98 @@ variable "clickhouse_source" {
   }
 }
 
+# ── External ClickHouse connection ────────────────────────────────────────────
+# With clickhouse_source = "external" and clickhouse_host set, the k8s-bootstrap
+# module writes the langsmith-clickhouse Secret the chart reads (host, ports,
+# user, password, database, tls, the chart's own key names) and init-values.sh
+# skips its prompt for them. With clickhouse_host empty, init-values.sh prompts
+# as before and creates the Secret itself. A custom CA for the server goes
+# through langsmith_custom_ca_secret_name: the chart validates ClickHouse's
+# certificate against config.customCa, not a ClickHouse-specific secret.
+variable "clickhouse_host" {
+  type        = string
+  description = "Host of an external ClickHouse, with clickhouse_source = \"external\": a self-hosted cluster (for example the Altinity operator's service, <chi>-<cluster>.<namespace>.svc) or a managed endpoint. Set, Terraform writes the langsmith-clickhouse Secret from the clickhouse_* variables and make init-values skips its prompt; empty (default), init-values prompts for the connection and creates the Secret itself. A host without a port; the ports are clickhouse_http_port and clickhouse_native_port."
+  default     = ""
+
+  validation {
+    condition     = var.clickhouse_host == "" || var.clickhouse_source == "external"
+    error_message = "clickhouse_host only applies with clickhouse_source = \"external\". Set clickhouse_source = \"external\", or leave clickhouse_host empty."
+  }
+
+  validation {
+    condition     = var.clickhouse_host == "" || can(regex("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$", var.clickhouse_host))
+    error_message = "clickhouse_host must be a host name or address with no scheme, port or path (e.g. 'ch-repl-replicated.langsmith-data.svc' or 'abc.clickhouse.cloud')."
+  }
+}
+
+variable "clickhouse_http_port" {
+  type        = number
+  description = "HTTP port of the external ClickHouse (the chart's clickhouse_port): 8123 plain, 8443 with TLS. Applies with clickhouse_host."
+  default     = 8443
+
+  validation {
+    condition     = var.clickhouse_http_port >= 1 && var.clickhouse_http_port <= 65535
+    error_message = "clickhouse_http_port must be a port number from 1 to 65535."
+  }
+}
+
+variable "clickhouse_native_port" {
+  type        = number
+  description = "Native protocol port of the external ClickHouse (the chart's clickhouse_native_port): 9000 plain, 9440 with TLS. Applies with clickhouse_host."
+  default     = 9440
+
+  validation {
+    condition     = var.clickhouse_native_port >= 1 && var.clickhouse_native_port <= 65535
+    error_message = "clickhouse_native_port must be a port number from 1 to 65535."
+  }
+}
+
+variable "clickhouse_user" {
+  type        = string
+  description = "User LangSmith connects to the external ClickHouse as. Applies with clickhouse_host."
+  default     = "default"
+}
+
+variable "clickhouse_password" {
+  type        = string
+  description = "Password of clickhouse_user. Required with clickhouse_host. Sensitive: put it in secrets.auto.tfvars, not terraform.tfvars; it is written to the langsmith-clickhouse Secret and held in state, as the Postgres password is."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.clickhouse_host == "" || var.clickhouse_password != ""
+    error_message = "clickhouse_password is required with clickhouse_host: the chart reads every connection field from the Secret, and a missing key leaves every LangSmith pod in CreateContainerConfigError."
+  }
+}
+
+variable "clickhouse_database" {
+  type        = string
+  description = "Database LangSmith uses on the external ClickHouse. Applies with clickhouse_host."
+  default     = "default"
+}
+
+variable "clickhouse_tls" {
+  type        = bool
+  description = "Whether LangSmith connects to the external ClickHouse over TLS. The certificate is validated against the system CAs, plus the bundle in langsmith_custom_ca_secret_name when set. Applies with clickhouse_host."
+  default     = true
+}
+
+variable "clickhouse_cluster" {
+  type        = string
+  description = "Name of the ClickHouse cluster (the cluster in the server's remote_servers, for example the Altinity operator's cluster name) that LangSmith's migrations create tables ON CLUSTER in, written as clickhouse.external.cluster. Set it before the first deploy against a replicated ClickHouse: the first migration decides whether tables are Replicated*MergeTree, and a standalone schema cannot be converted later. Empty (default) creates standalone tables. Applies with clickhouse_source = \"external\", whether or not Terraform writes the Secret."
+  default     = ""
+
+  validation {
+    condition     = var.clickhouse_cluster == "" || var.clickhouse_source == "external"
+    error_message = "clickhouse_cluster only applies with clickhouse_source = \"external\": the chart's own ClickHouse is a single server with no cluster."
+  }
+
+  validation {
+    condition     = var.clickhouse_cluster == "" || can(regex("^[A-Za-z0-9_.-]+$", var.clickhouse_cluster))
+    error_message = "clickhouse_cluster must match ^[A-Za-z0-9_.-]+$: init-values.sh writes it into values-overrides.yaml inside double quotes with no escaping."
+  }
+}
+
 variable "redis_subnet_address_prefix" {
   type        = list(string)
   description = "Prefix for the Redis subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
@@ -797,7 +889,7 @@ variable "redis_location" {
 
 variable "blob_ttl_enabled" {
   type        = bool
-  description = "Enable TTL for the blob container"
+  description = "Enable TTL for the blob container: lifecycle rules for trace blobs (ttl_s/, ttl_l/) and the raw values kept for redaction rules (ttl_1d/). When false, the module creates no management policy: you manage all lifecycle rules yourself, including a 1-day expiry on ttl_1d/."
   default     = true
 }
 
@@ -1370,18 +1462,6 @@ variable "smithdb_migration_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_parallelism" {
-  type        = number
-  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
-  default     = 1
-  nullable    = false
-
-  validation {
-    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
-    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
-  }
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
@@ -1390,7 +1470,7 @@ variable "smithdb_query_enabled" {
 
 variable "smithdb_sizing" {
   type        = string
-  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
   default     = null
   nullable    = true
 
@@ -1408,7 +1488,7 @@ variable "smithdb_metastore_admin_username" {
 
 variable "smithdb_metastore_admin_password" {
   type        = string
-  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used."
+  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used. Required when enable_smithdb = true and azure_environment = \"usgovernment\", where SmithDB's Entra token scope is the commercial one (LG-913). With SmithDB off, it can stay null in any cloud."
   sensitive   = true
   default     = null
   nullable    = true
@@ -1495,7 +1575,7 @@ variable "smithdb_cache_disk_throughput_mbps" {
 
 variable "enable_sandboxes" {
   type        = bool
-  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Azure Managed Redis for JuiceFS metadata, a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
+  description = "Provision the infrastructure LangSmith Sandboxes need: a tainted sandbox-host node pool, a dedicated Redis for JuiceFS metadata (Azure Managed Redis by default; see sandbox_juicefs_redis_source), a Blob container for JuiceFS data, a Workload Identity scoped to that container, and the JuiceFS config Secret. Also read by init-values.sh and deploy.sh, which enable the chart's sandboxes block."
   default     = false
 }
 
@@ -1552,26 +1632,77 @@ variable "sandbox_juicefs_name" {
 
 variable "sandbox_juicefs_redis_name" {
   type        = string
-  description = "Name for the JuiceFS metadata Redis. Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
+  description = "Name for the JuiceFS metadata Azure Managed Redis (sandbox_juicefs_redis_source = amr). Globally unique, 1-60 chars. Empty derives from the naming scheme. Retrying after a failed AMR create needs a new name, as with redis_name."
   default     = ""
 }
 
 variable "sandbox_juicefs_amr_sku" {
   type        = string
-  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis. JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
+  description = "Azure Managed Redis SKU for the dedicated JuiceFS metadata Redis (sandbox_juicefs_redis_source = amr). JuiceFS needs about 300 bytes per file, so Balanced_B1 (1 GB) holds a few million. Use Balanced_B5 or larger for production-scale sandbox fleets. On 409 CacheCapacityUnavailable, the region is out of this SKU: try another SKU, or another region through redis_location. On InsufficientCapacity, the whole Balanced family is short in the region, so use redis_location."
   default     = "Balanced_B1"
 }
 
 variable "sandbox_juicefs_redis_high_availability" {
   type        = bool
-  description = "Zone-redundant HA for the JuiceFS metadata Redis, plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
+  description = "Zone-redundant HA for the JuiceFS metadata Azure Managed Redis (sandbox_juicefs_redis_source = amr), plus AOF persistence, which Azure supports only with HA. Losing this Redis loses every sandbox filesystem, so keep it on outside of throwaway environments. Unsupported on Balanced_B0."
   default     = true
 }
 
 variable "sandbox_juicefs_redis_prevent_destroy" {
   type        = bool
-  description = "While true, plan refuses enable_sandboxes = false, which would delete the JuiceFS metadata Redis and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes. It does not stop terraform destroy."
+  description = "While true, plan refuses enable_sandboxes = false and any change of sandbox_juicefs_redis_source, both of which delete the JuiceFS metadata Redis in use and with it every sandbox filesystem. Set it to false in the same edit that disables sandboxes or changes the source. It does not stop terraform destroy."
   default     = false
+}
+
+variable "sandbox_juicefs_redis_source" {
+  type        = string
+  description = "Where the JuiceFS metadata Redis runs. amr (default): a dedicated Azure Managed Redis, configured by the sandbox_juicefs_amr_sku, _redis_name and _redis_high_availability variables. in-cluster: a dedicated single-replica Redis StatefulSet in the LangSmith namespace, with an append-only file on a Premium SSD volume whose disk is retained when the claim is deleted. Use it where Azure Managed Redis is not offered, such as Azure Government. external: a Redis you run, given by sandbox_juicefs_redis_url. Losing this Redis loses every sandbox filesystem whichever source you pick, so in-cluster and external need their own backups."
+  default     = "amr"
+
+  validation {
+    condition     = contains(["amr", "in-cluster", "external"], var.sandbox_juicefs_redis_source)
+    error_message = "sandbox_juicefs_redis_source must be amr, in-cluster or external."
+  }
+}
+
+variable "sandbox_juicefs_redis_url" {
+  type        = string
+  description = "JuiceFS metadata URL when sandbox_juicefs_redis_source = external, written into the JuiceFS config Secret as is: redis://[:<password>@]<host>:<port>/<db>, or rediss:// for TLS. The Redis must run with maxmemory-policy noeviction and should persist with an append-only file. sandbox-host connects from node IPs, so the Redis must accept the node subnet. Set it in secrets.auto.tfvars or TF_VAR_sandbox_juicefs_redis_url. Ignored for the other sources."
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_url == null || can(regex("^rediss?://[^/]+(/[0-9]+)?$", var.sandbox_juicefs_redis_url))
+    error_message = "sandbox_juicefs_redis_url must be redis://[:<password>@]<host>:<port>[/<db>] or the rediss:// form."
+  }
+}
+
+variable "sandbox_juicefs_redis_storage_gb" {
+  type        = number
+  description = "Size in GB of the in-cluster JuiceFS Redis volume, which holds the append-only file and the snapshots it is rewritten from. Used only with sandbox_juicefs_redis_source = in-cluster. JuiceFS needs about 300 bytes of memory per file, and the files on disk run to a few times the memory in use. Raising it grows the claim and its disk in place on the next apply; Kubernetes cannot shrink a claim, so a lower value fails the apply."
+  default     = 16
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_storage_gb >= 4 && var.sandbox_juicefs_redis_storage_gb <= 1024
+    error_message = "sandbox_juicefs_redis_storage_gb must be between 4 and 1024."
+  }
+}
+
+variable "sandbox_juicefs_redis_memory_mb" {
+  type        = number
+  description = "Memory limit in MiB of the in-cluster JuiceFS Redis container. Redis's maxmemory is set to 80% of it, and with noeviction a full Redis refuses writes rather than dropping metadata, so size it for the file count (about 300 bytes per file: 1024 MiB holds roughly 2.5 million). Used only with sandbox_juicefs_redis_source = in-cluster."
+  default     = 1024
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_memory_mb >= 256
+    error_message = "sandbox_juicefs_redis_memory_mb must be at least 256."
+  }
+}
+
+variable "sandbox_juicefs_redis_image" {
+  type        = string
+  description = "Image of the in-cluster JuiceFS Redis. Empty (default) uses the chart's own Redis image, docker.io/redis:7, through langsmith_image_registry when that is set, in the layout init-values.sh writes for images.redisImage: <registry>/redis:7, or <registry>/docker.io/redis:7 with langsmith_image_registry_keeps_source_host = true. Set it to override. The pod runs as the namespace's default service account, which carries langsmith_image_pull_secret_name when that is set. Used only with sandbox_juicefs_redis_source = in-cluster."
+  default     = ""
 }
 
 variable "sandbox_juicefs_csi_config_secret_name" {
@@ -1928,6 +2059,22 @@ variable "postgres_standby_availability_zone" {
   default     = ""
 }
 
+variable "postgres_high_availability_mode" {
+  type        = string
+  description = "How PostgreSQL high availability places the standby when postgres_high_availability is true or postgres_standby_availability_zone is set. \"ZoneRedundant\" (default): the standby in a zone other than the primary's; survives a zone loss; the 99.99% SLA mode. \"SameZone\": the standby in the primary's zone; survives a node loss and shortens planned maintenance, not a zone loss; the 99.95% SLA mode, and the only one a region offers when it has no zone-redundant capacity for the SKU, as usgovvirginia does for the General Purpose SKUs. Azure sets the mode at the server, so a server already set to one mode by hand must be told the same mode here, or the next apply changes it. SameZone takes no postgres_standby_availability_zone: the standby shares the primary's zone."
+  default     = "ZoneRedundant"
+
+  validation {
+    condition     = contains(["ZoneRedundant", "SameZone"], var.postgres_high_availability_mode)
+    error_message = "postgres_high_availability_mode must be \"ZoneRedundant\" or \"SameZone\"."
+  }
+
+  validation {
+    condition     = var.postgres_high_availability_mode != "SameZone" || var.postgres_standby_availability_zone == ""
+    error_message = "postgres_high_availability_mode = \"SameZone\" places the standby in the primary's zone, so postgres_standby_availability_zone cannot pin it elsewhere. Leave postgres_standby_availability_zone empty, or use \"ZoneRedundant\"."
+  }
+}
+
 variable "postgres_geo_redundant_backup" {
   type        = bool
   description = "Enable geo-redundant backups for PostgreSQL."
@@ -1970,6 +2117,17 @@ variable "aks_disk_encryption_set_reader_grant" {
   validation {
     condition     = !var.aks_disk_encryption_set_reader_grant || var.aks_disk_encryption_set_id != ""
     error_message = "aks_disk_encryption_set_reader_grant = true needs aks_disk_encryption_set_id: there is no set to grant Reader on."
+  }
+}
+
+variable "aks_additional_disk_encryption_set_reader_grant" {
+  type        = bool
+  description = "Whether the module assigns the Reader role to the cluster identity on each distinct further disk encryption set: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id and aks_additional_disk_encryption_set_ids, excluding aks_disk_encryption_set_id (which aks_disk_encryption_set_reader_grant covers). Works on an attached cluster too (create_cluster = false), granting the identity the cluster reports. Separate from that flag so a deployment can grant the cluster's set in Terraform and leave per-store sets to their owners, or the reverse. true needs roleAssignments/write on each set's scope; leave it false when the owners grant Reader themselves, or the apply fails with RoleAssignmentExists. Requires at least one further set."
+  default     = false
+
+  validation {
+    condition     = !var.aks_additional_disk_encryption_set_reader_grant || var.smithdb_cache_disk_encryption_set_id != "" || var.sandbox_juicefs_redis_disk_encryption_set_id != "" || length(var.aks_additional_disk_encryption_set_ids) > 0
+    error_message = "aks_additional_disk_encryption_set_reader_grant = true needs a further disk encryption set to grant Reader on: smithdb_cache_disk_encryption_set_id, sandbox_juicefs_redis_disk_encryption_set_id or aks_additional_disk_encryption_set_ids."
   }
 }
 
@@ -2080,6 +2238,118 @@ variable "storage_customer_managed_key_identity_id" {
   }
 }
 
+# ── SmithDB and per-store keys (PRO-190) ─────────────────────────────────────
+# Each store can take its own key, so one store's data can be made unreadable by
+# revoking its key without touching the others. Empty inputs fall back to
+# LangSmith's own keys and the cluster's disk encryption set.
+
+variable "smithdb_metastore_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the SmithDB metastore (PostgreSQL Flexible Server) encrypts with (https://<vault host>/keys/<name>, with or without a version). Empty (default) uses postgres_customer_managed_key_id and its identity, else the service-managed key. Set only when the metastore is created: the provider would apply a change by replacing the server and destroying SmithDB's catalog, so on an existing metastore plan refuses adding or removing the key (moving to another key or version is allowed). The key's vault has soft delete and purge protection on, and smithdb_metastore_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Needs enable_smithdb."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.smithdb_metastore_customer_managed_key_id))
+    error_message = "smithdb_metastore_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.smithdb_metastore_customer_managed_key_id == "") == (var.smithdb_metastore_customer_managed_key_identity_id == "")
+    error_message = "smithdb_metastore_customer_managed_key_id and smithdb_metastore_customer_managed_key_identity_id are set together or not at all: the metastore reads the key as that identity."
+  }
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_id == "" || var.enable_smithdb
+    error_message = "smithdb_metastore_customer_managed_key_id is set with enable_smithdb = false, so there is no metastore to encrypt. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "smithdb_metastore_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity (/subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>) the SmithDB metastore reads smithdb_metastore_customer_managed_key_id with. It must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with smithdb_metastore_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_metastore_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.smithdb_metastore_customer_managed_key_identity_id))
+    error_message = "smithdb_metastore_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "smithdb_storage_customer_managed_key_id" {
+  type        = string
+  description = "URL of the key the SmithDB storage account encrypts with (https://<vault host>/keys/<name>, with or without a version; a versionless URL enables automatic rotation). Empty (default) uses storage_customer_managed_key_id and its identity, else the service-managed key. Azure accepts the switch on an existing account. The key's vault has soft delete and purge protection on, and smithdb_storage_customer_managed_key_identity_id holds Key Vault Crypto Service Encryption User on it. Needs enable_smithdb."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_id == "" || can(regex("^https://[^/]+/keys/[^/]+(/[^/]+)?$", var.smithdb_storage_customer_managed_key_id))
+    error_message = "smithdb_storage_customer_managed_key_id must be a key URL: https://<vault host>/keys/<name>, optionally followed by /<version>."
+  }
+
+  validation {
+    condition     = (var.smithdb_storage_customer_managed_key_id == "") == (var.smithdb_storage_customer_managed_key_identity_id == "")
+    error_message = "smithdb_storage_customer_managed_key_id and smithdb_storage_customer_managed_key_identity_id are set together or not at all: the account reads the key as that identity."
+  }
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_id == "" || var.enable_smithdb
+    error_message = "smithdb_storage_customer_managed_key_id is set with enable_smithdb = false, so there is no SmithDB storage account to encrypt. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "smithdb_storage_customer_managed_key_identity_id" {
+  type        = string
+  description = "Resource ID of the user-assigned identity the SmithDB storage account reads smithdb_storage_customer_managed_key_id with. It must hold Key Vault Crypto Service Encryption User on the key's vault before the apply. Required with smithdb_storage_customer_managed_key_id and empty (default) without it."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_storage_customer_managed_key_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.smithdb_storage_customer_managed_key_identity_id))
+    error_message = "smithdb_storage_customer_managed_key_identity_id must be a user-assigned identity's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>."
+  }
+}
+
+variable "smithdb_cache_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set for SmithDB's cache volumes, written as diskEncryptionSetID on the SmithDB cache StorageClass. Empty (default), or the same set as aks_disk_encryption_set_id, writes no parameter: new volumes then take the cluster's set, which the Azure Disk CSI driver applies by default, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; existing cache volumes keep their key until their pods are recreated. The cluster identity needs Reader on the set (aks_additional_disk_encryption_set_reader_grant, or a grant made by the set's owner), and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault."
+  default     = ""
+
+  validation {
+    condition     = var.smithdb_cache_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.smithdb_cache_disk_encryption_set_id))
+    error_message = "smithdb_cache_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  validation {
+    condition     = var.smithdb_cache_disk_encryption_set_id == "" || var.enable_smithdb
+    error_message = "smithdb_cache_disk_encryption_set_id is set with enable_smithdb = false, so there is no SmithDB cache StorageClass. Remove it, or set enable_smithdb = true."
+  }
+}
+
+variable "sandbox_juicefs_redis_disk_encryption_set_id" {
+  type        = string
+  description = "Resource ID of the disk encryption set for the in-cluster JuiceFS Redis volume, written as diskEncryptionSetID on its StorageClass. Empty (default), or the same set as aks_disk_encryption_set_id, writes no parameter: new volumes then take the cluster's set, which the Azure Disk CSI driver applies by default, else platform-managed keys. A StorageClass's parameters are fixed, so a change replaces the class and applies to new volumes only; the existing volume keeps its key. The cluster identity needs Reader on the set, and the set's own identity needs Key Vault Crypto Service Encryption User on its key's vault. Takes effect with sandbox_juicefs_redis_source = \"in-cluster\"."
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_disk_encryption_set_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", var.sandbox_juicefs_redis_disk_encryption_set_id))
+    error_message = "sandbox_juicefs_redis_disk_encryption_set_id must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_disk_encryption_set_id == "" || (var.enable_sandboxes && var.sandbox_juicefs_redis_source == "in-cluster")
+    error_message = "sandbox_juicefs_redis_disk_encryption_set_id is set, but the module runs no JuiceFS Redis in the cluster (it needs enable_sandboxes = true and sandbox_juicefs_redis_source = \"in-cluster\"). Remove it."
+  }
+}
+
+variable "aks_additional_disk_encryption_set_ids" {
+  type        = list(string)
+  description = "Resource IDs of further disk encryption sets that StorageClasses outside this module name (for example in-cluster databases or agent deployment databases, one key per store). The module only grants the cluster identity Reader on each, with aks_additional_disk_encryption_set_reader_grant = true, so the Azure Disk CSI driver can create their volumes; it sets no StorageClass for them. Empty (default) grants nothing more."
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.aks_additional_disk_encryption_set_ids : can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/diskEncryptionSets/[^/]+$", id))])
+    error_message = "Each entry of aks_additional_disk_encryption_set_ids must be a disk encryption set's resource ID: /subscriptions/<id>/resourceGroups/<rg>/providers/Microsoft.Compute/diskEncryptionSets/<name>."
+  }
+}
+
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
 # Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
 
@@ -2101,6 +2371,12 @@ variable "sizing_profile" {
   type        = string
   description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing and the default sandbox_host_vm_size."
   default     = "production"
+
+  # "default" is the scripts' value for the chart's base values with no overlay.
+  validation {
+    condition     = contains(["default", "minimum", "dev", "production", "production-large"], var.sizing_profile)
+    error_message = "sizing_profile must be 'default', 'minimum', 'dev', 'production', or 'production-large'."
+  }
 }
 
 # tflint-ignore: terraform_unused_declarations
@@ -2211,7 +2487,7 @@ variable "ingress_load_balancer" {
 
 variable "ingress_load_balancer_subnet_id" {
   type        = string
-  description = "With ingress_load_balancer = \"internal\": the resource ID of a subnet in the cluster's VNet to take the load balancer's private IP from. Empty uses the AKS node subnet. A subnet other than the node subnet needs subnets/join/action and subnets/read for the cluster identity; see ingress_load_balancer_manage_subnet_assignment."
+  description = "With ingress_load_balancer = \"internal\": the resource ID of a subnet in the cluster's VNet to take the load balancer's private IP from. Empty uses the AKS node subnet. The cluster identity needs subnets/join/action and subnets/read on whichever subnet the load balancer uses (a user-assigned control plane holds them on the node subnet already); see ingress_load_balancer_manage_subnet_assignment."
   default     = ""
 
   validation {
@@ -2253,7 +2529,7 @@ variable "ingress_load_balancer_ip" {
 
 variable "ingress_load_balancer_manage_subnet_assignment" {
   type        = bool
-  description = "With ingress_load_balancer_subnet_id set to a subnet other than the node subnet: whether Terraform grants the cluster identity Network Contributor on that subnet, which carries the subnets/join/action and subnets/read the internal load balancer needs. Set false when the network owner makes that grant; the ingress_load_balancer_subnet_grant output names the role, scope and principal."
+  description = "With ingress_load_balancer = \"internal\": whether Terraform grants the cluster identity Network Contributor, which carries the subnets/join/action and subnets/read the load balancer needs, on its subnet. That is ingress_load_balancer_subnet_id when it is a subnet other than the node subnet, and the node subnet when the module creates the cluster with aks_control_plane_identity = \"system\", after the cluster and its identity exist (a user-assigned identity holds the grant already). Set false when the network owner makes that grant; the ingress_load_balancer_subnet_grant output names the role, scope and principal."
   default     = true
 }
 

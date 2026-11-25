@@ -135,7 +135,7 @@ aws/
 │       ├── eks/            ← EKS cluster, managed node groups, IRSA role, GP3 storage class
 │       ├── postgres/       ← RDS PostgreSQL, subnet group, security group, IAM auth
 │       ├── redis/          ← ElastiCache Redis, subnet group, security group, auth token
-│       ├── storage/        ← S3 bucket, VPC Gateway Endpoint, bucket policy, TTL lifecycle
+│       ├── storage/        ← Platform S3 bucket, VPC Gateway Endpoint, bucket policy, TTL lifecycle (platform bucket only)
 │       ├── alb/            ← Application Load Balancer, security group, ACM integration
 │       ├── k8s-bootstrap/  ← Namespace, KEDA, cert-manager, ESO Helm release
 │       ├── bastion/        ← EC2 bastion host for private cluster access (optional)
@@ -491,8 +491,9 @@ Enabling two controllers is rejected at plan time by a precondition in `infra/ma
 **Upgrading an existing deployment?** Istio and NGINX deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
 
 When enabled, the `k8s-bootstrap` module:
-1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
-2. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
+1. Applies the Gateway API CRDs (v1.6.1, standard channel) and the Envoy Gateway CRDs (v1.9.4). Helm does not upgrade CRDs, so the module downloads them, checks each file against a pinned sha256, and applies it with `kubectl apply --server-side`. The chart skips its own copy. The module needs EKS 1.33 to 1.36: it rejects an older `eks_cluster_version` at plan time and warns about a newer one.
+2. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.9.4) in the `envoy-gateway-system` namespace.
+3. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
 
 The LangSmith Helm chart then creates an `HTTPRoute` (not an `Ingress`) pointing to `langsmith-frontend`.
 
@@ -539,6 +540,55 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 ```
 
 The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmith` namespace) read access to pods, pod logs, deployments, and ReplicaSets in the `langsmith-agents` namespace. Without this, agent run logs will not stream in the LangSmith UI.
+
+---
+
+## LLM Gateway
+
+`enable_llm_gateway = true` deploys the chart's `agentGateway`, the
+[LLM Gateway](https://docs.langchain.com/langsmith/llm-gateway) (beta; on self-hosted, chart 0.17 only). It lets one
+LangSmith API key call models across the providers an organization configures, traces every call, and applies spend and
+rate policies centrally. It adds one Deployment and a `/gateway` path on the LangSmith hostname:
+
+| Client format | Base URL |
+|---|---|
+| OpenAI Chat Completions, Responses | `https://<langsmith host>/gateway/v1` |
+| Anthropic Messages | `https://<langsmith host>/gateway` |
+
+```hcl
+# infra/terraform.tfvars
+enable_llm_gateway           = true
+enable_gateway_pii_redaction = false  # Presidio PII redaction; requires enable_llm_gateway
+```
+
+To deploy it:
+
+1. With Envoy Gateway as the routing mode (the default), run `make apply`. It adds the `/gateway` path to the streams
+   route; without it, model calls longer than 15 s fail. Skip this step with Istio, NGINX, or classic ALB Ingress.
+2. Run `make init-values`.
+3. Run `make deploy`.
+
+After the deploy, an organization admin turns the gateway on for workspaces, adds provider secrets, and grants access, as
+in [Admin setup](https://docs.langchain.com/langsmith/llm-gateway-admin-setup).
+
+- **IRSA.** `init-values.sh` writes `langsmith-values-llm-gateway.yaml` with the LangSmith IRSA role on the gateway's
+  service account. The role already trusts every service account in the namespace, so the gateway needs no IAM change.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway` for long model calls. In front of it:
+  - Envoy Gateway: Terraform adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute, which removes Envoy's 15 s
+    request timeout on that path. Terraform creates the route only when `langsmith_domain` is set. Without a domain,
+    model calls longer than 15 s fail, so set `langsmith_domain` and run `make apply`.
+  - Istio: no request timeout.
+  - NGINX: `init-values.sh` sets 3600 s read and send timeouts.
+  - Classic ALB Ingress: `init-values.sh` sets the idle timeout of the ALB that the AWS Load Balancer Controller creates
+    to 900 s. The setting applies to every path on that ALB.
+
+  In every mode except classic ALB Ingress, the Terraform-managed ALB idles at 3600 s.
+- **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer (chart `presidioAnalyzer`, its own
+  `langsmith-values-gateway-pii.yaml`) and turns redaction on for new organizations. It requires
+  `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone. Presidio pulls
+  `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage.tag`). On a cluster without
+  egress to Microsoft's registry, mirror that image and set `images.presidioAnalyzerImage.repository` to the mirror in
+  `helm/values/langsmith-values.yaml`, which `init-values.sh` never overwrites.
 
 ---
 
@@ -644,18 +694,24 @@ source infra/scripts/setup-env.sh
 Builds the SSM path prefix from `terraform.tfvars`: `/langsmith/{name_prefix}-{environment}/`
 
 For each secret it follows this priority order:
-1. Already exported in the shell (`TF_VAR_*` or `LANGSMITH_*`) — use it, backfill SSM if missing
-2. Exists in SSM Parameter Store — read it (no prompt)
-3. Has an auto-generator — generate it (`openssl rand`), store in SSM
-4. Interactive terminal — prompt you, store in SSM
-5. No terminal (CI) — error with instructions to pre-export
+
+1. SSM Parameter Store — read and decrypt it; a read error stops setup
+2. Exported shell value (`TF_VAR_*` or `LANGSMITH_*`) — import it only if SSM confirms the parameter is missing
+3. No value in any source — generate it where supported, otherwise prompt
+4. No terminal (CI) and an input is still required — stop with instructions to supply it
+
+SSM is the persistent credential store. Setup exports each resolved credential to the shell without creating or refreshing local password backup files. Existing SSM values replace shell values. Legacy local password files are never read or updated and are left untouched. If SSM is missing a credential and its legacy backup path exists, setup stops before generating or saving a replacement. Import the existing credential into SSM with `infra/scripts/manage-ssm.sh`, then rerun setup. Once verified in SSM, legacy files can be deleted. Setup never overwrites an existing SSM parameter. Use `infra/scripts/manage-ssm.sh` for intentional SSM changes.
+
+**Changed setup requirements:** SSM read/decryption access is required even when the shell already contains credentials. SSM write failures, empty credentials, and concurrent parameter creation stop setup. Existing SSM names, shell variables, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials; this change removes separate setup password backups, not every local copy.
 
 **SSM parameters it manages (`/langsmith/{name_prefix}-{environment}/`):**
 
 | SSM key | How it's set | Notes |
 |---|---|---|
-| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. Override with `TF_VAR_postgres_password`; setup-env.sh rejects a value RDS will not accept. |
+| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. An initial value can come from `TF_VAR_postgres_password` when SSM is missing. |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
+| `sandbox-juicefs-redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | Created only when Sandboxes are enabled |
+| `sandbox-callback-signing-jwk` | Auto-generated (Ed25519 private JWK) | Created only when Sandboxes are enabled |
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
 | `langsmith-license-key` | You enter it | From your LangChain account |
@@ -792,6 +848,7 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
    - `enable_insights = true` → copies `langsmith-values-insights.yaml`
    - `enable_polly = true` → copies `langsmith-values-polly.yaml`
    - `enable_engine = true` → copies `langsmith-values-engine.yaml`, and writes the Engine IRSA role annotation into the overrides file
+   - `enable_llm_gateway = true` → writes `langsmith-values-llm-gateway.yaml`, and `langsmith-values-gateway-pii.yaml` with `enable_gateway_pii_redaction = true` (see [LLM Gateway](#llm-gateway))
 5. Copies the appropriate sizing file if `sizing_profile` is set
 
 Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
@@ -823,6 +880,8 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 -f langsmith-values-fleet.yaml                (enable_fleet = true)
 -f langsmith-values-standalone-polly.yaml     (enable_standalone_polly = true)
 -f langsmith-values-standalone-insights.yaml  (enable_standalone_insights = true)
+-f langsmith-values-llm-gateway.yaml          (enable_llm_gateway = true)
+-f langsmith-values-gateway-pii.yaml          (enable_gateway_pii_redaction = true)
 -f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default)
 -f langsmith-values-smithdb.yaml              (enable_smithdb = true)
 -f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
@@ -1124,7 +1183,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
+| `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules on the platform bucket for trace TTL (`ttl_s/`, `ttl_l/`) and the 1-day expiry of redaction raw values (`ttl_1d/`). When `false`, no lifecycle configuration is created: manage all rules yourself, including `ttl_1d/`. The SmithDB bucket never gets lifecycle rules. See [SMITHDB.md](SMITHDB.md#blob-storage) |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
 | `s3_kms_key_arn` | `""` | no | KMS CMK ARN for S3 encryption (empty = SSE-S3) |
@@ -1168,7 +1227,9 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
+| `enable_llm_gateway` | `false` | no | Enable the LLM Gateway (chart `agentGateway`, beta, chart 0.17). With Envoy Gateway, adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute. See [LLM Gateway](#llm-gateway) |
+| `enable_gateway_pii_redaction` | `false` | no | Add Presidio PII redaction for gateway traffic. Requires `enable_llm_gateway` |
+| `enable_smithdb` | `false` | no | Provision SmithDB v17 dependencies: dedicated/BYO PostgreSQL, dedicated S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |

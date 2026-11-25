@@ -18,7 +18,7 @@ variable "role_names" {
       "eks-cluster-role", "eks-node-role", "ebs-csi-role", "karpenter-node-role", "karpenter-controller-role",
       "postgres-monitoring-role", "smithdb-metastore-monitoring-role", "workload-iam-role", "postgres-setup-iam-role",
       "smithdb-iam-role", "smithdb-setup-iam-role", "external-secrets-iam-role", "lbc-role", "clickhouse-backup-iam-role",
-      "privatelink-lambda-role", "juicefs-csi-iam-role"
+      "privatelink-lambda-role", "juicefs-csi-iam-role", "playground-iam-role"
     ], key)])
     error_message = "role_names keys must be BYOIAM role purposes, such as eks-cluster-role or workload-iam-role."
   }
@@ -48,6 +48,28 @@ variable "karpenter_controller_policy_name" {
   validation {
     condition     = can(regex("^[\\w+=,.@-]{1,128}$", var.karpenter_controller_policy_name))
     error_message = "The policy name must be 1-128 characters of letters, digits, and +=,.@_-."
+  }
+}
+
+variable "ebs_kms_key_arns" {
+  description = "Optional. Customer-managed KMS key ARNs for EBS volumes: keys of encrypted custom AMI snapshots, including cross-account keys, and the EBS default encryption key. The Karpenter controller and EBS CSI roles may use them through EC2. The key owner must also allow those roles on each key."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.ebs_kms_key_arns) <= 5 && alltrue([for arn in var.ebs_kms_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Provide at most five KMS key ARNs."
+  }
+}
+
+variable "cmk_service_key_arns" {
+  description = "Optional. Customer-managed KMS key ARN per data plane service: s3, ebs, eks, rds, or elasticache."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for service, arn in var.cmk_service_key_arns : contains(["s3", "ebs", "eks", "rds", "elasticache"], service) && can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
+    error_message = "Keys must be s3, ebs, eks, rds, or elasticache, and values must be KMS key ARNs."
   }
 }
 
@@ -118,4 +140,16 @@ variable "workload_migration_source_blob_kms_key_arns" {
     condition     = length(var.workload_migration_source_blob_kms_key_arns) <= 5 && alltrue([for arn in var.workload_migration_source_blob_kms_key_arns : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/([0-9a-f-]{36}|mrk-[0-9a-f]{32})$", arn))])
     error_message = "Provide at most five KMS key ARNs."
   }
+}
+
+variable "dedicated_deployments" {
+  description = "Let LangSmith run dedicated deployments. Grants the workload role RDS access to lg- instances."
+  type        = bool
+  default     = false
+}
+
+variable "deployment_builds" {
+  description = "Let LangSmith build GitHub deployments and langgraph deploy images in the cluster. Creates the byoc-build-smith-workload-iam-role build role and the byoc-push-smith-workload-iam-role push role, and grants the workload role ECR repository management on lsd/* and access to the deployment source buckets."
+  type        = bool
+  default     = false
 }

@@ -46,6 +46,29 @@ fleet:
   # fleet.enabled. Do NOT set it inline — do not change once data exists.
   # encryptionKey: ""
 
+  # The chart sets no resources on these two, so without this block they get the
+  # namespace LimitRange default request while each uses ~500m starting up. The
+  # minimum sizing profile, loaded after this file, overrides these values.
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+
+  queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+
   postgres:
     external:
       enabled: true
@@ -55,8 +78,8 @@ fleet:
 
   # redis: intentionally omitted → the chart deploys its own in-cluster Fleet Redis
   # StatefulSet (<release>-standalone-fleet-redis). See the header note above.
-  # The langsmith-defaults LimitRange (infra/modules/k8s-bootstrap) supplies the
-  # cpu/memory the bundled Redis/Postgres StatefulSets need to satisfy the ResourceQuota.
+  # The langsmith-defaults LimitRange (infra/modules/k8s-bootstrap) gives the
+  # bundled Redis/Postgres StatefulSets default cpu/memory requests.
 
 # fleetToolServer / fleetTriggerServer are separate top-level Deployments. Chart
 # v0.15 renamed them from agentBuilderToolServer / agentBuilderTriggerServer.
@@ -70,8 +93,8 @@ fleetToolServer:
   # Fix = a longer startup window (below: 30 × 5s = 150s); CPU settles to < 20m
   # once it's up. No resources override: the chart already sizes this container at
   # 2 CPU / 4Gi (limits), which is adequate, and the namespace langsmith-defaults
-  # LimitRange only sets `default`/`defaultRequest` (applied to containers that
-  # declare no limits) — it has no `max`, so it never reduces a chart-sized pod.
+  # LimitRange only sets `defaultRequest` (applied to containers that
+  # declare no requests) — it has no `max`, so it never reduces a chart-sized pod.
   deployment:
     startupProbe:
       httpGet:

@@ -209,6 +209,22 @@ resource "terraform_data" "validate_inputs" {
       ]) <= 1
       error_message = "Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio or NGINX."
     }
+
+    # Envoy Gateway v1.9 supports Kubernetes 1.33 to 1.36, so an older control plane
+    # is refused at plan time. A newer one only warns (check below).
+    precondition {
+      condition     = !local.enable_envoy_gateway || tonumber(regex("^1\\.([0-9]+)", var.eks_cluster_version)[0]) >= 33
+      error_message = "Envoy Gateway v1.9 needs Kubernetes 1.33 or later, and eks_cluster_version is ${var.eks_cluster_version}. Raise eks_cluster_version to 1.33 to 1.36 first, or set enable_envoy_gateway = false."
+    }
+  }
+}
+
+# Warn, not fail, above the tested range: a newer EKS version may work, and a plan
+# should not block on a compatibility matrix that is published after the module.
+check "envoy_gateway_kubernetes_range" {
+  assert {
+    condition     = !local.enable_envoy_gateway || tonumber(regex("^1\\.([0-9]+)", var.eks_cluster_version)[0]) <= 36
+    error_message = "Envoy Gateway v1.9 is tested on Kubernetes 1.33 to 1.36, and eks_cluster_version is ${var.eks_cluster_version}. It may work, but it is outside the tested range."
   }
 }
 
@@ -1315,6 +1331,11 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 #   - Fleet run streams: POST /api/v1/fleet/threads/{id}/runs/stream,
 #     GET /api/v1/fleet/lg/threads/{id}/runs/{run_id}/stream
 #   - LangGraph Deployments proxy (host-backend): /api-host/v2/*
+#   - LLM Gateway model calls, when enable_llm_gateway: /gateway/* (the chart's
+#     frontend nginx allows these 900 s)
+#
+# Each new long-running path needs an entry here until the chart's own
+# HTTPRoute can carry a timeout; delete this route then.
 #
 # A second HTTPRoute on the same Gateway+hostname with more specific path
 # matches takes precedence over the chart's "/" catch-all per Gateway API
@@ -1340,11 +1361,13 @@ resource "kubectl_manifest" "fleet_stream_httproute" {
       parentRefs = [{ name = "langsmith-gateway" }]
       hostnames  = [var.langsmith_domain]
       rules = [{
-        matches = [
+        matches = concat([
           { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },
           { path = { type = "PathPrefix", value = "/api/v1/fleet/lg" } },
           { path = { type = "PathPrefix", value = "/api-host/v2" } },
-        ]
+          ], var.enable_llm_gateway ? [
+          { path = { type = "PathPrefix", value = "/gateway" } },
+        ] : [])
         backendRefs = [{ name = "langsmith-frontend", port = 80 }]
         timeouts    = { request = "0s" }
       }]

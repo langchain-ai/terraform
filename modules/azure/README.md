@@ -228,7 +228,7 @@ install_cert_manager = false   # cluster already runs cert-manager
 install_keda         = false   # cluster already runs KEDA
 ```
 
-Both default to `true`. Something still has to provide the component: the LangSmith Deployments operator scales agent deployments through KEDA, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
+Both default to `true`. Something still has to provide the component: the LangSmith Deployments operator scales agent deployments through KEDA, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `install_keda` on, Terraform also creates the NetworkPolicy `allow-keda-to-postgres`, which admits the `keda` namespace to the LangSmith namespace on TCP 5432: each agent deployment's ScaledObject polls that deployment's PostgreSQL, which runs in the LangSmith namespace under its default-deny policy. A KEDA you install yourself needs the same rule for its own namespace. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
 
@@ -307,8 +307,9 @@ The zone names are Microsoft's recommended names from the [private endpoint DNS 
 
 Limits in Azure Government:
 
-- **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
-- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+- **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run. The same applies to the Sandboxes JuiceFS Redis: with `enable_sandboxes = true`, set `sandbox_juicefs_redis_source = "in-cluster"` or `"external"`. See [Sandboxes](#sandboxes)
+- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true`; a region with only `SameZone` takes `postgres_high_availability_mode = "SameZone"` (#291)
+- **SmithDB metastore needs a password.** SmithDB requests its Entra token for the commercial Azure scope, which a Government Flexible Server refuses (LG-913), so `enable_smithdb = true` without `TF_VAR_smithdb_metastore_admin_password` is refused at plan. See [SMITHDB.md](SMITHDB.md)
 - **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
 
 **The state backend needs the cloud too.** `azure_environment` configures the providers, not the `azurerm` backend, which Terraform initializes before it reads any variable. A state storage account in Government needs `environment = "usgovernment"` in the `backend "azurerm"` block, or `ARM_ENVIRONMENT=usgovernment` in the shell that runs `terraform init`.
@@ -895,7 +896,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Refreshes kubeconfig via `az aks get-credentials`
 - Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `nginx`, `istio-addon`, and `istio`
 - With `ingress_load_balancer = "internal"`, writes the internal load-balancer annotations into the Envoy Gateway EnvoyProxy, binds the Istio add-on Gateway to the add-on's internal gateway, and puts the subnet and IP annotations on it
-- For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on. With `enable_fleet` or `enable_deployments` on, it also applies the `langsmith-fleet-streams` HTTPRoute after the chart: the same Gateway and hostname, only the Fleet run-stream paths (`/api/v1/fleet/threads`, `/api/v1/fleet/lg`) and the Deployments proxy (`/api-host/v2`), with `timeouts.request: 0s`, because Envoy Gateway's effective 15 s response timeout on the chart's catch-all route resets those streams mid-response. Every other path keeps the default; with both features off the route is removed. With `enable_deployments` on, the agent-deploys values file sets the operator's `HTTPROUTE_REQUEST_TIMEOUT` to `0s` (`operator.deployment.extraEnv`), so every HTTPRoute the operator creates for an agent deployment (`/lgp/<deployment>/...`) carries `timeouts.request: 0s`, no request timeout, as on `langsmith-fleet-streams`, and agent run streams are not cut at 15 s. The operator rewrites its routes on every reconcile, so an existing install picks it up after `make init-values` and `make deploy`.
+- For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on. It also applies the `langsmith-fleet-streams` HTTPRoute after the chart: the same Gateway, listener and hostname, only the long-running paths, with `timeouts.request: 0s`, because Envoy Gateway's effective 15 s response timeout on the chart's catch-all route resets them mid-response. Those paths are the playground and playground experiments, live experiment results, the prompt canvas, Fleet run streams and the Deployments proxy (`/api-host/v2`); `INGRESS_CONTROLLERS.md` lists the prefixes. Every other path keeps the default. With `enable_deployments` on, the agent-deploys values file sets the operator's `HTTPROUTE_REQUEST_TIMEOUT` to `0s` (`operator.deployment.extraEnv`), so every HTTPRoute the operator creates for an agent deployment (`/lgp/<deployment>/...`) carries `timeouts.request: 0s`, no request timeout, as on `langsmith-fleet-streams`, and agent run streams are not cut at 15 s. The operator rewrites its routes on every reconcile, so an existing install picks it up after `make init-values` and `make deploy`.
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
 - Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
 - Verifies `langsmith-config-secret` exists — auto-creates it from Key Vault if missing
@@ -904,7 +905,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Guards against a stuck Helm release: auto-rolls back `pending-upgrade` state before proceeding
 - Runs `helm upgrade --install langsmith langchain/langsmith --timeout 20m`
 - Waits for core deployments to roll out (`frontend`, `backend`, `platform-backend`, `ingest-queue`, `queue`, and Deployments pods if enabled)
-- Annotates the `langsmith-ksa` service account with the Workload Identity client ID (used by operator-spawned agent pods); a pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
+- Annotates the `langsmith-ksa` service account with the Workload Identity client ID. The operator's agent pods run as that account, but they get no Azure identity from it: the account has no federated credential and the agent template sets no Workload Identity label. A pull Secret the infra apply attached (`langsmith_image_pull_secret_name`) stays in place
 - Prints the access URL, login email, and the `az keyvault` command to retrieve the admin password
 
 ---
@@ -1024,8 +1025,8 @@ Managed Redis.
   `sandboxhost` pool. Otherwise, add a pool with nested virtualization yourself, with the `sandbox.langsmith.com/host=true`
   label and the `sandbox.langsmith.com/host=true:NoSchedule` taint, and set `sandbox_host_min_count` and
   `sandbox_host_max_count` to its bounds. In that setup, every plan warns that Terraform adds no pool.
-- Azure commercial cloud. Azure Government has no Azure Managed Redis, so the plan fails with
-  `azure_environment = "usgovernment"`.
+- In Azure Government, `sandbox_juicefs_redis_source = "in-cluster"` or `"external"`. Government has no Azure Managed
+  Redis, so the default `amr` fails the plan there.
 
 **Enable**
 
@@ -1069,10 +1070,36 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
   federated to the `<release>-sandbox-host` ServiceAccount. It holds `Storage Blob Data Contributor` on the JuiceFS
   container and nothing else, because sandbox nodes run untrusted code and the storage account also holds trace data.
   The JuiceFS Secret holds no storage account key.
-- The JuiceFS Redis runs with `NoCluster` and `NoEviction`, and with zone-redundant HA and AOF persistence unless
-  `sandbox_juicefs_redis_high_availability = false`, which turns off both. Losing it loses every sandbox file system.
-  Its private endpoint is in the AKS subnet, so it needs no Redis subnet. Size it with `sandbox_juicefs_amr_sku`;
-  JuiceFS uses about 300 bytes of Redis memory per file.
+- `sandbox_juicefs_redis_source` picks where the JuiceFS metadata Redis runs. Losing it loses every sandbox file
+  system, whichever source you pick. JuiceFS uses about 300 bytes of Redis memory per file.
+  - `amr` (default): a dedicated Azure Managed Redis with `NoCluster` and `NoEviction`, and with zone-redundant HA and
+    AOF persistence unless `sandbox_juicefs_redis_high_availability = false`, which turns off both. Its private
+    endpoint is in the AKS subnet, so it needs no Redis subnet. Size it with `sandbox_juicefs_amr_sku`.
+  - `in-cluster`: a dedicated Redis StatefulSet, `sandbox-juicefs-redis`, in the LangSmith namespace. Use it where
+    Azure Managed Redis is not offered, such as Azure Government. It writes an append-only file synced every second,
+    runs `noeviction` with `maxmemory` at 80% of `sandbox_juicefs_redis_memory_mb` (default `1024`), and requires a
+    password Terraform generates. Its volume, `sandbox_juicefs_redis_storage_gb` (default `16`), is a Premium SSD
+    claim, `sandbox-juicefs-redis-data`, on the `sandbox-juicefs-redis-retain<suffix>` class (cluster-scoped, so
+    suffixed per deployment like the SmithDB class). Raising the size grows the
+    disk in place on the next apply; a claim cannot shrink. Deleting the claim keeps the disk. The disk is in the
+    cluster's node resource group, so deleting the cluster deletes it. It runs one replica with no failover: a node
+    loss stops sandboxes until the pod reschedules and reattaches its disk, which a zonal disk does only in its own
+    zone. Back the disk up, for example with Azure Backup for AKS or a disk snapshot schedule.
+    The image is the chart's own `redis:7`, pulled through `langsmith_image_registry` when that is set, in the same
+    layout as the chart's Redis; `sandbox_juicefs_redis_image` overrides it. A new password restarts the Redis pod,
+    and the next `make deploy` restarts `sandbox-host` with it, so run the apply and the deploy together.
+    Traffic to it is `redis://`, not TLS, so the password and the metadata cross the node network in clear text, and
+    the node rule below admits the whole AKS subnet. Where pods take their addresses from that subnet (node-subnet
+    mode), any pod can open a connection to port 6379 and only the password stops it. Use `external` with a
+    `rediss://` URL where that matters.
+  - `external`: a Redis you run, given by `sandbox_juicefs_redis_url` (`redis://` or `rediss://`, in
+    `secrets.auto.tfvars`). It must run `noeviction`, should write an append-only file, and must accept connections
+    from the AKS node subnet, because `sandbox-host` connects from node IPs.
+- Changing `sandbox_juicefs_redis_source` on a cluster with sandboxes points JuiceFS at an empty Redis, which loses
+  every sandbox file system. Terraform does not move the metadata. Copy it first (for example with `juicefs dump` and
+  `juicefs load`), or change the source only before sandboxes hold data. With
+  `sandbox_juicefs_redis_prevent_destroy = true`, plan refuses a source change; set the flag to `false` in the same
+  edit.
 - `sandbox-host` runs on the host network and calls platform-backend on port 1986 from a node IP. platform-backend
   stays under the namespace's default-deny NetworkPolicy, and one more policy admits the nodes on port 1986 alone:
   - With Azure Network Policy Manager, Terraform creates `allow-nodes-to-platform-backend`, which admits the AKS node
@@ -1080,8 +1107,9 @@ The VM size follows `sizing_profile` unless you set `sandbox_host_vm_size`:
     on port 1986. Only overlay mode limits it to the nodes.
   - With Cilium, which never matches a node IP by `ipBlock`, `deploy.sh` applies a CiliumNetworkPolicy of the same
     name that admits the `host` and `remote-node` entities, and deletes it when sandboxes are off.
-- The namespace ResourceQuota caps requests only, and the LimitRange sets no default limits. `sandbox-host` runs the
-  microVMs in child cgroups of its own pod, so a container limit would cap every sandbox on the node.
+  - With `sandbox_juicefs_redis_source = "in-cluster"`, the same pair admits the nodes to the Redis on port 6379:
+    `allow-nodes-to-sandbox-redis`, from Terraform with Network Policy Manager or from `deploy.sh` with Cilium. As
+    for platform-backend, in node-subnet mode the Network Policy Manager rule also admits every pod on the subnet.
 - `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each deploy. This replaces any tag set
   in a values file, so the image always follows the chart.
 - `sandbox_service_url_base_url` sets the base URL for HTTP services that run inside sandboxes. It needs wildcard DNS
@@ -1200,7 +1228,7 @@ Enables ClickHouse-backed analytics in the Insights tab. The file is the same ei
 Where ClickHouse runs is a separate decision, made by `clickhouse_source` in `terraform.tfvars` and written into `values-overrides.yaml`, not this file:
 
 - `in-cluster` → the chart runs ClickHouse as a StatefulSet. Dev/POC only; the PVC is a zonal Azure managed disk, so the pod is pinned to one zone for the life of the volume.
-- `external` → the chart skips ClickHouse entirely and reads the connection from the `langsmith-clickhouse` secret. `init-values.sh` prompts for host/ports/user/password/db/tls and creates that secret; `deploy.sh` refuses to deploy if it is missing a key.
+- `external` → the chart skips ClickHouse entirely and reads the connection from the `langsmith-clickhouse` secret. With `clickhouse_host` set in `terraform.tfvars` (and `clickhouse_password` in `secrets.auto.tfvars`), `make apply` writes that secret from the `clickhouse_*` variables (`clickhouse_http_port`, `clickhouse_native_port`, `clickhouse_user`, `clickhouse_database`, `clickhouse_tls`) and `init-values.sh` says so. On an install where `init-values.sh` already created that secret before `clickhouse_host` was set, the next `make apply` would stop with `secrets "langsmith-clickhouse" already exists`, because the kubernetes provider does not adopt existing objects: `make preflight` reports it and prints the import that adopts the secret (`terraform import 'module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]' <namespace>/langsmith-clickhouse`), after which preflight passes on the imported address and the next apply adds the label and rewrites it from the variables; deleting the secret and applying also works but drops the connection until apply finishes. With `clickhouse_host` empty, `init-values.sh` prompts for host/ports/user/password/db/tls and creates the secret, as before. `deploy.sh` refuses to deploy if the secret is missing a key. For a replicated ClickHouse (several replicas on Keeper, for example under the Altinity operator), set `clickhouse_cluster` to the cluster's name before the first deploy, in any tfvars file or `TF_VAR_clickhouse_cluster`: `init-values.sh` writes it as `clickhouse.external.cluster` from the `clickhouse_cluster` output (from `terraform.tfvars` before the first apply), and the first migration then creates `Replicated*MergeTree` tables, which a standalone schema cannot be converted to afterwards. A certificate from an internal CA is trusted through `langsmith_custom_ca_secret_name`, the chart's one CA path for ClickHouse.
 
 **`langsmith-values-polly.yaml`** — Pass 5 (`enable_polly = true`)
 
@@ -1492,10 +1520,12 @@ also refuses a range with fewer `/24`s than the pools can reach nodes.
 Manager in node-subnet mode unless you name one. Cilium (Azure CNI Powered by
 Cilium) enforces NetworkPolicy with eBPF, needs overlay mode and Kubernetes
 1.31 or later, and is what Microsoft now recommends; Azure Network Policy
-Manager loses Linux support on 2028-09-30. The one NetworkPolicy this module
-creates, the namespace rule that admits the ingress gateway by its subnet,
-works on both. Cilium's documented limitation is that `ipBlock` rules cannot
-select node or pod addresses, which that rule does not do. The sandbox rule
+Manager loses Linux support on 2028-09-30. The namespace rules this module
+creates (default-deny, the rule that admits the ingress controller and the
+namespace itself, and the rule that admits KEDA to PostgreSQL on 5432) work on
+both. Cilium's documented limitation is that `ipBlock` rules cannot select node
+or pod addresses; the only `ipBlock` among them admits the Application Gateway
+subnet, which is neither. The sandbox rule
 that admits the nodes to platform-backend does, so it takes a different form
 on each engine (see [Sandboxes](#sandboxes)).
 
@@ -1890,13 +1920,41 @@ there, and every variable takes the ID the platform team returns.
   unless `postgres_source = "external"`, the only source with a server to take
   them.
 - **Blob storage.** `storage_customer_managed_key_id` and
-  `storage_customer_managed_key_identity_id` do the same for the blob account
-  (SmithDB's account takes the same pair in a later change).
+  `storage_customer_managed_key_identity_id` do the same for the blob account.
+- **SmithDB.** With `enable_smithdb`, the metastore takes
+  `smithdb_metastore_customer_managed_key_id` and its identity, and the SmithDB
+  storage account takes `smithdb_storage_customer_managed_key_id` and its
+  identity. Each pair left empty falls back to LangSmith's own pair
+  (`postgres_customer_managed_key_id` for the metastore,
+  `storage_customer_managed_key_id` for the account), so one key per kind still
+  covers SmithDB. The metastore takes its key only at creation, like the
+  LangSmith server, and plan refuses adding or removing one on an existing
+  metastore. An existing metastore on the service-managed key does not take
+  LangSmith's key by fallback: it keeps its key, and plan warns
+  (`check.smithdb_metastore_keeps_service_managed_key`). The metastore has no
+  geo-redundant backup, so it takes no geo pair.
+- **A key per store.** Set the per-store pairs above, and give a StorageClass
+  its own disk encryption set: `smithdb_cache_disk_encryption_set_id` for
+  SmithDB's cache volumes and `sandbox_juicefs_redis_disk_encryption_set_id`
+  for the in-cluster JuiceFS Redis volume. Each is written as
+  `diskEncryptionSetID` on the class only when it differs from
+  `aks_disk_encryption_set_id`. Empty, or the cluster's own set, leaves the
+  parameter off, and new volumes take the cluster's set, which the Azure Disk
+  CSI driver applies by default. Kubernetes refuses parameter changes, so a
+  change replaces the class and applies to new volumes only. The cluster
+  identity needs Reader on every set a class names: with
+  `aks_additional_disk_encryption_set_reader_grant = true` the module grants it
+  on each distinct set, on a cluster it creates or an attached one, and on each entry of
+  `aks_additional_disk_encryption_set_ids`, a list for sets that StorageClasses
+  outside the module name, such as the in-cluster databases'. Revoking one
+  store's key then makes only that store's data unreadable. The flag is separate from
+  `aks_disk_encryption_set_reader_grant`, so the cluster's set can be granted
+  in Terraform while each store's owner grants Reader on its own set.
 
 A versionless key URL follows the key's newest version. Each identity holds Key
 Vault Crypto Service Encryption User on its vault before the apply. `make
-preflight` reads the set's region, each vault's purge protection and each
-identity, and stops on a set outside the cluster's region or a vault without
+preflight` reads the cluster set's region, each LangSmith vault's purge
+protection and each LangSmith identity (not yet the per-store inputs), and stops on a set outside the cluster's region or a vault without
 purge protection. A read it cannot make is a warning. The provider documents Key
 Vault key IDs for all three resources. A Managed HSM key has no documented route
 for the server and is unverified for the set and the account.
@@ -2016,6 +2074,27 @@ postgres_high_availability = true
 
 Azure puts the standby in a zone other than the primary's, so HA works under the
 `[]` default and does not force you to pin anything.
+
+A region that offers no zone-redundant capacity for the SKU, as `usgovvirginia`
+does for the General Purpose sizes (`az postgres flexible-server list-skus
+--location <region>` shows `supportedHaMode: ["SameZone"]` and
+`zoneRedundantHaSupported: Disabled`), takes same-zone HA instead: the standby
+in the primary's zone, which survives a node loss and shortens planned
+maintenance but not a zone loss (Microsoft's 99.95% mode, against 99.99% for
+zone-redundant and 99.9% with no standby):
+
+```hcl
+postgres_high_availability      = true
+postgres_high_availability_mode = "SameZone"
+```
+
+`SameZone` takes no `postgres_standby_availability_zone`. Azure sets the mode on
+the server, so a server already switched to one mode by hand (the ARM call is
+`PATCH .../flexibleServers/<name>?api-version=2024-08-01` with
+`{"properties":{"highAvailability":{"mode":"SameZone"}}}`; the CLI has no
+flag for it) must be told the same mode here, or the next apply changes it:
+with the default, the plan changes `SameZone` to `ZoneRedundant` and the apply
+fails in a region without zone-redundant capacity.
 
 Pin zones when you want to choose the placement yourself:
 

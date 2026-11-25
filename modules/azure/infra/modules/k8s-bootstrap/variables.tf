@@ -191,41 +191,6 @@ variable "smithdb_cache_disk_throughput" {
   default     = 1000
 }
 
-variable "resource_quota_extra_cpu" {
-  type        = number
-  description = "Additional CPU added to the LangSmith namespace ResourceQuota, once on the requests side and twice on the limits side. The root sizes it for SmithDB. Zero keeps the base quota."
-  default     = 0
-
-  # SmithDB large with the backfill needs 414.
-  validation {
-    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 1024
-    error_message = "resource_quota_extra_cpu must be between 0 and 1024. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
-  }
-}
-
-variable "resource_quota_extra_memory_gi" {
-  type        = number
-  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
-  default     = 0
-
-  # SmithDB large with the backfill needs 906.
-  validation {
-    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 2048
-    error_message = "resource_quota_extra_memory_gi must be between 0 and 2048."
-  }
-}
-
-variable "resource_quota_extra_pods" {
-  type        = number
-  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
-  default     = 0
-
-  validation {
-    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
-    error_message = "resource_quota_extra_pods must be between 0 and 400."
-  }
-}
-
 # ── Application secrets ───────────────────────────────────────────────────────
 # License key is stored in K8s as langsmith-license secret.
 # Other app secrets (api_key_salt, jwt_secret, admin_password) are written by
@@ -309,7 +274,7 @@ variable "keda_version" {
 
 variable "enable_sandboxes" {
   type        = bool
-  description = "Shape the namespace for sandbox-host: the quota and LimitRange drop CPU and memory limits, the node subnet reaches platform-backend's API port where the policy engine is not Cilium, and the JuiceFS config Secret is created."
+  description = "Shape the namespace for sandbox-host: the node subnet reaches platform-backend's API port where the policy engine is not Cilium, and the JuiceFS config Secret is created."
   default     = false
 }
 
@@ -336,6 +301,43 @@ variable "sandbox_juicefs_redis_id" {
   type        = string
   description = "Resource ID of the JuiceFS Redis. A replaced Redis replaces the JuiceFS config Secret, which writes the new host and key."
   default     = null
+}
+
+variable "sandbox_juicefs_redis_in_cluster" {
+  type        = bool
+  description = "Run the JuiceFS metadata Redis in the LangSmith namespace: a single-replica StatefulSet with an append-only file on a retained Premium SSD volume, its Service, its password Secret, and, where the policy engine is not Cilium, a NetworkPolicy admitting the node subnet on 6379."
+  default     = false
+}
+
+variable "sandbox_juicefs_redis_password" {
+  type        = string
+  description = "requirepass of the in-cluster JuiceFS Redis."
+  sensitive   = true
+  default     = null
+}
+
+variable "sandbox_juicefs_redis_image" {
+  type        = string
+  description = "Image of the in-cluster JuiceFS Redis."
+  default     = "docker.io/redis:7"
+}
+
+variable "sandbox_juicefs_redis_storage_class_name" {
+  type        = string
+  description = "Name of the cluster-scoped StorageClass for the in-cluster JuiceFS Redis volume."
+  default     = "sandbox-juicefs-redis-retain"
+}
+
+variable "sandbox_juicefs_redis_storage_gb" {
+  type        = number
+  description = "Size in GB of the in-cluster JuiceFS Redis volume."
+  default     = 16
+}
+
+variable "sandbox_juicefs_redis_memory_mb" {
+  type        = number
+  description = "Memory limit in MiB of the in-cluster JuiceFS Redis container; maxmemory is 80% of it."
+  default     = 1024
 }
 
 variable "platform_backend_component" {
@@ -391,4 +393,66 @@ variable "keda_chart_repository_password" {
   description = "Password or token for keda_chart_repository_username."
   default     = ""
   sensitive   = true
+}
+
+# ── External ClickHouse ───────────────────────────────────────────────────────
+variable "use_external_clickhouse" {
+  type        = bool
+  description = "Whether LangSmith uses a ClickHouse outside the chart (clickhouse_source = external)."
+  default     = false
+}
+
+variable "clickhouse_host" {
+  type        = string
+  description = "Host of the external ClickHouse. Empty leaves the langsmith-clickhouse Secret to init-values.sh."
+  default     = ""
+}
+
+variable "clickhouse_http_port" {
+  type        = number
+  description = "HTTP port of the external ClickHouse."
+  default     = 8443
+}
+
+variable "clickhouse_native_port" {
+  type        = number
+  description = "Native port of the external ClickHouse."
+  default     = 9440
+}
+
+variable "clickhouse_user" {
+  type        = string
+  description = "User for the external ClickHouse."
+  default     = "default"
+}
+
+variable "clickhouse_password" {
+  type        = string
+  description = "Password for the external ClickHouse."
+  default     = ""
+  sensitive   = true
+}
+
+variable "clickhouse_database" {
+  type        = string
+  description = "Database on the external ClickHouse."
+  default     = "default"
+}
+
+variable "clickhouse_tls" {
+  type        = bool
+  description = "Whether the connection to the external ClickHouse uses TLS."
+  default     = true
+}
+
+variable "smithdb_cache_disk_encryption_set_id" {
+  type        = string
+  description = "Disk encryption set for the SmithDB cache StorageClass (diskEncryptionSetID), resolved by the root; empty omits the parameter."
+  default     = ""
+}
+
+variable "sandbox_juicefs_redis_disk_encryption_set_id" {
+  type        = string
+  description = "Disk encryption set for the JuiceFS Redis StorageClass (diskEncryptionSetID), resolved by the root; empty omits the parameter."
+  default     = ""
 }

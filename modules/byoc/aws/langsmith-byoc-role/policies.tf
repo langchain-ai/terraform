@@ -10,6 +10,7 @@ locals {
   ec2_eni_statements                    = jsondecode(templatefile("${path.module}/policies/ec2-eni.json", local.policy_template_vars))
   eks_statements                        = jsondecode(templatefile("${path.module}/policies/eks.json", local.policy_template_vars))
   elasticache_statements                = jsondecode(templatefile("${path.module}/policies/elasticache.json", local.policy_template_vars))
+  ecr_statements                        = jsondecode(templatefile("${path.module}/policies/ecr.json", local.policy_template_vars))
   elbv2_statements                      = jsondecode(templatefile("${path.module}/policies/elbv2.json", local.policy_template_vars))
   eventbridge_statements                = jsondecode(templatefile("${path.module}/policies/eventbridge.json", local.policy_template_vars))
   iam_statements                        = jsondecode(templatefile("${path.module}/policies/iam.json", local.policy_template_vars))
@@ -17,6 +18,7 @@ locals {
   kms_statements                        = jsondecode(templatefile("${path.module}/policies/kms.json", local.policy_template_vars))
   lambda_statements                     = jsondecode(templatefile("${path.module}/policies/lambda.json", local.policy_template_vars))
   network_firewall_statements           = jsondecode(templatefile("${path.module}/policies/network_firewall.json", local.policy_template_vars))
+  observability_statements              = jsondecode(templatefile("${path.module}/policies/observability.json", local.policy_template_vars))
   delete_statements                     = jsondecode(templatefile("${path.module}/policies/delete.json", local.policy_template_vars))
   rds_statements                        = jsondecode(templatefile("${path.module}/policies/rds.json", local.policy_template_vars))
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
@@ -60,7 +62,8 @@ locals {
     elbv2                      = concat(local.elbv2_statements, local.delete_statements_for_policy.elbv2)
     data                       = concat(local.rds_statements, local.secrets_manager_statements, local.kms_statements, local.delete_statements_for_policy.data, local.delete_statements_for_policy.storage)
     storage                    = concat(local.elasticache_statements, local.s3_statements)
-    lambda                     = concat(local.lambda_statements, local.eventbridge_statements, local.delete_statements_for_policy.lambda)
+    # ECR rides along here because the role is at IAM's default limit of 10 attached managed policies.
+    lambda = concat(local.lambda_statements, local.eventbridge_statements, local.ecr_statements, local.delete_statements_for_policy.lambda)
     dns = concat(
       local.route53_statements,
       local.route53_public_statements,
@@ -143,20 +146,30 @@ locals {
       for statement in statements : statement if length(statement.Action) > 0
     ]
   }
+  role_policy_documents = {
+    for name, statements in local.role_policies : name => jsonencode({
+      Version   = "2012-10-17"
+      Statement = statements
+    })
+  }
 }
 
 resource "aws_iam_policy" "this" {
-  for_each = local.role_policies
+  for_each = local.role_policy_documents
 
   name = "${var.role_name}-${each.key}"
   path = "/"
 
-  policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = each.value
-  })
+  policy = each.value
 
   tags = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = length(each.value) <= 6144
+      error_message = "The ${each.key} policy exceeds IAM's 6,144-character managed-policy limit. Move statements to another policy."
+    }
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "this" {
@@ -175,5 +188,67 @@ resource "aws_iam_role_policy" "byoiam_custom_names" {
   policy = jsonencode({
     Version   = "2012-10-17"
     Statement = local.byoiam_custom_name_statements
+  })
+}
+
+# Inline, because the role is at IAM's default limit of 10 attached managed
+# policies and inline policies don't count toward it.
+resource "aws_iam_role_policy" "observability" {
+  name = "${var.role_name}-observability"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.observability_statements
+  })
+}
+
+locals {
+  cmk_services = {
+    ebs         = { label = "EBS", via = ["ec2"] }
+    eks         = { label = "EKS", via = ["eks"] }
+    rds         = { label = "RDS", via = ["rds", "secretsmanager"] }
+    elasticache = { label = "ElastiCache", via = ["elasticache"] }
+  }
+  cmk_keys = { for service, arn in var.cmk_service_key_arns : service => arn if contains(keys(local.cmk_services), service) }
+
+  cmk_statements = concat(
+    length(var.cmk_service_key_arns) > 0 ? [{
+      Sid      = "CMKDescribe"
+      Effect   = "Allow"
+      Action   = ["kms:DescribeKey", "kms:GetKeyPolicy"]
+      Resource = sort(distinct(values(var.cmk_service_key_arns)))
+    }] : [],
+    flatten([for service in sort(keys(local.cmk_keys)) : [
+      {
+        Sid       = "CMKUse${local.cmk_services[service].label}"
+        Effect    = "Allow"
+        Action    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncryptFrom", "kms:ReEncryptTo", "kms:GenerateDataKey", "kms:GenerateDataKeyWithoutPlaintext"]
+        Resource  = [local.cmk_keys[service]]
+        Condition = { StringLike = { "kms:ViaService" = [for via in local.cmk_services[service].via : "${via}.*.amazonaws.com"] } }
+      },
+      {
+        Sid      = "CMKGrants${local.cmk_services[service].label}"
+        Effect   = "Allow"
+        Action   = ["kms:CreateGrant", "kms:ListGrants", "kms:RetireGrant"]
+        Resource = [local.cmk_keys[service]]
+        Condition = {
+          StringLike = { "kms:ViaService" = [for via in local.cmk_services[service].via : "${via}.*.amazonaws.com"] }
+          Bool       = { "kms:GrantIsForAWSResource" = "true" }
+        }
+      },
+    ]]),
+  )
+}
+
+resource "aws_iam_role_policy" "cmk" {
+  count = length(local.cmk_statements) > 0 ? 1 : 0
+
+  name = "${var.role_name}-cmk"
+  role = aws_iam_role.langchain_byoc.id
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.cmk_statements
   })
 }

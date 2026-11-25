@@ -331,7 +331,24 @@
         "elasticloadbalancing:RemoveListenerCertificates"
       ],
       "Resource": [
-        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/net/*-sm-istio/*/*"
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/net/*-sm-istio/*/*",
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener/app/*-sm-alb/*/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/elbv2.k8s.aws/cluster": "$${aws:PrincipalTag/eks-cluster-name}",
+          "aws:RequestedRegion": ${regions_json}
+        }
+      }
+    },
+    {
+      "Sid": "ModifyClusterOwnedAlbRules",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:ModifyRule"
+      ],
+      "Resource": [
+        "arn:${partition}:elasticloadbalancing:*:${account_id}:listener-rule/app/*-sm-alb/*/*/*"
       ],
       "Condition": {
         "StringEquals": {

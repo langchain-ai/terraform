@@ -20,7 +20,7 @@ variable "location" {
 
 variable "ttl_enabled" {
   type        = bool
-  description = "Whether to enable time to live for blobs by adding a lifecycle policy"
+  description = "Whether to enable time to live for blobs by adding a lifecycle policy (ttl_s/, ttl_l/ and redaction raw values under ttl_1d/). When false, no policy is created and you manage all rules yourself, including ttl_1d/."
   default     = true
 }
 

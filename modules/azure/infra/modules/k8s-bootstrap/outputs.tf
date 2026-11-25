@@ -43,14 +43,12 @@ output "sandbox_juicefs_secret_name" {
   value       = one(kubernetes_secret_v1.sandbox_juicefs[*].metadata[0].name)
 }
 
-output "resource_quota_keys" {
-  description = "Resources the namespace ResourceQuota caps. No limits.* with sandboxes on."
-  value       = sort(keys(kubernetes_resource_quota_v1.langsmith.spec[0].hard))
-}
-
-output "limit_range_default_limits" {
-  description = "Default container limits the namespace LimitRange injects, or null with sandboxes on."
-  value       = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
+output "limit_range_defaults" {
+  description = "Default container requests and limits the namespace LimitRange injects. Limits are always null."
+  value = {
+    default_request = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default_request
+    default         = kubernetes_limit_range_v1.langsmith.spec[0].limit[0].default
+  }
 }
 
 output "platform_backend_node_ingress" {
@@ -59,6 +57,16 @@ output "platform_backend_node_ingress" {
     for p in kubernetes_network_policy_v1.platform_backend_from_nodes : {
       cidrs = [for f in p.spec[0].ingress[0].from : f.ip_block[0].cidr]
       ports = [for port in p.spec[0].ingress[0].ports : "${port.protocol}/${port.port}"]
+    }
+  ])
+}
+
+output "keda_postgres_ingress" {
+  description = "Source namespace and ports of the NetworkPolicy that admits KEDA to the PostgreSQL pods in the LangSmith namespace, or null when this module installs no KEDA."
+  value = one([
+    for p in kubernetes_network_policy_v1.langsmith_allow_keda_postgres : {
+      namespace = p.spec[0].ingress[0].from[0].namespace_selector[0].match_labels["kubernetes.io/metadata.name"]
+      ports     = [for port in p.spec[0].ingress[0].ports : "${port.protocol}/${port.port}"]
     }
   ])
 }
@@ -96,4 +104,50 @@ output "langsmith_image_pull_secret_name" {
 output "langsmith_image_pull_secret_service_accounts" {
   description = "The service accounts in the LangSmith namespace that carry langsmith_image_pull_secret_name as imagePullSecrets. Empty without one."
   value       = local.langsmith_image_pull_secret_service_accounts
+}
+
+output "sandbox_juicefs_redis" {
+  description = "The in-cluster JuiceFS Redis: its Service, image, arguments, volume size, storage class and its reclaim policy, and pod annotations, or null when this module runs none."
+  value = one([
+    for ss in kubernetes_stateful_set_v1.sandbox_juicefs_redis : {
+      service         = kubernetes_service_v1.sandbox_juicefs_redis[0].metadata[0].name
+      image           = ss.spec[0].template[0].spec[0].container[0].image
+      args            = ss.spec[0].template[0].spec[0].container[0].args
+      memory_limit    = ss.spec[0].template[0].spec[0].container[0].resources[0].limits["memory"]
+      storage         = kubernetes_persistent_volume_claim_v1.sandbox_juicefs_redis[0].spec[0].resources[0].requests["storage"]
+      claim           = ss.spec[0].template[0].spec[0].volume[0].persistent_volume_claim[0].claim_name
+      claim_class     = kubernetes_persistent_volume_claim_v1.sandbox_juicefs_redis[0].spec[0].storage_class_name
+      storage_class   = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].metadata[0].name
+      reclaim_policy  = kubernetes_storage_class_v1.sandbox_juicefs_redis[0].reclaim_policy
+      pod_annotations = ss.spec[0].template[0].metadata[0].annotations
+    }
+  ])
+}
+
+output "sandbox_juicefs_redis_node_ingress" {
+  description = "Address prefixes and ports the node-subnet NetworkPolicy admits to the in-cluster JuiceFS Redis, or null when this module creates none."
+  value = one([
+    for p in kubernetes_network_policy_v1.sandbox_juicefs_redis_from_nodes : {
+      cidrs = [for f in p.spec[0].ingress[0].from : f.ip_block[0].cidr]
+      ports = [for port in p.spec[0].ingress[0].ports : "${port.protocol}/${port.port}"]
+    }
+  ])
+}
+
+output "clickhouse_secret_name" {
+  description = "Name of the external ClickHouse connection Secret Terraform writes, null when ClickHouse is in-cluster or when init-values.sh creates the Secret (clickhouse_host empty)."
+  value       = var.use_external_clickhouse && var.clickhouse_host != "" ? kubernetes_secret_v1.clickhouse[0].metadata[0].name : null
+}
+
+output "clickhouse_secret_labels" {
+  description = "Labels on the external ClickHouse Secret Terraform writes; preflight.sh reads app.kubernetes.io/managed-by to tell it from a Secret init-values.sh created. Null when Terraform writes no Secret."
+  value       = var.use_external_clickhouse && var.clickhouse_host != "" ? kubernetes_secret_v1.clickhouse[0].metadata[0].labels : null
+}
+
+output "storage_class_disk_encryption_set_ids" {
+  description = "diskEncryptionSetID on the SmithDB cache and JuiceFS Redis StorageClasses, null where the class is absent or names no set."
+  value = {
+    smithdb_cache         = try(kubernetes_storage_class_v1.smithdb_cache[0].parameters["diskEncryptionSetID"], null)
+    sandbox_juicefs_redis = try(kubernetes_storage_class_v1.sandbox_juicefs_redis[0].parameters["diskEncryptionSetID"], null)
+  }
 }

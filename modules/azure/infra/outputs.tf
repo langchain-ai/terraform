@@ -166,20 +166,6 @@ output "smithdb_helm_values" {
   value       = local.smithdb_helm_values
 }
 
-output "smithdb_migration_parallelism" {
-  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
-  value       = var.smithdb_migration_parallelism
-}
-
-output "smithdb_quota_extra" {
-  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
-  value = {
-    cpu       = local.smithdb_quota_extra_cpu
-    memory_gi = local.smithdb_quota_extra_memory_gi
-    pods      = local.smithdb_quota_extra_pods
-  }
-}
-
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true
@@ -310,7 +296,7 @@ output "ingress_internal_annotations" {
 }
 
 output "ingress_load_balancer_subnet_grant" {
-  description = "With an internal load balancer in a subnet other than the node subnet: the role, actions, scope and principal the cluster identity needs there, and whether Terraform makes the grant (made_by = \"terraform\") or the network owner must (\"owner\"). Null when no grant is needed."
+  description = "With an internal load balancer in a subnet other than the node subnet, or on the node subnet of a created cluster with a system-assigned identity: the role, actions, scope and principal the cluster identity needs there, and whether Terraform makes the grant (made_by = \"terraform\") or the network owner must (\"owner\"). Null when no grant is needed."
   value       = module.aks.ingress_load_balancer_subnet_grant
 }
 
@@ -415,5 +401,30 @@ output "sandbox_juicefs_container_name" {
 
 output "sandbox_juicefs_redis_name" {
   description = "Azure Managed Redis cluster holding JuiceFS metadata."
-  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+  value       = local.sandbox_juicefs_redis_amr ? local.sandbox_juicefs_redis_name : null
+}
+
+output "sandbox_juicefs_redis_source" {
+  description = "Where the JuiceFS metadata Redis runs (amr, in-cluster or external), or null when sandboxes are off. helm/scripts/deploy.sh reads it to apply the Cilium policy for the in-cluster Redis."
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_redis_source : null
+}
+
+output "sandbox_juicefs_redis_config_digest" {
+  description = "sha256 of the JuiceFS metadata URL for sandbox_juicefs_redis_source = in-cluster or external, null otherwise. deploy.sh sets it as a sandbox-host pod annotation so a new password or URL restarts sandbox-host."
+  value       = local.sandbox_juicefs_redis_config_digest
+}
+
+output "postgres_high_availability_mode" {
+  description = "The PostgreSQL high availability mode the module configures (ZoneRedundant or SameZone), null when HA is off or postgres_source is not external."
+  value       = var.postgres_source == "external" ? module.postgres[0].high_availability_mode : null
+}
+
+output "clickhouse_cluster" {
+  description = "The ClickHouse cluster LangSmith's migrations create tables ON CLUSTER in, as Terraform resolved clickhouse_cluster from every tfvars file and TF_VAR_clickhouse_cluster; init-values.sh writes it as clickhouse.external.cluster. Null when empty or when ClickHouse is in-cluster."
+  value       = var.clickhouse_source == "external" && var.clickhouse_cluster != "" ? var.clickhouse_cluster : null
+}
+
+output "clickhouse_secret_name" {
+  description = "Name of the external ClickHouse connection Secret Terraform writes (langsmith-clickhouse), null when ClickHouse is in-cluster or when init-values.sh creates the Secret."
+  value       = module.k8s_bootstrap.clickhouse_secret_name
 }
