@@ -6,14 +6,18 @@
 
 # Runs on the box, as root, from the bundle make up sends:
 #
-#   sudo bash install.sh <bundle folder>
+#   sudo bash install.sh <bundle folder> [fresh]
+#
+# fresh removes this install's releases, namespaces and volumes first, so it starts from no data on the
+# same k3s: no k3s reinstall and no image pulled again (make up FRESH=1, and make experiment each size).
 #
 # Checks the machine, installs k3s, hands each release to k3s's helm-controller in order, and removes
 # what an earlier bundle had and this one lacks. A second run changes only what differs. Each step's
 # output goes to /var/lib/langsmith-lite/logs/.
 set -euo pipefail
 
-SRC="${1:?usage: install.sh <bundle folder>}"
+SRC="${1:?usage: install.sh <bundle folder> [fresh]}"
+FRESH="${2:-}"
 LITE_HOME=/var/lib/langsmith-lite
 MANIFESTS=/var/lib/rancher/k3s/server/manifests
 STATIC=/var/lib/rancher/k3s/server/static/charts
@@ -25,6 +29,7 @@ MARKER=/etc/rancher/k3s/installed-by-langsmith-lite
 # shellcheck source=lib/ui.sh
 source "$SRC/ui.sh"
 [[ $EUID -eq 0 ]] || fail "install.sh runs as root" "make up runs it with sudo."
+[[ -z "$FRESH" || "$FRESH" == fresh ]] || fail "install.sh: unknown argument $FRESH" "the only one is fresh."
 
 # lite.env, KEY=value lines. Split at the first = by hand: IFS='=' read drops a value's trailing =, which
 # cut the padding off a base64 token.
@@ -140,7 +145,50 @@ else
   run machine "no cap on the pods" cap_pods
 fi
 
-#--- 4. Base and Secrets ------------------------------------------------------------------------------
+#--- 4. A fresh start ---------------------------------------------------------------------------------
+# Each release's manifest leaves k3s's folder first, or k3s would apply it again; deleting its HelmChart
+# then has helm-controller uninstall the release. The namespaces go with everything in them. The stores'
+# volumes are Retain, so their volumes and folders are removed by name: only a volume claimed in one of
+# this install's namespaces, and only a folder named for that volume.
+remove_volume() {
+  local pv="$1" path
+  path="$(kubectl get pv "$pv" -o jsonpath='{.spec.local.path}{.spec.hostPath.path}')" || return 1
+  # Checked before anything is deleted, so a volume that is not local-path's is left whole.
+  [[ -z "$path" || "$(basename "$path")" == "${pv}_"* ]] || { echo "volume $pv: $path is not a folder local-path made for it, left in place"; return 1; }
+  kubectl delete pv "$pv" --wait --timeout=120s || return 1
+  [[ -z "$path" ]] || rm -rf "$path"
+}
+
+start_fresh() {
+  local selector="langsmith-lite/instance=$NAME" namespaces volumes held file pv
+  held="$(mktemp -d)"
+  for file in "$MANIFESTS"/lite-[0-9][0-9]-*.yaml; do
+    [[ -e "$file" && "$(basename "$file")" != lite-00-base.yaml ]] || continue
+    mv "$file" "$held/"
+  done
+  for file in "$held"/*.yaml; do
+    [[ -e "$file" ]] || continue
+    echo "removing $(basename "$file")"
+    kubectl delete -f "$file" --ignore-not-found --wait --timeout=600s || { rm -rf "$held"; return 1; }
+  done
+  rm -rf "$held"
+  namespaces="$(kubectl get ns -l "$selector" -o jsonpath='{.items[*].metadata.name}')" || return 1
+  namespaces=" $namespaces "
+  echo "removing namespaces:${namespaces% }"
+  kubectl delete ns -l "$selector" --wait --timeout=600s || return 1
+  # Read before the loop: an unreadable list would otherwise look like no volumes and leave every one.
+  volumes="$(kubectl get pv -o jsonpath='{range .items[*]}{.metadata.name}={.spec.claimRef.namespace}{"\n"}{end}')" || return 1
+  for pv in $volumes; do
+    [[ "$namespaces" == *" ${pv#*=} "* ]] || continue
+    echo "removing volume ${pv%%=*}"
+    remove_volume "${pv%%=*}" || return 1
+  done
+}
+if [[ -n "$FRESH" ]]; then
+  run fresh "remove this install's releases, namespaces and volumes: it starts from no data" start_fresh
+fi
+
+#--- 5. Base and Secrets ------------------------------------------------------------------------------
 install -d -m 755 "$STATIC"
 install -m 644 "$SRC/$DATASTORES_TGZ" "$STATIC/$DATASTORES_TGZ"
 run base "namespaces, storage class, Traefik" kubectl apply -f "$SRC/lite-00-base.yaml"
@@ -149,7 +197,7 @@ run secrets "every credential, as Secrets" \
   kubectl apply --server-side --force-conflicts --field-manager=langsmith-lite -f "$SRC/secrets.yaml"
 rm -f "$SRC/secrets.yaml"
 
-#--- 5. The ssh user's kubeconfig ---------------------------------------------------------------------
+#--- 6. The ssh user's kubeconfig ---------------------------------------------------------------------
 # The operator ServiceAccount's (bundle.tf), not k3s's admin one, which stays root-only. Written before
 # the releases: written after them, a release that failed left nothing to read it with but root (magus).
 user_kubeconfig() {
@@ -187,7 +235,7 @@ if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then
   run kubeconfig "a kubeconfig for $SUDO_USER" user_kubeconfig
 fi
 
-#--- 6. The releases ----------------------------------------------------------------------------------
+#--- 7. The releases ----------------------------------------------------------------------------------
 # A HelmChart's install Job (helm-install-<name>) is replaced when the HelmChart changes. A changed
 # release waits for a Job with a new uid; an unchanged one's last Job stands. Tracked per release: one
 # time for the whole run made an upgrade of LangSmith wait out every unchanged release's timeout.
@@ -255,7 +303,7 @@ done
 run available "every LangSmith deployment available" \
   kubectl -n "$NS" wait --for=condition=Available deployment --all --timeout=900s
 
-#--- 7. What this bundle no longer has ----------------------------------------------------------------
+#--- 8. What this bundle no longer has ----------------------------------------------------------------
 # A manifest this bundle lacks is removed, but its objects only when no file here carries the same
 # release: deleting by file alone would uninstall a merely renamed release, stores included.
 retire() {

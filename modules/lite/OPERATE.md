@@ -139,7 +139,7 @@ Every LangSmith sign-in option is on [Authentication methods](https://docs.langc
 | `make verify` | Do traces flow? Ten traces followed hop by hop: accepted by the API, Redis's ingestion queue drained, SmithDB flushed, readable by a query. Where they stop, that workload's last log lines. | about 2 minutes |
 | `make soak` | Does the box hold its design load, with reads? Every target (nothing lost, readable in time), whether ingestion kept up, and each watch item against its alarm level. | `DURATION` (900 s) plus a 120 s ramp |
 | `STEP=1 make soak` | What does it hold? The design rate x 0.5, 1, 1.5, 2, 3 and 4 in turn, until a step does not hold, and what crossed its level there. | up to six soaks |
-| `make experiment` | What does each size hold? For each size (`SIZES`, all four by default): a clean install held to that size's machine (`emulate_machine`), `make verify`, then `MINUTES` (10) at each multiple of its design rate in `STEPS` (1 2 3 4), every step run whether or not the last held. Deletes the install for each size: it asks for the install's name, or takes `CONFIRM=<name>`. Stopped part way, the next `make experiment` continues it with the settings it started with: the sizes that finished are kept, and the one it was on is measured again from a clean install. `NEW=1` starts a new one. | about 80 minutes a size |
+| `make experiment` | What does each size hold? For each size (`SIZES`, all four by default): `FRESH=1 make up` at that size, held to its machine (`emulate_machine`), `make verify`, then `MINUTES` (10) at each multiple of its design rate in `STEPS` (1 2 3 4), every step run whether or not the last held. Deletes the install's data for each size, one root step a size: it asks for the install's name, or takes `CONFIRM=<name>`. Stopped part way, the next `make experiment` continues it with the settings it started with: the sizes that finished are kept, and the one it was on is measured again from no data. `NEW=1` starts a new one. | about 80 minutes a size |
 | `make report` | The runs in `build/soak/`, or the folders given, as figures, their numbers and the runs' own files. | a minute |
 
 They log in as the first admin, make an API key for the run and revoke it after; they reach the box's
@@ -186,6 +186,11 @@ Change a setting in `infra/terraform.tfvars`, or on the command line (`make up b
 it shows the plan, asks, applies what changed and reinstalls only the releases whose manifests changed.
 `make plan` shows the same without changing anything. Volumes are folders on the data disk, not
 resizable claims, so a larger size needs a disk that holds it, which the plan checks.
+
+`FRESH=1 make up` starts from no data on the same k3s: one root step removes the install's releases,
+its namespaces and its volumes (the stores' too, which a plain uninstall keeps), then installs. k3s and
+the images it pulled stay, so it is minutes, not a reinstall. It asks for the install's name, or takes
+`CONFIRM=<name>`.
 
 ```bash
 make pins    # what each chart line resolves to now, and what is newer

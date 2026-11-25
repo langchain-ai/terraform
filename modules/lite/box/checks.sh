@@ -194,6 +194,9 @@ check_internet() {
 }
 
 check_sudo() {
+  # Under the install this runs as root, where sudo -n always passes: it printed "passwordless" on a
+  # box that asks for a key's touch (magus, 2026-11-25). Only make preflight, as the ssh user, can tell.
+  ((EUID == 0)) && return 0
   if sudo -n true 2>/dev/null; then check ok sudo "passwordless"; else
     check ok sudo "asks for a password or a key's touch: make up asks once"; fi
 }

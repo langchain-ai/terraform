@@ -88,10 +88,11 @@ cmd_plan() {
 }
 
 cmd_up() {
-  heading "up" "plan, apply, then install"
+  heading "up" "plan, apply, then install${FRESH:+, from no data}"
   plan_and_summarise "$@"
   local cloud question="Apply this plan and install it?"
   cloud="$(tf_eval var.cloud)"
+  [[ "${FRESH:-}" != 1 ]] || confirm_fresh "$cloud"
   ((PLAN_CHANGES)) || question="Nothing to apply. Install it again?"
   [[ "$cloud" == cluster ]] && question="${question/install it/write its files}"
   if [[ "${YES:-}" != 1 ]]; then
@@ -142,6 +143,19 @@ write_export() {
   cp "$BUILD/charts/$tgz" "$out/charts/"
 }
 
+# FRESH=1 deletes every trace on the box before installing, so it asks for the install's name as make down
+# does: YES=1 is not enough to delete data.
+confirm_fresh() {
+  local name typed
+  [[ "$1" != cluster ]] || fail "FRESH=1 is for a box" "on a cluster of one's own, remove the releases with its own tools."
+  name="$(tf_eval var.name)"
+  printf '\n'
+  warn "FRESH=1 deletes every trace in $name before installing"
+  typed="${CONFIRM:-}"
+  [[ -n "$typed" ]] || read -r -p "  Type the install's name to delete its data: " typed
+  [[ "$typed" == "$name" ]] || { rm -f "$PLAN_FILE"; fail "nothing changed" "the name did not match."; }
+}
+
 # Send the bundle, the datastores chart and the box's scripts over ssh and run box/install.sh there. The
 # bundle holds the generated credentials: a private temporary folder here, removed on exit; on the box
 # /var/lib/langsmith-lite (mode 700), its Secrets file deleted once applied.
@@ -161,9 +175,10 @@ install_bundle() {
   cp "$BUILD/charts/$tgz" "$LITE/lib/ui.sh" "$LITE/box/install.sh" "$LITE/box/checks.sh" "$work/bundle/"
   run ssh "reach $SSH_TARGET over ssh" wait_for_ssh
   run send "send it to $SSH_TARGET" send_bundle "$work"
-  # shellcheck disable=SC2016  # $? and $status expand on the box
+  local fresh=""
+  [[ "${FRESH:-}" == 1 ]] && fresh=" fresh"
   ssh_root "k3s installs as a system service, and the data disk mounts: asked once, then the install runs (10 to 20 minutes the first time)" \
-    'sudo bash ~/.langsmith-lite/bundle/install.sh ~/.langsmith-lite/bundle; status=$?; rm -rf ~/.langsmith-lite; exit $status' \
+    "sudo bash ~/.langsmith-lite/bundle/install.sh ~/.langsmith-lite/bundle$fresh; status=\$?; rm -rf ~/.langsmith-lite; exit \$status" \
     || fail "the install on the box stopped" "its message is above; make status shows the box."
   next "make access"
 }
@@ -207,7 +222,7 @@ cmd_down() {
     data_path="$(tf_eval var.data_path)"
     # shellcheck disable=SC2016  # expands on the box
     ssh_root "k3s's uninstaller removes the service and every volume: asked once" \
-      'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then sudo /usr/local/bin/k3s-uninstall.sh >/dev/null; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi; sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml" /etc/systemd/system/k3s.service.d/langsmith-lite-data.conf /etc/systemd/system.control/kubepods.slice.d'"${data_path:+; sudo find '$data_path' -maxdepth 1 -name 'pvc-*' -exec rm -rf {} +}" \
+      'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then sudo /usr/local/bin/k3s-uninstall.sh >/dev/null; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi && sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml" /etc/systemd/system/k3s.service.d/langsmith-lite-data.conf /etc/systemd/system.control/kubepods.slice.d'"${data_path:+ && sudo find '$data_path' -maxdepth 1 -name 'pvc-*' -exec rm -rf {} +}" \
       || fail "the uninstall on the box failed" "nothing else was removed."
     printf '  %-18s %sk3s and every volume removed from %s%s %sok%s\n' uninstall "$DIM" "$SSH_TARGET" "$OFF" "$GREEN" "$OFF"
   fi

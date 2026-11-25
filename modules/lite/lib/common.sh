@@ -129,6 +129,9 @@ wait_for_ssh() {
   done
 }
 
+# A refused sudo -v ends the session: chained with && into COMMAND, a down whose touch timed out ran
+# the rest of its list, returned the last command's status, and reported every volume removed while
+# k3s still ran (magus, 2026-11-25).
 # ssh_root WHY COMMAND: root on the box, only to install, upgrade or remove k3s. -t and sudo -v ask once,
 # up front, so a password or a security key's touch works (a sudo that needed a touch failed without
 # them). It says why root is asked for, and that it was granted, so a long install after a touch is not
@@ -136,7 +139,7 @@ wait_for_ssh() {
 ssh_root() {
   printf '\n  %-18s %s%s%s\n' root "$DIM" "$1" "$OFF"
   ssh -t "${SSH_OPTS[@]}" "$SSH_TARGET" \
-    "sudo -v && printf '  %-18s %s %sgranted%s\n\n' root \"on \$(hostname)\" '$GREEN' '$OFF' && $2"
+    "sudo -v || { echo 'root was not granted: nothing was changed'; exit 1; }; printf '  %-18s %s %sgranted%s\n\n' root \"on \$(hostname)\" '$GREEN' '$OFF'; $2"
 }
 
 # Defines k on the box: kubectl as the ssh user, with the kubeconfig the install gave it. k3s kubectl

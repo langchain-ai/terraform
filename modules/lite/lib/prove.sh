@@ -87,10 +87,10 @@ cmd_experiment() {
   out="$(experiment_folder)" || exit 1
   sizes="$(experiment_setting "$out" SIZES)" steps="$(experiment_setting "$out" STEPS)" minutes="$(experiment_setting "$out" MINUTES)"
   heading "experiment" "sizes $sizes: a clean install each, verify, then $minutes minutes at ${steps// /, } times its design rate"
-  field "install" "$name, deleted and installed again for each size"
+  field "install" "$name, its data deleted and the next size installed on the same k3s"
   field "results" "${out#"$LITE"/}"
   for size in $sizes; do [[ -e "$out/$size/finished" ]] && field "$size" "finished: kept, not run again"; done
-  field "root" "each size asks for root twice: to remove the last install and to install the next"
+  field "root" "each size asks for root once, to install it from no data on the same k3s"
   printf '\n'
   # Each size starts from no data, so the sizes differ in one thing; that deletes every trace each time.
   typed="${CONFIRM:-}"
@@ -101,11 +101,10 @@ cmd_experiment() {
     # A size stopped part way is measured again from a clean install: its partial runs were taken on a
     # box holding data the rerun will not, so keeping both would put two unequal copies in the report.
     rm -rf "${out:?}/$size"
-    experiment_size "$size" "$out/$size" "$name" "$steps" "$minutes" || warn "$size stopped early: its folder holds what it measured"
-  done
-  for size in $sizes; do
-    # No report until every size finished: the report is what marks the experiment done.
-    [[ -e "$out/$size/finished" ]] || fail "$size did not finish" "make experiment measures it again; the sizes that finished are kept."
+    # A size stops only when its down, up or verify fails, and each size after it would fail the same
+    # way: magus, 2026-11-25, ran down and up for s, m and l against one timed-out sudo touch.
+    experiment_size "$size" "$out/$size" "$name" "$steps" "$minutes" ||
+      fail "$size stopped before its soaks" "why is above; make experiment continues from $size, and the sizes that finished are kept."
   done
   report "$out/report" "$out"/*/
   next "make up   (the last size stays installed and held to its machine until a plain make up lifts the cap)"
@@ -139,11 +138,10 @@ experiment_size() {
   local size="$1" dir="$2" name="$3" steps="$4" minutes="$5" design k
   heading "experiment" "size $size"
   mkdir -p "$dir"
-  if tf output -json plan >/dev/null 2>&1; then
-    CONFIRM="$name" "$LITE/bin/lite" down || return 1
-  fi
+  # From no data on the same k3s: the box keeps k3s and every image it pulled, and each size costs one
+  # root step, not a down and an up (two touches, k3s installed again and every image pulled again).
   # The cap rides on this up alone, never saved: the next plain make up lifts it.
-  box="$size" TF_VAR_emulate_machine=true YES=1 "$LITE/bin/lite" up || return 1
+  box="$size" TF_VAR_emulate_machine=true FRESH=1 CONFIRM="$name" YES=1 "$LITE/bin/lite" up || return 1
   OUT="$dir/verify" "$LITE/bin/lite" verify || return 1
   design="$(tf_output plan | json_get runs_per_second)"
   for k in $steps; do
