@@ -492,8 +492,6 @@ kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
 kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -i "juicefs mount ready"
 ```
 
-To upgrade from chart 0.16, see [MIGRATION-0.16-to-0.17.md](../../MIGRATION-0.16-to-0.17.md).
-
 ### Optional dedicated sandbox cluster
 
 `enable_sandboxes = true` uses the LangSmith GKE cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
@@ -652,7 +650,7 @@ make smithdb-migration-job-end     # once the Job is Complete; sets smithdb_migr
 make deploy-all
 ```
 
-See [SMITHDB.md](SMITHDB.md) for the sizing table, the stages, and the upgrade from chart 0.16.
+See [SMITHDB.md](SMITHDB.md) for sizing and staged rollout.
 
 ---
 

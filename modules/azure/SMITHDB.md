@@ -224,8 +224,7 @@ keep the current SKU, set it in `infra/terraform.tfvars`:
 smithdb_metastore_sku_name = "GP_Standard_D2ds_v5"
 ```
 
-For the downtime and the quota commands, see
-[SmithDB metastore SKU on Azure](../../MIGRATION-0.16-to-0.17.md#6-smithdb-metastore-sku-on-azure).
+For help planning a metastore SKU change during an upgrade, contact [LangChain Support](https://support.langchain.com).
 
 ## Staged rollout
 

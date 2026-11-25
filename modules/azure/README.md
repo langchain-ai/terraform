@@ -432,6 +432,8 @@ To deploy as a service principal instead, from CI or from a subscription that wi
 
 ## Upgrading an existing deployment
 
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance. The notes below cover changes to the Azure Terraform module.
+
 The LangSmith application secrets used to be Terraform-managed, which persisted their plaintext in Terraform state. They are now written directly to Key Vault by `make seed-secrets`, and Terraform manages only the vault and its RBAC.
 
 If you deployed before this change:

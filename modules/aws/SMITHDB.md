@@ -314,6 +314,8 @@ kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 
 ## Upgrading from 0.17
 
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance. The Terraform module also requires the settings below.
+
 **SmithDB settings.** The defaults now turn SmithDB on with queries served from
 it. In 0.17 an unset `enable_smithdb`, `smithdb_ingestion_enabled` or
 `smithdb_query_enabled` meant off, so a `terraform.tfvars` that leaves them out
