@@ -105,6 +105,10 @@ class Driver(unittest.TestCase):
         code, ran = self.run_main("soak", "--runs-per-second", "25", writes=False)
         self.assertEqual((code, [r[0] for r in ran]), (2, ["load-test"]))
 
+    def test_the_installs_prometheus_is_named_for_cpu(self) -> None:
+        _, ran = self.run_main("verify", "--prometheus", "a-observe/prometheus-server:80")
+        self.assertEqual(ran[0][ran[0].index("--prometheus") + 1], "a-observe/prometheus-server:80")
+
     def test_step_runs_the_step_command(self) -> None:
         _, ran = self.run_main("soak", "--runs-per-second", "25", "--step")
         self.assertEqual([r[0] for r in ran], ["load-test-step"])

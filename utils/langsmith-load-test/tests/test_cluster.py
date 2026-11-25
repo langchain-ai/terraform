@@ -106,6 +106,15 @@ class SummaryTest(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(len(collector.stop()), 2)
 
+    def test_cpu_comes_from_a_named_prometheus_without_touching_the_kubelet(self) -> None:
+        fake = FakeCluster()
+        s = cluster.Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t, prometheus="obs/prometheus-server:80").sample()
+        self.assertEqual({e["workload"] for e in s["cpu"].values()}, {"ingest-queue", "platform-backend", "smithdb-ingestion"})
+        self.assertFalse(any("/metrics/cadvisor" in " ".join(c) for c in fake.calls))
+        path = next(" ".join(c) for c in fake.calls if "/federate?" in " ".join(c))
+        self.assertIn("/api/v1/namespaces/obs/services/prometheus-server:80/proxy/federate?match%5B%5D=", path)
+        self.assertEqual(s["unread"], [])
+
     def test_runs_skipped_as_expired_are_counted_from_the_logs_when_sampling_stops(self) -> None:
         fake = FakeCluster()
         collector = cluster.Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t)

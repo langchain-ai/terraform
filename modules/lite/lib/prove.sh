@@ -64,9 +64,14 @@ prove() {
   wport="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$work/port-forward.log" | head -1)"
   run frontend "LangSmith answers through it" wait_for curl -sf -o /dev/null "http://127.0.0.1:$wport/api/v1/info"
   printf '\n'
+  # CPU through the install's own Prometheus: the operator's kubeconfig cannot reach the kubelet, by design.
+  # The +-expansion: bash 3.2, macOS's, calls an empty array unbound under set -u.
+  local prometheus=()
+  [[ "$(tf_output plan | json_get features observability)" == True ]] &&
+    prometheus=(--prometheus "$(json_get observe <<<"$ns")/prometheus-server:80")
   LITE_ADMIN_EMAIL="$(json_get langsmith user <<<"$logins")" LITE_ADMIN_PASSWORD="$(json_get langsmith password <<<"$logins")" \
     python3 "$LITE/lib/prove.py" "$mode" --endpoint "http://127.0.0.1:$wport" \
-    --namespace "$(json_get langsmith <<<"$ns")" --data-namespace "$(json_get data <<<"$ns")" \
+    --namespace "$(json_get langsmith <<<"$ns")" --data-namespace "$(json_get data <<<"$ns")" ${prometheus[@]+"${prometheus[@]}"} \
     --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@" ||
     fail "the install did not pass $mode" "why is above; the run's folder: ${work#"$LITE"/}"
 }

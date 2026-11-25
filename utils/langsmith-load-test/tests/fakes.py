@@ -32,6 +32,7 @@ class FakeClient(Client):
         self.runs_resource = SimpleNamespace(query=self._runs_query)
         self.traces_resource = SimpleNamespace(query=self._unused, list_runs=self._unused)
         self.info_reads = 0
+        self.api_url = ""
 
     @property  # type: ignore[override]
     def runs(self) -> Any:

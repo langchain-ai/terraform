@@ -12,6 +12,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from langsmith import Client
@@ -28,6 +29,15 @@ from loadtest.stats import summarize
 from loadtest.verify import Stored, settle
 
 READ_BATCH_WINDOW = datetime.timedelta(minutes=1)
+# The endpoint is probed with a TCP connect this often, and the run ends after this many misses in a
+# row: when a laptop slept, its tunnel to the install closed and the SDK retried every upload for the
+# rest of the run, printing each payload (magus, 2026-11-25).
+ENDPOINT_PROBE_SECONDS = 10.0
+ENDPOINT_GONE_AFTER = 3
+
+
+class EndpointGone(RuntimeError):
+    """The install's endpoint stopped taking connections during the run."""
 HIGH_CARDINALITY_EVERY = 5
 LOW_CARDINALITY_VALUES = 8
 
@@ -157,6 +167,7 @@ class _Run:
         self.pool = TracePool(settings.read_min_age_seconds)
         self.lag = LagTracker(settings.lag_deadline_seconds)
         self.lag_sampled = self.lag_poll_errors = 0
+        self.gone: str | None = None
         self.pick_project = random.Random(settings.data_seed)
         self.reader: Reader | None = None
         self.feedback = FeedbackSender(client, profile.feedback_per_trace, self.counts) if client is not None else None
@@ -257,6 +268,24 @@ class _Run:
         progress_task = asyncio.create_task(self.report_progress()) if self.on_progress is not None and s.progress_seconds > 0 else None
         return poll_task, progress_task
 
+    async def _watch_endpoint(self, main: asyncio.Task[Any]) -> None:
+        assert self.client is not None
+        url = urlsplit(self.client.api_url)
+        host, port = url.hostname or "localhost", url.port or (443 if url.scheme == "https" else 80)
+        misses = 0
+        while True:
+            await asyncio.sleep(ENDPOINT_PROBE_SECONDS)
+            try:
+                _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), ENDPOINT_PROBE_SECONDS / 2)
+                writer.close()
+                misses = 0
+            except (OSError, TimeoutError):
+                misses += 1
+                if misses >= ENDPOINT_GONE_AFTER:
+                    self.gone = f"{host}:{port} took no connection {misses} times in a row: the tunnel or the install is gone"
+                    main.cancel()
+                    return
+
     async def go(self) -> LoadOutcome:
         s, loop = self.settings, asyncio.get_running_loop()
         if self.client is not None:
@@ -270,6 +299,8 @@ class _Run:
         self.deadline = self.origin + self.total_seconds
         finished = asyncio.Event()
         poll_task, progress_task = self._tasks(finished)
+        main = asyncio.current_task()
+        watch_task = asyncio.create_task(self._watch_endpoint(main)) if self.client is not None and self.client.api_url and main else None
         read_dropped, read_lags = 0, []
         try:
             outcomes = await asyncio.gather(*self._loads())
@@ -280,8 +311,12 @@ class _Run:
             if self.reader is not None and s.reads_per_second:
                 read_dropped, read_lags = outcomes[-1].dropped, outcomes[-1].lags_seconds
             stored = await self._settle(finished, poll_task)
+        except asyncio.CancelledError:
+            if self.gone is None:
+                raise
+            raise EndpointGone(self.gone) from None
         finally:
-            await self._close(finished, (progress_task, poll_task))
+            await self._close(finished, (progress_task, poll_task, watch_task))
         return LoadOutcome(
             self.test_id, self.started_at, datetime.datetime.now(datetime.UTC), self.counts, self.reader, read_dropped, read_lags,
             self.lag, self.lag_poll_errors, self.lag_sampled, stored,

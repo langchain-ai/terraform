@@ -48,7 +48,9 @@ class FakeCluster:
             ("get pods", lambda: self._pods(args[args.index("-n") + 1])), ("get services", self._services), ("get hpa", self._hpa),
             ("platform-backend:1984/proxy/metrics?format=json", self._queues), ("backend:1984/proxy/metrics/queue", lambda: json.dumps({"queued": 0})),
             ("smithdb-compaction:8070/proxy/metrics/jobs", lambda: json.dumps({"pending": BACKLOG[min(self.n, len(BACKLOG) - 1)] // 10})),
-            ("/proxy/metrics/cadvisor", self._cadvisor), ("redis-cli", self._redis), ("psql", lambda: f"{12 + self.n}|100\n"),
+            ("/proxy/metrics/cadvisor", self._cadvisor),
+            # Prometheus's federate serves cAdvisor's series, each value followed by a timestamp.
+            ("/proxy/federate?", lambda: "\n".join(f"{line} 1732500000000" for line in self._cadvisor().splitlines() if line and not line.startswith("#"))), ("redis-cli", self._redis), ("psql", lambda: f"{12 + self.n}|100\n"),
             ("platform-backend:1984/proxy/metrics", self._queue_latency), ("logs", lambda: "x Skipping run as it has expired\n" * 2 + "ok\n"),
             ("/proxy/metrics", self._smithdb),
         ):

@@ -94,6 +94,7 @@ def main() -> int:
     p.add_argument("--duration", type=int, default=900)
     p.add_argument("--ramp", type=int, default=120)
     p.add_argument("--step", action="store_true")
+    p.add_argument("--prometheus", help="NS/SERVICE:PORT of the install's Prometheus, for CPU")
     a = p.parse_args()
     Path(a.out).mkdir(parents=True, exist_ok=True)
 
@@ -106,7 +107,7 @@ def main() -> int:
     env = {**os.environ, "LANGSMITH_TRACING": "true", "LANGSMITH_ENDPOINT": a.endpoint.rstrip("/") + "/api/v1", "LANGSMITH_API_KEY": key,
            "LANGSMITH_PROJECT": f"lite-{a.mode}"}
     env.pop("LANGSMITH_WORKSPACE_ID", None)
-    where = ["--namespace", a.namespace, "--data-namespace", a.data_namespace]
+    where = ["--namespace", a.namespace, "--data-namespace", a.data_namespace, *(["--prometheus", a.prometheus] if a.prometheus else [])]
     try:
         if a.mode == "verify":
             return load_test(a, env, "load-test-verify", *where, "--results", "verify.json")

@@ -2,15 +2,19 @@
 
 import dataclasses
 import json
+import socket
 import threading
+import time
 import unittest
+from unittest import mock
 from uuid import uuid4
 
 from fakes import FakeClient
+from loadtest import runner
 from loadtest.draw import Projects
 from loadtest.payloads.generator import KIB
 from loadtest.profile import from_document
-from loadtest.runner import LoadSettings, build_report, run_load_test
+from loadtest.runner import EndpointGone, LoadSettings, build_report, run_load_test
 from profiles import document
 
 
@@ -206,6 +210,30 @@ class VerifyThroughTheReportTest(unittest.IsolatedAsyncioTestCase):
         _, report = await run(client, run_limit=5, users=1, lag_sample=0)
         self.assertEqual(report["stored"]["missing_runs"], 2)
         self.assertFalse(report["passed"])
+
+
+
+class EndpointTest(unittest.IsolatedAsyncioTestCase):
+    async def test_a_run_ends_with_one_reason_when_its_endpoint_stops_taking_connections(self) -> None:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        client = FakeClient()
+        client.api_url = f"http://127.0.0.1:{port}"
+        started = time.monotonic()
+        with mock.patch.object(runner, "ENDPOINT_PROBE_SECONDS", 0.02), self.assertRaisesRegex(EndpointGone, f"127.0.0.1:{port} took no connection 3 times"):
+            await run(client, users=1, run_limit=None, duration_seconds=30, pause_seconds=0.01)
+        self.assertLess(time.monotonic() - started, 5)
+
+    async def test_an_endpoint_that_answers_lets_the_run_finish(self) -> None:
+        with socket.socket() as listening:
+            listening.bind(("127.0.0.1", 0))
+            listening.listen()
+            client = FakeClient()
+            client.api_url = f"http://127.0.0.1:{listening.getsockname()[1]}"
+            with mock.patch.object(runner, "ENDPOINT_PROBE_SECONDS", 0.02):
+                _, report = await run(client, run_limit=5, users=1, lag_sample=0)
+        self.assertEqual(report["stored"]["missing_runs"], 0)
 
 
 if __name__ == "__main__":

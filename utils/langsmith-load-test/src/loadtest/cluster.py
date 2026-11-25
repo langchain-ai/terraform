@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from langsmith_sizing import params as sizing_params
 
@@ -130,6 +131,17 @@ def parse_redis_info(text: str) -> dict[str, float]:
 CPU_FIELD = {CPU: "seconds", THROTTLED: "throttled", PERIODS: "periods"}
 
 
+def prometheus_federate(where: str, namespace: str) -> str:
+    """The API path to a Prometheus's /federate for one namespace's cAdvisor CPU series. It serves the
+    counters cAdvisor does, in the same text, through services/proxy: a kubeconfig without nodes/proxy
+    (Lite's operator, by design) read no CPU at all, and every soak's cores table was empty (magus,
+    2026-11-25)."""
+    ns, _, service = where.partition("/")
+    names = "|".join(CPU_FIELD)
+    query = urlencode({"match[]": f'{{namespace="{namespace}",__name__=~"{names}"}}'})
+    return f"/api/v1/namespaces/{ns}/services/{service}/proxy/federate?{query}"
+
+
 def _add_cpu(out: dict[str, dict[str, Any]], text: str, marker: str, owners: dict[str, str]) -> None:
     """Each of the namespace's containers' CPU counters from one node's cAdvisor, keyed pod/container."""
     # Filter before parsing: a node's cAdvisor holds every namespace's containers.
@@ -144,8 +156,8 @@ class Collector:
     """Samples the install on a thread until stopped; each sample is also appended to series_path."""
 
     def __init__(self, kube: Kube, namespace: str, release: str, interval_seconds: float, series_path: Path | None = None,
-                 clock: Callable[[], float] = time.time, data_namespace: str | None = None) -> None:
-        self.kube, self.ns, self.release = kube, namespace, release
+                 clock: Callable[[], float] = time.time, data_namespace: str | None = None, prometheus: str | None = None) -> None:
+        self.kube, self.ns, self.release, self.prometheus = kube, namespace, release, prometheus
         self.data_ns = data_namespace or namespace
         self.interval = interval_seconds
         self.series_path = series_path
@@ -293,8 +305,14 @@ class Collector:
 
     def _cpu(self, sample: Sample, pods: list[dict[str, Any]]) -> None:
         owners = {p["name"]: p["workload"] for p in pods}
-        nodes = sorted({p["node"] for p in pods if p["node"]})
         marker = f'namespace="{self.ns}"'
+        if self.prometheus:
+            text = self.kube(["get", "--raw", prometheus_federate(self.prometheus, self.ns)])
+            if text is None:
+                sample["unread"].append(f"CPU from Prometheus {self.prometheus}")
+            _add_cpu(sample["cpu"], text or "", marker, owners)
+            return
+        nodes = sorted({p["node"] for p in pods if p["node"]})
         def read(node: str) -> str | None:
             return self.kube(["get", "--raw", f"/api/v1/nodes/{node}/proxy/metrics/cadvisor"])
         with ThreadPoolExecutor(max_workers=min(16, len(nodes) or 1)) as pool:
@@ -394,9 +412,15 @@ def flushed_rows(sample: Sample) -> float | None:
     before any flush, and a delta over the samples that had the series measured 0 of 100 rows
     (2026-11-25).
     """
+    return smithdb_counter(sample, "ingest_flush_rows_sum")
+
+
+def smithdb_counter(sample: Sample, family: str) -> float | None:
+    """A SmithDB counter's value, 0 when SmithDB was read without it (a series appears at its first
+    increment), None when SmithDB was not read."""
     if not sample["smithdb"] or any(u.startswith("smithdb metrics") for u in sample["unread"]):
         return None
-    return family_sum(sample["smithdb"], "ingest_flush_rows_sum") or 0.0
+    return family_sum(sample["smithdb"], family) or 0.0
 
 
 def _delta(points: list[tuple[float, float]]) -> float | None:
@@ -544,6 +568,13 @@ def _throttling(samples: Sequence[Sample], window: Sequence[Sample], workload: s
     return _throttled_share(window, workload)
 
 
+def _increase(family: str, unit: str) -> Reader:
+    def read(samples: Sequence[Sample], window: Sequence[Sample], workload: str) -> dict[str, Any] | None:
+        during = _delta(_values(samples, lambda s: smithdb_counter(s, family)))
+        return None if during is None else {"during_run": during, "unit": unit}
+    return read
+
+
 # How each watched metric is read from the samples; a SmithDB gauge not named here is read as peak and end.
 READERS: dict[str, Reader] = {
     "used_memory": _redis_memory,
@@ -562,6 +593,7 @@ READERS: dict[str, Reader] = {
     "pg_stat_activity": _postgres_connections,
     "kube_pod_container_status_last_terminated_reason": _oom,
     THROTTLED: _throttling,
+    "query_fanout_limit_exceeded_total": _increase("query_fanout_limit_exceeded_total", "queries refused for scan-partition fanout"),
 }
 
 
