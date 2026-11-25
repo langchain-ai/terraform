@@ -155,6 +155,13 @@ locals {
     "Microsoft.KeyVault/vaults/PrivateEndpointConnectionsApproval/action",
     "Microsoft.KeyVault/vaults/privateEndpointConnections/write",
     "Microsoft.KeyVault/vaults/privateEndpointConnections/delete",
+
+    # PostgreSQL long-term backups. LangSmith keeps the vault and its backups
+    # after teardown, so the role cannot delete them.
+    "Microsoft.DataProtection/backupVaults/write",
+    "Microsoft.DataProtection/backupVaults/backupPolicies/write",
+    "Microsoft.DataProtection/backupVaults/backupInstances/write",
+    "Microsoft.DataProtection/backupVaults/validateForBackup/action",
   ]
 
   # Added with deployment_observability. Container Insights collects the
