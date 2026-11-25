@@ -1,5 +1,5 @@
 # Envoy Gateway install in the k8s-bootstrap module, asserted in both directions:
-# the chart is pinned to v1.9.2, the chart skips its own CRDs, and the two CRD
+# the chart is pinned to v1.9.4, the chart skips its own CRDs, and the two CRD
 # steps (Gateway API, then Envoy Gateway) carry the URLs that make them run again
 # when a version changes. The run swaps in the child module, so the resources are
 # reachable. mock_provider means no cloud credentials, no state, and no API calls.
@@ -32,8 +32,8 @@ run "envoy_gateway_is_pinned_and_applies_its_crds" {
   }
 
   assert {
-    condition     = helm_release.envoy_gateway[0].version == "v1.9.2"
-    error_message = "The Envoy Gateway chart is not pinned to v1.9.2"
+    condition     = helm_release.envoy_gateway[0].version == "v1.9.4"
+    error_message = "The Envoy Gateway chart is not pinned to v1.9.4"
   }
 
   # Helm does not upgrade CRDs, so the module applies them and the chart skips its copy.
@@ -47,15 +47,21 @@ run "envoy_gateway_is_pinned_and_applies_its_crds" {
     error_message = "The Envoy Gateway chart installs the topology injector"
   }
 
-  # The URL triggers run the CRD steps again on an existing cluster after a version change.
+  # The URL and digest triggers run the CRD steps again on an existing cluster after a
+  # version change, and the digest is what the download is checked against.
   assert {
     condition     = strcontains(terraform_data.gateway_api_crds[0].triggers_replace[0], "/v1.6.1/standard-install.yaml")
     error_message = "The Gateway API CRD step does not pin v1.6.1"
   }
 
   assert {
-    condition     = strcontains(terraform_data.envoy_gateway_crds[0].triggers_replace[0], "/v1.9.2/envoy-gateway-crds.yaml")
-    error_message = "The Envoy Gateway CRD step does not pin the v1.9.2 CRDs"
+    condition     = strcontains(terraform_data.envoy_gateway_crds[0].triggers_replace[0], "/v1.9.4/envoy-gateway-crds.yaml")
+    error_message = "The Envoy Gateway CRD step does not pin the v1.9.4 CRDs"
+  }
+
+  assert {
+    condition     = alltrue([for r in [terraform_data.gateway_api_crds[0], terraform_data.envoy_gateway_crds[0]] : can(regex("^[0-9a-f]{64}$", r.triggers_replace[1]))])
+    error_message = "A CRD step does not carry a sha256 digest to verify the download against"
   }
 }
 

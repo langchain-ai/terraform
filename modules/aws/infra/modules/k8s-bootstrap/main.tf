@@ -432,45 +432,66 @@ MANIFEST
 locals {
   # Envoy Gateway v1.9 supports Kubernetes 1.33 to 1.36 and needs Gateway API
   # v1.6. The upstream upgrade order is Gateway API first, then Envoy Gateway.
-  envoy_gateway_version = "v1.9.2"
+  envoy_gateway_version = "v1.9.4"
 
-  # Gateway API standard channel.
-  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
+  # Gateway API standard channel, and its sha256.
+  gateway_api_crds_url    = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
+  gateway_api_crds_sha256 = "24d931f22abd8e40c973264319ead7cfa09d0fb7716b7ab1ee2ff174cb063a73"
 
-  # The Envoy Gateway CRDs of that release, without the Gateway API CRDs.
-  envoy_gateway_crds_url = "https://github.com/envoyproxy/gateway/releases/download/${local.envoy_gateway_version}/envoy-gateway-crds.yaml"
+  # The Envoy Gateway CRDs of that release, without the Gateway API CRDs, and
+  # their sha256. Change the digest together with the version.
+  envoy_gateway_crds_url    = "https://github.com/envoyproxy/gateway/releases/download/${local.envoy_gateway_version}/envoy-gateway-crds.yaml"
+  envoy_gateway_crds_sha256 = "b339119f8f3a4046688fc96837b4129553f42c9998976913ef9dff25694d85cc"
+
+  # Shared by both CRD steps: download to a temp file, refuse a file whose sha256
+  # differs from the pinned one, then apply that exact file.
+  _crds_apply_script = <<-EOT
+    set -euo pipefail
+    _f=$(mktemp)
+    trap 'rm -f "$_f"' EXIT
+    curl -fsSL --retry 3 -o "$_f" "$CRDS_URL"
+    _sum=$( (shasum -a 256 "$_f" 2>/dev/null || sha256sum "$_f") | awk '{print $1}')
+    if [ "$_sum" != "$CRDS_SHA256" ]; then
+      echo "ERROR: $CRDS_URL has sha256 $_sum, expected $CRDS_SHA256" >&2
+      exit 1
+    fi
+    kubectl apply --server-side --force-conflicts -f "$_f"
+  EOT
 }
 
 # Helm installs CRDs only on the first install and never upgrades them, so a chart
 # version bump alone leaves the old CRDs on an existing cluster. The next two steps
-# apply the CRDs of the pinned releases and run again when a URL changes. Server-side
-# apply with --force-conflicts takes over fields that an earlier client-side apply or
-# Helm wrote, and two of the Envoy Gateway CRDs are too large for a client-side apply.
+# download the CRDs of the pinned releases, check them against a pinned sha256, apply
+# them, and run again when a URL or digest changes. Server-side apply with
+# --force-conflicts takes over fields that an earlier client-side apply or Helm
+# wrote, and two of the Envoy Gateway CRDs are too large for a client-side apply.
 resource "terraform_data" "gateway_api_crds" {
   count = var.enable_envoy_gateway ? 1 : 0
 
-  triggers_replace = [local.gateway_api_crds_url]
+  triggers_replace = [local.gateway_api_crds_url, local.gateway_api_crds_sha256]
 
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
-    command     = <<-EOT
-      ${local._ctx_check}
-      kubectl apply --server-side --force-conflicts -f ${local.gateway_api_crds_url}
-    EOT
+    command     = "${local._ctx_check}\n${local._crds_apply_script}"
+    environment = {
+      CRDS_URL    = local.gateway_api_crds_url
+      CRDS_SHA256 = local.gateway_api_crds_sha256
+    }
   }
 }
 
 resource "terraform_data" "envoy_gateway_crds" {
   count = var.enable_envoy_gateway ? 1 : 0
 
-  triggers_replace = [local.envoy_gateway_crds_url]
+  triggers_replace = [local.envoy_gateway_crds_url, local.envoy_gateway_crds_sha256]
 
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
-    command     = <<-EOT
-      ${local._ctx_check}
-      kubectl apply --server-side --force-conflicts -f ${local.envoy_gateway_crds_url}
-    EOT
+    command     = "${local._ctx_check}\n${local._crds_apply_script}"
+    environment = {
+      CRDS_URL    = local.envoy_gateway_crds_url
+      CRDS_SHA256 = local.envoy_gateway_crds_sha256
+    }
   }
 
   depends_on = [terraform_data.gateway_api_crds]
