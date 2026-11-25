@@ -170,6 +170,7 @@ The module then creates these service accounts in the project. LangSmith finds t
 | `langsmith-node` | GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader` |
 | `langsmith-sandbox-host` | Sandbox GKE nodes | `roles/container.defaultNodeServiceAccount`, `roles/artifactregistry.reader`, `roles/redis.dbConnectionUser` |
 | `langsmith-deployment-builds` | In-cluster deployment build Jobs. Only with [deployment builds](#deployment-builds). | None. LangSmith grants `roles/artifactregistry.writer` on each data plane's build repository. |
+| `langsmith-cell-operator` | The operator of the scale-to-zero cell. Only with [scale to zero](#scale-to-zero). | `roles/cloudsql.client`, `roles/cloudsql.instanceUser` |
 
 Name any secrets of your own in the project so their IDs don't start with `ls-`. Otherwise External Secrets can read them.
 
@@ -241,6 +242,10 @@ Name your own Cloud SQL instances so they don't start with `lg-`. Before you set
 
 `deployment_builds = true` lets LangSmith build GitHub deployments and `langgraph deploy` sources in the data plane cluster. With `byo_iam`, it creates the `langsmith-deployment-builds` service account with no project roles and lets the provisioner manage that account's IAM, so LangSmith can grant it `roles/artifactregistry.writer` on each data plane's own build repository only; without `byo_iam`, it changes nothing. CLI builds need nothing extra. Apply it before LangSmith turns builds on, and have LangSmith turn them off before you set it back to `false`.
 
+## Scale to zero
+
+`scale_to_zero = true` lets LangSmith run scale-to-zero deployments, which share one Cloud SQL instance per data plane, the cell. With `byo_iam`, it creates the `langsmith-cell-operator` service account, which logs in to the cell to create each deployment's database, with `roles/cloudsql.client` and `roles/cloudsql.instanceUser` limited to `langsmith-` instances. It lets the provisioner manage that account's IAM, so LangSmith can bind it to the cell operator's Kubernetes service account. Without `byo_iam`, it changes nothing. Apply it before LangSmith turns scale to zero on, and keep it while the data plane has the cell.
+
 ## Inputs
 
 | Name | Description | Default |
@@ -256,6 +261,7 @@ Name your own Cloud SQL instances so they don't start with `lg-`. Before you set
 | `regional_container_logs` | Let LangSmith keep data plane container logs out of the global `_Default` bucket. Requires `deployment_observability`. See [Regional container logs](#regional-container-logs). | `false` |
 | `dedicated_deployments` | Let LangSmith run dedicated deployments. Only changes anything with `byo_iam`. See [Dedicated deployments](#dedicated-deployments). | `false` |
 | `deployment_builds` | Let LangSmith turn on in-cluster deployment builds. Only changes anything with `byo_iam`. See [Deployment builds](#deployment-builds). | `false` |
+| `scale_to_zero` | Let LangSmith turn on scale-to-zero deployments. Only changes anything with `byo_iam`. See [Scale to zero](#scale-to-zero). | `false` |
 
 ## Outputs
 
