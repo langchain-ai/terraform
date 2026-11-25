@@ -170,11 +170,8 @@ run "refuses_a_zone_azure_does_not_have" {
   expect_failures = [var.additional_node_pools]
 }
 
-# SmithDB's components carry no nodeSelector by default, so a regional pool
-# under a zoned request can receive them, where a Premium SSD v2 cache volume
-# cannot attach. The root precondition refuses the pair; a pool with zones of
-# its own passes.
-run "smithdb_refuses_a_regional_pool_under_zoned_availability_zones" {
+# SmithDB is isolated on zonal nodes, so unrelated pools can remain regional.
+run "smithdb_isolation_allows_an_unrelated_regional_pool" {
   command = plan
 
   variables {
@@ -186,7 +183,10 @@ run "smithdb_refuses_a_regional_pool_under_zoned_availability_zones" {
     }
   }
 
-  expect_failures = [terraform_data.validate_network]
+  assert {
+    condition     = module.aks.node_pool_zones["data"] == null && toset(module.aks.node_pool_zones["smithdb"]) == toset(["1", "2", "3"])
+    error_message = "Only the isolated SmithDB pool must be zonal; an unrelated regional pool must remain supported."
+  }
 }
 
 # A cluster built nonzonal takes SmithDB through a zonal additional pool that

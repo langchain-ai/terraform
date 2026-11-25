@@ -709,6 +709,16 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   elif [[ -f "$_smithdb_migration_file" ]]; then
     echo "  ○ langsmith-values-smithdb-migration.yaml (file exists but smithdb_migration_enabled = false — skipped)"
   fi
+  source "$HELM_DIR/../infra/scripts/_smithdb-values.sh"
+  _smithdb_pool_tolerations=$(terraform -chdir="$INFRA_DIR" output -json smithdb_node_tolerations) || {
+    fail "Could not read SmithDB pool tolerations. Run make apply, then make init-values."
+    exit 1
+  }
+  jq -e 'type == "array" and length > 0' <<< "$_smithdb_pool_tolerations" >/dev/null || {
+    fail "SmithDB pool tolerations are missing. Run make apply, then make init-values."
+    exit 1
+  }
+  _smithdb_managed_values "$_smithdb_pool_tolerations"
 fi
 echo ""
 

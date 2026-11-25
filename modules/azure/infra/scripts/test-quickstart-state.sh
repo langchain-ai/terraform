@@ -85,12 +85,18 @@ eq "CREATE_WAF survives"       "$CREATE_WAF"    "true"
 # line; that deployment runs node-subnet, and the resumed session must not carry
 # the top-level default of overlay into its tfvars.
 printf 'SECTION=4\nANSWERED=1 2 3\n' > "$STATE_FILE"
-NETWORK_MODE="overlay"
+NETWORK_MODE="overlay"; ENABLE_SMITHDB="true"; SMITHDB_INGESTION="true"
 _load_state
+eq "old checkpoint does not enable SmithDB" "$ENABLE_SMITHDB/$SMITHDB_INGESTION" "false/false"
 eq "old checkpoint seeds node-subnet"  "$NETWORK_MODE" "node-subnet"
 printf 'SECTION=4\nNETWORK_MODE=overlay\n' > "$STATE_FILE"
 _load_state
 eq "checkpoint with a mode keeps it"   "$NETWORK_MODE" "overlay"
+# Old checkpoints for existing deployments must keep the saved rollout stage.
+printf 'enable_smithdb = true\nsmithdb_ingestion_enabled = true\nsmithdb_migration_enabled = true\nsmithdb_query_enabled = true\n' > "$OUTPUT"
+_load_state
+eq "old checkpoint reloads existing SmithDB flags" "$ENABLE_SMITHDB/$SMITHDB_INGESTION/$SMITHDB_MIGRATION/$SMITHDB_QUERY" "true/true/true/true"
+rm -f "$OUTPUT"
 
 echo "2. _STATE_KEYS covers every variable _load_tfvars assigns"
 # _load_state drops a key that is missing from the whitelist without saying so,
@@ -320,6 +326,11 @@ has "dev serves HTTP"                 tls_certificate_source '"none"'
 has "dev DNS label from the name"     dns_label         '"langsmith-dev"'
 has "dev Postgres in-cluster"         postgres_source   '"in-cluster"'
 has "dev sizing"                      sizing_profile    '"dev"'
+has "new dev enables SmithDB"         enable_smithdb true
+has "new dev enables ingestion"       smithdb_ingestion_enabled true
+has "new dev leaves migration off"    smithdb_migration_enabled false
+has "new dev leaves query off"        smithdb_query_enabled false
+has "dev SmithDB VM follows sizing"   smithdb_node_vm_size null
 [[ ! -e "$NI/.quickstart-state" ]] && ok "no checkpoint left behind" || bad "checkpoint left behind"
 
 qs --yes --profile prod --location westus2 --domain langsmith.example.com --email ops@example.com
@@ -334,6 +345,8 @@ has "prod Redis HA"                   redis_high_availability true
 has "prod purge protection"           keyvault_purge_protection true
 has "prod diagnostics"                create_diagnostics true
 has "prod sizing"                     sizing_profile    '"production"'
+has "prod SmithDB VM follows sizing"  smithdb_node_vm_size null
+has "prod SmithDB maximum"            smithdb_node_max_count 10
 has "domain switches TLS on"          tls_certificate_source '"letsencrypt"'
 has "domain written"                  langsmith_domain  '"langsmith.example.com"'
 has "domain gets a zone"              create_dns_zone   true
@@ -395,6 +408,9 @@ has "quick dev serves HTTP"           tls_certificate_source '"none"'
 has "quick dev DNS label"             dns_label         '"langsmith-dev"'
 has "quick dev Postgres in-cluster"   postgres_source   '"in-cluster"'
 has "quick dev purgeable vault"       keyvault_purge_protection false
+has "quick dev enables SmithDB"       enable_smithdb true
+has "quick dev enables ingestion"     smithdb_ingestion_enabled true
+has "quick dev SmithDB VM follows sizing" smithdb_node_vm_size null
 [[ ! -e "$NI/.quickstart-state" ]] && ok "quick leaves no checkpoint" || bad "quick left a checkpoint"
 
 # A bad domain and a bad email are each asked again, not written.
@@ -432,6 +448,66 @@ EOF
 eq "a rerun over a kept map exits 0"   "$?" "0"
 eq "a kept multi-line map is written back whole" "$(awk '/^tags/,/^}/' "$NI/terraform.tfvars")" \
   "$(printf 'tags = {\n  team = "platform" # required by policy\n}')"
+has "older deployment keeps SmithDB off" enable_smithdb false
+has "older deployment keeps ingestion off" smithdb_ingestion_enabled false
+
+# Editing an existing deployment preserves its rollout stage and explicit VM.
+cat > "$NI/terraform.tfvars" << 'EOF'
+name_prefix = "dev"
+enable_smithdb = true
+smithdb_ingestion_enabled = false
+smithdb_migration_enabled = true
+smithdb_query_enabled = true
+smithdb_node_vm_size = "Standard_D32s_v5"
+EOF
+{ printf '1'; printf '%300s' '' | tr ' ' '\n'; } | INFRA_DIR="$NI" "$SRC" > qs.out 2>&1
+eq "existing SmithDB edit exits 0" "$?" "0"
+has "edit keeps ingestion disabled" smithdb_ingestion_enabled false
+has "edit keeps migration enabled" smithdb_migration_enabled true
+has "edit keeps query enabled" smithdb_query_enabled true
+has "edit keeps explicit SmithDB VM" smithdb_node_vm_size '"Standard_D32s_v5"'
+eq "edit writes each gate once" "$(grep -c '^smithdb_migration_enabled[[:space:]]*=' "$NI/terraform.tfvars")" 1
+# An explicitly disabled SmithDB pool stays disabled on the next edit.
+sed 's/^enable_smithdb[[:space:]]*= true/enable_smithdb = false/' "$NI/terraform.tfvars" > disabled.tfvars
+cp disabled.tfvars "$NI/terraform.tfvars"
+{ printf '1'; printf '%300s' '' | tr ' ' '\n'; } | INFRA_DIR="$NI" "$SRC" > qs.out 2>&1
+eq "disabled SmithDB edit exits 0" "$?" "0"
+has "edit keeps SmithDB disabled" enable_smithdb false
+has "disabled SmithDB keeps its VM override" smithdb_node_vm_size '"Standard_D32s_v5"'
+
+echo "11. SmithDB node settings reach generated tfvars and survive edits"
+qs --yes --smithdb --smithdb-vm-size Standard_D32s_v5 --smithdb-min 3 --smithdb-max 8 --smithdb-zones 1,2
+eq "SmithDB run exits 0" "$?" "0"
+has "SmithDB enabled" enable_smithdb true
+has "SmithDB VM written" smithdb_node_vm_size '"Standard_D32s_v5"'
+has "SmithDB minimum written" smithdb_node_min_count 3
+has "SmithDB maximum written" smithdb_node_max_count 8
+has "SmithDB zones written" smithdb_node_zones '\["1", "2"\]'
+OUTPUT="$NI/terraform.tfvars"
+INFRA_DIR="$NI"
+ENABLE_SMITHDB=false; SMITHDB_NODE_VM=""; SMITHDB_NODE_MIN=2; SMITHDB_NODE_MAX=""; SMITHDB_NODE_ZONES=""
+_load_tfvars
+eq "SmithDB flag reloaded" "$ENABLE_SMITHDB" true
+eq "SmithDB VM reloaded" "$SMITHDB_NODE_VM" Standard_D32s_v5
+eq "SmithDB bounds reloaded" "$SMITHDB_NODE_MIN/$SMITHDB_NODE_MAX" 3/8
+eq "SmithDB zones reloaded" "$SMITHDB_NODE_ZONES" 1,2
+# An independent SmithDB tier override must size the new pool before it is pinned.
+printf 'smithdb_sizing = "large"\n' >> "$OUTPUT"
+_load_tfvars
+awk '/^_smithdb_node_defaults\(\)/ {p=1} p {print} p && /^}/ {exit}' "$SRC" > smithdb-defaults.sh
+# shellcheck source=/dev/null
+source ./smithdb-defaults.sh
+SMITHDB_NODE_VM=""
+_smithdb_node_defaults
+eq "independent SmithDB tier sets the VM default" "$_SMITHDB_VM_DEFAULT" Standard_D64s_v5
+qs --yes --smithdb --smithdb-min 3 --smithdb-max 3
+eq "SmithDB requires rollout headroom" "$?" "2"
+qs --yes --smithdb --smithdb-zones '1,4'
+eq "SmithDB rejects invalid zones" "$?" "2"
+qs --yes --smithdb-min 3
+eq "node overrides need no enable flag" "$?" "0"
+has "node override written" smithdb_node_min_count 3
+has "node override keeps automatic VM" smithdb_node_vm_size null
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

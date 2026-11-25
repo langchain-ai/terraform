@@ -949,14 +949,17 @@ run "an_attached_cluster_gets_no_sandbox_pool_by_default" {
     existing_cluster_resource_group_name = "platform-aks-rg"
     aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
     enable_sandboxes                     = true
+    enable_smithdb                       = true
+    availability_zones                   = []
+    smithdb_node_zones                   = ["2"]
   }
 
   # The plan warns that there is no pool, so sandbox-host does not sit Pending unexplained.
-  expect_failures = [check.sandbox_pool_on_attached_cluster]
+  expect_failures = [check.sandbox_pool_on_attached_cluster, check.smithdb_pool_on_attached_cluster]
 
   assert {
-    condition     = !contains(keys(local.aks_managed_node_pools), "sandboxhost")
-    error_message = "An attached cluster with existing_cluster_node_pools_managed = false got the sandboxhost pool"
+    condition     = !contains(keys(local.aks_managed_node_pools), "sandboxhost") && !contains(keys(local.aks_managed_node_pools), "smithdb")
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = false got a dedicated workload pool"
   }
 }
 
@@ -989,11 +992,13 @@ run "an_attached_cluster_gets_the_sandbox_pool_when_pools_are_managed" {
     existing_cluster_node_pools_managed  = true
     aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
     enable_sandboxes                     = true
+    enable_smithdb                       = true
+    availability_zones                   = ["1", "2", "3"]
   }
 
   assert {
-    condition     = tolist(local.aks_managed_node_pools["sandboxhost"].node_taints) == tolist(["sandbox.langsmith.com/host=true:NoSchedule"])
-    error_message = "An attached cluster with existing_cluster_node_pools_managed = true did not get the tainted sandboxhost pool"
+    condition     = tolist(local.aks_managed_node_pools["sandboxhost"].node_taints) == tolist(["sandbox.langsmith.com/host=true:NoSchedule"]) && contains(local.aks_managed_node_pools["smithdb"].node_taints, "langsmith-nodepool/smithdb=true:NoSchedule")
+    error_message = "An attached cluster with existing_cluster_node_pools_managed = true did not get both tainted workload pools"
   }
 }
 
