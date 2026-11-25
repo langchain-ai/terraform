@@ -1,6 +1,6 @@
 import unittest
 
-from loadtest.cli import build_parser, cluster_options, resolve
+from loadtest.cli import build_parser, cluster_options, cluster_rows, resolve
 from loadtest.profile import from_document
 from loadtest.runner import LoadSettings
 from profiles import document as profile
@@ -85,3 +85,12 @@ class ProjectsTest(unittest.TestCase):
         self.assertNotIn("projects", values)
         loaded, _ = resolve(arguments("--projects", "200", "--metadata-keys", "34", "--batch-runs", "40"), None)
         self.assertEqual((loaded.shape.projects, loaded.shape.metadata_keys, loaded.shape.batch_runs), (200, 34, 40))
+
+
+class ClusterRowsTest(unittest.TestCase):
+    def test_a_workload_with_memory_and_no_cpu_reads_not_read(self) -> None:
+        # magus, 2026-11-25: a verify's 60 s window gave one workload a memory peak and no CPU rate,
+        # and formatting the None stopped the summary with a TypeError.
+        rows = cluster_rows({"queue": {"cores_used": None, "memory_peak_mib": 412.4},
+                             "backend": {"cores_used": 0.5, "runs_per_core": 20.0}})
+        self.assertEqual(rows, [("queue", "not read", "", "412 MiB"), ("backend", "0.50", "20.0", "not read")])

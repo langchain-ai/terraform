@@ -349,14 +349,22 @@ def _print_cluster(section: dict[str, Any]) -> None:
     if not section.get("read"):
         ui.note(f"install metrics: {section.get('why')}")
         return
-    rows = [(w, f"{c['cores_used']:.2f}", f"{c['runs_per_core']:.1f}" if "runs_per_core" in c else "") for w, c in section["coefficients"].items()]
     flushed = section["smithdb_rows_flushed_per_second"]
-    ui.table(Table("The install under the load", ("workload", "cores used", "runs/s per core"), rows,
+    ui.table(Table("The install under the load", ("workload", "cores used", "runs/s per core", "memory peak"), cluster_rows(section["coefficients"]),
                    f"Over the {section['steady_samples']} samples after the ramp, at {section['runs_per_second_sent'] or 0:g} runs/s sent"
                    + (f"; SmithDB flushed {flushed:g} rows/s" if flushed is not None else "")
                    + f". Ingestion queue kept up: {_yes(section['kept_up']['ingestion_queue'])}; compaction kept up: {_yes(section['kept_up']['compaction'])}."))
     for what in section["unread"]:
         ui.warn(f"not read: {what}")
+
+
+def cluster_rows(coefficients: dict[str, dict[str, Any]]) -> list[tuple[str, ...]]:
+    """One row a workload. A workload seen only in the memory series has no CPU reading (a verify's 60 s
+    window can hold too few samples for a rate), and formatting that None stopped verify's summary."""
+    def num(value: float | None, fmt: str, unit: str = "") -> str:
+        return "not read" if value is None else f"{value:{fmt}}{unit}"
+    return [(w, num(c.get("cores_used"), ".2f"), num(c["runs_per_core"], ".1f") if "runs_per_core" in c else "",
+             num(c.get("memory_peak_mib"), ".0f", " MiB")) for w, c in coefficients.items()]
 
 
 def _target_detail(entry: dict[str, Any]) -> str:
