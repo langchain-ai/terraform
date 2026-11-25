@@ -474,8 +474,9 @@ Enabling two controllers is rejected at plan time by a precondition in `infra/ma
 **Upgrading an existing deployment?** Istio and NGINX deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
 
 When enabled, the `k8s-bootstrap` module:
-1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
-2. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
+1. Applies the Gateway API CRDs (v1.6.1, standard channel) and the Envoy Gateway CRDs (v1.9.4). Helm does not upgrade CRDs, so the module downloads them, checks each file against a pinned sha256, and applies it with `kubectl apply --server-side`. The chart skips its own copy. The module needs EKS 1.33 to 1.36: it rejects an older `eks_cluster_version` at plan time and warns about a newer one.
+2. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.9.4) in the `envoy-gateway-system` namespace.
+3. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
 
 The LangSmith Helm chart then creates an `HTTPRoute` (not an `Ingress`) pointing to `langsmith-frontend`.
 
