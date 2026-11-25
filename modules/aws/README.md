@@ -119,7 +119,8 @@ aws/
 │   ├── variables.tf        ← All input variables with defaults
 │   ├── locals.tf           ← Naming: {name_prefix}-{environment}-{resource}
 │   ├── outputs.tf          ← Cluster, DB, Redis, S3, ALB, IAM outputs
-│   ├── backend.tf          ← Remote state backend (configure before init)
+│   ├── backend.tf          ← Remote state notes (state is local unless backend.hcl exists)
+│   ├── backend.hcl.example ← Copy to backend.hcl (git-ignored) to keep state in S3
 │   ├── versions.tf         ← Required provider versions
 │   ├── scripts/
 │   │   ├── _common.sh          ← Shared helpers (tfvar parsing, colors)
@@ -129,7 +130,8 @@ aws/
 │   │   ├── quickstart.sh       ← Interactive setup wizard
 │   │   ├── set-kubeconfig.sh   ← Update KUBECONFIG for EKS
 │   │   ├── setup-env.sh        ← Create/manage secrets in SSM Parameter Store
-│   │   └── status.sh           ← Deployment state checker
+│   │   ├── status.sh           ← Deployment state checker
+│   │   └── tf-init.sh          ← terraform init, with S3 state when backend.hcl exists (make init)
 │   └── modules/
 │       ├── vpc/            ← VPC, subnets, NAT gateway
 │       ├── eks/            ← EKS cluster, managed node groups, IRSA role, GP3 storage class
@@ -249,17 +251,41 @@ DNS and Terraform state migration.
 
 ### Terraform state backend (recommended for production)
 
-Configure `terraform/aws/infra/backend.tf`:
+State is local by default (`infra/terraform.tfstate`). For anything beyond a
+single-operator test, keep it in an S3 bucket you own. The module does not create
+the bucket, so create it first (the commands are in Issue #21 of
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md)) and turn on versioning.
 
-```hcl
-terraform {
-  backend "s3" {
-    bucket = "<your-terraform-state-bucket>"
-    key    = "langsmith/aws/terraform.tfstate"
-    region = "us-west-2"
-  }
-}
+Then point Terraform at it without editing any tracked file:
+
+```bash
+cp infra/backend.hcl.example infra/backend.hcl   # git-ignored; set bucket, key, region (encrypt and use_lockfile are pre-set)
+make init                                         # new deployment
+make init ARGS="-migrate-state"                   # move existing local state into the bucket
 ```
+
+`make init` detects `infra/backend.hcl` and runs
+`terraform init -backend-config=backend.hcl`, so `make plan` and `make apply` use
+the bucket from then on. `make quickdeploy` does the same when it has to initialize;
+if the directory was already initialized without `backend.hcl`, it stops and tells
+you to run `make init ARGS="-migrate-state"` first. Locking uses S3 itself (`use_lockfile = true`), so no
+DynamoDB table is needed, and a second concurrent run is refused while the first
+holds the lock. Without `backend.hcl`, nothing changes.
+
+The identity that runs Terraform needs:
+
+| Action | Resource |
+|---|---|
+| `s3:ListBucket` | `arn:aws:s3:::<bucket>` |
+| `s3:GetObject`, `s3:PutObject` | `arn:aws:s3:::<bucket>/<key>` |
+| `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` | `arn:aws:s3:::<bucket>/<key>.tflock` |
+| `kms:GenerateDataKey`, `kms:Decrypt` | the KMS key, only if you set `kms_key_id` |
+
+To go back to local state, delete `infra/backend.hcl` and run
+`make init ARGS="-migrate-state"`.
+
+If you already copied `backend.tf.example` into `backend.tf`, that keeps working.
+To get S3 lockfile locking there, set `use_lockfile = true` in its backend block.
 
 ---
 
@@ -725,7 +751,7 @@ Running `./helm/scripts/deploy.sh` alone is not enough because it explicitly res
 
 **When to use:** First time, or after adding/upgrading a Terraform provider or module.
 
-Runs `terraform -chdir=infra init`. Downloads all required providers (`hashicorp/aws`, `hashicorp/kubernetes`, `hashicorp/helm`, etc.) and modules (the EKS Blueprints module, VPC module, etc.) into `infra/.terraform/`. Configures the state backend defined in `backend.tf`.
+Runs `infra/scripts/tf-init.sh`, which wraps `terraform -chdir=infra init`. Downloads all required providers (`hashicorp/aws`, `hashicorp/kubernetes`, `hashicorp/helm`, etc.) and modules (the EKS Blueprints module, VPC module, etc.) into `infra/.terraform/`. Configures the state backend: S3 when `infra/backend.hcl` exists (see [Terraform state backend](#terraform-state-backend-recommended-for-production)), local state otherwise.
 
 Safe to re-run at any time — it's idempotent.
 
@@ -993,7 +1019,7 @@ Runs `infra/scripts/quickdeploy.sh`. Before doing anything it gates on two prere
 1. `TF_VAR_langsmith_api_key_salt` is exported — confirms `source infra/scripts/setup-env.sh` has been run.
 2. `infra/terraform.tfvars` exists — confirms `make quickstart` has been run.
 
-If either gate fails it prints the exact command to fix and exits. If terraform is not yet initialized (`.terraform/` missing), it runs `terraform init` automatically.
+If either gate fails it prints the exact command to fix and exits. If terraform is not yet initialized (`.terraform/` missing), it runs `terraform init` automatically. If `infra/backend.hcl` exists but the directory was initialized without it, it stops instead of applying to local state, and prints `make init ARGS="-migrate-state"`.
 
 Then chains 5 steps: `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` → success banner with LangSmith URL.
 

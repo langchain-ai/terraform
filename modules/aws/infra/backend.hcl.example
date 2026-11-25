@@ -1,0 +1,26 @@
+# Remote Terraform state in an S3 bucket you create and own. The module does not
+# create it. Copy this file to backend.hcl (git-ignored), fill it in, and run:
+#
+#   cp backend.hcl.example backend.hcl
+#   make init                           # new deployment
+#   make init ARGS="-migrate-state"     # move existing local state into the bucket
+#
+# Without backend.hcl, state stays local (terraform.tfstate).
+#
+# Locking uses S3 itself (use_lockfile), so no DynamoDB table is needed. The
+# identity that runs Terraform needs:
+#   s3:ListBucket                          on  arn:aws:s3:::<bucket>
+#   s3:GetObject, s3:PutObject             on  arn:aws:s3:::<bucket>/<key>
+#   s3:GetObject, s3:PutObject, s3:DeleteObject
+#                                          on  arn:aws:s3:::<bucket>/<key>.tflock
+#   kms:GenerateDataKey, kms:Decrypt       on  the key, only if you set kms_key_id
+# Turn on bucket versioning so an earlier state can be recovered.
+
+bucket       = "my-terraform-state-bucket"
+key          = "langsmith/aws/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true
+
+# kms_key_id = "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"
+# profile    = "my-sso-profile"
