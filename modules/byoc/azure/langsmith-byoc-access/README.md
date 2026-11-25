@@ -314,6 +314,7 @@ Fields of each `data_planes` entry:
 | `deployment_observability` | `bool` | no | `false` | Let LangSmith turn on deployment observability for this data plane. Adds actions to its custom role. See [Turn on deployment observability](#turn-on-deployment-observability-optional). |
 | `dedicated_deployments` | `bool` | no | `false` | With `byo_iam`, create `langsmith-host-backend-identity` and grant it the roles that dedicated deployments need. See [Turn on dedicated deployments](#turn-on-dedicated-deployments-optional). |
 | `deployment_builds` | `bool` | no | `false` | With `byo_iam`, create the identities and roles that deployment builds and `langgraph deploy` need. Set it after the data plane is active. See [Deployment builds](#deployment-builds-optional). |
+| `egress_firewall` | `bool` | no | `false` | Let LangSmith add an Azure Firewall for outbound traffic. Adds actions to the LangSmith role, also with `reduced_access`. Apply it before LangSmith turns on the firewall. Ask LangSmith to turn off the firewall before you set it to `false`. Azure bills the firewall per hour and per GB. |
 | `flow_logs` | `object` | no | `null` | VNet flow logs: `storage_account_id`, `retention_days` (30), and an optional `network_watcher_name` and `network_watcher_resource_group_name`. See [Turn on flow logs](#turn-on-flow-logs-optional). |
 
 A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and hyphens. Start with a letter, end with a letter or a digit, and do not use two hyphens in sequence.
