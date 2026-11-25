@@ -1309,6 +1309,11 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 #   - Fleet run streams: POST /api/v1/fleet/threads/{id}/runs/stream,
 #     GET /api/v1/fleet/lg/threads/{id}/runs/{run_id}/stream
 #   - LangGraph Deployments proxy (host-backend): /api-host/v2/*
+#   - LLM Gateway model calls, when enable_llm_gateway: /gateway/* (the chart's
+#     frontend nginx allows these 900 s)
+#
+# Each new long-running path needs an entry here until the chart's own
+# HTTPRoute can carry a timeout; delete this route then.
 #
 # A second HTTPRoute on the same Gateway+hostname with more specific path
 # matches takes precedence over the chart's "/" catch-all per Gateway API
@@ -1334,11 +1339,13 @@ resource "kubectl_manifest" "fleet_stream_httproute" {
       parentRefs = [{ name = "langsmith-gateway" }]
       hostnames  = [var.langsmith_domain]
       rules = [{
-        matches = [
+        matches = concat([
           { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },
           { path = { type = "PathPrefix", value = "/api/v1/fleet/lg" } },
           { path = { type = "PathPrefix", value = "/api-host/v2" } },
-        ]
+          ], var.enable_llm_gateway ? [
+          { path = { type = "PathPrefix", value = "/gateway" } },
+        ] : [])
         backendRefs = [{ name = "langsmith-frontend", port = 80 }]
         timeouts    = { request = "0s" }
       }]
