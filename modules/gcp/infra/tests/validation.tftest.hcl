@@ -37,6 +37,12 @@ override_module {
   }
 }
 
+override_resource {
+  target          = random_id.suffix
+  override_during = plan
+  values          = { hex = "a1b2c3d4" }
+}
+
 run "enums_reject_an_unlisted_value" {
   command = plan
 
@@ -267,4 +273,29 @@ run "smithdb_disabled_ignores_the_metastore_tls_variables" {
     )
     error_message = "With SmithDB disabled, the metastore TLS outputs, the metastore tier, or the Helm values are not empty"
   }
+}
+
+run "smithdb_node_counts_reject_insufficient_capacity" {
+  command = plan
+  variables {
+    smithdb_node_min_count = 0
+  }
+  expect_failures = [var.smithdb_node_min_count]
+}
+run "smithdb_default_max_rejects_a_larger_minimum" {
+  command = plan
+  variables {
+    enable_smithdb         = true
+    smithdb_node_min_count = 6
+  }
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "smithdb_node_max_rejects_a_value_below_the_minimum" {
+  command = plan
+  variables {
+    smithdb_node_min_count = 3
+    smithdb_node_max_count = 2
+  }
+  expect_failures = [var.smithdb_node_max_count]
 }

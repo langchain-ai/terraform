@@ -1,11 +1,3 @@
-# smithdb-nodes: dedicated GKE node pools for the SmithDB workloads.
-#
-# The AWS module provisions this capacity with Karpenter (EC2NodeClass with
-# instanceStorePolicy: RAID0 plus NodePools constrained by local NVMe size).
-# Karpenter has no GCP equivalent here, so these are native node pools whose
-# labels and taints match the AWS ones exactly, letting a single Helm values
-# overlay schedule correctly on either cloud.
-
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
@@ -118,4 +110,29 @@ variable "labels" {
   description = "Labels to apply to resources"
   type        = map(string)
   default     = {}
+}
+
+variable "create_general_pool" {
+  type    = bool
+  default = true
+}
+variable "create_legacy_pools" {
+  type    = bool
+  default = false
+}
+variable "machine_type" {
+  type    = string
+  default = "c3-standard-22"
+}
+variable "min_nodes" {
+  type    = number
+  default = 2
+}
+variable "max_nodes" {
+  type    = number
+  default = 5
+}
+variable "disk_size_gb" {
+  type    = number
+  default = 300
 }
