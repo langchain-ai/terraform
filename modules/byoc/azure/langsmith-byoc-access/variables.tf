@@ -54,6 +54,14 @@ variable "data_planes" {
     # active. Without byo_iam, LangSmith creates them itself and this setting
     # changes nothing.
     deployment_builds = optional(bool, false)
+    # Customer-managed keys. See cmk.tf. key_id is for all services.
+    # service_key_ids (blob, postgres, disks) overrides it per service.
+    # Values are key IDs: <Key Vault ID>/keys/<name>. Set before you create
+    # the data plane. Do not change while it exists.
+    cmk = optional(object({
+      key_id          = optional(string)
+      service_key_ids = optional(map(string), {})
+    }))
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
@@ -75,6 +83,20 @@ variable "data_planes" {
       can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+  }
+
+  validation {
+    condition = alltrue([
+      for dp in values(var.data_planes) : dp.cmk == null || (
+        (dp.cmk.key_id != null || length(dp.cmk.service_key_ids) > 0) &&
+        alltrue([for service in keys(dp.cmk.service_key_ids) : contains(["blob", "postgres", "disks"], service)]) &&
+        alltrue([
+          for id in concat(dp.cmk.key_id == null ? [] : [dp.cmk.key_id], values(dp.cmk.service_key_ids)) :
+          can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.KeyVault/vaults/[a-zA-Z0-9-]{3,24}/keys/[a-zA-Z0-9-]{1,127}$", id))
+        ])
+      )
+    ])
+    error_message = "cmk needs key_id or service_key_ids (blob, postgres, disks). Each key must be <Key Vault ID>/keys/<name>."
   }
 }
 
