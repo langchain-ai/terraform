@@ -85,3 +85,9 @@ variable "deployment_builds" {
   type        = bool
   default     = false
 }
+
+variable "scale_to_zero" {
+  description = "Let LangSmith run scale-to-zero deployments. With byo_iam, creates the langsmith-cell-operator service account. See the README."
+  type        = bool
+  default     = false
+}

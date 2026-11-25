@@ -1,6 +1,7 @@
 # ingress_load_balancer = "internal": the annotations each controller gets, the
-# Istio add-on's gateway switch, the grant on a separate load-balancer subnet,
-# and every rule that refuses a combination that cannot work. The network is
+# Istio add-on's gateway switch, the cluster identity's grant on the load
+# balancer's subnet (a separate one, or the node subnet with a system-assigned
+# identity), and every rule that refuses a combination that cannot work. The network is
 # the byo_network fixture (a supplied VNet with a supplied AKS subnet), so the
 # same-VNet rule on ingress_load_balancer_subnet_id can be checked at plan.
 
@@ -147,40 +148,6 @@ run "internal_nginx_gets_the_subnet_and_ip_annotations" {
   }
 }
 
-run "internal_on_the_node_subnet_needs_no_grant" {
-  command = plan
-
-  variables {
-    ingress_controller              = "nginx"
-    ingress_load_balancer           = "internal"
-    ingress_load_balancer_subnet_id = var.aks_subnet_id
-  }
-
-  assert {
-    condition     = output.ingress_load_balancer_subnet_grant == null
-    error_message = "The node subnet was given an extra grant for the internal load balancer"
-  }
-}
-
-# A carved node subnet has no ID before apply, so the grant decision matches it
-# by name. vnet_name sets the carved subnet's name to shared-vnet-subnet-0.
-run "internal_on_a_carved_node_subnet_needs_no_grant" {
-  command = plan
-
-  variables {
-    ingress_controller              = "nginx"
-    aks_subnet_id                   = ""
-    vnet_name                       = "shared-vnet"
-    ingress_load_balancer           = "internal"
-    ingress_load_balancer_subnet_id = "${var.vnet_id}/subnets/shared-vnet-subnet-0"
-  }
-
-  assert {
-    condition     = output.ingress_load_balancer_subnet_grant == null
-    error_message = "The carved node subnet was given an extra grant for the internal load balancer"
-  }
-}
-
 run "internal_beside_a_carved_node_subnet_gets_the_grant" {
   command = plan
 
@@ -215,6 +182,156 @@ run "the_subnet_grant_can_be_left_to_the_network_owner" {
   assert {
     condition     = contains(output.ingress_load_balancer_subnet_grant.actions, "Microsoft.Network/virtualNetworks/subnets/join/action")
     error_message = "The listed grant does not name the join action the load balancer needs"
+  }
+}
+
+# ── The node subnet, with a system-assigned identity ─────────────────────────
+
+# The identity a created cluster gets by default holds Contributor on the node
+# resource group alone, so the frontend's subnets/read on the node subnet is
+# refused and the Service stays <pending> until the identity is granted there.
+run "internal_on_the_node_subnet_grants_the_system_identity_there" {
+  command = plan
+
+  variables {
+    ingress_controller              = "nginx"
+    ingress_load_balancer           = "internal"
+    ingress_load_balancer_subnet_id = var.aks_subnet_id
+  }
+
+  assert {
+    condition     = output.ingress_load_balancer_subnet_grant.made_by == "terraform" && output.ingress_load_balancer_subnet_grant.scope == var.aks_subnet_id
+    error_message = "An internal load balancer on the node subnet did not plan the system-assigned identity's grant there"
+  }
+}
+
+run "internal_with_no_subnet_grants_the_node_subnet" {
+  command = plan
+
+  variables {
+    ingress_controller    = "envoy-gateway"
+    ingress_load_balancer = "internal"
+  }
+
+  assert {
+    condition     = output.ingress_load_balancer_subnet_grant.scope == var.aks_subnet_id && output.ingress_load_balancer_subnet_grant.role == "Network Contributor"
+    error_message = "With no load-balancer subnet, the internal load balancer did not plan Network Contributor on the node subnet"
+  }
+  assert {
+    condition     = contains(output.ingress_load_balancer_subnet_grant.actions, "Microsoft.Network/virtualNetworks/subnets/read")
+    error_message = "The node-subnet grant does not name the read the frontend is refused without"
+  }
+}
+
+# A VNet the module creates, where the node subnet's ID is known only after
+# apply: the decision to grant is known at plan all the same.
+run "internal_on_a_created_vnet_grants_the_node_subnet" {
+  command = plan
+
+  variables {
+    create_vnet           = true
+    vnet_id               = ""
+    aks_subnet_id         = ""
+    ingress_controller    = "envoy-gateway"
+    ingress_load_balancer = "internal"
+  }
+
+  assert {
+    condition     = output.ingress_load_balancer_subnet_grant.made_by == "terraform"
+    error_message = "An internal load balancer on a created VNet's node subnet did not plan the grant"
+  }
+}
+
+run "the_node_subnet_grant_can_be_left_to_the_network_owner" {
+  command = plan
+
+  variables {
+    ingress_controller                             = "envoy-gateway"
+    ingress_load_balancer                          = "internal"
+    ingress_load_balancer_manage_subnet_assignment = false
+  }
+
+  assert {
+    condition     = output.ingress_load_balancer_subnet_grant.made_by == "owner" && output.ingress_load_balancer_subnet_grant.scope == var.aks_subnet_id
+    error_message = "ingress_load_balancer_manage_subnet_assignment = false did not hand the node-subnet grant to the owner"
+  }
+}
+
+# The resource itself, planned from the cluster module: one assignment, on the
+# node subnet, typed so a subscription that gates principalType admits it.
+run "the_node_subnet_grant_is_network_contributor_for_the_cluster_identity" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  variables {
+    resource_group_name   = "ls-rg-test"
+    cluster_name          = "ls-aks-test"
+    location              = "eastus"
+    subnet_id             = var.aks_subnet_id
+    ingress_controller    = "envoy-gateway"
+    ingress_load_balancer = "internal"
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.ingress_lb_subnet) == 1
+    error_message = "The cluster module did not plan the node-subnet grant"
+  }
+  assert {
+    condition     = azurerm_role_assignment.ingress_lb_subnet[0].scope == var.aks_subnet_id && azurerm_role_assignment.ingress_lb_subnet[0].role_definition_name == "Network Contributor"
+    error_message = "The node-subnet grant is not Network Contributor on the node subnet"
+  }
+  assert {
+    condition     = azurerm_role_assignment.ingress_lb_subnet[0].principal_type == "ServicePrincipal"
+    error_message = "The node-subnet grant does not name its principal type"
+  }
+}
+
+run "the_node_subnet_grant_left_to_the_owner_plans_no_assignment" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  variables {
+    resource_group_name                            = "ls-rg-test"
+    cluster_name                                   = "ls-aks-test"
+    location                                       = "eastus"
+    subnet_id                                      = var.aks_subnet_id
+    ingress_controller                             = "envoy-gateway"
+    ingress_load_balancer                          = "internal"
+    ingress_load_balancer_manage_subnet_assignment = false
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.ingress_lb_subnet) == 0
+    error_message = "ingress_load_balancer_manage_subnet_assignment = false still planned the node-subnet grant"
+  }
+}
+
+# Existing deployments that need nothing plan nothing new: a public load
+# balancer's frontend is a public IP in the node resource group.
+run "public_plans_no_node_subnet_grant" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  variables {
+    resource_group_name = "ls-rg-test"
+    cluster_name        = "ls-aks-test"
+    location            = "eastus"
+    subnet_id           = var.aks_subnet_id
+    ingress_controller  = "envoy-gateway"
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.ingress_lb_subnet) == 0
+    error_message = "A public load balancer planned a subnet grant"
   }
 }
 
@@ -546,5 +663,72 @@ run "an_attached_user_assigned_control_plane_gets_the_subnet_grant" {
   assert {
     condition     = output.ingress_load_balancer_subnet_grant.principal_id == "77777777-7777-7777-7777-777777777777"
     error_message = "On an attached cluster with a user-assigned control plane, the subnet grant did not go to that identity's principal"
+  }
+}
+
+# A user-assigned control plane holds Network Contributor on the node subnet
+# already, so the node subnet takes no second grant. Here the subnet is carved,
+# which also checks the decision matches a carved node subnet by name:
+# vnet_name sets its name to shared-vnet-subnet-0.
+run "a_user_assigned_control_plane_needs_no_node_subnet_grant" {
+  command = plan
+
+  variables {
+    ingress_controller                       = "nginx"
+    aks_subnet_id                            = ""
+    vnet_name                                = "shared-vnet"
+    ingress_load_balancer                    = "internal"
+    ingress_load_balancer_subnet_id          = "${var.vnet_id}/subnets/shared-vnet-subnet-0"
+    aks_control_plane_identity               = "user"
+    aks_control_plane_identity_manage_grants = true
+  }
+
+  assert {
+    condition     = output.ingress_load_balancer_subnet_grant == null
+    error_message = "A user-assigned control plane was given a second grant on the node subnet"
+  }
+}
+
+# An attached cluster's identity was granted by whoever created the cluster
+# (the az CLI makes the node-subnet grant itself), so the module adds none.
+run "an_attached_cluster_gets_no_node_subnet_grant" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+      identity = [{
+        type         = "SystemAssigned"
+        principal_id = "88888888-8888-8888-8888-888888888888"
+        tenant_id    = "00000000-0000-0000-0000-000000000000"
+        identity_ids = []
+      }]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    ingress_controller                   = "envoy-gateway"
+    ingress_load_balancer                = "internal"
+  }
+
+  assert {
+    condition     = output.ingress_load_balancer_subnet_grant == null
+    error_message = "An attached cluster was given a grant on the node subnet"
   }
 }

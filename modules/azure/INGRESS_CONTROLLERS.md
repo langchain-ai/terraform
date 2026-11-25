@@ -436,7 +436,22 @@ The mechanism is three Service annotations, from Microsoft's [Create an internal
 
 `create_dns_zone = true` with `internal` is what `dns01` needs, and on its own publishes nothing. Setting `ingress_ip` as well adds an A record that publishes the private address in the public zone, which plan warns about. Usually that record belongs in your own DNS or an Azure Private DNS zone linked to the VNet.
 
-**A separate load-balancer subnet.** With `ingress_load_balancer_subnet_id` set to a subnet other than the node subnet, the cluster identity needs `Microsoft.Network/virtualNetworks/subnets/join/action` and `subnets/read` there (same Microsoft page). Terraform grants it Network Contributor on that subnet. Where the network owner keeps role assignments to itself, set `ingress_load_balancer_manage_subnet_assignment = false` and have the owner make the grant: `terraform output ingress_load_balancer_subnet_grant` names the role, actions, scope and principal. See [PERMISSIONS.md](PERMISSIONS.md).
+**The cluster identity's grant on the load balancer's subnet.** The cluster identity creates the private frontend, which takes `Microsoft.Network/virtualNetworks/subnets/join/action` and `subnets/read` on the subnet the address comes from (same Microsoft page). AKS gives that identity Contributor on the node resource group (`MC_...`) and nothing on your VNet. The az CLI adds the subnet grant when it creates a cluster in your own VNet, but a cluster created through ARM or Terraform doesn't get it ([Managed identities in AKS](https://learn.microsoft.com/azure/aks/managed-identity-overview), updated 2026-10-20). Without it the controller's Service stays `<pending>`, and its events show `SyncLoadBalancerFailed` with a 403 `AuthorizationFailed` on `subnets/read`. Terraform grants the cluster identity Network Contributor, which carries both actions:
+
+- **On the node subnet**, when the frontend uses it (no `ingress_load_balancer_subnet_id`, or the node subnet's own ID) and the module creates the cluster with `aks_control_plane_identity = "system"`, the default. A system-assigned identity exists only once the cluster does, so the grant follows the cluster in the same apply. A user-assigned control plane holds Network Contributor on the node subnet already ([PERMISSIONS.md](PERMISSIONS.md#control-plane-identity-grants)). An attached cluster (`create_cluster = false`) keeps whatever its creator granted.
+- **On a separate subnet**, when `ingress_load_balancer_subnet_id` names a subnet other than the node subnet, whichever identity the cluster runs as.
+
+Where the network owner keeps role assignments to itself, set `ingress_load_balancer_manage_subnet_assignment = false` and have the owner make the grant. After `make apply`, `terraform output ingress_load_balancer_subnet_grant` names the role, actions, scope and principal; a system-assigned principal exists only from then on. AKS documents up to 60 minutes for a grant to take effect. Kubernetes keeps retrying the Service meanwhile, so it gets its address without a redeploy. See [PERMISSIONS.md](PERMISSIONS.md).
+
+A public load balancer is not affected: its frontend is a public IP in the node resource group, and the cluster identity reads the subnet only to place a private frontend.
+
+**A node-subnet grant you made by hand.** On a deployment from before this grant was in the module, the next `make apply` plans it, and Azure refuses the duplicate with `RoleAssignmentExists`. Delete the assignment you made and let Terraform make it, set `ingress_load_balancer_manage_subnet_assignment = false` to keep it as yours, or import it:
+
+```bash
+terraform import 'module.aks.azurerm_role_assignment.ingress_lb_subnet[0]' <role-assignment-id>
+```
+
+`az role assignment list --assignee <principal-id> --scope <node-subnet-id> --query "[?roleDefinitionName=='Network Contributor'].id" --output tsv` prints the ID.
 
 **Network security groups.** If the node subnet or the load balancer's subnet carries an NSG, it must allow 80 and 443 from the client ranges to the load balancer's address.
 
