@@ -141,7 +141,11 @@ With `--namespace` the test also reads the install while it runs, through `kubec
   the bare-metal datastores chart labels them, by name; `--data-namespace` reads them where they run when
   that is not LangSmith's namespace (LangSmith Lite runs them in `<namespace>-data`);
 - each autoscaler's replicas against its maximum, restarts and OOM kills;
-- each container's CPU and throttling from its node's cAdvisor;
+- each container's CPU, throttling and working-set memory from its node's cAdvisor, or, with
+  `--prometheus NS/SERVICE:PORT`, from that Prometheus's `/federate` through `services/proxy`, for a context
+  without `nodes/proxy` (LangSmith Lite's);
+- once a minute, the bytes in each persistent volume a store's pod mounts, with `du` in the pod: a local
+  volume reports no usage to the kubelet;
 - at the end, the runs ingest-queue logged as skipped because their payload had expired in Redis.
 
 SmithDB's series keep their `status`, `level` and `job_kind` labels: a compaction backlog counts pending
@@ -161,12 +165,23 @@ The results gain two sections:
     `runs_per_core` is the runs sent a second over those cores, on the ingest path only. Set ingest-queue's
     against the field curve `langsmith-sizing` sizes from (params `ingest.runs_per_core_points`) and the
     plan's `regime.measured.ingest_cores_by`: that is the figure the two ingest models disagree on.
+  - `coefficients.<workload>.memory_peak_mib` is the most memory its containers held together in a sample.
+  - `disk_bytes_per_run` is the bytes each volume gained a run sent, between the window's first and last
+    disk readings; with `write.payload_kib_per_run`, the bytes generated a run, it is what a run costs
+    each store.
   - `smithdb_rows_flushed_per_second` is the rate SmithDB wrote, to set beside the rate sent.
   - `unread` names what could not be read in some sample; a missing reading is unknown, never zero.
 
 Every sample is kept beside the results (`<results>.metrics.jsonl`). `uv run load-test-plot <results>.json
 --plan <sizing>/plan.json` (or `make plot`) writes `<results>.html` beside them, `--out` elsewhere: one chart
 a signal, the window after the ramp shaded, and with `--plan` each watch item's alarm level as a line.
+
+`uv run load-test-report OUT RUN_DIR...` reads every finished run in the folders and writes
+`OUT/report.html`, each figure as `OUT/figures/<figure>-light.png` and `-dark.png` for a deck,
+`OUT/stats.json` and `OUT/stats.csv` with every number a figure shows, and `OUT/runs/` with each run's own
+files. A figure's title is computed from the runs, never typed. The figures are `langsmith-sizing`'s pages
+in the LangChain brand, its faces and logos read from `--fonts` and `--logos`; `--draft` draws without
+them, each figure labelled a draft. `--design` says a rate as a multiple of the install's design rate.
 
 Read a run only once its backlogs settle: after an upgrade that rebuilds SmithDB's data, compaction runs
 behind for a while by design, and a coefficient read then measures the catch-up, not the load.
@@ -182,12 +197,12 @@ The kubectl context needs these permissions; `kubectl auth can-i` checks each:
   resources: [pods/proxy, services/proxy, pods/log]
   verbs: [get]
 - apiGroups: [""]
-  resources: [pods/exec]                 # Redis INFO and Postgres's connection count, in-cluster stores only
+  resources: [pods/exec]                 # Redis INFO, Postgres's connection count and du of each store's volume
   verbs: [create]
 - apiGroups: [autoscaling]
   resources: [horizontalpodautoscalers]
   verbs: [get, list]
-# Cluster-wide (a ClusterRole): each node's cAdvisor
+# Cluster-wide (a ClusterRole): each node's cAdvisor; not needed with --prometheus
 - apiGroups: [""]
   resources: [nodes/proxy]
   verbs: [get]
@@ -306,6 +321,7 @@ Every module under `src/loadtest/` is listed here; `tests/test_readme.py` fails 
 - `results.py`: the results document and target verdicts.
 - `cluster.py`: reads the install through kubectl while the load runs, and turns the samples into watch readings and cores used.
 - `plot.py`: draws a run's samples as one HTML page (`load-test-plot`).
+- `report.py`: a set of runs as branded figures, their numbers as JSON and CSV, and the runs' own files (`load-test-report`).
 - `fields.py`: the unit and meaning of every results field; [docs/results-fields.md](docs/results-fields.md) is generated from it (`make reference` in `../langsmith-sizing`).
 - `payloads/`: payload sizes from the mix and the English-like text.
 

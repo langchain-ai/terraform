@@ -94,6 +94,8 @@ class FakeCluster:
         for pod, cores in CORES.items():
             lines.append(f'container_cpu_usage_seconds_total{{container="main",namespace="{NS}",pod="{pod}"}} {cores * self.n * STEP_SECONDS}')
             lines.append(f'container_cpu_usage_seconds_total{{container="POD",namespace="{NS}",pod="{pod}"}} 5')
+            # Working-set memory that rises and falls back, so a peak differs from the last sample.
+            lines.append(f'container_memory_working_set_bytes{{container="main",namespace="{NS}",pod="{pod}"}} {(200 + 50 * (self.n % 3)) * 2**20}')
         lines.append(f'container_cpu_cfs_periods_total{{container="main",namespace="{NS}",pod="langsmith-platform-backend-a"}} {100 * self.n}')
         lines.append(f'container_cpu_cfs_throttled_periods_total{{container="main",namespace="{NS}",pod="langsmith-platform-backend-a"}} {10 * self.n}')
         return "\n".join(lines)

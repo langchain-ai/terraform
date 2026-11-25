@@ -60,6 +60,10 @@ BY_KIND = "compaction_jobs_executed"
 SERIES = re.compile(r'^([A-Za-z_:][A-Za-z0-9_:]*)(?:\{(.*)\})?\s+(\S+)')
 LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 CPU, THROTTLED, PERIODS = "container_cpu_usage_seconds_total", "container_cpu_cfs_throttled_periods_total", "container_cpu_cfs_periods_total"
+MEMORY = "container_memory_working_set_bytes"
+# Every DISK_EVERY samples, the bytes each store's volume holds: du over a large volume is not free, and
+# disk grows slowly enough that once a minute at the default interval resolves it.
+DISK_EVERY = 4
 
 
 def kubectl(context: str | None, timeout_seconds: float) -> Kube:
@@ -104,7 +108,10 @@ def family_sum(values: dict[str, float], family: str, **match: str) -> float | N
         name, _, labels = key.partition("{")
         if name.removesuffix("_total") != family.removesuffix("_total"):
             continue
-        if all(f"{k}={v}" in labels.rstrip("}").split(",") for k, v in match.items()):
+        # Values compare without case: SmithDB 0.17 labelled a level l0 and 0.18 labels it L0, and an exact
+        # match read the pending-segments item as not measured on every 0.18 run (magus, 2026-11-25).
+        kept = labels.rstrip("}").lower().split(",")
+        if all(f"{k}={v}".lower() in kept for k, v in match.items()):
             found = (found or 0.0) + value
     return found
 
@@ -128,7 +135,13 @@ def parse_redis_info(text: str) -> dict[str, float]:
     return out
 
 
-CPU_FIELD = {CPU: "seconds", THROTTLED: "throttled", PERIODS: "periods"}
+CONTAINER_FIELD = {CPU: "seconds", THROTTLED: "throttled", PERIODS: "periods", MEMORY: "memory"}
+
+
+def _claim_mounts(spec: dict[str, Any]) -> list[tuple[str, str]]:
+    """(container, mount path) for each persistent volume claim the pod mounts."""
+    claims = {v["name"] for v in spec.get("volumes", []) if "persistentVolumeClaim" in v}
+    return [(c["name"], m["mountPath"]) for c in spec.get("containers", []) for m in c.get("volumeMounts", []) if m["name"] in claims]
 
 
 def prometheus_federate(where: str, namespace: str) -> str:
@@ -137,19 +150,19 @@ def prometheus_federate(where: str, namespace: str) -> str:
     (Lite's operator, by design) read no CPU at all, and every soak's cores table was empty (magus,
     2026-11-25)."""
     ns, _, service = where.partition("/")
-    names = "|".join(CPU_FIELD)
+    names = "|".join(CONTAINER_FIELD)
     query = urlencode({"match[]": f'{{namespace="{namespace}",__name__=~"{names}"}}'})
     return f"/api/v1/namespaces/{ns}/services/{service}/proxy/federate?{query}"
 
 
-def _add_cpu(out: dict[str, dict[str, Any]], text: str, marker: str, owners: dict[str, str]) -> None:
+def _add_container(out: dict[str, dict[str, Any]], text: str, marker: str, owners: dict[str, str]) -> None:
     """Each of the namespace's containers' CPU counters from one node's cAdvisor, keyed pod/container."""
     # Filter before parsing: a node's cAdvisor holds every namespace's containers.
     lines = "\n".join(line for line in text.splitlines() if marker in line)
-    for name, labels, value in parse_prometheus(lines, CPU_FIELD):
+    for name, labels, value in parse_prometheus(lines, CONTAINER_FIELD):
         pod, container = labels.get("pod"), labels.get("container")
         if pod in owners and container and container != "POD":
-            out.setdefault(f"{pod}/{container}", {"workload": owners[pod]})[CPU_FIELD[name]] = value
+            out.setdefault(f"{pod}/{container}", {"workload": owners[pod]})[CONTAINER_FIELD[name]] = value
 
 
 class Collector:
@@ -246,10 +259,22 @@ class Collector:
                 running = item.get("status", {}).get("phase") == "Running"
                 workload = self.workload(component)
                 pods.append({"name": item["metadata"]["name"], "namespace": ns, "workload": workload, "node": item["spec"].get("nodeName"),
-                             "http": ports.get("http"), "running": running})
+                             "http": ports.get("http"), "running": running, "mounts": _claim_mounts(item["spec"])})
                 sample["replicas"][workload] = sample["replicas"].get(workload, 0) + running
         sample["oom_killed"], sample["restarts"] = oom, restarts
         return pods
+
+    def _disk(self, sample: Sample, pods: list[dict[str, Any]]) -> None:
+        """KiB in each persistent volume a running pod mounts, read with du inside it (needs pods/exec): local
+        volumes report no usage to the kubelet, so this is the one reading that works on every class."""
+        for pod in (p for p in pods if p["running"] and p["mounts"]):
+            for container, mount in pod["mounts"]:
+                text = self.kube(["exec", "-n", pod["namespace"], pod["name"], "-c", container, "--", "du", "-sk", mount])
+                kib = text.split()[0] if text else ""
+                if kib.isdigit():
+                    sample["disk"][f"{pod['workload']}:{mount}"] = int(kib)
+                else:
+                    sample["unread"].append(f"disk of {pod['workload']} {mount}")
 
     def _smithdb(self, sample: Sample, pods: list[dict[str, Any]]) -> None:
         targets = [p for p in pods if p["workload"].startswith("smithdb") and p["http"] and p["running"]]
@@ -310,7 +335,7 @@ class Collector:
             text = self.kube(["get", "--raw", prometheus_federate(self.prometheus, self.ns)])
             if text is None:
                 sample["unread"].append(f"CPU from Prometheus {self.prometheus}")
-            _add_cpu(sample["cpu"], text or "", marker, owners)
+            _add_container(sample["cpu"], text or "", marker, owners)
             return
         nodes = sorted({p["node"] for p in pods if p["node"]})
         def read(node: str) -> str | None:
@@ -320,11 +345,13 @@ class Collector:
         if any(t is None for t in texts):
             sample["unread"].append(f"cAdvisor on {sum(t is None for t in texts)} of {len(nodes)} nodes")
         for text in texts:
-            _add_cpu(sample["cpu"], text or "", marker, owners)
+            _add_container(sample["cpu"], text or "", marker, owners)
 
     def sample(self) -> Sample:
-        s: Sample = {"t": self.clock(), "queues": {}, "smithdb": {}, "redis": {}, "postgres": {}, "hpa": {}, "replicas": {}, "cpu": {}, "unread": []}
+        s: Sample = {"t": self.clock(), "queues": {}, "smithdb": {}, "redis": {}, "postgres": {}, "hpa": {}, "replicas": {}, "cpu": {}, "disk": {}, "unread": []}
         pods = self._pods(s)
+        if len(self.samples) % DISK_EVERY == 0:
+            self._disk(s, pods)
         self._queues(s)
         self._smithdb(s, pods)
         self._redis(s, pods)
@@ -418,9 +445,12 @@ def flushed_rows(sample: Sample) -> float | None:
 def smithdb_counter(sample: Sample, family: str) -> float | None:
     """A SmithDB counter's value, 0 when SmithDB was read without it (a series appears at its first
     increment), None when SmithDB was not read."""
-    if not sample["smithdb"] or any(u.startswith("smithdb metrics") for u in sample["unread"]):
-        return None
-    return family_sum(sample["smithdb"], family) or 0.0
+    return (family_sum(sample["smithdb"], family) or 0.0) if smithdb_read(sample) else None
+
+
+def smithdb_read(sample: Sample) -> bool:
+    """Whether the sample read SmithDB's metrics: a family missing from a read sample is absent, not unknown."""
+    return bool(sample["smithdb"]) and not any(u.startswith("smithdb metrics") for u in sample["unread"])
 
 
 def _delta(points: list[tuple[float, float]]) -> float | None:
@@ -463,6 +493,36 @@ def cores(window: Sequence[Sample]) -> dict[str, float]:
         if t1 > t0 and v1 >= v0:
             out[workload] = out.get(workload, 0.0) + (v1 - v0) / span
     return out
+
+
+def memory_peaks(samples: Sequence[Sample]) -> dict[str, float]:
+    """The most memory each workload's containers held together in any one sample, in MiB."""
+    peaks: dict[str, float] = {}
+    for s in samples:
+        now: dict[str, float] = {}
+        for entry in s["cpu"].values():
+            if "memory" in entry:
+                now[entry["workload"]] = now.get(entry["workload"], 0.0) + entry["memory"] / 2**20
+        for w, mib in now.items():
+            peaks[w] = max(peaks.get(w, 0.0), mib)
+    return peaks
+
+
+def disk_kib(sample: Sample) -> float | None:
+    """KiB every store volume held at this sample; None where the sample did not read the disks."""
+    return float(sum(sample["disk"].values())) if sample.get("disk") else None
+
+
+def disk_per_run(window: Sequence[Sample], runs_per_second: float | None) -> dict[str, float] | None:
+    """Bytes each store volume gained a run sent, between the first and last disk reading in the window."""
+    read = [s for s in window if s.get("disk")]
+    if len(read) < 2 or not runs_per_second:
+        return None
+    runs = runs_per_second * (read[-1]["t"] - read[0]["t"])
+    if runs <= 0:
+        return None
+    first, last = read[0]["disk"], read[-1]["disk"]
+    return {k: (last[k] - first[k]) * 1024 / runs for k in sorted(first.keys() & last.keys())}
 
 
 def _throttled_share(window: Sequence[Sample], workload: str) -> dict[str, Any] | None:
@@ -631,9 +691,11 @@ def summarize(samples: Sequence[Sample], window: tuple[float, float], runs_per_s
     used = cores(steady)
     flushed = _delta(_values(steady, flushed_rows))
     span = steady[-1]["t"] - steady[0]["t"] if len(steady) > 1 else 0
+    peaks = memory_peaks(samples)
     coefficients = {
-        w: {"cores_used": c, **({"runs_per_core": runs_per_second / c} if runs_per_second and c > 0 and w in INGEST_PATH else {})}
-        for w, c in sorted(used.items())
+        w: {"cores_used": used.get(w), **({"runs_per_core": runs_per_second / c} if runs_per_second and (c := used.get(w)) and w in INGEST_PATH else {}),
+            **({"memory_peak_mib": peaks[w]} if w in peaks else {})}
+        for w in sorted(used.keys() | peaks.keys())
     }
     unread = sorted({u for s in samples for u in s["unread"]})
     cluster = {
@@ -646,6 +708,7 @@ def summarize(samples: Sequence[Sample], window: tuple[float, float], runs_per_s
             "compaction": kept_up(steady, lambda s: s["queues"].get("compaction.pending", smithdb_value(s, "compaction_queue_job_count", status="pending"))),
         },
         "coefficients": coefficients,
+        "disk_bytes_per_run": disk_per_run(steady, runs_per_second),
         "unread": unread,
     }
     return metrics(samples, steady, p["watch.items"]), cluster

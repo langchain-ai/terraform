@@ -150,7 +150,7 @@ def _show(v: Any) -> str:
     return f"{v:g}" if isinstance(v, float) else str(v)
 
 
-def _page(figure: str, title: str, sub: str, body: str, source: str, wires: Sequence[Sequence[str]] = ()) -> str:
+def _page(figure: str, title: str, sub: str, body: str, source: str, wires: Sequence[Sequence[str]] = (), tool: str = "langsmith-sizing") -> str:
     """One figure's markup, theme-free: the theme, faces and logo are added at render time."""
     spec = (
         f'<script type="application/json" id="wire-spec">{json.dumps([list(w) for w in wires])}</script>'
@@ -159,7 +159,7 @@ def _page(figure: str, title: str, sub: str, body: str, source: str, wires: Sequ
     )
     return (
         f'<div class="canvas"><svg class="wires"></svg>{spec}'
-        f'<header><div class="eyebrow">{name("langsmith-sizing")}<span class="of">{e(figure)}</span></div>'
+        f'<header><div class="eyebrow">{name(tool)}<span class="of">{e(figure)}</span></div>'
         f'<h1>{title}</h1><p class="sub">{sub}</p><!--flag--></header>{body}'
         f"<footer><!--logo--><span>{source}</span></footer></div>"
     )

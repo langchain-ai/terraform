@@ -18,6 +18,7 @@ load-test-plot = "loadtest.plot:main"
 load-test-verify = "loadtest.judge:verify_main"
 load-test-judge = "loadtest.judge:judge_main"
 load-test-step = "loadtest.judge:step_main"
+load-test-report = "loadtest.report:main"
 
 [tool.uv.sources]
 langsmith-sizing = { path = "../langsmith-sizing", editable = true }

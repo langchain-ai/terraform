@@ -115,6 +115,20 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("/api/v1/namespaces/obs/services/prometheus-server:80/proxy/federate?match%5B%5D=", path)
         self.assertEqual(s["unread"], [])
 
+    def test_memory_peaks_are_the_largest_sample_not_the_last(self) -> None:
+        peaks = cluster.memory_peaks(samples(4))
+        self.assertEqual(peaks["ingest-queue"], 300.0)
+
+    def test_a_volume_mounted_from_a_claim_is_read_with_du(self) -> None:
+        spec = {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "d"}}, {"name": "tmp", "emptyDir": {}}],
+                "containers": [{"name": "postgres", "volumeMounts": [{"name": "data", "mountPath": "/var/lib/postgresql"}, {"name": "tmp", "mountPath": "/tmp"}]}]}
+        self.assertEqual(cluster._claim_mounts(spec), [("postgres", "/var/lib/postgresql")])
+
+    def test_disk_growth_is_bytes_a_run_over_the_window(self) -> None:
+        window = [{"t": 0.0, "disk": {"rustfs:/data": 1000}}, {"t": 30.0, "disk": {}}, {"t": 60.0, "disk": {"rustfs:/data": 1600}}]
+        self.assertEqual(cluster.disk_per_run(window, 10.0), {"rustfs:/data": 600 * 1024 / 600})
+        self.assertIsNone(cluster.disk_per_run(window[:2], 10.0))
+
     def test_runs_skipped_as_expired_are_counted_from_the_logs_when_sampling_stops(self) -> None:
         fake = FakeCluster()
         collector = cluster.Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t)

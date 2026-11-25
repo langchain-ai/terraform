@@ -192,6 +192,7 @@ class _Run:
             if s.traces_per_second and number - 1 >= s.traces_per_second * s.ramp_up_seconds / 2:
                 counts.steady_traces_sent += 1
             counts.runs_sent += run_count
+            counts.payload_bytes_sent += sum(p.input_bytes + p.output_bytes for p in payloads)
             self._track(trace_id, number, sent_at, at)
         except Exception as error:  # noqa: BLE001 - record a failed trace and continue the load
             counts.run_errors += 1
@@ -353,6 +354,8 @@ def _write_section(write: Any, settings: LoadSettings, profile: Profile, tracing
         "steady_traces_per_second": write.steady_traces_sent / settings.duration_seconds if write.mode == "open-loop" and settings.duration_seconds else None,
         "duration_seconds": write.duration_seconds, "traces_started": write.traces_started,
         "traces_sent": write.traces_sent, "runs_sent": write.runs_sent, "run_errors": write.run_errors,
+        "payload_bytes_sent": write.payload_bytes_sent,
+        "payload_kib_per_run": write.payload_bytes_sent / 1024 / write.runs_sent if write.runs_sent else None,
         "dropped_starts": write.dropped_starts,
         "send_latency_seconds": {key: send[key] for key in ("p50", "p95", "p99", "max")},
         "schedule_lag_seconds": {key: schedule[key] for key in ("p50", "p95", "p99", "max")},

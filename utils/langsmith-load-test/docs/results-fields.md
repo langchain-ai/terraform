@@ -38,6 +38,8 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `write.duration_seconds` | number | seconds | wall time of the load |
 | `write.first_error` | string or null | - | the first error message, or null |
 | `write.mode` | string | - | open-loop (a rate) or closed-loop (users) |
+| `write.payload_bytes_sent` | number | bytes | the inputs and outputs of those runs as generated, before the SDK serialises them; the denominator of every per-run store cost |
+| `write.payload_kib_per_run` | number | KiB | the same over the runs sent; null when none were |
 | `write.payload_shape` | object | - | how each run's bytes were shaped and sent, after any flag replaced the profile's |
 | `write.payload_shape.attachment_kib_per_run` | number | KiB | attachment bytes sent with every run; 0 sent none |
 | `write.payload_shape.batch_runs` | number | runs | the most runs the SDK sent in one request |
@@ -126,10 +128,12 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `server.app_version` | null | - | the LangSmith release it serves (its /info version), the images' version, not the chart's; null when tracing was off or the read failed |
 | `metrics` | object | - | each of the plan's watch items the run read, keyed by its id (langsmith-sizing params watch.items; an autoscaler's is autoscaler-at-ceiling:<workload>): peak and end, or a mean, a share or a count during the run, with its unit; `langsmith-sizing compare` sets each against the plan's alarm level. Empty when the install was not read |
 | `cluster` | object | - | what the install itself did under the load, read through kubectl (--namespace) |
-| `cluster.coefficients` | object | - | each workload's CPU in the window, from its containers' cAdvisor CPU seconds |
+| `cluster.coefficients` | object | - | each workload's CPU in the window and its memory peak, from its containers' cAdvisor series |
 | `cluster.coefficients.<workload>` | object | - | one workload |
 | `cluster.coefficients.<workload>.cores_used` | number | cores | CPU cores it used on average, not requested |
+| `cluster.coefficients.<workload>.memory_peak_mib` | number | MiB | the most working-set memory its containers held together in any one sample |
 | `cluster.coefficients.<workload>.runs_per_core` | number | runs/s per core | runs sent a second over the cores it used; on the ingest path only, the figure sizing's ingest model rests on |
+| `cluster.disk_bytes_per_run` | null | bytes | bytes each persistent volume gained a run sent across the window, keyed workload:mount path, read with du in its pod every few samples; null with fewer than two readings |
 | `cluster.kept_up` | object | - | whether a backlog was still climbing at the window's end |
 | `cluster.kept_up.compaction` | boolean | - | the same for pending compaction jobs |
 | `cluster.kept_up.ingestion_queue` | boolean | - | ingestion_queue.pending at the end no larger than the largest in the window's first half; null when not read |

@@ -18,6 +18,7 @@ class WriteCounts:
     traces_sent: int = 0
     steady_traces_sent: int = 0
     runs_sent: int = 0
+    payload_bytes_sent: int = 0
     run_errors: int = 0
     dropped_starts: int = 0
     send_latencies_seconds: list[float] = field(default_factory=list)
