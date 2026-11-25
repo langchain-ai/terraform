@@ -478,7 +478,7 @@ locals {
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
-  # Customize via the environment/owner/cost_center/tags variables.
+  # Customize via the environment/owner/cost_center/product/tags variables.
   # environment falls back to name_prefix so the deployment name and the tag
   # stay in sync without the operator setting both.
   # Azure tag names are case-insensitive and merge() is not, so a built-in key
@@ -493,6 +493,7 @@ locals {
       },
       var.owner != "" ? { owner = var.owner } : {},
       var.cost_center != "" ? { cost_center = var.cost_center } : {},
+      var.product != "" ? { product = var.product } : {},
     ) : k => v if !contains([for t in keys(var.tags) : lower(t)], k) },
     var.tags
   )
@@ -1021,7 +1022,7 @@ resource "terraform_data" "validate_network" {
     # first =, and fails every cache PVC on a pair it can't read.
     precondition {
       condition     = !var.enable_smithdb || alltrue([for k, v in local.common_tags : !strcontains(k, ",") && !strcontains(k, "=") && !strcontains(v, ",")])
-      error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, or cost_center."
+      error_message = "enable_smithdb = true passes the tags to the SmithDB cache disks as one key=value,key=value string, so no tag key can hold a comma or =, and no tag value a comma. These tags break it: ${join(", ", [for k, v in local.common_tags : k if strcontains(k, ",") || strcontains(k, "=") || strcontains(v, ",")])}. Change them in tags, owner, cost_center, or product."
     }
 
     # SmithDB caches sit on Premium SSD v2, and in most regions that offer
