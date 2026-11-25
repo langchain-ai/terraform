@@ -53,7 +53,6 @@ _environment=$(_parse_tfvar "environment") || _environment=""
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
-_alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
 _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
 _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
@@ -137,7 +136,6 @@ IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_irsa_role_ar
 }
 ALB_ARN=$(terraform -chdir="$INFRA_DIR" output -raw alb_arn 2>/dev/null) || ALB_ARN=""
 ALB_DNS_NAME=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || ALB_DNS_NAME=""
-ALB_SCHEME=$(terraform -chdir="$INFRA_DIR" output -raw alb_scheme 2>/dev/null) || ALB_SCHEME="$_alb_scheme"
 ACM_CERT_ARN=$(terraform -chdir="$INFRA_DIR" output -raw acm_certificate_arn 2>/dev/null) || ACM_CERT_ARN=""
 # Fallback to tfvars if the output isn't available (older infra module)
 if [[ -z "$ACM_CERT_ARN" && -n "$_acm_arn" ]]; then
@@ -148,7 +146,6 @@ echo "  bucket_name            = $BUCKET_NAME"
 echo "  langsmith_irsa_role_arn = $IRSA_ROLE_ARN"
 echo "  alb_arn                = ${ALB_ARN:-(not provisioned)}"
 echo "  alb_dns_name           = ${ALB_DNS_NAME:-(not provisioned)}"
-echo "  alb_scheme             = $ALB_SCHEME"
 echo "  acm_certificate_arn    = ${ACM_CERT_ARN:-(not set)}"
 echo ""
 
@@ -652,7 +649,7 @@ else
   _ingress_annotations=()
 
   # Always set scheme — the base values file no longer hardcodes it.
-  _ingress_annotations+=("    alb.ingress.kubernetes.io/scheme: \"${ALB_SCHEME}\"")
+  _ingress_annotations+=("    alb.ingress.kubernetes.io/scheme: \"internet-facing\"")
   _ingress_annotations+=("    alb.ingress.kubernetes.io/group.name: \"${_name_prefix}-${_environment}\"")
 
   if [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]]; then
