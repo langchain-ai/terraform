@@ -1,0 +1,40 @@
+{{- if .Values.gatewayIP }}
+# The gateway's own pool: one address, never handed out automatically, so no
+# other LoadBalancer Service can take it. The Envoy Service claims it with the
+# metallb.io/loadBalancerIPs annotation. None on an existing_gateway.
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: langsmith-gateway
+spec:
+  addresses:
+    - {{ .Values.gatewayIP }}/32
+  autoAssign: false
+---
+{{- end }}
+# Everything else: other LoadBalancer Services on the cluster. Excludes the
+# gateway IP (Terraform checks that).
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: lan-pool
+spec:
+  addresses:
+    {{- required "addresses must not be empty" .Values.addresses | toYaml | nindent 4 }}
+  autoAssign: true
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: lan-l2
+spec:
+  ipAddressPools:
+    {{- if .Values.gatewayIP }}
+    - langsmith-gateway
+    {{- end }}
+    - lan-pool
+  {{- with .Values.l2NodeSelector }}
+  nodeSelectors:
+    - matchLabels:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}

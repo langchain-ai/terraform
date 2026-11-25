@@ -303,6 +303,43 @@ variable "sandbox_juicefs_redis_id" {
   default     = null
 }
 
+variable "sandbox_juicefs_redis_in_cluster" {
+  type        = bool
+  description = "Run the JuiceFS metadata Redis in the LangSmith namespace: a single-replica StatefulSet with an append-only file on a retained Premium SSD volume, its Service, its password Secret, and, where the policy engine is not Cilium, a NetworkPolicy admitting the node subnet on 6379."
+  default     = false
+}
+
+variable "sandbox_juicefs_redis_password" {
+  type        = string
+  description = "requirepass of the in-cluster JuiceFS Redis."
+  sensitive   = true
+  default     = null
+}
+
+variable "sandbox_juicefs_redis_image" {
+  type        = string
+  description = "Image of the in-cluster JuiceFS Redis."
+  default     = "docker.io/redis:7"
+}
+
+variable "sandbox_juicefs_redis_storage_class_name" {
+  type        = string
+  description = "Name of the cluster-scoped StorageClass for the in-cluster JuiceFS Redis volume."
+  default     = "sandbox-juicefs-redis-retain"
+}
+
+variable "sandbox_juicefs_redis_storage_gb" {
+  type        = number
+  description = "Size in GB of the in-cluster JuiceFS Redis volume."
+  default     = 16
+}
+
+variable "sandbox_juicefs_redis_memory_mb" {
+  type        = number
+  description = "Memory limit in MiB of the in-cluster JuiceFS Redis container; maxmemory is 80% of it."
+  default     = 1024
+}
+
 variable "platform_backend_component" {
   type        = string
   description = "app.kubernetes.io/component label on platform-backend pods, <release fullname>-platform-backend. Selects the pods the node subnet may reach when sandboxes are on."
@@ -356,4 +393,66 @@ variable "keda_chart_repository_password" {
   description = "Password or token for keda_chart_repository_username."
   default     = ""
   sensitive   = true
+}
+
+# ── External ClickHouse ───────────────────────────────────────────────────────
+variable "use_external_clickhouse" {
+  type        = bool
+  description = "Whether LangSmith uses a ClickHouse outside the chart (clickhouse_source = external)."
+  default     = false
+}
+
+variable "clickhouse_host" {
+  type        = string
+  description = "Host of the external ClickHouse. Empty leaves the langsmith-clickhouse Secret to init-values.sh."
+  default     = ""
+}
+
+variable "clickhouse_http_port" {
+  type        = number
+  description = "HTTP port of the external ClickHouse."
+  default     = 8443
+}
+
+variable "clickhouse_native_port" {
+  type        = number
+  description = "Native port of the external ClickHouse."
+  default     = 9440
+}
+
+variable "clickhouse_user" {
+  type        = string
+  description = "User for the external ClickHouse."
+  default     = "default"
+}
+
+variable "clickhouse_password" {
+  type        = string
+  description = "Password for the external ClickHouse."
+  default     = ""
+  sensitive   = true
+}
+
+variable "clickhouse_database" {
+  type        = string
+  description = "Database on the external ClickHouse."
+  default     = "default"
+}
+
+variable "clickhouse_tls" {
+  type        = bool
+  description = "Whether the connection to the external ClickHouse uses TLS."
+  default     = true
+}
+
+variable "smithdb_cache_disk_encryption_set_id" {
+  type        = string
+  description = "Disk encryption set for the SmithDB cache StorageClass (diskEncryptionSetID), resolved by the root; empty omits the parameter."
+  default     = ""
+}
+
+variable "sandbox_juicefs_redis_disk_encryption_set_id" {
+  type        = string
+  description = "Disk encryption set for the JuiceFS Redis StorageClass (diskEncryptionSetID), resolved by the root; empty omits the parameter."
+  default     = ""
 }

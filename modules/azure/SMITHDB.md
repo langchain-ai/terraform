@@ -49,6 +49,14 @@ The Terraform root creates:
   so its name carries the deployment suffix unless
   `smithdb_cache_storage_class_name` names one.
 
+Customer-managed keys: the metastore, the storage account and the cache
+StorageClass take their own key or disk encryption set
+(`smithdb_metastore_customer_managed_key_id`,
+`smithdb_storage_customer_managed_key_id`, `smithdb_cache_disk_encryption_set_id`,
+each with its identity where it has one), else LangSmith's own key or the
+cluster's set. Set the metastore's key before the first apply that creates it:
+the key is fixed at creation. README "Customer-managed keys" has the rules.
+
 By default, the same SmithDB workload identity authenticates to PostgreSQL
 through Microsoft Entra ID and is configured as the Flexible Server's Entra
 administrator. This avoids a static database password and the separate SQL
@@ -62,6 +70,13 @@ Terraform state:
 export TF_VAR_smithdb_metastore_admin_password='<strong-random-password>'
 terraform -chdir=infra apply
 ```
+
+In Azure Government (`azure_environment = "usgovernment"`) the password is
+required, and plan stops without it. SmithDB requests its Entra token for the
+commercial Azure scope, `https://ossrdbms-aad.database.windows.net/.default`,
+which a Government Flexible Server does not accept, so every Entra login to the
+metastore fails (LG-913). The rule lifts once SmithDB reads the token scope for
+the cloud it runs in.
 
 The metastore Secret is created in the LangSmith namespace before Helm runs. In
 Entra mode it contains only the host, database, and username; the chart sets

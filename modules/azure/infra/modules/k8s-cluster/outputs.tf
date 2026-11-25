@@ -265,11 +265,11 @@ output "ingress_internal_annotations" {
 }
 
 output "ingress_load_balancer_subnet_grant" {
-  description = "The grant the internal load balancer needs on a subnet other than the node subnet, or null when none is needed. made_by is \"terraform\" when this module creates it and \"owner\" when the network owner must."
-  value = local.ingress_lb_other_subnet ? {
+  description = "The grant the internal load balancer needs on its subnet, or null when none is needed: on a subnet other than the node subnet, and on the node subnet for a created cluster with a system-assigned identity. made_by is \"terraform\" when this module creates it and \"owner\" when the network owner must."
+  value = local.ingress_lb_subnet_grant ? {
     role         = "Network Contributor"
     actions      = ["Microsoft.Network/virtualNetworks/subnets/join/action", "Microsoft.Network/virtualNetworks/subnets/read"]
-    scope        = var.ingress_load_balancer_subnet_id
+    scope        = local.ingress_lb_grant_scope
     principal_id = local.cluster_identity_principal_id
     made_by      = var.ingress_load_balancer_manage_subnet_assignment ? "terraform" : "owner"
   } : null
@@ -301,4 +301,9 @@ output "disk_encryption_set_id" {
 output "disk_encryption_set_reader_scope" {
   description = "Scope of the Reader assignment the module made on the disk encryption set for the cluster identity; null when the grant is left to the set's owner."
   value       = one(azurerm_role_assignment.disk_encryption_set_reader[*].scope)
+}
+
+output "additional_disk_encryption_set_reader_scopes" {
+  description = "Scopes of the Reader assignments the module made on further disk encryption sets for the cluster identity; empty when none."
+  value       = sort([for a in azurerm_role_assignment.additional_disk_encryption_set_reader : a.scope])
 }
