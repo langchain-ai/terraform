@@ -33,6 +33,7 @@ locals {
       owner       = var.owner
     },
     var.cost_center != "" ? { "cost-center" = var.cost_center } : {},
+    var.product != "" ? { product = var.product } : {},
     var.tags
   )
 

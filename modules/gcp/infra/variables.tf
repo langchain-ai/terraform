@@ -801,6 +801,17 @@ variable "cost_center" {
   default     = ""
 }
 
+variable "product" {
+  description = "Product label. Applied as the product label when non-empty."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = can(regex("^[a-z0-9_-]{0,63}$", var.product))
+    error_message = "product must be a valid GCP label value: up to 63 lowercase letters, digits, underscores, or hyphens."
+  }
+}
+
 #------------------------------------------------------------------------------
 # LangGraph Platform Features
 # Boolean flags that control which product addons are active in Helm (Pass 2).
