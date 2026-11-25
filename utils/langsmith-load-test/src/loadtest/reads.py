@@ -102,9 +102,12 @@ class Reader:
         return str(self.projects.ids[self.projects.pick(self.random_source)])
 
     async def list_traces(self) -> object:
-        # client.traces.query: the most recent root traces of the project, one page.
+        # client.traces.query: the most recent root traces of the project, one page. Its window opens a
+        # TRACE_WINDOW before the run: the server closes it at its own now, and a read in the run's first
+        # second from a client clock ahead of the box's was refused, "min_start_time must be before
+        # max_start_time", failing a soak that held its load (magus, 2026-11-25).
         return await self.client.traces.query(
-            project_id=self._project(), min_start_time=self.started, page_size=LIST_LIMIT, selects=LIST_SELECTS,
+            project_id=self._project(), min_start_time=self.started - TRACE_WINDOW, page_size=LIST_LIMIT, selects=LIST_SELECTS,
         )
 
     async def read_trace(self) -> object:

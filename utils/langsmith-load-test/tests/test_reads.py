@@ -14,7 +14,7 @@ from langsmith._openapi_client.resources.traces import AsyncTracesResource
 from langsmith._openapi_client.types import RunSelectField
 from loadtest.draw import Projects
 from loadtest.profile import from_document
-from loadtest.reads import FEEDBACK_KEY, Reader, TracePool
+from loadtest.reads import FEEDBACK_KEY, TRACE_WINDOW, Reader, TracePool
 from profiles import document
 
 NOW = datetime.datetime.now(datetime.UTC)
@@ -83,6 +83,13 @@ class ReaderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({entry["component"] for name, entry in report.items() if name in ("list_traces", "read_trace", "heavy_filter")}, {"query"})
         self.assertEqual(report["project_stats"]["component"], "stats-query")
 
+    async def test_the_trace_list_opens_before_the_run_so_a_box_clock_behind_still_answers(self) -> None:
+        client = RecordingClient()
+        await make_reader(client).list_traces()
+        (_, kwargs), = client.named("traces.query")
+        self.assertLess(kwargs["min_start_time"], NOW)
+        self.assertNotIn("max_start_time", kwargs)
+
     async def test_a_failing_class_counts_errors_for_that_class_only(self) -> None:
         client = RecordingClient()
         client.fail["read_project"] = RuntimeError("no")
@@ -113,7 +120,7 @@ class ReaderTest(unittest.IsolatedAsyncioTestCase):
             await reader.calls[name]()
         project = str(PROJECT)
         (_, query), = client.named("traces.query")
-        self.assertEqual((query["project_id"], query["min_start_time"], query["page_size"]), (project, NOW, 20))
+        self.assertEqual((query["project_id"], query["min_start_time"], query["page_size"]), (project, NOW - TRACE_WINDOW, 20))
         (args, listing), = client.named("traces.list_runs")
         self.assertEqual(args, ("trace-1",))
         self.assertEqual(listing["project_id"], TRACE_PROJECT)
