@@ -23,8 +23,9 @@ def results(missing: int = 0, refused: int = 0, kept: bool | None = True, passed
     }
 
 
-def sample(pending: float, rows: float) -> dict[str, Any]:
-    return {"queues": {"ingestion_queue.pending": pending}, "smithdb": {"ingest_flush_rows_total": rows}, "replicas": {"smithdb": 1}}
+def sample(pending: float, rows: float | None) -> dict[str, Any]:
+    smithdb = {"query_admission_queue_length": 0.0, **({} if rows is None else {"ingest_flush_rows_sum{status=success,level=L0}": rows})}
+    return {"queues": {"ingestion_queue.pending": pending}, "smithdb": smithdb, "replicas": {"smithdb": 1}, "unread": []}
 
 
 class HopsTest(unittest.TestCase):
@@ -41,6 +42,14 @@ class HopsTest(unittest.TestCase):
     def test_an_unread_install_is_not_read_never_ok(self) -> None:
         v = self.verdicts(results(), [])
         self.assertEqual((v["drained"], v["flushed"]), (None, None))
+
+    def test_rows_flushed_before_the_first_flush_series_count_from_zero(self) -> None:
+        v = self.verdicts(results(), [sample(0, None), sample(0, 100)])
+        self.assertTrue(v["flushed"])
+
+    def test_an_unread_smithdb_is_not_zero_rows(self) -> None:
+        unread = {**sample(0, None), "unread": ["smithdb metrics from 1 of 1 pods"]}
+        self.assertIsNone(self.verdicts(results(), [unread, sample(0, 100)])["flushed"])
 
     def test_refused_runs_stop_at_accepted(self) -> None:
         self.assertFalse(self.verdicts(results(refused=3), [sample(0, 1), sample(0, 2)])["accepted"])

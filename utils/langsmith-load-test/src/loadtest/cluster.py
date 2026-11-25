@@ -379,6 +379,19 @@ def _peak_end(points: list[tuple[float, float]], unit: str, **extra: Any) -> dic
     return {"peak": max(v for _, v in points), "end": points[-1][1], "unit": unit, "samples": len(points), **extra}
 
 
+def flushed_rows(sample: Sample) -> float | None:
+    """Rows SmithDB has flushed since it started; None when its metrics were not read.
+
+    ingest_flush_rows is a histogram, so its _sum is the rows. Its series appears only at the first
+    flush, so a sample that read SmithDB without it has flushed none: on magus the first sample came
+    before any flush, and a delta over the samples that had the series measured 0 of 100 rows
+    (2026-11-25).
+    """
+    if not sample["smithdb"] or any(u.startswith("smithdb metrics") for u in sample["unread"]):
+        return None
+    return family_sum(sample["smithdb"], "ingest_flush_rows_sum") or 0.0
+
+
 def _delta(points: list[tuple[float, float]]) -> float | None:
     return points[-1][1] - points[0][1] if len(points) > 1 else None
 
@@ -577,7 +590,7 @@ def summarize(samples: Sequence[Sample], window: tuple[float, float], runs_per_s
     p = sizing_params.values(sizing_params.load())
     steady = [s for s in samples if window[0] <= s["t"] <= window[1]]
     used = cores(steady)
-    flushed = _delta(_values(steady, lambda s: family_sum(s["smithdb"], "ingest_flush_rows")))
+    flushed = _delta(_values(steady, flushed_rows))
     span = steady[-1]["t"] - steady[0]["t"] if len(steady) > 1 else 0
     coefficients = {
         w: {"cores_used": c, **({"runs_per_core": runs_per_second / c} if runs_per_second and c > 0 and w in INGEST_PATH else {})}

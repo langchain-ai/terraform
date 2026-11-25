@@ -104,7 +104,9 @@ class FakeCluster:
             "# TYPE ingest_pending_segment_entry_count gauge",
             f'ingest_pending_segment_entry_count{{level="l0"}} {BACKLOG[min(self.n, len(BACKLOG) - 1)] * 3}',
             'ingest_pending_segment_entry_count{level="l1"} 5000',
-            f"ingest_flush_rows_total {1000 * self.n * STEP_SECONDS}",
+            # A histogram, as SmithDB serves it (magus, 2026-11-25): its _sum is the rows.
+            f'ingest_flush_rows_sum{{status="success",level="L0"}} {1000 * self.n * STEP_SECONDS}',
+            f'ingest_flush_rows_count{{status="success",level="L0"}} {self.n}',
             f'compaction_queue_job_count{{status="pending",job_kind="runs"}} {self.n % 3}',
             'compaction_queue_job_count{status="inflight",job_kind="runs"} 7',
             f"compaction_queue_oldest_pending_created_at_seconds {self.t - 30}",

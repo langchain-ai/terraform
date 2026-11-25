@@ -49,11 +49,7 @@ def samples(results_path: Path) -> list[dict[str, Any]]:
 
 def _flushed(series: Sequence[dict[str, Any]]) -> float | None:
     """Rows SmithDB flushed between the first and the last reading that had the counter."""
-    read = []
-    for s in series:
-        rows = [v for k, v in s.get("smithdb", {}).items() if k.startswith("ingest_flush_rows")]
-        if rows:
-            read.append(sum(rows))
+    read = [rows for rows in map(cluster.flushed_rows, series) if rows is not None]
     return read[-1] - read[0] if len(read) >= 2 else None
 
 

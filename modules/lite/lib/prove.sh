@@ -60,7 +60,8 @@ prove() {
   LITE_ADMIN_EMAIL="$(json_get langsmith user <<<"$logins")" LITE_ADMIN_PASSWORD="$(json_get langsmith password <<<"$logins")" \
     python3 "$LITE/lib/prove.py" "$mode" --endpoint "http://127.0.0.1:$wport" \
     --namespace "$(json_get langsmith <<<"$ns")" --data-namespace "$(json_get data <<<"$ns")" \
-    --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@"
+    --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@" ||
+    fail "the install did not pass $mode" "the hop that failed is above; the run's results: ${work#"$LITE"/}"
 }
 
 free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
