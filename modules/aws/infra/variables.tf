@@ -813,6 +813,30 @@ variable "langsmith_jwt_secret" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_name" {
+  type        = string
+  description = "Optional. A Secret in the LangSmith namespace holding a CA bundle (the chart's config.customCa), for endpoints a private CA signed, such as an OIDC provider behind an internal CA. The chart mounts it in backend, platform-backend, host-backend, the queues, listener and playground, and in the agent features. Create the Secret with kubectl before make deploy. Read by helm/scripts/init-values.sh and deploy.sh; Terraform only validates the name. Empty turns it off."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_custom_ca_secret_name == "" || can(regex("^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$", var.langsmith_custom_ca_secret_name))
+    error_message = "langsmith_custom_ca_secret_name must be empty or a valid Kubernetes Secret name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit, at most 253 characters."
+  }
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_key" {
+  type        = string
+  description = "The key in langsmith_custom_ca_secret_name that holds the PEM bundle. Read by helm/scripts/; Terraform only validates it."
+  default     = "ca.crt"
+
+  validation {
+    condition     = can(regex("^[-._a-zA-Z0-9]{1,253}$", var.langsmith_custom_ca_secret_key))
+    error_message = "langsmith_custom_ca_secret_key must be 1 to 253 characters of letters, digits, '-', '_' and '.'."
+  }
+}
+
 #------------------------------------------------------------------------------
 # LangSmith Features
 # Boolean flags that control which product addons are enabled in Helm (Pass 2).

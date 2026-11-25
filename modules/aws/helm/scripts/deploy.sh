@@ -218,6 +218,11 @@ _use_cluster_kubeconfig "$_cluster_name" "$_region"
 echo "  Active context: $(kubectl config current-context)"
 echo ""
 
+# A private CA bundle (config.customCa): the Secret must exist before Helm runs.
+_custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
+_custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
+_custom_ca_secret_check "$NAMESPACE" "$_custom_ca_secret" "$_custom_ca_key" || exit 1
+
 # ── Preflight checks ──────────────────────────────────────────────────────────
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
