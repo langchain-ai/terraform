@@ -81,7 +81,8 @@ cmd_status() {
   # shellcheck disable=SC2029  # the namespaces are read here and passed to the box
   ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "NAMESPACES='$ns'; $BOX_K"'
 echo "## releases (an install Job per HelmChart; COMPLETE 1 is installed)"
-k -n kube-system get jobs -l helmcharts.helm.cattle.io/chart -o custom-columns=RELEASE:.metadata.labels.helmcharts\.helm\.cattle\.io/chart,COMPLETE:.status.succeeded,FAILED:.status.failed,CREATED:.metadata.creationTimestamp
+# Quoted: unquoted, the box shell took each \. as an escaped dot, and RELEASE read <none>.
+k -n kube-system get jobs -l helmcharts.helm.cattle.io/chart -o "custom-columns=RELEASE:.metadata.labels.helmcharts\.helm\.cattle\.io/chart,COMPLETE:.status.succeeded,FAILED:.status.failed,CREATED:.metadata.creationTimestamp"
 echo "## pods"
 for n in $NAMESPACES; do k get pods -n "$n" -o wide 2>/dev/null; done
 echo "## use (metrics-server; empty for a minute after a restart)"

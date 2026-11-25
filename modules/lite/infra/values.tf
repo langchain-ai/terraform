@@ -50,6 +50,10 @@ locals {
     { for c in local.services : c => { deployment = jsondecode(contains(keys(local.k8s), c) ? jsonencode({ replicas = 1, resources = local.k8s[c] }) : jsonencode({ replicas = 0 })) } },
     {
       commonLabels = local.instance_label
+      # A hash of LangSmith's Secrets on every pod, so a changed Secret rolls them: the pods read the
+      # license key and credentials at start, and a new key reached only the pods crash-looping on the
+      # expired one (magus, 2026-11-25). A hash of random secrets, never the secrets.
+      commonPodAnnotations = { "langsmith-lite/secrets" = nonsensitive(sha256(jsonencode([for s in local.secret_list : s if s.namespace == local.ns.langsmith]))) }
       config = {
         existingSecretName   = "langsmith-config"
         authType             = "mixed"

@@ -139,7 +139,9 @@ ssh_root() {
     "sudo -v && printf '  %-18s %s %sgranted%s\n\n' root \"on \$(hostname)\" '$GREEN' '$OFF' && $2"
 }
 
-# Defines k on the box: kubectl as the ssh user, with the kubeconfig the install gave it.
+# Defines k on the box: kubectl as the ssh user, with the kubeconfig the install gave it. k3s kubectl
+# reads root's /etc/rancher/k3s/config.yaml first and warned "permission denied" on every call as the
+# ssh user (magus, 2026-11-24); an empty K3S_CONFIG_FILE and the kubeconfig in KUBECONFIG silence it.
 # shellcheck disable=SC2016  # expands on the box
-BOX_K='k() { k3s kubectl --kubeconfig "$HOME/.kube/langsmith-lite.yaml" "$@"; }
+BOX_K='k() { K3S_CONFIG_FILE=/dev/null KUBECONFIG="$HOME/.kube/langsmith-lite.yaml" k3s kubectl "$@"; }
 if [ ! -r "$HOME/.kube/langsmith-lite.yaml" ]; then echo "no kubeconfig for $(id -un) on this box: run make up."; exit 1; fi'
