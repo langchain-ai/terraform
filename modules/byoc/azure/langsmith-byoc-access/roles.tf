@@ -1,5 +1,5 @@
 # Actions of the LangSmith custom role. reduced_access picks one of the two
-# lists. The role applies only within one data plane resource group. Role
+# lists. deletion_protection removes every delete action from either list. The role applies only within one data plane resource group. Role
 # assignments and the custom blob role of the data plane are
 # Microsoft.Authorization actions; they come from the User Access
 # Administrator assignment in data_planes.tf, which exists only with full
