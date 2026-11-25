@@ -66,11 +66,13 @@ prove() {
 free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 
 # The ssh user's own kubeconfig from the install, with its server moved to the forwarded port. The
-# API's certificate names 127.0.0.1, so it verifies here as it does on the box.
+# API's certificate names 127.0.0.1, so it verifies here as it does on the box. The install writes the
+# server quoted; a pattern without the quotes matched nothing and verify stopped here (magus, 2026-11-25).
 box_kubeconfig() {
   # shellcheck disable=SC2016  # expands on the box
   ssh "${SSH_OPTS[@]}" "$SSH_TARGET" 'cat "$HOME/.kube/langsmith-lite.yaml"' |
-    sed -E "s#server: https://127\.0\.0\.1:[0-9]+#server: https://127.0.0.1:$2#" >"$1" && grep -q "127.0.0.1:$2" "$1"
+    sed -E "s#server: \"?https://127\.0\.0\.1:[0-9]+\"?#server: https://127.0.0.1:$2#" >"$1" || return 1
+  grep -q "127.0.0.1:$2" "$1" || { echo "the box's kubeconfig has no server at https://127.0.0.1:<port> to point here"; return 1; }
 }
 
 frontend_port() {

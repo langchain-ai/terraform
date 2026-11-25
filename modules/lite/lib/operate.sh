@@ -48,7 +48,7 @@ cmd_access() {
 import json, sys
 dim, off = sys.argv[1], sys.argv[2]
 for name, l in json.load(sys.stdin).items():
-    print(f"  {dim}{name.replace(\"_\", \" \"):<16}{off} {l[\"url\"]:<34} {l[\"user\"]:<26} {l[\"password\"]}")
+    print("  %s%-16s%s %-34s %-26s %s" % (dim, name.replace("_", " "), off, l["url"], l["user"], l["password"]))
 ' "$DIM" "$OFF" <<<"$logins"
   # One tunnel a UI that runs: Grafana and Mission Control are off on some boxes (xs).
   forwards=()
