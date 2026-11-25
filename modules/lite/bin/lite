@@ -44,6 +44,8 @@ Use|access|every login; tunnels to LangSmith, Grafana and Mission Control
 |status|each release, every pod, what the box uses (read-only)
 |verify|traces go in and come back out, checked hop by hop: about two minutes
 |soak|the design load with reads for DURATION=900 s; STEP=1 raises it until it breaks
+|experiment|every size from a clean install, held to its machine: verify, then 1x to 4x its design rate
+|report|the runs in build/soak (or the folders given) as figures, numbers and the runs' own files
 |down|delete the install and every trace in it
 Inspect and change|secrets|change the license key or the tunnel token (infra/.secrets.env, mode 600)
 |values|every release's chart and values, as the box gets them
@@ -59,7 +61,7 @@ EOF
 verb="${1:-help}"
 shift || true
 case "$verb" in
-  secrets | preflight | plan | up | export | access | status | verify | soak | down | values | pins | render | check)
+  secrets | preflight | plan | up | export | access | status | verify | soak | experiment | report | down | values | pins | render | check)
     "cmd_$verb" "$@" ;;
   tf) need terraform && tf "$@" ;;
   help | -h | --help) usage ;;

@@ -253,3 +253,26 @@ run "bare_metal_ssh_leaves_user_and_port_to_the_ssh_config" {
     error_message = "an unset ssh_user or ssh_port must not override ~/.ssh/config's."
   }
 }
+
+run "emulate_machine_caps_the_pods_at_the_machine_less_its_reservation" {
+  command = plan
+  variables {
+    box             = "m"
+    emulate_machine = true
+  }
+  assert {
+    condition     = local.lite_env.POD_CPU_M == "7250" && local.lite_env.POD_MEM_MI == "63488"
+    error_message = "an emulated m box should hold its pods to 8 vCPU less 750m reserved and 64 GiB less 2,048 MiB."
+  }
+}
+
+run "without_emulate_machine_the_pods_have_no_cap" {
+  command = plan
+  variables {
+    box = "m"
+  }
+  assert {
+    condition     = local.lite_env.POD_CPU_M == "0" && local.lite_env.POD_MEM_MI == "0"
+    error_message = "the pods should not be capped unless emulate_machine is set."
+  }
+}

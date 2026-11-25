@@ -66,6 +66,8 @@ own traces: OPERATE.md, Sending traces.
 | `preflight` | whether a machine can be the box: read-only, no root |
 | `verify` | do traces flow? Ten traces followed hop by hop; where they stop, that workload's logs |
 | `soak` | does it hold its design load? `STEP=1`: the rate it holds, and what breaks first |
+| `experiment` | every size from a clean install, held to its machine: verify, then 1 to 4 times its design rate |
+| `report` | the runs as figures, their numbers and the runs' own files |
 | `export` | the releases, values and Secrets for a cluster of one's own |
 | `access`, `status`, `down` | use it, read it, delete it |
 | `secrets`, `values`, `pins`, `render`, `check`, `tf` | change the license key; what is installed; the chart lines; the module's own gates; any Terraform command |

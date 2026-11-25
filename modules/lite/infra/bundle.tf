@@ -172,6 +172,9 @@ locals {
     NS_OBSERVE     = local.ns.observe
     RELEASES       = join(" ", local.release_order)
     DATASTORES_TGZ = local.datastores_tgz
+    # The pods' share of the size's machine, the cap emulate_machine sets; 0 for no cap.
+    POD_CPU_M  = tostring(var.emulate_machine ? local.machine.cpu * 1000 - local.preset.reserved.cpu_m : 0)
+    POD_MEM_MI = tostring(var.emulate_machine ? local.machine.memory_gi * 1024 - local.preset.reserved.mem_mi : 0)
   }
 
   bundle = merge(

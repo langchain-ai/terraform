@@ -173,11 +173,18 @@ in two places: Lite's extended TTL is 30 days, not the chart's 400 (a single dis
 SmithDB runs as one pod below the chart's smallest tier, with the metastore a second database in the
 one Postgres.
 
-**Not yet measured:** SmithDB as one pod at each size, the metastore's growth, the payload costs at
-chart 0.18 (measured at 0.17.6; 0.18 frees large fields from Redis once saved, which can only lower
-Redis's share), and Mission Control's and the observability stack's own use. `make soak` on a box
-measures the first; a measured size then replaces a computed one through `resources` (keyed as the plan
-lists the pods) or `volumes`, with the run cited beside it in the tfvars.
+**First measured, at `m` on magus (2026-11-25, chart 0.18.3, the load test's default payload mix, five
+runs from 12.5 to 75 runs/s):** every run stored at every rate; SmithDB used 1.5 to 1.6 cores whatever
+the rate; the services the plan sizes by rate used about a fifth of what it budgets them (ingest-queue
+0.0066 cores a run/s against 0.035 planned); Redis kept 1.6 KiB a run at every rate, against the 8 KB
+the payload costs plan, as 0.18 frees saved payloads from Redis. These are one size and a few hours of
+history: the plan's numbers stay until `make experiment` has measured every size, and a size changes
+only with its runs cited.
+
+**Not yet measured:** each size other than `m`, the bytes a run costs on disk, the metastore's growth,
+and Mission Control's and the observability stack's own use; `make experiment` reads each. A measured
+size then replaces a computed one through `resources` (keyed as the plan lists the pods) or `volumes`,
+with the run cited beside it in the tfvars.
 
 ## Settings
 
@@ -196,3 +203,4 @@ lists the pods) or `volumes`, with the run cited beside it in the tfvars.
 | `observability`, `mission_control` | on, but off at `xs` and on a cluster | the stack on the box |
 | `code_evaluators` | off | ace-backend, for custom code evaluators |
 | `resources`, `volumes`, `max_request_ratio` | none, none, 0.85 | a measured size in place of a computed one; the share of the machine pods may request |
+| `emulate_machine` | off | bare metal: every pod together held to the size's machine less its reservation, to measure a smaller size on a larger box (`make experiment` sets it for its own installs) |

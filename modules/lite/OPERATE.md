@@ -139,11 +139,21 @@ Every LangSmith sign-in option is on [Authentication methods](https://docs.langc
 | `make verify` | Do traces flow? Ten traces followed hop by hop: accepted by the API, Redis's ingestion queue drained, SmithDB flushed, readable by a query. Where they stop, that workload's last log lines. | about 2 minutes |
 | `make soak` | Does the box hold its design load, with reads? Every target (nothing lost, readable in time), whether ingestion kept up, and each watch item against its alarm level. | `DURATION` (900 s) plus a 120 s ramp |
 | `STEP=1 make soak` | What does it hold? The design rate x 0.5, 1, 1.5, 2, 3 and 4 in turn, until a step does not hold, and what crossed its level there. | up to six soaks |
+| `make experiment` | What does each size hold? For each size (`SIZES`, all four by default): a clean install held to that size's machine (`emulate_machine`), `make verify`, then `MINUTES` (10) at each multiple of its design rate in `STEPS` (1 2 3 4), every step run whether or not the last held. Deletes the install for each size: it asks for the install's name, or takes `CONFIRM=<name>`. | about 80 minutes a size |
+| `make report` | The runs in `build/soak/`, or the folders given, as figures, their numbers and the runs' own files. | a minute |
 
-Both log in as the first admin, make an API key for the run and revoke it after; they reach the box's
-Kubernetes API and LangSmith through ssh, with no port opened. Results, and every sample of the install
-taken during the run, are in `build/verify/` and `build/soak/`. They are the load test's own commands
+They log in as the first admin, make an API key for the run and revoke it after; they reach the box's
+Kubernetes API and LangSmith through ssh, with no port opened. They are the load test's own commands
 (`utils/langsmith-load-test`), which run the same way against a cloud or bare-metal install.
+
+Each run keeps, in `build/verify/`, `build/soak/` or the experiment's folder, its results and every
+sample of the install taken every 15 s: each workload's cores and memory (through the install's
+Prometheus, so a box without observability, size `xs`, reads neither), the bytes each store's volume
+gained a run (read with `du` in its pod each minute), the payload bytes sent a run, Redis's memory,
+Postgres's connections, the queues, and SmithDB's segments, compactions and refused queries.
+`make experiment` writes one report a size and one for all of them. A report's figures are in the
+LangChain brand when `FONTS` and `LOGOS` name the folders holding its faces and logos, read where they
+are and never copied in; without them each figure is drawn as a labelled draft.
 
 ## Watching it
 
@@ -249,14 +259,18 @@ sudo journalctl -u k3s --since -30min
 | Pods that cannot reach each other, with Docker on the box | Docker's FORWARD policy: allow the pod range (10.42.0.0/16), or stop Docker |
 | No certificate with `access = dns` | the A record does not resolve to the box, or port 80 is closed: Traefik's log says which |
 | `make verify` stops at a hop | that hop's workload printed its last log lines; the health dashboard's tab for it shows since when |
+| feedback stats answers 429, "Too many concurrent partitions" | SmithDB refused a query that would scan more than its partition limit, in the minute before compaction merges the segments waiting for it; it answers again once they are merged. Seen on magus at `m` from 25 runs/s, raised with SmithDB's maintainers (2026-11-25) |
 
 ## What the first install confirms
 
 What only a running box can show, each read on the first install of each size:
 
 1. SmithDB as one pod at each size: its use at the design load (`make soak`), and whether it is killed.
+   At `m` on magus (2026-11-25): 1.5 to 1.6 cores from 50 to 75 runs/s, never killed; every run stored up
+   to 75 runs/s, three times the design rate. The other sizes: `make experiment`.
 2. Traefik's HTTPS redirect and Let's Encrypt resolver, as k3s's bundled Traefik chart takes them.
 3. The health dashboard's signals reading data. Three LangSmith metric names (`langsmith_ingest_task_failures_total`, `langsmith_asynq_queue_latency_seconds`, `langsmith_asynq_ingestion_queue_retry`) come from the alerts page, not yet read from a 0.18 install; SmithDB's are checked against its source. Grafana 13.3.1 provisioning both dashboards and every rule was checked locally (2026-11-24).
-4. Postgres connections in use, and the metastore's growth.
+4. Postgres connections in use, and the metastore's growth. At `m`: about 40 connections of 200, from
+   12.5 to 75 runs/s; the metastore's growth is in each run's disk readings.
 5. Mission Control taking the pre-created login rather than its first-run setup token.
 6. k3s beside Docker on an Arch-family machine, then Ubuntu (AWS) and Debian.

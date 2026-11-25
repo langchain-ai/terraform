@@ -368,6 +368,17 @@ variable "data_path" {
   }
 }
 
+variable "emulate_machine" {
+  type        = bool
+  default     = false
+  description = "cloud = baremetal: cap every pod together at the size's machine, less what the size reserves for the system, so a smaller size is measured faithfully on a larger box (make experiment sets it). CPU and memory are capped; the disk's size and speed are not."
+
+  validation {
+    condition     = !var.emulate_machine || var.cloud == "baremetal"
+    error_message = "emulate_machine is for cloud = baremetal: an AWS instance is already the size's machine."
+  }
+}
+
 #--- AWS ----------------------------------------------------------------------
 
 variable "aws_region" {

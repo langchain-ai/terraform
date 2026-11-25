@@ -3,7 +3,7 @@
 # ARGS passes Terraform flags; YES=1 and VERBOSE=1 pass through too.
 
 LITE := bin/lite
-VERBS := up plan preflight export access status verify soak down secrets values pins render check tf
+VERBS := up plan preflight export access status verify soak experiment report down secrets values pins render check tf
 
 .DEFAULT_GOAL := help
 .PHONY: help $(VERBS)

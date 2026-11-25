@@ -32,7 +32,7 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && printf -v "${line%%=*}" '%s' "${line#*=}"
 done <"$SRC/lite.env"
 : "${NAME:?} ${K3S_VERSION:?} ${MACHINE_CPU:?} ${MACHINE_MEM_GI:?} ${MACHINE_DISK_GI:?} ${ACCESS:?} ${DATASTORES_TGZ:?}"
-: "${DATA_MOUNT:?} ${NS:?} ${NS_DATA:?} ${RELEASES:?}"
+: "${DATA_MOUNT:?} ${NS:?} ${NS_DATA:?} ${RELEASES:?} ${POD_CPU_M:?} ${POD_MEM_MI:?}"
 export MACHINE_CPU MACHINE_MEM_GI MACHINE_DISK_GI DATA_DISK_GI DATA_MOUNT DATA_VOLUME_ID ACCESS
 
 heading "$NAME" "k3s $K3S_VERSION on $(hostname)"
@@ -121,6 +121,24 @@ node_ready() {
     kubectl wait --for=condition=Established crd/helmcharts.helm.cattle.io crd/helmchartconfigs.helm.cattle.io --timeout=120s
 }
 run node "wait for the node to be Ready" node_ready
+
+# emulate_machine: every pod together held to the size's machine less its reservation, through the slice
+# systemd runs them in, so a small size measured on a large box (make experiment) meets its own limits.
+# set-property applies at once and persists; empty values lift a cap an earlier install set. ponytail:
+# CPU and memory only, not the disk's size or speed, nor k3s's own server, which runs outside the slice.
+cap_pods() {
+  if ((POD_CPU_M > 0)); then
+    systemctl set-property kubepods.slice CPUQuota="$((POD_CPU_M / 10))%" MemoryMax="${POD_MEM_MI}M"
+  else
+    systemctl set-property kubepods.slice CPUQuota= MemoryMax=
+  fi
+  echo "kubepods.slice cpu.max: $(cat /sys/fs/cgroup/kubepods.slice/cpu.max), memory.max: $(cat /sys/fs/cgroup/kubepods.slice/memory.max)"
+}
+if ((POD_CPU_M > 0)); then
+  run machine "every pod held to ${POD_CPU_M}m CPU and ${POD_MEM_MI}Mi memory (emulate_machine)" cap_pods
+else
+  run machine "no cap on the pods" cap_pods
+fi
 
 #--- 4. Base and Secrets ------------------------------------------------------------------------------
 install -d -m 755 "$STATIC"

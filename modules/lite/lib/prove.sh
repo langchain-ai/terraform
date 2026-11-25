@@ -37,7 +37,7 @@ prove() {
   shift
   ns="$(tf_output namespaces)"
   logins="$(tf_output logins)"
-  work="$BUILD/$mode/$(date -u +%Y%m%dT%H%M%SZ)"
+  work="${OUT:-$BUILD/$mode/$(date -u +%Y%m%dT%H%M%SZ)}"
   umask 077
   mkdir -p "$work"
   start_log "$BUILD/logs"
@@ -74,6 +74,70 @@ prove() {
     --namespace "$(json_get langsmith <<<"$ns")" --data-namespace "$(json_get data <<<"$ns")" ${prometheus[@]+"${prometheus[@]}"} \
     --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@" ||
     fail "the install did not pass $mode" "why is above; the run's folder: ${work#"$LITE"/}"
+}
+
+# Every size measured the same way, for sizing from runs rather than from a model: for each size, a clean
+# install held to that size's machine (emulate_machine), verify, then the load at each multiple of its
+# design rate in turn, every run kept in one folder with its report. Each step is a verb of its own in a
+# process of its own, so a size that fails is recorded and the next one still runs.
+cmd_experiment() {
+  need terraform python3 ssh kubectl uv
+  local sizes="${SIZES:-xs s m l}" steps="${STEPS:-1 2 3 4}" minutes="${MINUTES:-10}" name typed out size
+  name="$(tf_eval var.name)"
+  out="$BUILD/experiment/$(date -u +%Y%m%dT%H%M%SZ)"
+  heading "experiment" "sizes $sizes: a clean install each, verify, then $minutes minutes at ${steps// /, } times its design rate"
+  field "install" "$name, deleted and installed again for each size"
+  field "results" "${out#"$LITE"/}"
+  field "root" "each size asks for root twice: to remove the last install and to install the next"
+  printf '\n'
+  # Each size starts from no data, so the sizes differ in one thing; that deletes every trace each time.
+  typed="${CONFIRM:-}"
+  [[ -n "$typed" ]] || read -r -p "  Type the install's name to delete it for each size: " typed
+  [[ "$typed" == "$name" ]] || fail "nothing changed" "the name did not match."
+  mkdir -p "$out"
+  for size in $sizes; do
+    experiment_size "$size" "$out/$size" "$name" "$steps" "$minutes" || warn "$size stopped early: its folder holds what it measured"
+  done
+  report "$out/report" "$out"/*/
+  next "make up   (the last size stays installed and held to its machine until a plain make up lifts the cap)"
+}
+
+experiment_size() {
+  local size="$1" dir="$2" name="$3" steps="$4" minutes="$5" design k
+  heading "experiment" "size $size"
+  mkdir -p "$dir"
+  if tf output -json plan >/dev/null 2>&1; then
+    CONFIRM="$name" "$LITE/bin/lite" down || return 1
+  fi
+  # The cap rides on this up alone, never saved: the next plain make up lifts it.
+  box="$size" TF_VAR_emulate_machine=true YES=1 "$LITE/bin/lite" up || return 1
+  OUT="$dir/verify" "$LITE/bin/lite" verify || return 1
+  design="$(tf_output plan | json_get runs_per_second)"
+  for k in $steps; do
+    # A step that does not hold still runs the next: where each one fails is what this measures.
+    RATE="$(python3 -c "print(f'{$design * $k:g}')")" DURATION="$((minutes * 60))" OUT="$dir/${k}x" "$LITE/bin/lite" soak ||
+      warn "$size at ${k}x did not pass; its results are in ${dir#"$LITE"/}/${k}x"
+  done
+  report "$dir/report" "$dir"/*/ --design "$design"
+}
+
+# The load test's report of the runs in the folders given: figures in the LangChain brand (the faces and
+# logo read from FONTS and LOGOS, never copied here; without them the figures are labelled drafts), every
+# number as JSON and CSV, and each run's own files.
+cmd_report() {
+  need uv
+  local folders=("$@")
+  ((${#folders[@]})) || folders=("$BUILD"/soak/*/)
+  heading "report" "${#folders[@]} folders of runs"
+  report "$BUILD/report/$(date -u +%Y%m%dT%H%M%SZ)" "${folders[@]}"
+}
+
+report() {
+  local out="$1" brand=()
+  shift
+  if [[ -n "${FONTS:-}" ]]; then brand=(--fonts "$FONTS" ${LOGOS:+--logos "$LOGOS"}); else brand=(--draft); fi
+  uv run --quiet --project "$LITE/../../utils/langsmith-load-test" load-test-report "$out" "$@" "${brand[@]}" ||
+    warn "no report for ${out#"$LITE"/}: the folders held no finished run"
 }
 
 free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
