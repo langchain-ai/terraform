@@ -54,6 +54,16 @@ variable "data_planes" {
     # active. Without byo_iam, LangSmith creates them itself and this setting
     # changes nothing.
     deployment_builds = optional(bool, false)
+    # Use your VNet. Needs byo_iam. Do not change after creation. See network.tf.
+    byo_vnet = optional(object({
+      vnet_id                     = string
+      aks_subnet_id               = string
+      private_endpoints_subnet_id = string
+      # NAT_GATEWAY, or USER_DEFINED_ROUTING for a route table with 0.0.0.0/0.
+      outbound_type = optional(string, "NAT_GATEWAY")
+      # The route table of the AKS subnet. Only with USER_DEFINED_ROUTING.
+      route_table_id = optional(string)
+    }))
     # VNet flow logs in your storage account. Set it after the data plane is
     # active. Remove it before you delete the data plane. See flow_logs.tf.
     flow_logs = optional(object({
@@ -75,6 +85,22 @@ variable "data_planes" {
       can(regex("^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", key)) && !strcontains(key, "--")
     ])
     error_message = "Each data_planes key must be 1 to 63 characters of lowercase letters, digits, and hyphens, start with a letter, end with a letter or digit, and contain no consecutive hyphens."
+  }
+
+  # flow_logs and dedicated_deployments need a VNet that LangSmith creates.
+  validation {
+    condition = alltrue([
+      for data_plane in values(var.data_planes) : (
+        data_plane.byo_iam && data_plane.flow_logs == null && !data_plane.dedicated_deployments &&
+        can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/virtualNetworks/[^/]+$", data_plane.byo_vnet.vnet_id)) &&
+        startswith(data_plane.byo_vnet.aks_subnet_id, "${data_plane.byo_vnet.vnet_id}/subnets/") &&
+        startswith(data_plane.byo_vnet.private_endpoints_subnet_id, "${data_plane.byo_vnet.vnet_id}/subnets/") &&
+        contains(["NAT_GATEWAY", "USER_DEFINED_ROUTING"], data_plane.byo_vnet.outbound_type) &&
+        (data_plane.byo_vnet.outbound_type == "USER_DEFINED_ROUTING") == (data_plane.byo_vnet.route_table_id != null) &&
+        (data_plane.byo_vnet.route_table_id == null || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft.Network/routeTables/[^/]+$", data_plane.byo_vnet.route_table_id)))
+      ) if data_plane.byo_vnet != null
+    ])
+    error_message = "byo_vnet needs byo_iam, and no flow_logs or dedicated_deployments. Both subnets must be in vnet_id. outbound_type is NAT_GATEWAY or USER_DEFINED_ROUTING. route_table_id is required with USER_DEFINED_ROUTING only."
   }
 }
 
