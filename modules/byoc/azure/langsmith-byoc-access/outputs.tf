@@ -3,6 +3,11 @@ output "azure_entra_tenant_id" {
   value       = data.azurerm_client_config.current.tenant_id
 }
 
+output "langsmith_managed_identity_client_id" {
+  description = "Client ID of the LangSmith managed identity. Enter it in LangSmith when you create a data plane."
+  value       = azurerm_user_assigned_identity.langsmith.client_id
+}
+
 output "data_planes" {
   description = "Per data plane key: the resource group ID, the region, and the Key Vault name."
   value = {

@@ -4,7 +4,7 @@ Gives the LangSmith control plane access to deploy BYOC data planes in **your Az
 
 | Resource | Count | Purpose |
 |----------|-------|---------|
-| Service principal of the LangSmith multi-tenant Entra app | One per tenant | The consent step. No Microsoft Graph permissions. With `create_service_principal = false`, the module only reads it. |
+| Resource group `langsmith-byoc-identity` with the managed identity `langsmith-byoc` | One | LangSmith signs in as this identity. Its federated credential trusts only LangSmith tokens with the subject `byoc:<external_id>`. |
 | Resource group `langsmith-byoc-<key>` | One per data plane | LangSmith deploys the data plane into this resource group. |
 | Key Vault `ls-<key>-<suffix>` | One per data plane | Holds the secret that LangSmith writes. |
 | Custom role `langsmith-byoc-<key>-<suffix>` | One per data plane | The actions that LangSmith needs in that resource group. Assignable only there. |
@@ -17,15 +17,8 @@ Gives the LangSmith control plane access to deploy BYOC data planes in **your Az
 
 1. An Azure subscription.
 2. `Owner`, or `Contributor` and `User Access Administrator`, on the subscription. Use subscription scope, because the module creates the resource groups. `Role Based Access Control Administrator` is not sufficient, because it cannot create custom roles. If your `User Access Administrator` grant blocks privileged roles, set `byo_iam = true` and create the identities yourself. See [Bring your own identities](#bring-your-own-identities-optional).
-3. An Entra ID role that can create service principals, for example `Cloud Application Administrator`, once per tenant. If the person in step 2 does not have it, an Entra admin runs this first:
-
-   ```bash
-   az ad sp create --id 5b0a74cb-9f37-4797-b557-c15d7be80d3b
-   ```
-
-   Then set `create_service_principal = false` before the first `terraform apply`. The module only reads the service principal and needs no Entra ID permission.
-4. Terraform `>= 1.11.0`, AzureRM `>= 4.42.0, < 5.0.0`, and AzureAD `~> 3.0`.
-5. The external ID from **Settings > Data Planes** in LangSmith. LangSmith compares it with the description of each role assignment to verify that you own the subscription.
+3. Terraform `>= 1.11.0` and AzureRM `>= 4.42.0, < 5.0.0`. You need no Entra ID role.
+4. The external ID from **Settings > Data Planes** in LangSmith. The managed identity trusts only LangSmith tokens for this external ID, so no other LangSmith organization can use it.
 
 ## Usage
 
@@ -54,8 +47,6 @@ provider "azurerm" {
   ]
 }
 
-provider "azuread" {}
-
 variable "external_id" {
   type = string
 }
@@ -63,8 +54,8 @@ variable "external_id" {
 module "langsmith_byoc_access" {
   source = "github.com/langchain-ai/terraform//modules/byoc/azure/langsmith-byoc-access?ref=main"
 
-  langsmith_app_client_id = "5b0a74cb-9f37-4797-b557-c15d7be80d3b"
-  external_id             = var.external_id # from Settings > Data Planes
+  location    = "eastus"
+  external_id = var.external_id # from Settings > Data Planes
 
   data_planes = {
     prod = { location = "eastus" }
@@ -76,7 +67,7 @@ output "langsmith_byoc_access" {
 }
 ```
 
-Keep the Terraform state in remote storage.
+Keep the Terraform state in remote storage. When you create a data plane in LangSmith, enter the `langsmith_managed_identity_client_id` output.
 
 ## Manage data planes
 
@@ -296,9 +287,9 @@ Remove `flow_logs` before you delete the data plane.
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `langsmith_app_client_id` | `string` | yes | - | Client ID of the LangSmith multi-tenant Entra app. |
-| `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Must not be empty. |
-| `create_service_principal` | `bool` | no | `true` | `true`: create or update the service principal (needs Entra ID permission). `false`: only read it. Do not change from `true` to `false` later, or Terraform deletes it. |
+| `location` | `string` | yes | - | Region of the resource group that holds the LangSmith managed identity. |
+| `external_id` | `string` | yes | - | External ID from **Settings > Data Planes**. Letters, digits, `.`, `_`, and `-`. |
+| `langsmith_issuer` | `string` | no | `https://azure.api.smith.langchain.com` | OIDC issuer of the LangSmith control plane. |
 | `data_planes` | `map(object)` | no | `{}` | One entry per data plane. The key is the data plane name. See the fields below. |
 | `tags` | `map(string)` | no | `{}` | Tags for all resource groups and Key Vaults. The `tags` of a data plane override these tags. |
 
@@ -323,19 +314,20 @@ A `data_planes` key must have 1 to 63 characters: lowercase letters, digits, and
 | Output | Description |
 |--------|-------------|
 | `azure_entra_tenant_id` | Entra tenant ID of the subscription. |
+| `langsmith_managed_identity_client_id` | Client ID of the LangSmith managed identity. Enter it in LangSmith. |
 | `data_planes` | Map of data plane key to `resource_group_id`, `region`, and `key_vault_name`. |
 
 ## Security model
 
-- **Service principal:** no Microsoft Graph permissions and no role on the subscription.
+- **Managed identity:** an Azure resource in your subscription, with no role on the subscription. Its federated credential trusts one issuer and one subject, `byoc:<external_id>`. To stop all LangSmith access, delete the identity.
 - **Role assignments:** on each data plane resource group only, with the `external_id` as description. The custom role ([`roles.tf`](roles.tf)), and with full access `User Access Administrator`. LangSmith uses it to assign roles to its workload identities, one blob role, and, with CLI builds, two custom roles and `AcrDelete`.
 - **Key Vault:** Azure RBAC, no public network access, a deny-all network ACL, soft delete for 90 days, and purge protection. Terraform writes nothing into the vault.
 
 ## Operational notes
 
 - Run `terraform apply` with credentials in the **target** tenant and subscription.
-- A destroy deletes all role assignments, and the service principal if `create_service_principal` is `true`. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
-- A tenant has one LangSmith service principal. With more than one root module in a tenant, set `create_service_principal = true` in one only.
+- A destroy deletes the managed identity and all role assignments. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
+- After the first apply, Entra can take a few minutes to accept the federated credential. Wait before you create the data plane in LangSmith.
 
 ## License
 

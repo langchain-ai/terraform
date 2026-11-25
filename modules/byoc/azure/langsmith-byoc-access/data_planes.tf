@@ -77,14 +77,13 @@ resource "azurerm_role_definition" "langsmith_byoc" {
 }
 
 # Scoped to the data plane resource group only, never to the subscription.
-# LangSmith reads the description to verify that the owner of this
-# subscription is the LangSmith organization with this external ID.
+# The description labels the assignment with the LangSmith external ID.
 resource "azurerm_role_assignment" "langsmith_byoc" {
   for_each = var.data_planes
 
   scope              = azurerm_resource_group.data_plane[each.key].id
   role_definition_id = azurerm_role_definition.langsmith_byoc[each.key].role_definition_resource_id
-  principal_id       = local.langsmith_service_principal_object_id
+  principal_id       = local.langsmith_principal_id
   principal_type     = "ServicePrincipal"
   description        = var.external_id
 }
@@ -96,7 +95,7 @@ resource "azurerm_role_assignment" "langsmith_user_access_administrator" {
 
   scope                = azurerm_resource_group.data_plane[each.key].id
   role_definition_name = "User Access Administrator"
-  principal_id         = local.langsmith_service_principal_object_id
+  principal_id         = local.langsmith_principal_id
   principal_type       = "ServicePrincipal"
   description          = var.external_id
 }
