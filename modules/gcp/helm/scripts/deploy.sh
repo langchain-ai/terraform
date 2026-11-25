@@ -39,18 +39,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 
-# Defined here rather than further down because CHART_VERSION resolution below
-# needs it, and the chart-line guard runs before the old definition site.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
+# Sourced here because CHART_VERSION resolution below needs _parse_tfvar.
+source "$INFRA_DIR/scripts/_tfvars.sh"
 VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
@@ -183,12 +173,6 @@ if [[ -n "$_legacy_files" ]]; then
   echo "       files listed above and re-run 'make init-values' to regenerate them." >&2
   exit 1
 fi
-
-# ── tfvars helpers ────────────────────────────────────────────────────────────
-# Values are cut at the closing quote, or at an inline # for bare booleans and
-# numbers, so a commented flag line still reads as a flag. Keep identical to the
-# other copies of this function.
-_tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
 
 # SmithDB on this module needs chart 0.17, which the line guard above already
 # guarantees for every deploy, so there is no SmithDB-specific version gate

@@ -111,6 +111,50 @@ run "names_and_versions_reject_a_malformed_value" {
   ]
 }
 
+# The keys are valid here, so var.labels can fail only on its value validation.
+run "label_values_reject_what_gcp_cannot_store" {
+  command = plan
+
+  variables {
+    labels      = { "team" = "name@example.com" }
+    owner       = "Name.Surname"
+    cost_center = "-engineering"
+  }
+
+  expect_failures = [
+    var.labels,
+    var.owner,
+    var.cost_center,
+  ]
+}
+
+# name_prefix becomes the name-prefix label, which Kubernetes rejects when it
+# ends in a hyphen.
+run "name_prefix_rejects_a_trailing_hyphen" {
+  command = plan
+
+  variables {
+    name_prefix = "myco-"
+  }
+
+  expect_failures = [
+    var.name_prefix,
+  ]
+}
+
+run "name_prefix_accepts_inner_hyphens_up_to_11_characters" {
+  command = plan
+
+  variables {
+    name_prefix = "my-company1"
+  }
+
+  assert {
+    condition     = local.common_labels["name-prefix"] == "my-company1"
+    error_message = "An 11-character name_prefix with an inner hyphen should pass validation."
+  }
+}
+
 run "cidrs_reject_a_non_cidr" {
   command = plan
 

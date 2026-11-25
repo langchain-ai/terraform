@@ -8,7 +8,7 @@ TEST_SHELL="${1:-bash}"
 TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 mkdir -p "$TEST_TMP/bin" "$TEST_TMP/infra/scripts" "$TEST_TMP/store"
-cp "$SCRIPT_DIR/setup-env.sh" "$TEST_TMP/infra/scripts/"
+cp "$SCRIPT_DIR/setup-env.sh" "$SCRIPT_DIR/_tfvars.sh" "$TEST_TMP/infra/scripts/"
 cat > "$TEST_TMP/infra/terraform.tfvars" <<'EOF'
 project_id = "secret-regression"
 name_prefix = "sm-regression"
