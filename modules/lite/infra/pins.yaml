@@ -22,6 +22,8 @@ charts:
   postgres-exporter: { repo: https://prometheus-community.github.io/helm-charts, chart: prometheus-postgres-exporter, version: "~8.3.0" }
 
 images:
+  # Postgres, and what waits for it before the SmithDB metastore migration: one image, already on the box.
+  postgres: docker.io/library/postgres:18.6
   cloudflared: docker.io/cloudflare/cloudflared:2026.10.0
 
 # The chart's observability bundle at the installed langsmith release ({release}): its Grafana 13

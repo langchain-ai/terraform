@@ -96,9 +96,18 @@ locals {
         enabled   = true
         topology  = "unified"
         langsmith = { ingestion = { enabled = true }, query = { enabled = true } }
-        # Retried, not one-shot: its first connection to Postgres, milliseconds after it starts during the
-        # install, was refused on every attempt on magus (2026-11-24) while Postgres took others.
-        metastoreMigration = { job = { backoffLimit = 4 } }
+        # The migration connects within milliseconds of starting and gives up on the first refusal. A new
+        # pod is refused until k3s's network policy admits its IP, so all five attempts failed on magus
+        # while older pods reached Postgres (2026-11-24). It starts once Postgres accepts this pod.
+        metastoreMigration = { job = { initContainers = [{
+          name    = "wait-for-postgres"
+          image   = local.pins.images.postgres
+          command = ["sh", "-c", "until pg_isready -q -h ${local.postgres.host} -p ${local.postgres.port}; do sleep 1; done"]
+          resources = {
+            requests = { cpu = "10m", memory = "16Mi" }
+            limits   = { cpu = "100m", memory = "64Mi" }
+          }
+        }] } }
         config = {
           existingSecretName = "smithdb-config"
           metastore = {
@@ -147,7 +156,7 @@ locals {
     datastoreLabel    = merge({ "langsmith.lab/datastore" = "true" }, local.instance_label)
     # The exporters read the stores from the observability namespace.
     allowedNamespaces = [local.ns.langsmith, local.ns.observe]
-    postgres = { instances = {
+    postgres = { image = local.pins.images.postgres, instances = {
       langsmith = {
         enabled        = true
         namespace      = local.ns.data

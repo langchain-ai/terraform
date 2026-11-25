@@ -74,11 +74,15 @@ run "every_langsmith_service_runs_the_one_replica_the_plan_sized" {
   }
 }
 
-run "the_metastore_migration_retries" {
+run "the_metastore_migration_waits_for_postgres" {
   command = plan
   assert {
-    condition     = output.values.langsmith.values.smithdb.metastoreMigration.job.backoffLimit == 4
-    error_message = "the metastore migration should retry, not fail on its first refused connection."
+    condition = (
+      output.values.langsmith.values.smithdb.metastoreMigration.job.initContainers[0].image == output.values.datastores.values.postgres.image
+      && strcontains(output.values.langsmith.values.smithdb.metastoreMigration.job.initContainers[0].command[2], "pg_isready -q -h postgres-langsmith.")
+      && !can(output.values.langsmith.values.smithdb.metastoreMigration.job.backoffLimit)
+    )
+    error_message = "the metastore migration should start only once Postgres accepts its pod, with the image Postgres runs, and keep the chart's one attempt."
   }
 }
 
