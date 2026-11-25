@@ -83,11 +83,15 @@ def the_rest(p: dict, outputs: dict, cloud: str) -> None:
 
 
 def changes(plan: dict) -> dict:
+    """What the plan adds, changes and destroys, and how many outputs change. The outputs count: the
+    Helm values and the bundle are outputs, and a plan that changed only them read as nothing to apply,
+    so make up sent the bundle of the last apply (magus, 2026-11-24)."""
     counts = {"create": 0, "update": 0, "delete": 0}
     for change in plan.get("resource_changes", []):
         for action in change["change"]["actions"]:
             if action in counts:
                 counts[action] += 1
+    counts["outputs"] = sum(o["actions"] != ["no-op"] for o in plan.get("output_changes", {}).values())
     return counts
 
 
@@ -105,9 +109,16 @@ def main() -> int:
     retention(p["retention"])
     the_rest(p, outputs, cloud)
     counts = changes(plan)
-    field("changes", f"{counts['create']} to add, {counts['update']} to change, {counts['delete']} to destroy")
+    outputs = f"; {counts['outputs']} outputs change (the install's values)" if counts["outputs"] else ""
+    field("changes", f"{counts['create']} to add, {counts['update']} to change, {counts['delete']} to destroy{outputs}")
+    return 0
+
+
+def count() -> int:
+    """make up's question: the number of changes to apply, outputs included."""
+    print(sum(changes(json.load(sys.stdin)).values()))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(count() if sys.argv[1:] == ["--count"] else main())

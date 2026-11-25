@@ -60,7 +60,7 @@ ask_secret() {
   printf '%s' "${value:-$current}"
 }
 
-# Shared by plan and up. PLAN_CHANGES counts the resources the plan adds, changes or destroys.
+# Shared by plan and up. PLAN_CHANGES is what the plan would apply, outputs included (summary.py, changes).
 plan_and_summarise() {
   settings
   license
@@ -73,8 +73,7 @@ plan_and_summarise() {
   local json
   json="$(tf show -json "$PLAN_FILE")"
   python3 "$LITE/lib/summary.py" <<<"$json"
-  PLAN_CHANGES="$(python3 -c 'import json,sys
-print(sum(a in ("create", "update", "delete") for c in json.load(sys.stdin).get("resource_changes", []) for a in c["change"]["actions"]))' <<<"$json")"
+  PLAN_CHANGES="$(python3 "$LITE/lib/summary.py" --count <<<"$json")"
 }
 
 # up applies the plan when there is anything to apply, then installs. The install is safe to run again,

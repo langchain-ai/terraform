@@ -30,7 +30,8 @@ def plan(cloud: str = "baremetal", set_by_person: bool = True, cost: bool = Fals
     }
     outputs = {"plan": {"value": p}, "instance": {"value": {"cloud": cloud}}, "ssh": {"value": {"host": "magus"}}, "url": {"value": "http://localhost:8080"}}
     changes = [{"change": {"actions": ["create"]}}, {"change": {"actions": ["delete", "create"]}}, {"change": {"actions": ["no-op"]}}]
-    return {"planned_values": {"outputs": outputs}, "resource_changes": changes}
+    output_changes = {"values": {"actions": ["update"]}, "url": {"actions": ["no-op"]}}
+    return {"planned_values": {"outputs": outputs}, "resource_changes": changes, "output_changes": output_changes}
 
 
 def printed(doc: dict) -> tuple[int, str]:
@@ -44,7 +45,7 @@ class Summary(unittest.TestCase):
     def test_a_box_shows_its_fit_its_disk_and_its_changes(self) -> None:
         code, text = printed(plan())
         self.assertEqual(code, 0)
-        for line in ("m: 8 vCPU, 64 GiB, on magus", "system's 640 GiB disk, 79% used", "not running", "code evaluators", "2 to add, 0 to change, 1 to destroy", "while make access runs"):
+        for line in ("m: 8 vCPU, 64 GiB, on magus", "system's 640 GiB disk, 79% used", "not running", "code evaluators", "2 to add, 0 to change, 1 to destroy; 1 outputs change", "while make access runs"):
             self.assertIn(line, text)
 
     def test_retention_left_at_the_defaults_is_said_loudly(self) -> None:
@@ -66,6 +67,13 @@ class Summary(unittest.TestCase):
     def test_a_plan_without_the_sizing_output_fails(self) -> None:
         code, _ = printed({"planned_values": {"outputs": {}}})
         self.assertEqual(code, 1)
+
+    def test_a_plan_that_changes_only_the_values_has_something_to_apply(self) -> None:
+        doc = {"resource_changes": [{"change": {"actions": ["no-op"]}}], "output_changes": {"values": {"actions": ["update"]}}}
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(doc))), redirect_stdout(out):
+            summary.count()
+        self.assertEqual(out.getvalue().strip(), "1")
 
     def test_share_colours_by_how_full(self) -> None:
         self.assertIn("(50%)", summary.share(1, 2, "vCPU"))
