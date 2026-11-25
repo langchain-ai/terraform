@@ -303,3 +303,18 @@ run "engine_inputs_reject_malformed_values" {
     var.langsmith_engine_usage_signing_secret,
   ]
 }
+
+run "engine_and_sandboxes_support_alb_only" {
+  command = plan
+
+  variables {
+    enable_envoy_gateway = false
+    enable_sandboxes     = true
+    enable_engine        = true
+  }
+
+  assert {
+    condition     = length(aws_vpc_security_group_ingress_rule.alb_to_frontend) == 1 && length(aws_iam_role.engine) == 1
+    error_message = "Engine and Sandboxes must plan successfully with direct frontend routing."
+  }
+}

@@ -80,13 +80,13 @@ variable "bucket_suffix" {
 
 variable "enable_envoy_gateway" {
   type        = bool
-  description = "When true, provisions a target group for the Envoy Gateway proxy and sets the ALB listener default action to forward to it. ALB becomes the external entry point; Envoy proxy NLB stays internal."
+  description = "When true, provisions a target group for the Envoy Gateway proxy and sets the ALB listener default action to forward to it. The ALB forwards directly to Envoy proxy pod IPs."
   default     = false
 }
 
 variable "enable_istio_gateway" {
   type        = bool
-  description = "When true, provisions a target group for the Istio ingress gateway and sets the ALB listener default action to forward to it. ALB becomes the external entry point; Istio NLB stays internal."
+  description = "When true, provisions a target group for the Istio ingress gateway and sets the ALB listener default action to forward to it. The ALB forwards directly to Istio gateway pod IPs."
   default     = false
 }
 
