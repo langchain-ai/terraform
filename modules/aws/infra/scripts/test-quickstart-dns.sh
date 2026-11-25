@@ -327,6 +327,35 @@ run_wizard "update mode can turn SmithDB off after a warning" "$OPTOUT_INFRA" "$
 has_line "SmithDB is off after the update" "$OPTOUT_INFRA/terraform.tfvars" 'enable_smithdb                        = false'
 log_has "turning SmithDB off warns about its data" "$TMP/disable.log" "disabling SmithDB may remove its metastore"
 
+echo "9. Fleet, Chat and Insights storage is no longer asked, and 0.17 settings stop the wizard"
+for key in fleet_storage polly_storage insights_storage enable_standalone_polly enable_standalone_insights; do
+  lacks_key "a new install does not write $key" "$SMITHDB_INFRA/terraform.tfvars" "$key"
+done
+STOP_INFRA="$TMP/addon-stop"
+for case in 'polly_storage = "in-cluster"' 'enable_standalone_insights = true'; do
+  mkdir -p "$STOP_INFRA"
+  { cat "$SMITHDB_INFRA/terraform.tfvars"; printf '%s\n' "$case"; } > "$STOP_INFRA/terraform.tfvars"
+  write_update_defaults "$TMP/addon-stop.answers" true
+  if INFRA_DIR="$STOP_INFRA" bash "$SRC" < "$TMP/addon-stop.answers" > "$TMP/addon-stop.log" 2>&1; then
+    bad "update mode stops on $case (the wizard finished)"
+  else
+    log_has "update mode stops on $case" "$TMP/addon-stop.log" "${case%% *} "
+  fi
+  grep -Fqx "$case" "$STOP_INFRA/terraform.tfvars" \
+    && ok "the stop on $case leaves terraform.tfvars as it was" \
+    || bad "the stop on $case rewrote terraform.tfvars"
+done
+KEEP_INFRA="$TMP/addon-keep"
+mkdir -p "$KEEP_INFRA"
+{ cat "$SMITHDB_INFRA/terraform.tfvars"; printf 'polly_storage = "external"\n'; } > "$KEEP_INFRA/terraform.tfvars"
+write_update_defaults "$TMP/addon-keep.answers" true
+run_wizard "update mode accepts polly_storage = external" "$KEEP_INFRA" "$TMP/addon-keep.answers" "$TMP/addon-keep.log"
+if awk '$1 == "polly_storage" { found = ($3 == "\"external\"") } END { exit !found }' "$KEEP_INFRA/terraform.tfvars"; then
+  ok "update mode keeps the confirmation that deploy.sh reads"
+else
+  bad "update mode keeps the confirmation that deploy.sh reads"
+fi
+
 echo ""
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

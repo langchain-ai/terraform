@@ -334,6 +334,40 @@ else
   echo "PASS: no sizing profile sets SmithDB keys, and the SmithDB overlay sets the small tier"
 fi
 
+# From 0.18 Fleet, Chat and Insights run only on the shared RDS and ElastiCache.
+# Render the three overlays with deploy.sh's storage values: the chart must
+# accept them, create none of its in-cluster add-on StatefulSets, and read each
+# add-on's two Secrets from Terraform.
+source "$SCRIPT_DIR/_addon-storage.sh"
+VALUES_ARGS=(-f "$EXAMPLES_DIR/langsmith-values.yaml" -f "$TEST_TMP/overrides.yaml"
+  -f "$EXAMPLES_DIR/langsmith-values-insights.yaml" -f "$EXAMPLES_DIR/langsmith-values-polly.yaml"
+  -f "$EXAMPLES_DIR/langsmith-values-fleet.yaml"
+  --set polly.enabled=true --set insights.enabled=true --set hostBackend.enabled=true
+  --set fleet.encryptionKey=values-test --set polly.encryptionKey=values-test
+  --set insights.encryptionKey=values-test)
+_addon_storage_values true true true
+out="$TEST_TMP/addon-storage.yaml"
+problems=()
+if ! helm template langsmith "$chart" --namespace langsmith "${VALUES_ARGS[@]}" > "$out" 2> "$out.err"; then
+  problems+=("the chart rejected the values: $(head -1 "$out.err")")
+else
+  for addon in fleet polly insights; do
+    for store in postgres redis; do
+      [[ -z "$(manifest "$out" StatefulSet "langsmith-standalone-$addon-$store")" ]] \
+        || problems+=("the chart still creates the in-cluster StatefulSet langsmith-standalone-$addon-$store")
+      grep -q "name: langsmith-$addon-$store\$" "$out" \
+        || problems+=("nothing reads the Secret langsmith-$addon-$store")
+    done
+  done
+fi
+if (( ${#problems[@]} )); then
+  echo "FAIL: Fleet, Chat and Insights use the shared RDS and ElastiCache"
+  printf '      %s\n' "${problems[@]}"
+  failures=$((failures + 1))
+else
+  echo "PASS: Fleet, Chat and Insights use the shared RDS and ElastiCache"
+fi
+
 if (( failures )); then
   echo "$failures values check(s) failed"
   exit 1

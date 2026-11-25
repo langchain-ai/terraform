@@ -1106,71 +1106,39 @@ echo ""
 
 _ex_deploys=$(_existing "enable_deployments" "false")
 _ex_fleet=$(_existing "enable_fleet" "false")
-_ex_fleet_storage=$(_existing "fleet_storage" "external")
-_ex_fleet_external="false"
-[[ "$_ex_fleet_storage" == "external" ]] && _ex_fleet_external="true"
-_ex_insights_primary=$(_existing "enable_insights" "false")
-_ex_standalone_insights=$(_existing "enable_standalone_insights" "false")
-_ex_insights_storage=$(_existing "insights_storage" "")
-if [[ -z "$_ex_insights_storage" ]]; then
-  _ex_insights_storage="in-cluster"
-  [[ "$_ex_standalone_insights" == "true" ]] && _ex_insights_storage="external"
-fi
-_ex_insights_external="false"
-[[ "$_ex_insights_storage" == "external" ]] && _ex_insights_external="true"
-_ex_insights="false"
-[[ "$_ex_insights_primary" == "true" || "$_ex_standalone_insights" == "true" ]] && _ex_insights="true"
-_ex_insights_storage_guard="$_ex_insights"
-_ex_polly_primary=$(_existing "enable_polly" "false")
-_ex_standalone_polly=$(_existing "enable_standalone_polly" "false")
-_ex_polly_storage=$(_existing "polly_storage" "")
-if [[ -z "$_ex_polly_storage" ]]; then
-  _ex_polly_storage="in-cluster"
-  [[ "$_ex_standalone_polly" == "true" ]] && _ex_polly_storage="external"
-fi
-_ex_polly_external="false"
-[[ "$_ex_polly_storage" == "external" ]] && _ex_polly_external="true"
-_ex_polly="false"
-[[ "$_ex_polly_primary" == "true" || "$_ex_standalone_polly" == "true" ]] && _ex_polly="true"
-_ex_polly_storage_guard="$_ex_polly"
+_ex_insights=$(_existing "enable_insights" "false")
+_ex_polly=$(_existing "enable_polly" "false")
+# deploy.sh reads polly_storage / insights_storage = "external" as confirmation that
+# a 0.17 install moved that add-on's data, so update mode keeps the line.
+ADDON_STORAGE_HCL=""
+for _key in polly_storage insights_storage; do
+  if [[ "$(_existing "$_key" "")" == "external" ]]; then
+    ADDON_STORAGE_HCL+="${_key} = \"external\""$'\n'
+  fi
+done
+
+# Fleet, Chat and Insights always use the shared RDS and ElastiCache from 0.18.
+for _key in fleet_storage polly_storage insights_storage; do
+  if [[ "$(_existing "$_key" "external")" == "in-cluster" ]]; then
+    _red "  ERROR: $_key = \"in-cluster\" was removed in 0.18."
+    printf "  Move that data first, then set it to \"external\": the next deploy points the add-on\n"
+    printf "  at a new, empty database on RDS. See \"Move Fleet, Chat or Insights data to RDS\" in README.md.\n"
+    exit 1
+  fi
+done
+for _key in enable_standalone_polly enable_standalone_insights; do
+  if [[ "$(_existing "$_key" "false")" == "true" ]]; then
+    _red "  ERROR: $_key was removed in 0.18."
+    _feature="${_key#enable_standalone_}"
+    printf "  Replace it with enable_%s = true and %s_storage = \"external\" in terraform.tfvars.\n" "$_feature" "$_feature"
+    exit 1
+  fi
+done
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_FLEET="false"
-FLEET_STORAGE="$_ex_fleet_storage"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
-INSIGHTS_STORAGE="$_ex_insights_storage"
-POLLY_STORAGE="$_ex_polly_storage"
-ENABLE_INSIGHTS_PRIMARY="false"; ENABLE_POLLY_PRIMARY="false"
-ENABLE_STANDALONE_POLLY="false"; ENABLE_STANDALONE_INSIGHTS="false"
 ENABLE_SANDBOXES="false"
-
-_select_feature_storage() {
-  local feature="$1" existing_enabled="$2" existing_external="$3" storage_key="$4" question_number="$5"
-  local default=1 selected="in-cluster" current="in-cluster"
-
-  if [[ "$existing_enabled" == "true" && "$existing_external" == "true" ]]; then
-    default=2
-    current="external"
-  elif [[ "$existing_enabled" != "true" ]]; then
-    default=2
-  fi
-
-  local storage_choice_arg recommended=2
-  storage_choice_arg=$(_choice_arg "$storage_key")
-  _ask_choice "$storage_choice_arg" "$default" --recommended "$recommended" "$(_numbered_prompt "$question_number" "$feature storage (Postgres and Redis):")" \
-    "In-cluster — dedicated pods with persistent volumes" \
-    "External — use the same RDS and ElastiCache as LangSmith; $feature gets a separate Postgres database and Redis index"
-  [[ "$_CHOICE" == "2" ]] && selected="external"
-
-  # Helm does not move feature data between database locations during an upgrade.
-  if [[ "$UPDATE_MODE" == "true" && "$existing_enabled" == "true" && "$selected" != "$current" ]]; then
-    _red "  ERROR: Changing $feature storage requires a separate data migration."
-    printf "  Keep the current %s storage here and migrate it separately.\n" "$current"
-    exit 1
-  fi
-
-  [[ "$selected" == "external" ]]
-}
 
 _ask_yn "$(_choice_arg "enable_deployments")" "$(_numbered_prompt "13.1" "Enable LangSmith Deployments?" " — listener + operator + host-backend")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
@@ -1181,60 +1149,22 @@ _ask_yn "$(_choice_arg "enable_fleet")" "$(_numbered_prompt "13.2" "Enable Fleet
   "$([[ "$_ex_fleet" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_FLEET="true" || ENABLE_FLEET="false"
 
-if [[ "$ENABLE_FLEET" == "true" ]]; then
-  if _select_feature_storage "Fleet" "$_ex_fleet" "$_ex_fleet_external" "fleet_storage" "13.3"; then
-    FLEET_STORAGE="external"
-  else
-    FLEET_STORAGE="in-cluster"
-  fi
-fi
-
 echo ""
-_ask_yn "$(_choice_arg "enable_polly" "enable_standalone_polly")" "$(_numbered_prompt "13.4" "Enable LangSmith Chat (formerly Polly)?" " — chat for traces, threads, prompts, and experiments")" \
+_ask_yn "$(_choice_arg "enable_polly")" "$(_numbered_prompt "13.3" "Enable LangSmith Chat (formerly Polly)?" " — chat for traces, threads, prompts, and experiments")" \
   "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_POLLY="true" || ENABLE_POLLY="false"
 
-ENABLE_POLLY_PRIMARY="$ENABLE_POLLY"
-if [[ "$UPDATE_MODE" == "true" && "$_ex_polly" == "true" && "$ENABLE_POLLY" == "true" ]]; then
-  ENABLE_POLLY_PRIMARY="$_ex_polly_primary"
-fi
-
-# Existing features keep their storage model.
-# Newly enabled features follow the selected storage location; external storage requires both services to be external.
-if [[ "$ENABLE_POLLY" == "true" ]]; then
-  if _select_feature_storage "LangSmith Chat" "$_ex_polly_storage_guard" "$_ex_polly_external" "polly_storage" "13.5"; then
-    POLLY_STORAGE="external"
-    ENABLE_STANDALONE_POLLY="true"
-  else
-    POLLY_STORAGE="in-cluster"
-  fi
-fi
-
 echo ""
-_ask_yn "$(_choice_arg "enable_insights" "enable_standalone_insights")" "$(_numbered_prompt "13.6" "Enable Insights?" " — AI-powered trace analysis for patterns and failure modes")" \
+_ask_yn "$(_choice_arg "enable_insights")" "$(_numbered_prompt "13.4" "Enable Insights?" " — AI-powered trace analysis for patterns and failure modes")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
-
-ENABLE_INSIGHTS_PRIMARY="$ENABLE_INSIGHTS"
-if [[ "$UPDATE_MODE" == "true" && "$_ex_insights" == "true" && "$ENABLE_INSIGHTS" == "true" ]]; then
-  ENABLE_INSIGHTS_PRIMARY="$_ex_insights_primary"
-fi
-
-if [[ "$ENABLE_INSIGHTS" == "true" ]]; then
-  if _select_feature_storage "Insights" "$_ex_insights_storage_guard" "$_ex_insights_external" "insights_storage" "13.7"; then
-    INSIGHTS_STORAGE="external"
-    ENABLE_STANDALONE_INSIGHTS="true"
-  else
-    INSIGHTS_STORAGE="in-cluster"
-  fi
-fi
 
 echo ""
 printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
 printf "  ${DIM}external Redis instance for JuiceFS metadata. They also require a Linux${RESET}\n"
 printf "  ${DIM}KVM-compatible host. The matching Sandbox image is selected during deployment.${RESET}\n"
 echo ""
-if _ask_yn "$(_choice_arg "enable_sandboxes")" "$(_numbered_prompt "13.8" "Enable LangSmith Sandboxes?")" \
+if _ask_yn "$(_choice_arg "enable_sandboxes")" "$(_numbered_prompt "13.5" "Enable LangSmith Sandboxes?")" \
   "$([[ "$_ex_sandboxes" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SANDBOXES="true"
 fi
@@ -1341,11 +1271,8 @@ _show_summary() {
   _summary_section "13. Add-on Features"
   _summary_bool_row "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
   _summary_bool_row "Fleet:" "$ENABLE_FLEET"
-  [[ "$ENABLE_FLEET" == "true" ]] && _summary_row "Fleet storage:" "$FLEET_STORAGE"
   _summary_bool_row "LangSmith Chat (formerly Polly):" "$ENABLE_POLLY"
-  [[ "$ENABLE_POLLY" == "true" ]] && _summary_row "LangSmith Chat storage:" "$POLLY_STORAGE"
   _summary_bool_row "Insights:" "$ENABLE_INSIGHTS"
-  [[ "$ENABLE_INSIGHTS" == "true" ]] && _summary_row "Insights storage:" "$INSIGHTS_STORAGE"
   _summary_bool_row "Sandboxes:" "$ENABLE_SANDBOXES"
 }
 
@@ -1560,14 +1487,9 @@ sizing_profile = "${SIZING}"
 #------------------------------------------------------------------------------
 enable_deployments   = ${ENABLE_DEPLOYMENTS}
 enable_fleet         = ${ENABLE_FLEET}
-fleet_storage        = "${FLEET_STORAGE}"
-enable_insights      = ${ENABLE_INSIGHTS_PRIMARY}
-insights_storage     = "${INSIGHTS_STORAGE}"
-enable_polly         = ${ENABLE_POLLY_PRIMARY}
-polly_storage        = "${POLLY_STORAGE}"
-enable_standalone_polly = ${ENABLE_STANDALONE_POLLY}
-enable_standalone_insights = ${ENABLE_STANDALONE_INSIGHTS}
-enable_sandboxes = ${ENABLE_SANDBOXES}
+enable_insights      = ${ENABLE_INSIGHTS}
+enable_polly         = ${ENABLE_POLLY}
+${ADDON_STORAGE_HCL}enable_sandboxes = ${ENABLE_SANDBOXES}
 TFVARS
 
 if command -v terraform >/dev/null 2>&1; then

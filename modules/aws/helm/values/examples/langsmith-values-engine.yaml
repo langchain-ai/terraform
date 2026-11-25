@@ -41,8 +41,8 @@ engine:
 engineInsightsAgent:
   namePrefix: "standalone-insights"
 
-  # The same sizing as langsmith-values-standalone-insights.yaml. deploy.sh loads
-  # the Insights files after this file, so their settings win when Insights is on.
+  # The same sizing as langsmith-values-insights.yaml. deploy.sh loads the
+  # Insights file after this file, so its settings win when Insights is on.
   apiServer:
     deployment:
       resources:
@@ -63,8 +63,6 @@ engineInsightsAgent:
           cpu: "2"
           memory: 4Gi
 
-  # No postgres or redis block: Engine uses the chart's in-cluster PostgreSQL and
-  # Redis StatefulSets (an 8Gi PVC each on the default StorageClass). Insights can
-  # use external storage (insights_storage = "external"). Then deploy.sh points
-  # this shared deployment at the langsmith_insights database on the shared RDS
-  # and at a Redis DB on the shared ElastiCache. Engine uses them too.
+  # No postgres or redis block: init-values.sh and deploy.sh point this shared
+  # deployment at the langsmith_insights database on the shared RDS and at DB
+  # index 3 on the shared ElastiCache, whether or not Insights is on.

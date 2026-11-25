@@ -8,7 +8,6 @@
 # Prerequisites:
 #   - chart >= 0.15.0
 #   - Fleet entitlement in your LangSmith license
-#   - fleet_storage = "external" also requires external Postgres and Redis
 #   - TF_VAR_langsmith_agent_builder_encryption_key set (see infra/scripts/setup-env.sh).
 #     The historical environment-variable name is retained for compatibility.
 #

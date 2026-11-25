@@ -14,11 +14,9 @@
 #   5. langsmith-values-insights.yaml       — Insights (if enable_insights)
 #   6. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
 #   7. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
-#   8. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
-#   9. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
-#  10. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
-#  11. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
-#  12. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
+#   8. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
+#   9. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#  10. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -30,6 +28,8 @@ HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 source "$INFRA_DIR/scripts/_common.sh"
+# shellcheck source=_addon-storage.sh
+source "$SCRIPT_DIR/_addon-storage.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
@@ -192,13 +192,9 @@ _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 _enable_engine=false
 _tfvar_is_true "enable_engine" && _enable_engine=true
 _direct_polly_enabled=false
-if _tfvar_is_true "enable_polly" || _tfvar_is_true "enable_standalone_polly"; then
-  _direct_polly_enabled=true
-fi
+_tfvar_is_true "enable_polly" && _direct_polly_enabled=true
 _direct_insights_enabled=false
-if _tfvar_is_true "enable_insights" || _tfvar_is_true "enable_standalone_insights"; then
-  _direct_insights_enabled=true
-fi
+_tfvar_is_true "enable_insights" && _direct_insights_enabled=true
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
@@ -443,51 +439,13 @@ _enable_deployments=false
 _enable_insights=false
 _enable_polly=false
 _enable_fleet=false
-_enable_standalone_polly=false
-_enable_standalone_insights=false
 _enable_sandboxes=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
-_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
-_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
 _enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
-
-_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
-if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
-  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
-if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
-  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_polly" == "true" ]]; then
-  _enable_polly=true
-  _polly_storage="external"
-elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
-  _enable_standalone_polly=true
-fi
-
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
-if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
-  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_insights" == "true" ]]; then
-  _enable_insights=true
-  _insights_storage="external"
-elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
-  _enable_standalone_insights=true
-fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
@@ -542,15 +500,13 @@ echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 # The file must exist AND the corresponding flag must be true.
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
 # Engine loads before the Insights files: Engine and Insights share the
-# engineInsightsAgent deployment, so the Insights sizing and storage settings win.
+# engineInsightsAgent deployment, so the Insights sizing wins.
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
   "engine:engine:$_enable_engine"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
   "fleet:fleet:$_enable_fleet"
-  "standalone-polly:standalone_polly:$_enable_standalone_polly"
-  "standalone-insights:standalone_insights:$_enable_standalone_insights"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -593,74 +549,45 @@ else
   fi
 fi
 
-# The chart defaults Chat to enabled. Force the product and storage contract so
-# skipping a stale values file cannot enable Chat or select the wrong database.
+# The chart defaults Chat and Insights to enabled. Force their product flags so a
+# stale values file cannot turn either on.
 if [[ "$_enable_polly" == "true" ]]; then
   VALUES_ARGS+=(--set "polly.enabled=true")
-  if [[ "$_polly_storage" == "external" ]]; then
-    VALUES_ARGS+=(
-      --set "polly.postgres.external.enabled=true"
-      --set "polly.postgres.external.existingSecretName=langsmith-polly-postgres"
-      --set "polly.redis.external.enabled=true"
-      --set "polly.redis.external.existingSecretName=langsmith-polly-redis"
-    )
-  else
-    VALUES_ARGS+=(
-      --set "polly.postgres.external.enabled=false"
-      --set "polly.postgres.external.existingSecretName="
-      --set "polly.redis.external.enabled=false"
-      --set "polly.redis.external.existingSecretName="
-    )
-  fi
-  echo "  ✔ LangSmith Chat contract (${_polly_storage} Postgres/Redis)"
+  echo "  ✔ LangSmith Chat contract"
 else
   VALUES_ARGS+=(--set "polly.enabled=false")
   echo "  ○ LangSmith Chat disabled"
 fi
 
-# Insights defaults to enabled in the chart. Force both its product flag and
-# shared Engine/Insights storage so stale values cannot redirect its data.
 if [[ "$_enable_insights" == "true" ]]; then
   VALUES_ARGS+=(--set "insights.enabled=true")
-  if [[ "$_insights_storage" == "external" ]]; then
-    VALUES_ARGS+=(
-      --set "engineInsightsAgent.postgres.external.enabled=true"
-      --set "engineInsightsAgent.postgres.external.existingSecretName=langsmith-insights-postgres"
-      --set "engineInsightsAgent.redis.external.enabled=true"
-      --set "engineInsightsAgent.redis.external.existingSecretName=langsmith-insights-redis"
-    )
-  else
-    VALUES_ARGS+=(
-      --set "engineInsightsAgent.postgres.external.enabled=false"
-      --set "engineInsightsAgent.postgres.external.existingSecretName="
-      --set "engineInsightsAgent.redis.external.enabled=false"
-      --set "engineInsightsAgent.redis.external.existingSecretName="
-    )
-  fi
-  echo "  ✔ Insights contract (${_insights_storage} Postgres/Redis)"
+  echo "  ✔ Insights contract"
 else
   VALUES_ARGS+=(--set "insights.enabled=false")
   echo "  ○ Insights disabled"
 fi
 
-# Fleet always needs host-backend. Its storage mode must also override preserved
-# values files because init-values.sh intentionally does not replace them.
+# Fleet always needs host-backend.
 if [[ "$_enable_fleet" == "true" ]]; then
   VALUES_ARGS+=(--set "hostBackend.enabled=true")
-  if [[ "$_fleet_storage" == "external" ]]; then
-    VALUES_ARGS+=(
-      --set "fleet.postgres.external.enabled=true"
-      --set "fleet.postgres.external.existingSecretName=langsmith-fleet-postgres"
-      --set "fleet.redis.external.enabled=true"
-      --set "fleet.redis.external.existingSecretName=langsmith-fleet-redis"
-    )
-  else
-    VALUES_ARGS+=(
-      --set "fleet.postgres.external.enabled=false"
-      --set "fleet.redis.external.enabled=false"
-    )
-  fi
-  echo "  ✔ Fleet contract (host-backend; ${_fleet_storage} Postgres/Redis)"
+  echo "  ✔ Fleet contract (host-backend)"
+fi
+
+# Storage is set here too, not only in the values files, because init-values.sh
+# does not replace a values file that already exists.
+_engine_insights_agent=false
+[[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]] && _engine_insights_agent=true
+_unconfirmed_storage=()
+if [[ "$_enable_polly" == "true" && "$(_parse_tfvar polly_storage || true)" != "external" ]]; then
+  _unconfirmed_storage+=(polly)
+fi
+if [[ "$_engine_insights_agent" == "true" && "$(_parse_tfvar insights_storage || true)" != "external" ]]; then
+  _unconfirmed_storage+=(engineInsightsAgent)
+fi
+_addon_storage_cutover_check "$RELEASE_NAME" "$NAMESPACE" ${_unconfirmed_storage[@]+"${_unconfirmed_storage[@]}"} || exit 1
+_addon_storage_values "$_enable_fleet" "$_enable_polly" "$_engine_insights_agent"
+if [[ "$_enable_fleet" == "true" || "$_enable_polly" == "true" || "$_engine_insights_agent" == "true" ]]; then
+  echo "  ✔ Fleet, Chat, Insights and Engine storage (shared RDS and ElastiCache)"
 fi
 
 # Sizing: loaded last so it wins over addon defaults (e.g. polly maxScale).
