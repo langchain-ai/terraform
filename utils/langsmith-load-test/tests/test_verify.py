@@ -1,6 +1,7 @@
 import datetime
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 from uuid import uuid4
 
@@ -12,18 +13,23 @@ SINCE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
 
 class Counting(FakeClient):
-    """get_run_stats answers from a script: a number, or an exception to raise."""
+    """runs.query answers from a script: a number of runs, or an exception to raise, paged as the API pages."""
 
     def __init__(self, script: list) -> None:
         super().__init__()
         self.script = list(script)
+        self.runs_resource.query = self._scripted
 
-    def get_run_stats(self, **kwargs):
-        self.stats_calls.append(kwargs)
-        step = self.script.pop(0) if len(self.script) > 1 else self.script[0]
-        if isinstance(step, Exception):
-            raise step
-        return {"run_count": step}
+    async def _scripted(self, **kwargs):
+        if not kwargs.get("cursor"):
+            self.stats_calls.append(kwargs)
+            step = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+            if isinstance(step, Exception):
+                raise step
+            self.remaining = step
+        size = min(self.remaining, kwargs["page_size"])
+        self.remaining -= size
+        return SimpleNamespace(items=[SimpleNamespace(id=i) for i in range(size)], next_cursor="more" if self.remaining else None)
 
 
 class StoredCountsTest(unittest.IsolatedAsyncioTestCase):
@@ -37,9 +43,13 @@ class StoredCountsTest(unittest.IsolatedAsyncioTestCase):
         for call in (roots, everything):
             self.assertEqual(call["project_ids"], [str(project)])
             self.assertEqual(call["filter"], run_filter("tid"))
-            self.assertEqual(call["start_time"], SINCE.isoformat())
+            self.assertEqual(call["min_start_time"], SINCE)
         self.assertIn('"load_test_id"', run_filter("tid"))
         self.assertIn('"tid"', run_filter("tid"))
+
+    async def test_a_count_past_one_page_reads_every_page(self) -> None:
+        with mock.patch.object(verify, "PAGE_SIZE", 3):
+            self.assertEqual(await verify.stored_counts(Counting([4, 10]), [uuid4()], "tid", SINCE), (4, 10))
 
 
 class SettleTest(unittest.IsolatedAsyncioTestCase):

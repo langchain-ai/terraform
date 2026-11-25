@@ -51,8 +51,18 @@ class FakeClient(Client):
 
     async def _runs_query(self, **kwargs: Any) -> Any:
         self.queries.append(kwargs)
-        ids = kwargs["ids"] if self.readable else []
-        return SimpleNamespace(items=[SimpleNamespace(id=run_id) for run_id in ids])
+        if "ids" in kwargs:
+            ids = kwargs["ids"] if self.readable else []
+            return SimpleNamespace(items=[SimpleNamespace(id=run_id) for run_id in ids], next_cursor=None)
+        self.events.append("stats")
+        if self.stats_error:
+            raise self.stats_error
+        ours = [run for run in self.created if "load_test_id" in run["extra"]["metadata"]]
+        runs = [run for run in ours if kwargs.get("is_root") is not True or run.get("parent_run_id") is None]
+        start, size = int(kwargs.get("cursor") or 0), kwargs["page_size"]
+        rest = runs[start:start + size]
+        more = start + size < len(runs)
+        return SimpleNamespace(items=[SimpleNamespace(id=r.get("id")) for r in rest], next_cursor=str(start + size) if more else None)
 
     def create_run(self, **kwargs: Any) -> None:
         if self.create_run_error:

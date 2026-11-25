@@ -194,8 +194,15 @@ class VerifyThroughTheReportTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_runs_the_project_did_not_store_are_missing(self) -> None:
         client = FakeClient()
-        real = client.get_run_stats
-        client.get_run_stats = lambda **kw: {"run_count": real(**kw)["run_count"] - 2}  # type: ignore[method-assign]
+        real = client.runs_resource.query
+
+        async def short(**kw: object) -> object:
+            page = await real(**kw)
+            if "ids" not in kw and not kw.get("is_root"):
+                page.items = page.items[:-2]
+            return page
+
+        client.runs_resource.query = short
         _, report = await run(client, run_limit=5, users=1, lag_sample=0)
         self.assertEqual(report["stored"]["missing_runs"], 2)
         self.assertFalse(report["passed"])
