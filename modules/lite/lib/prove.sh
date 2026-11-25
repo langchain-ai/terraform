@@ -82,25 +82,58 @@ prove() {
 # process of its own, so a size that fails is recorded and the next one still runs.
 cmd_experiment() {
   need terraform python3 ssh kubectl uv
-  local sizes="${SIZES:-xs s m l}" steps="${STEPS:-1 2 3 4}" minutes="${MINUTES:-10}" name typed out size
+  local name typed out size sizes steps minutes
   name="$(tf_eval var.name)"
-  out="$BUILD/experiment/$(date -u +%Y%m%dT%H%M%SZ)"
+  out="$(experiment_folder)" || exit 1
+  sizes="$(experiment_setting "$out" SIZES)" steps="$(experiment_setting "$out" STEPS)" minutes="$(experiment_setting "$out" MINUTES)"
   heading "experiment" "sizes $sizes: a clean install each, verify, then $minutes minutes at ${steps// /, } times its design rate"
   field "install" "$name, deleted and installed again for each size"
   field "results" "${out#"$LITE"/}"
+  for size in $sizes; do [[ -e "$out/$size/finished" ]] && field "$size" "finished: kept, not run again"; done
   field "root" "each size asks for root twice: to remove the last install and to install the next"
   printf '\n'
   # Each size starts from no data, so the sizes differ in one thing; that deletes every trace each time.
   typed="${CONFIRM:-}"
   [[ -n "$typed" ]] || read -r -p "  Type the install's name to delete it for each size: " typed
   [[ "$typed" == "$name" ]] || fail "nothing changed" "the name did not match."
-  mkdir -p "$out"
   for size in $sizes; do
+    [[ -e "$out/$size/finished" ]] && continue
+    # A size stopped part way is measured again from a clean install: its partial runs were taken on a
+    # box holding data the rerun will not, so keeping both would put two unequal copies in the report.
+    rm -rf "${out:?}/$size"
     experiment_size "$size" "$out/$size" "$name" "$steps" "$minutes" || warn "$size stopped early: its folder holds what it measured"
+  done
+  for size in $sizes; do
+    # No report until every size finished: the report is what marks the experiment done.
+    [[ -e "$out/$size/finished" ]] || fail "$size did not finish" "make experiment measures it again; the sizes that finished are kept."
   done
   report "$out/report" "$out"/*/
   next "make up   (the last size stays installed and held to its machine until a plain make up lifts the cap)"
 }
+
+# The experiment to run: the newest under build/experiment with no report yet, continued with the
+# settings it started with, or a new one when every earlier one finished or NEW=1. Stopping a run
+# (Ctrl-C, a sleeping Mac) then costs the size it was on, not the sizes before it.
+experiment_folder() {
+  local last out
+  last="$(find "$BUILD/experiment" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)"
+  # One with no settings file was started before experiments could continue: it starts again.
+  if [[ -n "$last" && -e "$last/settings" && ! -e "$last/report" && "${NEW:-}" != 1 ]]; then
+    local key
+    for key in SIZES STEPS MINUTES; do
+      [[ -z "${!key:-}" || "${!key}" == "$(experiment_setting "$last" "$key")" ]] ||
+        fail "$key differs from the unfinished experiment ${last#"$LITE"/}" "NEW=1 starts a new one with $key=${!key}."
+    done
+    echo "$last"
+    return 0
+  fi
+  out="$BUILD/experiment/$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$out"
+  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 2 3 4}" "${MINUTES:-10}" >"$out/settings"
+  echo "$out"
+}
+
+experiment_setting() { awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$1/settings"; }
 
 experiment_size() {
   local size="$1" dir="$2" name="$3" steps="$4" minutes="$5" design k
@@ -119,6 +152,8 @@ experiment_size() {
       warn "$size at ${k}x did not pass; its results are in ${dir#"$LITE"/}/${k}x"
   done
   report "$dir/report" "$dir"/*/ --design "$design"
+  # Written last: a size without it was stopped, and the next make experiment measures it again.
+  touch "$dir/finished"
 }
 
 # The load test's report of the runs in the folders given: figures in the LangChain brand (the faces and

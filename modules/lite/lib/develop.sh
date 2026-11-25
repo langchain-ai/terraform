@@ -64,11 +64,21 @@ render_one() {
   helm template "$name" "${args[@]}" -n "$ns" -f "$work/$name.json" -f "$work/$name.layer.yaml"
 }
 
+# The files git tracks, as CI sees them: -recursive also read a person's own terraform.tfvars, which
+# is gitignored, and failed check on a hand-typed box = "l" (magus, 2026-11-25).
+check_fmt() {
+  local files
+  files="$(cd "$INFRA" && git ls-files '*.tf' '*.tfvars' '*.tftest.hcl')"
+  [[ -n "$files" ]] || { echo "git lists no Terraform files under infra"; return 1; }
+  # shellcheck disable=SC2086  # one file a word; none has a space
+  (cd "$INFRA" && terraform fmt -check $files)
+}
+
 cmd_check() {
   need terraform python3 shellcheck uv
   heading "check" "offline, as CI runs it"
   start_log "$BUILD/logs"
-  run fmt "terraform fmt" terraform -chdir="$INFRA" fmt -check -recursive
+  run fmt "terraform fmt" check_fmt
   run validate "validate and tflint (scripts/check.sh)" bash "$LITE/../../scripts/check.sh" modules/lite
   run tests "the plan tests (scripts/plan-tests.sh)" bash "$LITE/../../scripts/plan-tests.sh" modules/lite
   run shell "shellcheck" shellcheck -S style -x "$LITE/bin/lite" "$LITE"/lib/*.sh "$LITE"/box/*.sh
