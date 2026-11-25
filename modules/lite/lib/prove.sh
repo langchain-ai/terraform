@@ -39,20 +39,25 @@ prove() {
   umask 077
   mkdir -p "$work"
   start_log "$BUILD/logs"
-  # Expanded now: a local is gone by the time EXIT runs (see install_bundle).
+  # $work expanded now, a local being gone by the time EXIT runs (see install_bundle); TUNNELS then.
+  # Each tunnel is disowned and killed by its pid: a job killed at exit printed bash's "Terminated"
+  # notice with its whole command line after a passing verify (magus, 2026-11-25).
+  TUNNELS=()
   # shellcheck disable=SC2064
-  trap "jobs -p | xargs kill 2>/dev/null; rm -f '$work/kubeconfig'" EXIT
+  trap "kill \"\${TUNNELS[@]}\" 2>/dev/null; rm -f '$work/kubeconfig'" EXIT
   if [[ "$(tf_eval var.cloud)" != cluster ]]; then
     ssh_from_outputs
     kport="$(free_port)"
     run kubeconfig "the ssh user's kubeconfig, pointed here" box_kubeconfig "$work/kubeconfig" "$kport"
     export KUBECONFIG="$work/kubeconfig"
     ssh "${SSH_OPTS[@]}" -N -o ExitOnForwardFailure=yes -L "$kport:127.0.0.1:6443" "$SSH_TARGET" &
+    TUNNELS+=("$!") && disown
     run kube "reach the box's Kubernetes API over ssh" wait_for kubectl get --raw /readyz
   fi
   # Port 0: kubectl binds a free port itself. One picked here and bound later could be taken first by
   # another local user, who would receive the admin's login (security review, 2026-11-24).
   kubectl -n "$(json_get langsmith <<<"$ns")" port-forward svc/langsmith-frontend "0:$(frontend_port "$ns")" >"$work/port-forward.log" 2>&1 &
+  TUNNELS+=("$!") && disown
   run forward "a tunnel to LangSmith's frontend" wait_for grep -q '^Forwarding from 127.0.0.1:' "$work/port-forward.log"
   wport="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$work/port-forward.log" | head -1)"
   run frontend "LangSmith answers through it" wait_for curl -sf -o /dev/null "http://127.0.0.1:$wport/api/v1/info"

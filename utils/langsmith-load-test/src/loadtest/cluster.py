@@ -315,15 +315,22 @@ class Collector:
         self._cpu(s, pods)
         return s
 
+    def _record(self) -> None:
+        s = self.sample()
+        self.samples.append(s)
+        if self.series_path is not None:
+            with self.series_path.open("a") as out:
+                out.write(json.dumps(s) + "\n")
+
     def _loop(self) -> None:
-        while not self._stop.is_set():
+        # One more reading once stopped, so a run shorter than the interval still has two to compare:
+        # verify's ten traces were stored in seconds, and its flushed hop read nothing (magus, 2026-11-25).
+        while True:
             started = self.clock()
-            s = self.sample()
-            self.samples.append(s)
-            if self.series_path is not None:
-                with self.series_path.open("a") as out:
-                    out.write(json.dumps(s) + "\n")
-            self._stop.wait(max(0.0, self.interval - (self.clock() - started)))
+            self._record()
+            if self._stop.wait(max(0.0, self.interval - (self.clock() - started))):
+                self._record()
+                return
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._loop, name="cluster-collector", daemon=True)

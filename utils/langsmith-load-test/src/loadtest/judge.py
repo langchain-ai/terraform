@@ -47,6 +47,10 @@ def samples(results_path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in series.read_text().splitlines() if line.strip()] if series.exists() else []
 
 
+def _seconds(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f} s"
+
+
 def _flushed(series: Sequence[dict[str, Any]]) -> float | None:
     """Rows SmithDB flushed between the first and the last reading that had the counter."""
     read = [rows for rows in map(cluster.flushed_rows, series) if rows is not None]
@@ -66,7 +70,7 @@ def hops(results: dict[str, Any], series: Sequence[dict[str, Any]]) -> list[Hop]
         ("drained", "Redis's ingestion queue emptied", None if pending is None else pending == 0, "not read" if pending is None else f"{pending:g} pending"),
         ("flushed", "SmithDB wrote them", None if flushed is None else flushed > 0, "not read" if flushed is None else f"{flushed:g} rows"),
         ("readable", "every run sent can be queried", readable,
-         stored.get("error") or f"{stored.get('runs_stored')} of {stored['runs_sent']} stored, {lag['never_readable']} never readable, p95 {lag.get('p95_seconds')} s"),
+         stored.get("error") or f"{stored.get('runs_stored')} of {stored['runs_sent']} stored, {lag['never_readable']} never readable, p95 {_seconds(lag.get('p95_seconds'))}"),
     ]
 
 
@@ -150,7 +154,7 @@ def verify_main(argv: Sequence[str] | None = None) -> int:
         show_logs(results, HOP_WORKLOAD[failed], _option(args, "--kube-context"))
         ui.error(f"traces stop at {failed}; the run's results and log are beside {results_path}")
         return 1
-    ui.ok(f"traces flow end to end: {results['stored']['runs_stored']} runs stored, readable in {results['lag'].get('p95_seconds')} s (p95)")
+    ui.ok(f"traces flow end to end: {results['stored']['runs_stored']} runs stored, readable in {_seconds(results['lag'].get('p95_seconds'))} (p95)")
     return 0
 
 

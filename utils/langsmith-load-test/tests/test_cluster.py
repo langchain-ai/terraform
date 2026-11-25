@@ -1,5 +1,6 @@
 """The collector reads what the install did through kubectl alone, and reads a missing value as unknown."""
 
+import time
 import unittest
 
 from fake_cluster import NS, RELEASE, STEP_SECONDS, FakeCluster, samples
@@ -96,6 +97,14 @@ class SummaryTest(unittest.TestCase):
         unlabelled = [s | {"smithdb": {"compaction_queue_job_count": 9.0}} for s in samples()]
         metrics, _ = cluster.summarize(unlabelled, WINDOW, 1000.0)
         self.assertEqual(metrics["compaction-jobs"]["peak"], 9)  # an older SmithDB without the label
+
+    def test_a_run_shorter_than_the_interval_still_has_a_first_and_a_last_reading(self) -> None:
+        fake = FakeCluster()
+        collector = cluster.Collector(fake, NS, RELEASE, 3600, clock=lambda: fake.t)
+        collector.start()
+        while not collector.samples:
+            time.sleep(0.01)
+        self.assertEqual(len(collector.stop()), 2)
 
     def test_runs_skipped_as_expired_are_counted_from_the_logs_when_sampling_stops(self) -> None:
         fake = FakeCluster()
