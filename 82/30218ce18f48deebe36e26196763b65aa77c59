@@ -1,0 +1,70 @@
+modules/aws/README.md
+  s_c161e3bea7e1f6::t_3af8cf7b5fb300 1389-1390
+  s_c161e3bea7e1f6::t_d0f492a18b8579 641-643,693-741,999,1031-1032
+MIGRATION-0.16-to-0.17.md
+  s_c161e3bea7e1f6::t_bb2233bfe2b00e 14-17,303-369,387-388
+modules/aws/ARCHITECTURE.md
+  s_c161e3bea7e1f6::t_f142938512227f 324-325
+modules/aws/QUICK_REFERENCE.md
+  s_c161e3bea7e1f6::t_ca1ab572d80a44 134-137
+modules/aws/helm/scripts/init-values.sh
+  s_c161e3bea7e1f6::t_81eb1c09f33e41 30-31,271-272,283-284,292-297,622-663,759-777
+modules/aws/helm/scripts/test-init-values-llm-gateway.sh
+  s_c161e3bea7e1f6::t_1e62b19aff4e68 1-125
+modules/aws/infra/main.tf
+  s_c161e3bea7e1f6::t_e1a64fa6769f8c 261-276,1563-1567,1593,1597-1599
+modules/aws/infra/modules/k8s-bootstrap/main.tf
+  s_c161e3bea7e1f6::t_09245c5b656dab 427-494,503,513-528
+modules/aws/infra/terraform.tfvars.example
+  s_c161e3bea7e1f6::t_4a0064f4cb1531 403-414
+modules/aws/infra/tests/envoy_gateway.tftest.hcl
+  s_c161e3bea7e1f6::t_ed8ef7a9d2fad5 1-88
+modules/aws/infra/tests/preconditions.tftest.hcl
+  s_c161e3bea7e1f6::t_1f03339d512d5d 306-340
+modules/aws/infra/tests/validation.tftest.hcl
+  s_c161e3bea7e1f6::t_63350592058700 97-117
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_c161e3bea7e1f6::t_9f8ce7117b0a7a 651-681
+modules/aws/infra/variables.tf
+  s_c161e3bea7e1f6::t_42110a0e6375c2 998-1014
+modules/azure/INGRESS_CONTROLLERS.md
+  s_c161e3bea7e1f6::t_354a95d5d9d831 439-454
+modules/azure/PERMISSIONS.md
+  s_c161e3bea7e1f6::t_a9d5e7da93027a 104
+modules/azure/infra/modules/k8s-cluster/main.tf
+  s_c161e3bea7e1f6::t_fa693dd6c60c73 54-68,1029-1032,1096-1097,1358-1365,1367,1369
+modules/azure/infra/modules/k8s-cluster/outputs.tf
+  s_c161e3bea7e1f6::t_04166184fe041c 268-269,272
+modules/azure/infra/modules/k8s-cluster/variables.tf
+  s_c161e3bea7e1f6::t_93f8d585255662 332
+modules/azure/infra/outputs.tf
+  s_c161e3bea7e1f6::t_04fb8ea8ef7848 299
+modules/azure/infra/tests/internal_ingress.tftest.hcl
+  s_c161e3bea7e1f6::t_7227095bf0455d 2-4,151,156-157,159,163-164,168,172-175,179-184,188-193,199-236,241,245,249,255-266,268-277,279-334,668-734
+modules/azure/infra/variables.tf
+  s_c161e3bea7e1f6::t_190581b763236b 2578,2620
+modules/byoc/aws/byoiam/policies/load_balancer_controller.json.tftpl
+  s_c161e3bea7e1f6::t_7b7984ecfb6a79 334-351
+modules/byoc/aws/langsmith-byoc-role/policies/delete.json
+  s_c161e3bea7e1f6::t_123046e264d85d 243-256
+modules/aws/helm/scripts/deploy.sh
+  s_c161e3bea7e1f6::t_f033ba07240df2 19-23,451-452,461-462,560-561
+scripts/check.sh
+  s_c161e3bea7e1f6::t_2f09baee5320f6 61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8230218ce18f48deebe36e26196763b65aa77c59",
+  "prompts": {},
+  "sessions": {
+    "s_c161e3bea7e1f6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a37e189e-119a-411b-8ffc-c1c0585560e8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
