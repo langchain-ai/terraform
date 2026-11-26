@@ -16,7 +16,9 @@
 
 cmd_verify() {
   heading "verify" "traces go in, and come back out: every hop, about two minutes"
-  prove verify || exit 1
+  traces_field
+  # shellcheck disable=SC2046  # the flags split on spaces, as typed
+  prove verify $(traces_flags) || exit 1
   next "make soak"
 }
 
@@ -28,8 +30,19 @@ cmd_soak() {
   heading "soak" "$rate runs/s and $readers reader$([[ "$readers" == 1 ]] || echo s) for $(minutes "${DURATION:-900}") after a $(minutes "${RAMP:-120}") ramp${STEP:+, raised until a step fails}"
   local extra=(--runs-per-second "$rate" --readers "$readers" --duration "${DURATION:-900}" --ramp "${RAMP:-120}")
   [[ "${STEP:-}" == 1 ]] && extra+=(--step)
-  prove soak "${extra[@]}" || exit 1
+  traces_field
+  # shellcheck disable=SC2046  # the flags split on spaces, as typed
+  prove soak "${extra[@]}" $(traces_flags) || exit 1
 }
+
+# TRACES: the traces verify, soak and every experiment step send. Unset, the load test's default: ten
+# runs a trace, each a size drawn from the measured mix (70% 4 + 4 KiB, 25% 32 + 32, 5% 750 + 750), one
+# field of prose a side. Set, the load test's own payload-shape flags, as typed (--content json,
+# --fields-per-side 4, --metadata-keys 5, ...): a trace shaped like a customer's, the load test unchanged.
+# The first experiment sent the default, and its object store grew four times the plan's bytes a run: one
+# field a side puts every medium and large run past the 20 KiB offload, stored as sent (magus, 2026-11-26).
+traces_flags() { printf '%s' "${TRACES:-}"; }
+traces_field() { field "traces" "${TRACES:-the default: the measured size mix, one prose field a side}"; }
 
 prove() {
   need terraform python3 ssh kubectl uv
@@ -87,12 +100,14 @@ minutes() { python3 -c "s = $1; print(f'{s / 60:g} minutes' if s % 60 == 0 else 
 # process of its own, so a size that fails is recorded and the next one still runs.
 cmd_experiment() {
   need terraform python3 ssh kubectl uv
-  local name typed out size sizes steps minutes
+  local name typed out size sizes steps minutes traces
   name="$(tf_eval var.name)"
   out="$(experiment_folder)" || exit 1
   sizes="$(experiment_setting "$out" SIZES)" steps="$(experiment_setting "$out" STEPS)" minutes="$(experiment_setting "$out" MINUTES)"
+  traces="$(experiment_setting "$out" TRACES)"
   heading "experiment" "each size from no data, held to its machine: verify, then $minutes minutes at ${steps// /, } times its design rate"
   field "sizes" "$sizes"
+  TRACES="$traces" traces_field
   for size in $sizes; do [[ -e "$out/$size/finished" ]] && field "$size" "finished earlier: kept"; done
   field "results" "${out#"$LITE"/}"
   field "root" "once a size, to install it; every trace in $name is deleted each time"
@@ -108,7 +123,7 @@ cmd_experiment() {
     rm -rf "${out:?}/$size"
     # A size stops only when its down, up or verify fails, and each size after it would fail the same
     # way: magus, 2026-11-25, ran down and up for s, m and l against one timed-out sudo touch.
-    experiment_size "$size" "$out/$size" "$name" "$steps" "$minutes" ||
+    experiment_size "$size" "$out/$size" "$name" "$steps" "$minutes" "$traces" ||
       fail "size $size stopped: its $(cat "$out/$size/stopped" 2>/dev/null || echo run) did not pass" "make experiment continues from $size; the sizes that finished are kept."
   done
   # Every size's steps, not its verify: a verify is a minute of one user, not a rate.
@@ -126,7 +141,7 @@ experiment_folder() {
   # One with no settings file was started before experiments could continue: it starts again.
   if [[ -n "$last" && -e "$last/settings" && ! -e "$last/report" && "${NEW:-}" != 1 ]]; then
     local key
-    for key in SIZES STEPS MINUTES; do
+    for key in SIZES STEPS MINUTES TRACES; do
       [[ -z "${!key:-}" || "${!key}" == "$(experiment_setting "$last" "$key")" ]] ||
         fail "$key differs from the unfinished experiment ${last#"$LITE"/}" "NEW=1 starts a new one with $key=${!key}."
     done
@@ -135,14 +150,14 @@ experiment_folder() {
   fi
   out="$BUILD/experiment/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$out"
-  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 2 3}" "${MINUTES:-10}" >"$out/settings"
+  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\nTRACES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 1 2 3}" "${MINUTES:-10}" "${TRACES:-}" >"$out/settings"
   echo "$out"
 }
 
 experiment_setting() { awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$1/settings"; }
 
 experiment_size() {
-  local size="$1" dir="$2" name="$3" steps="$4" minutes="$5" design k
+  local size="$1" dir="$2" name="$3" steps="$4" minutes="$5" traces="$6" design k i=0
   heading "experiment" "size $size"
   mkdir -p "$dir"
   export LITE_INNER=1
@@ -150,12 +165,16 @@ experiment_size() {
   # root step, not a down and an up (two touches, k3s installed again and every image pulled again).
   # The cap rides on this up alone, never saved: the next plain make up lifts it.
   box="$size" TF_VAR_emulate_machine=true FRESH=1 CONFIRM="$name" YES=1 "$LITE/bin/lite" up || { echo install >"$dir/stopped"; return 1; }
-  OUT="$dir/verify" "$LITE/bin/lite" verify || { echo verify >"$dir/stopped"; return 1; }
+  TRACES="$traces" OUT="$dir/verify" "$LITE/bin/lite" verify || { echo verify >"$dir/stopped"; return 1; }
   design="$(tf_output plan | json_get runs_per_second)"
+  # Each step's folder is numbered in order, as a multiple can repeat: STEPS 1 1 2 3 runs 1x again once
+  # the install has warmed, so a first step slower than the second is the fresh install, not the load. The
+  # first experiment's first steps after a fresh install were each size's slowest (magus, 2026-11-26).
   for k in $steps; do
+    i=$((i + 1))
     # A step that does not hold still runs the next: where each one fails is what this measures.
-    RATE="$(python3 -c "print(f'{$design * $k:g}')")" DURATION="$((minutes * 60))" OUT="$dir/${k}x" "$LITE/bin/lite" soak ||
-      warn "$size at ${k}x did not hold; the next step still runs"
+    RATE="$(python3 -c "print(f'{$design * $k:g}')")" DURATION="$((minutes * 60))" TRACES="$traces" OUT="$dir/$i-${k}x" "$LITE/bin/lite" soak ||
+      warn "$size at ${k}x (step $i) did not hold; the next step still runs"
   done
   heading "experiment" "size $size: what it held, and what it took"
   report "$dir/report" "$dir"/*x/ --design "$design"

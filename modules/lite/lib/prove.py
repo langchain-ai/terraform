@@ -95,7 +95,9 @@ def main() -> int:
     p.add_argument("--ramp", type=int, default=120)
     p.add_argument("--step", action="store_true")
     p.add_argument("--prometheus", help="NS/SERVICE:PORT of the install's Prometheus, for CPU")
-    a = p.parse_args()
+    # Anything else is the load test's own (TRACES: --content, --fields-per-side, ...), passed through as
+    # given, so a flag it adds needs nothing here.
+    a, passed = p.parse_known_args()
     Path(a.out).mkdir(parents=True, exist_ok=True)
 
     ls = LangSmith(a.endpoint)
@@ -110,9 +112,9 @@ def main() -> int:
     where = ["--namespace", a.namespace, "--data-namespace", a.data_namespace, *(["--prometheus", a.prometheus] if a.prometheus else [])]
     try:
         if a.mode == "verify":
-            return load_test(a, env, "load-test-verify", *where, "--results", "verify.json")
+            return load_test(a, env, "load-test-verify", *where, *passed, "--results", "verify.json")
         load: List[str] = [*where, "--traces-per-second", f"{a.runs_per_second / runs_per_trace(a):.4f}", "--read",
-                           "--reads-per-second", f"{a.readers * READS_PER_READER:.2f}", "--duration-seconds", str(a.duration), "--ramp-up-seconds", str(a.ramp)]
+                           "--reads-per-second", f"{a.readers * READS_PER_READER:.2f}", "--duration-seconds", str(a.duration), "--ramp-up-seconds", str(a.ramp), *passed]
         if a.step:
             return load_test(a, env, "load-test-step", *load, "--results", "step.json")
         code = load_test(a, env, "load-test", *load, "--results", "soak.json")
