@@ -68,11 +68,24 @@ def hops(results: dict[str, Any], series: Sequence[dict[str, Any]]) -> list[Hop]
     readable = None if missing is None else missing == 0 and lag["never_readable"] == 0
     return [
         ("accepted", f"{write['runs_sent']} runs sent to the API", refused == 0, write.get("first_error") or f"{refused} refused"),
-        ("drained", "Redis's ingestion queue emptied", None if pending is None else pending == 0, "not read" if pending is None else f"{pending:g} pending"),
+        ("drained", "Redis's ingestion queue emptied", *_drained(pending, readable)),
         ("flushed", "SmithDB wrote them", None if flushed is None else flushed > 0, "not read" if flushed is None else f"{flushed:g} rows"),
         ("readable", "every run sent can be queried", readable,
          stored.get("error") or f"{stored.get('runs_stored')} of {stored['runs_sent']} stored, {lag['never_readable']} never readable, p95 {_seconds(lag.get('p95_seconds'))}"),
     ]
+
+
+def _drained(pending: float | None, readable: bool | None) -> tuple[bool | None, str]:
+    """The queue at the last reading. A task left there once every run sent is stored is not this run's:
+    after an upgrade (0.18.4 on magus, 2026-11-26) ingest-queue's backfill left one, and verify failed a
+    run that had lost nothing."""
+    if pending is None:
+        return None, "not read"
+    if pending == 0:
+        return True, "0 pending"
+    if readable:
+        return True, f"{pending:g} pending at the end, none of them this run's: every run is stored"
+    return False, f"{pending:g} pending"
 
 
 def held(results: dict[str, Any]) -> bool:
@@ -108,15 +121,40 @@ def crossed(verdicts: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     return [v for v in verdicts if "ABOVE the alarm level" in v["detail"]]
 
 
+LOG_LINES = 200
+LOG_SHOWN = 10
+
+
+def log_summary(text: str) -> list[str]:
+    """A workload's recent log as what matters: its warnings and errors, each message once with how often
+    it came. Forty raw JSON lines, each cut at 200 characters, said nothing about why traces stopped
+    (magus, 2026-11-26)."""
+    counts: dict[tuple[str, str], int] = {}
+    for line in text.splitlines():
+        body = line.split("] ", 1)[-1] if line.startswith("[pod/") else line
+        try:
+            entry = json.loads(body)
+            level, msg = str(entry.get("level", "")).upper(), str(entry.get("msg", body))
+            detail = entry.get("error") or entry.get("err")
+            msg = f"{msg}: {detail}" if detail else msg
+        except (ValueError, AttributeError):
+            level, msg = ("ERROR" if "error" in body.lower() else "", body)
+        counts[(level, msg[:160])] = counts.get((level, msg[:160]), 0) + 1
+    serious = [(k, n) for k, n in counts.items() if k[0] in ("WARN", "WARNING", "ERROR", "FATAL")]
+    shown = serious or list(counts.items())
+    lines = [f"{level or 'LOG'}  {msg}" + (f"  (x{n})" if n > 1 else "") for (level, msg), n in shown[-LOG_SHOWN:]]
+    return lines if serious else ["no warning or error in its last lines; the latest:", *lines[-3:]]
+
+
 def show_logs(results: dict[str, Any], workload: str, context: str | None) -> None:
     where = results.get("cluster", {})
     if not where.get("namespace"):
         return
     kube = cluster.kubectl(context, timeout_seconds=30)
-    text = kube(["logs", "-n", where["namespace"], "-l", f"{cluster.COMPONENT}={where.get('release', 'langsmith')}-{workload}", "--tail=15", "--prefix"])
-    ui.heading(f"{workload}'s last log lines")
-    for line in (text or "(could not read them)\n").splitlines()[-15:]:
-        ui.note(line[:200])
+    text = kube(["logs", "-n", where["namespace"], "-l", f"{cluster.COMPONENT}={where.get('release', 'langsmith')}-{workload}", f"--tail={LOG_LINES}", "--prefix"])
+    ui.heading(f"{workload}'s log")
+    for line in log_summary(text) if text else ["could not read it"]:
+        ui.note(line)
 
 
 def run_load(argv: Sequence[str]) -> int:
@@ -149,11 +187,11 @@ def verify_main(argv: Sequence[str] | None = None) -> int:
         if ok:
             ui.ok(line)
         else:
-            ui.warn(("NOT READ  " if ok is None else "FAILED  ") + line)
+            ui.warn(f"{'not read' if ok is None else 'FAILED'}: {line}")
             failed = failed or (hop if ok is False else None)
     if failed:
         show_logs(results, HOP_WORKLOAD[failed], _option(args, "--kube-context"))
-        ui.error(f"traces stop at {failed}; the run's results and log are beside {results_path}")
+        ui.error(f"traces stop at {failed}: {HOP_WORKLOAD[failed]} is where to look")
         return 1
     ui.ok(f"traces flow end to end: {results['stored']['runs_stored']} runs stored, readable in {_seconds(results['lag'].get('p95_seconds'))} (p95)")
     return 0

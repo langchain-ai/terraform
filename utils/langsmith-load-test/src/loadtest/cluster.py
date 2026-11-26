@@ -377,7 +377,7 @@ class Collector:
         with ThreadPoolExecutor(max_workers=min(16, len(nodes) or 1)) as pool:
             texts = list(pool.map(read, nodes))
         if any(t is None for t in texts):
-            sample["unread"].append(f"cAdvisor on {sum(t is None for t in texts)} of {len(nodes)} nodes")
+            sample["unread"].append(f"each pod's CPU and memory (the kubelet's cAdvisor on {sum(t is None for t in texts)} of {len(nodes)} nodes refused, and no --prometheus)")
         for text in texts:
             _add_container(sample["cpu"], text or "", markers, owners)
 

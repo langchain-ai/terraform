@@ -76,3 +76,21 @@ class HeldTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifyReadingTest(unittest.TestCase):
+    def test_a_task_left_in_the_queue_after_every_run_is_stored_is_not_this_runs(self) -> None:
+        # magus, 2026-11-26: 0.18.4's backfill left one task; verify failed a run that lost nothing.
+        self.assertEqual(judge._drained(1.0, True)[0], True)
+        self.assertEqual(judge._drained(1.0, False), (False, "1 pending"))
+        self.assertEqual(judge._drained(None, True), (None, "not read"))
+
+    def test_a_log_is_its_warnings_and_errors_each_once(self) -> None:
+        text = "\n".join([
+            '[pod/q/ingest-queue] {"level":"INFO","msg":"Persisted batched runs successfully"}',
+            '[pod/q/ingest-queue] {"level":"ERROR","msg":"write failed","error":"redis: OOM"}',
+            '[pod/q/ingest-queue] {"level":"ERROR","msg":"write failed","error":"redis: OOM"}',
+        ])
+        self.assertEqual(judge.log_summary(text), ["ERROR  write failed: redis: OOM  (x2)"])
+        quiet = judge.log_summary('{"level":"INFO","msg":"backfill complete"}')
+        self.assertEqual(quiet, ["no warning or error in its last lines; the latest:", "INFO  backfill complete"])

@@ -251,7 +251,7 @@ def _projects(client: Client, base: str, shape: Shape) -> Projects:
 
 
 def _banner(settings: LoadSettings, profile_path: Path | None) -> None:
-    mode = f"open loop at {settings.traces_per_second:g} traces/s" if settings.traces_per_second else f"closed loop, {settings.users} users"
+    mode = f"open loop at {settings.traces_per_second:g} traces/s" if settings.traces_per_second else f"closed loop, {settings.users} user{'s' if settings.users != 1 else ''}"
     ui.banner("LangSmith load test", f"{os.getenv('LANGSMITH_ENDPOINT', '(no endpoint: local only)')}\n{mode}, {settings.duration_seconds:g} s after a {settings.ramp_up_seconds:g} s ramp; "
               f"reads {f'{settings.reads_per_second:g}/s' if settings.read else 'off'}; run limit {settings.run_limit if settings.run_limit is not None else 'none'}"
               + (f"\nprofile {profile_path}" if profile_path else ""))
@@ -347,8 +347,14 @@ def print_summary(report: dict[str, Any]) -> None:
         ui.table(Table("Reads", ("class", "n", "errors", "p50", "p95", "p99", "served by"), read_rows))
     _print_cluster(report["cluster"])
     ui.heading("Verdict")
-    rows = target_rows(report)
+    every = target_rows(report)
+    # A promise this run could not measure (reads off in a verify, one reading of the queue) is named once,
+    # not given a row that says nothing.
+    rows = [r for r in every if r["verdict"] != "not measured"]
     ui.verdicts(rows)
+    unmeasured = [r["item"] for r in every if r["verdict"] == "not measured"]
+    if unmeasured:
+        ui.note("not measured in this run: " + ", ".join(unmeasured))
     if report["passed"]:
         ui.ok("every promise kept")
     else:
@@ -410,8 +416,10 @@ def _print_cluster(section: dict[str, Any]) -> None:
         return
     flushed = section["smithdb_rows_flushed_per_second"]
     rows = cluster_rows(section["coefficients"])
+    if section["steady_samples"] < 2 and not rows:
+        return
     # No per-pod reading (xs runs without Prometheus) printed the table's header over no rows (magus, 2026-11-25).
-    note = (f"Averaged over {section['steady_samples']} readings after the ramp, at {section['runs_per_second_sent'] or 0:g} runs/s sent"
+    note = (f"Averaged over {section['steady_samples']} readings after the ramp, at {section['runs_per_second_sent'] or 0:.1f} runs/s sent"
             + (f"; SmithDB flushed {flushed:.1f} rows/s" if flushed is not None else "")
             + f"; compaction kept up: {_yes(section['kept_up']['compaction'])}.")
     if rows:
@@ -420,8 +428,8 @@ def _print_cluster(section: dict[str, Any]) -> None:
         ui.note(note)
     for line in machine_lines(section.get("machine")):
         ui.note(line)
-    for what in section["unread"]:
-        ui.warn(f"not read: {what}")
+    if section["unread"]:
+        ui.warn("not read: " + "; ".join(section["unread"]))
 
 
 def machine_lines(m: dict[str, Any] | None) -> list[str]:

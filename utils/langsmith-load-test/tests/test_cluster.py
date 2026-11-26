@@ -50,7 +50,7 @@ class SampleTest(unittest.TestCase):
         self.assertEqual(s["redis"], {})
         self.assertNotIn("oldest_task_seconds", s["queues"])
         self.assertEqual(s["postgres"], {})
-        self.assertEqual(sorted(s["unread"]), ["cAdvisor on 1 of 1 nodes", "platform-backend queues", "postgres connections", "redis INFO"])
+        self.assertEqual(sorted(s["unread"]), ["each pod's CPU and memory (the kubelet's cAdvisor on 1 of 1 nodes refused, and no --prometheus)", "platform-backend queues", "postgres connections", "redis INFO"])
         _, section = cluster.summarize(samples(7, unreadable=("cadvisor",)), WINDOW, 100.0)
         self.assertEqual(section["coefficients"], {})
 
