@@ -21,6 +21,7 @@ from loadtest import results
 from loadtest.draw import Projects, share_due
 from loadtest.feedback import FeedbackSender
 from loadtest.lag import LagTracker
+from loadtest.payloads.agent import AgentModel, AgentRun, AgentTraces
 from loadtest.payloads.generator import PayloadGenerator, RunPayload
 from loadtest.profile import Profile
 from loadtest.reads import Reader, TracePool
@@ -145,6 +146,33 @@ def post_trace(
         root.patch()
 
 
+def post_agent_trace(
+    client: Client, project_name: str, trace_id: UUID, number: int, test_id: str, trace: AgentRun,
+    send: str = "post_then_patch", metadata_keys: int = 0,
+) -> None:
+    """An agent trace, every run in its tree sent as the SDK sends a traced call: the root created first,
+    each child under its parent in the order it ran, each finished before its parent. The test's id rides
+    on the root's metadata, which every child inherits."""
+    root = RunTree(
+        name=trace.name, run_type=trace.run_type, id=trace_id, inputs=trace.inputs, project_name=project_name, ls_client=client,
+        extra={"metadata": {**trace_metadata(test_id, number, metadata_keys), **trace.metadata, "load_test_traces": "agent"}},
+        tags=["load-test", "traces:agent"],
+    )
+    _send_run(root, trace, send == "post_once")
+
+
+def _send_run(run: RunTree, node: AgentRun, once: bool) -> None:
+    if not once:
+        run.post()
+    for child in node.children:
+        _send_run(run.create_child(name=child.name, run_type=child.run_type, inputs=child.inputs, extra={"metadata": child.metadata}), child, once)
+    run.end(outputs=node.outputs)
+    if once:
+        run.post()
+    else:
+        run.patch()
+
+
 class _Run:
     """One load test's shared state: the sending, reading and checking steps are its methods."""
 
@@ -158,6 +186,8 @@ class _Run:
             profile.mix, profile.sizes_kib, settings.data_seed,
             fields_per_side=shape.fields_per_side, content=shape.content, attachment_kib=shape.attachment_kib_per_run,
         )
+        # Agent traces are built a trace at a time from their own seeded stream (payloads/agent.py).
+        self.agents = AgentTraces(AgentModel.from_params(), settings.data_seed) if shape.traces == "agent" else None
         self.counts = results.WriteCounts(
             mode="open-loop" if settings.traces_per_second else "closed-loop", target_traces_per_second=settings.traces_per_second,
         )
@@ -173,18 +203,27 @@ class _Run:
         self.feedback = FeedbackSender(client, profile.feedback_per_trace, self.counts) if client is not None else None
         self.origin = self.deadline = 0.0
 
+    def build(self, number: int) -> tuple[int, int, Callable[[Client, str, UUID], None]]:
+        """Trace `number`: its run count, its payload bytes, and what sends it to a project under an id."""
+        shape = self.profile.shape
+        if self.agents is not None:
+            tree = self.agents.trace(number)
+            return (sum(1 for _ in tree.walk()), tree.payload_bytes(),
+                    lambda client, project, trace_id: post_agent_trace(client, project, trace_id, number, self.test_id, tree, shape.send, shape.metadata_keys))
+        payloads = [self.generator.next_run() for _ in range(max(1, share_due(self.profile.runs_per_trace, number)))]
+        return (len(payloads), sum(p.input_bytes + p.output_bytes for p in payloads),
+                lambda client, project, trace_id: post_trace(client, project, trace_id, number, self.test_id, payloads, shape.send, shape.metadata_keys))
+
     async def one_trace(self, number: int) -> None:
         s, counts = self.settings, self.counts
-        run_count = max(1, share_due(self.profile.runs_per_trace, number))
         try:
-            payloads = await asyncio.to_thread(lambda: [self.generator.next_run() for _ in range(run_count)])
+            run_count, payload_bytes, send = await asyncio.to_thread(self.build, number)
             await asyncio.sleep(s.simulated_delay_ms / 1000)
             trace_id = uuid4()
             at = self.projects.pick(self.pick_project)
             sent_at = time.monotonic()
             if self.client is not None:
-                shape = self.profile.shape
-                await asyncio.to_thread(post_trace, self.client, self.projects.names[at], trace_id, number, self.test_id, payloads, shape.send, shape.metadata_keys)
+                await asyncio.to_thread(send, self.client, self.projects.names[at], trace_id)
             counts.send_latencies_seconds.append(time.monotonic() - sent_at)
             counts.traces_sent += 1
             # Starts on the ramp offer half the target on average; the rate a plan is judged on is
@@ -192,7 +231,7 @@ class _Run:
             if s.traces_per_second and number - 1 >= s.traces_per_second * s.ramp_up_seconds / 2:
                 counts.steady_traces_sent += 1
             counts.runs_sent += run_count
-            counts.payload_bytes_sent += sum(p.input_bytes + p.output_bytes for p in payloads)
+            counts.payload_bytes_sent += payload_bytes
             self._track(trace_id, number, sent_at, at)
         except Exception as error:  # noqa: BLE001 - record a failed trace and continue the load
             counts.run_errors += 1

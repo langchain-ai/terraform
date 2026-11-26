@@ -92,6 +92,25 @@ class ClosedLoopTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(run_["inputs"]["input_0"], list)
             self.assertEqual(len(run_["attachments"]["file"][1]), 3 * KIB)  # the SDK passes it on as (mime type, bytes)
 
+    async def test_agent_traces_send_every_run_nested_under_its_parent_with_the_test_id(self) -> None:
+        loaded = small_profile()
+        loaded = dataclasses.replace(loaded, shape=dataclasses.replace(loaded.shape, traces="agent"))
+        client = FakeClient()
+        outcome, report = await run(client, loaded, run_limit=6, users=1)
+        trees = [runner.AgentTraces(runner.AgentModel.from_params(), 1).trace(n) for n in range(1, 7)]
+        self.assertEqual(outcome.write.runs_sent, sum(sum(1 for _ in t.walk()) for t in trees))
+        self.assertEqual(len(client.created), outcome.write.runs_sent)
+        self.assertEqual(outcome.write.payload_bytes_sent, sum(t.payload_bytes() for t in trees))
+        by_id = {r["id"]: r for r in client.created}
+        for run_ in client.created:
+            self.assertEqual(run_["extra"]["metadata"]["load_test_id"], outcome.test_id)
+            if run_["run_type"] == "llm":
+                self.assertEqual(by_id[run_["parent_run_id"]]["name"], "model")
+            if run_["run_type"] == "tool":
+                self.assertEqual(by_id[run_["parent_run_id"]]["name"], "tools")
+        self.assertEqual((outcome.stored.traces, outcome.stored.runs), (6, outcome.write.runs_sent))
+        self.assertEqual(report["write"]["payload_shape"]["traces"], "agent")
+
     async def test_traces_spread_over_projects_by_rank_and_feedback_follows_each_trace(self) -> None:
         loaded = small_profile(runs_per_trace=1, feedback_per_trace=1)
         loaded = dataclasses.replace(loaded, shape=dataclasses.replace(loaded.shape, metadata_keys=10))

@@ -23,7 +23,7 @@ from langsmith_sizing import ui
 from langsmith_sizing.summary import Table
 from loadtest import cluster
 from loadtest.draw import Projects, project_names
-from loadtest.profile import CONTENTS, SENDS, Profile, ProfileError, Shape, from_file, from_params
+from loadtest.profile import CONTENTS, SENDS, TRACES, Profile, ProfileError, Shape, from_file, from_params
 from loadtest.results import NOT_READ, short_error
 from loadtest.runner import LoadOutcome, LoadSettings, build_report, run_load_test
 from rich.console import Console
@@ -62,6 +62,7 @@ def build_parser(defaults: LoadSettings) -> argparse.ArgumentParser:
     load.add_argument("--feedback-per-trace", type=float, help="feedback writes per trace; the profile's or the model's default (load.feedback_per_trace) when omitted; 0 disables")
     load.add_argument("--data-seed", type=int, help="seed for repeatable text and size draws")
     shape = parser.add_argument_group("payload shape (each replaces the profile's; vary one at a time to measure what it costs)")
+    shape.add_argument("--traces", choices=TRACES, help="simple (a flat tree of runs, each a size from the mix) or agent (an agent's model and tool calls, its context resent every call)")
     shape.add_argument("--fields-per-side", type=int, help="fields an input and an output each split into, the size spread evenly")
     shape.add_argument("--content", choices=CONTENTS, help="text (prose), json (a message list) or base64 (incompressible bytes)")
     shape.add_argument("--send", choices=SENDS, help="post_then_patch (a create, then an update) or post_once (a finished run in one request)")
@@ -104,7 +105,7 @@ def cluster_options(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 SHAPE_FLAGS = {
-    "fields_per_side": "fields_per_side", "content": "content", "send": "send", "attachment_kib": "attachment_kib_per_run",
+    "traces": "traces", "fields_per_side": "fields_per_side", "content": "content", "send": "send", "attachment_kib": "attachment_kib_per_run",
     "projects": "projects", "project_skew": "project_skew", "metadata_keys": "metadata_keys", "batch_runs": "batch_runs",
 }
 

@@ -148,6 +148,12 @@ class SummaryTest(unittest.TestCase):
                 "containers": [{"name": "postgres", "volumeMounts": [{"name": "data", "mountPath": "/var/lib/postgresql"}, {"name": "tmp", "mountPath": "/tmp"}]}]}
         self.assertEqual(cluster._claim_mounts(spec), [("postgres", "/var/lib/postgresql")])
 
+    def test_du_reads_a_volume_and_an_object_stores_buckets_apart(self) -> None:
+        text = "6742408\t/data/langsmith-blobs\n17042860\t/data/smithdb\n23785272\t/data\n"
+        self.assertEqual(cluster.parse_du(text, "rustfs"), {"rustfs:/data/langsmith-blobs": 6742408, "rustfs:/data/smithdb": 17042860, "rustfs:/data": 23785272})
+        self.assertEqual(cluster.parse_du("110548\t/var/lib/postgresql\n", "postgres"), {"postgres:/var/lib/postgresql": 110548})
+        self.assertEqual(cluster.parse_du("du: cannot access '/data': No such file\n", "rustfs"), {})
+
     def test_disk_growth_is_bytes_a_run_over_the_window(self) -> None:
         window = [{"t": 0.0, "disk": {"rustfs:/data": 1000}}, {"t": 30.0, "disk": {}}, {"t": 60.0, "disk": {"rustfs:/data": 1600}}]
         self.assertEqual(cluster.disk_per_run(window, 10.0), {"rustfs:/data": 600 * 1024 / 600})

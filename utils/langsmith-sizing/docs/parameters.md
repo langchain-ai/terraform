@@ -144,7 +144,8 @@ self-hosted installs and never named. How each is used: [how-it-sizes.md](how-it
 | `clickhouse.floor_gi_per_day` | 5 | GiB per TTL day | decision | Dzmitry Dubarau |
 | `clickhouse.floor_up_to_traces_per_second` | 20 | traces/s | decision | Dzmitry Dubarau |
 | `load.feedback_per_trace` | 0.5 | feedback writes per trace | decision | Hari Narayan |
-| `load.payload_shape` | (a table: see params.yaml) | fields an input and an output each split into; text, json or base64; post_then_patch or post_once; projects and the Zipf exponent of their spread; metadata keys a run; the most runs a request | decision | Reed Bender |
+| `load.payload_shape` | (a table: see params.yaml) | simple (runs_per_trace runs in a flat tree, each a size from the mix) or agent (load.agent_trace); fields an input and an output each split into; text, json or base64; post_then_patch or post_once; projects and the Zipf exponent of their spread; metadata keys a run; the most runs a request | decision | Reed Bender |
+| `load.agent_trace` | (a table: see params.yaml) | agentic_share: the share of traces that call tools; tool_turns: the mean model calls past the first in such a trace (1 plus a geometric count); tools_per_turn: the weights of 1, 2 and 3 calls a turn; wrappers and history_messages: geometric means; *_kib: lognormal sizes (median KiB, the sigma of the log, an optional max) | decision | Reed Bender |
 | `load.read_mix` | (a table: see params.yaml) | relative weight per read | decision | Reed Bender |
 | `load.heavy_window_days` | 30 | days | field | Reed Bender |
 | `slo.stored_within_seconds` | {p99: 30} | s from send to readable | field | Ben Nagengast |

@@ -49,6 +49,7 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `write.payload_shape.project_skew` | number | exponent | Zipf exponent of that spread; 0 is even |
 | `write.payload_shape.projects` | number | count | projects the traces spread over, the first the busiest |
 | `write.payload_shape.send` | string | - | post_then_patch (a create, then an update) or post_once (a finished run in one request) |
+| `write.payload_shape.traces` | string | - | simple (a flat tree of runs, each a size from the mix) or agent (an agent's model and tool calls) |
 | `write.run_errors` | number | errors | runs the SDK reported an error for |
 | `write.runs_sent` | number | runs | runs in those traces |
 | `write.schedule_lag_seconds` | object | - | how late each open-loop start was |
@@ -133,7 +134,7 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `cluster.coefficients.<workload>.cores_used` | number | cores | CPU cores it used on average, not requested |
 | `cluster.coefficients.<workload>.memory_peak_mib` | number | MiB | the most working-set memory its containers held together in any one sample |
 | `cluster.coefficients.<workload>.runs_per_core` | number | runs/s per core | runs sent a second over the cores it used; on the ingest path only, the figure sizing's ingest model rests on |
-| `cluster.disk_bytes_per_run` | null | bytes | bytes each persistent volume gained a run sent across the window, keyed workload:mount path, read with du in its pod every few samples; null with fewer than two readings |
+| `cluster.disk_bytes_per_run` | null | bytes | bytes each persistent volume gained a run sent across the window, keyed workload:mount path, and for RustFS each bucket apart (rustfs:/data/langsmith-blobs, rustfs:/data/smithdb), read with du in its pod every few samples; null with fewer than two readings |
 | `cluster.kept_up` | object | - | whether a backlog was still climbing at the window's end |
 | `cluster.kept_up.compaction` | boolean | - | the same for pending compaction jobs |
 | `cluster.kept_up.ingestion_queue` | boolean | - | ingestion_queue.pending at the end no larger than the largest in the window's first half; null when not read |

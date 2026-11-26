@@ -96,6 +96,35 @@ prose. Every run carries the test's unique id in its metadata.
 Feedback is `feedback_per_trace` writes a trace (default 0.5, and it can exceed one), spread evenly. It is
 sent from its own threads so a slow server does not slow the trace schedule, and drained after the load.
 
+### Agent traces: `--traces agent`
+
+The traces above are quick to send and the same run to run, which suits `verify` and a rate held for a
+while. Real traces are shaped otherwise, and `--traces agent` sends an application's, as
+[`payloads/agent.py`](src/loadtest/payloads/agent.py) builds them:
+
+```
+agent                    chain   the new message                    the answer
+  model                  chain   the conversation so far            the model's message
+    prompt, ...          chain   the conversation so far            (its wrappers)
+    chat_model           llm     system prompt + the conversation   the generation, the token usage
+  tools                  chain   the conversation so far            the tool messages
+    search, fetch, ...   tool    the call's arguments               the tool's result
+  model ...                      until the model answers without calling a tool
+```
+
+Most traces are one model call; about a third are an agent that calls tools for several turns, so a
+trace holds 4 runs at the median and 10 on average, with a long tail. Every model call and its wrappers
+carry the conversation so far, so one large tool result or a long thread is sent again by every later
+run of the trace: a run's inputs and outputs are 16 KiB at the median and 40 on average. Sizes and counts
+are params.yaml's `load.agent_trace`, which says what they were calibrated against, and
+`tests/test_agent.py` fails when a change to them moves the traces off it. Trace N is drawn from its own
+stream, seeded by `--data-seed` (a fixed default without one) and N, so two runs send the same traces.
+
+Because the context repeats, these bytes compress far better together than field by field: zstd at
+level 3 makes 2.7:1 of a field alone and 20:1 of a trace's fields in one stream. Blob storage compresses
+a field at a time; SmithDB's segments hold many runs, so its bucket shows which it gets (RustFS's
+buckets are read apart, `cluster.disk_bytes_per_run`).
+
 ### The payload's shape
 
 A run's size is not the only thing that moves what ingest costs a core, so the shape is a profile field
@@ -104,6 +133,7 @@ that replaces it for one run:
 
 | Flag | Default | Why it can change the cost |
 |:--|:--|:--|
+| `--traces simple\|agent` | simple | A flat tree of independent sizes, or an application's traces (above): how many runs a trace holds, where its bytes are, and how much of them repeat. |
 | `--fields-per-side N` | 1 | Offload to the bucket is decided per field: ten 4 KiB fields stay inline where one 40 KiB field is offloaded. |
 | `--content text\|json\|base64` | text | Prose, a message list and encoded bytes compress differently in Redis and in storage. |
 | `--send post_then_patch\|post_once` | post_then_patch | A run created and then updated is two requests; a finished run is one. |

@@ -431,13 +431,33 @@ params:
     by: Hari Narayan
     since: 2026-09-24
   load.payload_shape:
-    value: {fields_per_side: 1, content: text, send: post_then_patch, projects: 1, project_skew: 1.0, metadata_keys: 0, batch_runs: 100}
-    unit: "fields an input and an output each split into; text, json or base64; post_then_patch or post_once; projects and the Zipf exponent of their spread; metadata keys a run; the most runs a request"
+    value: {traces: simple, fields_per_side: 1, content: text, send: post_then_patch, projects: 1, project_skew: 1.0, metadata_keys: 0, batch_runs: 100}
+    unit: "simple (runs_per_trace runs in a flat tree, each a size from the mix) or agent (load.agent_trace); fields an input and an output each split into; text, json or base64; post_then_patch or post_once; projects and the Zipf exponent of their spread; metadata keys a run; the most runs a request"
     chart_has_no_key: "how a test shapes the bytes it sends; the chart has no setting for the traffic it will see"
     why: "The ingest cost a core carries depends on more than a run's size: offload to the bucket is decided per field, prose, JSON and base64 compress differently, a run sent as a create then an update is two requests where a finished run is one, one project concentrates its runs on the same SmithDB ingestion pods, metadata is indexed, and fewer runs a request means more requests and more object-store writes (40 runs a request rate-limited S3 at 200,000 runs/s where 100 did not, in LangChain's v18 load test). A test that varies one of these against the default measures what it costs; every run sent with these defaults is comparable with the last."
     source: {kind: decision, ref: "the shape the load test sent before it could vary any of them: one input and one output field of prose, each run created then updated, into one project, with no metadata of its own and the SDK's 100 runs a request (utils/langsmith-load-test, 2026-09)"}
     by: Reed Bender
     since: 2026-11-18
+  load.agent_trace:
+    value:
+      agentic_share: 0.3
+      tool_turns: 3.0
+      tools_per_turn: [0.85, 0.1, 0.05]
+      wrappers: 1.0
+      history_messages: 6.0
+      system_kib: {median: 6.0, sigma: 0.6}
+      user_kib: {median: 0.2, sigma: 1.0}
+      history_kib: {median: 1.0, sigma: 1.2}
+      arguments_kib: {median: 0.1, sigma: 0.6}
+      result_kib: {median: 3.0, sigma: 1.6, max: 2048}
+      call_kib: {median: 0.1, sigma: 0.6}
+      answer_kib: {median: 0.4, sigma: 0.9}
+    unit: "agentic_share: the share of traces that call tools; tool_turns: the mean model calls past the first in such a trace (1 plus a geometric count); tools_per_turn: the weights of 1, 2 and 3 calls a turn; wrappers and history_messages: geometric means; *_kib: lognormal sizes (median KiB, the sigma of the log, an optional max)"
+    chart_has_no_key: "how a test shapes the traces it sends; the chart has no setting for the traffic it will see"
+    why: "An application's trace for --traces agent: a root holding the new message and the answer, a model node a turn with its wrapper chains and its chat-model call, and a tools node with a tool run a call for every turn that calls one. Every model call and its wrappers carry the conversation so far, so a large tool result or a long thread is sent again by every later run. Calibrated on 20,000 planned traces to what customers send: runs a trace median 4, mean 10.2, p99 69 (LangSmith's own trace data: median 3 to 4, mean 9 to 11, p99 73 to 95); model calls a trace mean 2.2, median 1 (2.0 to 2.6, median 1); a run's inputs and outputs median 16.8 KiB, p95 148, mean 40 (a customer's week of production runs: median about 16 KB, p95 about 180, mean about 42); non-root chains 68% of the bytes and model calls 28% (that week: 71% and 28%)."
+    source: {kind: decision, ref: "calibrated to LangSmith's sampled trace data (December 2025 to March 2026) and one customer's week of production runs (November 2026), LangChain-internal measurements (utils/langsmith-load-test, payloads/agent.py, 2026-11-26)"}
+    by: Reed Bender
+    since: 2026-11-26
   load.read_mix:
     value:
       list_traces: {weight: 45, component: query, what: "the most recent root runs in a project"}

@@ -42,6 +42,7 @@ NAME = "app.kubernetes.io/name"
 # RustFS too: the object store holds every payload, and without it neither its CPU nor its volume's growth,
 # the disk a size is planned on, was read (magus, 2026-11-26).
 STORES = ("redis", "postgres", "rustfs")
+BUCKET_STORES = ("rustfs",)  # an object store: each folder at its volume's top is a bucket
 QUEUES = ("ingestion_queue", "feedback_queue", "adhoc_queue")
 REDIS_FIELDS = ("used_memory", "maxmemory", "evicted_keys", "connected_clients")
 QUEUE_LATENCY = "langsmith_asynq_queue_latency_seconds"
@@ -296,13 +297,17 @@ class Collector:
 
     def _disk(self, sample: Sample, pods: list[dict[str, Any]]) -> None:
         """KiB in each persistent volume a running pod mounts, read with du inside it (needs pods/exec): local
-        volumes report no usage to the kubelet, so this is the one reading that works on every class."""
+        volumes report no usage to the kubelet, so this is the one reading that works on every class. An
+        object store's volume is read one folder deep too, each folder a bucket: the payload blobs and
+        SmithDB's segments read apart. Read whole, a store's growth hid which of them it was, and the
+        split, read by hand, was blobs 34 KiB a run and segments 86 (magus, box l, 2026-11-26)."""
         for pod in (p for p in pods if p["running"] and p["mounts"]):
             for container, mount in pod["mounts"]:
-                text = self.kube(["exec", "-n", pod["namespace"], pod["name"], "-c", container, "--", "du", "-sk", mount])
-                kib = text.split()[0] if text else ""
-                if kib.isdigit():
-                    sample["disk"][f"{pod['workload']}:{mount}"] = int(kib)
+                depth = ["-d", "1"] if pod["workload"] in BUCKET_STORES else ["-s"]
+                text = self.kube(["exec", "-n", pod["namespace"], pod["name"], "-c", container, "--", "du", "-k", *depth, mount])
+                read = parse_du(text or "", pod["workload"])
+                if f"{pod['workload']}:{mount}" in read:
+                    sample["disk"].update(read)
                 else:
                     sample["unread"].append(f"disk of {pod['workload']} {mount}")
 
@@ -595,6 +600,16 @@ def memory_peaks(samples: Sequence[Sample]) -> dict[str, float]:
 def disk_kib(sample: Sample) -> float | None:
     """KiB every store volume held at this sample; None where the sample did not read the disks."""
     return float(sum(sample["disk"].values())) if sample.get("disk") else None
+
+
+def parse_du(text: str, workload: str) -> dict[str, int]:
+    """du -k's lines, KiB and a path each, keyed workload:path."""
+    read: dict[str, int] = {}
+    for line in text.splitlines():
+        kib, _, path = line.partition("\t") if "\t" in line else line.partition(" ")
+        if kib.strip().isdigit() and path.strip():
+            read[f"{workload}:{path.strip()}"] = int(kib)
+    return read
 
 
 def disk_per_run(window: Sequence[Sample], runs_per_second: float | None) -> dict[str, float] | None:

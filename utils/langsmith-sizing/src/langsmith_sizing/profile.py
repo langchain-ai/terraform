@@ -13,7 +13,7 @@ Schema "langsmith-load-profile/1":
   write.payload.single_run_kib  [in, out] when one size replaces the mix, else null
   write.payload.compression     the compression the model sizes storage at
   write.payload.attachment_kib_per_run  attachment KiB each run carries; 0 sends none
-  write.payload.fields_per_side, content, send  how the bytes are shaped and sent (params load.payload_shape)
+  write.payload.traces, fields_per_side, ...   which traces, and how their bytes are shaped and sent (params load.payload_shape)
   write.feedback_per_trace
   read.users, read.requests_per_second
   read.mix               {class: {weight, component, what}}

@@ -20,12 +20,14 @@ READ_CLASSES = ("list_traces", "read_trace", "project_stats", "feedback_stats", 
 SINGLE = "single"
 CONTENTS = ("text", "json", "base64")
 SENDS = ("post_then_patch", "post_once")
+TRACES = ("simple", "agent")
 
 
 @dataclass(frozen=True)
 class Shape:
     """How a run's bytes are shaped and sent, beyond their size (params load.payload_shape)."""
 
+    traces: str = "simple"
     fields_per_side: int = 1
     content: str = "text"
     send: str = "post_then_patch"
@@ -45,6 +47,8 @@ class Shape:
         _number(self.project_skew, "project_skew")
         if self.content not in CONTENTS:
             raise ProfileError(f"content is one of {', '.join(CONTENTS)}, got {self.content!r}")
+        if self.traces not in TRACES:
+            raise ProfileError(f"traces is one of {', '.join(TRACES)}, got {self.traces!r}")
         if self.send not in SENDS:
             raise ProfileError(f"send is one of {', '.join(SENDS)}, got {self.send!r}")
         _number(self.attachment_kib_per_run, "attachment_kib_per_run")
@@ -105,7 +109,7 @@ def _payload(mix: dict[str, Any], sizes: dict[str, Any], single: Any) -> tuple[d
 
 def _shape(payload: dict[str, Any]) -> Shape:
     return Shape(
-        fields_per_side=_get(payload, "fields_per_side"), content=_get(payload, "content"), send=_get(payload, "send"),
+        traces=_get(payload, "traces"), fields_per_side=_get(payload, "fields_per_side"), content=_get(payload, "content"), send=_get(payload, "send"),
         attachment_kib_per_run=_number(_get(payload, "attachment_kib_per_run"), "write.payload.attachment_kib_per_run"),
         projects=_get(payload, "projects"), project_skew=_number(_get(payload, "project_skew"), "write.payload.project_skew"),
         metadata_keys=_get(payload, "metadata_keys"), batch_runs=_get(payload, "batch_runs"),
