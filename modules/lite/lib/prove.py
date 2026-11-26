@@ -79,7 +79,10 @@ READS_PER_READER = 3 / 5
 
 
 def runs_per_trace(a: argparse.Namespace) -> float:
-    code = "from loadtest.profile import from_params; print(from_params().runs_per_trace)"
+    """The mean runs a trace holds in the traces sent, to turn a rate in runs a second into traces a second:
+    the profile's for simple traces, the agent model's own for agent traces, which vary in length."""
+    code = ("from loadtest.payloads.agent import AgentModel, runs_per_trace; print(runs_per_trace(AgentModel.from_params()))"
+            if a.traces == "agent" else "from loadtest.profile import from_params; print(from_params().runs_per_trace)")
     return float(subprocess.run(["uv", "run", "--quiet", "--project", a.loadtest, "python", "-c", code],
                                 capture_output=True, text=True, check=True).stdout)
 
@@ -94,6 +97,7 @@ def main() -> int:
     p.add_argument("--duration", type=int, default=900)
     p.add_argument("--ramp", type=int, default=120)
     p.add_argument("--step", action="store_true")
+    p.add_argument("--traces", choices=("simple", "agent"), default="simple", help="the load test's --traces: simple, or an agent's realistic ones")
     p.add_argument("--prometheus", help="NS/SERVICE:PORT of the install's Prometheus, for CPU")
     # Anything else is the load test's own (TRACES: --content, --fields-per-side, ...), passed through as
     # given, so a flag it adds needs nothing here.
@@ -109,7 +113,7 @@ def main() -> int:
     env = {**os.environ, "LANGSMITH_TRACING": "true", "LANGSMITH_ENDPOINT": a.endpoint.rstrip("/") + "/api/v1", "LANGSMITH_API_KEY": key,
            "LANGSMITH_PROJECT": f"lite-{a.mode}"}
     env.pop("LANGSMITH_WORKSPACE_ID", None)
-    where = ["--namespace", a.namespace, "--data-namespace", a.data_namespace, *(["--prometheus", a.prometheus] if a.prometheus else [])]
+    where = ["--namespace", a.namespace, "--data-namespace", a.data_namespace, "--traces", a.traces, *(["--prometheus", a.prometheus] if a.prometheus else [])]
     try:
         if a.mode == "verify":
             return load_test(a, env, "load-test-verify", *where, *passed, "--results", "verify.json")

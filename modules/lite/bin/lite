@@ -43,8 +43,8 @@ Install|up|ask what is missing, plan, apply, install; again to change or repair 
 Use|access|every login; tunnels to LangSmith, Grafana and Mission Control
 |status|each release, every pod, what the box uses (read-only)
 |verify|traces go in and come back out, checked hop by hop: about two minutes
-|soak|the design load with reads for DURATION=900 s; STEP=1 raises it until it breaks; TRACES= shapes the traces
-|experiment|every size from no data, held to its machine: verify, then 1x twice, 2x and 3x its design rate; TRACES= shapes the traces
+|soak|the design load with reads for DURATION=900 s; STEP=1 raises it until it breaks; TRACES=agent sends realistic traces
+|experiment|every size from no data, held to its machine: verify, then 1x twice, 2x and 3x its design rate, in realistic (agent) traces
 |report|the runs in build/soak (or the folders given) as figures, numbers and the runs' own files
 |down|delete the install and every trace in it
 Inspect and change|secrets|change the license key or the tunnel token (infra/.secrets.env, mode 600)

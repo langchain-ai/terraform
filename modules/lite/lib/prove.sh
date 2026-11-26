@@ -35,14 +35,22 @@ cmd_soak() {
   prove soak "${extra[@]}" $(traces_flags) || exit 1
 }
 
-# TRACES: the traces verify, soak and every experiment step send. Unset, the load test's default: ten
-# runs a trace, each a size drawn from the measured mix (70% 4 + 4 KiB, 25% 32 + 32, 5% 750 + 750), one
-# field of prose a side. Set, the load test's own payload-shape flags, as typed (--content json,
-# --fields-per-side 4, --metadata-keys 5, ...): a trace shaped like a customer's, the load test unchanged.
-# The first experiment sent the default, and its object store grew four times the plan's bytes a run: one
-# field a side puts every medium and large run past the 20 KiB offload, stored as sent (magus, 2026-11-26).
-traces_flags() { printf '%s' "${TRACES:-}"; }
-traces_field() { field "traces" "${TRACES:-the default: the measured size mix, one prose field a side}"; }
+# TRACES: the traces verify, soak and every experiment step send, the load test's --traces.
+#   simple  ten runs in a flat tree, each a size from the measured mix: quick, and comparable run to run
+#   agent   an application's traces, as customers send them: mostly one model call, a third an agent that
+#           calls tools for several turns, every model call resending the conversation so far (the load
+#           test's payloads/agent.py, calibrated in params.yaml's load.agent_trace)
+# verify and soak send simple unless TRACES says otherwise; an experiment sends agent, as it measures
+# what a size holds for real traffic. The first experiment's simple traces put 34 KiB a run in blob
+# storage and 86 in SmithDB's segments on box l, against 25.7 KB the plan budgets (magus, 2026-11-26).
+# Checked here, in the verb's own shell: a fail inside $(traces_flags) would end only its subshell.
+traces_field() {
+  case "${TRACES:-simple}" in
+    simple | agent) field "traces" "${TRACES:-simple}" ;;
+    *) fail "TRACES is simple or agent, not $TRACES" "simple: the quick test traces; agent: an application's realistic ones." ;;
+  esac
+}
+traces_flags() { [[ -z "${TRACES:-}" ]] || printf -- '--traces %s' "$TRACES"; }
 
 prove() {
   need terraform python3 ssh kubectl uv
@@ -150,7 +158,7 @@ experiment_folder() {
   fi
   out="$BUILD/experiment/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$out"
-  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\nTRACES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 1 2 3}" "${MINUTES:-10}" "${TRACES:-}" >"$out/settings"
+  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\nTRACES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 1 2 3}" "${MINUTES:-10}" "${TRACES:-agent}" >"$out/settings"
   echo "$out"
 }
 
