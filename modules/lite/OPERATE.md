@@ -1,6 +1,6 @@
 # Operating Lite
 
-> **Status:** current · **Last verified:** 2026-11-24 (dashboards and alerts on Grafana 13.3.1 locally; not yet installed on a box)
+> **Status:** current · **Last verified:** 2026-11-25 (installed, verified and soaked on an Arch-family server; dashboards and alerts on Grafana 13.3.1 locally)
 
 Choosing and checking a machine, reaching it, proving it works, watching it, changing it, keeping its
 data, handing an install to a cluster, and what to do when an install stops. Every command is a `make`
@@ -35,11 +35,12 @@ aws iam create-policy --policy-name langsmith-lite --policy-document file://infr
 aws iam attach-user-policy --user-name <user> --policy-arn arn:aws:iam::<account>:policy/langsmith-lite
 ```
 
-Or in your own Terraform: `resource "aws_iam_policy" "langsmith_lite" { policy = file("<path>/iam-policy.json") }`.
-To hold it to one region, add `"Condition": { "StringEquals": { "aws:RequestedRegion": "us-east-1" } }` to
-each EC2 and DLM statement. The instance goes in the region's default VPC, or the subnet `aws_subnet_id`
-names, which must give it a public address. `make check` fails when the AWS host makes a resource the
-policy has no statement for; the policy itself is first exercised by the first AWS install.
+Or in your own Terraform: `resource "aws_iam_policy" "langsmith_lite" { policy =
+file("<path>/iam-policy.json") }`. To hold it to one region, add `"Condition": { "StringEquals": {
+"aws:RequestedRegion": "us-east-1" } }` to each EC2 and DLM statement. The instance goes in the region's
+default VPC, or the subnet `aws_subnet_id` names, which must give it a public address. `make check` fails
+when the AWS host makes a resource the policy has no statement for; the policy itself is first exercised
+by the first AWS install.
 
 On GCP or Azure, make a VM of the size's shape and use `baremetal` until their hosts land. k3s needs
 Linux, so on a Mac or Windows machine the box is a Linux VM (Lima, OrbStack, UTM, Hyper-V), for example
@@ -65,7 +66,7 @@ on the box before it changes anything:
 |:--|:--|
 | Ubuntu 22.04, 24.04 | written for; the AWS host's image is 24.04 |
 | Debian 12, 13 | written for |
-| Arch and Arch-based (Omarchy) | preflight passes (2026-11-24); install not yet run |
+| Arch and Arch-based (Omarchy) | tested: `make up`, `make verify` and `make soak` passed (2026-11-25) |
 | RHEL, Rocky, Alma, Fedora, Amazon Linux | untested; with SELinux enforcing, k3s needs `k3s-selinux` |
 | Alpine, or anything without systemd | not supported |
 
@@ -97,12 +98,13 @@ Control, Prometheus and the stores have no port there.
 ### Sending traces
 
 An application traces to LangSmith with the SDK's usual settings: `LANGSMITH_ENDPOINT` is LangSmith's
-address above with `/api/v1` (for `localhost`, `http://localhost:8080/api/v1`, reachable only while
-`make access` runs on the same machine), `LANGSMITH_API_KEY` a key made in LangSmith (Settings, API Keys),
-and `LANGSMITH_TRACING=true`. A trace then shows in its project within seconds; `make verify` checks the
-same path end to end. Reading traces back from SmithDB takes the SDK's newer query methods (Python
-`langsmith` 0.10.15 or later, TypeScript 0.8.9): they call LangSmith's `/v2` endpoints from the same
-`/api/v1` address ([the SmithDB SDK migration](https://docs.langchain.com/langsmith/smithdb-sdk-migration)).
+address from the `access` table with `/api/v1` (for `localhost`, `http://localhost:8080/api/v1`,
+reachable only while `make access` runs on the same machine), `LANGSMITH_API_KEY` a key made in LangSmith
+(Settings, API Keys), and `LANGSMITH_TRACING=true`. A trace then shows in its project within seconds;
+`make verify` checks the same path end to end. Reading traces back from SmithDB takes the SDK's newer
+query methods (Python `langsmith` 0.10.15 or later, TypeScript 0.8.9): they call LangSmith's `/v2`
+endpoints from the same `/api/v1` address ([the SmithDB SDK
+migration](https://docs.langchain.com/langsmith/smithdb-sdk-migration)).
 
 ### A real endpoint: DNS, certificates, SSO
 
@@ -114,8 +116,8 @@ scope is the box and its four access modes; the rest are noted here so an instal
 | A name | `dns`: you make the A record for `domain`; `tunnel`: Cloudflare makes it | private DNS, or a load balancer in front: point it at the box's 80 and 443 |
 | A trusted certificate | `dns`: Let's Encrypt through Traefik (HTTP-01, so port 80 must reach the box); `tunnel`: Cloudflare's | your own certificate or an internal CA's: not yet; with `ip`, clients must trust Traefik's self-signed one ([self-signed certificates](https://docs.langchain.com/langsmith/self-host-usage#self-signed-certificates)) |
 | Reachable only inside a network | `localhost` (ssh only), or `ip` with `access_cidrs` on AWS; `tunnel` with [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/applications/) in front | a VPN or private subnet the box sits in |
-| Single sign-on | not yet: logins are LangSmith's own (email and password, the first admin's generated) | [SSO with OAuth 2.0 and OIDC](https://docs.langchain.com/langsmith/self-host-sso), below |
-| Outbound through a proxy, or to services an internal CA signed | not supported: the box needs the internet (The machine) | [custom TLS certificates](https://docs.langchain.com/langsmith/self-host-custom-tls-certificates) |
+| Single sign-on | not yet: logins are LangSmith's own (email and password, the first admin's generated) | [SSO with OAuth 2.0 and OIDC](https://docs.langchain.com/langsmith/self-host-sso), in the steps after this table |
+| Outbound through a proxy, or to services an internal CA signed | not supported: the box needs the internet ([The machine](#the-machine)) | [custom TLS certificates](https://docs.langchain.com/langsmith/self-host-custom-tls-certificates) |
 
 SSO, when it lands, follows the chart's own path, and an install made today is ready for it: Lite already
 runs LangSmith with `authType: mixed` (which SSO needs) and sets its hostname. The order matters and is
@@ -130,9 +132,15 @@ one-way:
 4. Keep a [recovery admin login](https://docs.langchain.com/langsmith/self-host-sso-recovery) for when the
    identity provider is down.
 
-Every LangSmith sign-in option is on [Authentication methods](https://docs.langchain.com/langsmith/authentication-methods#self-hosted).
+Every LangSmith sign-in option is on [Authentication
+methods](https://docs.langchain.com/langsmith/authentication-methods#self-hosted).
 
 ## Proving it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/proving-dark.png">
+  <img alt="Four questions, each a command. make verify, about 2 minutes: do traces flow; ten traces followed through four hops, accepted, drained from Redis, flushed by SmithDB, readable by a query. make soak, 17 minutes: does it hold its design load; a 2-minute ramp, then the design rate with its readers for 15 minutes, every target judged. STEP=1 make soak, until a step does not hold: what does it hold; the design rate times 0.5, 1, 1.5, 2, 3 and 4 in turn. make experiment, about an hour a size: what each size holds; for xs, s, m and l, a fresh install, verify, then 1, 2 and 3 times the design rate." src="diagrams/proving-light.png">
+</picture>
 
 | Command | Answers | Takes |
 |:--|:--|:--|
@@ -144,7 +152,8 @@ Every LangSmith sign-in option is on [Authentication methods](https://docs.langc
 
 They log in as the first admin, make an API key for the run and revoke it after; they reach the box's
 Kubernetes API and LangSmith through ssh, with no port opened. They are the load test's own commands
-(`utils/langsmith-load-test`), which run the same way against a cloud or bare-metal install.
+([`utils/langsmith-load-test`](../../utils/langsmith-load-test)), which run the same way against a cloud
+or bare-metal install.
 
 Each run keeps, in `build/verify/`, `build/soak/` or the experiment's folder, its results and every
 sample of the install taken every 15 s: each workload's cores and memory, the stores' included; every
@@ -166,17 +175,18 @@ Grafana's "LangSmith Lite" folder holds the two dashboards that matter most:
 | LangSmith Lite health | Red flags; Ingestion; Writes and queries; Compaction; Stores and pods; Capacity | is anything wrong: one tile a signal, green, orange (the early signal) or red (an alert fires); each tab graphs its signals with their levels as lines, one line an install |
 | LangSmith Self-Hosted (the chart's own, from its [observability bundle](https://docs.langchain.com/langsmith/self-host-observability-dashboards)) | SmithDB; Sandboxes, empty on Lite, which runs none | why: every SmithDB and LangSmith metric in depth |
 
-Node Exporter, Redis and PostgreSQL dashboards are there too. Every signal on the health dashboard is
-one alert rule in Grafana (Alerting, Alert rules), from one list, `infra/health.yaml`: LangSmith's
-[recommended SmithDB alerts](https://docs.langchain.com/langsmith/self-host-smithdb-alerts) (runs lost,
-an old backlog, Redis nearly full, failed or slow writes and queries, a saturated metastore, compaction
-behind or stopped, a component with no pods, restarts) and the bounds the plan sized (the disks, each
-pod's memory). A rule shows in Grafana's alert list; where it is sent (email, Slack, a pager) is a
-contact point you add in Grafana. SmithDB's panics are read from logs, which Lite does not collect.
+Node Exporter, Redis and PostgreSQL dashboards are there too. Every signal on the health dashboard is one
+alert rule in Grafana (Alerting, Alert rules), from one list, [`infra/health.yaml`](infra/health.yaml):
+LangSmith's [recommended SmithDB alerts](https://docs.langchain.com/langsmith/self-host-smithdb-alerts)
+(runs lost, an old backlog, Redis nearly full, failed or slow writes and queries, a saturated metastore,
+compaction behind or stopped, a component with no pods, restarts) and the bounds the plan sized (the
+disks, each pod's memory). A rule shows in Grafana's alert list; where it is sent (email, Slack, a pager)
+is a contact point you add in Grafana. SmithDB's panics are read from logs, which Lite does not collect.
 
 The LangSmith and SmithDB signals are grouped by namespace and the dashboard has an install picker, so
-the same dashboard serves a Grafana that scrapes many installs (ARCHITECTURE.md, Many installs); Redis,
-Postgres and the disks come from the box's own exporters and stay one a box.
+the same dashboard serves a Grafana that scrapes many installs ([ARCHITECTURE.md, Many
+installs](ARCHITECTURE.md#many-installs)); Redis, Postgres and the disks come from the box's own
+exporters and stay one a box.
 
 `make status` gives the shell's view: each release's install, every pod, what the node and the pods use,
 and the volumes. Mission Control adds LangSmith's health view and a diagnostics bundle for a support
@@ -200,7 +210,8 @@ make up      # resolves the lines again: a new LangSmith patch shows as a change
 ```
 
 A patch inside a pinned line arrives with any `make up`. A new line (LangSmith 0.19, k3s 1.37) is an edit
-to `infra/pins.yaml`, made on purpose: read the chart's changelog, then `make render` before any box gets it.
+to `infra/pins.yaml`, made on purpose: read the chart's changelog, then `make render` before any box gets
+it.
 
 ## Keeping its data
 
@@ -240,9 +251,9 @@ Lite makes no Ingress there: route your ingress controller to the Service `langs
 the install's namespace, and set `ingress_namespaces` to the controller's namespace.
 
 Or hand `values/` to Helm or Argo CD as they are. Installs on one cluster are independent
-(ARCHITECTURE.md, Many installs): the cluster's CNI must enforce NetworkPolicies, and
-`ingress_namespaces` names its ingress controller's namespace. Observability and Mission Control are off
-by default there, since a cluster runs one stack for all of them.
+([ARCHITECTURE.md, Many installs](ARCHITECTURE.md#many-installs)): the cluster's CNI must enforce
+NetworkPolicies, and `ingress_namespaces` names its ingress controller's namespace. Observability and
+Mission Control are off by default there, since a cluster runs one stack for all of them.
 
 ## When an install stops
 
@@ -276,8 +287,13 @@ What only a running box can show, each read on the first install of each size:
    At `m` on magus (2026-11-25): 1.5 to 1.6 cores from 50 to 75 runs/s, never killed; every run stored up
    to 75 runs/s, three times the design rate. The other sizes: `make experiment`.
 2. Traefik's HTTPS redirect and Let's Encrypt resolver, as k3s's bundled Traefik chart takes them.
-3. The health dashboard's signals reading data. Three LangSmith metric names (`langsmith_ingest_task_failures_total`, `langsmith_asynq_queue_latency_seconds`, `langsmith_asynq_ingestion_queue_retry`) come from the alerts page, not yet read from a 0.18 install; SmithDB's are checked against its source. Grafana 13.3.1 provisioning both dashboards and every rule was checked locally (2026-11-24).
+3. The health dashboard's signals reading data. Three LangSmith metric names
+   (`langsmith_ingest_task_failures_total`, `langsmith_asynq_queue_latency_seconds`,
+   `langsmith_asynq_ingestion_queue_retry`) come from the alerts page, not yet read from a 0.18 install;
+   SmithDB's are checked against its source. Grafana 13.3.1 provisioning both dashboards and every rule
+   was checked locally (2026-11-24).
 4. Postgres connections in use, and the metastore's growth. At `m`: about 40 connections of 200, from
    12.5 to 75 runs/s; the metastore's growth is in each run's disk readings.
 5. Mission Control taking the pre-created login rather than its first-run setup token.
-6. k3s beside Docker on an Arch-family machine, then Ubuntu (AWS) and Debian.
+6. Ubuntu (the AWS host's image) and Debian. magus, Arch-family with Docker beside k3s, passed
+   (2026-11-25).

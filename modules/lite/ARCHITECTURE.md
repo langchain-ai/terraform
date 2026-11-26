@@ -1,72 +1,40 @@
 # Architecture
 
-> **Status:** current · **Last verified:** 2026-11-24
+> **Status:** current · **Last verified:** 2026-11-25
 
 How Lite goes from `make up` to a running box, how a trace moves through it, why each piece is the
 one it is, and how it differs from the other modules.
 
 ## From make up to a running box
 
-```
- laptop: bin/lite                                      box: box/install.sh, as root
- ----------------                                      ----------------------------
- make preflight   box/checks.sh  ---ssh--->            read-only, as the ssh user
-
- make up          ask what the tfvars lack   (lib/settings.py; NAME=value answers one)
-                  resolve each chart line   (live Helm repos)
-                  package the datastores chart
-                  terraform plan: size every pod and volume,
-                    check the fit, render the bundle
-                  the plan's summary, then a question      (make plan stops here)
-                  terraform apply           (aws: the instance, its data volume, its snapshots)
-                  bundle + chart + box/  ---ssh--->    1  checks.sh again
-                                                       2  aws: the data volume, at k3s's storage folder
-                                                       3  k3s at the pinned version
-                                                       4  namespaces and their network policies, priority
-                                                          class, storage class, Traefik, the operator's
-                                                          ServiceAccount, Secrets
-                                                       5  the ssh user's kubeconfig: the operator's, not admin
-                                                       6  each HelmChart into k3s's manifests folder,
-                                                          the stores first; wait for each install Job
-                                                       7  remove what this bundle no longer has
-
- cloud = cluster  terraform apply           (credentials only: there is no machine)
- (make export)    releases, values, Secrets, the datastores chart  --> files for the cluster's operator
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/install-dark.png">
+  <img alt="Two lanes. On the laptop, bin/lite: 1 ask what the settings lack; 2 resolve each chart line against the live Helm repos to an exact version; 3 terraform plan sizes every pod and volume, checks the fit and renders the bundle; 4 show the plan and ask once, where make plan stops; 5 terraform apply makes the credentials and, on AWS, the instance, its volume and its snapshots. One ssh session, with sudo asked once, carries the bundle, the datastores chart and box/ to the box, where box/install.sh runs as root: checks.sh again; on AWS only, the data volume mounted at k3s's storage folder; k3s at the pinned version; the node Ready; with emulate_machine, every pod held to the size's machine; with FRESH=1, this install's releases, namespaces and volumes removed; namespaces, their policies, the storage class and Traefik; every credential applied server-side; the ssh user's kubeconfig, the operator's and not admin; each release's HelmChart in order (datastores, langsmith, prometheus, grafana, redis-exporter, postgres-exporter, mission-control), the stores first, k3s's helm-controller running each install Job; every LangSmith deployment available; and what an earlier install had and this one lacks removed. Nothing on the laptop talks to Kubernetes. With cloud = cluster there is no machine and no ssh: make export writes the same releases." src="diagrams/install-light.png">
+</picture>
 
 During an install nothing on the laptop talks to the box's Kubernetes API (later, `status`, `access`,
 `verify` and `soak` reach it through ssh). Terraform has no Kubernetes or Helm
 provider: it sizes the box, renders the bundle, generates the credentials and, with `cloud = aws`,
 makes the instance. `infra/releases.tf` says what each release is (chart, namespace, values, order);
-`infra/bundle.tf` how they reach a k3s box; `make export` writes the same releases for a cluster. The box installs itself with k3s's own controllers: k3s applies whatever is in
+`infra/bundle.tf` how they reach a k3s box; `make export` writes the same releases for a cluster. The
+box installs itself with k3s's own controllers: k3s applies whatever is in
 `/var/lib/rancher/k3s/server/manifests`, and its helm-controller installs each `HelmChart` there. The
 plan therefore runs before any machine exists, a second `make up` changes only what differs, and the
 box keeps running if the laptop goes away.
 
 ## How a trace moves
 
-```
- SDK --HTTPS--> Traefik --> frontend (nginx) --/runs--> platform-backend --> Redis (queue + payload)
-                                                              |                         |
-                                       payloads >= 20 KiB     v                         v
-                                                       RustFS: blobs              ingest-queue
-                                                                                |
-                                                                                v
-                                                     SmithDB  <--metadata--> Postgres (metastore)
-                                                        |
-                                                        v
-                                                     RustFS: segments
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/trace-path-dark.png">
+  <img alt="A run written, in order: 1 and 2, an SDK sends it through Traefik to frontend, the nginx in front of every request; 3, on /runs, platform-backend accepts it and answers 202; 4, it keeps the run and a task in Redis, and a payload of 20 KiB or more in RustFS's blob bucket; 5 and 6, ingest-queue takes the task and writes the run's rows to SmithDB, one pod; 7 and 8, SmithDB records each segment in its metastore, a database of the one Postgres, and flushes the segment's file to RustFS. A read: a reader reaches backend through Traefik and frontend on /api, which asks SmithDB for runs, recent segments from its query cache on local disk, and Postgres for orgs, projects and keys. queue, LangSmith's background worker, reads Redis and Postgres beside the path." src="diagrams/trace-path-light.png">
+</picture>
 
- UI --> Traefik --> frontend --/api--> backend --> SmithDB (queries; its cache on local disk)
-                                           \--> Postgres (orgs, projects, keys)
-```
-
-`queue`, LangSmith's background worker, reads Redis and Postgres beside this path. Each store holds
-one kind of data with one bound on it: SIZING.md has the numbers. Redis and Postgres reserve their
-memory (request equals limit), since they hold the runs waiting to be ingested and every install's
-metadata, and a node short of memory reclaims first from pods using more than they asked; the stores
-(Postgres, Redis, RustFS and SmithDB) also run at a priority above the app's, so under memory pressure an
-app pod, which restarts with no loss, is evicted before a store.
+`queue`, LangSmith's background worker, reads Redis and Postgres beside this path. Each store holds one
+kind of data with one bound on it: [SIZING.md, Each store](SIZING.md#each-store) has the numbers. Redis
+and Postgres reserve their memory (request equals limit), since they hold the runs waiting to be ingested
+and every install's metadata, and a node short of memory reclaims first from pods using more than they
+asked; the stores (Postgres, Redis, RustFS and SmithDB) also run at a priority above the app's, so under
+memory pressure an app pod, which restarts with no loss, is evicted before a store.
 
 ## What runs, and why each piece
 
@@ -90,9 +58,10 @@ app pod, which restarts with no loss, is evicted before a store.
 
 The stores' volumes use `local-path-retain` (`storage_class`), so a deleted claim never deletes data;
 SmithDB's cache and Prometheus use k3s's `local-path` (`scratch_storage_class`), since both rebuild.
-Every volume is a folder on one data disk, with no cloud disk per volume and no CSI driver (OPERATE.md,
-The machine, says which disk). The plan keeps every disk at most 80% full once the stores hold their
-retention: on a one-disk box that disk also holds the images, and k3s's kubelet evicts pods under 15% free.
+Every volume is a folder on one data disk, with no cloud disk per volume and no CSI driver ([OPERATE.md,
+The machine](OPERATE.md#the-machine), says which disk). The plan keeps every disk at most 80% full once
+the stores hold their retention: on a one-disk box that disk also holds the images, and k3s's kubelet
+evicts pods under 15% free.
 
 ## What Lite decides, and what it reads
 
@@ -103,7 +72,7 @@ what it decides.
 |:--|:--|
 | Each chart's exact version, resolved from its pinned line (`infra/pins.yaml`) before every plan; a plan without it is refused | The chart lines, and k3s's exact version |
 | Mission Control's image tag: the chart's `appVersion` | Which products run: tracing only (`infra/values.tf`) |
-| LangSmith's metrics ports: the chart's `prometheus-values.yaml`, applied as a second values layer | Every pod's and volume's size (`infra/sizes.yaml`, SIZING.md) |
+| LangSmith's metrics ports: the chart's `prometheus-values.yaml`, applied as a second values layer | Every pod's and volume's size ([`infra/sizes.yaml`](infra/sizes.yaml), [SIZING.md](SIZING.md)) |
 | The official dashboard, from the chart's repo at the release tag | The stores' layout: one Postgres, one Redis, one RustFS |
 | k3s's installer, from its release's own tag | Retention, payload and access settings (`infra/variables.tf`) |
 
@@ -113,14 +82,19 @@ renamed a value fails there, before it reaches a box.
 
 ## Security
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/isolation-dark.png">
+  <img alt="Left, the network: kube-system's Traefik and, with access = tunnel, cloudflared in its own namespace are admitted to the install's namespace, which holds LangSmith's pods, SmithDB and Mission Control; that namespace and the observe namespace (Prometheus, Grafana, the exporters) are admitted to the data namespace (Postgres, Redis, RustFS); the observe namespace also scrapes the install's. Refused: the tunnel never reaches a store, and another install on the same cluster reaches neither namespace. Right, access as three rings: the laptop holds Terraform and its local state, with every generated credential, and the license key at mode 600; the ssh user on the box has the operator's kubeconfig, which reads the install, its logs and tunnels and execs in its own namespaces, and is not cluster-admin and not nodes/proxy; root, by sudo asked once a command, covers k3s and its config, the data disk's mount and k3s's manifests folder, and make down and FRESH=1 remove volumes. Every other verb reads through the operator's kubeconfig." src="diagrams/isolation-light.png">
+</picture>
+
 | Concern | What Lite does |
 |:--|:--|
 | Credentials | Terraform generates every one (`infra/secrets.tf`) and keeps it in its state, local and gitignored; the license key and a tunnel token are typed once into `infra/.secrets.env` (mode 600) and reach Terraform as environment variables, never as arguments. The plan file holds them too: mode 600, removed once applied or declined. No credential is in any Helm value (`make values` shows them) or any log. |
 | On the box | The bundle travels inside ssh and is deleted after the install; Secrets are applied server-side (a client-side apply copies them into an annotation), their file deleted, and k3s encrypts Secrets at rest. `make export` writes `secrets.yaml` mode 600, to apply server-side and delete. |
 | ssh | An AWS instance's host key is generated by Terraform, given to it at boot and checked strictly; a machine of your own is trusted on first use (its key is yours to know) and refused if its key changes. `admin_cidrs` refuses the whole internet. |
-| Root | sudo runs the install and the removal, and nothing after: k3s and its config, the data disk's mount (formatting a blank AWS volume, its fstab line, the rule that k3s waits for it), k3s's manifests; `make down` removes them and the volume folders. Asked once a command. |
+| Root | sudo runs the install and the removal, and nothing after: k3s and its config, the data disk's mount (formatting a blank AWS volume, its fstab line, the rule that k3s waits for it), k3s's manifests; `make down` removes them and the volume folders, and `FRESH=1 make up` this install's volumes in the same step as its install. Asked once a command. |
 | The cluster | The ssh user's kubeconfig is the operator ServiceAccount's: read the install, its logs, tunnels and exec in its own namespaces, a tunnel to Traefik; not cluster-admin and not `nodes/proxy` (whose GET opens a kubelet exec). k3s's admin kubeconfig stays root-only. |
-| The network | Every namespace refuses traffic but from where it is needed (the table above); Grafana, Prometheus, Mission Control and the stores have no port on the box; Prometheus runs without its unauthenticated lifecycle API. |
+| The network | Every namespace refuses traffic but from where it is needed (the namespace table in [What runs](#what-runs-and-why-each-piece)); Grafana, Prometheus, Mission Control and the stores have no port on the box; Prometheus runs without its unauthenticated lifecycle API. |
 | Logins | LangSmith's first admin, Grafana's admin and Mission Control's are generated passwords; Grafana has no anonymous access; Mission Control is strictly read-only. `make verify` and `make soak` make an API key for the run and revoke it, pass or fail. |
 | Data at rest | k3s's Secrets encrypted; on AWS both volumes and their snapshots encrypted, instance metadata reachable only from the instance (IMDSv2, one hop). |
 | What is Lite's | k3s is marked (`/etc/rancher/k3s/installed-by-langsmith-lite`): the checks refuse a k3s server someone else installed, `make down` removes only a marked one, and k3s will not start without the data disk mounted. |
@@ -134,13 +108,19 @@ Known limits, each a deliberate corner cut:
   The upgrade path is TLS between pods and read-only exporter roles.
 - With `access = ip`, browsers meet a self-signed certificate; with `tunnel`, put Cloudflare Access in
   front of the hostname, since LangSmith's login is then on the internet.
-- Not built yet, and where each would plug in without a change of shape (OPERATE.md, A real endpoint):
-  SSO is one setting that adds the chart's OIDC values (`infra/values.tf`, beside `authType: mixed` and
-  the hostname Lite already sets), its client secret in the Secret Lite already makes (`infra/secrets.tf`),
-  and basic auth off; your own certificate is a TLS Secret and Traefik's default certificate
-  (`traefik_values`); an internal CA for outbound calls is the chart's `config.customCa`.
+- Not built yet, and where each would plug in without a change of shape ([OPERATE.md, A real
+  endpoint](OPERATE.md#a-real-endpoint-dns-certificates-sso)): SSO is one setting that adds the chart's
+  OIDC values (`infra/values.tf`, beside `authType: mixed` and the hostname Lite already sets), its
+  client secret in the Secret Lite already makes (`infra/secrets.tf`), and basic auth off; your own
+  certificate is a TLS Secret and Traefik's default certificate (`traefik_values`); an internal CA for
+  outbound calls is the chart's `config.customCa`.
 
 ## Many installs
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/two-shapes-dark.png">
+  <img alt="Two shapes from one sizing. Left, a machine an install, cloud = baremetal or aws, make up: three machines (your server, a VM on a laptop, an EC2 instance with a gp3 data volume), each with k3s on one node, the install's namespace (LangSmith, SmithDB), its data namespace (Postgres, Redis, RustFS), its observe namespace (Prometheus, Grafana) and its own data disk; the laptop keeps a checkout or a state an install, plans, and ssh carries the bundle. Nothing is shared. Right, a namespace an install, cloud = cluster, make export: your cluster's ingress controller, named in each install's ingress_namespaces, reaches each install's namespace; each has its own data namespace on the cluster's storage class, and each namespace refuses another install's traffic. Every install schedules on the same nodes today. Not built: an install on a node pool of its own; the chart takes a node selector and tolerations a component, and the datastores chart and one Lite setting would carry them. No observability or Mission Control an install: one stack serves the cluster." src="diagrams/two-shapes-light.png">
+</picture>
 
 Lite is built to be one of many, one install a customer, driven by a system above it that is not built
 here. What that system needs, Lite gives:
@@ -159,6 +139,12 @@ here. What that system needs, Lite gives:
 - **Independent stores.** Each install has its own Postgres, Redis and RustFS, its own credentials and its
   own priority class, in namespaces named for it that refuse other installs' traffic (the cluster's CNI
   must enforce NetworkPolicies). Installs share a cluster's nodes and nothing else.
+- **A node pool an install, not built.** On a cluster every install schedules on the same nodes, held
+  apart by its namespaces, its credentials and its requests, not by the machine. Where a customer's data
+  must not share a node either, the plug-in is one setting that pins every release to a pool: the
+  LangSmith chart takes a `nodeSelector` and `tolerations` on each component, the datastores chart does
+  not yet, and a node pool with a taint per install is the cluster's to make. Until then, a node of its
+  own is a machine of its own: `cloud = baremetal` or `aws`.
 - **Watched from one place, later.** On a cluster an install runs no observability stack or Mission
   Control of its own, since their roles are cluster-wide. The health dashboard and its alerts are
   grouped by namespace, with an install picker, ready for one shared stack; that stack is not built
@@ -178,7 +164,7 @@ LangSmith on a cluster you have; Lite puts LangSmith's tracing on one machine.
 | Redis | ElastiCache, Memorystore, Azure Managed Redis | in-cluster | in-cluster, limit from the rate |
 | Object storage | S3, GCS, Azure Blob | in-cluster RustFS | in-cluster RustFS, volume from the traffic kept |
 | Trace store | ClickHouse during the move to SmithDB; SmithDB as separate pods | SmithDB's separate pods | SmithDB as one pod, no ClickHouse |
-| Chart line | `~0.17.0` | `~0.17.0` | `~0.18.0` |
+| Chart line (2026-11-25) | `~0.17.0` | `~0.17.0` | `~0.18.0` |
 | Products | tracing plus what each enables | the same, by input | tracing only |
 | Ingress | ALB with ACM (AWS); Envoy Gateway (GCP) | Envoy Gateway, MetalLB | Traefik: ssh, self-signed, Let's Encrypt or a tunnel |
 | Secrets | SSM with External Secrets, Secret Manager, Key Vault | Kubernetes Secrets from Terraform | the same, encrypted in k3s's datastore |

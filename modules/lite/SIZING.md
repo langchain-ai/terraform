@@ -1,11 +1,11 @@
 # Sizing
 
-> **Status:** current · **Last verified:** 2026-11-24 (plan output at each size; not yet measured on a box)
+> **Status:** current · **Last verified:** 2026-11-25 (plan output at each size; `m` measured on a box)
 
 Every pod and volume follows from two choices: the load (`box`, or `runs_per_second`) and the retention
-(`short_ttl_days`, `long_ttl_days`). The data is `infra/sizes.yaml`, the arithmetic `infra/sizing.tf`,
-whose blocks follow this page's computation in order and by name. `make plan` prints the result and
-refuses a machine that cannot hold it, before any machine exists.
+(`short_ttl_days`, `long_ttl_days`). The data is [`infra/sizes.yaml`](infra/sizes.yaml), the arithmetic
+[`infra/sizing.tf`](infra/sizing.tf), whose blocks follow this page's computation in order and by name.
+`make plan` prints the result and refuses a machine that cannot hold it, before any machine exists.
 
 ## The computation
 
@@ -42,6 +42,11 @@ peak      <= 50 runs/s                                      # past it: a full de
 
 ## The sizes
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/sizes-dark.png">
+  <img alt="Each of the four sizes against its machine, at its design rate and the default retention. xs, 1 run a second on 2 vCPU, 16 GiB and 100 GiB: 1.27 of 1.36 vCPU, 8.6 of 12.8 GiB, 76 of 80 GiB of disk. s, 5 runs a second on 4 vCPU, 32 GiB and 200 GiB: 2.37 of 2.98 vCPU, 12.4 of 25.9 GiB, 147 of 160 GiB. m, 25 runs a second on 8 vCPU, 64 GiB and 640 GiB: 5.37 of 6.16 vCPU, 25.1 of 52.7 GiB, 508 of 512 GiB. l, 50 runs a second on 16 vCPU, 64 GiB and 1,280 GiB: 9.73 of 12.75 vCPU, 43.7 of 51.8 GiB, 984 of 1,024 GiB. CPU comes nearest its allowance at xs, s and m, memory at l. The allowance is 85% of what k3s leaves allocatable for CPU and memory, and 80% of the disk for the volumes and the system's 40 GiB." src="diagrams/sizes-light.png">
+</picture>
+
 At the default TTLs (14 days, 30 extended), each size at its design rate:
 
 | `box` | Machine | Peak runs/s | Runs a day | Requests of allowed | Volumes | Object store | Redis maxmemory |
@@ -54,10 +59,12 @@ At the default TTLs (14 days, 30 extended), each size at its design rate:
 LangSmith's services ask their sampled memory peak x 1.2 and their CPU x 1.5, and the box lets requests
 reach 85% of what k3s leaves allocatable, so a request is the buffer on a measurement and the box keeps
 15% more on top. Memory binds before CPU, so `s` and `m` are memory-optimized machines (8 GiB a vCPU); on
-4 GiB a vCPU, `s` could not hold Mission Control beside the buffered services. A run is one span: a trace of 10 LLM and tool calls at one trace a second is 10 runs/s. `l` stops at
-50 runs/s, LangChain's sizing calculator's limit for one machine; past it the plan refuses and points at
-a full deployment (`../aws`, `../gcp`, `../azure`, `../baremetal`). `xs` runs no observability stack or
-Mission Control of its own (an install a fleet watches from one stack), which is what fits it in 2 vCPU.
+4 GiB a vCPU, `s` could not hold Mission Control beside the buffered services. A run is one span: a trace
+of 10 LLM and tool calls at one trace a second is 10 runs/s. `l` stops at 50 runs/s, LangChain's sizing
+calculator's limit for one machine; past it the plan refuses and points at a full deployment
+([`../aws`](../aws), [`../gcp`](../gcp), [`../azure`](../azure), [`../baremetal`](../baremetal)). `xs`
+runs no observability stack or Mission Control of its own (an install a fleet watches from one stack),
+which is what fits it in 2 vCPU.
 
 ## The cost
 
@@ -77,10 +84,15 @@ address   = $0.005 x 730                                # the instance's fixed p
 | `m` | r7i.2xlarge | $386.32 | $50.40 | $23.40 | $3.65 | about $464 |
 | `l` | m7i.4xlarge | $588.67 | $97.60 | $47.20 | $3.65 | about $738 |
 
-`make plan` prints the same for the box it plans, rounded up to the dollar. A machine of your own, or one in another cloud, costs
-what you pay for it.
+`make plan` prints the same for the box it plans, rounded up to the dollar. A machine of your own, or one
+in another cloud, costs what you pay for it.
 
 ## What runs on box `s`
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/the-box-dark.png">
+  <img alt="Box s to scale, at 5 runs a second and 14 and 30 days of retention. Memory: 12.4 of its 32 GiB requested, against 25.9 GiB allowed; SmithDB, queue, Redis and ingest-queue are the largest requests. CPU: 2.37 of its 4 vCPU requested, against 2.98 allowed; SmithDB's is the largest, then Mission Control's and ingest-queue's. Disk: 147 of its 200 GiB, the system's 40, the object store's 71 for SmithDB's segments and the payloads, and 36 for the other volumes, against the 160 GiB the plan fills to. Colours mark the namespace: LangSmith's, the stores', observability's and k3s's own." src="diagrams/the-box-light.png">
+</picture>
 
 | Pod | What it does | CPU | Memory (limit) |
 |:--|:--|--:|--:|
@@ -103,13 +115,13 @@ The other sizes scale the same rows; `make plan` lists every pod.
 
 ## What the chart runs, and what Lite keeps
 
-Chart 0.18.2 by default, against what Lite renders (`make render`; the plan lists the sizes):
+At chart 0.18, the chart's defaults against what Lite renders (`make render`; the plan lists the sizes):
 
 | Chart default | Lite | Why |
 |:--|:--|:--|
 | platform-backend x3, ingest-queue x3, backend x2, frontend, queue | one each, sized from the rate or the readers | the tracing path; one box has no second node to spread onto |
 | ClickHouse | off | SmithDB is the trace store at 0.18 |
-| SmithDB as separate services (ingestion, query, compaction and its workers, a cluster manager, and stats-query, mutations and run rules where enabled) at the `small` tier | one unified pod, below that tier | one process for one machine's load; not yet measured (below) |
+| SmithDB as separate services (ingestion, query, compaction and its workers, a cluster manager, and stats-query, mutations and run rules where enabled) at the `small` tier | one unified pod, below that tier | one process for one machine's load; measured at `m` ([Where the numbers come from](#where-the-numbers-come-from)) |
 | Insights and Polly, each with its own Postgres and Redis | off | products beyond tracing |
 | playground | 0 replicas, always | prompts against model providers, not tracing |
 | ace-backend | 0 replicas; `code_evaluators = true` runs it | runs custom code evaluators only; nothing on the tracing path calls it |
@@ -142,12 +154,18 @@ Kept and worth watching once a box has been measured, in order of what they woul
 | Prometheus | metrics | `prometheus_retention_days` | `retentionSize`, four fifths of its volume | per box: none, 10, 20, 40 GiB |
 
 Every volume is a folder on the data disk (k3s's local-path), not a quota; the plan keeps their sum
-within 80% of the disk (the computation, the fit), and the health dashboard turns orange at 80% of each disk and alerts at 90% (OPERATE.md, Watching it).
+within 80% of the disk (the computation, the fit), and the health dashboard turns orange at 80% of each
+disk and alerts at 90% ([OPERATE.md, Watching it](OPERATE.md#watching-it)).
 
 ## The retention
 
 The TTLs size the disk more than anything else, so `make up` asks for them, and a plan made without them
 says so on every run. The object store at box `s` (box `m` is five times each, `l` ten):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="diagrams/retention-dark.png">
+  <img alt="The object store at box s's design rate for each pair of TTLs, short and extended: 41 GiB at 7 and 14 days, 71 GiB at the default 14 and 30, 84 GiB at 14 and 90, 146 GiB at 30 and 90, 148 GiB at 14 and 400, 446 GiB at 90 and 400: eleven times from the shortest to the longest." src="diagrams/retention-light.png">
+</picture>
 
 | TTLs, days (short / extended) | 7 / 14 | 14 / 30 | 14 / 90 | 30 / 90 | 14 / 400 | 90 / 400 |
 |:--|--:|--:|--:|--:|--:|--:|
@@ -164,7 +182,7 @@ refuses a long TTL under 14 days, and so does the plan.
 | LangSmith's services (idle and per-unit cores, memory) | the bare-metal lab: 3 runs a trace, about 180 KiB a run, 5 s samples over ten minutes (2026-10-31, 2026-11-01, Reed Bender) |
 | The 2-CPU limit on the Go services | ingest-queue throttled in 98% of periods under 1 CPU at 4.3 traces/s (2026-10-22; terraform#513, Michael Frederick) |
 | What a run costs in each store | LangChain's trace payload measurements and load tests of LangSmith 0.17.6 with SmithDB (2026-11, Dzmitry Dubarau) |
-| Peak factor 3, headroom 1.2, Redis 1.3, the connection budget, 50 runs/s on one machine | LangChain's sizing calculator (`utils/langsmith-sizing`) |
+| Peak factor 3, headroom 1.2, Redis 1.3, the connection budget, 50 runs/s on one machine | LangChain's sizing calculator ([`utils/langsmith-sizing`](../../utils/langsmith-sizing)) |
 | SmithDB, Postgres, RustFS per box | the bare-metal module's tested profiles; RustFS's 6 GiB limit at `m` from the lab, where 2 GiB was OOM-killed 9 times at 70 to 80 traces/s (about 210 to 240 runs/s, far past `m`'s 25): headroom, not a measured need |
 
 Lite and the calculator share the services model, the payload costs, the peak factor, Redis's
