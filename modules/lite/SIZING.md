@@ -190,10 +190,13 @@ the payload costs plan, as 0.18 frees saved payloads from Redis. These are one s
 history: the plan's numbers stay until `make experiment` has measured every size, and a size changes
 only with its runs cited.
 
-**Not yet measured:** each size other than `m`, the bytes a run costs on disk, the metastore's growth,
-and Mission Control's and the observability stack's own use; `make experiment` reads each. A measured
-size then replaces a computed one through `resources` (keyed as the plan lists the pods) or `volumes`,
-with the run cited beside it in the tfvars.
+**Then every size, in the load test's simple traces (magus, 2026-11-26, chart 0.18.4):** each size
+from a fresh install, held to its machine, for ten minutes at 1, 2 and 3 times its design rate. Every
+run sent was stored, 320,760 in all; no size used more than 45% of its vCPU; and the object store grew
+more per run than the plan's payload costs, the simple traces sending 96 KiB a run in one field a side.
+Those traces are not what applications send, so the plan's numbers stay as they are: the experiment that
+measures every size in realistic traces (`make experiment`, `TRACES=agent`) is the one a size changes
+by, through `resources` (keyed as the plan lists the pods) or `volumes`, with its runs cited beside it.
 
 ## Settings
 

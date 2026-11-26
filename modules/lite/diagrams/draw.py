@@ -885,13 +885,27 @@ def draw(fonts_dir: Path | None, logos_dir: Path | None, draft: bool, only: list
     return names
 
 
+def stale() -> list[str]:
+    """The figures whose page no longer matches the one last drawn: a number or a step the docs or the
+    code changed since. Needs no fonts and no Chrome, so make check runs it."""
+    drawn = json.loads(RENDERED.read_text()) if RENDERED.is_file() else {}
+    return [name for name, page_of in FIGURES.items() if drawn.get(name) != hashlib.sha256(page_of().encode()).hexdigest()]
+
+
 if __name__ == "__main__":
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     a.add_argument("--fonts", type=Path, help="the folder holding the brand's four font files")
     a.add_argument("--logos", type=Path, help="the folder holding langchain-on-dark.svg")
     a.add_argument("--draft", action="store_true", help="draw without the faces, labelled, and not recorded")
     a.add_argument("--keep-html", type=Path, help="also keep each page here, for the brand linter")
+    a.add_argument("--check", action="store_true", help="draw nothing: fail if a figure no longer matches its sources")
     a.add_argument("names", nargs="*", help="the figures to draw; every one by default")
     x = a.parse_args()
+    if x.check:
+        behind = stale()
+        if behind:
+            raise SystemExit(f"stale figures: {', '.join(behind)}; draw them again (diagrams/draw.py, with the faces)")
+        print(f"all {len(FIGURES)} figures match their sources")
+        raise SystemExit(0)
     for n in draw(x.fonts, x.logos, x.draft, x.names, x.keep_html):
         print(f"drew diagrams/{n}.png")

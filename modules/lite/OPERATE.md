@@ -283,7 +283,8 @@ What only a running box can show, each read on the first install of each size:
 
 1. SmithDB as one pod at each size: its use at the design load (`make soak`), and whether it is killed.
    At `m` on magus (2026-11-25): 1.5 to 1.6 cores from 50 to 75 runs/s, never killed; every run stored up
-   to 75 runs/s, three times the design rate. The other sizes: `make experiment`.
+   to 75 runs/s, three times the design rate. Every size in the load test's simple traces (2026-11-26):
+   never killed, every run stored at 1 to 3 times its design rate. In realistic traces: `make experiment`.
 2. Traefik's HTTPS redirect and Let's Encrypt resolver, as k3s's bundled Traefik chart takes them.
 3. The health dashboard's signals reading data. Three LangSmith metric names
    (`langsmith_ingest_task_failures_total`, `langsmith_asynq_queue_latency_seconds`,

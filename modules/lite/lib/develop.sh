@@ -84,6 +84,9 @@ cmd_check() {
   run shell "shellcheck" shellcheck -S style -x "$LITE/bin/lite" "$LITE"/lib/*.sh "$LITE"/box/*.sh
   run iam "the AWS policy covers every resource the AWS host makes" check_iam_policy
   run quality "Python: tests, cc < 15, crap < 30, no dead code" check_python
+  # A figure draws its numbers from SIZING.md and its steps from box/install.sh: one whose source moved
+  # is stale, and the docs would show the old number.
+  run figures "the docs' figures match their sources" uv run --quiet --project "$LITE/../../utils/langsmith-sizing" python "$LITE/diagrams/draw.py" --check
   printf '\n'
 }
 

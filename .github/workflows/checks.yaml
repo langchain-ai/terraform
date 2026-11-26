@@ -163,6 +163,36 @@ jobs:
       - name: Run plan tests
         run: bash scripts/plan-tests.sh "modules/${{ matrix.provider }}"
 
+  # Lite's own gate, the one its `make check` runs and says CI runs. Beside the legs above it holds Lite's
+  # Python to its tests and quality bar (complexity under 15, CRAP under 30, no dead code) and its docs'
+  # figures to their sources: a figure whose number moved in SIZING.md, or whose step moved in
+  # box/install.sh, fails here. Only when the PR touches Lite.
+  lite:
+    name: make check (lite)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.providers), 'lite')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Setup shellcheck
+        uses: ./.github/actions/setup-shellcheck
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          # Lite's tools and the sizing package it draws its figures with require uv 0.13.4 or later.
+          version: "0.13.5"
+
+      - name: Run make check
+        run: make -C modules/lite check
+
   # Every tracked script, one bar, whole repo -- including the ones outside the
   # provider trees (scripts/, .github/scripts/, modules/ocp/). Its own job rather
   # than part of the legs above: it needs no terraform, so findings land in

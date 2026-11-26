@@ -1,6 +1,6 @@
 # LangSmith Lite: tracing on one box
 
-> **Status:** Example · **Last verified:** 2026-11-25 (installed, verified and soaked at `m` on an Arch-family server; the other sizes by `make experiment`)
+> **Status:** Example · **Last verified:** 2026-11-25 (installed, verified and soaked on an Arch-family server: `m` on 2026-11-25, every size in the load test's simple traces on 2026-11-26)
 
 Self-hosted LangSmith's tracing, sized to one machine from the load and the retention you name: k3s,
 every store beside the app, Prometheus and Grafana with a health dashboard and LangSmith's recommended
@@ -107,6 +107,6 @@ make:** the TTLs size the disk more than anything else, so `make up` asks for th
 | `lib/` | what the verbs do (`deploy.sh`, `operate.sh`, `prove.sh`, `develop.sh`, `versions.sh`), shared plumbing (`common.sh`, `ui.sh`), and their Python (`settings.py`: the questions; `summary.py`: the plan; `export.py`; `prove.py`: the key for verify and soak), its tests (`tests/`) and its gate (`quality.py`: complexity under 15, CRAP under 30) |
 | `box/` | what runs on the box: `checks.sh` (also `make preflight`) and `install.sh` |
 | `infra/` | Terraform: `sizing.tf` with `sizes.yaml`, `releases.tf` and `values.tf`, `health.yaml` (the alerts and the health dashboard), `secrets.tf`, `bundle.tf`, `pins.yaml`, `hosts/aws/`, `tests/` |
-| `diagrams/` | the docs' figures and `draw.py`, which draws them from the numbers the docs and the code hold |
+| `diagrams/` | the docs' figures and `draw.py`, which draws them from the numbers the docs and the code hold; `make check` fails when one no longer matches |
 | [`../baremetal/charts/datastores`](../baremetal/charts/datastores) | the Postgres, Redis and RustFS chart, shared with the bare-metal module |
 | [`../../utils/langsmith-load-test`](../../utils/langsmith-load-test) | the load test behind `verify` and `soak` |
