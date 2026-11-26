@@ -2,6 +2,7 @@ import unittest
 
 from loadtest.cli import build_parser, cluster_options, cluster_rows, resolve
 from loadtest.profile import from_document
+from loadtest.results import ERROR_CHARS, short_error
 from loadtest.runner import LoadSettings
 from profiles import document as profile
 
@@ -94,3 +95,13 @@ class ClusterRowsTest(unittest.TestCase):
         rows = cluster_rows({"queue": {"cores_used": None, "memory_peak_mib": 412.4},
                              "backend": {"cores_used": 0.5, "runs_per_core": 20.0}})
         self.assertEqual(rows, [("queue", "not read", "", "412 MiB"), ("backend", "0.50", "20.0", "not read")])
+
+
+class ShortErrorTest(unittest.TestCase):
+    def test_a_batch_error_keeps_its_cause_and_says_how_much_was_cut(self) -> None:
+        cause = "Server error (500) caused failure to POST /runs/multipart"
+        text = cause + "; trace=x,id=y" * 1000
+        short = short_error(text)
+        self.assertTrue(short.startswith(cause))
+        self.assertTrue(short.endswith(f"({len(text) - ERROR_CHARS:,} more characters)"))
+        self.assertEqual(short_error(cause), cause)

@@ -73,3 +73,12 @@ def assemble(
         "metrics": cluster[0], "cluster": cluster[1],
         "passed": not failed,
     }
+
+
+ERROR_CHARS = 600
+
+
+def short_error(text: str) -> str:
+    """The SDK's batch error names every run in the batch: one at s on magus (2026-11-26) was 8,951
+    characters, and the summary and results carried all of it. The cause is in its first characters."""
+    return text if len(text) <= ERROR_CHARS else f"{text[:ERROR_CHARS]} ... ({len(text) - ERROR_CHARS:,} more characters)"

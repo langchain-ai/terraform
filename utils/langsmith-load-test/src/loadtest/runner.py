@@ -196,7 +196,7 @@ class _Run:
             self._track(trace_id, number, sent_at, at)
         except Exception as error:  # noqa: BLE001 - record a failed trace and continue the load
             counts.run_errors += 1
-            counts.first_error = counts.first_error or str(error)
+            counts.first_error = counts.first_error or results.short_error(str(error))
 
     def _track(self, trace_id: UUID, number: int, sent_at: float, at: int) -> None:
         """What follows a sent trace: the read pool, the lag sample and its feedback."""

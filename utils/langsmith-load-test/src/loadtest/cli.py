@@ -24,7 +24,7 @@ from langsmith_sizing.summary import Table
 from loadtest import cluster
 from loadtest.draw import Projects, project_names
 from loadtest.profile import CONTENTS, SENDS, Profile, ProfileError, Shape, from_file, from_params
-from loadtest.results import NOT_READ
+from loadtest.results import NOT_READ, short_error
 from loadtest.runner import LoadOutcome, LoadSettings, build_report, run_load_test
 from rich.console import Console
 
@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
             client.close(timeout=0)
 
     upload_count = upload_errors.qsize()
-    first_upload_error = str(upload_errors.get()) if upload_count else None
+    first_upload_error = short_error(str(upload_errors.get())) if upload_count else None
     report = build_report(outcome, settings, profile, project_name, tracing_enabled, upload_count, first_upload_error, app_version, _cluster(samples, watch, outcome, settings, profile))
     _emit(report, results_path, json_output)
     return 0 if report["passed"] else 1
@@ -350,10 +350,15 @@ def _print_cluster(section: dict[str, Any]) -> None:
         ui.note(f"install metrics: {section.get('why')}")
         return
     flushed = section["smithdb_rows_flushed_per_second"]
-    ui.table(Table("The install under the load", ("workload", "cores used", "runs/s per core", "memory peak"), cluster_rows(section["coefficients"]),
-                   f"Over the {section['steady_samples']} samples after the ramp, at {section['runs_per_second_sent'] or 0:g} runs/s sent"
-                   + (f"; SmithDB flushed {flushed:g} rows/s" if flushed is not None else "")
-                   + f". Ingestion queue kept up: {_yes(section['kept_up']['ingestion_queue'])}; compaction kept up: {_yes(section['kept_up']['compaction'])}."))
+    rows = cluster_rows(section["coefficients"])
+    # No per-pod reading (xs runs without Prometheus) printed the table's header over no rows (magus, 2026-11-25).
+    note = (f"Over the {section['steady_samples']} samples after the ramp, at {section['runs_per_second_sent'] or 0:g} runs/s sent"
+            + (f"; SmithDB flushed {flushed:g} rows/s" if flushed is not None else "")
+            + f". Ingestion queue kept up: {_yes(section['kept_up']['ingestion_queue'])}; compaction kept up: {_yes(section['kept_up']['compaction'])}.")
+    if rows:
+        ui.table(Table("The install under the load", ("workload", "cores used", "runs/s per core", "memory peak"), rows, note))
+    else:
+        ui.note(note)
     for what in section["unread"]:
         ui.warn(f"not read: {what}")
 
