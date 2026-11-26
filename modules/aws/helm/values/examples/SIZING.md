@@ -1,56 +1,44 @@
-# LangSmith Helm Sizing Profiles
+# LangSmith sizing on AWS
 
-Four sizing profiles for different deployment scenarios. Each profile has a corresponding values file in this directory, and that file holds the per-component replicas, requests, limits, and autoscaling settings.
+Every install runs one sizing: the [medium reads, medium writes](https://docs.langchain.com/langsmith/self-host-scale#medium-reads-medium-writes) pattern in the scale guide, about 20 concurrent users and 100 traces per second, with the SmithDB small tier. [`langsmith-values.yaml`](langsmith-values.yaml) sets it:
 
-| Profile | Use Case | Values File |
+| Service | Setting | Source |
 |---|---|---|
-| **Minimum** | Cost parking, idle standby, CI smoke tests, single-user demos | [`langsmith-values-sizing-minimum.yaml`](langsmith-values-sizing-minimum.yaml) |
-| **Dev** | Local dev, integration tests, demos, POCs, with a developer actually using the system | [`langsmith-values-sizing-dev.yaml`](langsmith-values-sizing-dev.yaml) |
-| **Production** | Any environment serving real traffic, multi-replica with HPA/KEDA | [`langsmith-values-sizing-production.yaml`](langsmith-values-sizing-production.yaml) |
-| **Production Large** | High-volume (~50 concurrent users, ~1,000 traces/sec), higher baselines | [`langsmith-values-sizing-production-large.yaml`](langsmith-values-sizing-production-large.yaml) |
+| `frontend` | 2 replicas | the pattern |
+| `backend` | HPA, 8 to 16 replicas | the pattern's autoscaling range |
+| `ingestQueue` | KEDA, 3 to 6 replicas | the pattern's autoscaling range |
+| `queue` | KEDA, 1 to 10 replicas | the chart's range, with KEDA on |
+| SmithDB compaction worker | KEDA, 1 to 10 replicas | [SmithDB scale guide](https://docs.langchain.com/langsmith/self-host-smithdb-scale) |
+| `config.settings.redisRunsExpirySeconds` | `3600` | the pattern |
+| `CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT` | `0`, in the generated overrides file | the pattern |
 
-Every profile, and the base values when no profile is set, uses KEDA for `queue` and `ingestQueue` (queue target: 10) and for the SmithDB compaction worker (target: 60 pending jobs per worker). The dev, production, and production-large profiles use HPA for the other core services. Node autoscaling is configured separately.
+Every other service runs the chart's own requests, limits and replica count, and no example values file requests less than the chart's default; `make test-values` checks both. The pattern's Redis, 13 GiB, is the default ElastiCache node, `cache.m6g.xlarge`. Its ClickHouse, 16 CPU and 24 GiB, does not fit the default `m6a.2xlarge` LangSmith nodes, and with SmithDB serving reads ClickHouse mostly takes writes, so in-cluster ClickHouse keeps the chart's 3.5 CPU and 12 GiB.
 
-The dev profile (`queue`) and the minimum profile (`queue` and `ingestQueue`) set `targetMemoryUtilizationPercentage: 150`. Their idle memory is close to the request and does not fall as replicas are added, so the chart's 80% target would keep extra replicas running at idle.
+Rendered from chart 0.18.2 at minimum replicas, the core services request 22 CPU and 49 GiB across 21 pods, in-cluster ClickHouse included. Deployments, Fleet, LangSmith Chat and Insights together add about 10 CPU and 21 GiB, and Insights moves ClickHouse out of the cluster. SmithDB runs on its own node group, sized in [SMITHDB.md](../../../SMITHDB.md). Cluster Autoscaler adds LangSmith nodes, up to the node group's `max_size`, as the HPA and KEDA scale out.
 
-The chart allows one scaler per service. To run the compaction worker on its CPU HPA instead, set `smithdb.compactionWorker.autoscaling.hpa.enabled: true` and `smithdb.compactionWorker.autoscaling.keda.enabled: false`.
+## Sizing beyond the pattern
 
-The profiles do not size SmithDB. Every profile runs the SmithDB small tier that `langsmith-values-smithdb.yaml` sets, with the chart's replica defaults and the compaction-worker range from the base values. The medium and large tiers need larger SmithDB nodes; see [Scaling up](../../../SMITHDB.md#scaling-up).
+Edit `helm/values/langsmith-values.yaml`, the copy `make init-values` made, then run `make deploy`. The scale guide's [high reads, high writes](https://docs.langchain.com/langsmith/self-host-scale#high-reads-high-writes) section has the next set of numbers. An autoscaler owns the replica count once it is on, so set `maxReplicas` at or above the count the pattern calls for. No feature overlay sets the replicas or autoscaling of these services, so this file's values hold.
 
-`make init-values` preserves existing sizing files; merge template updates manually. When disabling an autoscaler, also set the component's fixed replica count.
+The SmithDB tier is set in `langsmith-values-smithdb.yaml`, which loads after this file; `make deploy` stops when `langsmith-values.yaml` sets a different tier. See [Scaling up](../../../SMITHDB.md#scaling-up).
 
-### Product workloads (Insights, LangSmith Chat (formerly Polly), Fleet)
+## Moving from a 0.17 sizing profile
 
-On chart 0.16 the standalone agents are ordinary Deployments, and everything about them is settable from Helm values. Each agent splits into an api-server and a queue:
+0.18 removed `sizing_profile` and its four files. Terraform warns about a leftover `sizing_profile` line, and `make deploy` stops while a `langsmith-values-sizing-*.yaml` is left in `helm/values`, because it no longer loads that file. To move:
 
+1. `make init-values` copies `langsmith-values.yaml` only when `helm/values` has none, so a 0.17 copy lacks this sizing. Copy the `frontend`, `backend` and `config.settings` blocks from `helm/values/examples/langsmith-values.yaml` into it.
+2. Copy any values you changed in `helm/values/langsmith-values-sizing-<profile>.yaml` into `helm/values/langsmith-values.yaml`.
+3. Delete the sizing file, and the `sizing_profile` line in `infra/terraform.tfvars`.
+4. Run `make init-values`, then `make deploy`.
+
+A `production-large` install keeps that profile's ranges (backend 10 to 50, queue and ingest-queue 6 to 24) only by copying them across.
+
+## Product workloads
+
+Fleet, LangSmith Chat and Insights each run an api-server and a queue Deployment, sized in their overlays:
+
+- `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`
 - `polly.apiServer.deployment.resources` and `polly.queue.deployment.resources`
 - `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`
-- `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`
 
-Each agent also gets its own Postgres and Redis. Left alone those are in-cluster StatefulSets sized by `<agent>.postgres.statefulSet.resources` and `<agent>.redis.statefulSet.resources` (`engineInsightsAgent.*` for Insights). Setting `<agent>.postgres.external.enabled` points the agent at a managed database instead, which is what the `langsmith-values-standalone-*.yaml` overlays do.
-
-The sizing profiles do not override these six product-service Deployments. Their resources come from the Fleet, Chat, and Insights overlays, so they are the same in every profile.
-
-This replaces the chart 0.15 arrangement, where `config.*.agent.resources` fed an agent-bootstrap Job that wrote database and redis sidecars at production-scale defaults which could then only be reduced through the LangSmith UI. Chart 0.16 removed that Job, so there is no longer anything to correct after the fact - and `config.agentBuilder.agent.resources` is no longer read at all.
-
----
-
-## Quick Comparison
-
-Totals from rendering chart 0.16.34 in `deploy.sh`'s values order, at minimum replica counts, with Postgres and Redis on RDS and ElastiCache. System pods are not included.
-
-- **Core:** no add-ons, with in-cluster ClickHouse.
-- **Full:** Deployments, Fleet, LangSmith Chat, and Insights, each product on external Postgres and Redis. The Insights overlay requires external ClickHouse, so this scope has no ClickHouse pod. Fleet itself needs host-backend, but not listener or operator. Choosing in-cluster storage for a product adds one Postgres and one Redis StatefulSet for it.
-
-| Profile | Scope | Pods | CPU Reserved | Memory Reserved | CPU Limit | Memory Limit |
-|---|---|---:|---:|---:|---:|---:|
-| Minimum | Core | 8 | 1.7 vCPU | 3.9Gi | 4.8 vCPU | 8.0Gi |
-| Minimum | Full | 18 | 9.1 vCPU | 18.3Gi | 21.8 vCPU | 40.6Gi |
-| Dev | Core | 8 | 4.0 vCPU | 12.2Gi | 10.0 vCPU | 24.5Gi |
-| Dev | Full | 18 | 10.8 vCPU | 22.3Gi | 26.0 vCPU | 48.5Gi |
-| Production | Core | 16 | 13.7 vCPU | 32.0Gi | 28.0 vCPU | 70.0Gi |
-| Production | Full | 28 | 22.7 vCPU | 45.0Gi | 48.5 vCPU | 101.0Gi |
-| Prod Large | Core | 36 | 35.0 vCPU | 78.0Gi | 122.0 vCPU | 268.0Gi |
-| Prod Large | Full | 52 | 43.5 vCPU | 87.0Gi | 152.0 vCPU | 312.0Gi |
-
-Treat these as starting points: the [scale guide](https://docs.langchain.com/langsmith/self-host-scale) notes that optimal capacity depends on actual usage and trace payloads.
+The chart gives these six Deployments no requests, so the overlays set them. Each add-on keeps its data in its own database on the shared RDS instance and its own index on the shared ElastiCache.

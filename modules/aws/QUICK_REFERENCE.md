@@ -137,16 +137,7 @@ make init-values   # copies addon values files based on enable_* flags
 make deploy
 ```
 
-**Sizing**: Set `sizing_profile` in `terraform.tfvars`:
-
-```hcl
-sizing_profile = "production"         # multi-replica with HPA (recommended)
-sizing_profile = "production-large"   # high-volume (~50 users, ~1000 traces/sec)
-sizing_profile = "dev"                # single-replica, minimal resources (dev/CI/demos)
-sizing_profile = "default"            # chart defaults (no sizing file)
-```
-
-Then re-run `make init-values && make deploy`.
+**Sizing**: every install runs one sizing, the scale guide's medium reads, medium writes pattern, set in `helm/values/langsmith-values.yaml`. To size beyond it, see [SIZING.md](helm/values/examples/SIZING.md).
 
 ---
 

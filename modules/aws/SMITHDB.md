@@ -101,8 +101,8 @@ Karpenter pools, `make init-values` replaces it with the current example and kee
 the old copy as `langsmith-values-smithdb.legacy.yaml`.
 
 **Tier and node size.** `langsmith-values-smithdb.yaml` sets
-`smithdb.resourceTier: small`, and no sizing profile changes it, so every profile
-runs the small tier on the default nodes. `make deploy` stops when the tier's
+`smithdb.resourceTier: small`, so every install runs the small tier on the default
+nodes. `make deploy` stops when the tier's
 largest pod does not fit a SmithDB node. To move to a larger tier, follow
 [Scaling up](#scaling-up).
 
