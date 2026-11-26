@@ -1,0 +1,19 @@
+modules/aws/helm/scripts/test-init-values-llm-gateway.sh
+  s_c161e3bea7e1f6::t_e3b44c01608265 42-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa69b09cb975da6efdf5e24750caadbbd2f6727d",
+  "prompts": {},
+  "sessions": {
+    "s_c161e3bea7e1f6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a37e189e-119a-411b-8ffc-c1c0585560e8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
