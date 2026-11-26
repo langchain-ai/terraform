@@ -370,7 +370,7 @@ echo ""
 printf "  ${DIM}Sets starting defaults for scale, security, and data protection.${RESET}\n"
 printf "  ${DIM}Dev / POC favors lower cost and easy cleanup; Production favors safer retention.${RESET}\n"
 if [[ "$UPDATE_MODE" == "true" ]]; then
-  printf "  ${DIM}Existing settings, including pod sizing, stay unchanged in update mode.${RESET}\n"
+  printf "  ${DIM}Existing settings stay unchanged in update mode.${RESET}\n"
 fi
 
 _profile_arg="--default"
@@ -687,8 +687,8 @@ printf "  ${DIM}  - A dedicated general-purpose managed node pool${RESET}\n"
 printf "  ${DIM}  - A SmithDB cache storage class (smithdb-cache) for per-pod gp3${RESET}\n"
 printf "  ${DIM}    EBS volumes, each configured with 7,000 IOPS and 1,000 MiB/s${RESET}\n"
 printf "  ${DIM}    of throughput${RESET}\n"
-printf "  ${DIM}Every sizing profile runs the SmithDB small tier, on m6a.4xlarge nodes by${RESET}\n"
-printf "  ${DIM}default. ../SMITHDB.md describes scaling up to the medium or large tier.${RESET}\n"
+printf "  ${DIM}LangSmith runs the SmithDB small tier, on m6a.4xlarge nodes by default.${RESET}\n"
+printf "  ${DIM}../SMITHDB.md describes scaling up to the medium or large tier.${RESET}\n"
 printf "  ${DIM}A new install writes to and queries SmithDB from the start. An existing${RESET}\n"
 printf "  ${DIM}install that turns SmithDB on starts with ingestion, migration, and query${RESET}\n"
 printf "  ${DIM}off, because its traces are in ClickHouse; ../SMITHDB.md stages them.${RESET}\n"
@@ -1037,55 +1037,20 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 12. LangSmith Pod Sizing
+# 12. Capacity
 # ═══════════════════════════════════════════════════════════════════════════
 
-_section "12. LangSmith Pod Sizing"
+_section "12. Capacity"
 
 echo ""
-printf "  ${DIM}This saved setting controls resource requests, replica counts, and HPA/KEDA autoscaling for LangSmith pods.${RESET}\n"
-printf "  ${DIM}It is independent of the QuickStart setup preset in Section 1.${RESET}\n"
-
-_ex_sizing=$(_existing "sizing_profile" "")
-_size_options=(
-  "minimum — cost parking or CI; minimal resources"
-  "dev — development and testing; single-replica baseline"
-  "production — real workloads; multi-replica baseline"
-  "production-large — high-volume workloads; larger baseline"
-)
-_size_default=2
-[[ "$PROFILE" == "prod" ]] && _size_default=3
-_size_recommended="$_size_default"
-_size_arg="--default"
-_size_offset=0
-if [[ "$UPDATE_MODE" == "true" ]]; then
-  case "$_ex_sizing" in
-    minimum) _size_default=1 ;;
-    dev) _size_default=2 ;;
-    production) _size_default=3 ;;
-    production-large) _size_default=4 ;;
-    *)
-      _size_options=("keep current sizing" "${_size_options[@]}")
-      _size_default=1
-      _size_offset=1
-      ;;
-  esac
-  _size_recommended=""
-  if [[ "$_size_offset" == "0" ]]; then
-    _size_arg="--current"
-    _size_options[$((_size_default - 1))]="${_ex_sizing} — keep existing sizing values"
-  fi
+printf "  ${DIM}LangSmith runs one sizing: the scale guide's medium reads and medium writes${RESET}\n"
+printf "  ${DIM}(about 20 users and 100 traces per second). ../helm/values/examples/SIZING.md${RESET}\n"
+printf "  ${DIM}says how to size beyond it.${RESET}\n"
+if [[ "$UPDATE_MODE" == "true" && -n "$(_existing "sizing_profile" "")" ]]; then
+  echo ""
+  _yellow "NOTE"; printf ": sizing_profile was removed in 0.18, and this run drops it. make deploy stops\n"
+  printf "  while a langsmith-values-sizing-*.yaml file is left in helm/values.\n"
 fi
-
-_ask_choice "$_size_arg" "$_size_default" --recommended "$_size_recommended" "$(_numbered_prompt "12.1" "LangSmith pod sizing:")" "${_size_options[@]}"
-
-case "$((_CHOICE - _size_offset))" in
-  0) SIZING="${_ex_sizing:-default}" ;;
-  1) SIZING="minimum" ;;
-  2) SIZING="dev" ;;
-  3) SIZING="production" ;;
-  4) SIZING="production-large" ;;
-esac
 
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   _ask_int_at_least 1 "$(_choice_arg smithdb_node_min_count)" "SmithDB minimum nodes" "$SMITHDB_NODE_MIN"; SMITHDB_NODE_MIN="$_REPLY"
@@ -1271,8 +1236,8 @@ _show_summary() {
   _summary_row "Short-lived trace TTL:" "${S3_SHORT} days"
   _summary_row "Long-lived trace TTL:" "${S3_LONG} days"
 
-  _summary_section "12. LangSmith Pod Sizing"
-  _summary_row "Pod sizing:" "$SIZING"
+  _summary_section "12. Capacity"
+  _summary_row "LangSmith pods:" "medium reads, medium writes"
 
   _summary_section "13. Add-on Features"
   _summary_bool_row "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
@@ -1478,13 +1443,6 @@ s3_ttl_long_days  = ${S3_LONG}
 # Namespace
 #------------------------------------------------------------------------------
 langsmith_namespace = "langsmith"
-
-#------------------------------------------------------------------------------
-# LangSmith Pod Sizing
-# Controls resource requests, replica counts, and HPA/KEDA autoscaling.
-# Docs: https://docs.langchain.com/langsmith/self-host-scale
-#------------------------------------------------------------------------------
-sizing_profile = "${SIZING}"
 
 #------------------------------------------------------------------------------
 # Add-on Features

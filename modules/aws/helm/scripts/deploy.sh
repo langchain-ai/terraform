@@ -14,9 +14,8 @@
 #   5. langsmith-values-insights.yaml       — Insights (if enable_insights)
 #   6. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
 #   7. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
-#   8. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
-#   9. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
-#  10. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
+#   8. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#   9. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -487,8 +486,16 @@ _resolve_entry_hostname() {
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
 
-# Sizing profile: read from terraform.tfvars (production, dev, minimum, or default).
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
+# 0.18 dropped sizing_profile and its files. make init-values copied the profile's
+# file into helm/values on 0.17, where it may hold tuned values this script no longer
+# loads, so a release would quietly lose them.
+_old_sizing=("$VALUES_DIR"/langsmith-values-sizing-*.yaml)
+if [[ -e "${_old_sizing[0]}" ]]; then
+  echo "ERROR: ${_old_sizing[0]##*/} is no longer loaded: every install now runs the one sizing in langsmith-values.yaml." >&2
+  echo "       Move any values you changed in it into helm/values/langsmith-values.yaml, delete the file," >&2
+  echo "       and remove sizing_profile from terraform.tfvars. See helm/values/examples/SIZING.md." >&2
+  exit 1
+fi
 
 # Print values chain so the user knows exactly what's going into the release.
 echo ""
@@ -590,28 +597,8 @@ if [[ "$_enable_fleet" == "true" || "$_enable_polly" == "true" || "$_engine_insi
   echo "  ✔ Fleet, Chat, Insights and Engine storage (shared RDS and ElastiCache)"
 fi
 
-# Sizing: loaded last so it wins over addon defaults (e.g. polly maxScale).
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_file" ]]; then
-    VALUES_ARGS+=(-f "$_sizing_file")
-    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
-    if [[ "$_sizing_profile" == "minimum" ]]; then
-      echo ""
-      echo "  ⚠️  WARNING: sizing_profile = ${_sizing_profile} — NOT for production use."
-      echo "     Resources are reduced for dev/test/POC only. Expect degraded"
-      echo "     performance under real workloads. Use sizing_profile = production for production."
-      echo ""
-    fi
-  else
-    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile} but file not found — run: make init-values)"
-  fi
-else
-  echo "  ○ sizing: chart defaults (sizing_profile = default)"
-fi
-
 # SmithDB overlay + env overrides — layered last so object-store, identity, and
-# staged LangSmith integration gates win over base/sizing defaults.
+# staged LangSmith integration gates win over the base values.
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
@@ -649,7 +636,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_cache_storage=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage 2>/dev/null) || _smithdb_cache_storage=""
   _smithdb_cache_storage=$(_smithdb_cache_mode "$_smithdb_cache_storage" "$(_parse_tfvar "smithdb_cache_storage" || true)") || exit 1
   _smithdb_managed_values "$_smithdb_cache_storage"
-  _smithdb_sizing_tier_check "${_sizing_file:-}" "$SMITHDB_RESOURCE_TIER" || exit 1
+  _smithdb_base_tier_check "$VALUES_DIR/langsmith-values.yaml" "$SMITHDB_RESOURCE_TIER" || exit 1
   _smithdb_tier_fits "$SMITHDB_RESOURCE_TIER" "$_smithdb_cache_storage" || exit 1
   echo "  ✔ SmithDB ${SMITHDB_RESOURCE_TIER} tier fits node-group-smithdb (${_smithdb_cache_storage} cache)"
 fi
@@ -689,7 +676,7 @@ if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
 fi
 
 echo ""
-echo "Deploying LangSmith (environment: $_environment, sizing: $_sizing_profile)..."
+echo "Deploying LangSmith (environment: $_environment)..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 

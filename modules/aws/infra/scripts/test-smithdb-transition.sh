@@ -38,7 +38,6 @@ cat > "$TEST_DIR/legacy.json" <<'VALUES'
 }}
 VALUES
 VALUES_ARGS=(-f "$TEST_DIR/legacy.json")
-_sizing_profile=production
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
@@ -57,7 +56,6 @@ jq -e --slurpfile before "$TEST_DIR/legacy.json" '
 echo "PASS: EBS clears legacy service overrides, uses the small tier when no values file sets one, and preserves migration, TaskDB, and customer volumes"
 
 VALUES_ARGS=(--set smithdb.enabled=true --set smithdb.resourceTier=large)
-_sizing_profile=dev
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
@@ -430,18 +428,17 @@ for spec in small:m6id.4xlarge:pass small:m6a.4xlarge:refuse medium:m6id.8xlarge
   echo "PASS: local-ssd tier check, $tier on $NODES: $want"
 done
 
-# A tier left in an earlier sizing file must be the deployed one, because the SmithDB
-# overlay loads after it and wins. Only the top-level smithdb block counts.
-printf 'queue:\n  autoscaling: {}\nsmithdb:\n  resourceTier: "medium"  # copied earlier\n' > "$TEST_DIR/sizing-medium.yaml"
-printf 'smithdb:\n  query:\n    autoscaling:\n      hpa:\n        minReplicas: 1\n' > "$TEST_DIR/sizing-no-tier.yaml"
-printf 'polly:\n  resourceTier: large\n' > "$TEST_DIR/sizing-other-key.yaml"
-_smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" medium
-_smithdb_sizing_tier_check "$TEST_DIR/sizing-no-tier.yaml" small
-_smithdb_sizing_tier_check "$TEST_DIR/sizing-other-key.yaml" small
-_smithdb_sizing_tier_check "" small
-_smithdb_sizing_tier_check "$TEST_DIR/no-such-file.yaml" small
-if _smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" small 2> "$TEST_DIR/sizing.err"; then
-  echo "FAIL: a sizing-file tier that the SmithDB overlay replaces was accepted"; exit 1
+# A tier set in the base values must be the deployed one, because the SmithDB
+# overlay loads after them and wins. Only the top-level smithdb block counts.
+printf 'queue:\n  autoscaling: {}\nsmithdb:\n  resourceTier: "medium"  # moved from a sizing file\n' > "$TEST_DIR/base-medium.yaml"
+printf 'smithdb:\n  query:\n    autoscaling:\n      hpa:\n        minReplicas: 1\n' > "$TEST_DIR/base-no-tier.yaml"
+printf 'polly:\n  resourceTier: large\n' > "$TEST_DIR/base-other-key.yaml"
+_smithdb_base_tier_check "$TEST_DIR/base-medium.yaml" medium
+_smithdb_base_tier_check "$TEST_DIR/base-no-tier.yaml" small
+_smithdb_base_tier_check "$TEST_DIR/base-other-key.yaml" small
+_smithdb_base_tier_check "$TEST_DIR/no-such-file.yaml" small
+if _smithdb_base_tier_check "$TEST_DIR/base-medium.yaml" small 2> "$TEST_DIR/base.err"; then
+  echo "FAIL: a base-values tier that the SmithDB overlay replaces was accepted"; exit 1
 fi
-grep -q 'sizing-medium.yaml sets smithdb.resourceTier: medium' "$TEST_DIR/sizing.err"
-echo "PASS: a sizing-file tier other than the deployed one stops the deploy, and a matching or absent one does not"
+grep -q 'base-medium.yaml sets smithdb.resourceTier: medium' "$TEST_DIR/base.err"
+echo "PASS: a base-values tier other than the deployed one stops the deploy, and a matching or absent one does not"

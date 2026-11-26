@@ -111,9 +111,8 @@ postgres_deletion_protection = false
 postgres_skip_final_snapshot = true
 clickhouse_source = "in-cluster"
 
-#── Namespace & Sizing ────────────────────────────────────────────────────────
+#── Namespace ─────────────────────────────────────────────────────────────────
 langsmith_namespace = "langsmith"
-sizing_profile      = "dev"
 
 #── Features (all off for test clusters) ─────────────────────────────────────
 enable_deployments   = false
