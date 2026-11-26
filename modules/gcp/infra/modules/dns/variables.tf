@@ -29,9 +29,3 @@ variable "existing_zone_name" {
   type        = string
   default     = ""
 }
-
-variable "create_certificate" {
-  description = "Whether to create a Google-managed SSL certificate"
-  type        = bool
-  default     = true
-}

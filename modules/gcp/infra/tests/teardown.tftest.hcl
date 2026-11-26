@@ -114,3 +114,129 @@ run "other_ingress_plans_no_gateway_delete" {
     error_message = "ingress_type = other still planned the Gateway delete on destroy"
   }
 }
+
+run "gke_ingress_plans_the_gateway_delete" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    project_id             = "langsmith-plan-tests"
+    region                 = "us-central1"
+    cluster_name           = "langsmith-plan-tests-gke"
+    ingress_type           = "gke"
+    langsmith_domain       = ""
+    langsmith_namespace    = "langsmith"
+    gateway_name           = "langsmith-plan-tests-gateway"
+    tls_certificate_source = "none"
+  }
+
+  # A destroy provisioner can read only self, so its triggers must hold the
+  # cluster, the Gateway name, and the namespace it lives in.
+  assert {
+    condition = (
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["project_id"] == "langsmith-plan-tests" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["region"] == "us-central1" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["cluster_name"] == "langsmith-plan-tests-gke" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["gateway_name"] == "langsmith-plan-tests-gateway" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["namespace"] == "langsmith"
+    )
+    error_message = "The GKE Gateway delete triggers do not hold the project, region, cluster, Gateway name, and namespace"
+  }
+}
+
+# ── Redirect route delete (modules/ingress) ──────────────────────────────────
+
+# kubectl applied the redirect route, so only this step deletes it from the
+# cluster when TLS is turned off. Its triggers must name the route that
+# apply_https_redirect applied.
+run "gke_with_tls_plans_the_redirect_delete" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    project_id             = "langsmith-plan-tests"
+    region                 = "us-central1"
+    cluster_name           = "langsmith-plan-tests-gke"
+    ingress_type           = "gke"
+    langsmith_domain       = ""
+    langsmith_namespace    = "langsmith"
+    gateway_name           = "langsmith-plan-tests-gateway"
+    tls_certificate_source = "existing"
+  }
+
+  assert {
+    condition = (
+      null_resource.delete_https_redirect_on_destroy[0].triggers["project_id"] == "langsmith-plan-tests" &&
+      null_resource.delete_https_redirect_on_destroy[0].triggers["region"] == "us-central1" &&
+      null_resource.delete_https_redirect_on_destroy[0].triggers["cluster_name"] == "langsmith-plan-tests-gke" &&
+      null_resource.delete_https_redirect_on_destroy[0].triggers["route_name"] == "langsmith-plan-tests-gateway-https-redirect" &&
+      null_resource.delete_https_redirect_on_destroy[0].triggers["namespace"] == "langsmith"
+    )
+    error_message = "The redirect delete triggers do not hold the project, region, cluster, route name, and namespace"
+  }
+
+  assert {
+    condition = (
+      null_resource.delete_https_redirect_on_destroy[0].triggers["route_name"] == yamldecode(local_file.https_redirect[0].content).metadata.name &&
+      null_resource.delete_https_redirect_on_destroy[0].triggers["namespace"] == yamldecode(local_file.https_redirect[0].content).metadata.namespace
+    )
+    error_message = "The redirect delete does not name the route that apply_https_redirect applies"
+  }
+}
+
+run "envoy_with_tls_plans_the_redirect_delete" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    project_id             = "langsmith-plan-tests"
+    region                 = "us-central1"
+    cluster_name           = "langsmith-plan-tests-gke"
+    ingress_type           = "envoy"
+    langsmith_domain       = ""
+    gateway_name           = "langsmith-plan-tests-gateway"
+    tls_certificate_source = "existing"
+  }
+
+  assert {
+    condition = (
+      null_resource.delete_https_redirect_on_destroy[0].triggers["route_name"] == "langsmith-plan-tests-gateway-https-redirect" &&
+      null_resource.delete_https_redirect_on_destroy[0].triggers["namespace"] == "envoy-gateway-system"
+    )
+    error_message = "On Envoy, the redirect delete does not name the route in envoy-gateway-system"
+  }
+}
+
+# With TLS off, the step leaves the plan, and Terraform runs its destroy
+# provisioner on an apply that turns TLS off.
+run "no_tls_plans_no_redirect_delete" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    project_id             = "langsmith-plan-tests"
+    region                 = "us-central1"
+    cluster_name           = "langsmith-plan-tests-gke"
+    ingress_type           = "gke"
+    langsmith_domain       = ""
+    gateway_name           = "langsmith-plan-tests-gateway"
+    tls_certificate_source = "none"
+  }
+
+  assert {
+    condition     = length(null_resource.apply_https_redirect) == 0 && length(null_resource.delete_https_redirect_on_destroy) == 0
+    error_message = "tls_certificate_source = none still planned the redirect route or its delete"
+  }
+}
