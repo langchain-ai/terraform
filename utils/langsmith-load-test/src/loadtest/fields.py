@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-WILD = {"reads.classes": "<class>", "cluster.coefficients": "<workload>"}
+WILD = {"reads.classes": "<class>", "cluster.coefficients": "<workload>", "cluster.machine.disks": "<device>"}
 OPAQUE = {
     "profile": "the load profile the run used, as langsmith-sizing writes it (its fields are in langsmith-sizing/docs/fields.md)",
     "metrics": "each of the plan's watch items the run read, keyed by its id (langsmith-sizing params watch.items; an autoscaler's is autoscaler-at-ceiling:<workload>): peak and end, or a mean, a share or a count during the run, with its unit; `langsmith-sizing compare` sets each against the plan's alarm level. Empty when the install was not read",
@@ -159,6 +159,15 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "cluster.coefficients.<workload>.cores_used": ("cores", "CPU cores it used on average, not requested"),
     "cluster.coefficients.<workload>.memory_peak_mib": ("MiB", "the most working-set memory its containers held together in any one sample"),
     "cluster.coefficients.<workload>.runs_per_core": ("runs/s per core", "runs sent a second over the cores it used; on the ingest path only, the figure sizing's ingest model rests on"),
+    "cluster.machine": ("", "every pod together and each disk across the window, from Prometheus; null without one"),
+    "cluster.machine.pods_cores": ("cores", "CPU cores every pod used together: the cgroup k3s runs them in, where a size's machine cap (emulate_machine) applies"),
+    "cluster.machine.pods_throttled_share": ("share", "the share of the pods' CPU periods throttled: how often they met their cap"),
+    "cluster.machine.pods_memory_peak_mib": ("MiB", "the most memory every pod held together in any one sample"),
+    "cluster.machine.disks": ("", "each disk that read or wrote in the window, from node-exporter"),
+    "cluster.machine.disks.<device>": ("", "one disk"),
+    "cluster.machine.disks.<device>.read_mib_per_second": ("MiB/s", "read from it a second"),
+    "cluster.machine.disks.<device>.written_mib_per_second": ("MiB/s", "written to it a second"),
+    "cluster.machine.disks.<device>.busy_share": ("share", "the share of time it had a request in flight; near 1, the disk is what the stores wait on"),
     "cluster.unread": ("list", "what could not be read in some sample; a missing reading is unknown, never zero"),
     "passed": ("", "every measured target met, nothing missing, and no run, feedback, upload, read or stored-count error"),
 }

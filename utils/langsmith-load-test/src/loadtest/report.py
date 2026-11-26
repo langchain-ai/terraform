@@ -27,6 +27,8 @@ from typing import Any
 
 from langsmith_sizing import figures as fig
 from langsmith_sizing import params as sizing_params
+from langsmith_sizing import ui
+from langsmith_sizing.summary import Table
 from loadtest.cluster import smithdb_counter, smithdb_read
 
 Sample = dict[str, Any]
@@ -71,7 +73,8 @@ def load(folders: Sequence[Path]) -> list[Run]:
             samples = [json.loads(line) for line in series.read_text().splitlines() if line.strip()]
             results = json.loads(res.read_text())
             if samples and "write" in results:
-                runs.append(Run(f"{folder.name}/{res.stem}", folder, results, samples))
+                # Named by the folder and its parent (xs/2x): an experiment's sizes each have a 2x.
+                runs.append(Run(f"{folder.parent.name}/{folder.name}", folder, results, samples))
     runs.sort(key=lambda r: r.results["started_at"])
     for r in runs:
         r.stats = stats(r)
@@ -158,6 +161,10 @@ def stats(run: Run) -> dict[str, Any]:
         "refusal_to_compaction_min": lead(rises(fanout), drops(l1)),
         "kept_up": ((r.get("cluster") or {}).get("kept_up") or {}).get("ingestion_queue"),
         "passed": r.get("passed"),
+        "memory_peak_mib": {k: v.get("memory_peak_mib") for k, v in ((r.get("cluster") or {}).get("coefficients") or {}).items()},
+        "redis_memory_peak_pct": ((r.get("metrics") or {}).get("redis-memory") or {}).get("peak"),
+        "postgres_connections_peak": ((r.get("metrics") or {}).get("postgres-connections") or {}).get("peak"),
+        "machine": (r.get("cluster") or {}).get("machine"),
     }
 
 
@@ -514,6 +521,35 @@ def index(runs: Sequence[Run], built: dict[str, str], out: Path) -> None:
     (out / "report.html").write_text(page)
 
 
+def _cell(value: float | None, fmt: str, unit: str = "") -> str:
+    return "" if value is None else f"{value:{fmt}}{unit}"
+
+
+def held_rows(runs: Sequence[Run]) -> list[tuple[str, ...]]:
+    """A row a run: the rate, whether it held, what was lost and how fast traces and reads came back."""
+    rows: list[tuple[str, ...]] = []
+    for r in runs:
+        st = r.stats
+        reads = {k: v for k, v in st["read_p99_s"].items() if v is not None}
+        slowest = max(reads, key=lambda k: reads[k]) if reads else None
+        lost = (st["runs_sent"] - st["runs_stored"]) if st["runs_stored"] is not None else None
+        rows.append((r.label, _cell(st["runs_per_second"], ".0f"), "yes" if st["passed"] else "NO", _cell(lost, ",.0f"),
+                     _cell(st["lag_p99_s"], ".1f", " s"), f"{reads[slowest]:.1f} s ({slowest})" if slowest else ""))
+    return rows
+
+
+def took_rows(runs: Sequence[Run]) -> list[tuple[str, ...]]:
+    """A row a run: what the hardware gave to hold it, every pod together and the workloads that matter."""
+    rows: list[tuple[str, ...]] = []
+    for r in runs:
+        st, m = r.stats, r.stats.get("machine") or {}
+        disk = sum((d.get("written_mib_per_second") or 0) for d in m["disks"].values()) if m.get("disks") else None
+        rows.append((r.label, _cell(m.get("pods_cores"), ".2f"), _cell(m.get("pods_throttled_share"), ".0%"),
+                     _cell(st["cores"].get("smithdb"), ".2f"), _cell(st["cores"].get("postgres"), ".2f"),
+                     _cell(st["redis_memory_peak_pct"], ".1f", "%"), _cell(disk, ".1f")))
+    return rows
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     a = argparse.ArgumentParser(prog="load-test-report", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     a.add_argument("out", type=Path, help="the folder to write the report to")
@@ -532,5 +568,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     copy_runs(runs, x.out)
     render(built, x.out, x.fonts, x.logos, x.draft)
     index(runs, built, x.out)
-    print(f"wrote {x.out / 'report.html'}: {len(built)} figures from {len(runs)} runs")
+    ui.table(Table("What each run held", ("run", "runs/s", "held", "runs lost", "readable p99", "slowest read p99"), held_rows(runs)))
+    ui.table(Table("What it took", ("run", "all pods, cores", "throttled", "SmithDB", "Postgres", "Redis peak", "disk MiB/s"), took_rows(runs),
+                   "Cores are averages after the ramp; throttled is the share of the pods' CPU periods held back by the size's cap; "
+                   "disk is written across every disk."))
+    ui.note(f"Figures, every number and each run's files: {x.out / 'report.html'}")
+    ui.console.print()
     return 0

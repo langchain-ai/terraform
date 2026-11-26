@@ -30,6 +30,7 @@ from typing import Any
 from langsmith_sizing import compare, ui
 from langsmith_sizing import params as sizing_params
 from langsmith_sizing.model import watch
+from langsmith_sizing.summary import Table
 from loadtest import cluster
 
 VERIFY_ARGS = ("--users", "1", "--run-limit", "10", "--duration-seconds", "60", "--pause-seconds", "0.5", "--lag-sample", "1",
@@ -166,13 +167,54 @@ def judge_main(argv: Sequence[str] | None = None) -> int:
     if not a.results.exists():
         parser.error(f"no results at {a.results}: the run did not finish, and its own output says why")
     results = json.loads(a.results.read_text())
-    verdicts = signals(results, json.loads(a.plan.read_text()) if a.plan else None, samples(a.results))
-    ui.heading("Held its load?" if held(results) else "Did not hold its load")
-    ui.verdicts(verdicts)
-    over = crossed(verdicts)
+    plan = json.loads(a.plan.read_text()) if a.plan else None
+    series = samples(a.results)
+    verdicts = signals(results, plan, series)
+    over = {v["item"].removeprefix("watch:") for v in crossed(verdicts)}
+    rows, unread = watch_table(results.get("metrics", {}), watch_items(plan, _topology(series)), over)
+    # The targets are the run summary's verdict table; repeated here, every soak printed them twice
+    # (magus, 2026-11-26). This is what the install showed while it held, or did not.
+    if rows:
+        ui.table(Table("Watched", ("item", "reading", "alarm at", ""), rows))
+    if unread:
+        ui.note("not read in this run: " + ", ".join(unread))
     if over:
-        ui.warn("past its alarm level, where to look first: " + ", ".join(v["item"].removeprefix("watch:") for v in over))
+        ui.warn("past its alarm level, where to look first: " + ", ".join(sorted(over)))
+    (ui.ok if held(results) else ui.error)("held its load" if held(results) else "did not hold its load")
     return 0 if held(results) else 1
+
+
+def _number(value: float) -> str:
+    """Three significant figures, thousands grouped: 0.0134, 3.28, 76, 20,114."""
+    return f"{value:,.0f}" if abs(value) >= 100 else f"{value:.3g}"
+
+
+def reading_text(entry: dict[str, Any]) -> str:
+    """One watch reading as a person reads it, its unit once at the end."""
+    unit = entry.get("unit", "")
+    if "completed_in_window" in entry:
+        kinds = {key.rsplit("job_kind=", 1)[-1].rstrip("}"): n for key, n in entry["completed_in_window"].items()}
+        return f"{_number(sum(kinds.values()))} {unit} ({', '.join(f'{k.removesuffix('_compaction')} {_number(n)}' for k, n in kinds.items())})"
+    if "peak" in entry:
+        return f"peak {_number(entry['peak'])}, end {_number(entry['end'])} {unit}"
+    for key, words in (("during_run", "during the run"), ("mean", "mean"), ("share", "share")):
+        if key in entry:
+            return f"{_number(entry[key])} {unit} during the run" if key == "during_run" else f"{words} {_number(entry[key])} {unit}"
+    return ", ".join(f"{k} {v}" for k, v in entry.items())
+
+
+def watch_table(metrics: dict[str, Any], items: Sequence[dict[str, Any]], over: set[str]) -> tuple[list[tuple[str, ...]], list[str]]:
+    """(a row a watch item read, the ids not read): the reading, the level it alarms at, and ABOVE when crossed."""
+    rows: list[tuple[str, ...]] = []
+    unread: list[str] = []
+    for item in items:
+        if item["id"] not in metrics:
+            unread.append(item["id"])
+            continue
+        level = item["threshold"]
+        at = f"{_number(level['value'])} {level['unit']}" if isinstance(level, dict) else "observed"
+        rows.append((item["id"], reading_text(metrics[item["id"]]), at, "ABOVE" if item["id"] in over else ""))
+    return rows, unread
 
 
 def step_main(argv: Sequence[str] | None = None) -> int:

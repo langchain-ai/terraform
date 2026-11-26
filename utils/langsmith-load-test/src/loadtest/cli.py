@@ -178,10 +178,20 @@ def main(argv: list[str] | None = None) -> int:
     _banner(settings, profile_path)
     upload_errors: SimpleQueue[Exception] = SimpleQueue()
 
+    total = settings.ramp_up_seconds + settings.duration_seconds
+    last_line = [0.0]
+
+    # One line rewritten in place at a terminal; a line a minute in a log. A line every 10 s made a
+    # 10-minute soak 72 lines long (magus, 2026-11-25).
     def report_progress(traces: int, errors: int, elapsed_seconds: float) -> None:
         errors += upload_errors.qsize()
-        line = f"{elapsed_seconds:>6.0f} s   {traces:>10,} traces   {traces / elapsed_seconds:>8.2f} traces/s   {errors:,} errors"
-        (ui.warn if errors else ui.note)(line)
+        line = f"  {elapsed_seconds:>4.0f} of {total:g} s   {traces:,} traces   {traces / elapsed_seconds:.2f} traces/s   {errors:,} errors"
+        style = "warn" if errors else "muted"
+        if ui.console.is_terminal:
+            ui.console.print(line.ljust(PROGRESS_WIDTH), style=style, end="\r")
+        elif elapsed_seconds - last_line[0] >= PROGRESS_LOG_SECONDS:
+            last_line[0] = elapsed_seconds
+            ui.console.print(line, style=style)
 
     client = None
     projects = Projects(project_names(project_name, profile.shape.projects), tuple(uuid4() for _ in range(profile.shape.projects)), profile.shape.project_skew)
@@ -192,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             ui.note("tracing is off: payloads are generated locally and nothing is uploaded")
         outcome, samples = _load_while_reading(watch, results_path, lambda: asyncio.run(run_load_test(settings, profile, client, projects, report_progress)))
+        if ui.console.is_terminal:
+            ui.console.print()
     except Exception as error:  # noqa: BLE001 - turn setup and flush failures into CLI errors
         logger.error(f"Load test failed: Reason: {' '.join(str(error).splitlines())}")
         return SETUP_ERROR
@@ -301,10 +313,6 @@ def _emit(report: dict[str, Any], results_path: Path | None, json_output: bool) 
         print_summary(report)
 
 
-def _fmt(value: object) -> str:
-    return "n/a" if value is None else f"{value:.3f}" if isinstance(value, float) else str(value)
-
-
 def _s(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.2f} s"
 
@@ -312,33 +320,84 @@ def _s(value: float | None) -> str:
 VERDICT = {None: "not measured", True: "pass", False: "fail"}
 
 
+PROGRESS_WIDTH = 78
+PROGRESS_LOG_SECONDS = 60
+TARGET_NAMES = {
+    "stored_within_seconds_p99": "readable in time", "trace_load_seconds_p99": "traces load in time",
+    "no_missing_runs": "nothing lost", "send_latency_limit": "send latency",
+}
+
+
 def print_summary(report: dict[str, Any]) -> None:
-    """The results as the sizing package draws a plan: facts, then a table each for reads, lag and the targets."""
+    """One panel of what was sent and what came of it, the reads, the install under the load, then one
+    verdict a promise. A table of one row (send to readable) and a second list of the same targets made
+    a 10-minute run's summary longer than its progress (magus, 2026-11-26)."""
     write, lag, stored, fb = report["write"], report["lag"], report["stored"], report["feedback"]
-    target = write["target_traces_per_second"]
-    held = write.get("steady_traces_per_second")
     ui.facts([
         ("Install", f"LangSmith {(report.get('server') or {}).get('app_version') or 'version not read'}, project {report['project']}"),
-        ("Write", f"{write['mode']}: {_fmt(write['achieved_traces_per_second'])} traces/s over the run" + (f", {_fmt(held)} held after the ramp" if held is not None else "") + (f", target {target:g}" if target else "")),
-        ("Sent", f"{write['traces_sent']:,} traces, {write['runs_sent']:,} runs, {fb['sent']:,} feedback"),
-        ("Errors", f"{write['run_errors']} runs, {fb['errors']} feedback, {report['errors']['upload']} uploads, {report['errors']['reads']} reads; {write['dropped_starts']} starts dropped"),
-        ("Stored", f"{stored['runs_stored'] if stored['runs_stored'] is not None else 'not read'} of {stored['runs_sent']:,} runs" + (f", {stored['missing_runs']} missing" if stored["missing_runs"] else "") + (f" ({stored['error']})" if stored["error"] else "")),
-        ("Schedule lag", f"p99 {_s(write['schedule_lag_seconds']['p99'])}: how late starts were against the rate"),
+        ("Sent", _sent(write, fb)),
+        ("Stored", _stored(stored)),
+        ("Errors", _errors(write, fb, report["errors"])),
+        ("Readable", _readable(lag)),
+        *([("Schedule", f"starts p99 {_s(write['schedule_lag_seconds']['p99'])} late against the rate")] if write["mode"] == "open-loop" else []),
     ], f"Load test {report['test_id']}")
     classes = report["reads"]["classes"]
     if classes:
-        rows = [(name, str(e["count"]), str(e["errors"]), str(e["skipped"]), _s(e["p50_seconds"]), _s(e["p95_seconds"]), _s(e["p99_seconds"]), e["component"]) for name, e in classes.items()]
-        ui.table(Table("Reads", ("class", "n", "errors", "skipped", "p50", "p95", "p99", "served by"), rows))
-    ui.table(Table("Send to readable", ("readable", "never readable", "p50", "p95", "p99", "max"),
-                   [(f"{lag['readable']} of {lag['sampled']}", str(lag["never_readable"]), _s(lag["p50_seconds"]), _s(lag["p95_seconds"]), _s(lag["p99_seconds"]), _s(lag["max_seconds"]))],
-                   f"A {lag['sample_share']:g} share of traces polled until readable, up to {lag['deadline_seconds']:g} s."))
+        read_rows = [(name, f"{e['count']:,}", f"{e['errors']:,}", _s(e["p50_seconds"]), _s(e["p95_seconds"]), _s(e["p99_seconds"]), e["component"]) for name, e in classes.items()]
+        ui.table(Table("Reads", ("class", "n", "errors", "p50", "p95", "p99", "served by"), read_rows))
     _print_cluster(report["cluster"])
-    ui.heading("Targets")
-    ui.verdicts([{"item": name, "verdict": VERDICT[e["passed"]], "detail": _target_detail(e)} for name, e in report["targets"].items()])
-    if write["first_error"]:
-        ui.warn(f"first error: {write['first_error']}")
-    (ui.ok if report["passed"] else ui.error)("the run passed" if report["passed"] else "the run FAILED")
+    ui.heading("Verdict")
+    rows = target_rows(report)
+    ui.verdicts(rows)
+    if report["passed"]:
+        ui.ok("every promise kept")
+    else:
+        broken = [r["item"] for r in rows if r["verdict"] == "fail"]
+        ui.error("the run FAILED: " + (", ".join(broken) if broken else "errors during the run, counted under Errors"))
     ui.console.print()
+
+
+def target_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """The promises as verdicts; a send-latency limit only when one was set."""
+    rows = [{"item": TARGET_NAMES.get(name, name), "verdict": VERDICT[e["passed"]], "detail": _target_detail(e)}
+            for name, e in report["targets"].items() if not (name == "send_latency_limit" and e["passed"] is None)]
+    kept = (report["cluster"].get("kept_up") or {}).get("ingestion_queue") if report["cluster"].get("read") else None
+    if report["cluster"].get("read"):
+        rows.append({"item": "ingestion kept up", "verdict": VERDICT[kept],
+                     "detail": "the backlog at the window's end no larger than in its first half" if kept is not False else "the backlog still climbing at the window's end"})
+    return rows
+
+
+def _sent(write: dict[str, Any], fb: dict[str, Any]) -> str:
+    rate = (f"{write['steady_traces_per_second']:.2f} traces/s after the ramp, target {write['target_traces_per_second']:g}"
+            if write["mode"] == "open-loop" and write.get("steady_traces_per_second") is not None
+            else f"{write['achieved_traces_per_second']:.2f} traces/s, {write['mode']}")
+    return f"{write['traces_sent']:,} traces, {write['runs_sent']:,} runs, {fb['sent']:,} feedback; {rate}"
+
+
+def _stored(stored: dict[str, Any]) -> str:
+    if stored["runs_stored"] is None:
+        return f"not read of {stored['runs_sent']:,} runs" + (f" ({stored['error']})" if stored["error"] else "")
+    missing = stored["missing_runs"]
+    return f"{stored['runs_stored']:,} of {stored['runs_sent']:,} runs" + (f": {missing:,} never stored" if missing else "")
+
+
+def _errors(write: dict[str, Any], fb: dict[str, Any], errors: dict[str, Any]) -> str:
+    counts = [(write["run_errors"], "traces refused"), (errors["upload"], "batches refused"), (fb["errors"], "feedback refused"),
+              (errors["reads"], "reads failed"), (write["dropped_starts"], "starts dropped")]
+    said = ", ".join(f"{n:,} {what}" for n, what in counts if n)
+    if not said:
+        return "none"
+    cause = (write["first_error"] or "").split(" in LangSmith API.")[0]
+    return said + (f"; first: {cause[:160]}" if cause else "")
+
+
+def _readable(lag: dict[str, Any]) -> str:
+    if not lag["sampled"]:
+        return "no trace followed"
+    never = f", {lag['never_readable']:,} never" if lag["never_readable"] else ""
+    return (f"p50 {_s(lag['p50_seconds'])}, p95 {_s(lag['p95_seconds'])}, p99 {_s(lag['p99_seconds'])}: "
+            f"{lag['readable']:,} of {lag['sampled']:,} traces followed ({lag['sample_share']:.0%}, up to {lag['deadline_seconds']:g} s){never}")
 
 
 def _yes(value: bool | None) -> str:
@@ -352,15 +411,34 @@ def _print_cluster(section: dict[str, Any]) -> None:
     flushed = section["smithdb_rows_flushed_per_second"]
     rows = cluster_rows(section["coefficients"])
     # No per-pod reading (xs runs without Prometheus) printed the table's header over no rows (magus, 2026-11-25).
-    note = (f"Over the {section['steady_samples']} samples after the ramp, at {section['runs_per_second_sent'] or 0:g} runs/s sent"
-            + (f"; SmithDB flushed {flushed:g} rows/s" if flushed is not None else "")
-            + f". Ingestion queue kept up: {_yes(section['kept_up']['ingestion_queue'])}; compaction kept up: {_yes(section['kept_up']['compaction'])}.")
+    note = (f"Averaged over {section['steady_samples']} readings after the ramp, at {section['runs_per_second_sent'] or 0:g} runs/s sent"
+            + (f"; SmithDB flushed {flushed:.1f} rows/s" if flushed is not None else "")
+            + f"; compaction kept up: {_yes(section['kept_up']['compaction'])}.")
     if rows:
         ui.table(Table("The install under the load", ("workload", "cores used", "runs/s per core", "memory peak"), rows, note))
     else:
         ui.note(note)
+    for line in machine_lines(section.get("machine")):
+        ui.note(line)
     for what in section["unread"]:
         ui.warn(f"not read: {what}")
+
+
+def machine_lines(m: dict[str, Any] | None) -> list[str]:
+    """Every pod together against its machine, and each disk that moved: the hardware in one place."""
+    if not m:
+        return []
+    def pct(v: float | None) -> str:
+        return "not read" if v is None else f"{v:.0%}"
+    cores = "not read" if m["pods_cores"] is None else f"{m['pods_cores']:.2f} cores"
+    memory = "not read" if m["pods_memory_peak_mib"] is None else f"{m['pods_memory_peak_mib'] / 1024:.1f} GiB"
+    lines = [f"Every pod together: {cores}, CPU throttled in {pct(m['pods_throttled_share'])} of periods, memory peak {memory}."]
+    for device, d in m["disks"].items():
+        written = "not read" if d["written_mib_per_second"] is None else f"{d['written_mib_per_second']:.1f} MiB/s"
+        read = "not read" if d["read_mib_per_second"] is None else f"{d['read_mib_per_second']:.1f} MiB/s"
+        busy = "" if d["busy_share"] is None else f", busy {d['busy_share']:.0%} of the time"
+        lines.append(f"Disk {device}: {written} written, {read} read{busy}.")
+    return lines
 
 
 def cluster_rows(coefficients: dict[str, dict[str, Any]]) -> list[tuple[str, ...]]:
@@ -374,9 +452,9 @@ def cluster_rows(coefficients: dict[str, dict[str, Any]]) -> list[tuple[str, ...
 
 def _target_detail(entry: dict[str, Any]) -> str:
     if "observed_seconds" in entry:
-        return f"{entry['observed']} {_s(entry['observed_seconds'])} against {entry['target_seconds']:g} s"
+        return f"{entry['observed'].replace('_', ' ')} {_s(entry['observed_seconds'])}, against {entry['target_seconds']:g} s"
     if "missing" in entry:
-        return "the stored count could not be read" if entry["missing"] is None else f"{entry['missing']} runs sent and not stored"
+        return "the stored count could not be read" if entry["missing"] is None else f"{entry['missing']:,} runs sent and not stored"
     return "set with --latency-limit-seconds" if entry["passed"] is None else "p95 time to hand a trace to the SDK"
 
 

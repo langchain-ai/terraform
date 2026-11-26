@@ -115,6 +115,30 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("/api/v1/namespaces/obs/services/prometheus-server:80/proxy/federate?match%5B%5D=", path)
         self.assertEqual(s["unread"], [])
 
+    def test_the_stores_namespace_is_read_with_langsmiths(self) -> None:
+        # magus, 2026-11-26: Postgres used 1.7 cores on an idle install and no run showed it.
+        fake = FakeCluster(data_namespace="ls-data")
+        s = cluster.Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t, data_namespace="ls-data", prometheus="obs/prometheus-server:80").sample()
+        self.assertIn("postgres", {e["workload"] for e in s["cpu"].values()})
+        path = next(" ".join(c) for c in fake.calls if "/federate?" in " ".join(c))
+        self.assertIn("ls%7Cls-data", path)
+
+    def test_the_machine_is_every_pod_together_and_each_disk_that_moved(self) -> None:
+        fake = FakeCluster()
+        collector = cluster.Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t, prometheus="obs/prometheus-server:80")
+        taken = []
+        for _ in range(4):
+            taken.append(collector.sample())
+            fake.step()
+        m = cluster.machine(taken, taken)
+        assert m is not None
+        # Hand-written from the fake: 8 cores, 100 of 1,000 periods throttled, 4 MiB/s written, busy 0.25.
+        self.assertAlmostEqual(m["pods_cores"], 8.0)
+        self.assertAlmostEqual(m["pods_throttled_share"], 0.1)
+        self.assertEqual(list(m["disks"]), ["nvme0n1"])  # the loop device is not a disk
+        self.assertAlmostEqual(m["disks"]["nvme0n1"]["written_mib_per_second"], 4.0)
+        self.assertAlmostEqual(m["disks"]["nvme0n1"]["busy_share"], 0.25)
+
     def test_memory_peaks_are_the_largest_sample_not_the_last(self) -> None:
         peaks = cluster.memory_peaks(samples(4))
         self.assertEqual(peaks["ingest-queue"], 300.0)

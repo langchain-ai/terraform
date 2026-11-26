@@ -22,7 +22,7 @@ def reports() -> list[dict]:
     """A clean open-loop run whose install was read, and a run whose counts could not be read, with errors
     and a latency limit, so every field that is sometimes null appears with and without a value."""
     profile = from_document(document())
-    metrics, section = cluster.summarize(samples(), (1_000.0 + STEP_SECONDS, 1_000.0 + 6 * STEP_SECONDS), 1000.0)
+    metrics, section = cluster.summarize(samples(prometheus="obs/prometheus-server:80"), (1_000.0 + STEP_SECONDS, 1_000.0 + 6 * STEP_SECONDS), 1000.0)
     read = (metrics, {"namespace": "ls", "release": "langsmith", "sample_seconds": STEP_SECONDS, **section})
     clean = runner.build_report(outcome(150, 150), runner.LoadSettings(), profile, "p", True, 0, None, None, read)
     broken = outcome(150, None)

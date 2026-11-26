@@ -137,6 +137,15 @@ change that number, renaming or moving one does. `<class>` repeats once per read
 | `cluster.kept_up` | object | - | whether a backlog was still climbing at the window's end |
 | `cluster.kept_up.compaction` | boolean | - | the same for pending compaction jobs |
 | `cluster.kept_up.ingestion_queue` | boolean | - | ingestion_queue.pending at the end no larger than the largest in the window's first half; null when not read |
+| `cluster.machine` | object | - | every pod together and each disk across the window, from Prometheus; null without one |
+| `cluster.machine.disks` | object | - | each disk that read or wrote in the window, from node-exporter |
+| `cluster.machine.disks.<device>` | object | - | one disk |
+| `cluster.machine.disks.<device>.busy_share` | number | share | the share of time it had a request in flight; near 1, the disk is what the stores wait on |
+| `cluster.machine.disks.<device>.read_mib_per_second` | number | MiB/s | read from it a second |
+| `cluster.machine.disks.<device>.written_mib_per_second` | number | MiB/s | written to it a second |
+| `cluster.machine.pods_cores` | number | cores | CPU cores every pod used together: the cgroup k3s runs them in, where a size's machine cap (emulate_machine) applies |
+| `cluster.machine.pods_memory_peak_mib` | number | MiB | the most memory every pod held together in any one sample |
+| `cluster.machine.pods_throttled_share` | number | share | the share of the pods' CPU periods throttled: how often they met their cap |
 | `cluster.namespace` | string | - | the namespace read |
 | `cluster.read` | boolean | - | whether the install was read; false leaves every other field out but why |
 | `cluster.release` | string | - | the Helm release, the prefix of every workload's name |

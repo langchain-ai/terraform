@@ -39,7 +39,9 @@ COMPONENT = "app.kubernetes.io/component"
 # pods by name, not component, and can run them in a namespace of their own: read by component alone,
 # its Redis and Postgres were never found, and the results said "not measured" as if they were managed.
 NAME = "app.kubernetes.io/name"
-STORES = ("redis", "postgres")
+# RustFS too: the object store holds every payload, and without it neither its CPU nor its volume's growth,
+# the disk a size is planned on, was read (magus, 2026-11-26).
+STORES = ("redis", "postgres", "rustfs")
 QUEUES = ("ingestion_queue", "feedback_queue", "adhoc_queue")
 REDIS_FIELDS = ("used_memory", "maxmemory", "evicted_keys", "connected_clients")
 QUEUE_LATENCY = "langsmith_asynq_queue_latency_seconds"
@@ -144,21 +146,49 @@ def _claim_mounts(spec: dict[str, Any]) -> list[tuple[str, str]]:
     return [(c["name"], m["mountPath"]) for c in spec.get("containers", []) for m in c.get("volumeMounts", []) if m["name"] in claims]
 
 
-def prometheus_federate(where: str, namespace: str) -> str:
+def prometheus_federate(where: str, namespaces: Sequence[str]) -> str:
     """The API path to a Prometheus's /federate for one namespace's cAdvisor CPU series. It serves the
     counters cAdvisor does, in the same text, through services/proxy: a kubeconfig without nodes/proxy
     (Lite's operator, by design) read no CPU at all, and every soak's cores table was empty (magus,
     2026-11-25)."""
     ns, _, service = where.partition("/")
     names = "|".join(CONTAINER_FIELD)
-    query = urlencode({"match[]": f'{{namespace="{namespace}",__name__=~"{names}"}}'})
+    query = urlencode({"match[]": f'{{namespace=~"{"|".join(namespaces)}",__name__=~"{names}"}}'})
     return f"/api/v1/namespaces/{ns}/services/{service}/proxy/federate?{query}"
 
 
-def _add_container(out: dict[str, dict[str, Any]], text: str, marker: str, owners: dict[str, str]) -> None:
-    """Each of the namespace's containers' CPU counters from one node's cAdvisor, keyed pod/container."""
+# The whole of the pods together, as the cgroup k3s runs every pod in: the one place a size's machine cap
+# (emulate_machine) bites, so the only reading of how near the pods are to their machine. Disk throughput
+# and busy time from node-exporter: a store waiting on the disk shows nowhere else.
+PODS_SLICE = "/kubepods.slice"
+DISK_FIELD = {"node_disk_read_bytes_total": "read", "node_disk_written_bytes_total": "written", "node_disk_io_time_seconds_total": "busy"}
+NOT_DISKS = ("loop", "ram", "zram", "sr")
+
+
+def prometheus_machine(where: str) -> str:
+    """The API path to a Prometheus's /federate for the pods' slice and the node's disks."""
+    ns, _, service = where.partition("/")
+    names = "|".join(CONTAINER_FIELD)
+    query = urlencode([("match[]", f'{{id="{PODS_SLICE}",__name__=~"{names}"}}'), ("match[]", f'{{__name__=~"{"|".join(DISK_FIELD)}"}}')])
+    return f"/api/v1/namespaces/{ns}/services/{service}/proxy/federate?{query}"
+
+
+def parse_machine(text: str) -> dict[str, Any]:
+    """{"pods": {seconds, throttled, periods, memory}, "disks": {device: {read, written, busy}}} from federate text."""
+    pods: dict[str, float] = {}
+    disks: dict[str, dict[str, float]] = {}
+    for name, labels, value in parse_prometheus(text, [*CONTAINER_FIELD, *DISK_FIELD]):
+        if name in CONTAINER_FIELD and labels.get("id") == PODS_SLICE:
+            pods[CONTAINER_FIELD[name]] = value
+        elif name in DISK_FIELD and not labels.get("device", "").startswith(NOT_DISKS):
+            disks.setdefault(labels.get("device", "?"), {})[DISK_FIELD[name]] = value
+    return {"pods": pods, "disks": disks}
+
+
+def _add_container(out: dict[str, dict[str, Any]], text: str, markers: Sequence[str], owners: dict[str, str]) -> None:
+    """Each of the namespaces' containers' counters from one node's cAdvisor, keyed pod/container."""
     # Filter before parsing: a node's cAdvisor holds every namespace's containers.
-    lines = "\n".join(line for line in text.splitlines() if marker in line)
+    lines = "\n".join(line for line in text.splitlines() if any(m in line for m in markers))
     for name, labels, value in parse_prometheus(lines, CONTAINER_FIELD):
         pod, container = labels.get("pod"), labels.get("container")
         if pod in owners and container and container != "POD":
@@ -330,12 +360,16 @@ class Collector:
 
     def _cpu(self, sample: Sample, pods: list[dict[str, Any]]) -> None:
         owners = {p["name"]: p["workload"] for p in pods}
-        marker = f'namespace="{self.ns}"'
+        # The stores' namespace too: only LangSmith's was read, and Postgres using 1.7 cores on an idle
+        # install showed nowhere in a run (magus, 2026-11-26).
+        namespaces = list(dict.fromkeys((self.ns, self.data_ns)))
+        markers = [f'namespace="{ns}"' for ns in namespaces]
         if self.prometheus:
-            text = self.kube(["get", "--raw", prometheus_federate(self.prometheus, self.ns)])
+            text = self.kube(["get", "--raw", prometheus_federate(self.prometheus, namespaces)])
             if text is None:
                 sample["unread"].append(f"CPU from Prometheus {self.prometheus}")
-            _add_container(sample["cpu"], text or "", marker, owners)
+            _add_container(sample["cpu"], text or "", markers, owners)
+            self._machine(sample)
             return
         nodes = sorted({p["node"] for p in pods if p["node"]})
         def read(node: str) -> str | None:
@@ -345,7 +379,17 @@ class Collector:
         if any(t is None for t in texts):
             sample["unread"].append(f"cAdvisor on {sum(t is None for t in texts)} of {len(nodes)} nodes")
         for text in texts:
-            _add_container(sample["cpu"], text or "", marker, owners)
+            _add_container(sample["cpu"], text or "", markers, owners)
+
+    def _machine(self, sample: Sample) -> None:
+        assert self.prometheus is not None
+        text = self.kube(["get", "--raw", prometheus_machine(self.prometheus)])
+        machine = parse_machine(text or "")
+        if text is None or not machine["pods"]:
+            sample["unread"].append(f"the pods' slice ({PODS_SLICE}) from Prometheus")
+        if text is not None and not machine["disks"]:
+            sample["unread"].append("the node's disks from Prometheus (node-exporter)")
+        sample["machine"] = machine
 
     def sample(self) -> Sample:
         s: Sample = {"t": self.clock(), "queues": {}, "smithdb": {}, "redis": {}, "postgres": {}, "hpa": {}, "replicas": {}, "cpu": {}, "disk": {}, "unread": []}
@@ -493,6 +537,46 @@ def cores(window: Sequence[Sample]) -> dict[str, float]:
         if t1 > t0 and v1 >= v0:
             out[workload] = out.get(workload, 0.0) + (v1 - v0) / span
     return out
+
+
+def _counter_rate(window: Sequence[Sample], get: Callable[[Sample], float | None]) -> float | None:
+    """A counter's rise a second between the first and last sample that read it; None without two."""
+    points = _values(window, get)
+    if len(points) < 2 or points[-1][0] <= points[0][0] or points[-1][1] < points[0][1]:
+        return None
+    return (points[-1][1] - points[0][1]) / (points[-1][0] - points[0][0])
+
+
+def _reading(*path: str) -> Callable[[Sample], float | None]:
+    """A getter for sample["machine"][path...], None where a sample lacks it."""
+    def get(s: Sample) -> float | None:
+        node: Any = s.get("machine", {})
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        return node if isinstance(node, float | int) else None
+    return get
+
+
+def machine(samples: Sequence[Sample], window: Sequence[Sample]) -> dict[str, Any] | None:
+    """Every pod together, and each disk, across the window; None where no sample read them."""
+    read = [s for s in window if s.get("machine", {}).get("pods") or s.get("machine", {}).get("disks")]
+    if not read:
+        return None
+    periods, throttled = _counter_rate(read, _reading("pods", "periods")), _counter_rate(read, _reading("pods", "throttled"))
+    memory = [m for s in samples if (m := _reading("pods", "memory")(s)) is not None]
+    disks: dict[str, dict[str, float | None]] = {}
+    for device in sorted({d for s in read for d in s["machine"].get("disks", {})}):
+        reading, writing, busy = (_counter_rate(read, _reading("disks", device, k)) for k in ("read", "written", "busy"))
+        if reading or writing:
+            disks[device] = {"read_mib_per_second": reading / 2**20 if reading is not None else None,
+                             "written_mib_per_second": writing / 2**20 if writing is not None else None,
+                             "busy_share": busy}
+    return {
+        "pods_cores": _counter_rate(read, _reading("pods", "seconds")),
+        "pods_throttled_share": throttled / periods if throttled is not None and periods else None,
+        "pods_memory_peak_mib": max(memory) / 2**20 if memory else None,
+        "disks": disks,
+    }
 
 
 def memory_peaks(samples: Sequence[Sample]) -> dict[str, float]:
@@ -709,6 +793,7 @@ def summarize(samples: Sequence[Sample], window: tuple[float, float], runs_per_s
         },
         "coefficients": coefficients,
         "disk_bytes_per_run": disk_per_run(steady, runs_per_second),
+        "machine": machine(samples, steady),
         "unread": unread,
     }
     return metrics(samples, steady, p["watch.items"]), cluster

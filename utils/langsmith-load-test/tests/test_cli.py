@@ -1,6 +1,6 @@
 import unittest
 
-from loadtest.cli import build_parser, cluster_options, cluster_rows, resolve
+from loadtest.cli import build_parser, cluster_options, cluster_rows, machine_lines, resolve
 from loadtest.profile import from_document
 from loadtest.results import ERROR_CHARS, short_error
 from loadtest.runner import LoadSettings
@@ -105,3 +105,12 @@ class ShortErrorTest(unittest.TestCase):
         self.assertTrue(short.startswith(cause))
         self.assertTrue(short.endswith(f"({len(text) - ERROR_CHARS:,} more characters)"))
         self.assertEqual(short_error(cause), cause)
+
+
+class MachineLinesTest(unittest.TestCase):
+    def test_the_pods_and_each_disk_read_as_sentences(self) -> None:
+        lines = machine_lines({"pods_cores": 2.5, "pods_throttled_share": 0.1, "pods_memory_peak_mib": 3072.0,
+                               "disks": {"nvme0n1": {"read_mib_per_second": 0.0, "written_mib_per_second": 4.0, "busy_share": None}}})
+        self.assertEqual(lines, ["Every pod together: 2.50 cores, CPU throttled in 10% of periods, memory peak 3.0 GiB.",
+                                 "Disk nvme0n1: 4.0 MiB/s written, 0.0 MiB/s read."])
+        self.assertEqual(machine_lines(None), [])

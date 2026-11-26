@@ -141,9 +141,12 @@ With `--namespace` the test also reads the install while it runs, through `kubec
   the bare-metal datastores chart labels them, by name; `--data-namespace` reads them where they run when
   that is not LangSmith's namespace (LangSmith Lite runs them in `<namespace>-data`);
 - each autoscaler's replicas against its maximum, restarts and OOM kills;
-- each container's CPU, throttling and working-set memory from its node's cAdvisor, or, with
-  `--prometheus NS/SERVICE:PORT`, from that Prometheus's `/federate` through `services/proxy`, for a context
-  without `nodes/proxy` (LangSmith Lite's);
+- each container's CPU, throttling and working-set memory, LangSmith's and the stores' (Redis, Postgres,
+  RustFS), from its node's cAdvisor, or, with `--prometheus NS/SERVICE:PORT`, from that Prometheus's
+  `/federate` through `services/proxy`, for a context without `nodes/proxy` (LangSmith Lite's);
+- with `--prometheus`, every pod together (the `/kubepods.slice` cgroup: its CPU, how often it was
+  throttled, its memory), the one place a machine cap such as Lite's `emulate_machine` bites, and each
+  disk's throughput and busy time from node-exporter;
 - once a minute, the bytes in each persistent volume a store's pod mounts, with `du` in the pod: a local
   volume reports no usage to the kubelet;
 - at the end, the runs ingest-queue logged as skipped because their payload had expired in Redis.
@@ -170,6 +173,9 @@ The results gain two sections:
     disk readings; with `write.payload_kib_per_run`, the bytes generated a run, it is what a run costs
     each store.
   - `smithdb_rows_flushed_per_second` is the rate SmithDB wrote, to set beside the rate sent.
+  - `machine` is every pod together and each disk that moved: `pods_cores`, `pods_throttled_share` (the
+    share of CPU periods the pods were held back), `pods_memory_peak_mib`, and per disk the MiB a second
+    read and written and `busy_share`, the share of time it had a request in flight.
   - `unread` names what could not be read in some sample; a missing reading is unknown, never zero.
 
 Every sample is kept beside the results (`<results>.metrics.jsonl`). `uv run load-test-plot <results>.json
@@ -181,7 +187,9 @@ a signal, the window after the ramp shaded, and with `--plan` each watch item's 
 `OUT/stats.json` and `OUT/stats.csv` with every number a figure shows, and `OUT/runs/` with each run's own
 files. A figure's title is computed from the runs, never typed. The figures are `langsmith-sizing`'s pages
 in the LangChain brand, its faces and logos read from `--fonts` and `--logos`; `--draft` draws without
-them, each figure labelled a draft. `--design` says a rate as a multiple of the install's design rate.
+them, each figure labelled a draft. `--design` says a rate as a multiple of the install's design rate. It
+prints two tables as well: what each run held (rate, runs lost, readable p99, the slowest read's p99) and
+what it took (every pod's cores, throttling, SmithDB's and Postgres's cores, Redis's peak, disk written).
 
 Read a run only once its backlogs settle: after an upgrade that rebuilds SmithDB's data, compaction runs
 behind for a while by design, and a coefficient read then measures the catch-up, not the load.

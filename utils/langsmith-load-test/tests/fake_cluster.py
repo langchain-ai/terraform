@@ -96,6 +96,19 @@ class FakeCluster:
             lines.append(f'container_cpu_usage_seconds_total{{container="POD",namespace="{NS}",pod="{pod}"}} 5')
             # Working-set memory that rises and falls back, so a peak differs from the last sample.
             lines.append(f'container_memory_working_set_bytes{{container="main",namespace="{NS}",pod="{pod}"}} {(200 + 50 * (self.n % 3)) * 2**20}')
+        if self.data_namespace:
+            # The stores in their own namespace burn CPU too: Postgres half a core.
+            lines.append(f'container_cpu_usage_seconds_total{{container="main",namespace="{self.data_namespace}",pod="langsmith-postgres-0"}} {0.5 * self.n * STEP_SECONDS}')
+        # Every pod together, as cAdvisor reports the cgroup k3s runs them in: 8 cores, a tenth of periods
+        # throttled; and node-exporter's disk counters: 4 MiB/s written, busy a quarter of the time.
+        lines.append(f'container_cpu_usage_seconds_total{{id="/kubepods.slice"}} {8 * self.n * STEP_SECONDS}')
+        lines.append(f'container_cpu_cfs_periods_total{{id="/kubepods.slice"}} {1000 * self.n}')
+        lines.append(f'container_cpu_cfs_throttled_periods_total{{id="/kubepods.slice"}} {100 * self.n}')
+        lines.append(f'container_memory_working_set_bytes{{id="/kubepods.slice"}} {(10 + self.n % 3) * 2**30}')
+        lines.append(f'node_disk_written_bytes_total{{device="nvme0n1"}} {4 * 2**20 * self.n * STEP_SECONDS}')
+        lines.append('node_disk_read_bytes_total{device="nvme0n1"} 0')
+        lines.append(f'node_disk_io_time_seconds_total{{device="nvme0n1"}} {0.25 * self.n * STEP_SECONDS}')
+        lines.append(f'node_disk_written_bytes_total{{device="loop0"}} {self.n}')
         lines.append(f'container_cpu_cfs_periods_total{{container="main",namespace="{NS}",pod="langsmith-platform-backend-a"}} {100 * self.n}')
         lines.append(f'container_cpu_cfs_throttled_periods_total{{container="main",namespace="{NS}",pod="langsmith-platform-backend-a"}} {10 * self.n}')
         return "\n".join(lines)
@@ -122,11 +135,11 @@ class FakeCluster:
         ])
 
 
-def samples(steps: int = 7, **kw: Any) -> list[dict[str, Any]]:
+def samples(steps: int = 7, prometheus: str | None = None, **kw: Any) -> list[dict[str, Any]]:
     from loadtest.cluster import Collector
 
     fake = FakeCluster(**kw)
-    collector = Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t, data_namespace=kw.get("data_namespace"))
+    collector = Collector(fake, NS, RELEASE, STEP_SECONDS, clock=lambda: fake.t, data_namespace=kw.get("data_namespace"), prometheus=prometheus)
     out = []
     for _ in range(steps):
         out.append(collector.sample())
