@@ -145,9 +145,24 @@ else
   run machine "no cap on the pods" cap_pods
 fi
 
+# unplace FILE: take a manifest out of k3s's folder, delete what it made, and forget it. k3s keeps an
+# Addon per manifest with the file's checksum and skips a file whose checksum it has applied: left
+# behind, a release removed and placed again unchanged never came back (magus, 2026-11-26: after
+# FRESH=1, Grafana, the exporters and Mission Control, whose manifests are the same at every size, had
+# no HelmChart).
+unplace() {
+  local file="$1" held status
+  held="$(mktemp -d)"
+  mv "$file" "$held/"
+  kubectl delete -f "$held/$(basename "$file")" --ignore-not-found --wait --timeout=600s &&
+    kubectl -n kube-system delete addon "$(basename "$file" .yaml)" --ignore-not-found
+  status=$?
+  rm -rf "$held"
+  return $status
+}
+
 #--- 4. A fresh start ---------------------------------------------------------------------------------
-# Each release's manifest leaves k3s's folder first, or k3s would apply it again; deleting its HelmChart
-# then has helm-controller uninstall the release. The namespaces go with everything in them. The stores'
+# Each release's manifest is unplaced; deleting its HelmChart has helm-controller uninstall the release. The namespaces go with everything in them. The stores'
 # volumes are Retain, so their volumes and folders are removed by name: only a volume claimed in one of
 # this install's namespaces, and only a folder named for that volume.
 remove_volume() {
@@ -160,18 +175,12 @@ remove_volume() {
 }
 
 start_fresh() {
-  local selector="langsmith-lite/instance=$NAME" namespaces volumes held file pv
-  held="$(mktemp -d)"
+  local selector="langsmith-lite/instance=$NAME" namespaces volumes file pv
   for file in "$MANIFESTS"/lite-[0-9][0-9]-*.yaml; do
     [[ -e "$file" && "$(basename "$file")" != lite-00-base.yaml ]] || continue
-    mv "$file" "$held/"
-  done
-  for file in "$held"/*.yaml; do
-    [[ -e "$file" ]] || continue
     echo "removing $(basename "$file")"
-    kubectl delete -f "$file" --ignore-not-found --wait --timeout=600s || { rm -rf "$held"; return 1; }
+    unplace "$file" || return 1
   done
-  rm -rf "$held"
   namespaces="$(kubectl get ns -l "$selector" -o jsonpath='{.items[*].metadata.name}')" || return 1
   namespaces=" $namespaces "
   echo "removing namespaces:${namespaces% }"
@@ -312,9 +321,12 @@ retire() {
     [[ -e "$old" && ! -f "$SRC/$(basename "$old")" ]] || continue
     release="$(basename "$old" .yaml | sed 's/^lite-[0-9][0-9]-//')"
     if [[ " $RELEASES tunnel base " != *" $release "* ]]; then
-      kubectl delete -f "$old" --ignore-not-found
+      unplace "$old" || return 1
+    else
+      # A release still here under a new file name: its objects stay, and k3s forgets the old name.
+      rm -f "$old"
+      kubectl -n kube-system delete addon "$(basename "$old" .yaml)" --ignore-not-found
     fi
-    rm -f "$old"
   done
   for old in "$STATIC"/datastores-*.tgz; do
     [[ "$(basename "$old")" == "$DATASTORES_TGZ" ]] || rm -f "$old"
