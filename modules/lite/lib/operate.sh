@@ -30,7 +30,7 @@ cmd_preflight() {
   # shellcheck disable=SC2029  # the machine's size is read here and passed to the box
   cat "$LITE/lib/ui.sh" "$LITE/box/checks.sh" | ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
     "FORCE_COLOR=$colour MACHINE_CPU=$(json_get cpu <<<"$machine") MACHINE_MEM_GI=$(json_get memory_gi <<<"$machine") MACHINE_DISK_GI=$(json_get system_gi <<<"$machine") DATA_DISK_GI=$(json_get data_gi <<<"$machine") DATA_MOUNT=$(json_get data_mount <<<"$machine") DATA_VOLUME_ID=$(tf output -raw data_volume_id 2>/dev/null) ACCESS=$(tf_eval var.access) bash -s" ||
-    fail "this machine cannot be the box" "each FAIL above says why."
+    exit 1  # checks.sh named what failed
   next "make up"
 }
 
@@ -97,7 +97,7 @@ for n in $NAMESPACES; do
     while read -r p; do echo "-- $n/$p"; k -n "$n" logs "$p" --all-containers --tail=15 2>&1; done
 done' |
     awk -v b="$BOLD" -v o="$OFF" '/^## / { print ""; print "  " b substr($0, 4) o; next } { print "  " $0 }' ||
-    fail "the box could not be read" "the line above says why"
+    fail "the box could not be read over ssh" "ssh $SSH_TARGET must work, and an install must have finished there (make up)."
   printf '\n'
 }
 

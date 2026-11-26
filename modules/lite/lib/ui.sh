@@ -21,7 +21,8 @@ heading() { printf '\n%s%s%s  %s%s%s\n\n' "$BOLD" "$1" "$OFF" "$DIM" "${2:-}" "$
 
 field() { printf '  %s%-18s%s %s\n' "$DIM" "$1" "$OFF" "$2"; }
 
-next() { printf '\n  %snext%s               %s%s%s\n\n' "$DIM" "$OFF" "$CYAN" "$*" "$OFF"; }
+# Inside make experiment each verb's next is the experiment's, not the person's: LITE_INNER silences it.
+next() { [[ -n "${LITE_INNER:-}" ]] && return 0; printf '\n  %snext%s               %s%s%s\n\n' "$DIM" "$OFF" "$CYAN" "$*" "$OFF"; }
 
 warn() { printf '  %swarning%s            %s\n' "$YELLOW" "$OFF" "$*" >&2; }
 

@@ -179,7 +179,7 @@ install_bundle() {
   [[ "${FRESH:-}" == 1 ]] && fresh=" fresh"
   ssh_root "k3s installs as a system service, and the data disk mounts: asked once, then the install runs (10 to 20 minutes the first time)" \
     "sudo bash ~/.langsmith-lite/bundle/install.sh ~/.langsmith-lite/bundle$fresh; status=\$?; rm -rf ~/.langsmith-lite; exit \$status" \
-    || fail "the install on the box stopped" "its message is above; make status shows the box."
+    || root_failed $? up
   next "make access"
 }
 
@@ -201,7 +201,7 @@ send_bundle() {
 # runs on the box first; terraform destroy then forgets the generated credentials.
 cmd_down() {
   need terraform python3 ssh
-  local name cloud typed data_path
+  local name cloud typed data_path status
   name="$(tf_eval var.name)" || fail "could not read the install's name" "is anything installed? make up installs."
   cloud="$(tf_eval var.cloud)"
   heading "down" "delete $name and every trace in it"
@@ -220,10 +220,12 @@ cmd_down() {
     # outside its own folder, so the volume folders go too and nothing else (security review, 2026-11-24:
     # the data stayed behind).
     data_path="$(tf_eval var.data_path)"
+    # The uninstaller traces every command it runs (set -x): kept to the box and shown only when it fails,
+    # it filled the screen with hundreds of lines on every down (magus, 2026-11-25).
     # shellcheck disable=SC2016  # expands on the box
     ssh_root "k3s's uninstaller removes the service and every volume: asked once" \
-      'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then sudo /usr/local/bin/k3s-uninstall.sh >/dev/null; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi && sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml" /etc/systemd/system/k3s.service.d/langsmith-lite-data.conf /etc/systemd/system.control/kubepods.slice.d'"${data_path:+ && sudo find '$data_path' -maxdepth 1 -name 'pvc-*' -exec rm -rf {} +}" \
-      || fail "the uninstall on the box failed" "nothing else was removed."
+      'if [ -e /etc/rancher/k3s/installed-by-langsmith-lite ]; then out="$(sudo /usr/local/bin/k3s-uninstall.sh 2>&1)" || { printf "%s\n" "$out" | tail -n 15; exit 1; }; elif [ -e /etc/systemd/system/k3s.service ]; then echo "this k3s was not installed by Lite: left as it is"; exit 1; fi && sudo rm -rf /var/lib/langsmith-lite "$HOME/.kube/langsmith-lite.yaml" /etc/systemd/system/k3s.service.d/langsmith-lite-data.conf /etc/systemd/system.control/kubepods.slice.d'"${data_path:+ && sudo find '$data_path' -maxdepth 1 -name 'pvc-*' -exec rm -rf {} +}" \
+      || { status=$?; ((status == 1)) || root_failed "$status" down; fail "the uninstall on $SSH_TARGET failed: the Terraform state is kept" "make down again once the box's reason is fixed."; }
     printf '  %-18s %sk3s and every volume removed from %s%s %sok%s\n' uninstall "$DIM" "$SSH_TARGET" "$OFF" "$GREEN" "$OFF"
   fi
   local volume=""

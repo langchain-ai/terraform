@@ -139,7 +139,7 @@ Every LangSmith sign-in option is on [Authentication methods](https://docs.langc
 | `make verify` | Do traces flow? Ten traces followed hop by hop: accepted by the API, Redis's ingestion queue drained, SmithDB flushed, readable by a query. Where they stop, that workload's last log lines. | about 2 minutes |
 | `make soak` | Does the box hold its design load, with reads? Every target (nothing lost, readable in time), whether ingestion kept up, and each watch item against its alarm level. | `DURATION` (900 s) plus a 120 s ramp |
 | `STEP=1 make soak` | What does it hold? The design rate x 0.5, 1, 1.5, 2, 3 and 4 in turn, until a step does not hold, and what crossed its level there. | up to six soaks |
-| `make experiment` | What does each size hold? For each size (`SIZES`, all four by default): `FRESH=1 make up` at that size, held to its machine (`emulate_machine`), `make verify`, then `MINUTES` (10) at each multiple of its design rate in `STEPS` (1 2 3 4), every step run whether or not the last held. Deletes the install's data for each size, one root step a size: it asks for the install's name, or takes `CONFIRM=<name>`. Stopped part way, the next `make experiment` continues it with the settings it started with: the sizes that finished are kept, and the one it was on is measured again from no data. `NEW=1` starts a new one. | about 80 minutes a size |
+| `make experiment` | What does each size hold? For each size (`SIZES`, all four by default): `FRESH=1 make up` at that size, held to its machine (`emulate_machine`), `make verify`, then `MINUTES` (10) at each multiple of its design rate in `STEPS` (1 2 3), every step run whether or not the last held. After each size and at the end, two tables: what each step held, and what it took from the machine. Deletes the install's data for each size, one root step a size: it asks for the install's name, or takes `CONFIRM=<name>`. Stopped part way, the next `make experiment` continues it with the settings it started with: the sizes that finished are kept, and the one it was on is measured again from no data. `NEW=1` starts a new one. | about an hour a size |
 | `make report` | The runs in `build/soak/`, or the folders given, as figures, their numbers and the runs' own files. | a minute |
 
 They log in as the first admin, make an API key for the run and revoke it after; they reach the box's
@@ -147,10 +147,12 @@ Kubernetes API and LangSmith through ssh, with no port opened. They are the load
 (`utils/langsmith-load-test`), which run the same way against a cloud or bare-metal install.
 
 Each run keeps, in `build/verify/`, `build/soak/` or the experiment's folder, its results and every
-sample of the install taken every 15 s: each workload's cores and memory (through the install's
-Prometheus, so a box without observability, size `xs`, reads neither), the bytes each store's volume
-gained a run (read with `du` in its pod each minute), the payload bytes sent a run, Redis's memory,
-Postgres's connections, the queues, and SmithDB's segments, compactions and refused queries.
+sample of the install taken every 15 s: each workload's cores and memory, the stores' included; every
+pod together against the machine, with how often the size's cap throttled them; each disk's throughput
+and busy time (those through the install's Prometheus, so a box without observability, size `xs`, reads
+none of them); the bytes each store's volume gained a run (read with `du` in its pod each minute), the
+payload bytes sent a run, Redis's memory, Postgres's connections, the queues, and SmithDB's segments,
+compactions and refused queries.
 `make experiment` writes one report a size and one for all of them. A report's figures are in the
 LangChain brand when `FONTS` and `LOGOS` name the folders holding its faces and logos, read where they
 are and never copied in; without them each figure is drawn as a labelled draft.

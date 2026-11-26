@@ -16,7 +16,7 @@
 
 cmd_verify() {
   heading "verify" "traces go in, and come back out: every hop, about two minutes"
-  prove verify
+  prove verify || exit 1
   next "make soak"
 }
 
@@ -25,10 +25,10 @@ cmd_soak() {
   plan="$(tf_output plan)"
   rate="${RATE:-$(json_get runs_per_second <<<"$plan")}"
   readers="$(json_get readers <<<"$plan")"
-  heading "soak" "$rate runs/s and $readers readers for ${DURATION:-900} s, the install read every 15 s${STEP:+; raised until a step fails}"
+  heading "soak" "$rate runs/s and $readers readers for $(minutes "${DURATION:-900}") after a $(minutes "${RAMP:-120}") ramp${STEP:+, raised until a step fails}"
   local extra=(--runs-per-second "$rate" --readers "$readers" --duration "${DURATION:-900}" --ramp "${RAMP:-120}")
   [[ "${STEP:-}" == 1 ]] && extra+=(--step)
-  prove soak "${extra[@]}"
+  prove soak "${extra[@]}" || exit 1
 }
 
 prove() {
@@ -72,9 +72,14 @@ prove() {
   LITE_ADMIN_EMAIL="$(json_get langsmith user <<<"$logins")" LITE_ADMIN_PASSWORD="$(json_get langsmith password <<<"$logins")" \
     python3 "$LITE/lib/prove.py" "$mode" --endpoint "http://127.0.0.1:$wport" \
     --namespace "$(json_get langsmith <<<"$ns")" --data-namespace "$(json_get data <<<"$ns")" ${prometheus[@]+"${prometheus[@]}"} \
-    --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@" ||
-    fail "the install did not pass $mode" "why is above; the run's folder: ${work#"$LITE"/}"
+    --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@"
+  local status=$?
+  # The load test's own last line says what held and what did not; this adds where the run is kept.
+  field "results" "${work#"$LITE"/}"
+  return "$status"
 }
+
+minutes() { python3 -c "s = $1; print(f'{s / 60:g} minutes' if s % 60 == 0 else f'{s:g} s')"; }
 
 # Every size measured the same way, for sizing from runs rather than from a model: for each size, a clean
 # install held to that size's machine (emulate_machine), verify, then the load at each multiple of its
@@ -86,11 +91,11 @@ cmd_experiment() {
   name="$(tf_eval var.name)"
   out="$(experiment_folder)" || exit 1
   sizes="$(experiment_setting "$out" SIZES)" steps="$(experiment_setting "$out" STEPS)" minutes="$(experiment_setting "$out" MINUTES)"
-  heading "experiment" "sizes $sizes: a clean install each, verify, then $minutes minutes at ${steps// /, } times its design rate"
-  field "install" "$name, its data deleted and the next size installed on the same k3s"
+  heading "experiment" "each size from no data, held to its machine: verify, then $minutes minutes at ${steps// /, } times its design rate"
+  field "sizes" "$sizes"
+  for size in $sizes; do [[ -e "$out/$size/finished" ]] && field "$size" "finished earlier: kept"; done
   field "results" "${out#"$LITE"/}"
-  for size in $sizes; do [[ -e "$out/$size/finished" ]] && field "$size" "finished: kept, not run again"; done
-  field "root" "each size asks for root once, to install it from no data on the same k3s"
+  field "root" "once a size, to install it; every trace in $name is deleted each time"
   printf '\n'
   # Each size starts from no data, so the sizes differ in one thing; that deletes every trace each time.
   typed="${CONFIRM:-}"
@@ -104,10 +109,12 @@ cmd_experiment() {
     # A size stops only when its down, up or verify fails, and each size after it would fail the same
     # way: magus, 2026-11-25, ran down and up for s, m and l against one timed-out sudo touch.
     experiment_size "$size" "$out/$size" "$name" "$steps" "$minutes" ||
-      fail "$size stopped before its soaks" "why is above; make experiment continues from $size, and the sizes that finished are kept."
+      fail "size $size stopped: its $(cat "$out/$size/stopped" 2>/dev/null || echo run) did not pass" "make experiment continues from $size; the sizes that finished are kept."
   done
-  report "$out/report" "$out"/*/
-  next "make up   (the last size stays installed and held to its machine until a plain make up lifts the cap)"
+  # Every size's steps, not its verify: a verify is a minute of one user, not a rate.
+  heading "experiment" "every size"
+  report "$out/report" "$out"/*/*x/
+  next "make up   (the last size stays held to its machine until a plain make up lifts the cap)"
 }
 
 # The experiment to run: the newest under build/experiment with no report yet, continued with the
@@ -128,7 +135,7 @@ experiment_folder() {
   fi
   out="$BUILD/experiment/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$out"
-  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 2 3 4}" "${MINUTES:-10}" >"$out/settings"
+  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 2 3}" "${MINUTES:-10}" >"$out/settings"
   echo "$out"
 }
 
@@ -138,18 +145,20 @@ experiment_size() {
   local size="$1" dir="$2" name="$3" steps="$4" minutes="$5" design k
   heading "experiment" "size $size"
   mkdir -p "$dir"
+  export LITE_INNER=1
   # From no data on the same k3s: the box keeps k3s and every image it pulled, and each size costs one
   # root step, not a down and an up (two touches, k3s installed again and every image pulled again).
   # The cap rides on this up alone, never saved: the next plain make up lifts it.
-  box="$size" TF_VAR_emulate_machine=true FRESH=1 CONFIRM="$name" YES=1 "$LITE/bin/lite" up || return 1
-  OUT="$dir/verify" "$LITE/bin/lite" verify || return 1
+  box="$size" TF_VAR_emulate_machine=true FRESH=1 CONFIRM="$name" YES=1 "$LITE/bin/lite" up || { echo install >"$dir/stopped"; return 1; }
+  OUT="$dir/verify" "$LITE/bin/lite" verify || { echo verify >"$dir/stopped"; return 1; }
   design="$(tf_output plan | json_get runs_per_second)"
   for k in $steps; do
     # A step that does not hold still runs the next: where each one fails is what this measures.
     RATE="$(python3 -c "print(f'{$design * $k:g}')")" DURATION="$((minutes * 60))" OUT="$dir/${k}x" "$LITE/bin/lite" soak ||
-      warn "$size at ${k}x did not pass; its results are in ${dir#"$LITE"/}/${k}x"
+      warn "$size at ${k}x did not hold; the next step still runs"
   done
-  report "$dir/report" "$dir"/*/ --design "$design"
+  heading "experiment" "size $size: what it held, and what it took"
+  report "$dir/report" "$dir"/*x/ --design "$design"
   # Written last: a size without it was stopped, and the next make experiment measures it again.
   touch "$dir/finished"
 }

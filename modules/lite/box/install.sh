@@ -49,7 +49,8 @@ set +e
 (source "$SRC/checks.sh")
 checks=$?
 set -e
-((checks == 0)) || fail "this machine cannot be the box" "each FAIL above says why; make preflight runs the same checks."
+# checks.sh has named what failed; nothing more to say.
+((checks == 0)) || exit 1
 printf '\n'
 
 install -d -m 700 "$LITE_HOME" "$LITE_HOME/logs"

@@ -11,15 +11,15 @@
 #   DATA_MOUNT DATA_DISK_GI DATA_VOLUME_ID       where the volumes go, when they have a disk of their own
 #   ACCESS                                       localhost, ip, dns or tunnel
 #
-# One row a check: ok, warn (it may work; the detail says what to watch) or FAIL (it will not). Exit 1
-# when any check fails. Needs lib/ui.sh's row, sourced before this file.
+# One row a check: ok, warn (it may work; the detail says what to watch) or FAIL (it will not). When any
+# fails, the last line names each one. Needs lib/ui.sh's row and fail, sourced before this file.
 
 : "${MACHINE_CPU:?} ${MACHINE_MEM_GI:?} ${MACHINE_DISK_GI:?} ${ACCESS:?}"
-failed=0
+failed=""
 ours=0
 check() {
   row "$@"
-  [[ "$1" != FAIL ]] || failed=1
+  [[ "$1" != FAIL ]] || failed="${failed:+$failed, }$2"
 }
 
 gib_of() { df -Pk "$1" | awk -v col="$2" 'NR == 2 { printf "%d", $col / 1048576 }'; }
@@ -219,4 +219,4 @@ check_firewall
 check_docker
 check_internet
 check_sudo
-exit "$failed"
+[[ -z "$failed" ]] || fail "this machine cannot be the box: $failed" "each needs what its row says; make preflight checks again without changing anything."

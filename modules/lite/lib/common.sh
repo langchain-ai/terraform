@@ -136,10 +136,23 @@ wait_for_ssh() {
 # up front, so a password or a security key's touch works (a sudo that needed a touch failed without
 # them). It says why root is asked for, and that it was granted, so a long install after a touch is not
 # a silent wait (magus, 2026-11-24).
+# -q: ssh's own "Connection to <host> closed." ended every root step. Exit 3 is a refused root, told
+# apart from a step that failed (the box says which) and a dropped connection (ssh's 255).
 ssh_root() {
   printf '\n  %-18s %s%s%s\n' root "$DIM" "$1" "$OFF"
-  ssh -t "${SSH_OPTS[@]}" "$SSH_TARGET" \
-    "sudo -v || { echo 'root was not granted: nothing was changed'; exit 1; }; printf '  %-18s %s %sgranted%s\n\n' root \"on \$(hostname)\" '$GREEN' '$OFF'; $2"
+  ssh -q -t "${SSH_OPTS[@]}" "$SSH_TARGET" \
+    "sudo -v || exit $ROOT_REFUSED; printf '  %-18s %s %sgranted%s\n\n' root \"on \$(hostname)\" '$GREEN' '$OFF'; $2"
+}
+ROOT_REFUSED=3
+
+# root_failed STATUS VERB: what an ssh_root that did not succeed means, said plainly. A step that failed
+# on the box has already said which and why, with its log; only what to do next is left.
+root_failed() {
+  case "$1" in
+    "$ROOT_REFUSED") fail "root was not granted on $SSH_TARGET: nothing changed" "touch the key, or type the password, when sudo asks; then make $2 again." ;;
+    255) fail "the ssh connection to $SSH_TARGET dropped" "make $2 again: it picks up where it stopped." ;;
+    *) next "make $2 again picks up where it stopped; make status shows the box as it is"; exit 1 ;;
+  esac
 }
 
 # Defines k on the box: kubectl as the ssh user, with the kubeconfig the install gave it. k3s kubectl
