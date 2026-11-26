@@ -186,7 +186,14 @@ check_internet() {
   for url in https://github.com https://registry-1.docker.io/v2/ https://quay.io \
     https://registry.k8s.io https://langchain-ai.github.io/helm/index.yaml https://raw.githubusercontent.com \
     https://prometheus-community.github.io/helm-charts/index.yaml https://grafana-community.github.io/helm-charts/index.yaml; do
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" 2>/dev/null || true)"
+    # Retried: one fetch of a GitHub Pages index that failed once stopped a whole experiment size on a
+    # box whose network was fine (magus, 2026-11-26).
+    # A loop, not curl's --retry-all-errors, which curl before 7.71 (Ubuntu 20.04) refuses outright.
+    for _ in 1 2 3; do
+      code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$url" 2>/dev/null || true)"
+      [[ "$code" =~ ^[1-5][0-9][0-9]$ ]] && break
+      sleep 5
+    done
     [[ "$code" =~ ^[1-5][0-9][0-9]$ ]] || unreachable="$unreachable ${url#https://}"
   done
   if [[ -z "$unreachable" ]]; then check ok internet "k3s, the charts and the images are reachable"; else
