@@ -33,7 +33,7 @@ def machine(p: dict, outputs: dict, cloud: str) -> None:
     else:
         host = outputs.get("ssh", {}).get("value", {}).get("host") or "(the instance, once made)"
         field("box", f"{p['box']}: {m['cpu']} vCPU, {m['memory_gi']} GiB, on {host}")
-    field("sized for", f"{p['runs_per_second']} runs/s at peak, {p['readers']} readers; {p['data']['runs_a_day']:,} runs a day")
+    field("sized for", f"{p['runs_per_second']} runs/s at peak, {p['readers']} reader{'s' if p['readers'] != 1 else ''}; {p['data']['runs_a_day']:,} runs a day")
     if cloud == "cluster":
         field("requests", f"{req['cpu_m'] / 1000:.1f} vCPU, {req['mem_mi'] / 1024:.1f} GiB")
         return

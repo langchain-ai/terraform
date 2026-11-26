@@ -25,7 +25,7 @@ cmd_soak() {
   plan="$(tf_output plan)"
   rate="${RATE:-$(json_get runs_per_second <<<"$plan")}"
   readers="$(json_get readers <<<"$plan")"
-  heading "soak" "$rate runs/s and $readers readers for $(minutes "${DURATION:-900}") after a $(minutes "${RAMP:-120}") ramp${STEP:+, raised until a step fails}"
+  heading "soak" "$rate runs/s and $readers reader$([[ "$readers" == 1 ]] || echo s) for $(minutes "${DURATION:-900}") after a $(minutes "${RAMP:-120}") ramp${STEP:+, raised until a step fails}"
   local extra=(--runs-per-second "$rate" --readers "$readers" --duration "${DURATION:-900}" --ramp "${RAMP:-120}")
   [[ "${STEP:-}" == 1 ]] && extra+=(--step)
   prove soak "${extra[@]}" || exit 1
