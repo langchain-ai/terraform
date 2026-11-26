@@ -247,6 +247,9 @@ run "addon_storage_rejects_in_cluster" {
   command = plan
 
   variables {
+    enable_fleet     = true
+    enable_polly     = true
+    enable_insights  = true
     fleet_storage    = "in-cluster"
     insights_storage = "in-cluster"
     polly_storage    = "in-cluster"
@@ -257,6 +260,22 @@ run "addon_storage_rejects_in_cluster" {
     var.insights_storage,
     var.polly_storage,
   ]
+}
+
+# The 0.17 QuickStart wrote "in-cluster" for add-ons that were off, where the
+# value does nothing, so those tfvars must still plan.
+run "addon_storage_in_cluster_is_ignored_while_the_addon_is_off" {
+  command = plan
+
+  variables {
+    enable_fleet     = false
+    enable_polly     = false
+    enable_insights  = false
+    enable_engine    = false
+    fleet_storage    = "in-cluster"
+    insights_storage = "in-cluster"
+    polly_storage    = "in-cluster"
+  }
 }
 
 run "standalone_switches_are_rejected" {

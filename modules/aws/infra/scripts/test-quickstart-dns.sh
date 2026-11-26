@@ -334,7 +334,8 @@ done
 STOP_INFRA="$TMP/addon-stop"
 for case in 'polly_storage = "in-cluster"' 'enable_standalone_insights = true'; do
   mkdir -p "$STOP_INFRA"
-  { cat "$SMITHDB_INFRA/terraform.tfvars"; printf '%s\n' "$case"; } > "$STOP_INFRA/terraform.tfvars"
+  # Chat is on, so its in-cluster data would be stranded.
+  { sed 's/^enable_polly[[:space:]]*=.*/enable_polly = true/' "$SMITHDB_INFRA/terraform.tfvars"; printf '%s\n' "$case"; } > "$STOP_INFRA/terraform.tfvars"
   write_update_defaults "$TMP/addon-stop.answers" true
   if INFRA_DIR="$STOP_INFRA" bash "$SRC" < "$TMP/addon-stop.answers" > "$TMP/addon-stop.log" 2>&1; then
     bad "update mode stops on $case (the wizard finished)"
@@ -345,6 +346,13 @@ for case in 'polly_storage = "in-cluster"' 'enable_standalone_insights = true'; 
     && ok "the stop on $case leaves terraform.tfvars as it was" \
     || bad "the stop on $case rewrote terraform.tfvars"
 done
+# The 0.17 QuickStart wrote polly_storage = "in-cluster" with Chat off too.
+STALE_INFRA="$TMP/addon-stale"
+mkdir -p "$STALE_INFRA"
+{ cat "$SMITHDB_INFRA/terraform.tfvars"; printf 'polly_storage = "in-cluster"\n'; } > "$STALE_INFRA/terraform.tfvars"
+write_update_defaults "$TMP/addon-stale.answers" true
+run_wizard "update mode accepts in-cluster storage for an add-on that is off" "$STALE_INFRA" "$TMP/addon-stale.answers" "$TMP/addon-stale.log"
+lacks_key "update mode drops the stale polly_storage" "$STALE_INFRA/terraform.tfvars" "polly_storage"
 KEEP_INFRA="$TMP/addon-keep"
 mkdir -p "$KEEP_INFRA"
 { cat "$SMITHDB_INFRA/terraform.tfvars"; printf 'polly_storage = "external"\n'; } > "$KEEP_INFRA/terraform.tfvars"

@@ -956,7 +956,9 @@ variable "insights_storage" {
   default     = "external"
 
   validation {
-    condition     = var.insights_storage == "external"
+    # The 0.17 QuickStart wrote "in-cluster" for an add-on that was off, where it
+    # does nothing, so the value only fails while the add-on runs.
+    condition     = var.insights_storage == "external" || !(var.enable_insights || var.enable_engine)
     error_message = "insights_storage = \"in-cluster\" was removed in 0.18: Insights uses its own database on the shared RDS instance (langsmith_insights) and its own DB index on the shared ElastiCache. Back up the in-cluster Insights database, then set this to \"external\" in terraform.tfvars: the next deploy points Insights at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
@@ -973,7 +975,7 @@ variable "polly_storage" {
   default     = "external"
 
   validation {
-    condition     = var.polly_storage == "external"
+    condition     = var.polly_storage == "external" || !var.enable_polly
     error_message = "polly_storage = \"in-cluster\" was removed in 0.18: Chat uses its own database on the shared RDS instance (langsmith_polly) and its own DB index on the shared ElastiCache. Back up the in-cluster Chat database, then set this to \"external\" in terraform.tfvars: the next deploy points Chat at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
@@ -990,7 +992,7 @@ variable "fleet_storage" {
   default     = "external"
 
   validation {
-    condition     = var.fleet_storage == "external"
+    condition     = var.fleet_storage == "external" || !var.enable_fleet
     error_message = "fleet_storage = \"in-cluster\" was removed in 0.18: Fleet uses its own database on the shared RDS instance (langsmith_fleet) and its own DB index on the shared ElastiCache. Back up the in-cluster Fleet database, then set this to \"external\" in terraform.tfvars: the next deploy points Fleet at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }

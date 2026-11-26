@@ -1118,7 +1118,13 @@ for _key in polly_storage insights_storage; do
 done
 
 # Fleet, Chat and Insights always use the shared RDS and ElastiCache from 0.18.
-for _key in fleet_storage polly_storage insights_storage; do
+# The 0.17 QuickStart wrote "in-cluster" for add-ons that were off too; that
+# value does nothing and this run drops it, so only an add-on that is on stops.
+_ex_engine=$(_existing "enable_engine" "false")
+for _entry in "fleet_storage:$_ex_fleet" "polly_storage:$_ex_polly" \
+  "insights_storage:$([[ "$_ex_insights" == "true" || "$_ex_engine" == "true" ]] && echo true || echo false)"; do
+  _key="${_entry%%:*}"
+  [[ "${_entry##*:}" == "true" ]] || continue
   if [[ "$(_existing "$_key" "external")" == "in-cluster" ]]; then
     _red "  ERROR: $_key = \"in-cluster\" was removed in 0.18."
     printf "  Move that data first, then set it to \"external\": the next deploy points the add-on\n"

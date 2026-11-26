@@ -340,7 +340,7 @@ From 0.18 Fleet, LangSmith Chat and Insights always use their own database on th
 shared RDS instance (`langsmith_fleet`, `langsmith_polly`, `langsmith_insights`) and
 their own DB index on the shared ElastiCache (1, 2 and 3). Engine uses the Insights
 storage. `fleet_storage`, `polly_storage` or `insights_storage = "in-cluster"` fails
-at plan, and so do `enable_standalone_polly` and `enable_standalone_insights`: replace
+at plan while that add-on is on (for `insights_storage`, Insights or Engine), and so do `enable_standalone_polly` and `enable_standalone_insights`: replace
 those two with `enable_polly = true`, `polly_storage = "external"`, `enable_insights =
 true` and `insights_storage = "external"`.
 
