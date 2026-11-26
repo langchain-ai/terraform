@@ -97,11 +97,11 @@ _confirm() {
 }
 
 # Resolve a boolean flag as applied, for post-apply scripts: the gateway
-# controllers (enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress)
+# controllers (enable_envoy_gateway / enable_istio_gateway)
 # and the SmithDB gates.
 #
 # Neither is readable from terraform.tfvars text alone. enable_envoy_gateway is
-# derived in Terraform (unset means "on unless Istio or NGINX was chosen"), and a
+# derived in Terraform (unset means "on unless Istio was chosen"), and a
 # SmithDB gate left out of tfvars takes a variable default of true. Read the
 # Terraform output instead; fall back to tfvars, then to <default>, only when no
 # state exists yet (pre-apply callers such as preflight).

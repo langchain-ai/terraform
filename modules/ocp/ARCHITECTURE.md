@@ -88,7 +88,7 @@ ocp/infra/
 
 | Concern          | AKS / GKE / EKS              | OCP                                     |
 |------------------|------------------------------|-----------------------------------------|
-| Ingress          | NGINX / Envoy / ALB          | OpenShift Route or Gateway API          |
+| Ingress          | Envoy / ALB          | OpenShift Route or Gateway API          |
 | Security context | Standard pod security        | SCC (Security Context Constraints)      |
 | Storage          | Cloud-native CSI             | ODF / Rook-Ceph or in-cluster MinIO     |
 | Identity         | Workload Identity / IRSA     | OpenShift service account tokens        |
