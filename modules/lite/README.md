@@ -20,10 +20,7 @@ own the box, its backups and its upgrades. Past size `l` is a full deployment: a
 
 ## Where Lite fits
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="diagrams/standard-vs-lite-dark.png">
-  <img alt="Two panels. A full deployment, the cloud modules or the bare-metal module on a cluster: four tenants, each an organization, use one LangSmith install whose services scale out (platform-backend and backend 2 or 3 to 10 by HPA, ingest-queue 3 to 10 by KEDA, SmithDB a pod per role), over managed Postgres, Redis and object storage outside the cluster, in which every tenant's rows are interleaved: separation is logical. LangSmith Lite: four tenants, each with its own install, its own LangSmith, Postgres, Redis and RustFS, its own disk and its own keys: separation is physical, up to 50 runs a second an install, tracing only, each install one failure domain." src="diagrams/standard-vs-lite-light.png">
-</picture>
+<img alt="Two panels. A full deployment, the cloud modules or the bare-metal module on a cluster: four tenants, each an organization, use one LangSmith install whose services scale out (platform-backend and backend 2 or 3 to 10 by HPA, ingest-queue 3 to 10 by KEDA, SmithDB a pod per role), over managed Postgres, Redis and object storage outside the cluster, in which every tenant's rows are interleaved: separation is logical. LangSmith Lite: four tenants, each with its own install, its own LangSmith, Postgres, Redis and RustFS, its own disk and its own keys: separation is physical, up to 50 runs a second an install, tracing only, each install one failure domain." src="diagrams/standard-vs-lite.png">
 
 A full deployment is one LangSmith for many tenants: each is an organization in one install, and its rows
 sit beside every other tenant's in shared managed stores that scale out. Lite turns that around: one
@@ -74,7 +71,7 @@ own traces: [OPERATE.md, Sending traces](OPERATE.md#sending-traces).
 | `preflight` | whether a machine can be the box: read-only, no root |
 | `verify` | do traces flow? Ten traces followed hop by hop; where they stop, that workload's logs |
 | `soak` | does it hold its design load? `STEP=1`: the rate it holds, and what breaks first |
-| `experiment` | every size from no data, held to its machine: verify, then 1, 2 and 3 times its design rate |
+| `experiment` | every size from no data, held to its machine: verify, then 1x twice, 2x and 3x its design rate |
 | `report` | the runs as figures, their numbers and the runs' own files |
 | `export` | the releases, values and Secrets for a cluster of one's own |
 | `access`, `status`, `down` | use it, read it, delete it |
@@ -110,6 +107,6 @@ make:** the TTLs size the disk more than anything else, so `make up` asks for th
 | `lib/` | what the verbs do (`deploy.sh`, `operate.sh`, `prove.sh`, `develop.sh`, `versions.sh`), shared plumbing (`common.sh`, `ui.sh`), and their Python (`settings.py`: the questions; `summary.py`: the plan; `export.py`; `prove.py`: the key for verify and soak), its tests (`tests/`) and its gate (`quality.py`: complexity under 15, CRAP under 30) |
 | `box/` | what runs on the box: `checks.sh` (also `make preflight`) and `install.sh` |
 | `infra/` | Terraform: `sizing.tf` with `sizes.yaml`, `releases.tf` and `values.tf`, `health.yaml` (the alerts and the health dashboard), `secrets.tf`, `bundle.tf`, `pins.yaml`, `hosts/aws/`, `tests/` |
-| `diagrams/` | the docs' figures, light and dark, and `draw.py`, which draws them from the numbers the docs and the code hold |
+| `diagrams/` | the docs' figures and `draw.py`, which draws them from the numbers the docs and the code hold |
 | [`../baremetal/charts/datastores`](../baremetal/charts/datastores) | the Postgres, Redis and RustFS chart, shared with the bare-metal module |
 | [`../../utils/langsmith-load-test`](../../utils/langsmith-load-test) | the load test behind `verify` and `soak` |

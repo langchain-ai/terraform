@@ -1,6 +1,5 @@
 """Lite's figures, for its README, ARCHITECTURE.md, SIZING.md and OPERATE.md: each drawn as an SVG on a
-brand page and shot to PNG by headless Chrome at twice the device scale, in a light and a dark theme for a
-<picture>. The page, the theme tokens and the shot are the sizing package's (utils/langsmith-sizing,
+brand page and shot to PNG by headless Chrome at twice the device scale, in the dark theme. The page, the theme tokens and the shot are the sizing package's (utils/langsmith-sizing,
 figures.py), so every figure in this repository shares one palette and one renderer:
 
     uv run --project ../../utils/langsmith-sizing python diagrams/draw.py --fonts DIR --logos DIR [name ...]
@@ -30,8 +29,8 @@ HERE = Path(__file__).resolve().parent
 LITE = HERE.parent
 ROOT = LITE.parent.parent
 RENDERED = HERE / "rendered.json"
-THEMES = ("light", "dark")
-LOGOS = {"light": "langchain-on-light.svg", "dark": "langchain-on-dark.svg"}
+THEMES = ("dark",)  # dark only (Reed, 2026-11-26): one image a figure, the same on every reader's page
+LOGOS = {"dark": "langchain-on-dark.svg"}
 W = 1472  # the page's content width: 1600 less the canvas's padding
 MONO = 7.9  # Aeonik Mono's advance at 13 px, for sizing chips and placing labels
 
@@ -829,7 +828,7 @@ def proving() -> str:
              ("make soak", "Does it hold its design load?",
               f"About {(int(shell_default('DURATION')) + int(shell_default('RAMP'))) // 60} minutes, the ramp included"),
              ("STEP=1 make soak", "What does it hold?", "until a step does not hold"),
-             ("make experiment", "What does each size hold?", "about an hour a size")]
+             ("make experiment", "What does each size hold?", "About an hour and a quarter a size")]
     o = []
     for i, (verb, q, takes) in enumerate(lanes):
         y = i * (LANE_H + gap)
@@ -876,7 +875,7 @@ def draw(fonts_dir: Path | None, logos_dir: Path | None, draft: bool, only: list
             for theme in THEMES:
                 html = Path(tmp) / f"{name}-{theme}.html"
                 html.write_text(document(markup, theme, fonts, logos_dir / LOGOS[theme] if logos_dir else None, note))
-                shoot(binary, html, HERE / f"{name}-{theme}.png")
+                shoot(binary, html, HERE / f"{name}.png")
                 if keep:
                     keep.mkdir(parents=True, exist_ok=True)
                     (keep / html.name).write_text(html.read_text())
@@ -889,10 +888,10 @@ def draw(fonts_dir: Path | None, logos_dir: Path | None, draft: bool, only: list
 if __name__ == "__main__":
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     a.add_argument("--fonts", type=Path, help="the folder holding the brand's four font files")
-    a.add_argument("--logos", type=Path, help="the folder holding langchain-on-light.svg and langchain-on-dark.svg")
+    a.add_argument("--logos", type=Path, help="the folder holding langchain-on-dark.svg")
     a.add_argument("--draft", action="store_true", help="draw without the faces, labelled, and not recorded")
     a.add_argument("--keep-html", type=Path, help="also keep each page here, for the brand linter")
     a.add_argument("names", nargs="*", help="the figures to draw; every one by default")
     x = a.parse_args()
     for n in draw(x.fonts, x.logos, x.draft, x.names, x.keep_html):
-        print(f"drew diagrams/{n}-light.png and {n}-dark.png")
+        print(f"drew diagrams/{n}.png")

@@ -42,10 +42,7 @@ peak      <= 50 runs/s                                      # past it: a full de
 
 ## The sizes
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="diagrams/sizes-dark.png">
-  <img alt="Each of the four sizes against its machine, at its design rate and the default retention. xs, 1 run a second on 2 vCPU, 16 GiB and 100 GiB: 1.27 of 1.36 vCPU, 8.6 of 12.8 GiB, 76 of 80 GiB of disk. s, 5 runs a second on 4 vCPU, 32 GiB and 200 GiB: 2.37 of 2.98 vCPU, 12.4 of 25.9 GiB, 147 of 160 GiB. m, 25 runs a second on 8 vCPU, 64 GiB and 640 GiB: 5.37 of 6.16 vCPU, 25.1 of 52.7 GiB, 508 of 512 GiB. l, 50 runs a second on 16 vCPU, 64 GiB and 1,280 GiB: 9.73 of 12.75 vCPU, 43.7 of 51.8 GiB, 984 of 1,024 GiB. CPU comes nearest its allowance at xs, s and m, memory at l. The allowance is 85% of what k3s leaves allocatable for CPU and memory, and 80% of the disk for the volumes and the system's 40 GiB." src="diagrams/sizes-light.png">
-</picture>
+<img alt="Each of the four sizes against its machine, at its design rate and the default retention. xs, 1 run a second on 2 vCPU, 16 GiB and 100 GiB: 1.27 of 1.36 vCPU, 8.6 of 12.8 GiB, 76 of 80 GiB of disk. s, 5 runs a second on 4 vCPU, 32 GiB and 200 GiB: 2.37 of 2.98 vCPU, 12.4 of 25.9 GiB, 147 of 160 GiB. m, 25 runs a second on 8 vCPU, 64 GiB and 640 GiB: 5.37 of 6.16 vCPU, 25.1 of 52.7 GiB, 508 of 512 GiB. l, 50 runs a second on 16 vCPU, 64 GiB and 1,280 GiB: 9.73 of 12.75 vCPU, 43.7 of 51.8 GiB, 984 of 1,024 GiB. CPU comes nearest its allowance at xs, s and m, memory at l. The allowance is 85% of what k3s leaves allocatable for CPU and memory, and 80% of the disk for the volumes and the system's 40 GiB." src="diagrams/sizes.png">
 
 At the default TTLs (14 days, 30 extended), each size at its design rate:
 
@@ -89,10 +86,7 @@ in another cloud, costs what you pay for it.
 
 ## What runs on box `s`
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="diagrams/the-box-dark.png">
-  <img alt="Box s to scale, at 5 runs a second and 14 and 30 days of retention. Memory: 12.4 of its 32 GiB requested, against 25.9 GiB allowed; SmithDB, queue, Redis and ingest-queue are the largest requests. CPU: 2.37 of its 4 vCPU requested, against 2.98 allowed; SmithDB's is the largest, then Mission Control's and ingest-queue's. Disk: 147 of its 200 GiB, the system's 40, the object store's 71 for SmithDB's segments and the payloads, and 36 for the other volumes, against the 160 GiB the plan fills to. Colours mark the namespace: LangSmith's, the stores', observability's and k3s's own." src="diagrams/the-box-light.png">
-</picture>
+<img alt="Box s to scale, at 5 runs a second and 14 and 30 days of retention. Memory: 12.4 of its 32 GiB requested, against 25.9 GiB allowed; SmithDB, queue, Redis and ingest-queue are the largest requests. CPU: 2.37 of its 4 vCPU requested, against 2.98 allowed; SmithDB's is the largest, then Mission Control's and ingest-queue's. Disk: 147 of its 200 GiB, the system's 40, the object store's 71 for SmithDB's segments and the payloads, and 36 for the other volumes, against the 160 GiB the plan fills to. Colours mark the namespace: LangSmith's, the stores', observability's and k3s's own." src="diagrams/the-box.png">
 
 | Pod | What it does | CPU | Memory (limit) |
 |:--|:--|--:|--:|
@@ -162,10 +156,7 @@ disk and alerts at 90% ([OPERATE.md, Watching it](OPERATE.md#watching-it)).
 The TTLs size the disk more than anything else, so `make up` asks for them, and a plan made without them
 says so on every run. The object store at box `s` (box `m` is five times each, `l` ten):
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="diagrams/retention-dark.png">
-  <img alt="The object store at box s's design rate for each pair of TTLs, short and extended: 41 GiB at 7 and 14 days, 71 GiB at the default 14 and 30, 84 GiB at 14 and 90, 146 GiB at 30 and 90, 148 GiB at 14 and 400, 446 GiB at 90 and 400: eleven times from the shortest to the longest." src="diagrams/retention-light.png">
-</picture>
+<img alt="The object store at box s's design rate for each pair of TTLs, short and extended: 41 GiB at 7 and 14 days, 71 GiB at the default 14 and 30, 84 GiB at 14 and 90, 146 GiB at 30 and 90, 148 GiB at 14 and 400, 446 GiB at 90 and 400: eleven times from the shortest to the longest." src="diagrams/retention.png">
 
 | TTLs, days (short / extended) | 7 / 14 | 14 / 30 | 14 / 90 | 30 / 90 | 14 / 400 | 90 / 400 |
 |:--|--:|--:|--:|--:|--:|--:|
