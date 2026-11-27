@@ -5,7 +5,7 @@
 # Prerequisites:
 #   • terraform apply with ingress_controller = "istio" or "istio-addon"
 #   • make k8s-secrets
-#   • make init-values  (generates values-overrides.yaml with ingressClassName: istio)
+#   • make init-values  (writes langsmith-values-overrides.yaml with ingressClassName: istio)
 #   • make deploy       (creates IngressClass, syncs TLS secret, and for istio-addon:
 #                        creates Gateway + VirtualService)
 #

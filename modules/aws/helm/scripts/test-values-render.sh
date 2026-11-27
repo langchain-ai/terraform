@@ -132,6 +132,8 @@ check "the header records an unset key" "  tfvar unset_key =" "$(_values_notes "
 check "the header records no local file" "  local none" "$(_values_notes "$OVR" local)"
 check "deploy.sh's checks pass" "0" "$(_values_check "$MOD" "$VALUES" 2>/dev/null; echo $?)"
 check "nothing drifted" "" "$(_values_drift "$OVR" "$MOD" "$VALUES")"
+check "the header returns a resolved value" "true" "$(_values_resolved "$OVR" some_flag)"
+check "the header returns nothing for an unrecorded name" "" "$(_values_resolved "$OVR" new_flag)"
 check "the same resolved value is no drift" "" "$(_values_resolved_drift "$OVR" some_flag=true)"
 check "another resolved value is drift" \
   'Terraform now resolves some_flag to "false", and the file was written for "true"' \

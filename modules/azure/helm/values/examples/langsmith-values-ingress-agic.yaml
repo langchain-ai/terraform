@@ -10,7 +10,7 @@
 #       - AGW public IP with optional DNS label (dns_label in tfvars)
 #       - Reader role on RG + Contributor role on AGW for the add-on identity
 #   • make k8s-secrets
-#   • make init-values  (generates values-overrides.yaml with ingressClassName: azure-application-gateway)
+#   • make init-values  (writes langsmith-values-overrides.yaml with ingressClassName: azure-application-gateway)
 #   • make deploy
 #
 # How it works:

@@ -9,7 +9,7 @@
 # Where am I?              make status
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-clickhouse-cluster test-chart-image-keys test-guard-ingress-nginx setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-values test-clickhouse-cluster test-chart-image-keys test-guard-ingress-nginx setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -57,8 +57,11 @@ test-license-key: ## Unit-test the license key check shared by setup-env, k8s-se
 test-images-block: ## Unit-test the images: block init-values writes for a mirror (no Azure)
 	$(INFRA_DIR)/scripts/test-langsmith-images-block.sh
 
-test-values-stamp: ## Unit-test the stamp check that stops make deploy on a values file generated from other tfvars (no Azure)
+test-values-stamp: ## Unit-test the recorded inputs that stop make deploy on an out-of-date overrides file (no Azure)
 	$(INFRA_DIR)/scripts/test-values-stamp.sh
+
+test-values: ## Run init-values for each feature and check the two values files against the chart (needs helm)
+	$(HELM_DIR)/scripts/test-values.sh
 
 test-clickhouse-cluster: ## Unit-test how clickhouse_cluster reaches the chart from any tfvars source (no Azure)
 	$(INFRA_DIR)/scripts/test-clickhouse-cluster.sh

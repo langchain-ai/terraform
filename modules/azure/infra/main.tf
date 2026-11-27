@@ -2068,9 +2068,9 @@ locals {
   }
   smithdb_metastore_sku_name = coalesce(var.smithdb_metastore_sku_name, local.smithdb_metastore_sku_defaults[local.smithdb_sizing])
 
-  # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
-  # to helm/values/langsmith-values-smithdb-sizing.yaml. The cache StorageClass,
-  # identity, and metastore stay in the overrides file.
+  # SmithDB Helm values (output smithdb_helm_values). init-values.sh merges them
+  # into helm/values/langsmith-values-overrides.yaml before the SmithDB example,
+  # then the cache StorageClass, identity, and metastore after it.
   #
   # small, medium, and large: the chart tier, with the tier replicas as each
   # cache component's HPA minReplicas. They also go to deployment.replicas,

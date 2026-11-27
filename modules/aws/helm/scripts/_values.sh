@@ -420,6 +420,12 @@ _values_drift() {
   done < <(_values_notes "$overrides")
 }
 
+# _values_resolved <overrides> <name>: prints the value that init-values.sh
+# recorded for <name> with _values_plan_resolved, or nothing.
+_values_resolved() {
+  _values_notes "$1" resolved | awk -v n="$2" '$2 == n { sub(/^[^=]*= ?/, ""); print; exit }'
+}
+
 # _values_resolved_drift <overrides> <name=value>...
 # Prints one line for each value that deploy.sh resolved again from Terraform
 # outputs and that differs from the one recorded when the file was written.
@@ -429,7 +435,7 @@ _values_resolved_drift() {
   for pair in "$@"; do
     name="${pair%%=*}"
     want="${pair#*=}"
-    got=$(_values_notes "$overrides" resolved | awk -v n="$name" '$2 == n { sub(/^[^=]*= ?/, ""); print; exit }')
+    got=$(_values_resolved "$overrides" "$name")
     [[ "$got" == "$want" ]] || echo "Terraform now resolves $name to \"$want\", and the file was written for \"${got:-unset}\""
   done
 }

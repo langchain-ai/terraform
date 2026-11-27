@@ -261,7 +261,7 @@ ingress_controller = "envoy-gateway"
 # keda_chart_repository_username        = "helm-reader"
 
 # LangSmith's own pods take their pull Secret from the chart (images.imagePullSecrets
-# in values-overrides.yaml). The pods the operator creates for each deployment do
+# in langsmith-values-overrides.yaml). The pods the operator creates for each deployment do
 # not: the agent pod runs as langsmith-ksa, and the deployment's Redis and PostgreSQL
 # as the namespace's default account. langsmith_image_pull_secret_name attaches a
 # Secret in the LangSmith namespace to those accounts (and to the backend's and
@@ -277,9 +277,9 @@ ingress_controller = "envoy-gateway"
 # templates are written with the mirror too for a chart that writes docker.io into
 # them, every 0.17 patch so far; 0.18 reads them from the images: block). A mirror that keeps docker.io as the first path segment
 # (<registry>/docker.io/langchain/...) takes langsmith_image_registry_keeps_source_host = true,
-# and the registry becomes images.registry in values-overrides.yaml. The pull Secret
-# above is written as images.imagePullSecrets as well. All three are stamped into
-# values-overrides.yaml, so deploy.sh stops if one changed since make init-values.
+# and the registry becomes images.registry in langsmith-values-overrides.yaml. The pull
+# Secret above is written as images.imagePullSecrets as well. All three are recorded
+# in that file's header, so deploy.sh stops if one changed since make init-values.
 # langsmith_image_registry                   = "nexus.example.com"
 # langsmith_image_registry_keeps_source_host = true
 

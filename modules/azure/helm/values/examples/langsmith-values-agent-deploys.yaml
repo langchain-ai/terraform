@@ -1,8 +1,7 @@
 # Deployments (LangGraph Platform) — enables the Deployments UI, listener, and operator.
 #
-# init-values.sh copies this to ../langsmith-values-agent-deploys.yaml when you choose
-# a product tier that includes Deployments (tier 2+).
-# Manual: cp examples/langsmith-values-agent-deploys.yaml ../langsmith-values-agent-deploys.yaml
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_deployments = true. Put your changes in ../langsmith-values-local.yaml.
 
 config:
   deployment:
@@ -67,7 +66,7 @@ operator:
     # Gateway's 15 s default and cut runs/stream mid-response. Read only
     # when the operator creates HTTPRoutes (envoy-gateway); other ingress
     # controllers ignore it. Helm replaces lists, so this list replaces any
-    # operator.deployment.extraEnv set in values-overrides.yaml.
+    # operator.deployment.extraEnv set in langsmith-values-overrides.yaml.
     extraEnv:
       - name: HTTPROUTE_REQUEST_TIMEOUT
         value: "0s"

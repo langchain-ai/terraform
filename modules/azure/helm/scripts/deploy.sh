@@ -7,27 +7,21 @@
 # deploy.sh — Deploy or upgrade LangSmith via Helm on Azure.
 #
 # Values files loaded (in order, last wins):
-#   1. values.yaml                               — base Azure config (always)
-#   2. values-overrides.yaml                     — env-specific: hostname, WI, blob (required)
-#   3. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
-#   4. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
-#   5. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #4)
-#   6. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
-#   7. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
-#   7b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
-#   7c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
-#   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
-#   9. langsmith-values-smithdb-sizing.yaml      — SmithDB tier and replicas, from terraform output (if enable_smithdb = true)
-#  10. langsmith-values-smithdb.yaml             — SmithDB overlay, hand-edited (if enable_smithdb = true)
-#  11. langsmith-values-smithdb-overrides.yaml   — SmithDB storage, identity, metastore, gates (if enable_smithdb = true)
+#   1. langsmith-values.yaml            — the base Azure values, copied from examples/
+#   2. langsmith-values-overrides.yaml  — everything else, in one file: hostname, Workload
+#                                         Identity, blob storage, each enabled feature,
+#                                         the sizing profile, SmithDB, and your
+#                                         langsmith-values-local.yaml
 #
 # With sandbox_runtime_source = external, a second release follows the
 # langsmith one: langsmith-sandbox (SANDBOX_RELEASE_NAME) in the sandbox cluster,
 # with langsmith-sandbox-values-overrides.yaml, from the newest langsmith-sandbox
 # chart whose appVersion equals the langsmith chart's.
 #
-# Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
-# Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
+# Write the values files first: make init-values (or: ./helm/scripts/init-values.sh).
+# The deploy stops while either file is missing or was edited by hand, and when
+# terraform.tfvars, a module file, or langsmith-values-local.yaml changed after
+# make init-values wrote them.
 #
 # Usage (from azure/):
 #   ./helm/scripts/deploy.sh
@@ -36,10 +30,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
+MODULE_DIR="$(cd "$HELM_DIR/.." && pwd)"
 INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
 VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
 
 source "$HELM_DIR/../infra/scripts/_common.sh"
+# shellcheck source=_values.sh
+source "$SCRIPT_DIR/_values.sh"
 
 # The Helm release name: RELEASE_NAME from the environment if set, else
 # langsmith_release_name from terraform.tfvars, else langsmith. The chart names
@@ -64,8 +61,8 @@ SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
 SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 _sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 
-BASE_VALUES_FILE="$HELM_DIR/values/values.yaml"
-OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
+BASE_VALUES_FILE="$VALUES_DIR/$_VALUES_BASE"
+OVERRIDES_FILE="$VALUES_DIR/$_VALUES_OVERRIDES"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
@@ -78,59 +75,33 @@ echo ""
 # a controller Terraform has not installed.
 INFRA_DIR="$INFRA_DIR" bash "$HELM_DIR/../infra/scripts/guard-ingress-nginx.sh" || exit 1
 
-# ── Validate required values files ────────────────────────────────────────
-if [[ ! -f "$OVERRIDES_FILE" ]]; then
-  fail "values-overrides.yaml not found"
-  action "make init-values  (generates it from terraform outputs)"
+# ── Validate the values files ─────────────────────────────────────────────
+# A 0.17 values-overrides.yaml written under the previous default of
+# langsmith_image_registry_keeps_source_host: checked first, because the 0.17
+# layout stop below asks to move that file away (_common.sh).
+if [[ -f "$VALUES_DIR/values-overrides.yaml" ]]; then
+  _stop_if_values_layout_from_old_default "$VALUES_DIR/values-overrides.yaml" || exit 1
+fi
+# The 0.17 layout, a missing or hand-edited values file, or one that make
+# init-values wrote for other inputs. init-values.sh bakes the terraform.tfvars
+# values into the overrides file and make deploy never regenerates it, so a
+# tfvars edit afterward would leave Terraform and Helm deploying different
+# configurations.
+_values_check "$MODULE_DIR" "$VALUES_DIR" || exit 1
+_resolved_now=("clickhouse_cluster=$(_clickhouse_cluster_resolved || true)")
+if [[ "$(_parse_tfvar enable_sandboxes || true)" == "true" && "$_sandbox_runtime_source" != "external" ]]; then
+  _resolved_now+=("sandbox_juicefs_redis_config_digest=$(_tf_out sandbox_juicefs_redis_config_digest || true)")
+fi
+_values_stale=$(_values_resolved_drift "$OVERRIDES_FILE" "${_resolved_now[@]}")
+if [[ -n "$_values_stale" ]]; then
+  fail "$_VALUES_OVERRIDES is out of date:"
+  printf '%s\n' "$_values_stale" | while IFS= read -r _line; do
+    [[ -n "$_line" ]] && info "$_line"
+  done
+  action "make init-values  (regenerate it, then re-run make deploy)"
   exit 1
 fi
-# init-values writes insights.enabled and polly.enabled into every overrides file
-# it generates. A file without them predates that, and may be missing other
-# settings init-values writes now.
-if ! grep -q '^insights:' "$OVERRIDES_FILE" || ! grep -q '^polly:' "$OVERRIDES_FILE"; then
-  warn "values-overrides.yaml has no insights/polly block, so it predates the current init-values"
-  action "make init-values  (regenerates it; re-apply any hand edits afterward)"
-fi
-
-# ── Reject a values-overrides.yaml generated from different tfvars ─────────
-# init-values.sh bakes tfvars values into that file and `make deploy` never
-# regenerates it, so a tfvars edit afterward leaves Terraform and Helm deploying
-# different configurations.
-if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
-  warn "terraform.tfvars not found — values-overrides.yaml not checked against it"
-  echo ""
-else
-  # _values_stamp_drift (infra/scripts/_common.sh): a key the stamp lacks is
-  # drift when terraform.tfvars sets it, so a file generated before that key
-  # existed cannot deploy as if the key were unset.
-  _drift_rc=0
-  _stale=$(_values_stamp_drift "$OVERRIDES_FILE") || _drift_rc=$?
-
-  if [[ "$_drift_rc" -eq 2 ]]; then
-    warn "values-overrides.yaml carries no terraform.tfvars stamp (written by an older init-values.sh)"
-    action "make init-values  (adds the stamp, so this check can run)"
-    echo ""
-  elif [[ "$_drift_rc" -eq 1 ]]; then
-    fail "values-overrides.yaml was generated from different terraform.tfvars values:"
-    printf '%s\n' "$_stale" | while IFS= read -r _line; do
-      [[ -n "$_line" ]] && info "$_line"
-    done
-    echo ""
-    info "terraform apply used the current terraform.tfvars; this file still describes the old one."
-    action "make init-values  (regenerate it, then re-run make deploy)"
-    exit 1
-  fi
-fi
-
-# A values file generated under the previous default of
-# langsmith_image_registry_keeps_source_host (true, host kept) with the key
-# unset in terraform.tfvars: the stamp reads '' on both sides, so the check
-# above passes it, and the next make init-values would write the host-dropped
-# layout under a mirror that serves the other one. Stop until the choice is
-# written down (init-values.sh makes the same stop before it overwrites the file).
-if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
-  _stop_if_values_layout_from_old_default "$OVERRIDES_FILE" || exit 1
-fi
+pass "$_VALUES_BASE and $_VALUES_OVERRIDES are current"
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
 _cluster_name=$(_tf_out aks_cluster_name) || {
@@ -204,16 +175,14 @@ _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 
 # ── Ingress class for ingress_controller = "none" ─────────────────────────
 # No class is set for none, so the chart's Ingress and the HTTP-01 solver's go
-# to the cluster's default IngressClass, unless values-overrides.yaml (or
-# values.yaml) names one. With neither, no controller serves them. Kubernetes
-# also refuses a classless Ingress when more than one class claims the default.
+# to the cluster's default IngressClass, unless the values name one (set
+# ingress.ingressClassName in langsmith-values-local.yaml). With neither, no
+# controller serves them. Kubernetes also refuses a classless Ingress when more
+# than one class claims the default.
 _byo_ingress_class=""
 if [[ "$_ingress_controller" == "none" ]]; then
-  for _vf in "$OVERRIDES_FILE" "$BASE_VALUES_FILE"; do
-    [[ -f "$_vf" ]] || continue
-    _byo_ingress_class=$(_values_ingress_class "$_vf")
-    [[ -n "$_byo_ingress_class" ]] && { _byo_class_file=$(basename "$_vf"); break; }
-  done
+  _byo_ingress_class=$(_values_get "$BASE_VALUES_FILE" "$OVERRIDES_FILE" -- ingress ingressClassName) || _byo_ingress_class=""
+  _byo_class_file="$_VALUES_LOCAL"
 
   if [[ -n "$_byo_ingress_class" ]]; then
     if ! [[ "$_byo_ingress_class" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]]; then
@@ -231,13 +200,13 @@ if [[ "$_ingress_controller" == "none" ]]; then
         ;;
       0)
         if [[ "$_tls_source" == "letsencrypt" ]]; then
-          fail "ingress_controller = none: the cluster has no default IngressClass, so no controller would serve the Ingress or the Let's Encrypt HTTP-01 challenge. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default."
+          fail "ingress_controller = none: the cluster has no default IngressClass, so no controller would serve the Ingress or the Let's Encrypt HTTP-01 challenge. Set ingress.ingressClassName in $_VALUES_LOCAL to your controller's class and run make init-values, or mark that IngressClass as the default."
           exit 1
         fi
-        warn "ingress_controller = none: the cluster has no default IngressClass, so no controller will serve the LangSmith Ingress. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default. Port-forwarding to langsmith-frontend works regardless."
+        warn "ingress_controller = none: the cluster has no default IngressClass, so no controller will serve the LangSmith Ingress. Set ingress.ingressClassName in $_VALUES_LOCAL to your controller's class and run make init-values, or mark that IngressClass as the default. Port-forwarding to langsmith-frontend works regardless."
         ;;
       *)
-        fail "ingress_controller = none: IngressClasses ${_default_classes% } all claim the default, and Kubernetes rejects an Ingress with no class in that case. Set ingress.ingressClassName in values-overrides.yaml, or leave one default."
+        fail "ingress_controller = none: IngressClasses ${_default_classes% } all claim the default, and Kubernetes rejects an Ingress with no class in that case. Set ingress.ingressClassName in $_VALUES_LOCAL and run make init-values, or leave one default."
         exit 1
         ;;
     esac
@@ -536,8 +505,7 @@ else
 fi
 
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
-_configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
-  | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
+_configured_hostname=$(_values_get "$BASE_VALUES_FILE" "$OVERRIDES_FILE" -- config hostname) || _configured_hostname=""
 if [[ -n "$_configured_hostname" && "$_configured_hostname" == *"<"* ]]; then
   warn "config.hostname still contains a placeholder — run: make init-values"
 fi
@@ -584,25 +552,20 @@ if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
   exit 1
 fi
-# The overlay carries the sandbox-host identity, so a deploy without it would
-# turn sandboxes off rather than fail.
-if [[ "$_enable_sandboxes" == "true" && ! -f "$VALUES_DIR/langsmith-values-sandboxes.yaml" ]]; then
-  fail "enable_sandboxes = true but langsmith-values-sandboxes.yaml is missing"
-  action "Run: make init-values"
-  exit 1
-fi
-# External runtime: the overlay must set sandboxes.external.enabled, or the langsmith release
-# would run its own sandbox-host beside the runtime's, and the runtime needs
-# its own values file. Both come from the same init-values run.
-if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
-  if ! awk '/^sandboxes:[[:space:]]*$/ { s = 1; next }
-            s && /^[^[:space:]#]/ { s = 0 }
-            s && /^  external:[[:space:]]*$/ { e = 1; next }
-            e && /^  [^[:space:]]/ { e = 0 }
-            e && /^    enabled:[[:space:]]*true[[:space:]]*$/ { found = 1 }
-            END { exit !found }' "$VALUES_DIR/langsmith-values-sandboxes.yaml" \
-    || grep -Eq '^[[:space:]]{2}(deploymentMode|hostIngressEndpoint):' "$VALUES_DIR/langsmith-values-sandboxes.yaml" \
-    || [[ ! -f "$SANDBOX_VALUES_FILE" ]]; then
+# The sandbox values: the sandbox-host identity in-cluster, so a deploy without
+# them would turn sandboxes off rather than fail. External runtime: the values
+# must set sandboxes.external.enabled, or the langsmith release would run its
+# own sandbox-host beside the runtime's, and the runtime needs its own values
+# file. Both come from the same init-values run.
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandboxes_on=$(_values_get "$BASE_VALUES_FILE" "$OVERRIDES_FILE" -- sandboxes enabled) || _sandboxes_on=""
+  _sandboxes_external=$(_values_get "$BASE_VALUES_FILE" "$OVERRIDES_FILE" -- sandboxes external enabled) || _sandboxes_external=""
+  if [[ "$_sandboxes_on" != "true" ]]; then
+    fail "enable_sandboxes = true but the values files hold no generated sandbox values"
+    action "Run: make init-values"
+    exit 1
+  fi
+  if [[ "$_sandbox_runtime_source" == "external" && ( "$_sandboxes_external" != "true" || ! -f "$SANDBOX_VALUES_FILE" ) ]]; then
     fail "sandbox_runtime_source = external but the sandbox values are missing or from the in-cluster runtime"
     action "Run: make init-values"
     exit 1
@@ -610,87 +573,19 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external"
 fi
 
 # ── Build values args ─────────────────────────────────────────────────────
-VALUES_ARGS=()
-
-# Base values (optional — provides Azure defaults + production sizing)
-if [[ -f "$BASE_VALUES_FILE" ]]; then
-  VALUES_ARGS+=(-f "$BASE_VALUES_FILE")
-  echo "Values chain:"
-  echo "  ✔ values.yaml (base)"
-else
-  echo "Values chain:"
-  echo "  ○ values.yaml (not found — using overrides only)"
+# The two files that make init-values wrote. The only value set here is the
+# sandbox-host image tag, which follows the chart that helm resolves below.
+VALUES_ARGS=(-f "$BASE_VALUES_FILE" -f "$OVERRIDES_FILE")
+echo "Values:"
+echo "  ✔ $_VALUES_BASE (the base values, from examples/)"
+echo "  ✔ $_VALUES_OVERRIDES (make init-values: Terraform outputs, the enabled features, sizing_profile = ${_sizing_profile})"
+if [[ -f "$VALUES_DIR/$_VALUES_LOCAL" ]]; then
+  echo "    with your changes from $_VALUES_LOCAL"
 fi
-
-VALUES_ARGS+=(-f "$OVERRIDES_FILE")
-echo "  ✔ values-overrides.yaml"
-
-# Addon overlays
-_addon_gate=(
-  "agent-deploys:deployments:$_enable_deployments"
-  "agent-builder:agent_builder:$_enable_agent_builder"
-  "fleet:fleet:$_enable_fleet"
-  "insights:insights:$_enable_insights"
-  "polly:polly:$_enable_polly"
-  "llm-gateway:llm_gateway:$_enable_llm_gateway"
-  "gateway-pii:gateway_pii_redaction:$_enable_gateway_pii_redaction"
-  "sandboxes:sandboxes:$_enable_sandboxes"
-)
-for entry in "${_addon_gate[@]}"; do
-  addon="${entry%%:*}"
-  rest="${entry#*:}"
-  flag_name="${rest%%:*}"
-  enabled="${rest##*:}"
-  f="$VALUES_DIR/langsmith-values-${addon}.yaml"
-  if [[ "$enabled" == "true" ]]; then
-    if [[ -f "$f" ]]; then
-      VALUES_ARGS+=(-f "$f")
-      echo "  ✔ langsmith-values-${addon}.yaml (enable_${flag_name} = true)"
-    else
-      echo "  ✗ langsmith-values-${addon}.yaml (enable_${flag_name} = true but file not found — run: make init-values)"
-    fi
-  else
-    if [[ -f "$f" ]]; then
-      echo "  ○ langsmith-values-${addon}.yaml (file exists but enable_${flag_name} = false — skipped)"
-    else
-      echo "  ✗ langsmith-values-${addon}.yaml (not enabled)"
-    fi
-  fi
-done
-
-# Sizing profile. Loaded after the addon overlays because agent-deploys carries
-# its own hostBackend/listener/operator resources for the default profile, and
-# loaded before it those overrode whatever profile was chosen.
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_file" ]]; then
-    VALUES_ARGS+=(-f "$_sizing_file")
-    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
-    if [[ "$_sizing_profile" == "minimum" ]]; then
-      echo ""
-      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
-      echo "     Use sizing_profile = production for production deployments."
-      echo ""
-    fi
-  else
-    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (not found — run: make init-values)"
-  fi
-else
-  echo "  ○ sizing: base values defaults (sizing_profile = default)"
-fi
-
-if [[ "$_enable_smithdb" == "true" ]]; then
-  # The generated sizing file goes first, so the hand-edited overlay can
-  # override it, and the generated overrides go last.
-  _smithdb_sizing="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
-  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
-  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
-  if [[ ! -f "$_smithdb_sizing" || ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
-    fail "enable_smithdb = true but the SmithDB values files are missing — run: make init-values"
-    exit 1
-  fi
-  VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base" -f "$_smithdb_overrides")
-  echo "  ✔ langsmith-values-smithdb-sizing.yaml + langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+if [[ "$_sizing_profile" == "minimum" ]]; then
+  echo ""
+  echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
+  echo "     Use sizing_profile = production for production deployments."
 fi
 echo ""
 
@@ -740,10 +635,9 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external"
   exit 1
 fi
 
-# Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
-# only creates an addon file when it is missing, so a values directory generated on the
-# 0.15 line keeps its stale copies and they get loaded here. The chart does reject them,
-# but its error names the key, not the generated file that carries it.
+# Preflight: reject values still carrying the chart 0.15 schema. They can reach the
+# overrides file only from langsmith-values-local.yaml. The chart does reject them,
+# but its error names the key, not the file that carries it.
 _legacy_files=""
 for _vf in "$VALUES_DIR"/*.yaml; do
   [[ -f "$_vf" ]] || continue
@@ -761,17 +655,16 @@ if [[ -n "$_legacy_files" ]]; then
   echo "ERROR: these values files use the chart 0.15 schema, which chart 0.16 rejects:" >&2
   printf '%s' "$_legacy_files" >&2
   echo "       config.insights, config.polly and backend.agentBootstrap were removed." >&2
-  echo "       init-values.sh only creates an addon file when it is missing, so delete the" >&2
-  echo "       files listed above and re-run 'make init-values' to regenerate them." >&2
+  echo "       Remove them from $_VALUES_LOCAL, then run 'make init-values'." >&2
   exit 1
 fi
 
-# Same trap, different keys: a values directory written while SmithDB still had
-# its own node pools keeps selecting smithdb-local/instance-store and
-# smithdb-local/compute. Those pools no longer exist, so every SmithDB pod stays
-# Pending on "node(s) didn't match Pod's node affinity/selector" and nothing in
-# the chart or the scheduler names the file that asked for them. The chart
-# accepts the keys, which is what makes this worth catching here.
+# Same trap, different keys: values written while SmithDB still had its own node
+# pools select smithdb-local/instance-store and smithdb-local/compute. Those
+# pools no longer exist, so every SmithDB pod stays Pending on "node(s) didn't
+# match Pod's node affinity/selector" and nothing in the chart or the scheduler
+# names the file that asked for them. The chart accepts the keys, which is what
+# makes this worth catching here.
 _stale_pool_files=""
 for _vf in "$VALUES_DIR"/*.yaml; do
   [[ -f "$_vf" ]] || continue
@@ -786,7 +679,7 @@ if [[ -n "$_stale_pool_files" ]]; then
   echo "       The smithcache and smithcompute pools were removed when the SmithDB cache" >&2
   echo "       moved to per-pod Premium SSD v2 volumes, so a smithdb-local/* nodeSelector" >&2
   echo "       now matches no node and leaves every SmithDB pod Pending." >&2
-  echo "       Delete the files listed above and re-run 'make init-values'." >&2
+  echo "       Remove those keys from $_VALUES_LOCAL, then run 'make init-values'." >&2
   exit 1
 fi
 
@@ -972,15 +865,8 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "in-cluste
   fi
   VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
   echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
-
-  # The chart hashes only the name of an existing JuiceFS Secret, so a new Redis
-  # password or URL would reach the Secret and leave sandbox-host on the old
-  # one. Terraform's digest of the metaurl (in-cluster and external sources)
-  # goes on the pod template, and a change rolls sandbox-host.
-  if _juicefs_config_digest=$(_tf_out sandbox_juicefs_redis_config_digest); then
-    VALUES_ARGS+=(--set-string "sandboxes.sandboxHost.deployment.podAnnotations.checksum/juicefs-redis=$_juicefs_config_digest")
-    echo "Sandboxes: sandbox-host restarts when the JuiceFS Redis URL changes (digest ${_juicefs_config_digest:0:12})"
-  fi
+  # The JuiceFS Redis digest is in the overrides file (init-values.sh), so a new
+  # Redis password or URL rolls sandbox-host.
 fi
 
 # sandbox-host runs on the host network, so it calls platform-backend from a node
@@ -1098,22 +984,22 @@ if [[ -n "$_ls_image_registry" && "$_ls_image_keeps_host" == "false" ]]; then
 fi
 
 # The per-deployment Redis and PostgreSQL templates: init-values writes them
-# into langsmith-values-agent-deploys.yaml with the mirror when the chart it
-# resolved writes docker.io into them, and leaves them out when the chart
-# reads images.deploymentRedisImage and images.deploymentDbImage. The chart
-# installed here is read again, so a file written for the other kind stops
-# the deploy instead of replacing the chart's templates or pulling docker.io.
-if [[ -n "$_ls_image_registry" && "$_enable_deployments" == "true" && -f "$VALUES_DIR/langsmith-values-agent-deploys.yaml" ]]; then
+# into the overrides file with the mirror when the chart it resolved writes
+# docker.io into them, and leaves them out when the chart reads
+# images.deploymentRedisImage and images.deploymentDbImage. It records which in
+# the file's header (resolved deployment_templates). The chart installed here is
+# read again, so a file written for the other kind stops the deploy instead of
+# replacing the chart's templates or pulling docker.io.
+if [[ -n "$_ls_image_registry" && "$_enable_deployments" == "true" ]]; then
   _chart_reads_keys="false"
   printf '%s\n' "$_chart_image_keys" | grep -qx deploymentRedisImage && _chart_reads_keys="true"
-  _file_writes_templates="false"
-  grep -qF "$_DEPLOYMENT_TEMPLATES_MARKER" "$VALUES_DIR/langsmith-values-agent-deploys.yaml" && _file_writes_templates="true"
+  _file_writes_templates=$(_values_resolved "$OVERRIDES_FILE" deployment_templates)
   if [[ "$_chart_reads_keys" == "true" && "$_file_writes_templates" == "true" ]]; then
-    fail "chart ${_resolved_chart} reads images.deploymentRedisImage and images.deploymentDbImage for the per-deployment pods, but langsmith-values-agent-deploys.yaml carries the templates init-values wrote for a chart that did not, which would replace the chart's own."
+    fail "chart ${_resolved_chart} reads images.deploymentRedisImage and images.deploymentDbImage for the per-deployment pods, but $_VALUES_OVERRIDES carries the templates init-values wrote for a chart that did not, which would replace the chart's own."
     action "make init-values  (with langsmith_helm_chart_version naming the chart to deploy), then re-run make deploy"
     exit 1
-  elif [[ "$_chart_reads_keys" == "false" && "$_file_writes_templates" == "false" ]]; then
-    fail "chart ${_resolved_chart} writes docker.io into its per-deployment Redis and PostgreSQL templates, and langsmith-values-agent-deploys.yaml carries no mirror templates for them."
+  elif [[ "$_chart_reads_keys" == "false" && "$_file_writes_templates" != "true" ]]; then
+    fail "chart ${_resolved_chart} writes docker.io into its per-deployment Redis and PostgreSQL templates, and $_VALUES_OVERRIDES carries no mirror templates for them."
     action "make init-values  (it writes them from langsmith_image_registry), then re-run make deploy"
     exit 1
   fi
@@ -1396,7 +1282,7 @@ fi
 # a 300 s timeout, and platform-backend's handlers carry their own.
 # The hostname, base path, Gateway listener (gateway.sectionName) and frontend
 # port come from the release's effective values, not from
-# values-overrides.yaml alone: the chart takes them from every values file it
+# langsmith-values-overrides.yaml alone: the chart takes them from every values file it
 # merges, and its own route uses them. Reading the same values keeps this
 # route on the host, paths, listener and port the chart's route uses. The
 # hostname is checked as a DNS name after the scheme is dropped, the chart's
@@ -1629,8 +1515,7 @@ elif kubectl get ingress "$_gw_ingress" -n "$NAMESPACE" &>/dev/null; then
 fi
 
 # ── Post-deploy access info ───────────────────────────────────────────────
-_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
-  | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
+_hostname=$(_values_get "$BASE_VALUES_FILE" "$OVERRIDES_FILE" -- config hostname) || _hostname=""
 _kv_name=$(_tf_out keyvault_name || true)
 _admin_email=$(_tf_out langsmith_admin_email || true)
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
