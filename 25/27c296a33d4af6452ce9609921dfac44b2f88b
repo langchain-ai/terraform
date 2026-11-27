@@ -1,0 +1,78 @@
+modules/gcp/helm/values/langsmith-values-local.yaml.example
+  s_8cee47d9319ea3::t_00eea5baf6de83 1-27
+modules/gcp/helm/values/examples/langsmith-values-fleet.yaml
+  s_8cee47d9319ea3::t_3e54ebd405e22f 79-80
+  s_8cee47d9319ea3::t_c74fe9a00006e4 18,20-21
+  s_8cee47d9319ea3::t_048d9cb51d17ea 6-8
+  s_8cee47d9319ea3::t_d7a049f8383f77 32-33
+modules/gcp/helm/scripts/deploy.sh
+  s_8cee47d9319ea3::t_85738aea17aec7 155-157
+  s_8cee47d9319ea3::t_66416dc82b6e88 245-253,256-267,272,275-277
+  s_8cee47d9319ea3::t_c43854b72d5915 924
+  s_8cee47d9319ea3::t_9902baa26380c0 9-13,15-19
+  s_8cee47d9319ea3::t_045535a0b7027d 175
+  s_8cee47d9319ea3::t_295ef01405ed14 49-53
+  s_8cee47d9319ea3::t_965b5d51f2c3af 383,385,391-393
+  s_8cee47d9319ea3::t_3d844367240d81 331,340-342
+  s_8cee47d9319ea3::t_bf609a440cc59b 403-404,407-419,422-423,433-441
+  s_8cee47d9319ea3::t_cc1462f8960064 34-35
+  s_8cee47d9319ea3::t_850c403fb2f617 111-121,123-127,132-135
+modules/gcp/infra/scripts/status.sh
+  s_8cee47d9319ea3::t_03a8df0aff71c2 24-26
+  s_8cee47d9319ea3::t_84407f0dda0f5b 265-275,278-301,305-307,310-312
+modules/gcp/helm/values/examples/langsmith-values-standalone-insights.yaml
+  s_8cee47d9319ea3::t_bf30ce27e398d0 25-26
+  s_8cee47d9319ea3::t_c4ac2a53cbf5a2 35
+  s_8cee47d9319ea3::t_5da0c4551145e3 8-11
+modules/gcp/helm/values/examples/langsmith-values.yaml
+  s_8cee47d9319ea3::t_31fd083c9764c4 3-6,8-11,13-14,17,19,22,28-30,35,38
+  s_8cee47d9319ea3::t_361388526572f1 40-58,60-78,84-90,95-279
+modules/gcp/helm/values/examples/langsmith-values-insights.yaml
+  s_8cee47d9319ea3::t_4e4d72f49602ea 1,3-19,27-28
+modules/gcp/Makefile
+  s_8cee47d9319ea3::t_0579e224bd0b16 91,94-95
+  s_8cee47d9319ea3::t_a2b92c669e6d0e 12
+  s_8cee47d9319ea3::t_aff923b4247ee8 96
+modules/gcp/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_475f2e553ea305 1-195,198-200,211-326,328,330-401,404-588
+  s_8cee47d9319ea3::t_074159546ec981 196-197,201-210
+  s_8cee47d9319ea3::t_83036cc687aacc 327,329
+  s_8cee47d9319ea3::t_16de5e29ba5bb7 402-403
+modules/gcp/helm/values/examples/langsmith-values-smithdb.yaml
+  s_8cee47d9319ea3::t_73a9f5aee8c1dc 26-27
+  s_8cee47d9319ea3::t_bf16dda26145c1 7-13,15-17
+modules/gcp/helm/values/examples/langsmith-values-standalone-polly.yaml
+  s_8cee47d9319ea3::t_b0c7f7971190a3 21-22
+  s_8cee47d9319ea3::t_25d84f4247f288 8-11
+  s_8cee47d9319ea3::t_38120aba4fabbd 34
+modules/gcp/infra/locals.tf
+  s_8cee47d9319ea3::t_2c957201324e67 220-221
+modules/gcp/helm/scripts/init-values.sh
+  s_8cee47d9319ea3::t_f4a23caebc4273 7,10,14-20,22-23,25-30,34-42,61-64,86-88,95-103,175,263,266,295,307-311,331-332,334-336,338,340,344-346,356-364,394-408,411-421,423,425-429,432-441,443-449,460-464,486,500-503,508-511,514-516,594-602,631,636,656-658,660-662,722-724,726-728,730,735-737,751-752,783,786-787,789,792,816-818,850-912,923
+  s_8cee47d9319ea3::t_a948f0c3527634 788
+modules/gcp/helm/values/examples/langsmith-values-agent-builder.yaml
+  s_8cee47d9319ea3::t_dd454b65e1ac50 3-4,13-16
+modules/gcp/infra/outputs.tf
+  s_8cee47d9319ea3::t_3e2a80c0c0576a 458
+modules/gcp/helm/values/examples/langsmith-values-agent-deploys.yaml
+  s_8cee47d9319ea3::t_95ec4626b0a5eb 3-4
+  s_8cee47d9319ea3::t_78e38d239140ea 12-13,16-19,23,25-26
+modules/gcp/helm/scripts/_values.sh
+  s_8cee47d9319ea3::t_ac13a75055845f 1-502
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2527c296a33d4af6452ce9609921dfac44b2f88b",
+  "prompts": {},
+  "sessions": {
+    "s_8cee47d9319ea3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4553e7f8-7983-41d0-9467-9cb545cda8d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
