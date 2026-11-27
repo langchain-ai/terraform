@@ -1043,6 +1043,17 @@ variable "enable_istio_gateway" {
   default     = false
 }
 
+variable "enable_nginx_ingress" {
+  type        = bool
+  description = "Removed in 0.18. Accepted only as false, which earlier QuickStart runs wrote into every terraform.tfvars, so those files still plan."
+  default     = false
+
+  validation {
+    condition     = var.enable_nginx_ingress == false
+    error_message = "enable_nginx_ingress was removed in 0.18. Applying this release would delete the NGINX controller and leave the ALB with nothing behind it. Keep the previous release until the deployment has moved to Envoy Gateway, Istio, or ALB, then remove this setting. See README.md, \"Moving off NGINX ingress\"."
+  }
+}
+
 #------------------------------------------------------------------------------
 # cert-manager (IRSA for Route 53 DNS-01 TLS)
 #------------------------------------------------------------------------------

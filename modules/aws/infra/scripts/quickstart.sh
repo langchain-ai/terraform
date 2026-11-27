@@ -339,6 +339,17 @@ if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
   esac
 fi
 
+# 0.18 removed NGINX ingress. A terraform.tfvars that runs NGINX enables neither
+# Envoy nor Istio, so the menu below would preselect ALB, and the next apply
+# would delete the controller that serves the deployment today.
+if [[ "$UPDATE_MODE" == "true" ]] && _tfvar_is_true "enable_nginx_ingress"; then
+  echo ""
+  _red "ERROR"; printf ": %s sets enable_nginx_ingress = true, and 0.18 removed NGINX ingress.\n" "$OUTPUT_DISPLAY"
+  printf "  Keep the previous release until the deployment has moved to Envoy Gateway, Istio, or ALB.\n"
+  printf "  See README.md, \"Moving off NGINX ingress\". terraform.tfvars was not changed.\n"
+  exit 1
+fi
+
 # In update mode, check for conflicting values already in the file.
 if [[ "$UPDATE_MODE" == "true" ]]; then
   _validate_conflicts

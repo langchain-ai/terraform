@@ -569,6 +569,11 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
 | `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
 
+> **Upgrading a deployment that runs ingress-nginx:** 0.18 removed `nginx`. `make plan` and
+> `make apply` stop while the Terraform state still holds the ingress-nginx release, including on a
+> deployment created on the old `nginx` default. Move it to another controller on the previous
+> release first. See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md).
+
 ---
 
 ## DNS + TLS

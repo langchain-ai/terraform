@@ -64,6 +64,14 @@ run "0.17 SmithDB state without the ingestion gate refuses" 1 "set smithdb_inges
 run "0.17 SmithDB state without the query gate refuses" 1 "set smithdb_query_enabled" "${R}enable_smithdb = true\nsmithdb_ingestion_enabled = false\n" 'module.eks.x'
 run "0.17 SmithDB state with both gates set passes" 0 "" "${R}enable_smithdb = true\nsmithdb_ingestion_enabled = true\nsmithdb_query_enabled = false\n" 'module.eks.x'
 run "0.18 state with settings left to their defaults passes" 0 "" "$R" 'module.eks.x' "$V018"
+# A state that still runs NGINX refuses whatever terraform.tfvars says: before
+# the SmithDB checks (they would pass here), and before the early exit a state
+# with the 0.18 outputs takes.
+N='module.k8s_bootstrap.helm_release.nginx_ingress[0]\nmodule.k8s_bootstrap.terraform_data.nginx_target_group_binding[0]\naws_vpc_security_group_ingress_rule.alb_to_nginx[0]'
+run "0.17 state that runs NGINX refuses" 1 "still runs the NGINX ingress controller" "${R}enable_smithdb = false\n" "module.eks.x\n$N"
+run "state with the 0.18 outputs that runs NGINX refuses" 1 "still runs the NGINX ingress controller" "$R" "module.eks.x\n$N" "$V018"
+run "NGINX under a wrapper module refuses" 1 "still runs the NGINX ingress controller" "$R" 'module.langsmith.module.k8s_bootstrap.helm_release.nginx_ingress[0]' "$V018"
+run "the NGINX ALB rule left by a failed apply refuses" 1 "still runs the NGINX ingress controller" "$R" 'module.eks.x\naws_vpc_security_group_ingress_rule.alb_to_nginx[0]' "$V018"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

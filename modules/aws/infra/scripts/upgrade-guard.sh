@@ -4,15 +4,20 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# upgrade-guard.sh — Refuses the first 0.18 apply of a 0.17 install whose
-# terraform.tfvars leaves the SmithDB settings to their defaults. apply.sh runs
-# it first, so make apply and make quickdeploy do.
+# upgrade-guard.sh — Refuses a 0.18 apply that would break a running install.
+# apply.sh runs it first, so make apply and make quickdeploy do. It refuses:
 #
-# In 0.17 an unset enable_smithdb, smithdb_ingestion_enabled or
-# smithdb_query_enabled meant off; in 0.18 each defaults to true. Left unset,
-# the first apply would switch the install to querying a SmithDB that holds
-# none of its ClickHouse history. A 0.17 state is one without the
-# smithdb_query_enabled output that 0.18 added.
+# - any apply while the state still holds the NGINX ingress controller. 0.18
+#   removed enable_nginx_ingress, so the apply would delete the controller, its
+#   TargetGroupBinding and its ALB rule, and leave the ALB with nothing behind
+#   it. The variable's validation catches a terraform.tfvars that still sets
+#   it; this catches one that no longer does.
+# - the first 0.18 apply of a 0.17 install whose terraform.tfvars leaves the
+#   SmithDB settings to their defaults. In 0.17 an unset enable_smithdb,
+#   smithdb_ingestion_enabled or smithdb_query_enabled meant off; in 0.18 each
+#   defaults to true. Left unset, the first apply would switch the install to
+#   querying a SmithDB that holds none of its ClickHouse history. A 0.17 state
+#   is one without the smithdb_query_enabled output that 0.18 added.
 #
 # A new install (no state) passes. A failed read of the state refuses, because
 # it cannot show the apply is safe.
@@ -25,9 +30,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_common.sh
 source "$SCRIPT_DIR/_common.sh"
 
+_SMITHDB_DOC='SMITHDB.md, "Upgrading from 0.17"'
 _refuse() {
   echo "ERROR: $1" >&2
-  echo "       See SMITHDB.md, \"Upgrading from 0.17\"." >&2
+  echo "       See ${2:-$_SMITHDB_DOC}." >&2
   exit 1
 }
 
@@ -36,6 +42,12 @@ if ! _state=$(terraform -chdir="$INFRA_DIR" state list 2>&1); then
   _refuse "could not read the Terraform state, so the upgrade checks cannot run: $_state"
 fi
 [[ -n "$_state" ]] || exit 0
+
+# Any one of the three: a failed apply can leave part of the set behind.
+if grep -qE '(^|\.)(helm_release\.nginx_ingress|terraform_data\.nginx_target_group_binding|aws_vpc_security_group_ingress_rule\.alb_to_nginx)\[' <<< "$_state"; then
+  _refuse "this install still runs the NGINX ingress controller, which 0.18 removed. This apply would delete it and leave the ALB with nothing behind it. Keep the previous release until the install has moved to Envoy Gateway, Istio, or ALB." \
+    'README.md, "Moving off NGINX ingress"'
+fi
 
 _outputs=$(terraform -chdir="$INFRA_DIR" output -json 2>&1) \
   || _refuse "could not read the Terraform outputs, so the upgrade checks cannot run: $_outputs"

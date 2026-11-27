@@ -10,7 +10,7 @@
 # SmithDB migration:       make smithdb-migration-job-start / smithdb-migration-job-end, then apply, init-values, deploy
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-clickhouse-cluster test-chart-image-keys setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key test-images-block test-values-stamp test-clickhouse-cluster test-chart-image-keys test-guard-ingress-nginx setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -68,6 +68,9 @@ test-clickhouse-cluster: ## Unit-test how clickhouse_cluster reaches the chart f
 test-chart-image-keys: ## Unit-test the parser deploy.sh reads the chart's images block with, under pipefail (no Azure)
 	$(INFRA_DIR)/scripts/test-chart-image-keys.sh
 
+test-guard-ingress-nginx: ## Unit-test the guard that stops make plan and make apply while ingress-nginx is in the state (no Azure)
+	$(INFRA_DIR)/scripts/test-guard-ingress-nginx.sh
+
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh
 
@@ -92,12 +95,14 @@ init: ## terraform init (infra)
 	terraform -chdir=$(TF_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.auto.tfvars exists
+	@bash $(INFRA_DIR)/scripts/guard-ingress-nginx.sh
 	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
 	terraform -chdir=$(TF_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra) — three stages, each prompts for confirmation: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
 	@# The stage targets are this root's addresses; a wrapper module prefixes them.
 	@if [ -n "$(LANGSMITH_INFRA_DIR)" ]; then echo "make apply stages this repo's addresses; run terraform apply in $(LANGSMITH_INFRA_DIR) instead."; exit 1; fi
+	@bash $(INFRA_DIR)/scripts/guard-ingress-nginx.sh
 	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
 	terraform -chdir=$(TF_DIR) apply $(ARGS) \
@@ -130,6 +135,7 @@ destroy-force: ## terraform destroy without confirmation prompt (use after make 
 	terraform -chdir=$(TF_DIR) destroy -auto-approve $(ARGS)
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
+	@case "$(firstword $(ARGS))" in plan|apply) bash $(INFRA_DIR)/scripts/guard-ingress-nginx.sh ;; esac
 	terraform -chdir=$(TF_DIR) $(ARGS)
 
 clean: ## Remove all local secrets and generated files (run after destroy)
