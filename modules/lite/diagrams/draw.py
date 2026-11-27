@@ -23,14 +23,13 @@ from collections.abc import Callable, Sequence
 from html import escape
 from pathlib import Path
 
-from langsmith_sizing.figures import chrome, document, faces, shoot
+from langsmith_sizing.figures import chrome, document, faces, logo, shoot
 
 HERE = Path(__file__).resolve().parent
 LITE = HERE.parent
 ROOT = LITE.parent.parent
 RENDERED = HERE / "rendered.json"
 THEMES = ("dark",)  # dark only (Reed, 2026-11-26): one image a figure, the same on every reader's page
-LOGOS = {"dark": "langchain-on-dark.svg"}
 W = 1472  # the page's content width: 1600 less the canvas's padding
 MONO = 7.9  # Aeonik Mono's advance at 13 px, for sizing chips and placing labels
 
@@ -865,7 +864,7 @@ def draw(fonts_dir: Path | None, logos_dir: Path | None, draft: bool, only: list
         raise SystemExit(f"no figure {', '.join(sorted(unknown))}; the figures: {', '.join(FIGURES)}")
     fonts, missing = faces(fonts_dir)
     if missing and not draft:
-        raise SystemExit(f"the brand faces are missing ({', '.join(missing)}): give --fonts DIR, or --draft")
+        raise SystemExit(f"the brand faces are missing ({', '.join(missing)}): check out ps-ops-center and content-studio beside this repository (or set PS_OPS_CENTER and CONTENT_STUDIO), give --fonts DIR, or --draft")
     note = f"Drawn without the brand faces ({', '.join(missing)} missing); not for publishing." if missing else ""
     drawn = json.loads(RENDERED.read_text()) if RENDERED.is_file() else {}
     binary, names = chrome(), only or list(FIGURES)
@@ -874,7 +873,7 @@ def draw(fonts_dir: Path | None, logos_dir: Path | None, draft: bool, only: list
             markup = FIGURES[name]()
             for theme in THEMES:
                 html = Path(tmp) / f"{name}-{theme}.html"
-                html.write_text(document(markup, theme, fonts, logos_dir / LOGOS[theme] if logos_dir else None, note))
+                html.write_text(document(markup, theme, fonts, logo(logos_dir, theme), note))
                 shoot(binary, html, HERE / f"{name}.png")
                 if keep:
                     keep.mkdir(parents=True, exist_ok=True)

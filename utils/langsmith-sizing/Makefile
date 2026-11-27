@@ -147,7 +147,7 @@ reference: ## rewrite docs/fields.md, the docs' generated tables, and the load t
 	uv run python -m langsmith_sizing.docs_gen
 	uv run --directory ../langsmith-load-test python tests/results_fields.py
 
-figures: ## redraw each figure whose data changed (needs Chrome, FONTS= the brand faces, LOGOS= the logos; DRAFT=1 without)
+figures: ## redraw each figure whose data changed (needs Chrome and the brand: found in ps-ops-center and content-studio, or FONTS= and LOGOS=; DRAFT=1 without)
 	uv run python -m langsmith_sizing.figures $(if $(FONTS),--fonts $(FONTS)) $(if $(LOGOS),--logos $(LOGOS)) $(if $(DRAFT),--draft)
 
 report: ## the module profiles' presets beside the modules' hand-written profiles

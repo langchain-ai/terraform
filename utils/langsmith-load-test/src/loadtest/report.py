@@ -485,7 +485,7 @@ def copy_runs(runs: Sequence[Run], out: Path) -> None:
 def render(built: dict[str, str], out: Path, fonts_dir: Path | None, logos_dir: Path | None, draft: bool) -> None:
     fonts, missing = fig.faces(fonts_dir)
     if missing and not draft:
-        raise SystemExit(f"the brand faces are missing ({', '.join(missing)}): give --fonts DIR, or --draft for a labelled draft")
+        raise SystemExit(f"the brand faces are missing ({', '.join(missing)}): check out ps-ops-center and content-studio beside this repository (or set PS_OPS_CENTER and CONTENT_STUDIO), give --fonts DIR, or --draft for a labelled draft")
     note = f"Drawn without the brand faces ({', '.join(missing)} missing); not for publishing." if missing else ""
     binary = fig.chrome()
     (out / "figures").mkdir(parents=True, exist_ok=True)
@@ -493,7 +493,7 @@ def render(built: dict[str, str], out: Path, fonts_dir: Path | None, logos_dir: 
         for name, markup in built.items():
             for theme in fig.THEMES:
                 page = Path(tmp) / f"{name}-{theme}.html"
-                page.write_text(fig.document(markup, theme, fonts, logos_dir / fig.LOGOS[theme] if logos_dir else None, note))
+                page.write_text(fig.document(markup, theme, fonts, fig.logo(logos_dir, theme), note))
                 fig.shoot(binary, page, out / "figures" / f"{name}-{theme}.png")
 
 

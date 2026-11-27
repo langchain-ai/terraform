@@ -2,8 +2,10 @@
 PNG by headless Chrome at twice the device scale, each in a light and a dark theme for a <picture>.
 
 The brand's faces (TWK Lausanne, Aeonik Mono) and logo are licensed or LangChain's own, so they never
-enter this repository: `--fonts` and `--logos` name the folders they are read from at render time, and
-the pages are written to a temporary folder, so only the PNGs land here. A render without the faces is
+enter this repository. They are read where LangChain keeps them, at render time: the folders `--fonts`
+and `--logos` name, or else the ps-ops-center and content-studio checkouts (`PS_OPS_CENTER`,
+`CONTENT_STUDIO`, or a folder of that name beside this repository or any folder above it). The pages are
+written to a temporary folder, so only the PNGs land here. A render without the faces is
 refused, since a figure in fallback faces is not a delivery; `--draft` draws one anyway and says so on the
 figure. rendered.json holds the hash of each page's markup (faces and logo excluded) at the time it was
 drawn, so a test can say a figure is stale without fonts or Chrome.
@@ -39,6 +41,39 @@ FACES = (  # (file, family, weight, format): the brand's two faces at the only w
     ("aeonikmono-medium.otf", "Aeonik Mono", 500, "opentype"),
 )
 LOGOS = {"light": "langchain-on-light.svg", "dark": "langchain-on-dark.svg"}
+# Where a LangChain machine keeps the faces and the lockups, in the checkouts that own them: a figure reads
+# them in place, so a run needs no folder named on the command line (a five-hour experiment once had to be
+# started with two scratch paths to draw its last figures in the brand).
+FACE_PLACES = (("PS_OPS_CENTER", "ps-ops-center", "docs/public/fonts"),
+               ("PS_OPS_CENTER", "ps-ops-center", "engagement-management/feedback/public/fonts"),
+               ("CONTENT_STUDIO", "content-studio", "private-fonts"))
+LOGO_PLACES = {theme: ("CONTENT_STUDIO", "content-studio", f"skills/langchain-brand-guidelines/assets/logos/company/{file}")
+               for theme, file in (("light", "LangChain_Lockup_light_mode_black.svg"), ("dark", "LangChain_Lockup_dark_mode_white.svg"))}
+
+
+def _checkout(env: str, name: str) -> list[Path]:
+    """The checkout an environment variable names, else every folder of that name beside this file or above it."""
+    named = os.environ.get(env)
+    if named:
+        return [Path(named)]
+    return [parent / name for parent in Path(__file__).resolve().parents if (parent / name).is_dir()]
+
+
+def brand_file(folder: Path | None, file: str, places: Sequence[tuple[str, str, str]]) -> Path | None:
+    """A brand file: in the folder given, or else where its owning checkout keeps it."""
+    if folder:
+        return folder / file if (folder / file).is_file() else None
+    for env, name, sub in places:
+        for root in _checkout(env, name):
+            found = root / sub / file if not sub.endswith(".svg") else root / sub
+            if found.is_file():
+                return found
+    return None
+
+
+def logo(folder: Path | None, theme: str) -> Path | None:
+    """The LangChain lockup for a theme: LOGOS[theme] in the folder given, or content-studio's own."""
+    return brand_file(folder, LOGOS[theme], [LOGO_PLACES[theme]])
 # Where each autoscaling signal is read, as the chart wires it (its scaled-object and hpa templates at
 # the charts CI renders, charts.yaml). A signal params adds without a row here fails the build.
 SIGNAL_SOURCE = {
@@ -559,8 +594,8 @@ def stale(built: Mapping[str, str]) -> list[str]:
 def faces(folder: Path | None) -> tuple[str, list[str]]:
     rules, missing = [], []
     for file, family, weight, fmt in FACES:
-        path = folder / file if folder else None
-        if path is None or not path.is_file():
+        path = brand_file(folder, file, FACE_PLACES)
+        if path is None:
             missing.append(file)
             continue
         mime = "font/woff2" if fmt == "woff2" else "font/otf"
@@ -630,7 +665,7 @@ def draw(fonts_dir: Path | None, logos_dir: Path | None, draft: bool, only_stale
     fonts, missing = faces(fonts_dir)
     if missing and not draft:
         raise SystemExit(
-            f"the brand faces are missing ({', '.join(missing)}): give --fonts DIR (make figures FONTS=DIR), or --draft for a labelled draft"
+            f"the brand faces are missing ({', '.join(missing)}): check out ps-ops-center and content-studio beside this repository (or set PS_OPS_CENTER and CONTENT_STUDIO), give --fonts DIR (make figures FONTS=DIR), or --draft for a labelled draft"
         )
     note = f"Drawn without the brand faces ({', '.join(missing)} missing); not for publishing." if missing else ""
     built, binary = pages(), chrome()
@@ -642,7 +677,7 @@ def draw(fonts_dir: Path | None, logos_dir: Path | None, draft: bool, only_stale
             for theme in THEMES:
                 page = Path(tmp) / f"{fig}-{theme}.html"
                 page.write_text(
-                    document(built[fig], theme, fonts, logos_dir / LOGOS[theme] if logos_dir else None, note)
+                    document(built[fig], theme, fonts, logo(logos_dir, theme), note)
                 )
                 shoot(binary, page, FIGURES / f"{fig}-{theme}.png")
             if not note:

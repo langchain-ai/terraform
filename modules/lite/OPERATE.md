@@ -162,8 +162,9 @@ none of them); the bytes each store's volume gained a run (read with `du` in its
 payload bytes sent a run, Redis's memory, Postgres's connections, the queues, and SmithDB's segments,
 compactions and refused queries.
 `make experiment` writes one report a size and one for all of them. A report's figures are in the
-LangChain brand when `FONTS` and `LOGOS` name the folders holding its faces and logos, read where they
-are and never copied in; without them each figure is drawn as a labelled draft.
+LangChain brand where its faces and logos are found: in the ps-ops-center and content-studio checkouts
+beside this repository (or where `PS_OPS_CENTER` and `CONTENT_STUDIO` point; `FONTS` and `LOGOS` name
+other folders), read in place and never copied in. Without them each figure is drawn as a labelled draft.
 
 ## Watching it
 

@@ -602,7 +602,7 @@ def requests(rows: list[dict[str, Any]], _steps: list[Step], plans: Plans) -> Fi
     o: list[str] = []
     used = {s: _measured(rows, e, s) for s in sizes}
     asked = {s: _asked(plans[(e, s)]) for s in sizes}
-    before = {s: _asked(plans[(first, s)]) for s in sizes if (first, s) in plans and first != e}
+    before = {s: _asked(plans[(first, s)]) for s in sizes if (first, s) in plans and first != e and _asked(plans[(first, s)]) != asked[s]}
     names = [w for w in WORKLOADS if any(w in used[s] and w in asked[s] for s in sizes)]
     pairs = [(s, w) for s in sizes for w in names if w in used[s] and w in asked[s]]
     tops = (nice(max(max(asked[s][w][0], used[s][w][1], before.get(s, {}).get(w, (0, 0))[0]) for s, w in pairs) * 1.05),
@@ -665,6 +665,7 @@ def machine(rows: list[dict[str, Any]], _steps: list[Step], plans: Plans) -> Fig
         return None
     o: list[str] = []
     worst = {"cpu": 0.0, "mem": 0.0}
+    changed = False
     for i, size in enumerate(sizes):
         pl, rs, old = plans[(e, size)], [r for r in shown if r["size"] == size], plans.get((first, size)) if first != e else None
         o.append(text(0, 70 + i * 150 + 58, f"box {size}", "t"))
@@ -679,6 +680,7 @@ def machine(rows: list[dict[str, Any]], _steps: list[Step], plans: Plans) -> Fig
             o.append(f'<rect x="{p.x(allocatable):.1f}" y="{p.y0:.1f}" width="{p.x(total) - p.x(allocatable):.1f}" height="40" style="fill:var(--line)"/>')
             o.append(f'<rect x="{p.x(0):.1f}" y="{p.y0 + 8:.1f}" width="{p.x(requested) - p.x(0):.1f}" height="24" style="fill:var(--hl);stroke:var(--accent);stroke-width:1.5"/>')
             if old is not None and amount(old["requested"]) != requested:
+                changed = True
                 x_old = p.x(amount(old["requested"]))
                 o.append(f'<line x1="{x_old:.1f}" x2="{x_old:.1f}" y1="{p.y0 + 2:.1f}" y2="{p.y0 + 38:.1f}" style="stroke:var(--muted);stroke-width:2.5;stroke-dasharray:4 3"/>')
             if mean is not None:
@@ -690,7 +692,7 @@ def machine(rows: list[dict[str, Any]], _steps: list[Step], plans: Plans) -> Fig
     items = [("requested by the plan", "var(--accent)", "hollow"), ("mean, busiest step", "var(--accent)", "dot"), ("busiest minute or peak", "var(--text)", "line"),
              ("the most pods may ask", "var(--text-2)", "dotted"), ("reserved for the system", "var(--line)", "dot")]
     o += legend(130, 70 + len(sizes) * 150 + 10, items[:3])
-    o += legend(130, 70 + len(sizes) * 150 + 50, items[3:] + ([(f"requested in {label(rows, first)}", "var(--muted)", "dashed")] if first != e else []))
+    o += legend(130, 70 + len(sizes) * 150 + 50, items[3:] + ([(f"requested in {label(rows, first)}", "var(--muted)", "dashed")] if changed else []))
     return (f"In {label(rows, e)}, no size's pods used more than {worst['cpu']:.0%} of its machine's vCPU or {worst['mem']:.0%} of its memory",
             "Each bar one machine as the plan sized it: the system's reserve at the right end, the plan's requests, and every pod "
             "together across the experiment's steps, by the minute for CPU and at its peak for memory.", 70 + len(sizes) * 150 + 80, o)
@@ -740,7 +742,7 @@ def main(argv: list[str] | None = None) -> int:
     write_rows(rows, x.out / "steps.csv")
     fonts, missing = fig.faces(x.fonts)
     if missing and not x.draft:
-        raise SystemExit(f"the brand faces are missing ({', '.join(missing)}): give --fonts DIR, or --draft")
+        raise SystemExit(f"the brand faces are missing ({', '.join(missing)}): check out ps-ops-center and content-studio beside this repository (or set PS_OPS_CENTER and CONTENT_STUDIO), give --fonts DIR, or --draft")
     note = "Drawn without the brand's faces; not for publishing." if missing else ""
     (x.out / "figures").mkdir(exist_ok=True)
     binary = fig.chrome()
@@ -753,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             title, sub, height, body = drawn
             html = Path(tmp) / f"{name}.html"
-            logo = x.logos / "langchain-on-dark.svg" if x.logos else None
+            logo = fig.logo(x.logos, "dark")
             html.write_text(fig.document(page(title, sub, height, body, source), "dark", fonts, logo, note))
             fig.shoot(binary, html, x.out / "figures" / f"{name}.png")
             print(f"drew figures/{name}.png: {title}")

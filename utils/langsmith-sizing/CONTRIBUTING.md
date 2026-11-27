@@ -7,7 +7,7 @@
 ```bash
 make check       # every gate CI runs, one line each: ruff, mypy, tests (helm required), check-params on every planned chart, check-citations, the load test's
 make reference   # rewrite docs/fields.md, the docs' generated tables and the load test's results fields
-make figures FONTS=<dir> LOGOS=<dir>   # draw each figure whose data changed, light and dark (needs Chrome and the brand faces)
+make figures                           # draw each figure whose data changed, light and dark (needs Chrome and the brand faces)
 ```
 
 - **A parameter** is an entry in `params.yaml` with `value`, `unit`, `why`, `source` (kind and ref), `by`
@@ -39,7 +39,8 @@ make figures FONTS=<dir> LOGOS=<dir>   # draw each figure whose data changed, li
 - **The docs cannot drift.** The tables marked generated, and the figures, are built from `params.yaml` and
   `citations.yaml`; a test fails when a table is stale or a figure was drawn from older data. The figures
   are drawn in the LangChain brand, whose faces are licensed and never committed: `make figures` reads them
-  from the folder `FONTS=` names, and refuses a final render without them.
+  where the ps-ops-center and content-studio checkouts keep them (beside this repository, or `PS_OPS_CENTER`
+  and `CONTENT_STUDIO`; `FONTS=` and `LOGOS=` name other folders), and refuses a final render without them.
 - **Open questions are tests.** Three of the six presets' questions are written to the answer the preset's
   name promises and marked `expectedFailure`, so fixing one fails the suite until the marker goes.
 

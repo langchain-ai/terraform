@@ -197,8 +197,9 @@ experiment_size() {
 }
 
 # The load test's report of the runs in the folders given: figures in the LangChain brand (the faces and
-# logo read from FONTS and LOGOS, never copied here; without them the figures are labelled drafts), every
-# number as JSON and CSV, and each run's own files.
+# logo read where the ps-ops-center and content-studio checkouts keep them, or from FONTS and LOGOS; never
+# copied here, and without them the figures are labelled drafts), every number as JSON and CSV, and each
+# run's own files.
 cmd_report() {
   need uv
   local folders=("$@")
@@ -207,7 +208,7 @@ cmd_report() {
   report "$BUILD/report/$(date -u +%Y%m%dT%H%M%SZ)" "${folders[@]}"
 }
 
-# Experiments side by side: every size and both kinds of traces on one scale, a row a step in steps.csv and
+# Experiments side by side: every size and every experiment on one scale, a row a step in steps.csv and
 # the figures in the brand's dark theme (the load test's load-test-experiments). Each run's own report
 # shows one size; this one shows what changed between them.
 cmd_compare() {
