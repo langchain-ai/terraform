@@ -1,0 +1,38 @@
+modules/aws/README.md
+  s_cd03e8f6bf2eb7::t_3a32e90ecab5e6 362-364
+modules/aws/helm/scripts/deploy.sh
+  s_cd03e8f6bf2eb7::t_54dacc90bfcb1f 581-583
+modules/aws/infra/variables.tf
+  s_cd03e8f6bf2eb7::t_097ad41fd63e06 991
+modules/aws/helm/scripts/test-addon-storage.sh
+  s_cd03e8f6bf2eb7::t_19d5337e5042e8 47-48
+  s_cd03e8f6bf2eb7::t_0bfd3dd48c7119 56-58
+modules/aws/helm/scripts/_addon-storage.sh
+  s_cd03e8f6bf2eb7::t_648b7ea3126d02 35-41,52
+  s_cd03e8f6bf2eb7::t_719300758d6afb 62,67-69
+modules/aws/infra/scripts/quickstart.sh
+  s_cd03e8f6bf2eb7::t_01f5289f1d88fd 1111-1113,1115
+modules/aws/infra/scripts/test-quickstart-dns.sh
+  s_cd03e8f6bf2eb7::t_d8c39bba1178be 358,360-367
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b43d345dcc1fadec1cbc7f7b4431eef2d7c8ba56",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_cd03e8f6bf2eb7": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "bfcec538-f610-41e9-b662-3ccfc0a66b0f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
