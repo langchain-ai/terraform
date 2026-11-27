@@ -77,6 +77,12 @@ run "0.17 state that runs NGINX refuses" 1 "still runs the NGINX ingress control
 run "state with the 0.18 outputs that runs NGINX refuses" 1 "still runs the NGINX ingress controller" "$R" "module.eks.x\n$N" "$V018"
 run "NGINX under a wrapper module refuses" 1 "still runs the NGINX ingress controller" "$R" 'module.langsmith.module.k8s_bootstrap.helm_release.nginx_ingress[0]' "$V018"
 run "the NGINX ALB rule left by a failed apply refuses" 1 "still runs the NGINX ingress controller" "$R" 'module.eks.x\naws_vpc_security_group_ingress_rule.alb_to_nginx[0]' "$V018"
+# 0.18 has no Karpenter, so a state that still has it refuses, whatever the
+# settings and whichever release wrote it.
+run "0.17 state with the Karpenter pools refuses" 1 "Karpenter SmithDB node pools" "${R}enable_smithdb = true\nsmithdb_ingestion_enabled = true\nsmithdb_query_enabled = false\n" 'kubectl_manifest.smithdb_nodepool_compute[0]\nmodule.eks.x'
+run "0.18 state with the Karpenter controller refuses" 1 "Karpenter SmithDB node pools" "$R" 'module.eks.module.eks_blueprints_addons.aws_iam_role.karpenter[0]' "$V018"
+run "Karpenter pools under a wrapper module refuse" 1 "Karpenter SmithDB node pools" "$R" 'module.langsmith.kubectl_manifest.smithdb_nodepool_compute[0]' "$V018"
+run "0.18 state with SmithDB on managed nodes passes" 0 "" "$R" 'module.smithdb.aws_db_instance.metastore[0]\nkubectl_manifest.fleet_stream_httproute[0]' "$V018"
 
 # nginx_stop <name> <want exit> <enable_nginx_ingress output, empty when absent> <tfvars>
 nginx_stop() {

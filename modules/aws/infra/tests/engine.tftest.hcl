@@ -36,7 +36,6 @@ override_module {
     langsmith_irsa_role_arn            = "arn:aws:iam::123456789012:role/plantest-dev-eks-irsa-role"
     langsmith_irsa_role_name           = "plantest-dev-eks-irsa-role"
     node_security_group_id             = "sg-00000000000000001"
-    karpenter_node_iam_role_name       = "plantest-dev-karpenter-node"
   }
 }
 

@@ -660,7 +660,6 @@ ENABLE_SMITHDB="false"
 SMITHDB_INGESTION="false"; SMITHDB_QUERY="false"
 SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
 [[ "$SMITHDB_NODE_TYPE" == "null" ]] && SMITHDB_NODE_TYPE="m6a.4xlarge"
-SMITHDB_TRANSITION="$(_existing smithdb_transition_mode false)"
 SMITHDB_CACHE_STORAGE="$(_existing smithdb_cache_storage network-disk)"
 [[ "$SMITHDB_CACHE_STORAGE" == "null" ]] && SMITHDB_CACHE_STORAGE="network-disk"
 SMITHDB_NODE_MIN="$(_existing smithdb_node_min_count 2)"
@@ -1358,7 +1357,6 @@ clickhouse_source = "${CH_SOURCE}"
 # SmithDB
 #------------------------------------------------------------------------------
 enable_smithdb                           = ${ENABLE_SMITHDB}
-smithdb_transition_mode                  = ${SMITHDB_TRANSITION}
 smithdb_node_instance_type               = ${SMITHDB_NODE_TYPE_HCL}
 smithdb_cache_storage                    = "${SMITHDB_CACHE_STORAGE}"
 smithdb_node_min_count                   = ${SMITHDB_NODE_MIN}

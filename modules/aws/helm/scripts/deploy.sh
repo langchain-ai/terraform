@@ -644,7 +644,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     exit 1
   fi
   VALUES_ARGS+=(-f "$_smithdb_overrides")
-  source "$INFRA_DIR/scripts/_smithdb-transition.sh"
+  source "$INFRA_DIR/scripts/_smithdb.sh"
   _smithdb_cache_storage=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage 2>/dev/null) || _smithdb_cache_storage=""
   _smithdb_cache_storage=$(_smithdb_cache_mode "$_smithdb_cache_storage" "$(_parse_tfvar "smithdb_cache_storage" || true)") || exit 1
   _smithdb_managed_values "$_smithdb_cache_storage"

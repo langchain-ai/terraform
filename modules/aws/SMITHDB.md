@@ -86,10 +86,7 @@ resources and cache sizes. By default, caches use gp3
 **Scheduling.** `make init-values` writes the node selector and tolerations for the
 SmithDB group (`langsmith-nodepool/smithdb`) into
 `langsmith-values-smithdb-overrides.yaml`, for every SmithDB service, the metastore
-migration Job and TaskDB. `make deploy` does not add them. If
-`langsmith-values-smithdb.yaml` is a copy from an older release that still pins the
-Karpenter pools, `make init-values` replaces it with the current example and keeps
-the old copy as `langsmith-values-smithdb.legacy.yaml`.
+migration Job and TaskDB. `make deploy` does not add them.
 
 **Tier and node size.** `langsmith-values-smithdb.yaml` sets
 `smithdb.resourceTier: small`, so every install runs the small tier on the default
@@ -323,20 +320,20 @@ at plan.
 
 ### Existing Karpenter deployments
 
-Finish and disable any historical migration on the current version before upgrading.
+In 0.17, `enable_smithdb = true` runs SmithDB on Karpenter node pools, and 0.18
+has no Karpenter. An apply would delete those pools and the Karpenter controller
+under the running SmithDB pods. `make apply` and `make quickdeploy` refuse a
+state that still has them, but a plain `terraform apply` does not check. Contact
+LangChain Support before you upgrade such an install, or build a new 0.18
+install.
 
-1. Set `smithdb_transition_mode = true` in `infra/terraform.tfvars`, keeping
-   `enable_smithdb = true`. Run `make init` and `make apply` to add managed nodes
-   while retaining Karpenter.
-2. Run `make init-values` and `make deploy`. Deployment clears old service
-   resource and cache-volume overrides, uses the selected resource tier,
-   and moves workloads to the managed group.
-3. Set `smithdb_transition_mode = false` and run `make apply`. Cleanup checks
-   workload health and cache storage, waits for old nodes to terminate, then
-   removes Karpenter. Failed checks stop cleanup.
-
-Use `make apply` or `make quickdeploy`; direct `terraform apply` bypasses these
-checks. The existing S3 bucket and metastore are preserved.
+0.18 also removes the settings that configured those pools:
+`smithdb_karpenter_chart_version`, `smithdb_karpenter_ami_alias`,
+`smithdb_node_arch`, `smithdb_capacity_type`, `smithdb_instance_store_sizes`,
+`smithdb_instance_store_min_local_nvme_gib`, `smithdb_instance_store_limits`,
+`smithdb_compute_sizes`, and `smithdb_compute_limits`. Delete them from
+`terraform.tfvars`. Terraform only warns about a value that it no longer
+declares.
 
 ### Move an external metastore to RDS
 
@@ -345,6 +342,8 @@ instance, and `smithdb_metastore_source = "external"` fails at plan. Move the da
 before the first 0.18 apply. That apply points the `smithdb-local` Secret at a new,
 empty RDS instance. Writes made after the dump are not copied, so stop sending
 traces until the move is done. The commands use the default namespace, `langsmith`.
+In 0.17, an install with SmithDB also runs it on Karpenter, and `make apply`
+refuses that state. Read [Existing Karpenter deployments](#existing-karpenter-deployments) first.
 
 1. Save this pod as `smithdb-pg.yaml`. It reads the metastore connection from
    `smithdb-local` when it starts: before the apply, that is the external

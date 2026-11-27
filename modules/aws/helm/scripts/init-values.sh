@@ -39,7 +39,7 @@ INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 EXAMPLES_DIR="$VALUES_DIR/examples"
 source "$INFRA_DIR/scripts/_common.sh"
-source "$INFRA_DIR/scripts/_smithdb-transition.sh"
+source "$INFRA_DIR/scripts/_smithdb.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
@@ -1007,9 +1007,6 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   if [[ ! -f "$_smithdb_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
     echo "SmithDB: created langsmith-values-smithdb.yaml"
-  elif _smithdb_refresh_legacy_overlay "$_smithdb_file" "$EXAMPLES_DIR/langsmith-values-smithdb.yaml"; then
-    echo "SmithDB: replaced langsmith-values-smithdb.yaml, which still pinned the old Karpenter pools"
-    echo "         (the old copy is kept as langsmith-values-smithdb.legacy.yaml)"
   else
     echo "SmithDB: langsmith-values-smithdb.yaml (existing)"
   fi

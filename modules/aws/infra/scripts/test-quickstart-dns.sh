@@ -267,17 +267,15 @@ if awk '$1 == "smithdb_node_root_volume_size_gb" { found = ($3 == 400) } END { e
 else
   bad "SmithDB boot disk written"
 fi
-sed -e 's/^smithdb_transition_mode[[:space:]]*=.*/smithdb_transition_mode = true/' \
-  -e 's/^smithdb_node_instance_type[[:space:]]*=.*/smithdb_node_instance_type = "m6i.4xlarge"/' \
+sed -e 's/^smithdb_node_instance_type[[:space:]]*=.*/smithdb_node_instance_type = "m6i.4xlarge"/' \
   -e 's/^smithdb_cache_storage[[:space:]]*=.*/smithdb_cache_storage = "local-ssd"/' \
   -e 's/^smithdb_ingestion_enabled[[:space:]]*=.*/smithdb_ingestion_enabled = false/' \
-  "$SMITHDB_INFRA/terraform.tfvars" > "$TMP/transition.tfvars"
-mv "$TMP/transition.tfvars" "$SMITHDB_INFRA/terraform.tfvars"
+  "$SMITHDB_INFRA/terraform.tfvars" > "$TMP/overrides.tfvars"
+mv "$TMP/overrides.tfvars" "$SMITHDB_INFRA/terraform.tfvars"
 write_update_defaults "$TMP/smithdb-update.answers" true
 run_wizard "SmithDB update accepts current settings" "$SMITHDB_INFRA" "$TMP/smithdb-update.answers" "$TMP/smithdb-update.log"
 has_line "SmithDB minimum preserved" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_min_count                = 2"
 has_line "SmithDB maximum preserved" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_max_count                = 7"
-has_line "SmithDB transition mode survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_transition_mode               = true"
 has_line "SmithDB instance override survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6i.4xlarge"'
 has_line "SmithDB local-ssd cache survives QuickStart" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_cache_storage                 = "local-ssd"'
 has_line "disabled ingestion survives with SmithDB enabled" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = false'

@@ -411,9 +411,7 @@ callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configure
 add-on with one ENIConfig per AZ and holds node group creation for two minutes
 after the cluster is active, so the add-on is configured before the first
 nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
-into that add-on. With `smithdb_transition_mode = true`, it also sets Karpenter's
-`settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
-node's primary ENI.
+into that add-on.
 
 Choose the mode at cluster creation. Switching an existing cluster changes the
 add-on configuration only: nodes that joined before the switch keep their pod
@@ -1382,7 +1380,6 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes |
 | `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes; must exceed the minimum |
 | `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |
-| `smithdb_transition_mode` | `false` | no | Retain Karpenter during an existing deployment's transition. See [SMITHDB.md](SMITHDB.md#existing-karpenter-deployments) |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |

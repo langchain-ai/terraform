@@ -53,10 +53,8 @@ provider "helm" {
   }
 }
 
-# kubectl provider — used for the SmithDB Karpenter CRs (EC2NodeClass, NodePool).
-# kubectl_manifest defers schema validation to apply time, so terraform plan
-# succeeds on a fresh cluster before the Karpenter CRDs are installed (the
-# controller is deployed by the eks module's blueprints add-on).
+# kubectl provider — used for the Fleet stream HTTPRoute below.
+# kubectl_manifest defers schema validation to apply time, so terraform plan succeeds on a fresh cluster before the Gateway API CRDs are installed.
 provider "kubectl" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
@@ -260,10 +258,6 @@ module "vpc" {
   private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 
-  # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
-  # over subnet IDs that are unknown until apply.
-  extra_private_subnet_tags = var.enable_smithdb && var.smithdb_transition_mode ? { "karpenter.sh/discovery" = local.cluster_name } : {}
-
   pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
 
@@ -307,8 +301,6 @@ module "eks" {
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
   eks_managed_node_groups         = var.eks_managed_node_groups
   extra_eks_managed_node_groups   = local.extra_eks_managed_node_groups
-  enable_karpenter                = var.enable_smithdb && var.smithdb_transition_mode
-  karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
@@ -1309,192 +1301,6 @@ resource "kubernetes_secret" "smithdb_local" {
   depends_on = [module.k8s_bootstrap]
 }
 
-#------------------------------------------------------------------------------
-# Legacy SmithDB Karpenter provisioning (transition mode only)
-#
-# Preserve resource addresses and labels so existing pools remain available
-# until workloads have moved and their nodes can terminate.
-#------------------------------------------------------------------------------
-
-locals {
-  # Subnets are discovered by the karpenter.sh/discovery tag (applied to the
-  # private subnets at creation via the vpc module's extra_private_subnet_tags).
-  smithdb_karpenter_discovery = { "karpenter.sh/discovery" = local.cluster_name }
-
-  # Security groups are discovered by the EKS-managed cluster tag
-  # (kubernetes.io/cluster/<cluster> = owned), which is stable and always present
-  # on the cluster security group. We deliberately do NOT put karpenter.sh/discovery
-  # on the node SG ourselves: the EKS module reconciles node-SG tags and can drop
-  # an out-of-band tag, leaving the EC2NodeClass with SecurityGroupsReady=False.
-  smithdb_karpenter_sg_selector = { "kubernetes.io/cluster/${local.cluster_name}" = "owned" }
-}
-
-# EC2NodeClass subnet discovery for a bring-your-own VPC: tag the existing private
-# subnets here (a for_each is safe because their IDs are known statically). For a
-# Terraform-created VPC the tag is applied at creation via the vpc module's
-# extra_private_subnet_tags (above).
-resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
-  for_each = var.enable_smithdb && var.smithdb_transition_mode && !var.create_vpc ? toset(var.private_subnets) : toset([])
-
-  resource_id = each.value
-  key         = "karpenter.sh/discovery"
-  value       = local.cluster_name
-}
-
-resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
-  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata   = { name = "smithdb-instance-store" }
-    spec = {
-      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
-      role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
-      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
-      associatePublicIPAddress   = false
-      # Karpenter RAID0s the local NVMe and points kubelet at it — no userdata.
-      instanceStorePolicy = "RAID0"
-      metadataOptions = {
-        httpEndpoint            = "enabled"
-        httpProtocolIPv6        = "disabled"
-        httpPutResponseHopLimit = 1
-        httpTokens              = "required"
-      }
-      blockDeviceMappings = [{
-        deviceName = "/dev/xvda"
-        ebs = {
-          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
-          volumeType = "gp3"
-          encrypted  = true
-        }
-      }]
-    }
-  })
-
-  depends_on = [module.eks]
-}
-
-resource "kubectl_manifest" "smithdb_ec2nc_compute" {
-  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata   = { name = "smithdb-compute" }
-    spec = {
-      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
-      role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
-      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
-      associatePublicIPAddress   = false
-      metadataOptions = {
-        httpEndpoint            = "enabled"
-        httpProtocolIPv6        = "disabled"
-        httpPutResponseHopLimit = 1
-        httpTokens              = "required"
-      }
-      blockDeviceMappings = [{
-        deviceName = "/dev/xvda"
-        ebs = {
-          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
-          volumeType = "gp3"
-          encrypted  = true
-        }
-      }]
-    }
-  })
-
-  depends_on = [module.eks]
-}
-
-resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
-  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata   = { name = "smithdb-instance-store" }
-    spec = {
-      template = {
-        metadata = { labels = { "smithdb-local/instance-store" = "true" } }
-        spec = {
-          taints = [{ key = "smithdb-local/instance-store", value = "true", effect = "NoSchedule" }]
-          requirements = [
-            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
-            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
-            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
-            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
-            { key = "karpenter.k8s.aws/instance-local-nvme", operator = "Gt", values = [tostring(var.smithdb_instance_store_min_local_nvme_gib - 1)] },
-            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_instance_store_sizes },
-          ]
-          nodeClassRef = {
-            group = "karpenter.k8s.aws"
-            kind  = "EC2NodeClass"
-            name  = "smithdb-instance-store"
-          }
-          expireAfter = "720h"
-        }
-      }
-      limits = {
-        cpu    = tostring(var.smithdb_instance_store_limits.cpu)
-        memory = var.smithdb_instance_store_limits.memory
-      }
-      # Avoid churn for nodes holding large local caches.
-      disruption = {
-        consolidationPolicy = "WhenEmpty"
-        consolidateAfter    = "2m"
-        budgets             = [{ nodes = "10%" }]
-      }
-    }
-  })
-
-  depends_on = [kubectl_manifest.smithdb_ec2nc_instance_store]
-}
-
-resource "kubectl_manifest" "smithdb_nodepool_compute" {
-  count = var.enable_smithdb && var.smithdb_transition_mode ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata   = { name = "smithdb-compute" }
-    spec = {
-      template = {
-        metadata = { labels = { "smithdb-local/compute" = "true" } }
-        spec = {
-          taints = [{ key = "smithdb-local/compute", value = "true", effect = "NoSchedule" }]
-          requirements = [
-            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
-            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
-            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
-            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
-            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_compute_sizes },
-          ]
-          nodeClassRef = {
-            group = "karpenter.k8s.aws"
-            kind  = "EC2NodeClass"
-            name  = "smithdb-compute"
-          }
-          expireAfter = "720h"
-        }
-      }
-      limits = {
-        cpu    = tostring(var.smithdb_compute_limits.cpu)
-        memory = var.smithdb_compute_limits.memory
-      }
-      disruption = {
-        consolidationPolicy = "WhenEmptyOrUnderutilized"
-        consolidateAfter    = "2m"
-        budgets             = [{ nodes = "10%" }]
-      }
-    }
-  })
-
-  depends_on = [kubectl_manifest.smithdb_ec2nc_compute]
-}
-
 # ── Long-lived-stream timeout override ───────────────────────────────────────
 # Envoy Gateway applies an effective 15s response timeout to the LangSmith
 # chart's own catch-all HTTPRoute (chart's http_route.yaml has no timeouts
@@ -1513,10 +1319,8 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 # own route. timeouts.request: 0s disables the request timeout for just
 # these path prefixes; every other path keeps Envoy Gateway's default.
 #
-# kubectl_manifest (not kubernetes_manifest) for the same reason as the
-# SmithDB Karpenter CRs above: it defers schema validation to apply time, so
-# terraform plan succeeds even before the Gateway API CRDs are installed
-# (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
+# kubectl_manifest (not kubernetes_manifest) defers schema validation to apply time, so terraform plan succeeds even before the Gateway API CRDs are installed.
+# Envoy Gateway's helm_release installs them inside module.k8s_bootstrap.
 resource "kubectl_manifest" "fleet_stream_httproute" {
   count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
 

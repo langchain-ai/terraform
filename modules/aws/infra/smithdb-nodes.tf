@@ -133,14 +133,3 @@ output "smithdb_cache_storage_class_name" {
   description = "StorageClass for SmithDB per-pod caches."
   value       = var.enable_smithdb ? kubernetes_storage_class_v1.smithdb_cache[0].metadata[0].name : null
 }
-
-variable "smithdb_transition_mode" {
-  type        = bool
-  description = "Keep Karpenter while moving an existing SmithDB deployment to managed nodes. See ../SMITHDB.md for transition steps."
-  default     = false
-
-  validation {
-    condition     = !var.smithdb_transition_mode || var.enable_smithdb
-    error_message = "smithdb_transition_mode requires enable_smithdb = true."
-  }
-}

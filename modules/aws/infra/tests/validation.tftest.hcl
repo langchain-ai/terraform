@@ -18,15 +18,6 @@ mock_provider "kubectl" {}
 mock_provider "random" {}
 mock_provider "time" {}
 
-run "transition_requires_smithdb" {
-  command = plan
-  variables {
-    enable_smithdb          = false
-    smithdb_transition_mode = true
-  }
-  expect_failures = [var.smithdb_transition_mode]
-}
-
 run "smithdb_capacity_requires_headroom" {
   command = plan
   variables {
@@ -54,7 +45,6 @@ run "enums_reject_an_unlisted_value" {
     tls_certificate_source   = "self-signed"
     clickhouse_source        = "langsmith-managed"
     smithdb_metastore_source = "import"
-    smithdb_node_arch        = "x86_64"
     smithdb_cache_storage    = "nvme"
     eks_network_mode         = "overlay"
   }
@@ -67,7 +57,6 @@ run "enums_reject_an_unlisted_value" {
     var.tls_certificate_source,
     var.clickhouse_source,
     var.smithdb_metastore_source,
-    var.smithdb_node_arch,
     var.smithdb_cache_storage,
     var.eks_network_mode,
   ]

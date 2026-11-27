@@ -73,7 +73,7 @@ EOF
 # The SmithDB overrides come from the heredoc in init-values.sh itself, so a change to the
 # generated scheduling or cache values is rendered against the real chart here.
 # The gates are a new install's defaults: ingestion and query on.
-source "$SCRIPT_DIR/../../infra/scripts/_smithdb-transition.sh"
+source "$SCRIPT_DIR/../../infra/scripts/_smithdb.sh"
 (
   export _smithdb_overrides="$TEST_TMP/smithdb-overrides.yaml"
   export SMITHDB_CACHE_STORAGE_CLASS=smithdb-cache
@@ -161,7 +161,6 @@ expect_pool() {
   [[ -n "$m" ]] || { echo "$name: no $kind rendered"; return 1; }
   grep -q 'langsmith-nodepool/smithdb: "\?true"\?' <<< "$m" || { echo "$name: no nodeSelector for the SmithDB node group"; return 1; }
   grep -q 'key: "\?langsmith-nodepool/smithdb"\?' <<< "$m" || { echo "$name: no toleration for the SmithDB node group"; return 1; }
-  ! grep -q 'smithdb-local/' <<< "$m" || { echo "$name: still pinned to an old Karpenter pool"; return 1; }
 }
 
 # Each cache volume claim uses the generated StorageClass.
