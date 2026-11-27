@@ -1,0 +1,19 @@
+modules/aws/helm/scripts/test-values.sh
+  s_82ce142c9e5ef2::t_697672adc0f0de 187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16caaed3c108d53b98dd972a172ae44bbd4f11c5",
+  "prompts": {},
+  "sessions": {
+    "s_82ce142c9e5ef2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "be49cdda-d22e-49ce-b81a-e72ef6da4a94",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
