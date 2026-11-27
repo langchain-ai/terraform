@@ -691,13 +691,15 @@ Before it touches the cluster, `make deploy` stops when:
 - the gateway mode or SmithDB, as Terraform applied them, differ from the file;
 - a values file from the 0.17 layout is still in `helm/values` (see [Move from the 0.17 values layout](#move-from-the-017-values-layout)).
 
+After it points kubectl at the cluster, and before the Helm upgrade, `make deploy` also stops when the values turn on an external ClickHouse and the namespace has no Secret of the name they read (`langsmith-clickhouse`). `make init-values` asks for the ClickHouse details on its first run only. A later run finds the Secret name in the earlier overrides file, or in `langsmith-values-local.yaml`, and does not contact the cluster.
+
 Each message names the fix. In most cases it is `make init-values`.
 
 ### Use the rendered files in your own CI/CD
 
 The two files are complete Helm values. A pipeline can apply them without `deploy.sh`:
 
-1) Run `make init-values` in the pipeline, after `terraform apply`, so the files match the Terraform state. It needs `helm`, `terraform`, and read access to the state.
+1) Run `make init-values` in the pipeline, after `terraform apply`, so the files match the Terraform state. It needs `helm`, `terraform`, and read access to the state. With an external ClickHouse, the first run also looks up the `langsmith-clickhouse` Secret with `kubectl`, and asks for the connection details in a terminal when the Secret is missing. Later runs do not contact the cluster.
 2) Keep the two files as build artifacts. Do not commit them to this repository: `.gitignore` excludes them.
 3) Apply them with the chart version that `deploy.sh` pins:
 
@@ -709,7 +711,7 @@ helm upgrade --install langsmith langchain/langsmith \
   --set-string images.sandboxHostImage.tag=<chart-appVersion>   # only with enable_sandboxes = true
 ```
 
-`deploy.sh` also does work that the values do not hold: it applies the ESO `ExternalSecret` (`make apply-eso`), checks the SSO and storage cutovers, and refreshes the hostname from the ALB. A pipeline that skips `deploy.sh` must do those steps, or run `make apply-eso` first. With Helm 4, add `--server-side=false` (see [`make deploy`](#make-deploy), Step 8).
+`deploy.sh` also does work that the values do not hold: it applies the ESO `ExternalSecret` (`make apply-eso`), checks the SSO and storage cutovers, checks that the external ClickHouse Secret exists, and refreshes the hostname from the ALB. A pipeline that skips `deploy.sh` must do those steps, or run `make apply-eso` first. With Helm 4, add `--server-side=false` (see [`make deploy`](#make-deploy), Step 8).
 
 ### Move from the 0.17 values layout
 

@@ -249,6 +249,47 @@ rc=0; _values_set_strings "$TMP/none.yaml" "config.hostname=x" 2>/dev/null || rc
 check "a set on a missing file fails" "1" "$rc"
 check "no temporary file is left in the values directory" "" "$(find "$VALUES" -maxdepth 1 -type f -name '.*')"
 
+echo "secret checks"
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/kubectl" <<'STUB'
+#!/usr/bin/env bash
+echo "kubectl $*" >> "$KUBECTL_LOG"
+[[ "$1 $2" == "get secret" ]] || exit 2
+case "$3" in
+  present-secret) echo "secret/$3" ;;
+  missing-secret) echo "Error from server (NotFound): secrets \"$3\" not found" >&2; exit 1 ;;
+  *) echo "The connection to the server localhost:8080 was refused" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$TMP/bin/kubectl"
+export KUBECTL_LOG="$TMP/kubectl.log"
+_path="$PATH"
+PATH="$TMP/bin:$PATH"
+check "a Secret that kubectl finds is present" "present" "$(_values_secret_state ns present-secret 2>&1)"
+check "a Secret that kubectl reports NotFound is missing" "missing" "$(_values_secret_state ns missing-secret 2>&1)"
+rc=0; out=$(_values_secret_state ns other-secret 2>&1) || rc=$?
+check "a kubectl failure returns 1, not missing" "1" "$rc"
+check "a kubectl failure prints kubectl's message" "The connection to the server localhost:8080 was refused" "$out"
+check "kubectl reads the name only" "kubectl get secret present-secret -n ns -o name" "$(grep -m1 present-secret "$KUBECTL_LOG")"
+for state in off:false:missing-secret present:true:present-secret missing:true:missing-secret error:true:other-secret; do
+  IFS=: read -r name enabled secret <<< "$state"
+  printf 'clickhouse:\n  external:\n    enabled: %s\n    existingSecretName: %s\n' "$enabled" "$secret" > "$TMP/ch-$name.yaml"
+done
+: > "$KUBECTL_LOG"
+rc=0; _values_clickhouse_secret_check ns "$TMP/ch-off.yaml" 2>/dev/null || rc=$?
+check "no external ClickHouse: no check" "0 0" "$rc $(grep -c . "$KUBECTL_LOG")"
+rc=0; _values_clickhouse_secret_check ns "$TMP/ch-present.yaml" 2>/dev/null || rc=$?
+check "the named Secret exists: pass" "0" "$rc"
+rc=0; out=$(_values_clickhouse_secret_check ns "$TMP/ch-missing.yaml" 2>&1) || rc=$?
+check "the named Secret is missing: stop" "1" "$rc"
+check "the stop names the Secret and the file to delete" "yes" \
+  "$([[ "$out" == *"Secret missing-secret,"* && "$out" == *"delete $TMP/ch-missing.yaml"* ]] && echo yes)"
+rc=0; out=$(_values_clickhouse_secret_check ns "$TMP/ch-error.yaml" 2>&1) || rc=$?
+check "kubectl cannot tell: stop with its message" "1 yes" "$rc $([[ "$out" == *"connection to the server"* ]] && echo yes)"
+rc=0; _values_clickhouse_secret_check ns "$TMP/ch-missing.yaml" "$TMP/ch-present.yaml" 2>/dev/null || rc=$?
+check "a later file names another Secret: the merged name counts" "0" "$rc"
+PATH="$_path"
+
 echo "bash 3.2"
 _values_plan_reset
 _values_render_overrides "$TMP/empty.yaml"

@@ -23,7 +23,8 @@
 # Sourced by init-values.sh, deploy.sh, status.sh and the values tests. The
 # copies in modules/aws, modules/azure and modules/gcp are identical, and
 # scripts/check.sh fails when they differ. Needs helm, awk, base64, and
-# sha256sum or shasum. Runs on bash 3.2. The caller provides _parse_tfvar.
+# sha256sum or shasum, and kubectl for the Secret checks. Runs on bash 3.2. The
+# caller provides _parse_tfvar.
 #
 # Every step checks its own status: callers run these functions as `f || exit 1`,
 # and bash ignores set -e inside a command that runs under || or &&.
@@ -500,3 +501,46 @@ _values_set_strings() (
   _values_notes "$file" > "$work/notes" || return 1
   _values_seal "$file" "$_VALUES_OVERRIDES, written by make init-values" "$work/notes" "$work/body" || return 1
 )
+
+# _values_secret_state <namespace> <name>
+# Prints present or missing for the Secret <name> in the current kubectl context,
+# and reads its name only, never its data. Returns 1, with kubectl's message on
+# stderr, when kubectl cannot tell: no context, expired credentials, or no
+# permission do not mean that the Secret is missing.
+_values_secret_state() {
+  local err
+  if err=$(kubectl get secret "$2" -n "$1" -o name 2>&1 >/dev/null); then
+    echo present
+  elif [[ "$err" == *"(NotFound)"* ]]; then
+    echo missing
+  else
+    printf '%s\n' "${err:-kubectl get secret $2 -n $1 failed}" >&2
+    return 1
+  fi
+}
+
+# _values_clickhouse_secret_check <namespace> <values file>...
+# Returns 1, with the fix, when the values turn on an external ClickHouse and
+# <namespace> holds no Secret of the name they read its connection from. make
+# init-values asks for the connection details on its first run only, so deploy.sh
+# checks the Secret in the cluster it deploys to. The last file is the overrides.
+_values_clickhouse_secret_check() {
+  local namespace="$1" name state overrides
+  shift
+  for overrides; do :; done
+  [[ "$(_values_get "$@" -- clickhouse external enabled 2>/dev/null)" == true ]] || return 0
+  name=$(_values_get "$@" -- clickhouse external existingSecretName 2>/dev/null) || name=""
+  [[ -n "$name" ]] || return 0
+  if ! state=$(_values_secret_state "$namespace" "$name"); then
+    echo "ERROR: kubectl could not check namespace $namespace for the ClickHouse Secret $name (message above)." >&2
+    return 1
+  fi
+  [[ "$state" == missing ]] || return 0
+  echo "ERROR: the values read the external ClickHouse connection from the Secret $name," >&2
+  echo "       and namespace $namespace has none, so the LangSmith pods would not start." >&2
+  echo "       To enter the connection details again, delete $overrides" >&2
+  echo "       and run make init-values in a terminal. Or create $name with the keys clickhouse_host," >&2
+  echo "       clickhouse_port, clickhouse_native_port, clickhouse_user, clickhouse_password," >&2
+  echo "       clickhouse_db and clickhouse_tls." >&2
+  return 1
+}

@@ -298,6 +298,10 @@ echo ""
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
 
+# Here, after kubectl points at this cluster: make init-values asks for the
+# external ClickHouse details on its first run only.
+_values_clickhouse_secret_check "$NAMESPACE" "$BASE_FILE" "$ENV_FILE" || exit 1
+
 # Chart 0.16 mounted sandbox volumes through a bundled JuiceFS CSI driver, which
 # chart 0.17 deletes. If the upgrade removes the driver while those volumes are
 # mounted, kubelet can no longer unmount them and the old sandbox-host pods hang in

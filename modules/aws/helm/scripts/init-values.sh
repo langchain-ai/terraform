@@ -369,8 +369,10 @@ fi
 
 # Insights. In-cluster ClickHouse runs as the chart's StatefulSet (dev/POC only).
 # The chart reads every connection field of an external ClickHouse from the
-# langsmith-clickhouse Secret, so the values hold only the pointer to it, and the
-# details are asked for only while that Secret does not exist.
+# langsmith-clickhouse Secret, so the values hold only the pointer to it. As on
+# 0.17, the details are asked for on the first run only: an earlier overrides
+# file or langsmith-values-local.yaml that names the Secret means it was set up,
+# and a re-run then needs no cluster. deploy.sh checks that the Secret exists.
 if [[ "$_enable_insights" == "true" ]]; then
   echo "  ✔ Insights (ClickHouse: $_clickhouse_source)"
   if [[ "$_clickhouse_source" != "in-cluster" ]]; then
@@ -380,7 +382,18 @@ clickhouse:
     enabled: true
     existingSecretName: "langsmith-clickhouse"
 CHEOF
-    if ! kubectl get secret langsmith-clickhouse -n "${NAMESPACE:-langsmith}" >/dev/null 2>&1; then
+    _ch_ref=""
+    for _ch_file in "$VALUES_DIR/$_VALUES_OVERRIDES" "$VALUES_DIR/$_VALUES_LOCAL"; do
+      [[ -z "$_ch_ref" && -f "$_ch_file" ]] || continue
+      _ch_ref=$(_values_get "$_ch_file" -- clickhouse external existingSecretName 2>/dev/null) || _ch_ref=""
+    done
+    _ch_state=present
+    if [[ -z "$_ch_ref" ]] && ! _ch_state=$(_values_secret_state "${NAMESPACE:-langsmith}" langsmith-clickhouse); then
+      echo "ERROR: kubectl could not check namespace ${NAMESPACE:-langsmith} for the Secret langsmith-clickhouse (message above)." >&2
+      echo "       Point kubectl at this cluster (make kubeconfig), then re-run make init-values." >&2
+      exit 1
+    fi
+    if [[ "$_ch_state" == missing ]]; then
       if [[ ! -t 0 ]]; then
         echo "ERROR: clickhouse_source = external, and namespace ${NAMESPACE:-langsmith} has no Secret langsmith-clickhouse." >&2
         echo "       Run make init-values in a terminal to enter the ClickHouse connection details." >&2
@@ -427,7 +440,8 @@ CHEOF
 
       echo ""
       echo "  Creating langsmith-clickhouse K8s Secret..."
-      echo "  (deploy.sh will re-apply this if the namespace is recreated)"
+      # A failure stops here, before any overrides file names a Secret that the
+      # next run would then take as set up.
       if ! kubectl create secret generic langsmith-clickhouse -n "${NAMESPACE:-langsmith}" \
         --from-literal=clickhouse_host="${_ch_host}" \
         --from-literal=clickhouse_port="${_ch_port}" \
@@ -437,11 +451,11 @@ CHEOF
         --from-literal=clickhouse_db="${_ch_db}" \
         --from-literal=clickhouse_tls="${_ch_tls_val}" \
         --dry-run=client -o yaml | kubectl apply -f -; then
-        echo "  WARNING: Could not create langsmith-clickhouse K8s secret." >&2
-        echo "           Ensure kubectl is configured and re-run, or create the secret manually." >&2
-      else
-        echo "  Secret langsmith-clickhouse created/updated."
+        echo "ERROR: could not create the Secret langsmith-clickhouse in namespace ${NAMESPACE:-langsmith} (message above)." >&2
+        echo "       Point kubectl at this cluster (make kubeconfig), then re-run make init-values." >&2
+        exit 1
       fi
+      echo "  Secret langsmith-clickhouse created/updated."
     fi
   fi
 fi

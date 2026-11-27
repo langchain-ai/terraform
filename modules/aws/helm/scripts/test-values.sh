@@ -102,10 +102,18 @@ esac
 cat "$file"
 STUB
 # The external ClickHouse Secret exists, and the ALB Ingress has no address yet.
+# CLICKHOUSE_SECRET (present, missing, error) sets the answer for the ClickHouse
+# Secret, and KUBECTL_LOG names a file that records each call.
 cat > "$STUB_BIN/kubectl" <<'STUB'
 #!/usr/bin/env bash
+[[ -z "${KUBECTL_LOG:-}" ]] || echo "kubectl $*" >> "$KUBECTL_LOG"
 case "$*" in
-  "get secret langsmith-clickhouse "*) exit 0 ;;
+  "get secret langsmith-clickhouse "*)
+    case "${CLICKHOUSE_SECRET:-present}" in
+      present) exit 0 ;;
+      missing) echo 'Error from server (NotFound): secrets "langsmith-clickhouse" not found' >&2; exit 1 ;;
+      *) echo 'The connection to the server localhost:8080 was refused' >&2; exit 1 ;;
+    esac ;;
   "get ingress "*) exit 0 ;;
 esac
 echo "values test: unexpected kubectl $*" >&2
@@ -668,6 +676,36 @@ grep -q 'langsmith-values-sizing-production.yaml .*no example of this name' "$di
 deploy_checks "$dir" 2> /dev/null && problems+=("deploy.sh's checks pass with 0.17 files in helm/values")
 report "files from the 0.17 layout stop init-values.sh and deploy.sh" ${problems[@]+"${problems[@]}"}
 
+# External ClickHouse: the details are asked for on the first run only, and a
+# kubectl failure is not a missing Secret.
+problems=()
+dir="$TEST_TMP/clickhouse-secret"
+make_case clickhouse-external "$dir"
+(export CLICKHOUSE_SECRET=missing; run_init "$dir") && problems+=("a first run without a terminal passed while kubectl reports NotFound")
+grep -q 'has no Secret langsmith-clickhouse' "$dir/init.log" || problems+=("the NotFound stop does not name the Secret")
+(export CLICKHOUSE_SECRET=error; run_init "$dir") && problems+=("a first run passed while kubectl could not reach the cluster")
+grep -q 'kubectl could not check namespace langsmith for the Secret langsmith-clickhouse' "$dir/init.log" ||
+  problems+=("the kubectl failure is not reported as one")
+grep -q 'The connection to the server' "$dir/init.log" || problems+=("the stop does not print kubectl's message")
+! grep -q 'ClickHouse host' "$dir/init.log" || problems+=("a kubectl failure led to the prompt")
+[[ -z "$(ls -A "$dir/values")" ]] || problems+=("a stopped first run wrote values files")
+run_init "$dir" || problems+=("a first run with the Secret in place failed: $(tail -n 1 "$dir/init.log")")
+(export CLICKHOUSE_SECRET=error KUBECTL_LOG="$dir/kubectl.log"; run_init "$dir") ||
+  problems+=("a re-run needs the cluster: $(tail -n 1 "$dir/init.log")")
+! grep -q 'get secret' "$dir/kubectl.log" 2>/dev/null || problems+=("a re-run looked up the Secret")
+report "external ClickHouse: a first run stops on NotFound and on a kubectl failure, without asking, and a re-run needs no cluster" ${problems[@]+"${problems[@]}"}
+
+problems=()
+dir="$TEST_TMP/clickhouse-local"
+make_case clickhouse-external "$dir"
+printf 'clickhouse:\n  external:\n    existingSecretName: my-clickhouse\n' > "$dir/values/$_VALUES_LOCAL"
+(export CLICKHOUSE_SECRET=error KUBECTL_LOG="$dir/kubectl.log"; run_init "$dir") ||
+  problems+=("init-values.sh failed with a Secret named in the local file: $(tail -n 1 "$dir/init.log")")
+! grep -q 'get secret' "$dir/kubectl.log" 2>/dev/null || problems+=("init-values.sh looked up langsmith-clickhouse although the local file names another Secret")
+[[ "$(value "$dir" clickhouse external existingSecretName || true)" == my-clickhouse ]] ||
+  problems+=("the values do not read the Secret that the local file names")
+report "external ClickHouse: a Secret named in langsmith-values-local.yaml needs no cluster" ${problems[@]+"${problems[@]}"}
+
 # deploy.sh hands Helm the two values files and no other: no values file in
 # VALUES_ARGS or in the helm upgrade of the LangSmith release besides them.
 problems=()
@@ -682,6 +720,18 @@ found=$(grep -oE -- '(^|[[:space:](])(-f|--values|--set-file)[ =]"?[^ )]*' "$TES
 [[ "$(grep -c . <<< "$found")" == 2 ]] ||
   problems+=("deploy.sh passes these values files to the LangSmith release: ${found//$'\n'/, }; want only the two files")
 report "deploy.sh applies only the two values files" ${problems[@]+"${problems[@]}"}
+
+# deploy.sh checks the ClickHouse Secret after it points kubectl at this cluster
+# and before the Helm upgrade of the LangSmith release.
+problems=()
+order=$(awk -v kube='_use_cluster_kubeconfig "$_cluster_name"' '
+  index($0, kube) == 1 && !k { k = NR }
+  /^_values_clickhouse_secret_check / && !c { c = NR }
+  /helm upgrade --install "\$RELEASE_NAME"/ && !u { u = NR }
+  END { print (k && c > k && u > c) ? "ok" : "kubeconfig " k ", check " c ", upgrade " u }
+' "$SCRIPT_DIR/deploy.sh")
+[[ "$order" == ok ]] || problems+=("the lines are out of order: $order")
+report "deploy.sh checks the ClickHouse Secret in this cluster before the Helm upgrade" ${problems[@]+"${problems[@]}"}
 
 # ── The example files ─────────────────────────────────────────────────────────
 # The base values set the sizing, and the feature overlays merge after them, so a
