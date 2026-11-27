@@ -349,7 +349,7 @@ Scale-down waits 30 minutes after the backlog clears (the chart's 1800 s stabili
 
 ### SmithDB checks
 
-Test `enable_smithdb = false`, managed RDS/S3, and BYO PostgreSQL plans.
+Test `enable_smithdb = false` and managed RDS/S3 plans.
 For an applied environment, verify:
 
 ```bash

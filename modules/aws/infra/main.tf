@@ -221,13 +221,6 @@ resource "terraform_data" "validate_inputs" {
       error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
     }
 
-    # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
-    # and requires a dedicated metastore Postgres.
-    precondition {
-      condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
-      error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
-    }
-
     # The gates default to true, so they count only with SmithDB on: opting
     # out takes enable_smithdb = false alone (outputs.tf reports them the same way).
     precondition {
@@ -1278,7 +1271,6 @@ module "smithdb" {
   eks_oidc_provider_url      = module.eks.oidc_provider
 
   # Metastore
-  metastore_source                  = var.smithdb_metastore_source
   metastore_instance_class          = var.smithdb_metastore_instance_class
   metastore_engine_version          = var.smithdb_metastore_engine_version
   metastore_allocated_storage       = var.smithdb_metastore_allocated_storage
@@ -1288,20 +1280,14 @@ module "smithdb" {
   metastore_skip_final_snapshot     = var.smithdb_metastore_skip_final_snapshot
   metastore_master_username         = var.smithdb_metastore_master_username
 
-  external_metastore_host     = var.smithdb_external_metastore_host
-  external_metastore_port     = var.smithdb_external_metastore_port
-  external_metastore_database = var.smithdb_external_metastore_database
-  external_metastore_username = var.smithdb_external_metastore_username
-  external_metastore_password = var.smithdb_external_metastore_password
-
   # Object store
   bucket_name           = local.smithdb_bucket_name
   s3_kms_key_arn        = var.s3_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
 
-  existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
-  manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
+  existing_security_group_id           = var.smithdb_metastore_existing_security_group_id
+  manage_existing_security_group_rules = var.smithdb_metastore_manage_existing_security_group_rules
 }
 
 # Metastore connection secret consumed by smithdb.config.existingSecretName.

@@ -266,7 +266,7 @@ output "smithdb_metastore_use_ssl" {
 }
 
 output "smithdb_metastore_security_group_id" {
-  description = "Security group ID attached to the metastore RDS instance (null when enable_smithdb = false or smithdb_metastore_source = 'external')"
+  description = "Security group ID attached to the metastore RDS instance (null when enable_smithdb = false)"
   value       = var.enable_smithdb ? module.smithdb[0].metastore_security_group_id : null
 }
 
