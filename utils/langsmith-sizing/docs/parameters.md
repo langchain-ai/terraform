@@ -129,6 +129,9 @@ self-hosted installs and never named. How each is used: [how-it-sizes.md](how-it
 | `redis.cluster_shard_cap` | 250 | shards | decision | Dzmitry Dubarau |
 | `redis.single_node_max_gb` | 300 | GB | decision | Dzmitry Dubarau |
 | `redis.expiry_retry_hours` | 3.5 | hours | field | Dzmitry Dubarau |
+| `redis.payload_trimmed_from` | 0.18 | chart line | field | Reed Bender |
+| `redis.trimmed_kb_per_run` | 2.5 | KB per run (decimal) | load-test | Reed Bender |
+| `redis.stall_hours` | 1 | hours | decision | Reed Bender |
 | `redis.queue_partitions` | {runs_per_partition: 12000, min_on_cluster: 2} | runs/s per partition | field | Dzmitry Dubarau |
 | `postgres.pool_api_pod` | 50 | connections per pod | measurement | Dzmitry Dubarau |
 | `postgres.connection_budget` | 0.8 | share of max_connections | decision | Dzmitry Dubarau |

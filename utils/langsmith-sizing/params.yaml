@@ -120,7 +120,7 @@ params:
   payload.redis_kb_per_run:
     value: {small: 9.7, medium: 2.9, large: 12}
     unit: KB per run (decimal)
-    why: "Bytes a run holds in Redis until ingest: the body when inline, a pointer when offloaded; the rise to the large run is unexplained."
+    why: "Bytes a run holds in Redis while it waits for ingest: the body when inline, a pointer when offloaded; the rise to the large run is unexplained. Through 0.17, or with ClickHouse on, a run keeps these bytes for the whole expiry (redis.payload_trimmed_from)."
     source: {kind: load-test, ref: "LangChain load tests of LangSmith 0.17.6 with SmithDB, 2026-11"}
     by: Dzmitry Dubarau
     since: 2026-11-12
@@ -308,6 +308,30 @@ params:
     source: {kind: field, ref: "installs lost runs with a 1 h expiry and a backlog over 1 h, LangChain field cases, 2026-11"}
     by: Dzmitry Dubarau
     since: 2026-11-13
+  redis.payload_trimmed_from:
+    value: "0.18"
+    unit: chart line
+    chart_has_no_key: "the release that changed what Redis keeps; a fact about the application, not a setting"
+    why: "From this chart line, with ClickHouse off, ingest deletes a run's payload from Redis once the run is stored and keeps only a small record until the expiry, for late feedback (LangSmith's ingest worker, from 0.18). Redis then holds the record for the expiry and payloads only while a backlog waits."
+    source: {kind: field, ref: "LangChain's ingestion team, 2026-11; LangSmith 0.18's ingest worker"}
+    by: Reed Bender
+    since: 2026-11-27
+  redis.trimmed_kb_per_run:
+    value: 2.5
+    unit: KB per run (decimal)
+    chart_has_no_key: "what the application keeps; the chart has no counterpart"
+    why: "What a stored run keeps in Redis for the expiry once its payload is trimmed (redis.payload_trimmed_from): the same whatever the payload, 1.56 to 1.73 KiB a run at 34 to 97 KiB payloads on one machine, about 2.5 KB in LangChain's load test at 20,000 to 200,000 runs a second. The larger of the two."
+    source: {kind: load-test, ref: "LangSmith Lite on magus, 2026-11-26: Redis used_memory over runs stored, 28 ten-minute steps of simple and agent traces, chart 0.18.5; LangChain's load test at 20,000 to 200,000 runs/s, 2026-11"}
+    by: Reed Bender
+    since: 2026-11-27
+  redis.stall_hours:
+    value: 1
+    unit: hours
+    chart_has_no_key: "how long a stalled ingest Redis must hold at the peak; the chart has no such setting"
+    why: "Once payloads are trimmed, Redis holds them only while ingest is behind: this many hours of the peak rate's payloads (payload.redis_kb_per_run) buffer a stalled ingest before Redis fills. A drain measured under two minutes on one machine; an hour covers a SmithDB restart or an object store outage with room to spare, and the expiry still bounds a longer stall."
+    source: {kind: decision, ref: "Reed Bender, 2026-11-27, from LangSmith Lite's experiments on magus (oldest queued task at most 59 s) and the 6 h chart expiry"}
+    by: Reed Bender
+    since: 2026-11-27
   redis.queue_partitions:
     value: {runs_per_partition: 12000, min_on_cluster: 2}
     unit: runs/s per partition

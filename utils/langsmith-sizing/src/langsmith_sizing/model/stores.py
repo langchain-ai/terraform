@@ -89,9 +89,14 @@ def redis_headroom(base: float, expiry_tuned: bool, untuned_factor: float) -> fl
     return base * (1 if expiry_tuned else untuned_factor)
 
 
-def redis_bytes(peak_runs_per_second: float, redis_kb_per_run: float, ttl_seconds: float, headroom: float) -> float:
-    """Runs stay in Redis for the full expiry, even after ingest, so: peak runs/s x KB x 1,000 x TTL x headroom."""
-    return peak_runs_per_second * redis_kb_per_run * KILO * ttl_seconds * headroom
+def redis_bytes(peak_runs_per_second: float, redis_kb_per_run: float, ttl_seconds: float, headroom: float,
+                trimmed_kb_per_run: float | None = None, stall_seconds: float = 0.0) -> float:
+    """What Redis holds at the peak, with headroom. Untrimmed (through 0.17, or ClickHouse on) a run keeps its
+    payload for the whole expiry: peak x KB x TTL. Trimmed, a stored run keeps a small record for the expiry
+    and payloads wait only through a stall: peak x (record x TTL + payload x stall)."""
+    if trimmed_kb_per_run is None:
+        return peak_runs_per_second * redis_kb_per_run * KILO * ttl_seconds * headroom
+    return peak_runs_per_second * KILO * (trimmed_kb_per_run * ttl_seconds + redis_kb_per_run * stall_seconds) * headroom
 
 
 def bytes_to_gb(b: float) -> float:

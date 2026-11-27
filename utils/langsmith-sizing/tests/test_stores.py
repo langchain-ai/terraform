@@ -59,6 +59,13 @@ class Redis(unittest.TestCase):
         self.assertAlmostEqual(stores.bytes_to_gib(b), 318.3, places=1)
         self.assertEqual(stores.redis_sizing(10, stores.bytes_to_gib(b))["gi"], 319)
 
+    def test_a_trimmed_redis_holds_a_record_for_the_expiry_and_payloads_for_the_stall(self) -> None:
+        # 0.18 with ClickHouse off: 1,500 runs/s x (2.5 KB x 6 h + 8.115 KB x 1 h) x 1.3 = 162 GB, against
+        # the 341.8 GB every payload for 6 hours would take.
+        b = stores.redis_bytes(1500, 8.115, 21600, 1.3, trimmed_kb_per_run=2.5, stall_seconds=3600)
+        self.assertAlmostEqual(stores.bytes_to_gb(b), 1500 * 1.3 * (2.5 * 21600 + 8.115 * 3600) / 1e6, places=3)
+        self.assertLess(b, stores.redis_bytes(1500, 8.115, 21600, 1.3) / 2)
+
     def test_the_guide_is_a_floor(self) -> None:
         self.assertEqual(stores.redis_sizing(26, 5.2), {"gi": 26, "basis": "load", "payload_gi": 6, "profile_gi": 26})
 

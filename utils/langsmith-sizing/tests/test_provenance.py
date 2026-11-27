@@ -17,7 +17,7 @@ from tests.helpers import needs_helm
 REDIS = {
     "derived:payload", "derived:rates", "param:headroom.redis", "param:headroom.redis_untuned_expiry", "param:redis.runs_per_shard",
     "param:redis.alarm_pct", "param:redis.queue_partitions", "param:redis.single_node_max_gb", "param:redis.cluster_shard_cap",
-    "param:redis.expiry_retry_hours", "docs:scale.redis_gib", "chart:config.settings.redisRunsExpirySeconds", "chart:redis.statefulSet.resources",
+    "param:redis.expiry_retry_hours", "param:redis.payload_trimmed_from", "param:redis.trimmed_kb_per_run", "param:redis.stall_hours", "docs:scale.redis_gib", "chart:config.settings.redisRunsExpirySeconds", "chart:redis.statefulSet.resources",
 }
 EVERY_PLAN = {
     "stores.redis": REDIS,

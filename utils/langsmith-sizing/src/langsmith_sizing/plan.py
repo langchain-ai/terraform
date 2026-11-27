@@ -17,7 +17,7 @@ from typing import Any
 
 from langsmith_sizing import PLANNED_CHARTS, deploy
 from langsmith_sizing import inputs as inputs_mod
-from langsmith_sizing.chart import SMITHDB_RENDERABLE, Chart, ChartError, cpu, gib, merge
+from langsmith_sizing.chart import SMITHDB_RENDERABLE, Chart, ChartError, cpu, gib, line_at_least, merge
 from langsmith_sizing.model import (
     configure,
     lite,
@@ -33,7 +33,7 @@ from langsmith_sizing.model import (
     watch,
 )
 from langsmith_sizing.params import Param, values
-from langsmith_sizing.units import KIB, KILO
+from langsmith_sizing.units import KIB, KILO, SECONDS_PER_HOUR
 from langsmith_sizing.values import cpu_quantity, memory_quantity, placeholder, resources
 
 SCHEMA = 1
@@ -403,19 +403,26 @@ def _object_storage(c: _Ctx, rates: dict[str, Any], pay: dict[str, Any]) -> dict
     )
 
 
+def redis_trimmed(c: _Ctx) -> bool:
+    """Whether ingest trims a stored run's payload from Redis: SmithDB alone, on the line that does it or later."""
+    return c.inputs.trace_store == "smithdb" and line_at_least(c.chart.version, str(c.p["redis.payload_trimmed_from"]))
+
+
 def _redis(c: _Ctx, rates: dict[str, Any], profile: dict[str, Any], pay: dict[str, Any], pods: dict[str, Any], floor: bool = True) -> dict[str, Any]:
     """Redis sized on its payload, with the scale guide's figure as a floor unless the regime sizes from measured use."""
     r, p = c.r, c.p
     peak = rates["runs_per_second_peak"]
     headroom = stores.redis_headroom(p["headroom.redis"], r["redis_expiry_tuned"], p["headroom.redis_untuned_expiry"])
-    rbytes = stores.redis_bytes(peak, pay["blend"]["redis_kb"], r["redis_expiry_seconds"], headroom)
+    trimmed = redis_trimmed(c)
+    rbytes = stores.redis_bytes(peak, pay["blend"]["redis_kb"], r["redis_expiry_seconds"], headroom,
+                                p["redis.trimmed_kb_per_run"] if trimmed else None, p["redis.stall_hours"] * SECONDS_PER_HOUR)
     sizing = stores.redis_sizing(profile["redis_gi"] if floor else 1, stores.bytes_to_gib(rbytes))
     shards = stores.redis_shards_for_cpu(peak, pay["inline_share"], p["redis.runs_per_shard"])
     cluster = r["redis"] == "external" and stores.redis_needs_cluster(sizing["gi"], shards, p["redis.single_node_max_gb"])
-    c.prov("stores.redis", "derived:payload", "derived:rates", "param:headroom.redis", "param:headroom.redis_untuned_expiry", "param:redis.runs_per_shard", "param:redis.alarm_pct", "param:redis.queue_partitions", "param:redis.single_node_max_gb", "param:redis.cluster_shard_cap", "param:redis.expiry_retry_hours", "docs:scale.redis_gib", "chart:config.settings.redisRunsExpirySeconds", "chart:redis.statefulSet.resources")
+    c.prov("stores.redis", "derived:payload", "derived:rates", "param:headroom.redis", "param:headroom.redis_untuned_expiry", "param:redis.runs_per_shard", "param:redis.alarm_pct", "param:redis.queue_partitions", "param:redis.single_node_max_gb", "param:redis.cluster_shard_cap", "param:redis.expiry_retry_hours", "param:redis.payload_trimmed_from", "param:redis.trimmed_kb_per_run", "param:redis.stall_hours", "docs:scale.redis_gib", "chart:config.settings.redisRunsExpirySeconds", "chart:redis.statefulSet.resources")
     return {
         "memory_gi": sizing["gi"], "basis": sizing["basis"], "payload_gi": sizing["payload_gi"], "guide_gi": sizing["profile_gi"],
-        "bytes": rbytes, "gb": stores.bytes_to_gb(rbytes), "headroom": headroom, "expiry_seconds": r["redis_expiry_seconds"],
+        "bytes": rbytes, "gb": stores.bytes_to_gb(rbytes), "headroom": headroom, "expiry_seconds": r["redis_expiry_seconds"], "payload_trimmed": trimmed,
         "backlog_tolerance_hours": stores.redis_backlog_tolerance_hours(r["redis_expiry_seconds"], p["redis.expiry_retry_hours"]),
         "expiry_below_chart_default": r["redis_expiry_seconds"] < c.chart.number("config.settings.redisRunsExpirySeconds"),
         "alarm_gib": stores.redis_alarm_gib(sizing["gi"], p["redis.alarm_pct"]), "maxmemory_policy": "noeviction",

@@ -264,6 +264,14 @@ class OnTheNextChart(unittest.TestCase):
         self.assertEqual(size(chart_version=self.V)["smithdb"]["topology"], "cluster")
         self.assertEqual(size(chart_version=CHART)["smithdb"]["topology"], "cluster")
 
+    def test_redis_holds_a_record_a_run_on_018_with_smithdb_alone_and_every_payload_otherwise(self) -> None:
+        trimmed = size(chart_version=self.V)["stores"]["redis"]
+        dual = size(chart_version=self.V, trace_store="dual")["stores"]["redis"]
+        before = size(chart_version=CHART)["stores"]["redis"]
+        self.assertEqual((trimmed["payload_trimmed"], dual["payload_trimmed"]), (True, False))
+        self.assertEqual(before["payload_trimmed"], chart.line_at_least(CHART, "0.18"))
+        self.assertLess(trimmed["bytes"], dual["bytes"])
+
     def test_unified_is_one_pod_sized_by_the_tier(self) -> None:
         s = size(chart_version=self.V, smithdb_topology="unified", users=2, traces_per_month=10_000)["smithdb"]
         self.assertEqual((s["topology"], s["tier"], s["splits"], s["ingestion_cores"]), ("unified", "small", False, None))

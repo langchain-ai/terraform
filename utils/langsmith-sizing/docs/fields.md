@@ -302,7 +302,8 @@ Chart values (`values`, `configure.values`, `scale.<workload>.applied.values`) a
 | `stores.redis.maxmemory_policy` | string | - | always noeviction: a refused write is retried by the SDK, an eviction loses the run |
 | `stores.redis.memory_gi` | number | GiB | the memory every consumer reads: the larger of the guide's figure and the payload's |
 | `stores.redis.over_shard_cap` | boolean | - | the shards pass the managed cap |
-| `stores.redis.payload_gi` | number | GiB | memory to hold every run's payload for the full expiry at the peak rate, with headroom |
+| `stores.redis.payload_gi` | number | GiB | memory for what Redis holds at the peak rate, with headroom: every payload for the expiry, or once trimmed a record a run for the expiry and payloads for a stall |
+| `stores.redis.payload_trimmed` | boolean | - | whether ingest deletes a stored run's payload from Redis (SmithDB alone, chart 0.18 and later) |
 | `stores.redis.queue_partitions` | number | partitions | ingest queue partitions; 1 on a single node |
 | `stores.sandboxes_juicefs_redis` | object | - | the dedicated Redis that holds JuiceFS metadata for sandboxes; present when sandboxes run |
 | `stores.smithdb_metastore` | object | - | the SmithDB metastore's Postgres |
