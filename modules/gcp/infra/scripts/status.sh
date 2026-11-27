@@ -21,7 +21,9 @@ source "$SCRIPT_DIR/_common.sh"
 
 GCP_DIR="$INFRA_DIR/.."
 HELM_DIR="$GCP_DIR/helm"
-VALUES_DIR="$HELM_DIR/values"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+# shellcheck source=../../helm/scripts/_values.sh
+source "$HELM_DIR/scripts/_values.sh"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -260,41 +262,54 @@ fi
 # ── 7. Helm Values ────────────────────────────────────────────────────────────
 header "7. Helm Values"
 
-_base_values="$VALUES_DIR/values.yaml"
-_overrides="$VALUES_DIR/values-overrides.yaml"
+_overrides="$VALUES_DIR/$_VALUES_OVERRIDES"
 
-if [[ -f "$_base_values" ]]; then
-  pass "values.yaml (base)"
-else
-  fail "values.yaml (base) — missing"
+# make deploy stops while a file from the 0.17 layout is in helm/values.
+_legacy=$(_values_legacy_files "$VALUES_DIR" "$HELM_DIR/values/examples")
+while IFS= read -r _old_file; do
+  [[ -n "$_old_file" ]] || continue
+  fail "${_old_file} — from the 0.17 layout; make deploy stops while it is in helm/values"
+done <<< "$_legacy"
+if [[ -n "$_legacy" ]]; then
+  action "Move your changes into $_VALUES_LOCAL and the files out of helm/values (README.md, \"Move from the 0.17 values layout\")"
+  set_next "Move the 0.17 values files out of helm/values (make init-values prints the steps)"
 fi
 
-if [[ -f "$_overrides" ]]; then
-  pass "values-overrides.yaml exists"
-  _hostname=$(grep -E '^\s*hostname:' "$_overrides" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
+for _name in "$_VALUES_BASE" "$_VALUES_OVERRIDES"; do
+  case "$(_values_seal_state "$VALUES_DIR/$_name")" in
+    intact) pass "$_name (written by make init-values)" ;;
+    edited)
+      fail "$_name — edited by hand after make init-values wrote it"
+      action "Move the change into $_VALUES_LOCAL, delete the file, then run make init-values"
+      set_next "Move your change into $_VALUES_LOCAL, then run make init-values"
+      ;;
+    missing)
+      fail "$_name — not generated"
+      action "make init-values  (or: ./helm/scripts/init-values.sh)"
+      set_next "make init-values"
+      ;;
+  esac
+done
+
+if [[ "$(_values_seal_state "$_overrides")" == intact && -z "$_legacy" ]]; then
+  _drift=$(_values_drift "$_overrides" "$GCP_DIR" "$VALUES_DIR")
+  if [[ -n "$_drift" ]]; then
+    warn "$_VALUES_OVERRIDES is out of date: ${_drift//$'\n'/; }"
+    action "make init-values"
+    set_next "make init-values"
+  fi
+  _hostname=$(_values_get "$_overrides" -- config hostname) || _hostname=""
   if [[ -n "$_hostname" ]]; then
     info "hostname: ${_hostname}"
   else
-    warn "hostname is blank in values-overrides.yaml"
-    action "Edit values/values-overrides.yaml — set config.hostname"
-    set_next "Edit values/values-overrides.yaml — set config.hostname"
+    warn "hostname is blank in $_VALUES_OVERRIDES"
+    action "Set langsmith_domain in terraform.tfvars, or deploy once for the Gateway IP, then make init-values"
+    set_next "make init-values"
   fi
-else
-  fail "values-overrides.yaml — not generated"
-  action "make init-values  (or: ./helm/scripts/init-values.sh)"
-  set_next "make init-values"
 fi
-
-# Addon files
-for addon in sizing-ha sizing-light agent-deploys agent-builder insights; do
-  f="$VALUES_DIR/langsmith-values-${addon}.yaml"
-  if [[ -f "$f" ]]; then
-    pass "langsmith-values-${addon}.yaml (addon)"
-  else
-    skip "langsmith-values-${addon}.yaml — not enabled"
-  fi
-done
+if [[ -f "$VALUES_DIR/$_VALUES_LOCAL" ]]; then
+  info "$_VALUES_LOCAL (your changes, merged last by make init-values)"
+fi
 
 # ── 8. Kubernetes Resources ───────────────────────────────────────────────────
 header "8. Kubernetes Resources"

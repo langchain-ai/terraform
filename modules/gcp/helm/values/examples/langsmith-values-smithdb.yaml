@@ -4,19 +4,17 @@
 # ClickHouse. It shares the LangSmith namespace and release; it cannot run in a
 # separate namespace or cluster.
 #
-# init-values.sh copies this to ../langsmith-values-smithdb.yaml once, when
-# enable_smithdb = true. deploy.sh loads three SmithDB files, and a later file
-# wins:
-#   1. langsmith-values-smithdb-sizing.yaml     generated from terraform output
-#      smithdb_helm_values: tier, resources, HPA minimum replicas, cache
-#      volumes, node placement
-#   2. langsmith-values-smithdb.yaml            your copy of this file
-#   3. langsmith-values-smithdb-overrides.yaml  generated: bucket, Workload
-#      Identity, metastore mapping, Auth Proxy, and rollout gates
+# init-values.sh merges three SmithDB sources into ../langsmith-values-overrides.yaml
+# when enable_smithdb = true, and a later source wins:
+#   1. terraform output smithdb_helm_values: tier, resources, HPA minimum
+#      replicas, cache volumes, node placement
+#   2. this file
+#   3. bucket, Workload Identity, metastore mapping, Auth Proxy, and rollout
+#      gates, from the other Terraform outputs
 #
-# Do not set SmithDB sizing or placement here. Set smithdb_sizing and
-# smithdb_cache_storage in infra/terraform.tfvars, so Terraform sizes the node
-# pools for the same values.
+# Do not set SmithDB sizing or placement here or in langsmith-values-local.yaml.
+# Set smithdb_sizing and smithdb_cache_storage in infra/terraform.tfvars, so
+# Terraform sizes the node pools for the same values.
 # Helm merges maps but replaces lists, so a volumes or tolerations list here
 # replaces the generated list.
 
@@ -25,8 +23,8 @@ smithdb:
 
   config:
     # Metastore credentials come from the Terraform-created Kubernetes secret.
-    # The per-field key mapping and the object-store bucket are injected by
-    # langsmith-values-smithdb-overrides.yaml (generated from infra outputs).
+    # init-values.sh merges the per-field key mapping and the object-store bucket
+    # after this file, from the infra outputs.
     existingSecretName: "smithdb-metastore"
     objectStore:
       # GCS access is via Workload Identity only. The chart's GCS path renders

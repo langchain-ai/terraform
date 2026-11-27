@@ -4,36 +4,42 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# init-values.sh — Generates Helm values files from Terraform outputs.
+# init-values.sh — Writes the two Helm values files from Terraform outputs.
 #
 # Usage (from gcp/):
-#   ./helm/scripts/init-values.sh
+#   make init-values  (or: ./helm/scripts/init-values.sh)
 #
 # Reads:
 #   - gcp/infra/terraform.tfvars    → project_id, region, name_prefix, environment,
-#                                     tls_certificate_source, langsmith_domain,
-#                                     postgres_source, redis_source
-#   - terraform output              → storage_bucket_name, workload_identity_annotation,
-#                                     cluster_name, ingress_ip
+#                                     tls_certificate_source, postgres_source, redis_source,
+#                                     clickhouse_source, sizing_profile, the enable_* flags
+#   - terraform output              → langsmith_domain, storage_bucket_name, cluster_name,
+#                                     workload_identity_annotation, ingress_ip, and the
+#                                     SmithDB and sandbox outputs
+#   - helm/values/examples/         → the base values, the sizing profile, and each enabled feature
+#   - helm/values/langsmith-values-local.yaml → your own changes (optional), merged last
 #
-# Falls back to prompting for the admin email when it is not in Terraform.
-# Prompts for (on first run):
-#   - Sizing profile (ha / light / none)
-#   - Product tier (LangSmith only / +Deployments / +Agent Builder / +Insights)
+# Prompts for the admin email when terraform.tfvars does not set it, and for the
+# external ClickHouse connection while the langsmith-clickhouse Secret does not exist.
 #
-# Creates:
-#   - values/values-overrides.yaml              (auto-generated: hostname, WI annotations, GCS)
-#   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
-#   - values/langsmith-values-agent-*.yaml      (based on product tier)
-#   - values/langsmith-values-insights.yaml     (if Insights tier chosen)
-#   - values/langsmith-values-smithdb-sizing.yaml    (if enable_smithdb; from terraform output)
-#   - values/langsmith-values-smithdb.yaml           (if enable_smithdb)
-#   - values/langsmith-values-smithdb-overrides.yaml (if enable_smithdb)
+# Writes, on every run:
+#   - values/langsmith-values.yaml            (the base, copied from examples/)
+#   - values/langsmith-values-overrides.yaml  (everything else, merged into one file:
+#                                              Terraform outputs, the sizing profile,
+#                                              each enabled feature, SmithDB, and the
+#                                              local file)
 #   - values/langsmith-sandbox-values-overrides.yaml (langsmith-sandbox chart, if
 #                                                     sandbox_runtime_source = external)
 #
-# Re-running is safe: Terraform outputs are refreshed; choices are preserved
-# if the files already exist.
+# make deploy applies langsmith-values.yaml, then langsmith-values-overrides.yaml.
+# Neither file holds a secret: deploy.sh writes them into the langsmith-config
+# Secret from the TF_VAR_* values that setup-env.sh exports. A re-run rewrites
+# both files. No script writes langsmith-values-local.yaml. When a generated file
+# was edited by hand, the run stops and prints the change instead.
+#
+# LANGSMITH_INFRA_DIR and LANGSMITH_VALUES_DIR point the script at another
+# terraform.tfvars and values directory. The values tests use them.
+#
 # This script has to run in its own process. Sourced directly, the `set -euo
 # pipefail` below would leak into the caller's shell and stay armed after the
 # script finishes, so that shell would then die on the next non-zero command or
@@ -52,9 +58,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-INFRA_DIR="$HELM_DIR/../infra"
-VALUES_DIR="$HELM_DIR/values"
-EXAMPLES_DIR="$VALUES_DIR/examples"
+MODULE_DIR="$(cd "$HELM_DIR/.." && pwd)"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$MODULE_DIR/infra}"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+EXAMPLES_DIR="$HELM_DIR/values/examples"
 
 # ── tfvars parser ─────────────────────────────────────────────────────────────
 # Values are cut at the closing quote, or at an inline # for bare booleans and
@@ -76,12 +83,24 @@ _tfvar_is_true() {
   [[ "$val" == "true" ]]
 }
 
+# shellcheck source=_values.sh
+source "$SCRIPT_DIR/_values.sh"
+
 # ── Parse terraform.tfvars ────────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   echo "ERROR: terraform.tfvars not found at $INFRA_DIR/terraform.tfvars" >&2
   echo "Run: cp $INFRA_DIR/terraform.tfvars.example $INFRA_DIR/terraform.tfvars" >&2
   exit 1
 fi
+if ! command -v helm >/dev/null 2>&1; then
+  echo "ERROR: helm is not installed. init-values.sh merges the values files with it." >&2
+  exit 1
+fi
+_values_legacy_stop "$VALUES_DIR" "$EXAMPLES_DIR" || exit 1
+
+# The generated pieces of the overrides file, merged by _values_write below.
+_frag_dir=$(mktemp -d)
+trap 'rm -rf "$_frag_dir"' EXIT
 
 _project_id=$(_parse_tfvar "project_id")
 # Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
@@ -153,9 +172,7 @@ else
   _protocol="http"
 fi
 
-OUT_FILE="$VALUES_DIR/values-overrides.yaml"
-_first_run="false"
-[[ ! -f "$OUT_FILE" ]] && _first_run="true"
+OUT_FILE="$VALUES_DIR/$_VALUES_OVERRIDES"
 
 echo "Parsed terraform.tfvars:"
 echo "  project_id             = $_project_id"
@@ -243,11 +260,10 @@ fi
 echo ""
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
-# Priority: langsmith_domain > existing OUT_FILE > ingress IP > empty
+# Priority: langsmith_domain > existing overrides file > ingress IP > empty
 EXISTING_HOSTNAME=""
 if [[ -f "$OUT_FILE" ]]; then
-  EXISTING_HOSTNAME=$(grep -E '^\s*hostname:' "$OUT_FILE" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_HOSTNAME=""
+  EXISTING_HOSTNAME=$(_values_get "$OUT_FILE" -- config hostname) || EXISTING_HOSTNAME=""
 fi
 
 if [[ -n "$EXISTING_HOSTNAME" && -n "$_domain" && "$EXISTING_HOSTNAME" != "$_domain" ]]; then
@@ -276,8 +292,7 @@ fi
 ADMIN_EMAIL=$(_parse_tfvar "langsmith_admin_email") || ADMIN_EMAIL=""
 EXISTING_EMAIL=""
 if [[ -f "$OUT_FILE" ]]; then
-  EXISTING_EMAIL=$(grep -E '^\s*initialOrgAdminEmail:' "$OUT_FILE" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_EMAIL=""
+  EXISTING_EMAIL=$(_values_get "$OUT_FILE" -- config initialOrgAdminEmail) || EXISTING_EMAIL=""
 fi
 
 if [[ -n "$ADMIN_EMAIL" ]]; then
@@ -289,11 +304,11 @@ elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
   ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
   echo "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
 else
-  # read returns 1 at EOF and set -euo pipefail (line 48) aborts there, so a
-  # headless run exits 1 with nothing printed. Tolerate the failure and report on
-  # the empty value instead. Testing "is there a tty" would be the wrong gate:
-  # piped stdin is not a tty either, and several prompts below have no env
-  # override, so `printf ... | init-values.sh` is the only way to drive them.
+  # read returns 1 at EOF and set -euo pipefail aborts there, so a headless run
+  # exits 1 with nothing printed. Tolerate the failure and report on the empty
+  # value instead. Testing "is there a tty" would be the wrong gate: piped stdin
+  # is not a tty either, and `printf ... | init-values.sh` is how a script drives
+  # this prompt.
   #
   # Keep whatever read assigned: `|| true`, not `|| ADMIN_EMAIL=""`. read assigns
   # the partial line and then returns 1 when the input has no trailing newline,
@@ -312,149 +327,48 @@ else
 fi
 echo ""
 
-# ── Stable runtime secrets (apiKeySalt / jwtSecret / admin password) ─────────
-# Prefer TF_VAR_* from setup-env.sh, then existing file values.
-_extract_yaml_value() {
-  local key="$1"
-  awk -F': ' -v k="$key" '
-    $1 ~ "^[[:space:]]*"k"$" {
-      v = $2
-      gsub(/[[:space:]]+$/, "", v)
-      if ((substr(v, 1, 1) == "\"" && substr(v, length(v), 1) == "\"") ||
-          (substr(v, 1, 1) == "\047" && substr(v, length(v), 1) == "\047")) {
-        v = substr(v, 2, length(v) - 2)
-      }
-      print v
-      exit
-    }
-  ' "$OUT_FILE" 2>/dev/null || true
-}
-
-EXISTING_API_KEY_SALT=""
-EXISTING_JWT_SECRET=""
-EXISTING_ADMIN_PASSWORD=""
-EXISTING_LICENSE_KEY=""
-EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=""
-if [[ -f "$OUT_FILE" ]]; then
-  EXISTING_API_KEY_SALT=$(_extract_yaml_value "apiKeySalt")
-  EXISTING_JWT_SECRET=$(_extract_yaml_value "jwtSecret")
-  EXISTING_ADMIN_PASSWORD=$(_extract_yaml_value "initialOrgAdminPassword")
-  EXISTING_LICENSE_KEY=$(_extract_yaml_value "langsmithLicenseKey")
-  EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=$(_extract_yaml_value "callbackSigningJwk")
-fi
-
-API_KEY_SALT="${TF_VAR_langsmith_api_key_salt:-$EXISTING_API_KEY_SALT}"
-if [[ -z "$API_KEY_SALT" ]]; then
-  API_KEY_SALT="$(openssl rand -base64 32 | tr -d '\n')"
-  echo "WARNING: TF_VAR_langsmith_api_key_salt not set; generated a new apiKeySalt."
-  echo "         To avoid API key invalidation across redeploys, run: source infra/scripts/setup-env.sh"
-fi
-
-JWT_SECRET="${TF_VAR_langsmith_jwt_secret:-$EXISTING_JWT_SECRET}"
-if [[ -z "$JWT_SECRET" ]]; then
-  JWT_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
-  echo "WARNING: TF_VAR_langsmith_jwt_secret not set; generated a new jwtSecret."
-  echo "         To avoid session invalidation across redeploys, run: source infra/scripts/setup-env.sh"
-fi
-
-ADMIN_PASSWORD="${TF_VAR_langsmith_admin_password:-$EXISTING_ADMIN_PASSWORD}"
-if [[ -z "$ADMIN_PASSWORD" ]]; then
-  printf "Initial admin password: "
-  # `|| true`, not `|| ADMIN_PASSWORD=""` — see the admin email prompt above.
-  # A password piped without a trailing newline is otherwise silently dropped,
-  # and the operator sees "password is required" for a password they supplied.
-  read -rs ADMIN_PASSWORD || true
-  echo
-  if [[ -z "$ADMIN_PASSWORD" ]]; then
-    echo "ERROR: initial admin password is required." >&2
-    echo "       Source infra/scripts/setup-env.sh first so" >&2
-    echo "       TF_VAR_langsmith_admin_password is exported from Secret Manager." >&2
+# ── Sizing profile (from terraform.tfvars) ────────────────────────────────────
+# sizing_profile is the only input, so a re-run writes the same file and make
+# deploy can tell when it changed.
+if [[ "$_sizing_profile" != "default" ]]; then
+  if [[ ! -f "$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml" ]]; then
+    echo "ERROR: sizing_profile = ${_sizing_profile}, and examples/ has no langsmith-values-sizing-${_sizing_profile}.yaml." >&2
     exit 1
   fi
-fi
-
-LANGSMITH_LICENSE_KEY="${TF_VAR_langsmith_license_key:-$EXISTING_LICENSE_KEY}"
-if [[ -z "$LANGSMITH_LICENSE_KEY" ]]; then
-  echo "ERROR: LangSmith license key is required." >&2
-  echo "       Set TF_VAR_langsmith_license_key (or run: source infra/scripts/setup-env.sh)." >&2
-  exit 1
-fi
-
-# ── Sizing profile (from terraform.tfvars) ────────────────────────────────────
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ ! -f "$_sizing_file" ]]; then
-    if [[ -f "$_sizing_example" ]]; then
-      cp "$_sizing_example" "$_sizing_file"
-      echo "Sizing: ${_sizing_profile} (created langsmith-values-sizing-${_sizing_profile}.yaml)"
-    else
-      echo "WARNING: Example file not found for sizing_profile = ${_sizing_profile}. Skipping sizing file." >&2
-    fi
-  else
-    echo "Sizing: ${_sizing_profile} (existing langsmith-values-sizing-${_sizing_profile}.yaml)"
-  fi
+  echo "Sizing: ${_sizing_profile} (examples/langsmith-values-sizing-${_sizing_profile}.yaml)"
 else
-  echo "Sizing: chart defaults (sizing_profile = default)"
+  echo "Sizing: the base values (sizing_profile = default)"
 fi
 echo ""
 
-# ── Product addons (from terraform.tfvars, with interactive fallback) ─────────
-_deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
-_builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
-_insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
-
+# ── Product addons (from terraform.tfvars) ────────────────────────────────────
+# An unset flag is off. terraform.tfvars is the only input, so a re-run writes the
+# same file and make deploy can tell when a flag changed.
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
-_enable_usage_telemetry=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_sso_oidc=false
-_tfvars_drive_addons=false
-
-# Resolve encryption keys up front so the standalone copy+inject blocks below
-# can reference them before the _addon_keys_block section runs.
-_agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
-_insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
-_polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
-
-# Read enable_* flags from terraform.tfvars if set
-_tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_insights"           && { _enable_insights=true;           _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_polly"              && { _enable_polly=true;              _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_usage_telemetry"    && { _enable_usage_telemetry=true;    _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_fleet"              && { _enable_fleet=true;              _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
-
-# An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
-# addon keys falls back to the interactive prompt or the files already on disk.
-for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
-          enable_usage_telemetry enable_fleet enable_standalone_polly \
-          enable_standalone_insights enable_sandboxes; do
-  if [[ -n "$(_parse_tfvar "$_k")" ]]; then _tfvars_drive_addons=true; fi
-done
+_tfvar_is_true "enable_deployments"         && _enable_deployments=true
+_tfvar_is_true "enable_agent_builder"       && _enable_agent_builder=true
+_tfvar_is_true "enable_insights"            && _enable_insights=true
+_tfvar_is_true "enable_polly"               && _enable_polly=true
+_tfvar_is_true "enable_fleet"               && _enable_fleet=true
+_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
+_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
+_tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
+_tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
-SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 _sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source=""
 _sandbox_runtime_source="${_sandbox_runtime_source:-in-cluster}"
-SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 SANDBOX_CLUSTER_NAME=""
 SANDBOX_RUNTIME_SECRET_NAME=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
-    echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
-    echo "       Run: source infra/scripts/setup-env.sh" >&2
-    exit 1
-  fi
   if [[ "$_sandbox_runtime_source" == "external" ]]; then
     # The sandbox cluster calls ${_protocol}://${HOSTNAME}/api, so the name has
     # to resolve to the Envoy Gateway from inside the VPC. langsmith_domain = ""
@@ -477,189 +391,62 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
 fi
 
+if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
+  exit 1
+fi
+if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
+  exit 1
+fi
+# Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the
+# bundled agent-bootstrap Job, so the two paths can no longer be combined and
+# the legacy one has no agent runtime of its own.
+if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
+  echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
+  echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
+  exit 1
+fi
+
 echo "Product addons (from terraform.tfvars):"
-
-if [[ "$_tfvars_drive_addons" == "true" ]]; then
-  # Validate addon dependencies
-  if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
-  if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
-  # Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the
-  # bundled agent-bootstrap Job, so the two paths can no longer be combined and
-  # the legacy one has no agent runtime of its own.
-  if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
-    echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
-    echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
-    exit 1
-  fi
-
-  if [[ "$_enable_deployments" == "true" ]]; then
-    if [[ ! -f "$_deploys_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-      echo "  ✔ Deployments (created langsmith-values-agent-deploys.yaml)"
-    else
-      echo "  ✔ Deployments (existing)"
-    fi
+for _addon in "Deployments:$_enable_deployments:enable_deployments" \
+  "Agent Builder:$_enable_agent_builder:enable_agent_builder" \
+  "Insights:$_enable_insights:enable_insights" \
+  "Polly:$_enable_polly:enable_polly" \
+  "Fleet:$_enable_fleet:enable_fleet" \
+  "Standalone Polly:$_enable_standalone_polly:enable_standalone_polly" \
+  "Standalone Insights:$_enable_standalone_insights:enable_standalone_insights"; do
+  IFS=: read -r _label _on _flag <<< "$_addon"
+  if [[ "$_on" == "true" ]]; then
+    echo "  ✔ $_label"
   else
-    echo "  ✗ Deployments (enable_deployments = false)"
+    echo "  ✗ $_label ($_flag = false)"
   fi
-
-  if [[ "$_enable_agent_builder" == "true" ]]; then
-    if [[ ! -f "$_builder_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-      echo "  ✔ Agent Builder (created langsmith-values-agent-builder.yaml)"
-    else
-      echo "  ✔ Agent Builder (existing)"
-    fi
-  else
-    echo "  ✗ Agent Builder (enable_agent_builder = false)"
-  fi
-
-  if [[ "$_enable_insights" == "true" ]]; then
-    echo "  ✔ Insights (enable_insights = true)"
-    # File creation + ClickHouse prompt handled below
-  else
-    echo "  ✗ Insights (enable_insights = false)"
-  fi
-
-  if [[ "$_enable_polly" == "true" ]]; then
-    _polly_file="$VALUES_DIR/langsmith-values-polly.yaml"
-    if [[ ! -f "$_polly_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-polly.yaml" "$_polly_file"
-      echo "  ✔ Polly (created langsmith-values-polly.yaml)"
-    else
-      echo "  ✔ Polly (existing)"
-    fi
-  else
-    echo "  ✗ Polly (enable_polly = false)"
-  fi
-
-  if [[ "$_enable_fleet" == "true" ]]; then
-    _fleet_file="$VALUES_DIR/langsmith-values-fleet.yaml"
-    if [[ ! -f "$_fleet_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
-      echo "  ✔ Fleet (created langsmith-values-fleet.yaml)"
-    else
-      echo "  ✔ Fleet (existing)"
-    fi
-  else
-    echo "  ✗ Fleet (enable_fleet = false)"
-  fi
-
-  if [[ "$_enable_standalone_polly" == "true" ]]; then
-    _sp_file="$VALUES_DIR/langsmith-values-standalone-polly.yaml"
-    if [[ ! -f "$_sp_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_sp_file"
-      echo "  ✔ Standalone Polly (created langsmith-values-standalone-polly.yaml; encryptionKey written to values-overrides.yaml)"
-    else
-      echo "  ✔ Standalone Polly (existing; encryptionKey in values-overrides.yaml)"
-    fi
-  else
-    echo "  ✗ Standalone Polly (enable_standalone_polly = false)"
-  fi
-
-  if [[ "$_enable_standalone_insights" == "true" ]]; then
-    _si_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml"
-    if [[ ! -f "$_si_file" ]]; then
-      cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_si_file"
-      echo "  ✔ Standalone Insights (created langsmith-values-standalone-insights.yaml; encryptionKey written to values-overrides.yaml)"
-    else
-      echo "  ✔ Standalone Insights (existing; encryptionKey in values-overrides.yaml)"
-    fi
-  else
-    echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
-  fi
-
-  if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
-  else
-    echo "  ✗ Sandboxes (enable_sandboxes = false)"
-  fi
-
-elif [[ "$_first_run" == "true" && "$_enable_sandboxes" != "true" ]]; then
-  # No tfvars flags set — interactive fallback on first run
-  echo "  (no enable_* flags in terraform.tfvars — prompting interactively)"
-  echo ""
-  echo "  Product tier:"
-  echo "  1) LangSmith only"
-  echo "  2) LangSmith + Deployments (LangGraph Platform)"
-  echo "  3) LangSmith + Deployments + Agent Builder"
-  echo "  4) LangSmith + Deployments + Agent Builder + Insights"
-  echo ""
-  printf "  Choice [1]: "
-  # EOF falls through to choice 1 rather than aborting: this block only runs on a
-  # first run with no enable_* flags set in terraform.tfvars, and 1 is
-  # "LangSmith only", which is what no flags already means.
-  #
-  # `|| true`, not `|| _tier_choice=""` — see the admin email prompt above. Here
-  # the cleared value is not caught by any check: it defaults to 1 below, so
-  # `printf 4 | init-values.sh` would deploy LangSmith only and report nothing.
-  read -r _tier_choice || true
-  _tier_choice="${_tier_choice:-1}"
-
-  case "$_tier_choice" in
-    1)
-      ;;
-    2|3|4)
-      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-      echo "  Created: langsmith-values-agent-deploys.yaml"
-      _enable_deployments=true
-
-      if [[ "$_tier_choice" == "3" || "$_tier_choice" == "4" ]]; then
-        cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-        echo "  Created: langsmith-values-agent-builder.yaml"
-        _enable_agent_builder=true
-      fi
-
-      if [[ "$_tier_choice" == "4" ]]; then
-        _enable_insights=true
-      fi
-      ;;
-    *)
-      echo "ERROR: Invalid choice '$_tier_choice'. Expected 1–4." >&2
-      exit 1
-      ;;
-  esac
-  echo ""
-  echo "  Tip: set enable_deployments / enable_agent_builder / enable_insights"
-  echo "  in terraform.tfvars to skip this prompt on future runs."
+done
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
 else
-  # Re-run with no tfvars flags — report what's already on disk
-  [[ -f "$_deploys_file" ]]  && { _enable_deployments=true;  echo "  ✔ Deployments (existing file)"; } || echo "  ✗ Deployments"
-  [[ -f "$_builder_file" ]]  && { _enable_agent_builder=true; echo "  ✔ Agent Builder (existing file)"; } || echo "  ✗ Agent Builder"
-  [[ -f "$_insights_file" ]] && { _enable_insights=true;      echo "  ✔ Insights (existing file)"; } || echo "  ✗ Insights"
-  [[ -f "$VALUES_DIR/langsmith-values-fleet.yaml" ]]               && echo "  ✔ Fleet (existing file)"               || echo "  ✗ Fleet"
-  [[ -f "$VALUES_DIR/langsmith-values-standalone-polly.yaml" ]]    && echo "  ✔ Standalone Polly (existing file)"    || echo "  ✗ Standalone Polly"
-  [[ -f "$VALUES_DIR/langsmith-values-standalone-insights.yaml" ]] && echo "  ✔ Standalone Insights (existing file)" || echo "  ✗ Standalone Insights"
+  echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
 
-if [[ "$_tfvars_drive_addons" != "true" ]]; then
-  if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (${_sandbox_runtime_source}; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
-  else
-    echo "  ✗ Sandboxes (enable_sandboxes = false)"
-  fi
-fi
-
-# Insights — create file based on clickhouse_source
-if [[ "$_enable_insights" == "true" && ! -f "$_insights_file" ]]; then
-  echo ""
-  if [[ "$_clickhouse_source" == "in-cluster" ]]; then
-    cat > "$_insights_file" <<CHEOF
-# Auto-generated by init-values.sh — in-cluster ClickHouse.
-# ClickHouse runs as a StatefulSet pod in the cluster (dev/POC only).
-# For production, set clickhouse_source = "external" in terraform.tfvars
-# and re-run init-values.sh to configure an external ClickHouse connection.
-insights:
-  enabled: true
+# Insights. In-cluster ClickHouse runs as the chart's StatefulSet (dev/POC only).
+# The chart reads every connection field of an external ClickHouse from the
+# langsmith-clickhouse Secret, so the values hold only the pointer to it, and the
+# details are asked for only while that Secret does not exist.
+if [[ "$_enable_insights" == "true" && "$_clickhouse_source" != "in-cluster" ]]; then
+  cat > "$_frag_dir/clickhouse.yaml" <<'CHEOF'
+clickhouse:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-clickhouse"
 CHEOF
-    echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
-  else
+  if ! kubectl get secret langsmith-clickhouse -n "${NAMESPACE:-langsmith}" >/dev/null 2>&1; then
+    if [[ ! -t 0 ]]; then
+      echo "ERROR: clickhouse_source = ${_clickhouse_source}, and namespace ${NAMESPACE:-langsmith} has no Secret langsmith-clickhouse." >&2
+      echo "       Run make init-values in a terminal to enter the ClickHouse connection details." >&2
+      exit 1
+    fi
+    echo ""
     echo "Insights requires an external ClickHouse instance."
     printf "  ClickHouse host: "
     read -r _ch_host
@@ -670,8 +457,11 @@ CHEOF
     printf "  ClickHouse port [8123]: "
     read -r _ch_port
     _ch_port="${_ch_port:-8123}"
-    if ! [[ "$_ch_port" =~ ^[0-9]+$ ]]; then
-      echo "ERROR: ClickHouse port must be numeric." >&2
+    printf "  ClickHouse native port [9000]: "
+    read -r _ch_native_port
+    _ch_native_port="${_ch_native_port:-9000}"
+    if ! [[ "$_ch_port" =~ ^[0-9]+$ && "$_ch_native_port" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: ClickHouse ports must be numeric." >&2
       exit 1
     fi
     printf "  ClickHouse database [default]: "
@@ -688,30 +478,12 @@ CHEOF
     _ch_tls="${_ch_tls:-Y}"
     [[ "$_ch_tls" =~ ^[Yy] ]] && _ch_tls_val="true" || _ch_tls_val="false"
 
-    cat > "$_insights_file" <<CHEOF
-# Auto-generated by init-values.sh — ClickHouse connection details.
-# Re-run init-values.sh or edit this file to update.
-# Password is stored in the langsmith-clickhouse K8s Secret (not this file).
-insights:
-  enabled: true
-
-clickhouse:
-  external:
-    enabled: true
-    host: "${_ch_host}"
-    port: "${_ch_port}"
-    database: "${_ch_db}"
-    user: "${_ch_user}"
-    tls: ${_ch_tls_val}
-    existingSecretName: "langsmith-clickhouse"
-CHEOF
-
-    echo "  Created: langsmith-values-insights.yaml"
     echo ""
     echo "  Creating langsmith-clickhouse K8s Secret..."
     if ! kubectl create secret generic langsmith-clickhouse -n "${NAMESPACE:-langsmith}" \
       --from-literal=clickhouse_host="${_ch_host}" \
       --from-literal=clickhouse_port="${_ch_port}" \
+      --from-literal=clickhouse_native_port="${_ch_native_port}" \
       --from-literal=clickhouse_user="${_ch_user}" \
       --from-literal=clickhouse_password="${_ch_pass}" \
       --from-literal=clickhouse_db="${_ch_db}" \
@@ -725,40 +497,23 @@ CHEOF
   fi
 fi
 
-# Patch tlsEnabled in agent-deploys if TLS is configured
-if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
-  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "existing" ]]; then
-    sed -i.bak 's/tlsEnabled: false/tlsEnabled: true/' "$_deploys_file" && rm -f "$_deploys_file.bak"
-  fi
+# Deployments: the example leaves config.deployment.tlsEnabled false, and the
+# operator builds the agent endpoint URLs from it.
+if [[ "$_enable_deployments" == "true" && ( "$_tls_source" == "letsencrypt" || "$_tls_source" == "existing" ) ]]; then
+  printf 'config:\n  deployment:\n    tlsEnabled: true\n' > "$_frag_dir/agent-deploys-tls.yaml"
 fi
 echo ""
 
 # ── SmithDB (chart 0.17) ──────────────────────────────────────────────────────
-# Three files, in the order deploy.sh loads them: the sizing file (written every
-# run from terraform output smithdb_helm_values), the overlay (copied once from
-# examples/, safe to hand-edit), and the overrides file (written every run from
-# the other Terraform outputs). A later file wins.
-_smithdb_sizing_file="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
-_smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
-_smithdb_overrides_file="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
-
+# Three sources, in merge order: the sizing (terraform output
+# smithdb_helm_values), the SmithDB example, and the bucket, Workload Identity,
+# metastore and gate values from the other Terraform outputs. A later source
+# wins, and langsmith-values-local.yaml wins over all three.
 if [[ "$_enable_smithdb" == "true" ]]; then
   echo "SmithDB (enable_smithdb = true):"
-
-  {
-    echo "# Auto-generated by init-values.sh from terraform output smithdb_helm_values."
-    echo "# Do not edit. To change the size or cache, set smithdb_sizing or smithdb_cache_storage in infra/terraform.tfvars."
-    echo ""
-    printf '%s\n' "$SMITHDB_HELM_VALUES"
-  } > "$_smithdb_sizing_file"
-  echo "  ✔ Written langsmith-values-smithdb-sizing.yaml"
-
-  if [[ ! -f "$_smithdb_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
-    echo "  ✔ Created langsmith-values-smithdb.yaml (from examples/)"
-  else
-    echo "  ○ langsmith-values-smithdb.yaml already exists — left as-is"
-  fi
+  # To change the size or cache, set smithdb_sizing or smithdb_cache_storage in
+  # infra/terraform.tfvars.
+  printf '%s\n' "$SMITHDB_HELM_VALUES" > "$_frag_dir/smithdb-sizing.yaml"
 
   # Cloud SQL Auth Proxy sidecar. commonInitContainers rather than the
   # per-component deployment.sidecars key: the chart injects this one into every
@@ -836,15 +591,15 @@ PROXYYAML
     )
   fi
 
-  cat > "$_smithdb_overrides_file" << SMITHDBYAML
-# Auto-generated by init-values.sh — do not edit manually.
-# Re-run init-values.sh to refresh from Terraform outputs.
-#
-# Loaded after langsmith-values-smithdb.yaml, so anything here wins.
-#
-# The integration gates below come from infra/terraform.tfvars. Change them
-# there, and keep ClickHouse enabled throughout.
-
+  # The integration gates come from infra/terraform.tfvars. Change them there,
+  # and keep ClickHouse enabled throughout.
+  #
+  # The metastore-migration hook Job inherits useSsl. The chart builds its env
+  # from the shared smithdb.serviceEnv helper, which reads
+  # config.metastore.useSsl for METASTORE__USE_SSL on every component, the Job
+  # included, so no separate metastoreMigration.useSsl leaf is needed - the chart
+  # does not read one.
+  cat > "$_frag_dir/smithdb-overrides.yaml" << SMITHDBYAML
 smithdb:
   serviceAccount:
     annotations:
@@ -867,31 +622,18 @@ ${_smithdb_proxy_block}
       # same mapping covers both modes.
       port: "${SMITHDB_METASTORE_PORT}"
       useSsl: ${SMITHDB_METASTORE_USE_SSL}
-
-  # The metastore-migration hook Job inherits this useSsl. The chart builds its
-  # env from the shared smithdb.serviceEnv helper, which reads
-  # config.metastore.useSsl for METASTORE__USE_SSL on every component, the Job
-  # included, so no separate metastoreMigration.useSsl leaf is needed - the chart
-  # does not read one.
-
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDBYAML
-
-  echo "  ✔ Written langsmith-values-smithdb-overrides.yaml"
+  echo "  ✔ SmithDB sizing, bucket, Workload Identity, metastore and gates (Terraform outputs)"
   echo ""
-else
-  if [[ -f "$_smithdb_file" ]]; then
-    echo "NOTE: langsmith-values-smithdb.yaml exists but enable_smithdb = false — deploy.sh will skip it."
-    echo ""
-  fi
 fi
 
 # ── In-cluster postgres/redis overrides ───────────────────────────────────────
-# values.yaml names the Secrets that k8s-bootstrap creates for Cloud SQL and
+# The base values name the Secrets that k8s-bootstrap creates for Cloud SQL and
 # Memorystore. k8s-bootstrap creates them only for external services. The chart
 # uses existingSecretName whenever it is set, so clear it here, and the chart
 # creates its own in-cluster Secret.
@@ -911,13 +653,14 @@ redis:
     existingSecretName: \"\""
 fi
 
+# ── Sandboxes ─────────────────────────────────────────────────────────────────
+# The callback signing key is not written here: the chart reads it from the
+# langsmith-config Secret (sandbox_callback_signing_jwk), which deploy.sh writes.
 _sandbox_config_block=""
-if [[ "$_enable_sandboxes" == "true" ]]; then
-  _sandbox_service_url_block=""
-  if [[ -n "$_sandbox_service_url_base_url" ]]; then
-    _sandbox_service_url_block="
+_sandbox_service_url_block=""
+if [[ "$_enable_sandboxes" == "true" && -n "$_sandbox_service_url_base_url" ]]; then
+  _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
-  fi
 fi
 if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   # The control plane stays here; the langsmith-sandbox chart runs sandbox-host
@@ -930,7 +673,6 @@ sandboxes:
   enabled: true
   external:
     enabled: true${_sandbox_service_url_block}
-  callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
   serviceAuth:
     secretKey: \"sandbox_service_auth_secret\""
 elif [[ "$_enable_sandboxes" == "true" ]]; then
@@ -949,7 +691,6 @@ elif [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
-  callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
   juicefs:
     existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
   sandboxHost:
@@ -975,95 +716,25 @@ sandboxes:
                   values: [\"true\"]"
 fi
 
-# ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
-_addon_keys_block=""
-_fleet_key_block=""
-_standalone_polly_key_block=""
-_standalone_insights_key_block=""
-if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" || \
-      "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" || \
-      "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
-
-  if [[ ( "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ) && -z "$_agent_builder_key" ]]; then
-    echo "ERROR: TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
-    echo "       Run: source infra/scripts/setup-env.sh" >&2
-    exit 1
-  fi
-
-  if [[ ( "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ) && -z "$_insights_key" ]]; then
-    echo "ERROR: TF_VAR_langsmith_insights_encryption_key is not set." >&2
-    echo "       Run: source infra/scripts/setup-env.sh" >&2
-    exit 1
-  fi
-
-  if [[ ( "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ) && -z "$_polly_key" ]]; then
-    echo "ERROR: TF_VAR_langsmith_polly_encryption_key is not set." >&2
-    echo "       Run: source infra/scripts/setup-env.sh" >&2
-    exit 1
-  fi
-
-  # config.agentBuilder is still the Agent Builder enablement path in chart 0.16.
-  # config.insights and config.polly were removed in 0.15.1 — validate.yaml rejects
-  # them on presence alone, so their keys go on the top-level blocks below.
-  if [[ "$_enable_agent_builder" == "true" ]]; then
-    _addon_keys_block="
-  agentBuilder:
-    encryptionKey: \"${_agent_builder_key}\""
-  fi
-
-  if [[ "$_enable_fleet" == "true" ]]; then
-    _fleet_key_block="
-fleet:
-  encryptionKey: \"${_agent_builder_key}\""
-  fi
-
-  # One top-level block per feature regardless of which flag turned it on. Writing
-  # a legacy and a standalone variant separately would emit the key twice in the
-  # same document, and the second mapping would win silently.
-  if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
-    _standalone_polly_key_block="
-polly:
-  encryptionKey: \"${_polly_key}\""
-  fi
-
-  if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
-    _standalone_insights_key_block="
-insights:
-  encryptionKey: \"${_insights_key}\""
-  fi
-fi
-
 # ── SSO/OIDC login (optional) ─────────────────────────────────────────────────
 # WARNING: enable only after the initial install has completed with basic auth
 # and you've confirmed org-admin access — flipping this on before an admin
-# account exists locks you out of the UI.
-_oauth_block=""
-_basic_auth_enabled_block=""
+# account exists locks you out of the UI. The chart reads the client ID, secret
+# and issuer URL from the langsmith-config Secret, which deploy.sh writes.
+_auth_block=""
 if [[ "$_enable_sso_oidc" == "true" ]]; then
-  _oauth_client_id="${TF_VAR_langsmith_oauth_client_id:-}"
-  _oauth_client_secret="${TF_VAR_langsmith_oauth_client_secret:-}"
-  _oauth_issuer_url="${TF_VAR_langsmith_oauth_issuer_url:-}"
-  if [[ -z "$_oauth_client_id" || -z "$_oauth_client_secret" || -z "$_oauth_issuer_url" ]]; then
-    echo "ERROR: enable_sso_oidc = true but OIDC credentials are not set." >&2
-    echo "       Run: source infra/scripts/setup-env.sh" >&2
-    exit 1
-  fi
-  _basic_auth_enabled_block="
-    enabled: false"
-  _oauth_block="
+  _auth_block="
+  basicAuth:
+    enabled: false
   oauth:
-    enabled: true
-    oauthClientId: \"${_oauth_client_id}\"
-    oauthClientSecret: \"${_oauth_client_secret}\"
-    oauthIssuerUrl: \"${_oauth_issuer_url}\""
+    enabled: true"
 fi
 
 # ── Agent defaults ────────────────────────────────────────────────────────────
 # Chart 0.16 ships insights.enabled and polly.enabled as true. Without an explicit
-# false a base install grows two agent deployments nobody asked for, and because
-# this module sets no config.existingSecretName the chart then hard-fails on the
-# missing encryptionKey. Make the terraform enable_* flags authoritative. The
-# addon overlays load after this file, so an enabled feature still turns itself on.
+# false a base install grows two agent deployments nobody asked for. Make the
+# terraform enable_* flags authoritative. The feature examples merge after the
+# core values, so an enabled feature still turns itself on.
 _agent_defaults_block=""
 if [[ "$_enable_insights" != "true" && "$_enable_standalone_insights" != "true" ]]; then
   _agent_defaults_block+="
@@ -1077,73 +748,48 @@ polly:
 fi
 
 # ── Workload Identity annotation block ────────────────────────────────────────
+# langsmith-ksa, the account of the agent deployment pods the operator creates,
+# is not part of the release: deploy.sh annotates it after each deploy.
 _wi_block=""
 if [[ -n "$WI_ANNOTATION" ]]; then
   _wi_block="
-# Workload Identity — annotate each component's service account.
-# The chart does not support a global serviceAccount block.
 platformBackend:
   serviceAccount:
     annotations:
       iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-
 backend:
   serviceAccount:
     annotations:
       iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-
 queue:
   serviceAccount:
     annotations:
       iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-
 ingestQueue:
   serviceAccount:
     annotations:
       iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-
-# Deployments feature components — annotations are harmless if the addon is not enabled.
 hostBackend:
   serviceAccount:
     annotations:
       iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-
 listener:
   serviceAccount:
     annotations:
       iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-
 operator:
   serviceAccount:
     annotations:
-      iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-# langsmith-ksa is used by operator-spawned agent deployment pods and must also
-# carry the Workload Identity annotation. Apply it after Helm creates the SA:
-#   kubectl annotate serviceaccount langsmith-ksa -n langsmith \\
-#     iam.gke.io/gcp-service-account=${WI_ANNOTATION} --overwrite"
+      iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\""
 fi
 
-# ── Write values-overrides.yaml ───────────────────────────────────────────────
-cat > "$OUT_FILE" << YAML
-# Auto-generated by init-values.sh — do not edit auto-filled fields manually.
-# Re-run init-values.sh to refresh Terraform outputs.
-#
-# GCS blob storage: LangSmith accesses GCS via the S3-compatible API.
-# Set accessKey and accessKeySecret to HMAC credentials created in:
-#   GCP Console → Cloud Storage → Settings → Interoperability → Service Account HMAC Keys
-# The service account must have Storage Admin on the ${BUCKET_NAME} bucket.
-
+# ── The core of langsmith-values-overrides.yaml ───────────────────────────────
+# GCS blob storage: LangSmith accesses GCS natively (the base values set engine
+# GCS), with Workload Identity, so no access keys are written.
+cat > "$_frag_dir/core.yaml" << YAML
 config:
-  # Envoy Gateway IP — required for OAuth and Deployments features.
-  # Find it with: kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
   hostname: "${HOSTNAME}"
-  langsmithLicenseKey: "${LANGSMITH_LICENSE_KEY}"
-  apiKeySalt: "${API_KEY_SALT}"
-  initialOrgAdminEmail: "${ADMIN_EMAIL}"
-  basicAuth:${_basic_auth_enabled_block}
-    jwtSecret: "${JWT_SECRET}"
-    initialOrgAdminPassword: "${ADMIN_PASSWORD}"${_oauth_block}
-${_addon_keys_block}
+  initialOrgAdminEmail: "${ADMIN_EMAIL}"${_auth_block}
   deployment:
     # URL used by the operator to build agent deployment endpoints.
     # Must match config.hostname with correct protocol — wrong value keeps
@@ -1151,10 +797,6 @@ ${_addon_keys_block}
     url: "${_protocol}://${HOSTNAME}"
   blobStorage:
     bucketName: "${BUCKET_NAME}"
-    # TODO: Set HMAC credentials for GCS S3-compatible API access.
-    # Leave empty only if you are using Workload Identity + the chart's native GCS support.
-    accessKey: ""
-    accessKeySecret: ""
     region: "${_region}"
     apiURL: "https://storage.googleapis.com"
     s3UsePathStyle: false
@@ -1165,19 +807,15 @@ gateway:
   namespace: "envoy-gateway-system"
 ${_wi_block}
 ${_external_services_block}
-${_fleet_key_block}
-${_standalone_polly_key_block}
-${_standalone_insights_key_block}
 ${_agent_defaults_block}
 YAML
-
-echo "Written: $OUT_FILE"
 
 if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
   # No secrets in this file: Terraform writes both Secrets it names into the
   # sandbox cluster. Its keys are the chart defaults, spelled out because the
-  # Secret depends on them.
-  cat > "$SANDBOX_VALUES_FILE" << YAML
+  # Secret depends on them. Copied to helm/values once the two values files are
+  # written.
+  cat > "$_frag_dir/sandbox-runtime.yaml" << YAML
 # Auto-generated by init-values.sh for the dedicated sandbox cluster
 # (${SANDBOX_CLUSTER_NAME}). deploy.sh installs the langsmith-sandbox chart with it.
 # Both Secret values match the same keys in langsmith-config; neither is the
@@ -1209,6 +847,69 @@ sandboxHost:
     podAnnotations:
       cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
 YAML
+fi
+
+# ── Merge everything into langsmith-values-overrides.yaml ─────────────────────
+# The sources merge in the order deploy.sh layered them on 0.17, after the base
+# values, so a later one wins. The sizing profile comes before the feature
+# examples, so a feature's own resources win over the profile. The local file is
+# the last file. hostBackend.enabled applies after every file while Fleet is on,
+# because Fleet's OAuth endpoints live in host-backend.
+_values_plan_reset
+_values_plan_file generated "$_frag_dir/core.yaml" "core values from Terraform outputs: hostname, admin email, GCS, Gateway, Workload Identity, sandboxes, databases"
+if [[ "$_sizing_profile" != "default" ]]; then
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+fi
+if [[ "$_enable_deployments" == "true" ]]; then
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml"
+  if [[ -f "$_frag_dir/agent-deploys-tls.yaml" ]]; then
+    _values_plan_file generated "$_frag_dir/agent-deploys-tls.yaml" "config.deployment.tlsEnabled from tls_certificate_source"
+  fi
+fi
+if [[ "$_enable_agent_builder" == "true" ]]; then
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml"
+fi
+if [[ "$_enable_insights" == "true" ]]; then
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-insights.yaml"
+  if [[ -f "$_frag_dir/clickhouse.yaml" ]]; then
+    _values_plan_file generated "$_frag_dir/clickhouse.yaml" "the pointer to the langsmith-clickhouse Secret (clickhouse_source = ${_clickhouse_source})"
+  fi
+fi
+for _addon in polly:"$_enable_polly" fleet:"$_enable_fleet" \
+  standalone-polly:"$_enable_standalone_polly" standalone-insights:"$_enable_standalone_insights"; do
+  if [[ "${_addon#*:}" == "true" ]]; then
+    _values_plan_file example "$EXAMPLES_DIR/langsmith-values-${_addon%%:*}.yaml"
+  fi
+done
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _values_plan_file generated "$_frag_dir/smithdb-sizing.yaml" "SmithDB sizing from terraform output smithdb_helm_values"
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-smithdb.yaml"
+  _values_plan_file generated "$_frag_dir/smithdb-overrides.yaml" "SmithDB bucket, Workload Identity, metastore and gates from Terraform outputs"
+fi
+_values_plan_local "$VALUES_DIR"
+if [[ "$_enable_fleet" == "true" ]]; then
+  _values_plan_set --set "hostBackend.enabled=true"
+fi
+
+# Recorded in the header, so make deploy stops when one of them changes.
+_values_plan_tfvars project_id name_prefix environment region tls_certificate_source \
+  langsmith_domain postgres_source redis_source clickhouse_source sizing_profile \
+  langsmith_admin_email enable_deployments enable_agent_builder enable_insights \
+  enable_polly enable_fleet enable_standalone_polly enable_standalone_insights \
+  enable_sandboxes enable_sso_oidc enable_smithdb smithdb_ingestion_enabled \
+  smithdb_query_enabled sandbox_runtime_source sandbox_service_url_base_url
+_values_plan_resolved langsmith_domain "$_domain"
+_values_plan_script "$MODULE_DIR" helm/scripts/init-values.sh helm/scripts/_values.sh
+
+_values_write "$VALUES_DIR" "$EXAMPLES_DIR" || exit 1
+echo "Written: $VALUES_DIR/$_VALUES_BASE (the base values, from examples/)"
+echo "Written: $OUT_FILE"
+if [[ -f "$VALUES_DIR/$_VALUES_LOCAL" ]]; then
+  echo "  with your changes from $_VALUES_LOCAL"
+fi
+if [[ -f "$_frag_dir/sandbox-runtime.yaml" ]]; then
+  SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
+  cp "$_frag_dir/sandbox-runtime.yaml" "$SANDBOX_VALUES_FILE"
   echo "Written: $SANDBOX_VALUES_FILE (sandbox cluster: $SANDBOX_CLUSTER_NAME)"
 fi
 
@@ -1219,4 +920,4 @@ if [[ -z "$HOSTNAME" ]]; then
   echo "  Then set langsmith_domain in terraform.tfvars and re-run this script."
 fi
 echo ""
-echo "Next step: ./helm/scripts/deploy.sh"
+echo "Next step: make deploy"

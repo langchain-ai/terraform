@@ -1,77 +1,279 @@
 # GCP base Helm values for LangSmith.
 #
-# This is the annotated reference for helm/values/values.yaml.
-# init-values.sh uses values.yaml directly — this file documents the
-# GCP-specific choices made in that base file.
+# make init-values copies this file to ../langsmith-values.yaml on every run, and
+# make deploy applies that copy first, then ../langsmith-values-overrides.yaml.
+# Configures GCP-native integrations: Envoy Gateway (HTTPRoute), GCS blob
+# storage, and the default resources and autoscaling of each service.
 #
-# Manual copy: cp examples/langsmith-values.yaml ../values.yaml
+# Everything that varies per environment is in langsmith-values-overrides.yaml,
+# which init-values.sh writes: hostname, admin email, bucket name, Workload
+# Identity annotations, each enabled feature, and the sizing profile. Put your
+# own changes in ../langsmith-values-local.yaml, not in the copy.
 #
-# Applied on every deploy alongside values-overrides.yaml.
-# Configures GCP-native integrations: Envoy Gateway (HTTPRoute) and
-# GCS blob storage via the S3-compatible HMAC API.
-#
-# Do NOT put secrets or env-specific values here.
-#   Hostname, admin email, bucket name, WI annotation → values-overrides.yaml
-#   Feature addon config (agentBuilder, insights)     → addon overlay files
-#   Resource sizing                                   → langsmith-values-sizing-*.yaml
+# Do NOT put secrets here. deploy.sh writes them into the langsmith-config Secret
+# from Secret Manager (setup-env.sh), and the chart reads them from it.
 
-# ── Ingress / Gateway ─────────────────────────────────────────────────────────
-# GCP uses Envoy Gateway (Gateway API) instead of a K8s Ingress.
-# The Gateway resource is managed by Terraform; the HTTPRoute is created by Helm.
-# gateway.name is filled by init-values.sh from `terraform output gateway_name`.
 ingress:
-  enabled: false
+  enabled: false  # GCP uses Envoy Gateway (Gateway API), not a K8s Ingress
 
+# The Gateway resource is managed by Terraform; the HTTPRoute is created by Helm.
 gateway:
   enabled: true
-  name: ""        # set by init-values.sh
+  name: ""        # Filled by init-values.sh from terraform output
   namespace: "envoy-gateway-system"
 
-# ── Config ────────────────────────────────────────────────────────────────────
 config:
   basePath: ""
   authType: "mixed"  # "mixed" = API keys + basic auth; "api_key" = API keys only
-
+  # The license key, API key salt, JWT secret, admin password, OIDC client, and
+  # the feature encryption keys.
+  existingSecretName: "langsmith-config"
   basicAuth:
     enabled: true
-    # initialOrgAdminEmail and initialOrgAdminPassword go in values-overrides.yaml
-
-  # GCS blob storage via S3-compatible HMAC API.
-  # engine: "S3" is correct — GCS exposes an S3-compatible endpoint at storage.googleapis.com.
-  # bucketName, accessKey, accessKeySecret are set in values-overrides.yaml by init-values.sh.
   blobStorage:
     enabled: true
-    engine: "S3"
+    engine: "GCS"       # Prefer native GCS mode (supports Workload Identity without HMAC keys)
     apiURL: "https://storage.googleapis.com"
     s3UsePathStyle: false
+    # bucketName → langsmith-values-overrides.yaml (init-values.sh)
 
-# ── Postgres ──────────────────────────────────────────────────────────────────
-# Secret "langsmith-postgres" is created by the k8s-bootstrap Terraform module.
-# It contains a "connection_url" key with the full PostgreSQL connection string.
-# When postgres_source = "in-cluster" this block is overridden by the chart defaults.
-postgres:
-  external:
-    enabled: true
-    existingSecretName: "langsmith-postgres"
-    connectionUrlSecretKey: "connection_url"
+aceBackend:
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 200m
+        memory: 1000Mi
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1987
 
-# ── Redis ─────────────────────────────────────────────────────────────────────
-# Secret "langsmith-redis" is created by the k8s-bootstrap Terraform module.
-redis:
-  external:
-    enabled: true
-    existingSecretName: "langsmith-redis"
-    connectionUrlSecretKey: "connection_url"
+backend:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1984
 
-# ── ClickHouse ────────────────────────────────────────────────────────────────
-# Defaults to in-cluster. When clickhouse_source = "langsmith-managed" or "external",
-# k8s-bootstrap creates the "langsmith-clickhouse" secret and the insights overlay
-# (langsmith-values-insights.yaml) sets external.enabled = true + existingSecretName.
 clickhouse:
   external:
     enabled: false
   statefulSet:
+    resources:
+      limits:
+        cpu: 4000m
+        memory: 12Gi
+      requests:
+        cpu: 2000m
+        memory: 8Gi
     persistence:
       enabled: true
       size: 500Gi
       storageClassName: "premium-rwo"  # GKE high-performance persistent disk
+
+frontend:
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    httpPort: 80
+    httpsPort: 443
+
+# Off unless an addon needs it: the agent-deploys overlay turns it on, and
+# deploy.sh adds --set hostBackend.enabled=true when enable_fleet is true.
+hostBackend:
+  enabled: false
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 200m
+        memory: 1000Mi
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1985
+
+# Chart 0.16 defaults insights.enabled and polly.enabled to true with empty
+# encryptionKeys, and validate.yaml fails the render on that combination. Both are
+# opt-in here via the langsmith-values-insights.yaml / -polly.yaml overlays, which
+# supply the key along with the enable flag, so hold them off in the base.
+insights:
+  enabled: false
+
+polly:
+  enabled: false
+
+listener:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+
+platformBackend:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1986
+
+operator:
+  enabled: true
+  templates:
+    deployment: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${name}
+        namespace: ${namespace}
+      spec:
+        replicas: ${replicas}
+        revisionHistoryLimit: 10
+        selector:
+          matchLabels:
+            app: ${name}
+        template:
+          metadata:
+            labels:
+              app: ${name}
+          spec:
+            enableServiceLinks: false
+            serviceAccountName: langsmith-ksa
+            containers:
+            - name: api-server
+              image: ${image}
+              ports:
+              - name: api-server
+                containerPort: 8000
+                protocol: TCP
+              livenessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              readinessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+
+playground:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 8Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1988
+
+postgres:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-postgres-credentials"  # created by k8s-bootstrap
+    connectionUrlSecretKey: "connection_url"
+
+queue:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-credentials"  # created by k8s-bootstrap
+    connectionUrlSecretKey: "connection_url"

@@ -1,0 +1,27 @@
+# Your own changes to the LangSmith values. To use them:
+#
+#   cp helm/values/langsmith-values-local.yaml.example helm/values/langsmith-values-local.yaml
+#   make init-values   # merges this file last into langsmith-values-overrides.yaml
+#   make deploy
+#
+# No script writes langsmith-values-local.yaml, and make init-values keeps it. A key
+# here wins over the base values, the generated values, the sizing profile, and
+# each enabled feature. It cannot turn off host-backend while Fleet is on, which
+# make init-values sets after every file. Turn features on or off, and pick
+# sizing_profile, in terraform.tfvars instead: Terraform creates the databases,
+# service accounts, and Secrets that each feature needs. make deploy stops when
+# this file changed after make init-values, so run make init-values after each edit.
+#
+# Keep secrets out of this file. They belong in Secret Manager: setup-env.sh
+# exports them, and make deploy writes them into the langsmith-config Secret.
+#
+# Examples. Remove the leading "# " to use one.
+#
+# More frontend replicas:
+# frontend:
+#   deployment:
+#     replicas: 3
+#
+# More detailed logs:
+# config:
+#   logLevel: debug

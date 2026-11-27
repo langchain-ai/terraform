@@ -455,7 +455,7 @@ output "smithdb_cache_storage" {
   value       = var.enable_smithdb ? local.smithdb_cache_storage : null
 }
 
-# helm/scripts/init-values.sh writes this to langsmith-values-smithdb-sizing.yaml.
+# helm/scripts/init-values.sh merges this into langsmith-values-overrides.yaml.
 output "smithdb_helm_values" {
   description = "SmithDB sizing and placement Helm values as YAML, or null when SmithDB is disabled"
   value       = local.smithdb_helm_values
