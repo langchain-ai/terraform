@@ -93,7 +93,7 @@ letsencrypt_email      = "you@example.com"
 - With `install_cert_manager = false`, the cluster's own cert-manager must run with Gateway API support enabled; `make deploy` warns about this
 - `deploy.sh` creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` **before** helm install (required for chart validation)
 - `deploy.sh` also applies the `langsmith-fleet-streams` HTTPRoute after the chart: Envoy Gateway applies an effective 15 s response timeout to the chart's catch-all HTTPRoute, which resets long-running requests mid-response (`response_flags=UT`, `net::ERR_HTTP2_PROTOCOL_ERROR` in the browser, a client disconnect in the backend log). The second route carries only the long-running path prefixes with `timeouts.request: 0s`, so every other path keeps the default: the playground and playground experiments (`/api/v1/playground`), live experiment results (`/api/v1/platform/datasets`, and `/api/v1/platform/public` for shared links), the prompt canvas (`/api/v1/prompts/canvas`, `/api/v1/platform/prompt-canvas`), Fleet run streams (`/api/v1/fleet/threads`, `/api/v1/fleet/lg`) and the Deployments proxy (`/api-host/v2`). It follows the release's `config.hostname`, `config.basePath`, `gateway.sectionName` and `frontend.service.httpPort`. An install that added an HTTPRoute by hand for these paths can delete it after the next `make deploy`. Check with `kubectl get httproute -n <namespace> -o custom-columns='NAME:.metadata.name,TIMEOUT:.spec.rules[0].timeouts.request'`: `0s` on `langsmith-fleet-streams`, `<none>` on the chart's route
-- With `enable_deployments` on, `langsmith-values-agent-deploys.yaml` sets `HTTPROUTE_REQUEST_TIMEOUT: "0s"` in `operator.deployment.extraEnv`: the operator creates one HTTPRoute per agent deployment at runtime and, with the variable set, writes `timeouts.request` on each, so `/lgp/<deployment>/runs/stream` is not cut at 15 s. Check with `kubectl get httproute -n langsmith -o custom-columns='NAME:.metadata.name,TIMEOUT:.spec.rules[0].timeouts.request'`: agent routes and `langsmith-fleet-streams` show `0s`, the chart's route shows `<none>`
+- With `enable_deployments` on, the agent-deploys example (`helm/values/examples/langsmith-values-agent-deploys.yaml`) sets `HTTPROUTE_REQUEST_TIMEOUT: "0s"` in `operator.deployment.extraEnv`: the operator creates one HTTPRoute per agent deployment at runtime and, with the variable set, writes `timeouts.request` on each, so `/lgp/<deployment>/runs/stream` is not cut at 15 s. Check with `kubectl get httproute -n langsmith -o custom-columns='NAME:.metadata.name,TIMEOUT:.spec.rules[0].timeouts.request'`: agent routes and `langsmith-fleet-streams` show `0s`, the chart's route shows `<none>`
 - The EnvoyProxy lists the `service.beta.kubernetes.io/azure-dns-label-name` annotation, so Envoy Gateway creates the proxy LB service with the DNS label already on it
 - For `letsencrypt` and `dns01`, the Gateway has the `cert-manager.io/cluster-issuer: letsencrypt-prod` annotation, and cert-manager issues `langsmith-tls` for its HTTPS listener
 - cert-manager uses the `gatewayHTTPRoute` solver for `letsencrypt`
@@ -152,7 +152,7 @@ Kubernetes Ingress with `ingressClassName: istio` targets `istio: ingressgateway
 
 **For LangGraph Platform (`enable_deployments = true`):**
 `init-values.sh` automatically sets `istioGateway.enabled: true` with `name: langsmith-gateway`
-in `values-overrides.yaml`. Required for chart validation — no manual steps needed.
+in `langsmith-values-overrides.yaml`. Required for chart validation — no manual steps needed.
 
 **URL:** `http://langsmith-prod.eastus.cloudapp.azure.com` (or `https://` with dns01)
 
@@ -423,7 +423,7 @@ make init-values && make deploy             # re-deploy LangSmith
 
 ## How init-values.sh Configures Routing
 
-`init-values.sh` generates the correct `values-overrides.yaml` block automatically:
+`init-values.sh` writes the correct block into `langsmith-values-overrides.yaml` automatically:
 
 | Controller | `ingress.enabled` | `istioGateway.enabled` | `gateway.enabled` | Routing mechanism |
 |---|---|---|---|---|

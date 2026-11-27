@@ -273,7 +273,7 @@ These fail on a correct Pass 1 and are not part of this cycle. Check them after
 `make init-values && make deploy`:
 
 - The `letsencrypt-prod` ClusterIssuer, `READY=True`
-- `values-overrides.yaml` and the Helm release, sections 7 to 9 of `make status`
+- `langsmith-values-overrides.yaml` and the Helm release, sections 7 to 9 of `make status`
 - `All checks passed — deployment looks healthy` as the final line of `make status`
 
 ---

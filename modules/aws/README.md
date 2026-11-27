@@ -147,26 +147,32 @@ aws/
     │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
     │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
     │   ├── sso.sh                  ← Turn on SSO login after a working password install (make sso)
-    │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
+    │   ├── init-values.sh          ← Write the two values files from Terraform outputs
+    │   ├── _values.sh              ← Merge, seal, and check the values files (same on every cloud)
+    │   ├── test-values.sh          ← Render each feature against the chart (make test-values)
     │   ├── preflight-check.sh      ← Pre-deploy validation
     │   └── uninstall.sh            ← Helm uninstall + cleanup
     └── values/
-        ├── examples/                                    ← Reference templates (init-values.sh copies from here)
+        ├── examples/                                    ← Module sources (init-values.sh merges from here)
         │   ├── langsmith-values.yaml                    ← Base AWS values
         │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
         │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
         │   ├── langsmith-values-insights.yaml           ← Insights
         │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
         │   ├── langsmith-values-engine.yaml             ← Engine (see ENGINE.md)
+        │   ├── langsmith-values-sso.yaml                ← SSO login
         │   ├── langsmith-values-smithdb.yaml            ← SmithDB base
-        │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
+        │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) reference
         │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
         │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
-        ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
-        ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
-        ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
-        └── langsmith-values-*.yaml                      ← Active addon files (based on choices)
+        ├── langsmith-values.yaml                        ← Base values (written by make init-values)
+        ├── langsmith-values-overrides.yaml              ← Everything else, one file (written by make init-values)
+        ├── langsmith-values-local.yaml                  ← Your own changes (optional, you write it)
+        ├── langsmith-values-local.yaml.example          ← Template for the file above
+        └── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
 ```
+
+See [Helm values](#helm-values) for who writes each file and how to change a value.
 
 ---
 
@@ -649,9 +655,93 @@ make init-values       # reads admin email and addons from Terraform
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
-`init-values.sh` reads the `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
+`init-values.sh` reads the `enable_*` flags from `terraform.tfvars` and the Terraform outputs, then writes `helm/values/langsmith-values.yaml` and `helm/values/langsmith-values-overrides.yaml`. Each run writes both files again; your own changes go in `helm/values/langsmith-values-local.yaml` (see [Helm values](#helm-values)).
 
 Every install runs one sizing, the scale guide's medium reads, medium writes pattern: the base values run the frontend at 2 replicas, the backend on an HPA from 8 to 16, and KEDA for `queue`, `ingest-queue`, and the SmithDB compaction worker. Requests stay at the chart's defaults. Cluster Autoscaler adds LangSmith nodes up to the node group's `max_size`, and on `m6a.2xlarge` nodes the sizing needs up to 8 at maximum replicas. See [SIZING.md](helm/values/examples/SIZING.md) to size beyond it, or to move from a 0.17 `sizing_profile`.
+
+---
+
+## Helm values
+
+`make deploy` applies two values files, and nothing else except the sandbox-host image tag. AWS, Azure, and GCP use the same two file names.
+
+| File in `helm/values/` | Written by | Holds |
+| --- | --- | --- |
+| `langsmith-values.yaml` | `make init-values`, on every run | A copy of `examples/langsmith-values.yaml`: the base AWS values and the one sizing |
+| `langsmith-values-overrides.yaml` | `make init-values`, on every run | Everything else, merged into one file: the Terraform outputs, each enabled feature, SSO, SmithDB, and your local file |
+| `langsmith-values-local.yaml` | You. No script writes it | Your own changes. Optional. Start from `langsmith-values-local.yaml.example` |
+
+The values files hold no secrets. ESO syncs the secrets from SSM into the `langsmith-config` Secret, and the chart reads them from it.
+
+### Change a value
+
+1) Put the change in `helm/values/langsmith-values-local.yaml`. `make init-values` merges this file last, so a key in it wins over every other source.
+2) Run `make init-values`, then `make deploy`.
+
+Do not edit the two generated files. Line 1 of each holds a sha256 of the rest of the file, so `make init-values` and `make deploy` find a hand edit. `make init-values` then prints the edit and writes nothing.
+
+Some values come from `terraform.tfvars`, and `make init-values` sets them after every file, so the local file cannot change them: `polly.enabled`, `insights.enabled`, `hostBackend.enabled` while Fleet is on, the storage of Fleet, Chat, and Insights, and the SmithDB tier and caches. Change the `enable_*` flags and the SmithDB inputs in `terraform.tfvars` instead. The header of `langsmith-values-overrides.yaml` lists these settings, the sources in merge order, and the inputs of the file.
+
+### What `make deploy` checks
+
+Before it touches the cluster, `make deploy` stops when:
+
+- a values file is missing, or was edited after `make init-values` wrote it;
+- `terraform.tfvars`, an example file, a module script, or the local file changed after `make init-values` wrote the overrides file;
+- the gateway mode or SmithDB, as Terraform applied them, differ from the file;
+- a values file from the 0.17 layout is still in `helm/values` (see [Move from the 0.17 values layout](#move-from-the-017-values-layout)).
+
+Each message names the fix. In most cases it is `make init-values`.
+
+### Use the rendered files in your own CI/CD
+
+The two files are complete Helm values. A pipeline can apply them without `deploy.sh`:
+
+1) Run `make init-values` in the pipeline, after `terraform apply`, so the files match the Terraform state. It needs `helm`, `terraform`, and read access to the state.
+2) Keep the two files as build artifacts. Do not commit them to this repository: `.gitignore` excludes them.
+3) Apply them with the chart version that `deploy.sh` pins:
+
+```bash
+helm upgrade --install langsmith langchain/langsmith \
+  --namespace langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-overrides.yaml \
+  --set-string images.sandboxHostImage.tag=<chart-appVersion>   # only with enable_sandboxes = true
+```
+
+`deploy.sh` also does work that the values do not hold: it applies the ESO `ExternalSecret` (`make apply-eso`), checks the SSO and storage cutovers, and refreshes the hostname from the ALB. A pipeline that skips `deploy.sh` must do those steps, or run `make apply-eso` first. With Helm 4, add `--server-side=false` (see [`make deploy`](#make-deploy), Step 8).
+
+### Move from the 0.17 values layout
+
+The 0.17 layout kept one file per feature in `helm/values`. From 0.18, `make init-values` and `make deploy` stop while one of those files is still there, because a deploy no longer applies them. The message lists each file and marks it:
+
+| Mark | Meaning |
+| --- | --- |
+| `same as examples/<file>` | The file holds no change of yours. |
+| `differs from examples/<file>` | The file can hold your changes. |
+| `no example of this name` | The file can hold your changes, for example a 0.17 sizing profile. |
+| `written by make init-values on 0.17` | The 0.17 overrides file. Check it for changes you made by hand. |
+
+1) For each file marked `differs`, `no example`, or `written by make init-values on 0.17`, compare it with its example, for example `diff -u helm/values/examples/langsmith-values-fleet.yaml helm/values/langsmith-values-fleet.yaml`.
+2) Copy each change you made into `helm/values/langsmith-values-local.yaml`. Do not copy values that `make init-values` writes from Terraform, such as the hostname, the IRSA roles, and the bucket names. For a 0.17 `langsmith-values-sizing-*.yaml`, see [SIZING.md](helm/values/examples/SIZING.md), "Moving from a 0.17 sizing profile".
+3) Move the old files out of `helm/values`. The message prints the command, for example:
+
+```bash
+mkdir -p ~/langsmith-values-0.17
+(cd helm/values && mv langsmith-values-fleet.yaml langsmith-values-sizing-production.yaml ~/langsmith-values-0.17/)
+```
+
+4) Run `make init-values`. To confirm the result, render the chart with the old files and with the new ones, and compare:
+
+```bash
+helm template langsmith langchain/langsmith --version <chart-version> \
+  -f ~/langsmith-values-0.17/<base> -f ~/langsmith-values-0.17/<overrides> -f ~/langsmith-values-0.17/<feature> > /tmp/old.yaml
+helm template langsmith langchain/langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml -f helm/values/langsmith-values-overrides.yaml > /tmp/new.yaml
+diff /tmp/old.yaml /tmp/new.yaml
+```
+
+5) Run `make deploy`.
 
 ---
 
@@ -693,10 +783,8 @@ Then apply and deploy:
 source infra/scripts/setup-env.sh
 make apply
 
-# Use the Envoy Gateway Helm values overlay
+# init-values.sh writes the Gateway values (ingress off, gateway on)
 make init-values
-# Copy the envoy gateway overlay:
-cp helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml helm/values/
 make deploy
 ```
 
@@ -981,16 +1069,18 @@ make ssm                                                # interactive menu
 Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and Pass 2:
 
 1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `enable_*` flags, `langsmith_domain`)
-2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`)
-3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
-4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
-   - `enable_deployments = true` → copies `langsmith-values-agent-deploys.yaml`
-   - `enable_fleet = true` → copies `langsmith-values-fleet.yaml`
-   - `enable_insights = true` → copies `langsmith-values-insights.yaml`
-   - `enable_polly = true` → copies `langsmith-values-polly.yaml`
-   - `enable_engine = true` → copies `langsmith-values-engine.yaml`, and writes the Engine IRSA role annotation into the overrides file
+2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`, and the SmithDB and sandbox outputs)
+3. Copies `helm/values/examples/langsmith-values.yaml` to `helm/values/langsmith-values.yaml`
+4. Merges into `helm/values/langsmith-values-overrides.yaml`, in this order: the values from the Terraform outputs (hostname, IRSA role ARNs, S3 bucket, ACM cert ARN), then the example of each enabled feature, then SSO and SmithDB, then `langsmith-values-local.yaml`:
+   - `enable_deployments = true` → `langsmith-values-agent-deploys.yaml`
+   - `enable_engine = true` → `langsmith-values-engine.yaml`, and the Engine IRSA role annotation
+   - `enable_insights = true` → `langsmith-values-insights.yaml`
+   - `enable_polly = true` → `langsmith-values-polly.yaml`
+   - `enable_fleet = true` → `langsmith-values-fleet.yaml`
+   - `enable_sso_oidc = true` → `langsmith-values-sso.yaml`
+   - `enable_smithdb = true` → `langsmith-values-smithdb.yaml`, and the SmithDB bucket, role, and cache from Terraform
 
-Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
+Re-running is safe: each run writes both files again from the same inputs, and keeps your admin email. When a generated file was edited by hand, the run stops, prints the edit, and writes nothing. See [Helm values](#helm-values).
 
 ---
 
@@ -1008,21 +1098,12 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet, LangSmith Chat and Insights keep their data on the shared RDS and ElastiCache.
 
-**Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
+**Step 5 — Check the values files.** Applies exactly two files:
 ```
--f langsmith-values.yaml                      (base — always)
--f langsmith-values-overrides.yaml            (your env — always)
--f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
--f langsmith-values-engine.yaml               (enable_engine = true)
--f langsmith-values-insights.yaml             (enable_insights = true)
--f langsmith-values-polly.yaml                (enable_polly = true)
--f langsmith-values-fleet.yaml                (enable_fleet = true)
--f langsmith-values-smithdb.yaml              (enable_smithdb = true)
--f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
+-f langsmith-values.yaml             (the base values)
+-f langsmith-values-overrides.yaml   (everything else, merged by make init-values)
 ```
-SmithDB loads last so its object-store, identity, and staged integration settings
-take final precedence. `make deploy` stops while a 0.17 `langsmith-values-sizing-*.yaml`
-is left in `helm/values`, because it no longer loads that file.
+Before that, it stops when a file is missing or was edited by hand, when an input of the overrides file changed after `make init-values`, or while a 0.17 values file is left in `helm/values`. See [What `make deploy` checks](#what-make-deploy-checks).
 
 **Step 6 — Pre-deploy hostname check.** If the ingress already exists and `langsmith_domain` is not set, compares `config.hostname` in the overrides file against the live ALB hostname. Auto-updates it if stale (prevents agent deployments getting stuck in `DEPLOYING` state with the wrong endpoint URL).
 
@@ -1089,9 +1170,9 @@ Runs `helm/scripts/sso.sh`. It stops with a clear message at the first check tha
 6. Checks the issuer URL serves an OIDC discovery document.
 7. Runs `apply-eso.sh` and checks `langsmith-config` has the three OIDC keys.
 8. Sets `enable_sso_oidc = true` in `terraform.tfvars`, changing only that line.
-9. Copies `helm/values/examples/langsmith-values-sso.yaml` to `helm/values/` if it is not there yet, then asks before running `make deploy`.
+9. Runs `make init-values`, which merges `langsmith-values-sso.yaml` into `langsmith-values-overrides.yaml` and keeps `langsmith-values-local.yaml`, then asks before running `make deploy`.
 
-It never runs `init-values.sh`, so `langsmith-values-overrides.yaml` is not rewritten. `deploy.sh` layers `langsmith-values-sso.yaml` whenever `enable_sso_oidc = true`, and stops if that file is missing, or if SSO is already on in the cluster but `enable_sso_oidc` is not true, rather than deploying with password login.
+`deploy.sh` stops if SSO is already on in the cluster but `enable_sso_oidc` is not true, rather than deploying with password login.
 
 ---
 
@@ -1116,7 +1197,7 @@ make status-quick    # skip SSM + K8s queries (faster, for quick credential chec
 | 4 | **SSM Parameters** | All 6 required params exist; shows which optional addon keys are present |
 | 5 | **Terraform Infra** | `terraform output` returns outputs — confirms `apply` has run; prints cluster name, ALB, bucket, IRSA role |
 | 6 | **Kubeconfig** | `kubectl` context matches the cluster name; can reach the API server |
-| 7 | **Helm Values** | `langsmith-values-overrides.yaml` exists; hostname is populated; addon files present |
+| 7 | **Helm Values** | both values files exist and are not edited by hand; no input changed since `make init-values`; no 0.17 values file is left; hostname is populated |
 | 8 | **Kubernetes Resources** | Namespace exists; ESO `ClusterSecretStore` and `ExternalSecret` are deployed and synced; `langsmith-config` secret exists |
 | 9 | **Helm Release** | Release status (`deployed`, `failed`, `pending-upgrade`); pod count |
 

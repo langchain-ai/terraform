@@ -626,6 +626,21 @@ If the bastion is not needed — for example when the EKS endpoint is public wit
 
 ---
 
+### Issue #23 — make init-values or make deploy stops on the values files
+
+**Symptom:** one of these messages, before the deploy touches the cluster:
+
+| Message | Cause | Fix |
+| --- | --- | --- |
+| `... holds values files from the 0.17 layout` | A file from the 0.17 layout is in `helm/values`. A deploy no longer applies it. | Move your changes into `langsmith-values-local.yaml`, then move the files out. See [Move from the 0.17 values layout](README.md#move-from-the-017-values-layout). |
+| `... was edited after make init-values wrote it` | A generated file was edited by hand. `make init-values` prints the edit (the lines marked `+`) and writes nothing. | Move the change into `helm/values/langsmith-values-local.yaml`, delete the edited file, then run `make init-values`. |
+| `langsmith-values-overrides.yaml is out of date` | `terraform.tfvars`, a module file, the local file, or an applied Terraform setting changed after `make init-values`. | Run `make init-values`, then `make deploy`. |
+| `helm could not merge the values files` | A values source is not valid YAML, often `langsmith-values-local.yaml`. Nothing was written. | Fix the file that Helm names, then run `make init-values`. |
+
+The header of `helm/values/langsmith-values-overrides.yaml` lists the sources of the file in merge order, and the inputs that `make deploy` compares.
+
+---
+
 ## Diagnostic Commands
 
 > **Quick start:** Before running individual commands, try the automated diagnostics:
