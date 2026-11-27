@@ -180,7 +180,7 @@ expect_cache_class() {
 # The CPU and memory of the first requests block that has a CPU: the container's,
 # not the cache volume claim's, which requests only storage.
 expect_requests() {
-  local out="$1" name="$2" cpu="$3" memory="$4" got
+  local out="$1" name="$2" cpu="$3" memory="$4" source="${5:-small tier}" got
   got=$(manifest "$out" Deployment "$name" | awk '
     /^ *$/ { next }
     /^ *requests:$/ { r = 1; ind = match($0, /[^ ]/); c = ""; m = ""; next }
@@ -189,7 +189,7 @@ expect_requests() {
     r && $1 == "memory:" { m = $2; gsub(/"/, "", m) }
     END { if (c != "" && (found || r)) print c ":" m }
   ')
-  [[ "$got" == "$cpu:$memory" ]] || { echo "$name: requests ${got:-none}, want $cpu:$memory (small tier)"; return 1; }
+  [[ "$got" == "$cpu:$memory" ]] || { echo "$name: requests ${got:-none}, want $cpu:$memory ($source)"; return 1; }
 }
 
 # A local-ssd cache: an emptyDir of the tier's cache size, no volume claim, and an
@@ -334,12 +334,27 @@ else
   echo "PASS: no sizing profile sets SmithDB keys, and the SmithDB overlay sets the small tier"
 fi
 
+# The engineInsightsAgent overrides come from the heredoc in init-values.sh, as the
+# SmithDB ones do, so the requests and limits it writes are rendered below.
+(
+  export _engine_agent_role_arn=arn:aws:iam::123456789012:role/values-test-engine
+  _engine_insights_agent_block=""
+  sed -n '/^  _engine_insights_agent_block=\$(cat << ENGINE_INSIGHTS_AGENT_YAML$/,/^ENGINE_INSIGHTS_AGENT_YAML$/p' \
+    "$SCRIPT_DIR/init-values.sh" > "$TEST_TMP/generate-engine-insights-agent.sh"
+  [[ -s "$TEST_TMP/generate-engine-insights-agent.sh" ]] || { echo "ERROR: no engineInsightsAgent block found in init-values.sh" >&2; exit 2; }
+  echo ')' >> "$TEST_TMP/generate-engine-insights-agent.sh"
+  source "$TEST_TMP/generate-engine-insights-agent.sh"
+  printf '%s\n' "$_engine_insights_agent_block" > "$TEST_TMP/engine-insights-agent.yaml"
+)
+
 # From 0.18 Fleet, Chat and Insights run only on the shared RDS and ElastiCache.
 # Render the three overlays with deploy.sh's storage values: the chart must
 # accept them, create none of its in-cluster add-on StatefulSets, and read each
-# add-on's two Secrets from Terraform.
+# add-on's two Secrets from Terraform. Engine is off, so the Insights requests
+# can come only from the overrides that init-values.sh writes.
 source "$SCRIPT_DIR/_addon-storage.sh"
 VALUES_ARGS=(-f "$EXAMPLES_DIR/langsmith-values.yaml" -f "$TEST_TMP/overrides.yaml"
+  -f "$TEST_TMP/engine-insights-agent.yaml"
   -f "$EXAMPLES_DIR/langsmith-values-insights.yaml" -f "$EXAMPLES_DIR/langsmith-values-polly.yaml"
   -f "$EXAMPLES_DIR/langsmith-values-fleet.yaml"
   --set polly.enabled=true --set insights.enabled=true --set hostBackend.enabled=true
@@ -348,8 +363,10 @@ VALUES_ARGS=(-f "$EXAMPLES_DIR/langsmith-values.yaml" -f "$TEST_TMP/overrides.ya
 _addon_storage_values true true true
 out="$TEST_TMP/addon-storage.yaml"
 problems=()
+sizing_problems=()
 if ! helm template langsmith "$chart" --namespace langsmith "${VALUES_ARGS[@]}" > "$out" 2> "$out.err"; then
   problems+=("the chart rejected the values: $(head -1 "$out.err")")
+  sizing_problems+=("the chart rejected the values")
 else
   for addon in fleet polly insights; do
     for store in postgres redis; do
@@ -359,6 +376,11 @@ else
         || problems+=("nothing reads the Secret langsmith-$addon-$store")
     done
   done
+  for spec in api-server:2:4Gi queue:1:2Gi; do
+    IFS=: read -r component cpu memory <<< "$spec"
+    msg=$(expect_requests "$out" "langsmith-standalone-insights-$component" "$cpu" "$memory" "init-values.sh overrides") \
+      || sizing_problems+=("$msg")
+  done
 fi
 if (( ${#problems[@]} )); then
   echo "FAIL: Fleet, Chat and Insights use the shared RDS and ElastiCache"
@@ -366,6 +388,13 @@ if (( ${#problems[@]} )); then
   failures=$((failures + 1))
 else
   echo "PASS: Fleet, Chat and Insights use the shared RDS and ElastiCache"
+fi
+if (( ${#sizing_problems[@]} )); then
+  echo "FAIL: Insights without Engine gets the requests that init-values.sh writes"
+  printf '      %s\n' "${sizing_problems[@]}"
+  failures=$((failures + 1))
+else
+  echo "PASS: Insights without Engine gets the requests that init-values.sh writes"
 fi
 
 if (( failures )); then

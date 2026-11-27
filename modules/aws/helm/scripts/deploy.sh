@@ -500,7 +500,7 @@ echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 # The file must exist AND the corresponding flag must be true.
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
 # Engine loads before the Insights files: Engine and Insights share the
-# engineInsightsAgent deployment, so the Insights sizing wins.
+# engineInsightsAgent deployment, so a setting in the Insights file wins.
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
   "engine:engine:$_enable_engine"
@@ -528,6 +528,12 @@ for entry in "${_addon_gate[@]}"; do
       echo "  ✗ langsmith-values-${addon}.yaml (not enabled — skipped)"
     fi
   fi
+done
+# 0.18 merged these two overlays into the Chat and Insights files and stopped
+# loading them, so a change made only in one of them no longer applies.
+for _old_overlay in standalone-polly standalone-insights; do
+  [[ -f "$VALUES_DIR/langsmith-values-${_old_overlay}.yaml" ]] || continue
+  echo "  ○ langsmith-values-${_old_overlay}.yaml (not loaded from 0.18 — move any change you made in it to langsmith-values-${_old_overlay#standalone-}.yaml)"
 done
 
 # SSO is one-way (LangSmith does not support going back to basic auth), so the deploy stops rather than redeploy a live SSO install with basic auth.
