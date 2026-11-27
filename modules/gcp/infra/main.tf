@@ -253,7 +253,7 @@ resource "terraform_data" "validate_inputs" {
 
     precondition {
       condition     = !local.external_sandbox_runtime || can(regex(local.external_runtime_chart_version_pattern, var.langsmith_helm_chart_version))
-      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
+      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.5\". The langsmith-sandbox chart is paired with that exact chart by appVersion, so the default ~0.18.0 range is not enough."
     }
 
     precondition {

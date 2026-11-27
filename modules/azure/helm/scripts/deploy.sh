@@ -25,7 +25,7 @@
 #
 # Usage (from azure/):
 #   ./helm/scripts/deploy.sh
-#   CHART_VERSION=0.17.0 ./helm/scripts/deploy.sh
+#   CHART_VERSION=0.18.5 ./helm/scripts/deploy.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -604,24 +604,23 @@ fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-CHART_VERSION="${CHART_VERSION:-~0.17.0}"
-_required_chart_line="0.17"
+CHART_VERSION="${CHART_VERSION:-~0.18.0}"
+_required_chart_line="0.18"
 
-# These values target chart 0.17, where the SmithDB Azure values first appear.
-# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
-# Refuse any other line rather than deploy a half-configured release.
+# These values target chart 0.18. Refuse any other line rather than deploy a
+# half-configured release.
 _chart_line="$(_chart_line_of "$CHART_VERSION")"
-if [[ "$_chart_line" != "$_required_chart_line" && "$_chart_line" != "0.18" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} or 0.18 line." >&2
-  echo "       These values require chart ${_required_chart_line} or 0.18 (SmithDB values, engineInsightsAgent)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} or 0.18 patch explicitly:" >&2
-  echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
+if [[ "$_chart_line" != "$_required_chart_line" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
+  echo "       These values require chart ${_required_chart_line} (SmithDB values, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
+  echo "         CHART_VERSION=0.18.5 make deploy" >&2
   exit 1
 fi
 
 # sandboxes.external ships with chart 0.18, and the runtime chart is picked below by
 # this chart's appVersion, so the langsmith chart must be one exact version on
-# 0.18 or later: not the default 0.17 line and not a range. Terraform checks
+# 0.18 or later, and not a range (the default ~0.18.0 is one). Terraform checks
 # langsmith_helm_chart_version the same way; this also covers CHART_VERSION.
 # Keep the pattern in step with external_runtime_chart_version_pattern in
 # infra/main.tf.

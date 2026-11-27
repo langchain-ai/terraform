@@ -109,11 +109,11 @@ resource "terraform_data" "validate_inputs" {
 
     # sandboxes.external ships with chart 0.18, and deploy.sh picks the runtime
     # chart by this chart's appVersion, so the pin must be one exact version on
-    # 0.18 or later: not empty (the 0.17 line) and not a range. deploy.sh checks
+    # 0.18 or later: not empty (the ~0.18.0 range) and not a range. deploy.sh checks
     # the same rule, since a CHART_VERSION environment variable overrides this.
     precondition {
       condition     = !local.external_sandbox_runtime || can(regex(local.external_runtime_chart_version_pattern, var.langsmith_helm_chart_version))
-      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.0\". The default 0.17 line has no separate-cluster support, and the langsmith-sandbox chart is paired with that exact chart by appVersion."
+      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.5\". The langsmith-sandbox chart is paired with that exact chart by appVersion, so the default ~0.18.0 range is not enough."
     }
 
     # Separate-cluster sandboxes call the LangSmith API through the ALB. With an

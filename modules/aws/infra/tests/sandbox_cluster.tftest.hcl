@@ -354,7 +354,8 @@ run "a_0_17_chart_is_rejected" {
     langsmith_helm_chart_version = "0.17.5"
   }
 
-  expect_failures = [terraform_data.validate_inputs]
+  # The variable's own validation refuses a 0.17 chart before this check runs.
+  expect_failures = [var.langsmith_helm_chart_version]
 }
 
 run "a_chart_range_is_rejected" {
