@@ -21,9 +21,9 @@ source "$SCRIPT_DIR/_common.sh"
 
 AWS_DIR="$INFRA_DIR/.."
 HELM_DIR="$AWS_DIR/helm"
-VALUES_DIR="$HELM_DIR/values"
-# shellcheck source=../../helm/scripts/_sizing.sh
-source "$HELM_DIR/scripts/_sizing.sh"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+# shellcheck source=../../helm/scripts/_values.sh
+source "$HELM_DIR/scripts/_values.sh"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -293,53 +293,55 @@ fi
 # ── Helm overrides ──────────────────────────────────────────────────────────
 header "7. Helm Values"
 
-_overrides="$VALUES_DIR/langsmith-values-overrides.yaml"
-_base_values="$VALUES_DIR/langsmith-values.yaml"
+_overrides="$VALUES_DIR/$_VALUES_OVERRIDES"
 
-if [[ -f "$_base_values" ]]; then
-  pass "langsmith-values.yaml (base)"
-  _sizing_gaps=$(_base_sizing_gaps "$_base_values")
-  if [[ -n "$_sizing_gaps" ]]; then
-    warn "langsmith-values.yaml does not set ${_sizing_gaps//$'\n'/, } — those run the chart's defaults, not the one sizing"
-    action "Copy them from helm/values/examples/langsmith-values.yaml (helm/values/examples/SIZING.md)"
-  fi
-else
-  fail "langsmith-values.yaml (base) — missing"
+# make deploy stops while a file from the 0.17 layout is in helm/values.
+_legacy=$(_values_legacy_files "$VALUES_DIR" "$HELM_DIR/values/examples")
+while IFS= read -r _old_file; do
+  [[ -n "$_old_file" ]] || continue
+  fail "${_old_file} — from the 0.17 layout; make deploy stops while it is in helm/values"
+done <<< "$_legacy"
+if [[ -n "$_legacy" ]]; then
+  action "Move your changes into $_VALUES_LOCAL and the files out of helm/values (README.md, \"Move from the 0.17 values layout\")"
+  set_next "Move the 0.17 values files out of helm/values (make init-values prints the steps)"
 fi
 
-# make deploy stops while a 0.17 sizing file is left in helm/values.
-while IFS= read -r _old_sizing; do
-  [[ -n "$_old_sizing" ]] || continue
-  fail "${_old_sizing} — 0.17 sizing file; make deploy stops while it is in helm/values"
-  action "Move the values you need into langsmith-values.yaml, then delete it (helm/values/examples/SIZING.md)"
-  set_next "Move what you need from helm/values/${_old_sizing} into langsmith-values.yaml, then delete it"
-done <<< "$(_old_sizing_files "$VALUES_DIR")"
+for _name in "$_VALUES_BASE" "$_VALUES_OVERRIDES"; do
+  case "$(_values_seal_state "$VALUES_DIR/$_name")" in
+    intact) pass "$_name (written by make init-values)" ;;
+    edited)
+      fail "$_name — edited by hand after make init-values wrote it"
+      action "Move the change into $_VALUES_LOCAL, delete the file, then run make init-values"
+      set_next "Move your change into $_VALUES_LOCAL, then run make init-values"
+      ;;
+    missing)
+      fail "$_name — not generated"
+      action "make init-values  (or: ./helm/scripts/init-values.sh)"
+      set_next "make init-values"
+      ;;
+    unsealed)
+      grep -qx "$_name" <<< "$_legacy" || info "$_name — copied before 0.18; make init-values replaces it"
+      ;;
+  esac
+done
 
-if [[ -f "$_overrides" ]]; then
-  pass "langsmith-values-overrides.yaml exists"
-  # Check if hostname is populated
-  _hostname=$(grep -E '^\s*hostname:' "$_overrides" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
-  if [[ -n "$_hostname" ]]; then
+if [[ "$(_values_seal_state "$_overrides")" == intact && -z "$_legacy" ]]; then
+  _drift=$(_values_drift "$_overrides" "$AWS_DIR" "$VALUES_DIR")
+  if [[ -n "$_drift" ]]; then
+    warn "$_VALUES_OVERRIDES is out of date: ${_drift//$'\n'/; }"
+    action "make init-values"
+    set_next "make init-values"
+  fi
+  _hostname=$(_values_get "$_overrides" -- config hostname) || _hostname=""
+  if [[ -n "${_hostname#*://}" ]]; then
     info "hostname: ${_hostname}"
   else
     warn "hostname is blank (normal on first deploy — deploy.sh auto-fills it)"
   fi
-else
-  fail "langsmith-values-overrides.yaml — not generated"
-  action "make init-values  (or: ./helm/scripts/init-values.sh)"
-  set_next "make init-values"
 fi
-
-# Report addon files
-for addon in agent-deploys fleet insights polly engine; do
-  f="$VALUES_DIR/langsmith-values-${addon}.yaml"
-  if [[ -f "$f" ]]; then
-    pass "langsmith-values-${addon}.yaml (addon)"
-  else
-    skip "langsmith-values-${addon}.yaml — not enabled"
-  fi
-done
+if [[ -f "$VALUES_DIR/$_VALUES_LOCAL" ]]; then
+  info "$_VALUES_LOCAL (your changes, merged last by make init-values)"
+fi
 
 # ── Kubernetes resources ────────────────────────────────────────────────────
 header "8. Kubernetes Resources"

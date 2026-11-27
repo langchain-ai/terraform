@@ -3,7 +3,7 @@
 # .github/workflows/checks.yaml, and run locally before handing back:
 #   bash scripts/check.sh                   # every root, plus every script
 #   bash scripts/check.sh modules/aws       # the roots under one dir, terraform only
-#   bash scripts/check.sh --scripts         # shellcheck and AWS/GCP secret tests
+#   bash scripts/check.sh --scripts         # shellcheck, the script tests, and the values helper
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
 # state) and tflint with the provider's pinned ruleset. Under each directory
@@ -59,8 +59,35 @@ check_scripts() {
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-smithdb.sh" || return $?
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-upgrade-guard.sh" || return $?
   bash "$REPO_ROOT/modules/aws/helm/scripts/test-addon-storage.sh" || return $?
-  bash "$REPO_ROOT/modules/aws/helm/scripts/test-sizing.sh" || return $?
+  check_values_helper || return $?
   bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
+}
+
+# AWS, Azure and GCP write their two values files with one helper. Each module
+# carries a copy, so that a module works on its own. The copies must stay
+# identical, and the AWS test of the helper then covers all three; a module
+# without its copy fails its own values test. The test merges with helm, so CI
+# treats a missing helm as a failure, as check_values does.
+check_values_helper() {
+  local provider copy rc=0
+  for provider in azure gcp; do
+    copy="$REPO_ROOT/modules/$provider/helm/scripts/_values.sh"
+    [ -f "$copy" ] || continue
+    cmp -s "$REPO_ROOT/modules/aws/helm/scripts/_values.sh" "$copy" || {
+      echo "check: modules/$provider/helm/scripts/_values.sh differs from the AWS copy; keep the three identical" >&2
+      rc=1
+    }
+  done
+  [ "$rc" -eq 0 ] || return "$rc"
+  if ! command -v helm >/dev/null 2>&1; then
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      echo "check: helm is not installed, so the values helper test could not run" >&2
+      return 2
+    fi
+    echo "   (helm not installed, skipping the values helper test)"
+    return 0
+  fi
+  bash "$REPO_ROOT/modules/aws/helm/scripts/test-values-render.sh"
 }
 
 # Print the terraform roots at or beneath one repo-relative directory. Roots are

@@ -1,8 +1,7 @@
 # Engine (chart v0.17+). See ENGINE.md.
 #
-# init-values.sh copies this file to ../langsmith-values-engine.yaml when
-# enable_engine = true in terraform.tfvars, and deploy.sh loads it only while
-# enable_engine = true. Engine finds recurring failures in your traces, diagnoses
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_engine = true in terraform.tfvars. Engine finds recurring failures in your traces, diagnoses
 # them against your code, and proposes fixes. Every Engine run executes in a
 # sandbox.
 #
@@ -42,8 +41,8 @@ engineInsightsAgent:
   namePrefix: "standalone-insights"
 
   # The same requests and limits that init-values.sh writes into
-  # langsmith-values-overrides.yaml. deploy.sh loads this file after the overrides
-  # file, and the Insights file after this one, so a setting there wins over both.
+  # langsmith-values-overrides.yaml. To change them, set engineInsightsAgent in
+  # ../langsmith-values-local.yaml, which init-values.sh merges after this file.
   apiServer:
     deployment:
       resources:

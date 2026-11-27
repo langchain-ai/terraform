@@ -6,8 +6,8 @@
 
 # sso.sh — Turn on SSO (OIDC) login for an installed LangSmith.
 #
-# Checks the prerequisites, stores any missing OIDC settings in SSM, sets enable_sso_oidc = true in terraform.tfvars (that line only), syncs the settings into the cluster, and deploys.
-# It never runs init-values.sh, so the generated overrides file is left as it is.
+# Checks the prerequisites, stores any missing OIDC settings in SSM, sets enable_sso_oidc = true in terraform.tfvars (that line only), syncs the settings into the cluster, writes the values files, and deploys.
+# init-values.sh merges the SSO values into langsmith-values-overrides.yaml. It keeps langsmith-values-local.yaml, where your own changes live.
 # One-way: LangSmith does not support moving a self-hosted install from SSO back to basic auth.
 #
 # Usage (from aws/):
@@ -19,13 +19,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INFRA_DIR="${INFRA_DIR:-$SCRIPT_DIR/../../infra}"
 source "$INFRA_DIR/scripts/_common.sh"
+# shellcheck source=_values.sh
+source "$SCRIPT_DIR/_values.sh"
 
 NAMESPACE="${NAMESPACE:-langsmith}"
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 TFVARS_FILE="$INFRA_DIR/terraform.tfvars"
-VALUES_DIR="$HELM_DIR/values"
-OVERRIDES_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
-SSO_FILE="$VALUES_DIR/langsmith-values-sso.yaml"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+OVERRIDES_FILE="$VALUES_DIR/$_VALUES_OVERRIDES"
 OIDC_KEYS=(oauth-client-id oauth-client-secret oauth-issuer-url)
 
 echo ""
@@ -48,8 +49,7 @@ _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 # The deploy uses this hostname, so it is where HTTPS must be set, and it is where the identity provider redirects back to.
 _hostname=""
 if [[ -f "$OVERRIDES_FILE" ]]; then
-  _hostname=$(grep -E '^[[:space:]]*hostname:' "$OVERRIDES_FILE" | head -1 \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
+  _hostname=$(_values_get "$OVERRIDES_FILE" -- config hostname) || _hostname=""
 fi
 if [[ -z "$_hostname" ]]; then
   fail "No hostname in $OVERRIDES_FILE"
@@ -180,13 +180,13 @@ header "8. terraform.tfvars"
 _set_tfvar "enable_sso_oidc" "true"
 pass "enable_sso_oidc = true"
 
-header "9. SSO values file"
-if [[ -f "$SSO_FILE" ]]; then
-  pass "Existing: helm/values/langsmith-values-sso.yaml (kept as is)"
-else
-  cp "$VALUES_DIR/examples/langsmith-values-sso.yaml" "$SSO_FILE"
-  pass "Created: helm/values/langsmith-values-sso.yaml"
+header "9. Values files"
+if ! "$SCRIPT_DIR/init-values.sh"; then
+  fail "make init-values failed, so the values files do not turn SSO on yet"
+  action "terraform.tfvars already has enable_sso_oidc = true. Fix the error above, then rerun make sso"
+  exit 1
 fi
+pass "$_VALUES_OVERRIDES turns SSO login on"
 
 header "10. Deploy"
 if ! _confirm "Deploy now? Password login stops working once this finishes."; then

@@ -74,7 +74,7 @@ _smithdb_cache_mode() {
     return 0
   fi
   if [[ "$wanted" == local-ssd ]]; then
-    echo "NOTE: the SmithDB caches stay on EBS until make apply adds the local SSD. Then run make deploy again." >&2
+    echo "NOTE: the SmithDB caches stay on EBS until make apply adds the local SSD. Then run make init-values and make deploy again." >&2
   elif [[ "$applied" == local-ssd ]]; then
     echo "NOTE: the SmithDB caches move to EBS now. Run make apply next to roll the SmithDB nodes." >&2
   fi
