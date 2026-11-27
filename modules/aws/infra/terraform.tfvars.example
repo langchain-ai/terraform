@@ -898,8 +898,7 @@ enable_bedrock_access = false
 # smithdb_migration_enabled = false
 # smithdb_query_enabled     = true
 
-# ── Metastore (dedicated RDS Postgres; set source = "external" to bring your own)
-# smithdb_metastore_source          = "create"
+# ── Metastore (dedicated RDS Postgres)
 # smithdb_metastore_instance_class  = "db.m6g.large"
 # smithdb_metastore_engine_version  = "18"
 # smithdb_metastore_allocated_storage = 50
@@ -907,18 +906,12 @@ enable_bedrock_access = false
 # smithdb_metastore_deletion_protection = true
 # smithdb_metastore_skip_final_snapshot = false
 # smithdb_metastore_use_ssl         = true
-# For an external metastore, set smithdb_metastore_source = "external" and:
-#   smithdb_external_metastore_host     = "my-pg.example.com"
-#   smithdb_external_metastore_username = "smithdb"
-#   export TF_VAR_smithdb_external_metastore_password="..."
 #
-# Or keep smithdb_metastore_source = "create" but attach an existing security
-# group to the metastore RDS instance instead of letting Terraform create one.
-# Attach-only by default; set smithdb_manage_byo_security_group_rules = true
-# to let Terraform still write the required EKS-node ingress rule. See
-# "Bring your own security groups" in README.md.
-# smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
-# smithdb_manage_byo_security_group_rules      = false
+# To attach an existing security group to the metastore RDS instance instead of letting Terraform create one, set its ID below.
+# Attach-only by default; set smithdb_metastore_manage_existing_security_group_rules = true to let Terraform still write the required EKS-node ingress rule.
+# See "Bring your own security groups" in README.md.
+# smithdb_metastore_existing_security_group_id           = "sg-0123456789abcdef4"
+# smithdb_metastore_manage_existing_security_group_rules = false
 
 # ── Object store (S3) ─────────────────────────────────────────────────────────
 # A shared S3 Gateway endpoint is always associated with the VPC route tables.

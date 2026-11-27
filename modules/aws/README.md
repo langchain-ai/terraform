@@ -411,7 +411,7 @@ alb_existing_security_group_id               = "sg-0123456789abcdef0"
 bastion_existing_security_group_id           = "sg-0123456789abcdef1"
 postgres_existing_security_group_id          = "sg-0123456789abcdef2"
 redis_existing_security_group_id             = "sg-0123456789abcdef3"
-smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+smithdb_metastore_existing_security_group_id = "sg-0123456789abcdef4"
 ```
 
 Each is independent: supply one, some, or all of them. Leave a variable unset
@@ -442,18 +442,14 @@ the same `apply`. You can't look that ID up and pre-provision the rule yourself
 before running Terraform. So this one case has an opt-in escape hatch:
 
 ```hcl
-smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
-smithdb_manage_byo_security_group_rules      = true   # default: false
+smithdb_metastore_existing_security_group_id           = "sg-0123456789abcdef4"
+smithdb_metastore_manage_existing_security_group_rules = true   # default: false
 ```
 
-Leave `smithdb_manage_byo_security_group_rules` at its default (`false`) and the
-supplied group is attach-only, same as everywhere else, but then you're
-responsible for adding tcp/5432 ingress from the EKS node security group
-yourself (`module.eks.node_security_group_id` after a first apply, or from the
-EKS console) before SmithDB pods can reach the metastore. Set it to `true` and
-Terraform adds that ingress rule to your security group. `terraform destroy`
-removes the rule. Manual teardown without Terraform state leaves the rule in
-place; see [Teardown](#teardown) / `TEARDOWN.md` for removal instructions.
+Leave `smithdb_metastore_manage_existing_security_group_rules` at its default (`false`) and the supplied group is attach-only, same as everywhere else, but then you're responsible for adding tcp/5432 ingress from the EKS node security group yourself (`module.eks.node_security_group_id` after a first apply, or from the EKS console) before SmithDB pods can reach the metastore.
+Set it to `true` and Terraform adds that ingress rule to your security group.
+`terraform destroy` removes the rule.
+Manual teardown without Terraform state leaves the rule in place; see [Teardown](#teardown) / `TEARDOWN.md` for removal instructions.
 
 ### What Terraform does not check
 
@@ -1337,10 +1333,9 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
 | `smithdb_migration_enabled` | `false` | no | Migrate historical ClickHouse data to SmithDB. Set by `make smithdb-migration-job-start` |
 | `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |
-| `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
-| `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_metastore_existing_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_metastore_manage_existing_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for the small tier that every sizing profile runs, `m6a.8xlarge` for medium, `m6a.16xlarge` for large. See [SMITHDB.md](SMITHDB.md#scaling-up) |
 | `smithdb_cache_storage` | `network-disk` | no | SmithDB cache storage: `network-disk` (gp3 volumes) or `local-ssd` (the nodes' instance-store NVMe as RAID0, which needs a type such as `m6id.4xlarge`). See [SMITHDB.md](SMITHDB.md#local-ssd-cache) |
 | `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes, including TaskDB |

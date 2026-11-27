@@ -96,9 +96,8 @@ if [[ "$DRY_RUN" != "true" && "$SKIP_DESTROY" != "true" ]]; then
   fi
 
   _smithdb_enabled=$(_parse_tfvar "enable_smithdb") || _smithdb_enabled="true"
-  _smithdb_source=$(_parse_tfvar "smithdb_metastore_source") || _smithdb_source="create"
   _smithdb_skip_snapshot=$(_parse_tfvar "smithdb_metastore_skip_final_snapshot") || _smithdb_skip_snapshot="false"
-  if [[ "$_smithdb_enabled" == "true" && "$_smithdb_source" == "create" && "$_smithdb_skip_snapshot" != "true" ]]; then
+  if [[ "$_smithdb_enabled" == "true" && "$_smithdb_skip_snapshot" != "true" ]]; then
     echo "ERROR: destructive permutation tests require smithdb_metastore_skip_final_snapshot = true." >&2
     exit 1
   fi
