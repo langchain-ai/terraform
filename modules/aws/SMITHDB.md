@@ -10,7 +10,7 @@ alongside it unless you turn it off.
 
 With `enable_smithdb = true` (the default), the infrastructure pass creates:
 
-- a dedicated PostgreSQL 18 RDS metastore, or wiring for dedicated BYO Postgres;
+- a dedicated PostgreSQL 18 RDS metastore;
 - a dedicated S3 object-store bucket;
 - a SmithDB-specific IRSA role with bucket-scoped access;
 - a dedicated EKS managed node group and a gp3 cache StorageClass (or caches on
@@ -55,18 +55,8 @@ The module sets no size limit on Sandbox storage: the bucket grows with use.
 
 ## Configure infrastructure
 
-Run `make quickstart`, or leave the SmithDB settings out of
-`infra/terraform.tfvars` to take the defaults. Managed PostgreSQL is the default. To use an existing
-metastore:
-
-```hcl
-smithdb_metastore_source            = "external"
-smithdb_external_metastore_host     = "postgres.internal.example"
-smithdb_external_metastore_username = "smithdb"
-```
-
-Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file.
-The Postgres database and S3 bucket must be dedicated to SmithDB.
+Run `make quickstart`, or leave the SmithDB settings out of `infra/terraform.tfvars` to take the defaults.
+Terraform always creates the metastore RDS instance and the S3 bucket, both dedicated to SmithDB.
 
 SmithDB services run on their own EKS managed node group. Every sizing
 profile runs the SmithDB small tier, and the defaults below fit it. For the medium

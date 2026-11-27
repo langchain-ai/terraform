@@ -47,16 +47,15 @@ run "enums_reject_an_unlisted_value" {
   command = plan
 
   variables {
-    postgres_source          = "rds"
-    redis_source             = "elasticache"
-    alb_scheme               = "public"
-    environment              = "qa"
-    tls_certificate_source   = "self-signed"
-    clickhouse_source        = "langsmith-managed"
-    smithdb_metastore_source = "import"
-    smithdb_node_arch        = "x86_64"
-    smithdb_cache_storage    = "nvme"
-    eks_network_mode         = "overlay"
+    postgres_source        = "rds"
+    redis_source           = "elasticache"
+    alb_scheme             = "public"
+    environment            = "qa"
+    tls_certificate_source = "self-signed"
+    clickhouse_source      = "langsmith-managed"
+    smithdb_node_arch      = "x86_64"
+    smithdb_cache_storage  = "nvme"
+    eks_network_mode       = "overlay"
   }
 
   expect_failures = [
@@ -66,7 +65,6 @@ run "enums_reject_an_unlisted_value" {
     var.environment,
     var.tls_certificate_source,
     var.clickhouse_source,
-    var.smithdb_metastore_source,
     var.smithdb_node_arch,
     var.smithdb_cache_storage,
     var.eks_network_mode,
