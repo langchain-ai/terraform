@@ -418,6 +418,13 @@ CHEOF
       _ch_tls="${_ch_tls:-Y}"
       [[ "$_ch_tls" =~ ^[Yy] ]] && _ch_tls_val="true" || _ch_tls_val="false"
 
+      # The password goes through a file only its owner can read, never
+      # --from-literal: argv is world-readable in the process list for as long
+      # as kubectl runs. The EXIT trap removes $_frag_dir and the file.
+      _ch_pass_file="$_frag_dir/clickhouse-password"
+      (umask 077 && printf '%s' "$_ch_pass" > "$_ch_pass_file")
+      unset _ch_pass
+
       echo ""
       echo "  Creating langsmith-clickhouse K8s Secret..."
       echo "  (deploy.sh will re-apply this if the namespace is recreated)"
@@ -426,7 +433,7 @@ CHEOF
         --from-literal=clickhouse_port="${_ch_port}" \
         --from-literal=clickhouse_native_port="${_ch_native_port}" \
         --from-literal=clickhouse_user="${_ch_user}" \
-        --from-literal=clickhouse_password="${_ch_pass}" \
+        --from-file=clickhouse_password="$_ch_pass_file" \
         --from-literal=clickhouse_db="${_ch_db}" \
         --from-literal=clickhouse_tls="${_ch_tls_val}" \
         --dry-run=client -o yaml | kubectl apply -f -; then
