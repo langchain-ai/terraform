@@ -96,7 +96,7 @@ _values_get() (
   # Helm reads every rendered document as a manifest, so the value goes out
   # inside a map, base64-encoded so that YAML quoting cannot change it. The "v"
   # prefix keeps an empty string apart from a missing value.
-  cat > "$chart/templates/get.yaml" <<'TEMPLATE' || return 1
+  cat > "$chart/templates/get.yaml" <<'TEMPLATE'
 {{- $v := .Values -}}
 {{- $found := true -}}
 {{- range $k := .Values.langsmithValuesGetPath -}}

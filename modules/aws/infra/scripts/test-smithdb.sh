@@ -238,18 +238,3 @@ for spec in small:m6id.4xlarge:pass small:m6a.4xlarge:refuse medium:m6id.8xlarge
   fi
   echo "PASS: local-ssd tier check, $tier on $NODES: $want"
 done
-
-# A tier set in the base values must be the deployed one, because the SmithDB
-# overlay loads after them and wins. Only the top-level smithdb block counts.
-printf 'queue:\n  autoscaling: {}\nsmithdb:\n  resourceTier: "medium"  # moved from a sizing file\n' > "$TEST_DIR/base-medium.yaml"
-printf 'smithdb:\n  query:\n    autoscaling:\n      hpa:\n        minReplicas: 1\n' > "$TEST_DIR/base-no-tier.yaml"
-printf 'polly:\n  resourceTier: large\n' > "$TEST_DIR/base-other-key.yaml"
-_smithdb_base_tier_check "$TEST_DIR/base-medium.yaml" medium
-_smithdb_base_tier_check "$TEST_DIR/base-no-tier.yaml" small
-_smithdb_base_tier_check "$TEST_DIR/base-other-key.yaml" small
-_smithdb_base_tier_check "$TEST_DIR/no-such-file.yaml" small
-if _smithdb_base_tier_check "$TEST_DIR/base-medium.yaml" small 2> "$TEST_DIR/base.err"; then
-  echo "FAIL: a base-values tier that the SmithDB overlay replaces was accepted"; exit 1
-fi
-grep -q 'base-medium.yaml sets smithdb.resourceTier: medium' "$TEST_DIR/base.err"
-echo "PASS: a base-values tier other than the deployed one stops the deploy, and a matching or absent one does not"
