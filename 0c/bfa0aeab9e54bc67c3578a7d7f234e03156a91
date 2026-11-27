@@ -1,0 +1,46 @@
+modules/aws/helm/values/examples/langsmith-values-insights.yaml
+  s_cd03e8f6bf2eb7::t_0ebe699ecb0fc1 13,17-24
+modules/aws/ENGINE.md
+  s_cd03e8f6bf2eb7::t_e2f73bcd71d546 61
+modules/aws/helm/scripts/init-values.sh
+  s_cd03e8f6bf2eb7::t_ea107d8eb44f67 791-796,798,803,807,809-816,819,821-828,831-835
+modules/aws/helm/scripts/deploy.sh
+  s_cd03e8f6bf2eb7::t_c48dd5da092b82 503
+  s_cd03e8f6bf2eb7::t_cceaad8e5dbdf8 532-537
+modules/aws/helm/values/examples/langsmith-values-engine.yaml
+  s_cd03e8f6bf2eb7::t_1b771673fd0c78 44-46
+modules/aws/helm/scripts/test-values.sh
+  s_cd03e8f6bf2eb7::t_91ecf37a53eaa7 192
+  s_cd03e8f6bf2eb7::t_7844f692074d60 337-349,353-354,357,366,369,379-383,392-397
+  s_cd03e8f6bf2eb7::t_92d24fd81606df 183
+  s_82ce142c9e5ef2::t_e0ca89c7093fc6 398
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0cbfa0aeab9e54bc67c3578a7d7f234e03156a91",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_82ce142c9e5ef2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "be49cdda-d22e-49ce-b81a-e72ef6da4a94",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    },
+    "s_cd03e8f6bf2eb7": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "bfcec538-f610-41e9-b662-3ccfc0a66b0f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
