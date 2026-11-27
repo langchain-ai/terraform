@@ -1,8 +1,7 @@
 # Deployments (LangGraph Platform) — enables the Deployments UI, listener, and operator.
 #
-# init-values.sh copies this to ../langsmith-values-agent-deploys.yaml when you choose
-# a product tier that includes Deployments (tier 2+).
-# Manual: cp examples/langsmith-values-agent-deploys.yaml ../langsmith-values-agent-deploys.yaml
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_deployments = true, and sets tlsEnabled from tls_certificate_source.
 
 config:
   deployment:
@@ -16,21 +15,8 @@ config:
     # build agent deployment endpoint URLs — wrong value keeps deployments in DEPLOYING.
     tlsEnabled: false
 
-# Resource sizing for shared components (backend, frontend, playground, aceBackend)
-# is handled by the sizing files (langsmith-values-sizing-{production,production-large,dev}.yaml).
-# Do not set replicaCount or resources for those components here — it silently
-# overrides HPA/autoscaling settings from the sizing file because this file
-# is loaded after them in Helm's values merge order.
-
 hostBackend:
   enabled: true
-  resources:
-    requests:
-      cpu: "500m"
-      memory: "512Mi"
-    limits:
-      cpu: "2"
-      memory: "2Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -40,23 +26,9 @@ hostBackend:
 
 listener:
   enabled: true
-  resources:
-    requests:
-      cpu: "1000m"
-      memory: "2Gi"
-    limits:
-      cpu: "2"
-      memory: "4Gi"
 
 operator:
   enabled: true
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
-      cpu: "500m"
-      memory: "512Mi"
   # Deployment template for operator-spawned agent pods.
   # IRSA: agent pods run as langsmith-ksa. That ServiceAccount must have the
   # IRSA role annotation — init-values.sh writes it alongside the other

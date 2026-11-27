@@ -1,4 +1,6 @@
 # Polly — AI-powered evaluation and monitoring.
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_polly = true. Put your changes in ../langsmith-values-local.yaml.
 # Requires config.deployment.enabled = true (LangGraph Platform).
 # Encryption key is read from langsmith-config-secret (polly_encryption_key).
 # Do NOT set it inline — it is already in the secret via config.existingSecretName.

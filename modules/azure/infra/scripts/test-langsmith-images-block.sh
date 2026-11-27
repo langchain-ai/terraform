@@ -5,7 +5,7 @@
 # See LICENSE at the root of this repository for full license text.
 
 # test-langsmith-images-block.sh — Unit tests for the images: block init-values.sh
-# writes into values-overrides.yaml from langsmith_image_registry,
+# writes into langsmith-values-overrides.yaml from langsmith_image_registry,
 # langsmith_image_registry_keeps_source_host and langsmith_image_pull_secret_name
 # (_langsmith_images_block in _common.sh), and for the operator's per-deployment
 # Redis and PostgreSQL templates it writes on the 0.17 chart line

@@ -8,12 +8,11 @@
 # Prerequisites:
 #   - chart >= 0.15.0
 #   - Fleet entitlement in your LangSmith license
-#   - fleet_storage = "external" also requires external Postgres and Redis
-#   - TF_VAR_langsmith_agent_builder_encryption_key set (see infra/scripts/setup-env.sh).
-#     The historical environment-variable name is retained for compatibility.
+#   - the SSM parameter agent-builder-encryption-key (infra/scripts/setup-env.sh
+#     creates it). The historical name is retained for compatibility.
 #
-# Enable via: enable_fleet = true in terraform.tfvars
-# encryptionKey is injected automatically by init-values.sh.
+# Enable via: enable_fleet = true in terraform.tfvars. init-values.sh then merges
+# this file into langsmith-values-overrides.yaml.
 
 hostBackend:
   enabled: true
@@ -21,10 +20,9 @@ hostBackend:
 fleet:
   enabled: true
   namePrefix: "standalone-fleet"
-  # encryptionKey is written by init-values.sh into langsmith-values-overrides.yaml
-  # from TF_VAR_langsmith_agent_builder_encryption_key. The historical name is
-  # retained for compatibility. Do NOT set it here or change it once data exists.
-  # encryptionKey: ""
+  # The chart reads the encryption key from the langsmith-config Secret, as
+  # agent_builder_encryption_key, which ESO syncs from SSM. Do NOT set
+  # encryptionKey in a values file, and do not change the key once data exists.
 
   # Explicit resources — a strict ResourceQuota (regulated/production namespaces)
   # rejects any pod that doesn't specify cpu/memory requests and limits
@@ -65,14 +63,15 @@ fleetToolServer:
   # (LANGGRAPH_DEPLOYMENT_URL sync/poll loop) and CrashLoopBackOffs on a 1-CPU
   # limit because uvicorn can't bind port 1989 within the default probe window.
   # Give it >= 2 CPU and relax the startup probe; CPU settles to < 20m afterward.
+  # Memory stays at the chart's default.
   deployment:
     resources:
       requests:
         cpu: "1"
-        memory: 1Gi
+        memory: 2Gi
       limits:
         cpu: "2500m"
-        memory: 3Gi
+        memory: 4Gi
     startupProbe:
       httpGet:
         path: /health

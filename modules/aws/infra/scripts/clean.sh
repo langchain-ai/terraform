@@ -15,12 +15,14 @@ set -euo pipefail
 #   infra/terraform.tfstate             — local state (when not using remote backend)
 #   infra/terraform.tfstate*.backup     — state backup files
 #   infra/logs/                         — permutation and parallel test run logs
-#   helm/values/langsmith-values*.yaml           — gitignored local copies (canonical versions in examples/)
+#   helm/values/langsmith-values*.yaml           — the values files make init-values wrote,
+#                                                  and your langsmith-values-local.yaml
+#   helm/values/langsmith-sandbox-values*.yaml   — generated runtime chart values (external runtime)
 #
 # Does NOT remove:
 #   infra/terraform.tfvars.example      — template, keep it
-#   infra/terraform.tfvars.dev/.minimum/.production  — preset templates, keep them
-#   helm/values/langsmith-values-*.yaml — static overlay files, keep them
+#   infra/terraform.tfvars.dev/.production  — preset templates, keep them
+#   helm/values/examples/               — the module's values sources, keep them
 #   .terraform/                         — provider cache, not sensitive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,7 +47,8 @@ _has_local_artifacts() {
   [[ -f "$INFRA_DIR/terraform.tfstate" ]] && return 0
   [[ -f "$INFRA_DIR/terraform.tfstate.backup" ]] && return 0
 
-  for f in "$INFRA_DIR"/terraform.tfstate.*.backup "$HELM_VALUES_DIR"/langsmith-values*.yaml; do
+  for f in "$INFRA_DIR"/terraform.tfstate.*.backup "$HELM_VALUES_DIR"/langsmith-values*.yaml \
+    "$HELM_VALUES_DIR"/langsmith-sandbox-values*.yaml; do
     [[ -f "$f" ]] && return 0
   done
 
@@ -179,7 +182,8 @@ fi
 
 # ── Helm generated values ──────────────────────────────────────────────────────
 header "Helm values"
-for f in "$HELM_VALUES_DIR"/langsmith-values*.yaml; do
+# langsmith-sandbox-values*.yaml: the runtime chart's values (external runtime).
+for f in "$HELM_VALUES_DIR"/langsmith-values*.yaml "$HELM_VALUES_DIR"/langsmith-sandbox-values*.yaml; do
   [[ -f "$f" ]] && _rm "$f"
 done
 

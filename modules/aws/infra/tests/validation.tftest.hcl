@@ -18,6 +18,15 @@ mock_provider "kubectl" {}
 mock_provider "random" {}
 mock_provider "time" {}
 
+run "smithdb_capacity_requires_headroom" {
+  command = plan
+  variables {
+    smithdb_node_min_count = 2
+    smithdb_node_max_count = 2
+  }
+  expect_failures = [var.smithdb_node_max_count]
+}
+
 variables {
   name_prefix         = "plantest"
   postgres_password   = "fixture-not-a-real-secret-Aa1"
@@ -35,12 +44,8 @@ run "enums_reject_an_unlisted_value" {
     environment              = "qa"
     tls_certificate_source   = "self-signed"
     clickhouse_source        = "langsmith-managed"
-    sizing_profile           = "small"
     smithdb_metastore_source = "import"
-    smithdb_node_arch        = "x86_64"
-    fleet_storage            = "rds"
-    insights_storage         = "rds"
-    polly_storage            = "rds"
+    smithdb_cache_storage    = "nvme"
     eks_network_mode         = "overlay"
   }
 
@@ -51,12 +56,8 @@ run "enums_reject_an_unlisted_value" {
     var.environment,
     var.tls_certificate_source,
     var.clickhouse_source,
-    var.sizing_profile,
     var.smithdb_metastore_source,
-    var.smithdb_node_arch,
-    var.fleet_storage,
-    var.insights_storage,
-    var.polly_storage,
+    var.smithdb_cache_storage,
     var.eks_network_mode,
   ]
 }
@@ -72,6 +73,33 @@ run "enable_agent_builder_is_rejected_when_true" {
   }
 
   expect_failures = [var.enable_agent_builder]
+}
+
+# enable_nginx_ingress is the same kind of bool: 0.18 removed the NGINX path,
+# and the variable survives so that true stops at plan instead of being ignored
+# while the apply deletes the controller. The false that earlier QuickStart runs
+# wrote must still plan, and must not change the derived ingress mode.
+run "enable_nginx_ingress_is_rejected_when_true" {
+  command = plan
+
+  variables {
+    enable_nginx_ingress = true
+  }
+
+  expect_failures = [var.enable_nginx_ingress]
+}
+
+run "enable_nginx_ingress_false_still_plans" {
+  command = plan
+
+  variables {
+    enable_nginx_ingress = false
+  }
+
+  assert {
+    condition     = output.enable_envoy_gateway == true
+    error_message = "enable_nginx_ingress = false changed the derived ingress mode"
+  }
 }
 
 # Presidio only serves the LLM Gateway, so redaction without it is refused, and
@@ -139,12 +167,12 @@ run "chart_version_accepts_the_pinned_line" {
   command = plan
 
   variables {
-    langsmith_helm_chart_version = "0.17.0"
+    langsmith_helm_chart_version = "0.18.5"
   }
 
   assert {
-    condition     = var.langsmith_helm_chart_version == "0.17.0"
-    error_message = "a 0.17.x langsmith_helm_chart_version failed validation"
+    condition     = var.langsmith_helm_chart_version == "0.18.5"
+    error_message = "a 0.18.x langsmith_helm_chart_version failed validation"
   }
 }
 
@@ -223,6 +251,123 @@ run "sizes_and_counts_reject_a_value_above_the_ceiling" {
     var.postgres_max_storage_gb,
     var.sandbox_juicefs_redis_snapshot_retention_limit,
   ]
+}
+
+# A 0.17 tfvars file that still runs PostgreSQL in the cluster must fail at plan,
+# not silently get a new RDS instance.
+run "postgres_source_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    postgres_source = "in-cluster"
+  }
+
+  expect_failures = [var.postgres_source]
+}
+
+run "redis_source_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    redis_source = "in-cluster"
+  }
+
+  expect_failures = [var.redis_source]
+}
+
+# A 0.17 tfvars file that still keeps Fleet, Chat or Insights in the cluster, or
+# still uses a standalone switch, must fail at plan rather than move the feature
+# to a new, empty database or silently turn it off.
+run "addon_storage_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    enable_fleet     = true
+    enable_polly     = true
+    enable_insights  = true
+    fleet_storage    = "in-cluster"
+    insights_storage = "in-cluster"
+    polly_storage    = "in-cluster"
+  }
+
+  expect_failures = [
+    var.fleet_storage,
+    var.insights_storage,
+    var.polly_storage,
+  ]
+}
+
+# The 0.17 QuickStart wrote "in-cluster" for add-ons that were off, where the
+# value does nothing, so those tfvars must still plan.
+run "addon_storage_in_cluster_is_ignored_while_the_addon_is_off" {
+  command = plan
+
+  variables {
+    enable_fleet     = false
+    enable_polly     = false
+    enable_insights  = false
+    enable_engine    = false
+    fleet_storage    = "in-cluster"
+    insights_storage = "in-cluster"
+    polly_storage    = "in-cluster"
+  }
+}
+
+run "standalone_switches_are_rejected" {
+  command = plan
+
+  variables {
+    enable_standalone_polly    = true
+    enable_standalone_insights = true
+  }
+
+  expect_failures = [
+    var.enable_standalone_polly,
+    var.enable_standalone_insights,
+  ]
+}
+
+# A 0.17 tfvars file with an external metastore must fail at plan rather than
+# point SmithDB at a new, empty RDS instance.
+run "smithdb_metastore_source_rejects_external" {
+  command = plan
+
+  variables {
+    smithdb_metastore_source = "external"
+  }
+
+  expect_failures = [var.smithdb_metastore_source]
+}
+
+# The 0.17 names of the metastore security group settings must fail at plan
+# rather than be ignored, which would swap the supplied group for a new one or
+# delete the ingress rule on it.
+run "renamed_smithdb_security_group_settings_are_rejected" {
+  command = plan
+
+  variables {
+    smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+    smithdb_manage_byo_security_group_rules      = true
+  }
+
+  expect_failures = [
+    var.smithdb_existing_metastore_security_group_id,
+    var.smithdb_manage_byo_security_group_rules,
+  ]
+}
+
+run "smithdb_metastore_takes_a_supplied_security_group" {
+  command = plan
+
+  variables {
+    smithdb_metastore_existing_security_group_id           = "sg-0123456789abcdef4"
+    smithdb_metastore_manage_existing_security_group_rules = true
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_security_group_id == "sg-0123456789abcdef4"
+    error_message = "smithdb_metastore_existing_security_group_id should be the security group on the metastore"
+  }
 }
 
 # RDS rejects these characters in a master password, and the ones that survive

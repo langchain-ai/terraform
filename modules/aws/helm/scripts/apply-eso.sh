@@ -43,6 +43,9 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+# An external sandbox runtime uses a dedicated service-auth secret. setup-env.sh
+# creates its SSM parameter under the same gate, so keep the two identical.
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: Could not read name_prefix from $INFRA_DIR/terraform.tfvars" >&2
@@ -158,6 +161,12 @@ $(if [[ "$_enable_sandboxes" == "true" ]]; then cat <<SEOF
         key: ${_ssm_prefix}/sandbox-callback-signing-jwk
 SEOF
 fi)
+$(if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then cat <<SAEOF
+    - secretKey: sandbox_service_auth_secret
+      remoteRef:
+        key: ${_ssm_prefix}/sandbox-service-auth-secret
+SAEOF
+fi)
 $(if _ssm_key_exists "${_ssm_prefix}/oauth-client-secret"; then cat <<OEOF
     - secretKey: oauth_client_secret
       remoteRef:
@@ -169,24 +178,6 @@ $(if _ssm_key_exists "${_ssm_prefix}/oauth-client-secret"; then cat <<OEOF
       remoteRef:
         key: ${_ssm_prefix}/oauth-issuer-url
 OEOF
-fi)
-$(if _ssm_key_exists "${_ssm_prefix}/smithdb-taskdb-password"; then cat <<TEOF
-    - secretKey: smithdb_taskdb_password
-      remoteRef:
-        key: ${_ssm_prefix}/smithdb-taskdb-password
-TEOF
-fi)
-$(if _ssm_key_exists "${_ssm_prefix}/smithdb-taskdb-host"; then cat <<XEOF
-    - secretKey: smithdb_taskdb_host
-      remoteRef:
-        key: ${_ssm_prefix}/smithdb-taskdb-host
-    - secretKey: smithdb_taskdb_database
-      remoteRef:
-        key: ${_ssm_prefix}/smithdb-taskdb-database
-    - secretKey: smithdb_taskdb_username
-      remoteRef:
-        key: ${_ssm_prefix}/smithdb-taskdb-username
-XEOF
 fi)
 EOF
 

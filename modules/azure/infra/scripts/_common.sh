@@ -15,11 +15,12 @@
 #   _set_tfvar <key> <value>        — Set one key in terraform.tfvars, editing only its line
 #   _confirm <prompt>               — Yes/no prompt that defaults to no
 #   _tf_out <name>                  — Read one terraform output, or return 1
+#   _external_sandbox_runtime     — Return 0 for sandbox_runtime_source = external
+#   _sandbox_kubeconfig <file>      — Write the sandbox cluster's credentials to <file>
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
-#   _values_input_stamp             — tfvars values baked into values-overrides.yaml
-#   _langsmith_images_block         — images: block for values-overrides.yaml from a mirror
+#   _VALUES_INPUT_KEYS              — tfvars keys recorded in langsmith-values-overrides.yaml
+#   _langsmith_images_block         — images: block for langsmith-values-overrides.yaml from a mirror
 #   _langsmith_image_keys           — the chart images the module knows (0.17 and 0.18 lines)
-#   _read_values_stamp <f> <k>      — Read one stamped value back out
 #   _name_suffix                    — Resource-name suffix derived from name_prefix
 #   _derive_kv_name                 — Key Vault name, mirroring local.keyvault_name
 #   _require_kv_name                — _derive_kv_name, or exit with the reason it could not
@@ -31,8 +32,8 @@
 # secrets.auto.tfvars, state, and outputs. It defaults to infra/ next to this
 # script. LANGSMITH_INFRA_DIR points it at a root outside this repo, such as a
 # wrapper module that sources modules/azure/infra; LANGSMITH_VALUES_DIR does the
-# same for the generated Helm values. Scripts, examples, and the base
-# values.yaml always come from this repo.
+# same for the generated Helm values. Scripts and examples, the base values
+# included, always come from this repo.
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${INFRA_DIR:-${LANGSMITH_INFRA_DIR:-$(cd "$_COMMON_DIR/.." && pwd)}}"
 
@@ -179,6 +180,28 @@ _aks_get_credentials() {
     --overwrite-existing ${flags[@]+"${flags[@]}"}
 }
 
+# ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
+# Returns 0 when enable_sandboxes = true and sandbox_runtime_source =
+# "external" in terraform.tfvars.
+_external_sandbox_runtime() {
+  _tfvar_is_true "enable_sandboxes" || return 1
+  [[ "$(_parse_tfvar sandbox_runtime_source || true)" == "external" ]]
+}
+
+# Credentials for the dedicated sandbox cluster, written to the file named by $1
+# rather than ~/.kube/config, so the current context stays on the LangSmith
+# cluster and no command meant for one cluster reaches the other. Callers point
+# KUBECONFIG at the file. Returns 1 when the outputs or the fetch fail.
+_sandbox_kubeconfig() {
+  local file="$1" cluster rg flags=()
+  cluster=$(_tf_out sandbox_cluster_name) || return 1
+  rg=$(_tf_out sandbox_cluster_resource_group_name) || return 1
+  [[ "$(_tf_out sandbox_kubeconfig_public_fqdn || true)" == "true" ]] && flags=(--public-fqdn)
+  az aks get-credentials --name "$cluster" --resource-group "$rg" \
+    --file "$file" --overwrite-existing ${flags[@]+"${flags[@]}"} >/dev/null || return 1
+  KUBECONFIG="$file" _aks_kubelogin_convert "$cluster" "$rg"
+}
+
 # ── Entra ID sign-in for kubectl and Helm ───────────────────────────────────
 # On a cluster with Entra ID integration, `az aks get-credentials` writes a
 # kubeconfig whose user signs in interactively. Convert it to reuse the caller's
@@ -286,20 +309,15 @@ _validate_license_key() {
   fi
 }
 
-# ── values-overrides.yaml staleness stamp ────────────────────────────────────
-# terraform.tfvars keys whose value init-values.sh bakes into
-# values-overrides.yaml. That file is generated once and `make deploy` never
-# regenerates it, so editing terraform.tfvars afterwards leaves Terraform and
-# Helm deploying different configurations. init-values.sh writes these values
-# into the generated file's header; deploy.sh reads them back and compares.
-#
-# Keys deploy.sh re-reads from terraform.tfvars on every run — sizing_profile and
-# the enable_* flags, which select whole values files — are deliberately absent.
-# Those cannot go stale, so listing them would fail a deploy that is fine.
-# enable_sso_oidc is the exception: it is baked into the generated auth block
-# (basicAuth off, oauth on), so a flip after init-values would deploy the old
-# login path.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source clickhouse_cluster langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count enable_sso_oidc langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
+# ── The terraform.tfvars inputs of langsmith-values-overrides.yaml ───────────
+# The terraform.tfvars keys init-values.sh reads into the overrides file. It
+# records each value in the file's header, and deploy.sh stops when one has
+# changed since (_values_drift in helm/scripts/_values.sh), because make deploy
+# never regenerates the file. The enable_* flags and sizing_profile are inputs
+# too: they decide which values the file merges. clickhouse_cluster is recorded
+# as Terraform resolves it (_clickhouse_cluster_resolved), not from
+# terraform.tfvars, so it is not in this list.
+_VALUES_INPUT_KEYS="name_prefix environment location azure_environment ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label sizing_profile langsmith_release_name langsmith_helm_chart_version langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key enable_deployments enable_agent_builder enable_fleet enable_insights enable_polly enable_llm_gateway enable_gateway_pii_redaction enable_sso_oidc enable_smithdb smithdb_ingestion_enabled smithdb_query_enabled enable_sandboxes sandbox_runtime_source sandbox_service_url_base_url sandbox_host_min_count sandbox_host_max_count sandbox_namespace sandbox_service_account_name sandbox_runtime_secret_name langsmith_image_registry langsmith_image_registry_keeps_source_host langsmith_image_pull_secret_name"
 
 # The chart line deploy.sh installs when neither CHART_VERSION in the
 # environment nor langsmith_helm_chart_version in terraform.tfvars names one:
@@ -369,8 +387,9 @@ _chart_templates_need_mirror_by_version() {
   esac
 }
 
-# The first line _deployment_templates_block writes; deploy.sh looks for it to
-# tell a file that carries the templates from one that does not.
+# The first line _deployment_templates_block writes. The merge drops comments, so
+# deploy.sh reads "resolved deployment_templates" in the header of the overrides
+# file instead.
 _DEPLOYMENT_TEMPLATES_MARKER="# The per-deployment Redis and PostgreSQL from langsmith_image_registry"
 
 # ── LangSmith images from a mirror ────────────────────────────────────────────
@@ -406,7 +425,7 @@ _langsmith_image_keys() {
   done
 }
 
-# Print the images: block for values-overrides.yaml from the three tfvars:
+# Print the images: block for langsmith-values-overrides.yaml from the three tfvars:
 #   _langsmith_images_block <registry> <keeps_source_host true|false> <pull secret>
 # Nothing set: one comment line naming the knob. A registry that keeps the
 # source host: images.registry alone. One that drops it: images.registry empty
@@ -449,7 +468,7 @@ _langsmith_images_block() {
 # docker.io/redis:7 and pgvector/pgvector:pg15 written in, and images.registry
 # does not reach them, so a cluster that pulls only from the mirror gets
 # ImagePullBackOff on both pods of every deployment while make deploy reports
-# success. init-values.sh appends this block to langsmith-values-agent-deploys.yaml
+# success. init-values.sh merges this block after the agent-deploys example
 # (which overrides operator.templates.deployment the same way) when
 # langsmith_image_registry is set and the chart line is 0.17. The 0.18 line
 # reads images.deploymentRedisImage and images.deploymentDbImage, which the
@@ -596,88 +615,13 @@ _clickhouse_values_block() {
   fi
 }
 
-# One stamped input as init-values.sh resolves it: the tfvars value, except
-# clickhouse_cluster, which comes from Terraform (_clickhouse_cluster_resolved).
-_values_input_value() {
-  if [[ "$1" == "clickhouse_cluster" ]]; then
-    _clickhouse_cluster_resolved
-  else
-    _parse_tfvar "$1"
-  fi
-}
-
-# Where _values_input_value reads a key, for the drift message.
-_values_input_source() {
-  if [[ "$1" == "clickhouse_cluster" ]]; then
-    printf 'Terraform'
-  else
-    printf 'terraform.tfvars'
-  fi
-}
-
-# Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
-# leaves it empty when the key is absent — never the default a caller substitutes,
-# so both sides of the comparison are reading the same thing.
-_values_input_stamp() {
-  local key val
-  for key in $_VALUES_INPUT_KEYS; do
-    val=$(_values_input_value "$key") || val=""
-    printf '#   %s = %s\n' "$key" "$val"
-  done
-}
-
-# Read one stamped value back out of a generated values file. Prints the value and
-# returns 0 when the stamp line is present, including when the value is empty.
-# Returns 1 when the file carries no stamp for that key, which is how a file
-# written by an older init-values.sh is told apart from a genuine empty value.
-_read_values_stamp() {
-  local file="$1" key="$2" line
-  line=$(grep -E "^#   ${key} =" "$file" 2>/dev/null | head -1) || return 1
-  [[ -n "$line" ]] || return 1
-  printf '%s' "$line" | sed "s/^#   ${key} =[[:space:]]*//"
-}
-
-# Compare a generated values file's stamp with the current terraform.tfvars,
-# one line per key that disagrees:
-#   <key>: generated with '<was>', terraform.tfvars now says '<now>'
-#   <key>: not stamped (the file predates this key), terraform.tfvars now says '<now>'
-# Returns 0 when the file is stamped and every key agrees, 1 when a line was
-# printed, 2 when the file carries no stamp at all (written by an older
-# init-values.sh; the lines printed, if any, are then only informative).
-# A key the stamp lacks counts as drift only when terraform.tfvars sets it:
-# an older file with the key unset on both sides still describes those
-# tfvars, but one generated before langsmith_image_registry existed, with a
-# tfvars that now sets it, would otherwise deploy from docker.io and report
-# success.
-_values_stamp_drift() {
-  local file="$1" key was now stamped="false" drift="false"
-  for key in $_VALUES_INPUT_KEYS; do
-    if was=$(_read_values_stamp "$file" "$key"); then
-      stamped="true"
-      now=$(_values_input_value "$key") || now=""
-      [[ "$was" == "$now" ]] && continue
-      printf "%s: generated with '%s', %s now says '%s'\n" "$key" "$was" "$(_values_input_source "$key")" "$now"
-      drift="true"
-    else
-      now=$(_values_input_value "$key") || now=""
-      [[ -n "$now" ]] || continue
-      printf "%s: not stamped (the file predates this key), %s now says '%s'\n" "$key" "$(_values_input_source "$key")" "$now"
-      drift="true"
-    fi
-  done
-  [[ "$stamped" == "true" ]] || return 2
-  [[ "$drift" == "true" ]] && return 1
-  return 0
-}
-
-# Returns 0 when a values file carries the host-kept mirror layout
-# (images.registry set) while terraform.tfvars sets langsmith_image_registry
-# and leaves langsmith_image_registry_keeps_source_host unset: a file generated
-# under that key's previous default (true; the 0.16 line's v0.16.124 to .126
-# wrote it). The default is now false, the stamp reads '' on both sides so
-# _values_stamp_drift passes the file, and the next make init-values would
-# switch the layout under a mirror that serves the host-kept one. deploy.sh
-# stops on it until the key is set.
+# Returns 0 when a 0.17 values-overrides.yaml carries the host-kept mirror
+# layout (images.registry set) while terraform.tfvars sets
+# langsmith_image_registry and leaves langsmith_image_registry_keeps_source_host
+# unset: a file generated under that key's previous default (true; the 0.16
+# line's v0.16.124 to .126 wrote it). The default is now false, so the next make
+# init-values would switch the layout under a mirror that serves the host-kept
+# one. init-values.sh stops on it until the key is set.
 #   _values_layout_from_old_default <values-file>
 _values_layout_from_old_default() {
   local file="$1" registry
@@ -687,11 +631,9 @@ _values_layout_from_old_default() {
   awk '/^images:/{p=1; next} /^[^ #]/{p=0} p && /^  registry: "[^"]+"/{f=1} END{exit !f}' "$file" 2>/dev/null
 }
 
-# The stop both scripts make on that file: init-values.sh before it overwrites
-# values-overrides.yaml (the usual make init-values && make deploy would
-# otherwise rewrite the file to the new layout first, and deploy.sh would see
-# nothing), deploy.sh before installing. Returns 1 after printing when the
-# file is that one, 0 otherwise.
+# The stop init-values.sh and deploy.sh make on that file, before the 0.17
+# layout stop asks to move it away. Returns 1 after printing when the file is
+# that one, 0 otherwise.
 #   _stop_if_values_layout_from_old_default <values-file>
 _stop_if_values_layout_from_old_default() {
   _values_layout_from_old_default "$1" || return 0
@@ -700,17 +642,6 @@ _stop_if_values_layout_from_old_default() {
   info "To move to the layout the chart's mirror script pushes (<registry>/langchain/...): set it to false and lay the mirror out that way."
   action "Set the key in terraform.tfvars, run make init-values, then re-run make deploy"
   return 1
-}
-
-# Print ingress.ingressClassName from a values file, quotes stripped; nothing when
-# unset or empty. With ingress_controller = "none" this is the only place a class
-# comes from, so init-values.sh keeps it on re-run and deploy.sh checks it.
-_values_ingress_class() {
-  awk '
-    /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
-    top == "ingress" && /^  ingressClassName:/ { v = $2; gsub(/["\047]/, "", v); cls = v }
-    END { print cls }
-  ' "$1" 2>/dev/null
 }
 
 # Resource-name suffix, mirroring local.name_suffix in main.tf.

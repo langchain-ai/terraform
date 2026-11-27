@@ -1,8 +1,7 @@
 # Agent Builder — visual agent building UI (requires Deployments).
 #
-# init-values.sh copies this to ../langsmith-values-agent-builder.yaml when you choose
-# a product tier that includes Agent Builder.
-# Manual: cp examples/langsmith-values-agent-builder.yaml ../langsmith-values-agent-builder.yaml
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_agent_builder = true. Put your changes in ../langsmith-values-local.yaml.
 #
 # Prerequisites:
 #   - Agent Builder / LangGraph Platform entitlement in your LangSmith license
@@ -11,12 +10,10 @@
 config:
   agentBuilder:
     enabled: true
-    # encryptionKey must be set in values-overrides.yaml or via --set on each deploy.
-    # Generate a Fernet key:
-    #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    # Store it safely (Secret Manager, 1Password, etc.) — rotating this key requires
-    # re-encrypting all existing Agent Builder configurations.
-    # encryptionKey: "YOUR_AGENT_BUILDER_FERNET_KEY"
+    # encryptionKey is read from the langsmith-config Secret
+    # (agent_builder_encryption_key), which deploy.sh writes from
+    # TF_VAR_langsmith_agent_builder_encryption_key. Do not set it here. Rotating
+    # this key requires re-encrypting all existing Agent Builder configurations.
 
 fleetToolServer:
   enabled: true

@@ -1,17 +1,33 @@
-# Insights — ClickHouse-backed analytics (requires external ClickHouse).
+# Insights — ClickHouse-backed analytics.
 #
-# init-values.sh copies this to ../langsmith-values-insights.yaml when you choose
-# a product tier that includes Insights (tier 4). You'll be prompted for ClickHouse connection details.
-# Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_insights = true. ClickHouse follows clickhouse_source in terraform.tfvars:
+#   - in-cluster: the chart runs ClickHouse as a StatefulSet (dev/POC only).
+#   - external: the chart reads every connection field from the langsmith-clickhouse
+#     Secret, so the values hold only the pointer to it. init-values.sh asks for the
+#     connection details while that Secret does not exist, and creates it:
+#       kubectl create secret generic langsmith-clickhouse -n langsmith \
+#         --from-literal=clickhouse_host=<host> \
+#         --from-literal=clickhouse_port=8123 \
+#         --from-literal=clickhouse_native_port=9000 \
+#         --from-literal=clickhouse_user=default \
+#         --from-literal=clickhouse_password=<password> \
+#         --from-literal=clickhouse_db=default \
+#         --from-literal=clickhouse_tls=true
 #
-# Prerequisites:
-#   - ClickHouse instance (AWS Marketplace, LangChain managed, or self-hosted)
-#   - ClickHouse must be reachable from the EKS cluster
-
 # Chart 0.15.1 removed the bundled config.insights path and its validator hard-fails
 # on the mere presence of the key (hasKey), even when set to false. The top-level
-# insights block is the only supported path. Workload settings (scaling, databases,
-# resources) live in engineInsightsAgent — see langsmith-values-standalone-insights.yaml.
+# insights block is the only supported path. Insights uses the langsmith_insights
+# database on the shared RDS and DB index 3 on the shared ElastiCache; init-values.sh
+# writes that storage into langsmith-values-overrides.yaml, after every values file.
+#
+# Chart 0.16 co-hosts the Engine and Insights agents on one deployment, so every
+# workload setting moved out of `insights` into `engineInsightsAgent`; the chart
+# hard-fails on insights.{namePrefix,apiServer,queue,postgres,redis}. init-values.sh
+# writes the requests and limits of that deployment into
+# langsmith-values-overrides.yaml on every run, because a strict ResourceQuota
+# rejects a pod without them. To change them, set engineInsightsAgent in
+# ../langsmith-values-local.yaml.
 insights:
   enabled: true
   # encryptionKey is pulled from SSM via ESO — do not set it here.
@@ -19,27 +35,4 @@ insights:
   # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
   # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/insights-encryption-key" \
   #             --value "<key>" --type SecureString
-  # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
-
-clickhouse:
-  external:
-    enabled: true
-    host: ""          # ClickHouse hostname or endpoint
-    port: "8123"      # HTTP port (default 8123); use 8443 for HTTPS
-    database: "default"
-    user: "default"
-    # tls: true       # Uncomment if using HTTPS/TLS
-    #
-    # Option A (recommended): Store credentials in a K8s Secret and reference it.
-    # The chart reads each field by its *SecretKey name (clickhouse_password, etc.).
-    #   kubectl create secret generic langsmith-clickhouse -n langsmith \
-    #     --from-literal=clickhouse_host=<host> \
-    #     --from-literal=clickhouse_port=8123 \
-    #     --from-literal=clickhouse_user=default \
-    #     --from-literal=clickhouse_password=<password> \
-    #     --from-literal=clickhouse_db=default \
-    #     --from-literal=clickhouse_tls=false
-    existingSecretName: "langsmith-clickhouse"
-    #
-    # Option B: Inline password (not recommended — visible in Helm release metadata):
-    # password: ""
+  # apply-eso.sh adds this key to the langsmith-config ExternalSecret automatically.

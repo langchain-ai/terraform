@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`), so an unpinned deploy never crosses a breaking minor on its own. SmithDB is part of that line — see [SMITHDB.md](SMITHDB.md#version-requirements). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.18.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.18.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.18.0` = latest `0.18.x`), so an unpinned deploy never crosses a breaking minor on its own. SmithDB is part of that line — see [SMITHDB.md](SMITHDB.md#version-requirements). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -78,7 +78,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 2** | LangSmith Helm chart (~25 pods production) | `make init-values` → `make deploy` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
-| **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`) — needs a stable chart release on the 0.17 line; see [SMITHDB.md](SMITHDB.md#version-requirements) | `terraform -chdir=infra apply` | ~15–30 min |
+| **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`) — needs a stable chart release on the 0.18 line; see [SMITHDB.md](SMITHDB.md#version-requirements) | `terraform -chdir=infra apply` | ~15–30 min |
 | **Optional** | Sandboxes (`enable_sandboxes = true`), chart 0.17; see [Sandboxes](#sandboxes) | `make apply && make seed-secrets && make init-values && make deploy` | ~15–30 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
@@ -432,6 +432,8 @@ To deploy as a service principal instead, from CI or from a subscription that wi
 
 ## Upgrading an existing deployment
 
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance. The notes below cover changes to the Azure Terraform module.
+
 The LangSmith application secrets used to be Terraform-managed, which persisted their plaintext in Terraform state. They are now written directly to Key Vault by `make seed-secrets`, and Terraform manages only the vault and its RBAC.
 
 If you deployed before this change:
@@ -538,8 +540,10 @@ export LANGSMITH_INFRA_DIR=/path/to/deployment        # Terraform root: tfvars, 
 export LANGSMITH_VALUES_DIR=/path/to/deployment/helm/values   # generated Helm values
 ```
 
-The scripts and the tracked base `helm/values/values.yaml` still come from this
-repo. `make apply` refuses to run under `LANGSMITH_INFRA_DIR`, because its
+The scripts and the examples in `helm/values/examples/` still come from this
+repo, and `make init-values` writes the two values files into
+`LANGSMITH_VALUES_DIR`, with `langsmith-values-local.yaml` read from there too.
+`make apply` refuses to run under `LANGSMITH_INFRA_DIR`, because its
 staged `-target` addresses gain the wrapper's module prefix; run
 `terraform apply` in the wrapper directory instead.
 
@@ -565,17 +569,14 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 | Value | What Terraform installs | Best for |
 |-------|------------------------|----------|
 | `envoy-gateway` **(default)** | `gateway-helm` OCI chart (Envoy Gateway v1.2.0, ships the Gateway API CRDs) → Azure LB | Standard deployments. Gateway API-native. Use this for quickstart. |
-| `nginx` | `ingress-nginx` Helm chart → Azure LB | Legacy Ingress compatibility, for clusters standardized on classic Kubernetes Ingress. |
 | `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
 | `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
 
-> **Upgrading a deployment created on the old `nginx` default:** if `terraform.tfvars` omits
-> `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. To keep nginx,
-> set `ingress_controller = "nginx"`. To move to Envoy Gateway, set
-> `ingress_controller = "envoy-gateway"`, then run `make apply`, `make init-values`, and
-> `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes.
-> Update any DNS A record that points at the old IP.
+> **Upgrading a deployment that runs ingress-nginx:** 0.18 removed `nginx`. `make plan`,
+> `make apply`, `make init-values`, and `make deploy` stop while the Terraform state still holds the
+> ingress-nginx release, including on a deployment created on the old `nginx` default. Move it to
+> another controller on the previous release first. See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md).
 
 ---
 
@@ -591,7 +592,7 @@ tls_certificate_source = "none"
 
 **A private address instead of a public one:** `ingress_load_balancer = "internal"` puts the ingress controller on a private IP in the cluster's VNet, with no public frontend. It can't be combined with `dns_label` or with `tls_certificate_source = "letsencrypt"`. See [INGRESS_CONTROLLERS.md, "Private ingress"](INGRESS_CONTROLLERS.md#private-ingress).
 
-**Add HTTPS with Let's Encrypt (`envoy-gateway`, `nginx`, or self-managed `istio`):**
+**Add HTTPS with Let's Encrypt (`envoy-gateway` or self-managed `istio`):**
 ```hcl
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
@@ -632,7 +633,7 @@ langsmith_custom_ca_secret_name = "langsmith-ca"   # only for a private CA, see 
    ```
 2. `make init-values` writes the Ingress `tls:` entry for that Secret, with no cert-manager annotation. The Envoy Gateway Gateway references the same Secret, and `make deploy` copies it to the Istio gateway's namespace for `istio` and `istio-addon`. `langsmith_domain` alone is enough for every controller; `dns_label` is not needed.
 3. `make deploy` checks the Secret exists and is `kubernetes.io/tls` before it runs Helm, and stops with the command above if not.
-4. **Renewal is yours:** replace the Secret with the new certificate. NGINX and Envoy Gateway pick it up without a restart; with `istio` or `istio-addon`, re-run `make deploy` so the gateway's copy is refreshed.
+4. **Renewal is yours:** replace the Secret with the new certificate. Envoy Gateway picks it up without a restart; with `istio` or `istio-addon`, re-run `make deploy` so the gateway's copy is refreshed.
 
 **A private CA needs one more Secret** if LangSmith's pods call anything that CA signed, such as an OIDC provider or a Postgres or ClickHouse server. Browsers trust your CA through your organization's devices; the pods do not. Give them the CA bundle (root and intermediates, PEM) as `langsmith_custom_ca_secret_name`. `init-values.sh` sets the chart's `config.customCa` from it, and `deploy.sh` checks it before Helm runs:
 ```bash
@@ -644,7 +645,7 @@ The key defaults to `ca.crt` (`langsmith_custom_ca_secret_key`).
 - **Which pods do not:** the frontend, the operator, and the agent deployments the operator creates. If those must trust the CA, they need wiring this module does not yet do.
 - **It replaces the default trust store** for those pods, so include a public CA as well if they also reach public endpoints, such as Beacon for an online license.
 
-> ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
+> ⚠️ **`letsencrypt` (HTTP-01) only works with `istio` (self-managed) and `envoy-gateway`.**
 > `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
 > For those controllers, use `dns01` with a custom domain, `existing` with your own certificate, or `none` for HTTP-only.
 >
@@ -672,7 +673,7 @@ Guided questionnaire that generates `infra/terraform.tfvars` from scratch. Mirro
 - Re-running against an existing `terraform.tfvars` offers to load its values as answers, so you can change one setting without retyping the rest
 - Auto-detects Azure subscription ID from `az account show`
 - Validates deployment name format (`prod`, `staging`, `myco`)
-- Supports all 5 ingress options: `envoy-gateway` (default), `nginx`, `istio-addon`, `istio`, `agic`
+- Supports all 4 ingress options: `envoy-gateway` (default), `istio-addon`, `istio`, `agic`
 - Sends you back to the TLS choice on `istio-addon + letsencrypt` or `agic + letsencrypt`, which Terraform rejects
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 - `ARGS="--yes"` is for CI and scripts: it skips the prompts and writes the profile's defaults. Dev runs Postgres, Redis, and ClickHouse in-cluster over HTTP at `langsmith-<name>.<region>.cloudapp.azure.com`; `--profile prod` uses external Postgres and Redis with production sizing. `--subscription`, `--location`, `--name`, `--dns-label`, and `--domain` with `--email` override the defaults; `--help` lists them. It writes new deployments only and refuses to run over an existing `terraform.tfvars` or checkpoint
@@ -751,12 +752,11 @@ Seeds these secrets, which Terraform never sees:
 | `langsmith-agent-builder-encryption-key` | Generated (Fernet) |
 | `langsmith-insights-encryption-key` | Generated (Fernet) |
 | `langsmith-polly-encryption-key` | Generated (Fernet) |
-| `smithdb-taskdb-password` | Generated (`openssl rand -hex 32`) |
 | `langsmith-sandbox-callback-signing-jwk` | Generated (Ed25519 JWK), only with `enable_sandboxes = true`. Needs OpenSSL 3, as [Sandboxes](#sandboxes) describes |
 
 It also seeds `postgres-admin-password` and `langsmith-license-key`, from `secrets.auto.tfvars` or the environment, when the vault does not already hold them. That is what `keyvault_manage_secrets = false` relies on. On the default path Terraform wrote both and the script skips them.
 
-- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, a new Fernet key makes existing encrypted data unreadable, and a new taskdb password locks the SmithDB backfill out of a taskdb that already initialized. Rotate deliberately with `make keyvault` instead.
+- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable. Rotate deliberately with `make keyvault` instead.
 - **Validates the admin password before storing it:** min 12 characters, with a lowercase letter, an uppercase letter, and a symbol from ``!#$%()+,-./:?@[\]^_{~}``. The Helm chart's auth-bootstrap job rejects a password without a symbol, and it fails ~10 minutes into the release rather than at the point you typed it.
 - Requires the **Key Vault Secrets Officer** role on the vault, which `make apply` grants to the deployer identity.
 - Set `LANGSMITH_ADMIN_PASSWORD` to run it non-interactively (CI); it exits with a clear error if the password is unset and stdin is not a tty.
@@ -813,7 +813,7 @@ Runs `terraform apply` in `infra/` in three targeted stages, each of which shows
 - Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
 - Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The eight LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
-- cert-manager, KEDA, ingress controller (Envoy Gateway / NGINX / Istio / AGIC — based on `ingress_controller` in tfvars)
+- cert-manager, KEDA, ingress controller (Envoy Gateway / Istio / AGIC — based on `ingress_controller` in tfvars)
 - For `agic`: Application Gateway v2 + static public IP + AGIC managed identity + Contributor/Reader/Network Contributor role assignments + the AKS `ingress-appgw` add-on
 - For `envoy-gateway`: `envoyproxy/gateway-helm` v1.2.0 in the `envoy-gateway-system` namespace, which ships the Gateway API CRDs, and the `ExperimentalGatewayAPISupport=true` feature gate on cert-manager, installed after Envoy Gateway
 - `langsmith` namespace + `langsmith-sa` service account
@@ -838,8 +838,8 @@ Prompts for confirmation, then removes all generated and sensitive local files. 
 - Removes `infra/terraform.tfvars` and `infra/secrets.auto.tfvars`
 - Removes the legacy plaintext dot-files (`.api_key_salt`, `.jwt_secret`, `.deployments_key`, etc.). `setup-env.sh` no longer writes these, but deployments created before the Key Vault seeding change still have them on disk
 - Removes `infra/terraform.tfstate` and `terraform.tfstate.backup` (only present when not using remote backend)
-- Removes `helm/values/values-overrides.yaml` and all `helm/values/langsmith-values-*.yaml` (generated by `make init-values`)
-- Keeps `terraform.tfvars.example`, `helm/values/examples/`, and `.terraform/` cache
+- Removes `helm/values/langsmith-values.yaml` and `helm/values/langsmith-values-overrides.yaml` (written by `make init-values`), your `helm/values/langsmith-values-local.yaml`, the sandbox runtime values, and a 0.17 `helm/values/values-overrides.yaml`
+- Keeps `terraform.tfvars.example`, `helm/values/examples/`, `helm/values/langsmith-values-local.yaml.example`, and `.terraform/` cache
 
 ---
 
@@ -875,15 +875,14 @@ Bridges Key Vault (Terraform's output) to Kubernetes (Helm's input). Safe to re-
 ### `make init-values` — Generate Helm values from Terraform outputs
 **Script:** `helm/scripts/init-values.sh`
 
-Translates Terraform outputs and `terraform.tfvars` flags into Helm values files. Re-running is safe — outputs are refreshed, existing hostname is preserved unless overridden.
+Writes the two Helm values files from Terraform outputs and `terraform.tfvars`. Re-running is safe: each run writes both files again from the same inputs, and keeps the existing hostname unless an input overrides it.
 
 - Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
-- Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
+- Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name, and the SmithDB and sandbox outputs
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
-- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`, `gateway.enabled: true`, `gateway.name: langsmith-gateway`)
-- Generates `helm/values/values-overrides.yaml` with: hostname, auth config, Blob WI config, Postgres/Redis blocks, Workload Identity annotations for 5 service accounts, ingress/TLS block
-- Copies the selected sizing file from `examples/` into `helm/values/`
-- Copies addon files based on `enable_*` flags: `agent-deploys` (with `url` and `tlsEnabled` injected automatically), `agent-builder`, `insights` (minimal in-cluster file or full external example), `polly`
+- Sets `ingressClassName` based on `ingress_controller`: `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`, `gateway.enabled: true`, `gateway.name: langsmith-gateway`)
+- Copies `helm/values/examples/langsmith-values.yaml` to `helm/values/langsmith-values.yaml`
+- Merges into `helm/values/langsmith-values-overrides.yaml`, in the order 0.17 layered the files: the values from the outputs (hostname, auth, Blob Workload Identity, Postgres/Redis, ingress/TLS), the example of each enabled feature (`agent-deploys` with `url` and `tlsEnabled`, `agent-builder`, `fleet`, `insights`, `polly`), the LLM Gateway, sandboxes, the `sizing_profile` example, SmithDB, then `langsmith-values-local.yaml`. See [Helm values](#helm-values)
 
 ---
 
@@ -892,16 +891,16 @@ Translates Terraform outputs and `terraform.tfvars` flags into Helm values files
 
 The main deploy command. Handles everything from pre-checks to post-deploy verification.
 
-- Validates `values-overrides.yaml` exists (fails fast with `make init-values` hint if missing)
+- Checks the two values files before it touches the cluster: it stops when one is missing or was edited by hand, when an input changed after `make init-values`, or while a 0.17 values file is left in `helm/values` (see [What `make deploy` checks](#what-make-deploy-checks))
 - Refreshes kubeconfig via `az aks get-credentials`
-- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `nginx`, `istio-addon`, and `istio`
+- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `istio-addon` and `istio`
 - With `ingress_load_balancer = "internal"`, writes the internal load-balancer annotations into the Envoy Gateway EnvoyProxy, binds the Istio add-on Gateway to the add-on's internal gateway, and puts the subnet and IP annotations on it
 - For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on. It also applies the `langsmith-fleet-streams` HTTPRoute after the chart: the same Gateway, listener and hostname, only the long-running paths, with `timeouts.request: 0s`, because Envoy Gateway's effective 15 s response timeout on the chart's catch-all route resets them mid-response. Those paths are the playground and playground experiments, live experiment results, the prompt canvas, Fleet run streams and the Deployments proxy (`/api-host/v2`); `INGRESS_CONTROLLERS.md` lists the prefixes. Every other path keeps the default. With `enable_deployments` on, the agent-deploys values file sets the operator's `HTTPROUTE_REQUEST_TIMEOUT` to `0s` (`operator.deployment.extraEnv`), so every HTTPRoute the operator creates for an agent deployment (`/lgp/<deployment>/...`) carries `timeouts.request: 0s`, no request timeout, as on `langsmith-fleet-streams`, and agent run streams are not cut at 15 s. The operator rewrites its routes on every reconcile, so an existing install picks it up after `make init-values` and `make deploy`.
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
 - Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
 - Verifies `langsmith-config-secret` exists — auto-creates it from Key Vault if missing
 - Reads `enable_*` feature flags from tfvars and validates addon dependencies (agent builder requires deployments)
-- Builds the values chain and logs each file included: `values.yaml` → `values-overrides.yaml` → addon overlays → sizing overlay
+- Applies exactly two values files: `langsmith-values.yaml`, then `langsmith-values-overrides.yaml`
 - Guards against a stuck Helm release: auto-rolls back `pending-upgrade` state before proceeding
 - Runs `helm upgrade --install langsmith langchain/langsmith --timeout 20m`
 - Waits for core deployments to roll out (`frontend`, `backend`, `platform-backend`, `ingest-queue`, `queue`, and Deployments pods if enabled)
@@ -987,10 +986,9 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   `<release>-presidio-analyzer`) with the LangSmith identity. Those two credentials exist whether or not the flag is set,
   so turning the gateway on needs no `make apply` on a cluster applied from this version. On an older cluster, run
   `make apply` once first.
-- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls, but ingress-nginx cuts requests
-  at 60 s and Application Gateway at 30 s. `make deploy` gives `/gateway/` an Ingress of its own,
-  `<release>-llm-gateway`, copied from the chart's (same class, host, TLS and backend) and carrying a 900 s timeout: the
-  NGINX read and send timeouts with `ingress_controller = "nginx"`, Application Gateway's request timeout with `agic`.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls, but Application Gateway cuts requests
+  at 30 s. `make deploy` gives `/gateway/` an Ingress of its own,
+  `<release>-llm-gateway`, copied from the chart's (same class, host, TLS and backend) and carrying a 900 s timeout: Application Gateway's request timeout with `agic`.
   Every other path keeps the controller's default, so a slow request elsewhere is not held for fifteen minutes. Istio sets
   no request timeout by default. With `envoy-gateway` or `none`, `init-values.sh` warns, and the timeout has to be raised
   there. `make uninstall` removes the extra Ingress.
@@ -1034,7 +1032,7 @@ Managed Redis.
 2. Run `make apply`. Terraform adds the node pool, the JuiceFS Redis, the Blob container, the `sandbox-host` identity, and
    the `juicefs-csi-config` Secret.
 3. Run `make seed-secrets`. The script writes `langsmith-sandbox-callback-signing-jwk` to Key Vault.
-4. Run `make init-values && make deploy`. `init-values.sh` writes `helm/values/langsmith-values-sandboxes.yaml`.
+4. Run `make init-values && make deploy`. `init-values.sh` merges the sandbox values into `helm/values/langsmith-values-overrides.yaml`.
    `deploy.sh` adds the signing key to `langsmith-config-secret`, then waits for the `juicefs-format` Job and the
    `sandbox-host` rollout.
 
@@ -1146,41 +1144,246 @@ kubectl rollout restart deployment -n langsmith -l app=sandbox-host
 2. Run `make apply`. Terraform deletes the node pool, the JuiceFS Redis, the Blob container and its data, and the
    identity.
 
----
+#### Sandboxes in a separate cluster
 
-## Helm Values Files
+`sandbox_runtime_source = "external"` runs `sandbox-host` in a second AKS cluster, so untrusted sandbox code
+never shares a node or a cluster with LangSmith. The LangSmith cluster runs the `langsmith` chart with
+`sandboxes.external.enabled: true`, and the sandbox cluster runs the `langsmith-sandbox` chart. The JuiceFS
+Redis, the Blob container and the `sandbox-host` identity are the same as with the in-cluster runtime. This Terraform is one
+way to meet the requirements in the LangSmith docs for a separate sandbox cluster; the charts work without it.
 
-Helm values are layered — later files override earlier ones. `make deploy` applies them in this order:
+This mode does not yet work in Azure Government or with customer-managed disk keys (`aks_disk_encryption_set_id`); plan
+refuses both. **Not supported yet** below lists these gaps and the others.
 
+**What Terraform creates**
+
+- **Cluster:** `<base>-sbox-aks<suffix>` in the same resource group and VNet. It has a `system` pool for the add-ons AKS
+  marks critical, and a `sandboxhost` pool sized by the same `sandbox_host_*` variables. AKS's own add-ons cannot
+  tolerate the sandbox taint, so the system pool is required (`sandbox_system_node_vm_size`, default
+  `Standard_D4s_v5`, and `sandbox_system_node_count`, default 1; use 2 or more in production).
+- **Networking:** the cluster runs Azure CNI overlay on `aks_pod_cidr`, so only its nodes take addresses from its subnet.
+- **Settings shared with the LangSmith cluster:** the Kubernetes version, tier, OS image, zones, ClusterIP range and API
+  server access (private cluster, authorized ranges, Entra-only) follow it. The pod and ClusterIP ranges are private to
+  each cluster.
+- **Subnet:** `<vnet>-subnet-sandbox` from `sandbox_subnet_address_prefix` (default `10.0.112.0/24`), with the
+  `Microsoft.Storage` endpoint. The Blob firewall allowlists it for the JuiceFS container.
+- **NSG on that subnet, inbound:**
+  - It admits TCP 19190 (`sandbox-host`) from the AKS node subnet only.
+  - It admits all traffic from the sandbox subnet and its pod range.
+  - It denies the rest of the VNet.
+  - Port 19190 carries plain HTTP with sandbox secrets, commands and files, so it stays inside the VNet.
+- **NSG on that subnet, outbound,** closed to the rest of the VNet apart from the LangSmith ingress and JuiceFS's Redis
+  and Blob:
+  - It allows the sandbox subnet and its pod range, and the platform address `168.63.129.16` (DNS and the node agent).
+  - It allows TCP 80 and 443 to the LangSmith ingress: the AKS node subnet, plus `ingress_load_balancer_subnet_id`
+    when an internal load balancer has a subnet of its own.
+  - It allows TCP 10000 to the AKS node subnet, where the JuiceFS Redis private endpoint sits.
+  - With `storage_private_endpoint_enabled = true` and a `storage_private_endpoint_subnet_id` other than the AKS node
+    subnet, it allows TCP 443 to that subnet. The Blob accounts then have no public endpoint, so JuiceFS reaches its
+    container through the private endpoint there. In the AKS node subnet, the default, the 443 allow above covers it.
+  - It denies the rest of the VNet. Internet egress stays open: sandboxes need it.
+  - The 80, 443 and 10000 allows cover whole subnets. Whatever else listens there on those ports (node-subnet pods,
+    and private endpoints such as Key Vault, Blob or LangSmith's own Redis) is reachable from a sandbox node, though it
+    still needs its credentials.
+- **Bringing your own subnet:** with `create_vnet = false`, pass `sandbox_subnet_id`. Terraform attaches no NSG to it,
+  so plan refuses a subnet without one. Give that NSG the same rules in both directions, with one change on a subnet
+  whose route table sends `0.0.0.0/0` to a firewall: deny the VNet's address ranges by prefix, not with the
+  `VirtualNetwork` service tag. The tag also covers the prefixes of the subnet's user-defined routes, `0.0.0.0/0`
+  among them, so a deny to it would block internet egress, and with it image pulls and JuiceFS Blob traffic.
+- **Egress:** the sandbox cluster takes `aks_outbound_type` from the LangSmith cluster, so its internet traffic follows
+  the same path. With `userDefinedRouting` or `userAssignedNATGateway`, pass `sandbox_subnet_id`: a subnet you own
+  that carries the same route table or NAT gateway as `aks_subnet_id`. Plan refuses an external sandbox runtime without it,
+  and with `userDefinedRouting` checks that the subnet has a route table.
+- **Workload Identity:** the `sandbox-host` identity's federated credential moves to the sandbox cluster's issuer and
+  trusts `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>` (`langsmith-sandbox:sandbox-host`
+  by default). `init-values.sh` writes the same name into the runtime chart.
+- **In the sandbox cluster:** the `sandbox_namespace` namespace and the `juicefs-csi-config` Secret.
+- **What the LangSmith cluster loses:** the `sandboxhost` pool, the platform-backend node policy and the JuiceFS
+  Secret. `sandbox-host` reaches LangSmith through the ingress.
+
+**Requirements**
+
+- Everything under **Sandboxes** above, except the attached-cluster pool note.
+- `langsmith_helm_chart_version` set to one exact version on 0.18 or later, for example `"0.18.0"`.
+  - `deploy.sh` installs the newest `langsmith-sandbox` chart with the same appVersion, and stops before either release
+    changes if none exists.
+  - `deploy.sh` needs `jq` for this.
+- An encrypted callback path. `sandbox-host` calls `<scheme>://<hostname>/api` with signed tokens, so the plan refuses
+  `ingress_load_balancer = "public"` together with `tls_certificate_source = "none"`. Use either:
+  - `ingress_load_balancer = "internal"`, with `langsmith_domain` resolving to the load balancer inside the VNet, or
+  - TLS.
+- `aks_private_dns_zone_id` empty, `"System"` or `"None"` on a private cluster. A supplied zone needs a user-assigned
+  control-plane identity, which the sandbox cluster does not take.
+- No `additional_node_pools` entry named `sandboxhost`. In this mode it would land in the LangSmith cluster.
+- No `aks_disk_encryption_set_id`. The sandbox cluster takes no disk encryption set yet, so plan refuses it rather than
+  encrypt the sandbox nodes' disks, which hold the JuiceFS cache and sandbox images, with platform-managed keys.
+- `sandbox_juicefs_redis_source = "amr"`, the default. An in-cluster Redis runs as a ClusterIP Service in the
+  LangSmith cluster, which the sandbox cluster cannot reach, and the sandbox subnet's NSG admits only Azure Managed
+  Redis's private endpoint inside the VNet, so plan refuses `in-cluster` and `external` in this mode.
+
+**Not supported yet**
+
+- A private image mirror. `langsmith_image_registry` and `langsmith_image_pull_secret_name` reach the `langsmith`
+  release only; the runtime chart pulls its images from their default registries.
+- Custom CA trust. `aks_custom_ca_trust_certificate_files` reaches the LangSmith cluster only, so `sandbox-host` fails
+  TLS on its calls to `https://<hostname>/api` when a private CA signs the LangSmith certificate.
+- A user-assigned control-plane identity. The sandbox cluster's identity is system-assigned and exists only once the
+  cluster does, so it cannot be granted beforehand on a subnet, route table or private DNS zone in another resource
+  group.
+- Outbound allows narrowed to the ingress load balancer's address and the JuiceFS Redis endpoint's.
+- A JuiceFS Redis other than Azure Managed Redis (`sandbox_juicefs_redis_source = "in-cluster"` or `"external"`).
+- Azure Government, which follows from it: Azure Managed Redis is not offered there. The in-cluster runtime works
+  there with an in-cluster or external Redis.
+
+**Enable**
+
+1. In `infra/terraform.tfvars`, set:
+
+   ```hcl
+   enable_sandboxes             = true
+   sandbox_runtime_source      = "external"
+   langsmith_helm_chart_version = "0.18.0"
+   ```
+
+2. Run `make apply`. Stage 1 creates both clusters.
+3. Run `make seed-secrets`. The script writes `langsmith-sandbox-service-auth-secret` to Key Vault, a dedicated secret
+   for the calls between LangSmith and the sandbox hosts. The sandbox cluster never holds the API key salt.
+4. Run `make k8s-secrets`. The script adds `sandbox_service_auth_secret` to `langsmith-config-secret`. It also writes
+   `langsmith-sandbox-runtime` into the sandbox namespace, holding exactly the service-auth secret and the callback
+   signing key.
+5. Run `make init-values && make deploy`.
+   - `init-values.sh` merges the separate-cluster block into `langsmith-values-overrides.yaml`, and writes
+     `langsmith-sandbox-values-overrides.yaml`, the runtime chart's values.
+   - `deploy.sh` upgrades `langsmith` first, then installs `langsmith-sandbox` in the sandbox cluster.
+   - The scripts reach the sandbox cluster through a temporary kubeconfig, so your current context stays on the
+     LangSmith cluster.
+
+**Upgrade and uninstall**
+
+- **Upgrades:** bump `langsmith_helm_chart_version`, then run `make init-values && make deploy`. The control plane
+  upgrades first and the runtime follows in the same run.
+- **Rollback:** roll back the runtime release only.
+- **Uninstall:** `make uninstall` removes `langsmith-sandbox` from the sandbox cluster first, then the `langsmith`
+  release.
+- **One runtime per install:** run exactly one `langsmith-sandbox` release against a LangSmith install. LangSmith
+  accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its
+  elected `sandbox-host` pod turns not ready.
+- **Move from the in-cluster runtime:** set `sandbox_runtime_source = "external"`, then run steps 2 to 5 above. The
+  JuiceFS Redis, the Blob container and the identity stay the same, so Sandboxes and snapshots carry over. Before it
+  switches the `langsmith` release, `make deploy` copies the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into
+  the sandbox namespace, so Sandboxes that resume from saved memory keep their auth proxy credential injection; a CA
+  Secret you copied there yourself, as the LangSmith docs' move steps describe, is used as is. Running Sandboxes stop
+  during the switch, and LangSmith accepts the new runtime about 6 minutes after the in-cluster hosts stop reporting.
+- **Move back to the in-cluster runtime, or turn Sandboxes off:** this direction is not tested end to end yet. Before
+  you change `sandbox_runtime_source` or `enable_sandboxes`, remove the two objects Terraform keeps in the sandbox
+  cluster from state. Both go when the cluster is deleted:
+
+  ```bash
+  terraform -chdir=infra state rm 'kubernetes_secret_v1.sandbox_cluster_juicefs[0]' 'kubernetes_namespace_v1.sandbox[0]'
+  ```
+
+  Without this, plan fails reaching `no-sandbox-cluster.invalid`. Once the sandbox cluster leaves the configuration,
+  its Kubernetes provider points there, so it never falls back to your kubeconfig, where the in-cluster runtime's
+  namespace has the same name.
+
+**Verify**
+
+```bash
+az aks get-credentials -n "$(terraform -chdir=infra output -raw sandbox_cluster_name)" \
+  -g "$(terraform -chdir=infra output -raw sandbox_cluster_resource_group_name)" --file sandbox.kubeconfig
+KUBECONFIG=sandbox.kubeconfig kubectl get jobs -n langsmith-sandbox -l app.kubernetes.io/component=juicefs-format
+KUBECONFIG=sandbox.kubeconfig kubectl rollout status deployment -n langsmith-sandbox -l app=sandbox-host --timeout=10m
 ```
-values.yaml  →  values-overrides.yaml  →  addon files  →  sizing file
+
+The kubeconfig file holds cluster credentials, so delete it when you are done.
+
+---
+
+## Helm values
+
+`make deploy` applies two values files, and nothing else except the sandbox-host image tag. AWS, Azure, and GCP use the same two file names.
+
+| File in `helm/values/` | Written by | Holds |
+| --- | --- | --- |
+| `langsmith-values.yaml` | `make init-values`, on every run | A copy of `examples/langsmith-values.yaml`: the Azure base (Blob Storage with Workload Identity, the secret references) |
+| `langsmith-values-overrides.yaml` | `make init-values`, on every run | Everything else, merged into one file: the Terraform outputs, each enabled feature, the sizing profile, SmithDB, and your local file |
+| `langsmith-values-local.yaml` | You. No script writes it | Your own changes. Optional. Start from `langsmith-values-local.yaml.example` |
+
+The values files hold no secrets. `make k8s-secrets` and `make deploy` copy them from Key Vault into `langsmith-config-secret`, and the chart reads them from it (`config.existingSecretName`).
+
+`make init-values` merges the overrides file in the order 0.17 layered its files, so a later source wins: the values from the Terraform outputs (hostname, admin email, Blob Storage, Workload Identity for each service account, Postgres and Redis, ClickHouse, ingress and TLS), the example of each enabled feature, the LLM Gateway, sandboxes, the `sizing_profile` example, SmithDB, then `langsmith-values-local.yaml`. The sandbox-host JuiceFS Redis digest applies after every file. The header of the file lists the sources in that order, and the inputs of the file.
+
+### Change a value
+
+1) Put the change in `helm/values/langsmith-values-local.yaml`. `make init-values` merges this file last, so a key in it wins over every other source, the sizing profile included.
+2) Run `make init-values`, then `make deploy`.
+
+Do not edit the two generated files. Line 1 of each holds a sha256 of the rest of the file, so `make init-values` and `make deploy` find a hand edit. `make init-values` then prints the edit and writes nothing. Turn features on or off, and pick `sizing_profile`, in `terraform.tfvars`: Terraform creates the identities, databases, and secrets that each feature needs.
+
+### What `make deploy` checks
+
+Before it touches the cluster, `make deploy` stops when:
+
+- a values file is missing, or was edited after `make init-values` wrote it;
+- `terraform.tfvars`, an example file, a module script, or the local file changed after `make init-values` wrote the overrides file;
+- the `clickhouse_cluster` output, or the sandbox JuiceFS Redis digest, differ from the file;
+- a values file from the 0.17 layout is still in `helm/values` (see [Move from the 0.17 values layout](#move-from-the-017-values-layout)).
+
+Each message names the fix. In most cases it is `make init-values`.
+
+### Use the rendered files in your own CI/CD
+
+The two files are complete Helm values. A pipeline can apply them without `deploy.sh`:
+
+1) Run `make init-values` in the pipeline, after `terraform apply`, so the files match the Terraform state. It needs `helm`, `terraform`, and read access to the state. `LANGSMITH_INFRA_DIR` and `LANGSMITH_VALUES_DIR` point it at a Terraform root and a values directory outside this repo.
+2) Keep the two files as build artifacts. Do not commit them to this repository: `.gitignore` excludes them.
+3) Apply them with the chart version that `deploy.sh` resolves:
+
+```bash
+helm upgrade --install langsmith langchain/langsmith \
+  --namespace langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-overrides.yaml \
+  --set-string images.sandboxHostImage.tag=<chart-appVersion>   # only with enable_sandboxes = true
 ```
 
-All files in `helm/values/` are **gitignored** (generated or contain live secrets). The source templates live in `helm/values/examples/` and are copied by `make init-values`.
+`deploy.sh` also does work that the values do not hold: it writes `langsmith-config-secret` from Key Vault, creates the ingress and Gateway resources for the selected controller, and checks the ClickHouse Secret and the image mirror. A pipeline that skips `deploy.sh` must do those steps.
 
----
+### Move from the 0.17 values layout
 
-### `values.yaml` — Azure base config
-**Location:** `helm/values/values.yaml` (tracked in git)
+The 0.17 layout kept `values-overrides.yaml` and one file per feature and sizing profile in `helm/values`, and the tracked base was `helm/values/values.yaml`. From 0.18, `make init-values` and `make deploy` stop while one of those files is still there, because a deploy no longer applies them. The message lists each file and marks it:
 
-The Azure-specific base that applies on every deploy. Sets `nginx` as the fallback ingress class (the overrides layer replaces it, or disables Ingress for `envoy-gateway`), configures Blob Storage with Workload Identity (no static credentials), and disables Istio gateway. You should not need to edit this file — environment-specific overrides go in `values-overrides.yaml`.
+| Mark | Meaning |
+| --- | --- |
+| `same as examples/<file>` | The file holds no change of yours. |
+| `differs from examples/<file>` | The file can hold your changes. |
+| `no example of this name` | The file can hold your changes. |
+| `written by make init-values on 0.17` | The 0.17 `values-overrides.yaml`. Check it for changes you made by hand. |
 
----
+1) For each file marked `differs`, `no example`, or `written by make init-values on 0.17`, compare it with its example, for example `diff -u helm/values/examples/langsmith-values-polly.yaml helm/values/langsmith-values-polly.yaml`.
+2) Copy each change you made into `helm/values/langsmith-values-local.yaml`. Do not copy values that `make init-values` writes from Terraform, such as the hostname, the Workload Identity client IDs, and the storage account names.
+3) If 0.17 asked you for a sizing profile at the prompt, set the same `sizing_profile` in `terraform.tfvars`. The prompt is gone, and an unset `sizing_profile` means no sizing profile.
+4) Move the old files out of `helm/values`. The message prints the command, for example:
 
-### `values-overrides.yaml` — Your deployment
-**Location:** `helm/values/values-overrides.yaml` (gitignored, generated by `make init-values`)
+```bash
+mkdir -p ~/langsmith-values-0.17
+(cd helm/values && mv values-overrides.yaml langsmith-values-polly.yaml langsmith-values-sizing-production.yaml ~/langsmith-values-0.17/)
+```
 
-The live file for your specific deployment. Generated fresh from Terraform outputs each time you run `make init-values`. Contains:
+5) Run `make init-values`. To confirm the result, render the chart with the old files and with the new ones, and compare:
 
-- `config.hostname` — your FQDN (from `dns_label` or `langsmith_domain`)
-- `config.initialOrgAdminEmail` — the first org admin account
-- `config.existingSecretName: langsmith-config-secret` — tells Helm where to find all secrets
-- `config.blobStorage` — Azure storage account name + container + Workload Identity client ID
-- Workload Identity annotations for 5 service accounts (backend, platform-backend, queue, ingest-queue, host-backend)
-- Ingress + TLS block (cert-manager annotation, TLS secret name) based on `tls_certificate_source`
-- Postgres and Redis external secret references (if using managed services)
+```bash
+helm template langsmith langchain/langsmith --version <chart-version> \
+  -f helm/values/examples/langsmith-values.yaml -f ~/langsmith-values-0.17/values-overrides.yaml \
+  -f ~/langsmith-values-0.17/<each feature file> > /tmp/old.yaml
+helm template langsmith langchain/langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml -f helm/values/langsmith-values-overrides.yaml > /tmp/new.yaml
+diff /tmp/old.yaml /tmp/new.yaml
+```
 
-> Edit freely after generation — re-running `make init-values` will overwrite it.
+6) Run `make deploy`.
+
+A 0.17 `values-overrides.yaml` that kept the source host in its mirror layout (`images.registry` set) while `terraform.tfvars` leaves `langsmith_image_registry_keeps_source_host` unset stops `make init-values` first. Set the key, as the message says, then follow the steps above.
 
 ---
 
@@ -1188,7 +1391,7 @@ The live file for your specific deployment. Generated fresh from Terraform outpu
 
 See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for total CPU and memory per profile. Each sizing file holds its per-component resources and HPA ranges.
 
-`make init-values` copies one of these to `helm/values/` based on `sizing_profile` in `terraform.tfvars`.
+`make init-values` merges one of these into the overrides file, after the feature examples, based on `sizing_profile` in `terraform.tfvars`.
 
 | File | Profile | When to use |
 |------|---------|-------------|
@@ -1201,7 +1404,7 @@ See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for tot
 
 ### Addon files — Feature overlays
 
-These are copied to `helm/values/` by `make init-values` when the corresponding `enable_*` flag is set.
+`make init-values` merges each of these from `helm/values/examples/` into the overrides file when the corresponding `enable_*` flag is set.
 
 **`langsmith-values-agent-deploys.yaml`** — Pass 3 (`enable_deployments = true`)
 
@@ -1225,7 +1428,7 @@ Enables the visual agent builder UI and its two supporting services: `fleetToolS
 
 Enables ClickHouse-backed analytics in the Insights tab. The file is the same either way — it only sets `insights.enabled: true`.
 
-Where ClickHouse runs is a separate decision, made by `clickhouse_source` in `terraform.tfvars` and written into `values-overrides.yaml`, not this file:
+Where ClickHouse runs is a separate decision, made by `clickhouse_source` in `terraform.tfvars` and written into `langsmith-values-overrides.yaml`, not this file:
 
 - `in-cluster` → the chart runs ClickHouse as a StatefulSet. Dev/POC only; the PVC is a zonal Azure managed disk, so the pod is pinned to one zone for the life of the volume.
 - `external` → the chart skips ClickHouse entirely and reads the connection from the `langsmith-clickhouse` secret. With `clickhouse_host` set in `terraform.tfvars` (and `clickhouse_password` in `secrets.auto.tfvars`), `make apply` writes that secret from the `clickhouse_*` variables (`clickhouse_http_port`, `clickhouse_native_port`, `clickhouse_user`, `clickhouse_database`, `clickhouse_tls`) and `init-values.sh` says so. On an install where `init-values.sh` already created that secret before `clickhouse_host` was set, the next `make apply` would stop with `secrets "langsmith-clickhouse" already exists`, because the kubernetes provider does not adopt existing objects: `make preflight` reports it and prints the import that adopts the secret (`terraform import 'module.k8s_bootstrap.kubernetes_secret_v1.clickhouse[0]' <namespace>/langsmith-clickhouse`), after which preflight passes on the imported address and the next apply adds the label and rewrites it from the variables; deleting the secret and applying also works but drops the connection until apply finishes. With `clickhouse_host` empty, `init-values.sh` prompts for host/ports/user/password/db/tls and creates the secret, as before. `deploy.sh` refuses to deploy if the secret is missing a key. For a replicated ClickHouse (several replicas on Keeper, for example under the Altinity operator), set `clickhouse_cluster` to the cluster's name before the first deploy, in any tfvars file or `TF_VAR_clickhouse_cluster`: `init-values.sh` writes it as `clickhouse.external.cluster` from the `clickhouse_cluster` output (from `terraform.tfvars` before the first apply), and the first migration then creates `Replicated*MergeTree` tables, which a standalone schema cannot be converted to afterwards. A certificate from an internal CA is trusted through `langsmith_custom_ca_secret_name`, the chart's one CA path for ClickHouse.
@@ -1236,9 +1439,9 @@ Enables Polly, the AI-powered evaluation and monitoring agent. On chart 0.16 Pol
 
 > Requires `enable_deployments = true`.
 
-**`langsmith-values-sandboxes.yaml`** (`enable_sandboxes = true`)
+**Sandboxes** (`enable_sandboxes = true`)
 
-`make init-values` generates this file instead of copying it, because it holds the `sandbox-host` Workload Identity client ID from Terraform. It points the chart at the Terraform-managed JuiceFS Secret, pins `sandbox-host` to the sandbox pool, and gives `sandbox-host` and the `juicefs-format` Job the Workload Identity label. It holds no secret. Refer to [Sandboxes](#sandboxes).
+`make init-values` generates these values instead of merging an example, because they hold the `sandbox-host` Workload Identity client ID from Terraform. They point the chart at the Terraform-managed JuiceFS Secret, pin `sandbox-host` to the sandbox pool, and give `sandbox-host` and the `juicefs-format` Job the Workload Identity label. They hold no secret. Refer to [Sandboxes](#sandboxes).
 
 ---
 
@@ -1265,17 +1468,21 @@ azure/
 │       └── clean.sh                # Remove all generated/sensitive local files after teardown
 └── helm/                       # Pass 2: shell-script-based Helm deploy
     ├── scripts/
-    │   ├── deploy.sh           # Helm values chain deploy (base + overrides + addons + sizing)
-    │   ├── init-values.sh      # TF outputs → values-overrides.yaml; copies sizing + addon files
+    │   ├── deploy.sh           # Helm deploy: checks and applies the two values files
+    │   ├── init-values.sh      # TF outputs → langsmith-values.yaml + langsmith-values-overrides.yaml
+    │   ├── _values.sh          # Merge, seal, and check the values files (same on every cloud)
+    │   ├── test-values.sh      # Render each feature against the chart (make test-values)
     │   ├── get-kubeconfig.sh   # az aks get-credentials wrapper
     │   ├── preflight-check.sh  # Tools check + cluster connectivity + Helm repo
     │   └── uninstall.sh        # Clean Helm uninstall (Azure LB warning included)
     └── values/
-        ├── values.yaml                              # Azure base (fallback Ingress class, Blob WI, external secrets)
-        ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
-        ├── langsmith-values-sandboxes.yaml          # Gitignored, generated by init-values.sh when enable_sandboxes = true
+        ├── langsmith-values.yaml                    # Base values — gitignored, written by make init-values
+        ├── langsmith-values-overrides.yaml          # Everything else — gitignored, written by make init-values
+        ├── langsmith-values-local.yaml              # Your own changes (optional, you write it)
+        ├── langsmith-values-local.yaml.example      # Template for the file above
         └── examples/
             ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
+            ├── langsmith-values.yaml                     # Azure base (Blob WI, external secrets)
             ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
             ├── langsmith-values-sizing-dev.yaml          # Dev / CI sizing
             ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
@@ -1298,7 +1505,7 @@ azure/
 | Module | Required | Description |
 |--------|----------|-------------|
 | `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Not zonal — an Azure subnet spans every zone in its region. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
-| `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: envoy-gateway (default) / nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart). |
+| `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: envoy-gateway (default) / istio / istio-addon / agic (App Gateway v2 + AGIC chart). |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
 | `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete), its network ACLs and role assignments, and the two secrets Terraform needs (Postgres password, license key). The LangSmith app secrets are seeded by `make seed-secrets`, not Terraform. |
@@ -1699,8 +1906,8 @@ decides what the cluster can reach, and nothing works until it allows:
   the operator's per-deployment Redis and PostgreSQL templates, where
   `images.registry` does not reach (every 0.17 patch so far, and 0.18
   prereleases before 0.18.0-rc.30), gets both templates written into
-  `langsmith-values-agent-deploys.yaml` by `init-values` with the images on the
-  mirror when `enable_deployments` is on; a chart that reads
+  `langsmith-values-overrides.yaml` by `init-values`, after the agent-deploys
+  example, with the images on the mirror when `enable_deployments` is on; a chart that reads
   `images.deploymentRedisImage` and `images.deploymentDbImage` (0.18 from
   0.18.0-rc.30) takes them from the `images:` block, and nothing is written.
   `init-values` reads the chart it will install through Helm to decide (by
@@ -1709,12 +1916,13 @@ decides what the cluster can reach, and nothing works until it allows:
   takes `langsmith_image_registry_keeps_source_host = true`: `init-values` then
   writes the value as `images.registry` and the chart composes the paths.
   `langsmith_image_pull_secret_name` is written as `images.imagePullSecrets`
-  too. The three are stamped into `values-overrides.yaml`, so a change after
-  `init-values` stops the deploy until the file is regenerated. A file
-  generated with the key unset while its default was `true` (the 0.16 line's
-  v0.16.124 to .126) carries the host-kept layout; `make init-values` and
-  `make deploy` both stop on it until the key is set, so the file is not
-  regenerated under the new default for a mirror laid out the old way.
+  too. The three are recorded in the header of `langsmith-values-overrides.yaml`,
+  so a change after `init-values` stops the deploy until the file is written
+  again. A 0.17 `values-overrides.yaml` generated with the key unset while its
+  default was `true` (the 0.16 line's v0.16.124 to .126) carries the host-kept
+  layout; `make init-values` and `make deploy` both stop on it until the key is
+  set, so the file is not regenerated under the new default for a mirror laid
+  out the old way.
 - **A mirror behind an internal CA** also needs that CA on the nodes, where
   containerd does the pulling and trusts only public CAs; without it every pull
   fails with `x509: certificate signed by unknown authority`.
@@ -1754,7 +1962,7 @@ The Helm charts are not on this list when Terraform and `make deploy` run
 outside the VNet: the runner fetches them, not the cluster. From a jump host
 inside the VNet, its route has to reach `charts.jetstack.io`,
 `kedacore.github.io` (or `keda_chart_repository`), `langchain-ai.github.io`,
-`docker.io` (the Envoy Gateway chart), and the NGINX or Istio chart repository
+`docker.io` (the Envoy Gateway chart), and the Istio chart repository
 for the controller you choose.
 
 **A public ingress and user-defined routes.** With `userDefinedRouting`, a

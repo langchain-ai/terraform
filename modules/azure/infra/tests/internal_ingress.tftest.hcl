@@ -97,7 +97,7 @@ run "public_is_the_default_and_adds_no_internal_annotation" {
   command = plan
 
   variables {
-    ingress_controller = "nginx"
+    ingress_controller = "envoy-gateway"
   }
 
   assert {
@@ -105,7 +105,7 @@ run "public_is_the_default_and_adds_no_internal_annotation" {
     error_message = "ingress_load_balancer no longer defaults to public"
   }
   assert {
-    condition     = !contains(keys(module.aks.nginx_service_annotations), "service.beta.kubernetes.io/azure-load-balancer-internal")
+    condition     = !contains(keys(output.ingress_internal_annotations), "service.beta.kubernetes.io/azure-load-balancer-internal")
     error_message = "The default public load balancer was annotated internal"
   }
   assert {
@@ -114,45 +114,11 @@ run "public_is_the_default_and_adds_no_internal_annotation" {
   }
 }
 
-run "internal_nginx_gets_the_subnet_and_ip_annotations" {
-  command = plan
-
-  variables {
-    ingress_controller              = "nginx"
-    ingress_load_balancer           = "internal"
-    ingress_load_balancer_subnet_id = "${var.vnet_id}/subnets/ingress"
-    ingress_load_balancer_ip        = "10.0.40.10"
-  }
-
-  assert {
-    condition     = module.aks.nginx_service_annotations["service.beta.kubernetes.io/azure-load-balancer-internal"] == "true"
-    error_message = "ingress_load_balancer = internal did not make the NGINX Service internal"
-  }
-  assert {
-    # The annotation takes the subnet's name, not its resource ID.
-    condition     = module.aks.nginx_service_annotations["service.beta.kubernetes.io/azure-load-balancer-internal-subnet"] == "ingress"
-    error_message = "The internal-subnet annotation is not the subnet's name"
-  }
-  assert {
-    condition     = module.aks.nginx_service_annotations["service.beta.kubernetes.io/azure-load-balancer-ipv4"] == "10.0.40.10"
-    error_message = "ingress_load_balancer_ip did not reach the ipv4 annotation"
-  }
-  assert {
-    # The health-probe annotation the controller always had stays.
-    condition     = module.aks.nginx_service_annotations["service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path"] == "/nginx-health"
-    error_message = "The internal annotations replaced NGINX's health-probe annotation"
-  }
-  assert {
-    condition     = output.ingress_load_balancer_subnet_grant.made_by == "terraform" && output.ingress_load_balancer_subnet_grant.scope == "${var.vnet_id}/subnets/ingress"
-    error_message = "A load-balancer subnet other than the node subnet did not plan the cluster identity's grant there"
-  }
-}
-
 run "internal_beside_a_carved_node_subnet_gets_the_grant" {
   command = plan
 
   variables {
-    ingress_controller              = "nginx"
+    ingress_controller              = "envoy-gateway"
     aks_subnet_id                   = ""
     vnet_name                       = "shared-vnet"
     ingress_load_balancer           = "internal"
@@ -169,7 +135,7 @@ run "the_subnet_grant_can_be_left_to_the_network_owner" {
   command = plan
 
   variables {
-    ingress_controller                             = "nginx"
+    ingress_controller                             = "envoy-gateway"
     ingress_load_balancer                          = "internal"
     ingress_load_balancer_subnet_id                = "${var.vnet_id}/subnets/ingress"
     ingress_load_balancer_manage_subnet_assignment = false
@@ -194,7 +160,7 @@ run "internal_on_the_node_subnet_grants_the_system_identity_there" {
   command = plan
 
   variables {
-    ingress_controller              = "nginx"
+    ingress_controller              = "envoy-gateway"
     ingress_load_balancer           = "internal"
     ingress_load_balancer_subnet_id = var.aks_subnet_id
   }
@@ -598,7 +564,7 @@ run "a_user_assigned_control_plane_gets_the_subnet_grant" {
   command = plan
 
   variables {
-    ingress_controller                       = "nginx"
+    ingress_controller                       = "istio"
     ingress_load_balancer                    = "internal"
     ingress_load_balancer_subnet_id          = "${var.vnet_id}/subnets/ingress"
     aks_control_plane_identity               = "user"
@@ -655,7 +621,7 @@ run "an_attached_user_assigned_control_plane_gets_the_subnet_grant" {
     create_cluster                       = false
     existing_cluster_name                = "platform-aks"
     existing_cluster_resource_group_name = "platform-aks-rg"
-    ingress_controller                   = "nginx"
+    ingress_controller                   = "istio"
     ingress_load_balancer                = "internal"
     ingress_load_balancer_subnet_id      = "${var.vnet_id}/subnets/ingress"
   }
@@ -674,7 +640,7 @@ run "a_user_assigned_control_plane_needs_no_node_subnet_grant" {
   command = plan
 
   variables {
-    ingress_controller                       = "nginx"
+    ingress_controller                       = "envoy-gateway"
     aks_subnet_id                            = ""
     vnet_name                                = "shared-vnet"
     ingress_load_balancer                    = "internal"

@@ -4,8 +4,11 @@
 #
 # Chart 0.15.1 removed the bundled config.polly path and its validator hard-fails on
 # the mere presence of the key (hasKey), even when set to false. The top-level polly
-# block below is the only supported path. External Postgres/Redis wiring for the Polly
-# deployment lives in langsmith-values-standalone-polly.yaml; loading both is additive.
+# block below is the only supported path. Chat uses the langsmith_polly database on the
+# shared RDS and DB index 2 on the shared ElastiCache; init-values.sh writes that
+# storage into langsmith-values-overrides.yaml, after every values file.
+# init-values.sh merges this file into langsmith-values-overrides.yaml when
+# enable_polly = true.
 polly:
   enabled: true
   # Sizing mirrors the legacy config.polly.agent.resources defaults

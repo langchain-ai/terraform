@@ -47,7 +47,7 @@ run "enums_reject_an_unlisted_value" {
     postgres_source                           = "cloudsql"
     postgres_ssl_mode                         = "REQUIRED"
     redis_source                              = "memorystore"
-    ingress_type                              = "nginx"
+    ingress_type                              = "unsupported"
     clickhouse_source                         = "clickhouse-cloud"
     tls_certificate_source                    = "acm"
     sizing_profile                            = "small"
@@ -223,31 +223,6 @@ run "postgres_password_rejects_a_short_value" {
   }
 
   expect_failures = [var.postgres_password]
-}
-
-run "smithdb_migration_start_time_rejects_an_impossible_date" {
-  command = plan
-
-  variables {
-    smithdb_migration_start_time = "2026-13-01T00:00:00Z"
-  }
-
-  expect_failures = [var.smithdb_migration_start_time]
-}
-
-# smithdb_migration_start_time has nullable = false, so null takes the default "".
-run "smithdb_null_start_time_keeps_the_chart_window" {
-  command = plan
-
-  variables {
-    enable_smithdb               = true
-    smithdb_migration_start_time = null
-  }
-
-  assert {
-    condition     = !strcontains(output.smithdb_helm_values, "startTime")
-    error_message = "A null smithdb_migration_start_time still wrote smithdb.migration.startTime"
-  }
 }
 
 # With SmithDB off, the metastore TLS variables have no effect, so an old

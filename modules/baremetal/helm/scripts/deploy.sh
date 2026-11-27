@@ -41,19 +41,18 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="langsmith"
 NAMESPACE="langsmith"
-# Line pin, like the other providers: Helm resolves ~0.17.0 to the newest 0.17
+# Line pin, like the other providers: Helm resolves ~0.18.0 to the newest 0.18
 # patch. Override with CHART_VERSION for an exact patch.
-CHART_VERSION="${CHART_VERSION:-~0.17.0}"
+CHART_VERSION="${CHART_VERSION:-~0.18.0}"
 
-# These values use the chart 0.17 schema (SmithDB per-component sizing, the
-# gateway HTTPRoute, standalone Insights/Polly wiring). Chart 0.18 keeps that
-# layout and only adds keys, so it is accepted too, as on the other providers
-# (#433). Refuse any other line rather than deploy a half-configured release.
+# These values use the chart 0.18 schema (SmithDB per-component sizing, the
+# gateway HTTPRoute, standalone Insights/Polly wiring). Like the other providers,
+# accept only the pinned line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 or 0.18 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.17.10 make deploy" >&2
+if [[ "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.18 line." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.18 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.18.5 make deploy" >&2
   exit 1
 fi
 

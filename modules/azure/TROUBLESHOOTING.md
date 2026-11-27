@@ -561,30 +561,7 @@ kubectl get svc -n envoy-gateway-system \
 # Expected: langsmith-demo (or your dns_label value)
 ```
 
-If either is missing, set `dns_label` in `terraform.tfvars` and run `make deploy`, which re-applies the EnvoyProxy. Once DNS resolves, delete the stuck cert as in the nginx fix that follows.
-
-**Fix with `ingress_controller = "nginx"`:** set the annotation manually.
-```bash
-kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
-  service.beta.kubernetes.io/azure-dns-label-name=<dns_label> \
-  --overwrite
-# e.g. --overwrite with value: langsmith-demo
-
-# Wait 1-2 minutes, then verify DNS resolves:
-nslookup langsmith-demo.eastus.cloudapp.azure.com
-# Expected: returns the public IP
-
-# Once DNS resolves, delete the stuck cert to trigger a re-issue:
-kubectl delete certificate langsmith-tls -n langsmith
-# cert-manager re-creates it and the ACME challenge completes within 2-3 minutes
-```
-
-**Verify the annotation was set:**
-```bash
-kubectl get svc ingress-nginx-controller -n ingress-nginx \
-  -o jsonpath='{.metadata.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}'
-# Expected: langsmith-demo (or your dns_label value)
-```
+If either is missing, set `dns_label` in `terraform.tfvars` and run `make deploy`, which re-applies the EnvoyProxy. Once DNS resolves, delete the stuck Certificate to trigger reissuance: `kubectl delete certificate langsmith-tls -n langsmith`.
 
 ---
 
@@ -736,7 +713,7 @@ spec:
     solvers:
     - http01:
         ingress:
-          ingressClassName: nginx   # replace with "istio" when ingress_controller = "istio-addon" or "istio"
+          ingressClassName: istio
 EOF
 
 # Verify it becomes Ready (takes ~20 seconds)
@@ -782,7 +759,7 @@ infra/scripts/_common.sh: No such file or directory
 | `infra/scripts/_common.sh` | Shared bash helpers (`_parse_tfvar`, `pass/fail/warn/info/header`) |
 | `helm/scripts/get-kubeconfig.sh` | Reads cluster name from `terraform output`, runs `az aks get-credentials` |
 | `helm/scripts/preflight-check.sh` | Checks required tools, cluster connectivity, helm repo |
-| `helm/scripts/preflight-check.sh` | TLS check, NGINX DNS label annotation |
+| `helm/scripts/preflight-check.sh` | TLS check, ingress DNS label annotation |
 | `helm/scripts/uninstall.sh` | Uninstalls Helm release, prompts for namespace deletion |
 | `infra/scripts/status.sh` | 9-section health check for the full deployment |
 | `infra/scripts/tf-run.sh` | Wrapper for `terraform init/plan/apply/destroy` |
@@ -873,13 +850,24 @@ make deploy   # recommended — handles timeout, values chain, and release guard
 
 ## Pass 2 — init-values
 
+### `make init-values` or `make deploy` stops on the values files
+
+**Symptom:** one of these messages, before the deploy touches the cluster:
+
+| Message | Cause | Fix |
+| --- | --- | --- |
+| `... holds values files from the 0.17 layout` | A file from the 0.17 layout is in `helm/values`. A deploy no longer applies it. | Move your changes into `langsmith-values-local.yaml`, then move the files out. See [Move from the 0.17 values layout](README.md#move-from-the-017-values-layout). |
+| `... was edited after make init-values wrote it` | A generated file was edited by hand. `make init-values` prints the edit (the lines marked `+`) and writes nothing. | Move the change into `helm/values/langsmith-values-local.yaml`, delete the edited file, then run `make init-values`. |
+| `langsmith-values-overrides.yaml is out of date` | `terraform.tfvars`, a module file, the local file, the `clickhouse_cluster` output, or the JuiceFS Redis digest changed after `make init-values`. | Run `make init-values`, then `make deploy`. |
+| `helm could not merge the values files` | A values source is not valid YAML, often `langsmith-values-local.yaml`. Nothing was written. | Fix the file that Helm names, then run `make init-values`. |
+
+The header of `helm/values/langsmith-values-overrides.yaml` lists the sources of the file in merge order, and the inputs that `make deploy` compares.
+
+---
+
 ### `enable_deployments = true` (unquoted boolean) not picked up by init-values.sh
 
-**Symptom:** After setting `enable_deployments = true` in `terraform.tfvars` and running `make init-values`, the `langsmith-values-agent-deploys.yaml` file is not generated:
-```
-✗ langsmith-values-agent-deploys.yaml (not enabled)
-```
-Even though `enable_deployments = true` is clearly set in tfvars.
+**Symptom:** After setting `enable_deployments = true` in `terraform.tfvars` and running `make init-values`, the Deployments values are not in `langsmith-values-overrides.yaml`, and its header does not list `example langsmith-values-agent-deploys.yaml`, even though `enable_deployments = true` is clearly set in tfvars.
 
 **Cause:** `_parse_tfvar` in `_common.sh` used a sed command without `-n`/`p` flags. For unquoted values (`true`, `false`, numbers), sed returned the full line unchanged, which is non-empty, so the function returned `enable_deployments=true` (the full key=value) instead of just `true`. The `== "true"` check then failed.
 
@@ -893,7 +881,7 @@ Even though `enable_deployments = true` is clearly set in tfvars.
 
 **Cause:** `config.deployment.url` was empty or `config.deployment.tlsEnabled` was `false` when TLS is enabled. The operator builds agent endpoint URLs using these values — an empty URL or wrong protocol causes the health check to fail.
 
-**Fix:** `init-values.sh` now automatically injects `url` and `tlsEnabled` into `langsmith-values-agent-deploys.yaml` after copying from examples. If deploying manually, set both explicitly:
+**Fix:** `init-values.sh` merges `url` and `tlsEnabled` into `langsmith-values-overrides.yaml` after the agent-deploys example. If deploying manually, set both explicitly:
 ```yaml
 config:
   deployment:
@@ -913,24 +901,11 @@ Warning  Failed  kubelet  Error: secret "langsmith-clickhouse" not found
 ```
 Multiple pods fail with `CreateContainerConfigError` immediately after enabling `enable_insights = true`.
 
-**Cause:** `langsmith-values-insights.yaml` (copied from the AWS-oriented example) sets `clickhouse.external.enabled: true` with `existingSecretName: langsmith-clickhouse`. This overrides the in-cluster ClickHouse configuration and expects an external secret that doesn't exist.
+**Cause:** a values file sets `clickhouse.external.enabled: true` with `existingSecretName: langsmith-clickhouse`, while `clickhouse_source = "in-cluster"`. This overrides the in-cluster ClickHouse configuration and expects an external secret that doesn't exist. On 0.17 an Insights file copied from an AWS-oriented example did this.
 
-**Fix:** `init-values.sh` no longer puts any ClickHouse configuration in the insights file. The generated file only enables the feature:
-```yaml
-insights:
-  enabled: true
-```
+**Fix:** The Insights example only enables the feature (`insights.enabled: true`). Look for `clickhouse.external` in `helm/values/langsmith-values-local.yaml`, remove it there, then run `make init-values` and `make deploy`.
 
-If you have this issue on an existing deployment, overwrite the file and redeploy:
-```bash
-cat > helm/values/langsmith-values-insights.yaml << 'EOF'
-insights:
-  enabled: true
-EOF
-make deploy
-```
-
-For **external ClickHouse**, set `clickhouse_source = "external"` in `terraform.tfvars` and re-run `make init-values`. That writes the `clickhouse.external` block into `values-overrides.yaml` and prompts for the connection details to create the `langsmith-clickhouse` secret.
+For **external ClickHouse**, set `clickhouse_source = "external"` in `terraform.tfvars` and re-run `make init-values`. That writes the `clickhouse.external` block into `langsmith-values-overrides.yaml` and prompts for the connection details to create the `langsmith-clickhouse` secret.
 
 The same symptom appears when the secret exists but is missing a key. The chart reads all seven through `secretKeyRef` with `optional: false`:
 
@@ -986,24 +961,23 @@ kubectl exec -n langsmith deploy/langsmith-frontend -- env | grep POLLY
 
 **Cause:** `config.deployment.url` was set but `config.deployment.enabled: true` was omitted. The chart silently skips creating `listener` and `operator` when `enabled` is false (the default).
 
-**Fix:** Add `enabled: true` inside the `deployment` block in `values-overrides.yaml`:
+**Fix:** Set `enable_deployments = true` in `terraform.tfvars`, then run `make init-values` and `make deploy`. The agent-deploys example sets `config.deployment.enabled: true`:
 ```yaml
 config:
   deployment:
     enabled: true          # required — url alone is not enough
     url: "https://<your-hostname>"
 ```
-Then re-run helm upgrade.
 
 ---
 
 ### Duplicate top-level `config:` key silently drops values
 
-**Symptom:** Pass 3 or later config (`deployment.url`, `agentBuilder.enabled`, etc.) appears to have no effect even though it is set in `values-overrides.yaml`.
+**Symptom:** A setting under `config:` appears to have no effect even though it is set in `langsmith-values-local.yaml`.
 
-**Cause:** YAML does not allow duplicate top-level keys. When a second `config:` block is added (e.g. by uncommenting a Pass 3 section that starts with `config:`), only one block is used — the other is silently dropped.
+**Cause:** YAML does not allow duplicate top-level keys. When a second `config:` block is added (e.g. by uncommenting an example that starts with `config:`), only one block is used — the other is silently dropped.
 
-**Fix:** Always add new config blocks *inside* the existing `config:` key — never create a second `config:` at the top level. Use `helm get values langsmith -n langsmith` to verify what the chart actually received.
+**Fix:** Always add new config blocks *inside* the existing `config:` key — never create a second `config:` at the top level. After `make init-values`, read the merged value in `langsmith-values-overrides.yaml`, or use `helm get values langsmith -n langsmith` to verify what the chart actually received.
 
 ---
 
@@ -1012,7 +986,7 @@ Then re-run helm upgrade.
 Changing `deployments_encryption_key`, `agent_builder_encryption_key`, or `insights_encryption_key` after their first use permanently corrupts the data they protect. There is no recovery path.
 
 - Do not rotate these keys.
-- Do not set `config.agentBuilder.encryptionKey` or `insights.encryptionKey` inline in `values-overrides.yaml` — the chart reads them from `langsmith-config-secret` via `existingSecretName`. Setting inline overrides the secret reference.
+- Do not set `config.agentBuilder.encryptionKey` or `insights.encryptionKey` inline in `langsmith-values-local.yaml` — the chart reads them from `langsmith-config-secret` via `existingSecretName`. Setting inline overrides the secret reference.
 
 ---
 
@@ -1146,16 +1120,13 @@ az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningStat
 
 **Symptom:** `terraform destroy` hangs waiting to delete the VNet or subnet with no progress.
 
-**Cause:** The Azure Load Balancer provisioned for the ingress controller's LoadBalancer service (the Envoy proxy service for `envoy-gateway`, `ingress-nginx-controller` for `nginx`) is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
+**Cause:** The Azure Load Balancer provisioned for the ingress controller's LoadBalancer service (the Envoy proxy service for `envoy-gateway`) is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
 
 **Fix — correct teardown order:**
 ```bash
 # 1. Uninstall LangSmith — removes pods, services, and the Azure Load Balancer
 #    (for envoy-gateway, make uninstall deletes the Gateway, which removes the proxy service)
 make uninstall
-
-# 1b. With ingress_controller = "nginx": remove the ingress-nginx Load Balancer
-helm uninstall ingress-nginx -n ingress-nginx --wait
 
 # 2. Delete the namespace (clears any lingering finalizers)
 kubectl delete namespace langsmith --timeout=60s
@@ -1181,8 +1152,7 @@ object created by the previous 0.15 release.
 kubectl delete job langsmith-agent-bootstrap -n langsmith --ignore-not-found
 ```
 
-The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. See
-[MIGRATION-0.15-to-0.16.md](../../MIGRATION-0.15-to-0.16.md).
+The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance.
 
 ---
 
@@ -1190,9 +1160,9 @@ The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. See
 
 **Symptom:** `langsmith-listener` pods repeatedly crash. `kubectl describe pod` shows `Reason: OOMKilled` / `Exit Code: 137`. Cluster memory looks fine overall.
 
-**Cause:** `make deploy` loads the sizing file last, so its listener limit wins over the `langsmith-values-agent-deploys.yaml` overlay. The `dev` and `production` profiles cap the listener at 2Gi and `minimum` caps it at 1536Mi. When Deployments (Pass 3) are enabled, the listener is heavier and can exceed that limit.
+**Cause:** `make init-values` merges the sizing profile after the feature examples, so its listener limit wins over the agent-deploys example. The `dev` and `production` profiles cap the listener at 2Gi and `minimum` caps it at 1536Mi. When Deployments (Pass 3) are enabled, the listener is heavier and can exceed that limit.
 
-**Fix:** Set `sizing_profile = "production-large"` in `terraform.tfvars`, which gives the listener 4Gi. Then run `make apply`, `make init-values`, and `make deploy`. To stay on your profile, raise `listener.deployment.resources.limits.memory` in `helm/values/langsmith-values-sizing-<profile>.yaml` and run `make deploy`. `make init-values` copies the sizing file again, so repeat the edit after each run.
+**Fix:** Set `sizing_profile = "production-large"` in `terraform.tfvars`, which gives the listener 4Gi. Then run `make apply`, `make init-values`, and `make deploy`. To stay on your profile, set `listener.deployment.resources.limits.memory` in `helm/values/langsmith-values-local.yaml`, which merges after the profile, then run `make init-values` and `make deploy`.
 
 **Key gotcha — `resources` vs `deployment.resources`:** The LangSmith chart uses `listener.deployment.resources` (not `listener.resources`) for container resource limits. Setting `listener.resources` in an overlay file is silently ignored. Always use the `deployment.resources` path.
 

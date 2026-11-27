@@ -141,8 +141,11 @@ output "sandbox_juicefs_redis_instance_name" {
 }
 
 output "sandbox_juicefs_bucket_url" {
-  description = "GCS bucket URL passed to JuiceFS for sandbox object storage"
-  value       = var.enable_sandboxes ? module.storage.bucket_url : null
+  description = "GCS bucket URL passed to JuiceFS for sandbox object storage: the trace bucket with the in-cluster runtime, a JuiceFS-only bucket with an external runtime"
+  value = (
+    local.external_sandbox_runtime ? google_storage_bucket.sandbox_juicefs[0].url
+    : var.enable_sandboxes ? module.storage.bucket_url : null
+  )
 }
 
 output "sandbox_host_machine_type" {
@@ -153,6 +156,31 @@ output "sandbox_host_machine_type" {
 output "sandbox_host_node_service_account_email" {
   description = "Restricted GCP service account email assigned to sandbox-host GKE nodes"
   value       = var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+}
+
+output "sandbox_runtime_source" {
+  description = "Sandbox runtime location: in-cluster or external (null when sandboxes are disabled)"
+  value       = var.enable_sandboxes ? var.sandbox_runtime_source : null
+}
+
+output "sandbox_cluster_name" {
+  description = "Dedicated sandbox GKE cluster name (external runtime only)"
+  value       = local.external_sandbox_runtime ? module.sandbox_gke[0].cluster_name : null
+}
+
+output "sandbox_cluster_location" {
+  description = "Dedicated sandbox GKE cluster location (external runtime only)"
+  value       = local.external_sandbox_runtime ? module.sandbox_gke[0].location : null
+}
+
+output "sandbox_namespace" {
+  description = "Namespace of the langsmith-sandbox release in the sandbox cluster (external runtime only)"
+  value       = local.external_sandbox_runtime ? var.sandbox_namespace : null
+}
+
+output "sandbox_runtime_secret_name" {
+  description = "Secret in the sandbox namespace holding sandbox_service_auth_secret and sandbox_callback_signing_jwk (external runtime only)"
+  value       = local.external_sandbox_runtime ? var.sandbox_runtime_secret_name : null
 }
 
 #------------------------------------------------------------------------------
@@ -384,19 +412,9 @@ output "smithdb_metastore_secret_name" {
   value       = var.enable_smithdb ? "smithdb-metastore" : null
 }
 
-output "smithdb_taskdb_secret_name" {
-  description = "Kubernetes secret holding the in-chart taskdb Postgres password used by the historical migration"
-  value       = var.enable_smithdb ? "smithdb-taskdb" : null
-}
-
 output "smithdb_ingestion_enabled" {
   description = "Whether LangSmith writes are routed to SmithDB as well as ClickHouse"
   value       = var.smithdb_ingestion_enabled
-}
-
-output "smithdb_migration_enabled" {
-  description = "Whether the historical ClickHouse-to-SmithDB migration integration is enabled"
-  value       = var.smithdb_migration_enabled
 }
 
 output "smithdb_query_enabled" {
@@ -437,7 +455,7 @@ output "smithdb_cache_storage" {
   value       = var.enable_smithdb ? local.smithdb_cache_storage : null
 }
 
-# helm/scripts/init-values.sh writes this to langsmith-values-smithdb-sizing.yaml.
+# helm/scripts/init-values.sh merges this into langsmith-values-overrides.yaml.
 output "smithdb_helm_values" {
   description = "SmithDB sizing and placement Helm values as YAML, or null when SmithDB is disabled"
   value       = local.smithdb_helm_values

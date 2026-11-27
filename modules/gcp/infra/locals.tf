@@ -34,6 +34,41 @@ locals {
     "roles/stackdriver.resourceMetadata.writer",
   ])
 
+  # sandbox_runtime_source = "external": a dedicated sandbox GKE
+  # cluster runs the langsmith-sandbox chart; the LangSmith cluster gets none of
+  # the same-cluster sandbox pieces.
+  in_cluster_sandbox_runtime = var.enable_sandboxes && var.sandbox_runtime_source == "in-cluster"
+  external_sandbox_runtime   = var.enable_sandboxes && var.sandbox_runtime_source == "external"
+  sandbox_cluster_name       = "${local.base_name}-sbox-gke"
+  # GKE system add-ons (kube-dns and friends) cannot tolerate the sandbox-host
+  # taint, so the sandbox cluster keeps a small untainted pool for them.
+  sandbox_system_node_sa_account_id = "${local.base_name}-sbox-sys"
+  sandbox_system_node_sa_project_roles = toset([
+    "roles/container.defaultNodeServiceAccount",
+    "roles/monitoring.metricWriter",
+    "roles/stackdriver.resourceMetadata.writer",
+  ])
+  # One exact chart version (SemVer, optional prerelease) on 0.18 or later.
+  # Keep in step with helm/scripts/deploy.sh and the AWS module.
+  external_runtime_chart_version_pattern = "^(0\\.(1[89]|[2-9][0-9])|[1-9][0-9]*\\.[0-9]+)\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+
+  # The sandbox ranges must not overlap each other or the LangSmith ranges. Two
+  # CIDRs overlap when either one's network address, masked to the other's
+  # prefix, is the other's network address. Pairs are built by position, not
+  # value, so two variables set to the same CIDR still count as an overlap.
+  vpc_cidrs = [var.subnet_cidr, var.pods_cidr, var.services_cidr, var.sandbox_subnet_cidr, var.sandbox_pods_cidr, var.sandbox_services_cidr]
+  sandbox_cidr_pairs = [
+    for pair in setproduct(range(3, 6), range(6)) : [local.vpc_cidrs[pair[0]], local.vpc_cidrs[pair[1]]]
+    if pair[0] != pair[1]
+  ]
+  sandbox_cidr_overlaps = [
+    for pair in local.sandbox_cidr_pairs : "${pair[0]} and ${pair[1]}"
+    if can(cidrhost(pair[0], 0)) && can(cidrhost(pair[1], 0)) && (
+      cidrhost("${cidrhost(pair[0], 0)}/${split("/", pair[1])[1]}", 0) == cidrhost(pair[1], 0)
+      || cidrhost("${cidrhost(pair[1], 0)}/${split("/", pair[0])[1]}", 0) == cidrhost(pair[0], 0)
+    )
+  ]
+
   # The sandbox-host machine type follows sizing_profile unless it is set.
   sandbox_host_production_profile = contains(["production", "production-large"], var.sizing_profile)
   sandbox_host_machine_type = coalesce(
@@ -52,6 +87,9 @@ locals {
 
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"
+  # An external runtime gives JuiceFS its own bucket, so the sandbox node service
+  # account's grant needs no IAM condition and never reaches trace data.
+  sandbox_juicefs_bucket_name = "${var.project_id}-${local.base_name}-jfs${local.suffix}"
 
   # SmithDB (optional, enable_smithdb)
   smithdb_name                    = "${local.base_name}-smithdb"
@@ -124,20 +162,13 @@ locals {
   smithdb_cache_components   = ["query", "ingestion", "compactionWorker"]
   smithdb_compute_components = ["compaction", "clusterManager"]
 
-  # minimal: explicit resources, limits 2x requests. A partial resources block
-  # keeps the chart default for each key that it omits. The chart Job default
-  # has 100Gi of ephemeral-storage, so the Job block sets every key.
-  # The taskdb keeps the chart default resources.
+  # minimal: explicit resources, limits 2x requests.
   smithdb_minimal_resources = {
     query            = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     ingestion        = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     compactionWorker = { requests = { cpu = "1", memory = "2Gi" }, limits = { cpu = "2", memory = "4Gi" } }
     compaction       = { requests = { cpu = "500m", memory = "1Gi" }, limits = { cpu = "1", memory = "2Gi" } }
     clusterManager   = { requests = { cpu = "250m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } }
-    migration_job = {
-      requests = { cpu = "1", memory = "4Gi", "ephemeral-storage" = "10Gi" }
-      limits   = { cpu = "2", memory = "8Gi", "ephemeral-storage" = "20Gi" }
-    }
   }
 
   # Default node pool shapes. An explicit smithdb_* pool variable wins.
@@ -156,8 +187,6 @@ locals {
     var.smithdb_instance_store_local_ssd_count,
     local.smithdb_network_disk ? 0 : local.smithdb_pool_default.local_ssd_count,
   )
-  # network-disk: the backfill Job takes 100Gi of ephemeral storage from the
-  # boot disk, and a 200 GB boot disk has only about 97 GiB allocatable.
   smithdb_instance_store_disk_size = coalesce(var.smithdb_instance_store_disk_size, local.smithdb_network_disk ? 300 : 100)
   smithdb_compute_machine_type     = coalesce(var.smithdb_compute_machine_type, local.smithdb_pool_default.compute_type)
 
@@ -188,8 +217,8 @@ locals {
   smithdb_metastore_use_ssl        = coalesce(var.smithdb_metastore_use_ssl, !local.smithdb_metastore_use_auth_proxy)
 
   #----------------------------------------------------------------------------
-  # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
-  # to helm/values/langsmith-values-smithdb-sizing.yaml.
+  # SmithDB Helm values (output smithdb_helm_values). init-values.sh merges them
+  # into helm/values/langsmith-values-overrides.yaml before the SmithDB example.
   #----------------------------------------------------------------------------
   smithdb_pin_cache_pool = {
     nodeSelector = { "smithdb-local/instance-store" = "true" }
@@ -199,12 +228,9 @@ locals {
     nodeSelector = { "smithdb-local/compute" = "true" }
     tolerations  = [{ key = "smithdb-local/compute", operator = "Equal", value = "true", effect = "NoSchedule" }]
   }
-  smithdb_start_time_values = var.smithdb_migration_start_time != "" ? { startTime = var.smithdb_migration_start_time } : {}
 
-  # Values for small, medium, and large. The backfill Job goes to the cache
-  # pool, which has room for its 100Gi ephemeral-storage request, and the taskdb
-  # goes to the compute pool. Each cache component gets the tier replicas as
-  # its HPA minReplicas, and keeps the chart maxReplicas (10). The tier
+  # Values for small, medium, and large. Each cache component gets the tier
+  # replicas as its HPA minReplicas, and keeps the chart maxReplicas (10). The tier
   # replicas also go to deployment.replicas. The chart uses that field only
   # when the HPA is off.
   smithdb_values_cache_autoscaling = {
@@ -216,12 +242,6 @@ locals {
   smithdb_values_pools_common = merge(
     { resourceTier = local.smithdb_resource_tier },
     { for c in local.smithdb_compute_components : c => { deployment = local.smithdb_pin_compute_pool } },
-    {
-      migration = merge(local.smithdb_start_time_values, {
-        job    = local.smithdb_pin_cache_pool
-        taskdb = { postgres = { statefulSet = local.smithdb_pin_compute_pool } }
-      })
-    },
   )
 
   # local-ssd: each cache is an emptyDir on node Local SSD. The chart needs
@@ -270,11 +290,6 @@ locals {
         }
       },
       { for c in local.smithdb_compute_components : c => { deployment = { resources = local.smithdb_minimal_resources[c] } } },
-      {
-        migration = merge(local.smithdb_start_time_values, {
-          job = { resources = local.smithdb_minimal_resources.migration_job }
-        })
-      },
     )
   }
 

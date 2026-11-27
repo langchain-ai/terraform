@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`, never `0.18`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.18.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.18.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.18.0` = latest `0.18.x`, never `0.19`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -21,10 +21,10 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
-| **Dev** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
+| **Dev** | RDS PostgreSQL (small instance) | ElastiCache Redis (small instance) | In-cluster pod | Demo / POC |
 | **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster ClickHouse | Scalable / persistent |
 
-> **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
+> **As of LangSmith v0.18, blob storage is required.** The module creates the S3 bucket and points LangSmith at it.
 >
 > **In-cluster ClickHouse is recommended for production during the transition to SmithDB.** It runs as a single StatefulSet. Customers who prefer a managed ClickHouse lifecycle can use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
@@ -147,31 +147,32 @@ aws/
     │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
     │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
     │   ├── sso.sh                  ← Turn on SSO login after a working password install (make sso)
-    │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
+    │   ├── init-values.sh          ← Write the two values files from Terraform outputs
+    │   ├── _values.sh              ← Merge, seal, and check the values files (same on every cloud)
+    │   ├── test-values.sh          ← Render each feature against the chart (make test-values)
     │   ├── preflight-check.sh      ← Pre-deploy validation
     │   └── uninstall.sh            ← Helm uninstall + cleanup
     └── values/
-        ├── examples/                                    ← Reference templates (init-values.sh copies from here)
+        ├── examples/                                    ← Module sources (init-values.sh merges from here)
         │   ├── langsmith-values.yaml                    ← Base AWS values
-        │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
-        │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
-        │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
         │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
         │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
         │   ├── langsmith-values-insights.yaml           ← Insights
         │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
-        │   ├── langsmith-values-standalone-polly.yaml   ← Chat external-storage overlay
-        │   ├── langsmith-values-standalone-insights.yaml ← Insights external-storage overlay
         │   ├── langsmith-values-engine.yaml             ← Engine (see ENGINE.md)
+        │   ├── langsmith-values-sso.yaml                ← SSO login
         │   ├── langsmith-values-smithdb.yaml            ← SmithDB base
-        │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
+        │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) reference
         │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
         │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
-        ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
-        ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
-        ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
-        └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
+        ├── langsmith-values.yaml                        ← Base values (written by make init-values)
+        ├── langsmith-values-overrides.yaml              ← Everything else, one file (written by make init-values)
+        ├── langsmith-values-local.yaml                  ← Your own changes (optional, you write it)
+        ├── langsmith-values-local.yaml.example          ← Template for the file above
+        └── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
 ```
+
+See [Helm values](#helm-values) for who writes each file and how to change a value.
 
 ---
 
@@ -205,12 +206,10 @@ eks_managed_node_groups = {
   }
 }
 
-# RDS PostgreSQL (required when postgres_source = "external")
-postgres_source   = "external"
+# RDS PostgreSQL
 postgres_password = "<strong-password>"   # or: export TF_VAR_postgres_password=...
 
-# ElastiCache Redis (required when redis_source = "external")
-redis_source     = "external"
+# ElastiCache Redis
 redis_auth_token = "<min-16-char-token>"  # or: export TF_VAR_redis_auth_token=...
 
 # TLS — "acm" (default), "letsencrypt", or "none"
@@ -261,6 +260,125 @@ terraform {
 }
 ```
 
+### Move an in-cluster PostgreSQL to RDS
+
+From 0.18 the module always creates RDS, and `postgres_source = "in-cluster"` fails at
+plan. Move the data before the first 0.18 apply. That apply points the
+`langsmith-postgres` Secret at a new, empty RDS instance, and it removes the keys that
+the in-cluster PostgreSQL pod needs to start again. Writes made after the dump are not
+copied, so stop using LangSmith until the move is done. The commands use the default
+namespace and release name, `langsmith`.
+
+1. Dump the in-cluster database to your machine. The password stays inside the pod:
+
+   ```bash
+   kubectl exec -n langsmith langsmith-postgres-0 -c postgres -- \
+     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+     > langsmith.dump
+   ```
+
+2. Remove `postgres_source = "in-cluster"` from `infra/terraform.tfvars`, then run
+   `make apply`. It creates the RDS instance.
+3. Restore the dump before `make deploy`, which runs the LangSmith database migrations.
+   RDS is reachable only from inside the VPC, so restore from a pod that reads the new
+   connection URL from the Secret. Save this as `pg-restore.yaml`, with the image at
+   your RDS engine version:
+
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: pg-restore
+     namespace: langsmith
+   spec:
+     restartPolicy: Never
+     containers:
+       - name: pg-restore
+         image: postgres:18
+         command: ["sleep", "3600"]
+         env:
+           - name: DATABASE_URL
+             valueFrom:
+               secretKeyRef:
+                 name: langsmith-postgres
+                 key: connection_url
+   ```
+
+   Then copy the dump into the pod and restore it:
+
+   ```bash
+   kubectl apply -f pg-restore.yaml
+   kubectl wait -n langsmith --for=condition=Ready pod/pg-restore --timeout=180s
+   kubectl cp langsmith.dump langsmith/pg-restore:/tmp/langsmith.dump
+   kubectl exec -n langsmith pg-restore -- \
+     sh -c 'pg_restore --no-owner --no-privileges -d "$DATABASE_URL" /tmp/langsmith.dump'
+   kubectl delete pod -n langsmith pg-restore
+   ```
+
+4. Run `make init-values` and `make deploy`. The deploy removes the in-cluster
+   PostgreSQL StatefulSet and keeps its volume.
+5. When LangSmith shows your organizations, projects, and datasets, delete the old
+   volume. This cannot be undone, so keep `langsmith.dump` until you no longer need it:
+
+   ```bash
+   kubectl delete pvc -n langsmith data-langsmith-postgres-0
+   ```
+
+### Move an in-cluster Redis to ElastiCache
+
+From 0.18 the module always creates ElastiCache, and `redis_source = "in-cluster"`
+fails at plan. Redis holds LangSmith's queues and caches, so there is no data to copy.
+But runs that LangSmith accepted and has not processed yet wait in the in-cluster
+queue, and the first 0.18 apply points LangSmith at a new, empty ElastiCache instance.
+Runs still in the old queue are not processed.
+
+1. Stop sending traces, and wait until the last ones show in LangSmith.
+2. Remove `redis_source = "in-cluster"` from `infra/terraform.tfvars`, then run
+   `make apply`. It creates the ElastiCache instance.
+3. Run `make init-values` and `make deploy`. The deploy removes the in-cluster Redis.
+
+### Move Fleet, Chat or Insights data to RDS
+
+From 0.18 Fleet, LangSmith Chat and Insights always use their own database on the
+shared RDS instance (`langsmith_fleet`, `langsmith_polly`, `langsmith_insights`) and
+their own DB index on the shared ElastiCache (1, 2 and 3). Engine uses the Insights
+storage. `fleet_storage`, `polly_storage` or `insights_storage = "in-cluster"` fails
+at plan while that add-on is on (for `insights_storage`, Insights or Engine).
+`enable_standalone_polly` and `enable_standalone_insights` always fail at plan, and
+`make deploy` stops on them too: replace them with `enable_polly = true`,
+`polly_storage = "external"`, `enable_insights = true` and
+`insights_storage = "external"`.
+
+The first 0.18 deploy points each feature at its new, empty database, so move the data
+before it. The steps use Chat (`polly`); for Fleet or Insights, put `fleet` or
+`insights` in its place. Redis holds only each feature's job queue, so there is no data
+to copy there. But writes made after the dump are not copied, and jobs still in the
+in-cluster queue are not run, so stop using the feature until the move is done.
+
+1. Dump the in-cluster database to your machine:
+
+   ```bash
+   kubectl exec -n langsmith langsmith-standalone-polly-postgres-0 -c postgres -- \
+     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+     > polly.dump
+   ```
+
+2. Set `polly_storage = "external"` in `infra/terraform.tfvars`, then run `make apply`.
+   It creates the `langsmith_polly` database and the `langsmith-polly-postgres` Secret.
+   `make deploy` stops on a release that keeps the feature in the cluster until this
+   line says `external`. It also stops when the line is missing, because 0.17 read an
+   unset `polly_storage` or `insights_storage` as `in-cluster`.
+3. Restore the dump with the `pg-restore.yaml` pod from
+   [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds), with
+   the Secret `name: langsmith-polly-postgres` and `key: postgres_connection_url`.
+4. Run `make init-values` and `make deploy`. The deploy removes the in-cluster
+   StatefulSets and keeps their volumes.
+5. When the feature shows its data, delete the old volumes. This cannot be undone:
+
+   ```bash
+   kubectl delete pvc -n langsmith data-langsmith-standalone-polly-postgres-0 data-langsmith-standalone-polly-redis-0
+   ```
+
 ---
 
 ## Pod networking
@@ -299,9 +417,7 @@ callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configure
 add-on with one ENIConfig per AZ and holds node group creation for two minutes
 after the cluster is active, so the add-on is configured before the first
 nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
-into that add-on. When `enable_smithdb = true`, it also sets Karpenter's
-`settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
-node's primary ENI.
+into that add-on.
 
 Choose the mode at cluster creation. Switching an existing cluster changes the
 add-on configuration only: nodes that joined before the switch keep their pod
@@ -336,7 +452,7 @@ alb_existing_security_group_id               = "sg-0123456789abcdef0"
 bastion_existing_security_group_id           = "sg-0123456789abcdef1"
 postgres_existing_security_group_id          = "sg-0123456789abcdef2"
 redis_existing_security_group_id             = "sg-0123456789abcdef3"
-smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+smithdb_metastore_existing_security_group_id = "sg-0123456789abcdef4"
 ```
 
 Each is independent: supply one, some, or all of them. Leave a variable unset
@@ -355,8 +471,8 @@ table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
 |-----------|-------------------------------|
 | ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
 | Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
-| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
-| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |
+| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR. With `sandbox_runtime_source = "external"`, admit the LangSmith node security group (and the bastion's) instead of the VPC CIDR, which also contains the sandbox nodes |
+| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR. With an external sandbox runtime, the same narrowing as Postgres |
 | SmithDB metastore (RDS) | See below. This one component can have its ingress rule managed by Terraform |
 
 ### The one exception: SmithDB's metastore security group
@@ -367,18 +483,17 @@ the same `apply`. You can't look that ID up and pre-provision the rule yourself
 before running Terraform. So this one case has an opt-in escape hatch:
 
 ```hcl
-smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
-smithdb_manage_byo_security_group_rules      = true   # default: false
+smithdb_metastore_existing_security_group_id           = "sg-0123456789abcdef4"
+smithdb_metastore_manage_existing_security_group_rules = true   # default: false
 ```
 
-Leave `smithdb_manage_byo_security_group_rules` at its default (`false`) and the
-supplied group is attach-only, same as everywhere else, but then you're
-responsible for adding tcp/5432 ingress from the EKS node security group
-yourself (`module.eks.node_security_group_id` after a first apply, or from the
-EKS console) before SmithDB pods can reach the metastore. Set it to `true` and
-Terraform adds that ingress rule to your security group. `terraform destroy`
-removes the rule. Manual teardown without Terraform state leaves the rule in
-place; see [Teardown](#teardown) / `TEARDOWN.md` for removal instructions.
+Leave `smithdb_metastore_manage_existing_security_group_rules` at its default (`false`) and the supplied group is attach-only, same as everywhere else, but then you're responsible for adding tcp/5432 ingress from the EKS node security group yourself (`module.eks.node_security_group_id` after a first apply, or from the EKS console) before SmithDB pods can reach the metastore.
+Set it to `true` and Terraform adds that ingress rule to your security group.
+`terraform destroy` removes the rule.
+Manual teardown without Terraform state leaves the rule in place; see [Teardown](#teardown) / `TEARDOWN.md` for removal instructions.
+
+Before 0.18 these two settings were `smithdb_existing_metastore_security_group_id` and `smithdb_manage_byo_security_group_rules`.
+The old names fail at plan, so rename them in `infra/terraform.tfvars` before the first 0.18 apply.
 
 ### What Terraform does not check
 
@@ -426,6 +541,95 @@ kubectl get ns
 kubectl get pods -n kube-system
 ```
 
+### Optional dedicated sandbox cluster
+
+`enable_sandboxes = true` uses the main EKS cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
+
+```hcl
+enable_sandboxes        = true
+sandbox_runtime_source = "external"
+sandbox_namespace       = "langsmith-sandbox"
+
+langsmith_helm_chart_version = "0.18.0" # exact, 0.18 or later
+```
+
+An external sandbox runtime needs one exact chart version on 0.18 or later: the runtime chart is paired with that exact chart (see [Versions](#versions)), so the default `~0.18.0` range is not enough. `terraform plan` and `make deploy` both reject anything else.
+
+Terraform then creates a second EKS cluster in the same VPC and private subnets, with only the KVM-capable sandbox node group. Around it, Terraform creates:
+
+- an IRSA role that trusts exactly one ServiceAccount, `system:serviceaccount:<sandbox_namespace>:<sandbox_service_account_name>`, with S3 access to the JuiceFS prefix of the trace bucket and nothing else: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:AbortMultipartUpload` on `<bucket>/<sandbox_juicefs_name>/*`, and `s3:ListBucket` for that prefix only;
+- the network rules below;
+- two write-only Secrets in the sandbox namespace: the runtime Secret and the JuiceFS config (volume name, metadata URL, bucket).
+
+The S3 bucket and the dedicated `noeviction` ElastiCache metadata store remain shared infrastructure in the VPC.
+
+#### Network
+
+- **TCP 19190 into the sandbox nodes** comes from two sources only, both named by security group: the LangSmith cluster's node security group (where `platform-backend` and `ingest-queue` run; pod ENIs carry the same group, with custom networking too) and the sandbox nodes themselves, which forward ingress requests, dial sandbox links and send live-migration streams to each other on that port. Nothing else opens 19190.
+- **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, or the traffic would leave a network you trust, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.external.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
+- **Sandbox nodes reach the LangSmith API** at the runtime chart's `config.endpoint` (`<config.hostname>[/<basePath>]/api`) through the ALB. With `alb_scheme = "internal"` Terraform adds an ALB rule for the sandbox node security group. With an internet-facing ALB the call leaves through the NAT gateway, so a narrowed `alb_allowed_cidr_blocks` must admit the NAT address (see `sandbox_alb_allow_nat_egress` in `terraform.tfvars.example`); `terraform plan` fails otherwise. With `alb_existing_security_group_id`, Terraform writes no rules on your group: allow the `sandbox_node_security_group_id` output on the ALB's ports yourself. With `create_firewall = true`, `langsmith_domain` is added to the allowed FQDNs.
+- **Sandbox nodes reach Redis and S3** inside the VPC: the JuiceFS Redis admits the VPC CIDR, and S3 goes through the VPC gateway endpoint.
+- **Sandbox nodes cannot reach the LangSmith Postgres or Redis.** The sandbox nodes share the private subnets, so in this mode the RDS and ElastiCache security groups admit the LangSmith node security group (which pod ENIs carry, with custom networking too) and the bastion's, not the VPC CIDR. Other clients in the VPC lose access to those databases in this mode. If one needs them, supply your own groups with `postgres_existing_security_group_id` and `redis_existing_security_group_id`; Terraform writes no rules on those, so keep the sandbox nodes out of them.
+
+#### Secrets
+
+The runtime Secret (`sandbox_runtime_secret_name`, default `langsmith-sandbox-runtime`) holds exactly two keys, the `langsmith-sandbox` chart's defaults. Never copy the whole `langsmith-config` Secret into the sandbox cluster.
+
+| Key | Value |
+|-----|-------|
+| `sandbox_service_auth_secret` | A dedicated sandbox service-auth secret, identical to `sandbox_service_auth_secret` in `langsmith-config`. It is never the API key salt: `api_key_salt` also signs LangSmith's own service calls, and the sandbox cluster runs untrusted code. |
+| `sandbox_callback_signing_jwk` | The callback-signing JWK, identical to the one in `langsmith-config`. |
+
+With `sandbox_runtime_source = "external"`, `setup-env.sh` generates the service-auth secret (64 hex characters) into the SSM parameter `sandbox-service-auth-secret`, `apply-eso.sh` syncs it into `langsmith-config` as `sandbox_service_auth_secret`, and `init-values.sh` sets `sandboxes.serviceAuth.secretKey: sandbox_service_auth_secret` in the LangSmith values. The in-cluster runtime creates none of this and keeps the chart default, `api_key_salt`.
+
+Terraform writes both runtime keys from `TF_VAR_sandbox_service_auth_secret` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. `terraform plan` fails if the service-auth secret is missing, shorter than 32 characters, or equal to the API key salt.
+
+Write-only values reach the cluster only when `sandbox_runtime_secret_revision` changes, so after changing either value, increment it and re-apply. Both releases read these values only at startup, so a new value takes effect when the LangSmith pods and `sandbox-host` restart on it together; sandboxes fail while the two sides disagree.
+
+A sandbox cluster applied with an earlier version of this module holds the API key salt under `sandbox_service_auth_secret`. To move it to the dedicated secret: run `source infra/scripts/setup-env.sh` (it creates the SSM parameter), increment `sandbox_runtime_secret_revision`, run `make apply`, `make init-values` and `make deploy`, then restart `sandbox-host` in the sandbox cluster:
+
+```bash
+kubectl --kubeconfig ~/.kube/langsmith-<sandbox cluster name> -n <sandbox_namespace> \
+  rollout restart deployment -l app=sandbox-host
+```
+
+`make deploy` restarts the LangSmith pods because their service-auth key changes, but `sandbox-host` picks up the rewritten Secret only when it restarts.
+
+#### Versions
+
+Each LangSmith install runs the `langsmith-sandbox` chart whose appVersion equals the `langsmith` chart's. `make deploy` reads the appVersion of the pinned `langsmith` chart, installs the newest `langsmith-sandbox` chart with the same appVersion, and leaves `images.sandboxHostImage.tag` empty so the image follows that appVersion. If no runtime chart matches, it stops before changing either release. To check by hand:
+
+```bash
+APP=$(helm show chart langchain/langsmith --version 0.18.0 | awk '/^appVersion:/{print $2}' | tr -d '"')
+helm search repo langchain/langsmith-sandbox --versions --devel -o json \
+  | jq -r --arg a "$APP" '[.[] | select(.app_version == $a)][0].version // error("no langsmith-sandbox chart for appVersion \($a)")'
+```
+
+#### One runtime per install
+
+Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.external.enabled: true`. LangSmith accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its elected `sandbox-host` pod turns not ready. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
+
+To move an existing install from the in-cluster runtime, change `sandbox_runtime_source`, run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret), then run `make apply`, `make init-values` and `make deploy`. `make apply` creates the sandbox cluster and removes the in-cluster sandbox node group. `make deploy` copies the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into the sandbox namespace, so Sandboxes that resume from saved memory keep their auth proxy credential injection; then it switches the LangSmith release to `sandboxes.external.enabled` (removing the embedded runtime) and to the dedicated service-auth secret, and installs the runtime chart against the same JuiceFS metadata store and bucket, so both sides start on the new secret together. LangSmith accepts the new runtime about 6 minutes after the embedded hosts stop reporting, so its host can stay not ready until then. Running sandboxes stop during the move and start again on the new hosts when used.
+
+To move back to the in-cluster runtime, or turn Sandboxes off: this direction is not tested end to end yet. Before you change `sandbox_runtime_source` or `enable_sandboxes`, remove the three objects Terraform keeps in the sandbox cluster from state. They go when the cluster is deleted:
+
+```bash
+terraform -chdir=infra state rm 'kubernetes_secret_v1.sandbox_runtime[0]' 'kubernetes_secret_v1.sandbox_juicefs_config[0]' 'kubernetes_namespace_v1.sandbox[0]'
+```
+
+Without this, plan fails reaching `no-sandbox-cluster.invalid`. Once the sandbox cluster leaves the configuration, its Kubernetes provider points there, so it never falls back to your kubeconfig, where the in-cluster runtime's namespace has the same name.
+
+#### Install, upgrade and uninstall order
+
+- **Install:** `make apply`, then `make init-values`, then `make deploy`. `make init-values` writes both the LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`; `make deploy` installs `langsmith` first, then `langsmith-sandbox` in the sandbox cluster, and waits for `sandbox-host`.
+- **Upgrade:** change `langsmith_helm_chart_version` and run `make deploy`. It upgrades `langsmith` first and the runtime right after, to the matching chart. If you upgrade with other tools, keep that order and upgrade the runtime within days.
+- **Uninstall:** `make uninstall` removes the `langsmith-sandbox` release from the sandbox cluster first, then the LangSmith release; then empty the trace bucket, which also holds the JuiceFS data, and run `make destroy` ([TEARDOWN.md](TEARDOWN.md), A5). Without Terraform outputs, uninstall the runtime release from the sandbox cluster yourself before running `make uninstall`.
+- **Status:** `make status` also checks the sandbox cluster: the `langsmith-sandbox` release, that its appVersion matches the `langsmith` release, and the runtime pods.
+
+`make deploy`, `make uninstall` and `make status` reach the sandbox cluster through their own kubeconfig file, `~/.kube/langsmith-<sandbox cluster name>`, so your current context is unchanged.
+
+The sandbox IRSA role trusts exactly one ServiceAccount, named by `sandbox_service_account_name` (default `sandbox-host`). `init-values.sh` writes the same name into `sandboxHost.serviceAccount.name` and the role into `workloadIdentity.aws.roleArn` in the generated values, so the two always agree. Renaming the ServiceAccount only in the values file breaks IRSA and leaves `sandbox-host` unable to reach the bucket — change the tfvar and re-run `make init-values` instead.
+
 ---
 
 ## Pass 2 — LangSmith Application
@@ -447,13 +651,99 @@ make quickdeploy-auto
 ```bash
 cd terraform/aws
 
-make init-values       # reads admin email, sizing, and addons from Terraform
+make init-values       # reads admin email and addons from Terraform
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
-`init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
+`init-values.sh` reads the `enable_*` flags from `terraform.tfvars` and the Terraform outputs, then writes `helm/values/langsmith-values.yaml` and `helm/values/langsmith-values-overrides.yaml`. Each run writes both files again; your own changes go in `helm/values/langsmith-values-local.yaml` (see [Helm values](#helm-values)).
 
-Pod autoscaling is built into the `dev`, `production`, and `production-large` sizing templates; `minimum` keeps core services fixed while retaining SmithDB HPAs. These settings do not enable node autoscaling. Existing sizing files are preserved, so merge template updates into your current values when upgrading. See [sizing guidance](helm/values/examples/SIZING.md).
+Every install runs one sizing, the scale guide's medium reads, medium writes pattern: the base values run the frontend at 2 replicas, the backend on an HPA from 8 to 16, and KEDA for `queue`, `ingest-queue`, and the SmithDB compaction worker. Requests stay at the chart's defaults. Cluster Autoscaler adds LangSmith nodes up to the node group's `max_size`, and on `m6a.2xlarge` nodes the sizing needs up to 8 at maximum replicas. See [SIZING.md](helm/values/examples/SIZING.md) to size beyond it, or to move from a 0.17 `sizing_profile`.
+
+---
+
+## Helm values
+
+`make deploy` applies two values files, and nothing else except the sandbox-host image tag. AWS, Azure, and GCP use the same two file names.
+
+| File in `helm/values/` | Written by | Holds |
+| --- | --- | --- |
+| `langsmith-values.yaml` | `make init-values`, on every run | A copy of `examples/langsmith-values.yaml`: the base AWS values and the one sizing |
+| `langsmith-values-overrides.yaml` | `make init-values`, on every run | Everything else, merged into one file: the Terraform outputs, each enabled feature, SSO, SmithDB, and your local file |
+| `langsmith-values-local.yaml` | You. No script writes it | Your own changes. Optional. Start from `langsmith-values-local.yaml.example` |
+
+The values files hold no secrets. ESO syncs the secrets from SSM into the `langsmith-config` Secret, and the chart reads them from it.
+
+### Change a value
+
+1) Put the change in `helm/values/langsmith-values-local.yaml`. `make init-values` merges this file last, so a key in it wins over every other source.
+2) Run `make init-values`, then `make deploy`.
+
+Do not edit the two generated files. Line 1 of each holds a sha256 of the rest of the file, so `make init-values` and `make deploy` find a hand edit. `make init-values` then prints the edit and writes nothing.
+
+Some values come from `terraform.tfvars`, and `make init-values` sets them after every file, so the local file cannot change them: `polly.enabled`, `insights.enabled`, `hostBackend.enabled` while Fleet is on, the storage of Fleet, Chat, and Insights, and the SmithDB tier and caches. Change the `enable_*` flags and the SmithDB inputs in `terraform.tfvars` instead. The header of `langsmith-values-overrides.yaml` lists these settings, the sources in merge order, and the inputs of the file.
+
+### What `make deploy` checks
+
+Before it touches the cluster, `make deploy` stops when:
+
+- a values file is missing, or was edited after `make init-values` wrote it;
+- `terraform.tfvars`, an example file, a module script, or the local file changed after `make init-values` wrote the overrides file;
+- the gateway mode or SmithDB, as Terraform applied them, differ from the file;
+- a values file from the 0.17 layout is still in `helm/values` (see [Move from the 0.17 values layout](#move-from-the-017-values-layout)).
+
+After it points kubectl at the cluster, and before the Helm upgrade, `make deploy` also stops when the values turn on an external ClickHouse and the namespace has no Secret of the name they read (`langsmith-clickhouse`). `make init-values` asks for the ClickHouse details on its first run only. A later run finds the Secret name in the earlier overrides file, or in `langsmith-values-local.yaml`, and does not contact the cluster.
+
+Each message names the fix. In most cases it is `make init-values`.
+
+### Use the rendered files in your own CI/CD
+
+The two files are complete Helm values. A pipeline can apply them without `deploy.sh`:
+
+1) Run `make init-values` in the pipeline, after `terraform apply`, so the files match the Terraform state. It needs `helm`, `terraform`, and read access to the state. With an external ClickHouse, the first run also looks up the `langsmith-clickhouse` Secret with `kubectl`, and asks for the connection details in a terminal when the Secret is missing. Later runs do not contact the cluster.
+2) Keep the two files as build artifacts. Do not commit them to this repository: `.gitignore` excludes them.
+3) Apply them with the chart version that `deploy.sh` pins:
+
+```bash
+helm upgrade --install langsmith langchain/langsmith \
+  --namespace langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-overrides.yaml \
+  --set-string images.sandboxHostImage.tag=<chart-appVersion>   # only with enable_sandboxes = true
+```
+
+`deploy.sh` also does work that the values do not hold: it applies the ESO `ExternalSecret` (`make apply-eso`), checks the SSO and storage cutovers, checks that the external ClickHouse Secret exists, and refreshes the hostname from the ALB. A pipeline that skips `deploy.sh` must do those steps, or run `make apply-eso` first. With Helm 4, add `--server-side=false` (see [`make deploy`](#make-deploy), Step 8).
+
+### Move from the 0.17 values layout
+
+The 0.17 layout kept one file per feature in `helm/values`. From 0.18, `make init-values` and `make deploy` stop while one of those files is still there, because a deploy no longer applies them. The message lists each file and marks it:
+
+| Mark | Meaning |
+| --- | --- |
+| `same as examples/<file>` | The file holds no change of yours. |
+| `differs from examples/<file>` | The file can hold your changes. |
+| `no example of this name` | The file can hold your changes, for example a 0.17 sizing profile. |
+| `written by make init-values on 0.17` | The 0.17 overrides file. Check it for changes you made by hand. |
+
+1) For each file marked `differs`, `no example`, or `written by make init-values on 0.17`, compare it with its example, for example `diff -u helm/values/examples/langsmith-values-fleet.yaml helm/values/langsmith-values-fleet.yaml`.
+2) Copy each change you made into `helm/values/langsmith-values-local.yaml`. Do not copy values that `make init-values` writes from Terraform, such as the hostname, the IRSA roles, and the bucket names. For a 0.17 `langsmith-values-sizing-*.yaml`, see [SIZING.md](helm/values/examples/SIZING.md), "Moving from a 0.17 sizing profile".
+3) Move the old files out of `helm/values`. The message prints the command, for example:
+
+```bash
+mkdir -p ~/langsmith-values-0.17
+(cd helm/values && mv langsmith-values-fleet.yaml langsmith-values-sizing-production.yaml ~/langsmith-values-0.17/)
+```
+
+4) Run `make init-values`. To confirm the result, render the chart with the old files and with the new ones, and compare:
+
+```bash
+helm template langsmith langchain/langsmith --version <chart-version> \
+  -f ~/langsmith-values-0.17/<base> -f ~/langsmith-values-0.17/<overrides> -f ~/langsmith-values-0.17/<feature> > /tmp/old.yaml
+helm template langsmith langchain/langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml -f helm/values/langsmith-values-overrides.yaml > /tmp/new.yaml
+diff /tmp/old.yaml /tmp/new.yaml
+```
+
+5) Run `make deploy`.
 
 ---
 
@@ -466,12 +756,10 @@ Envoy Gateway is the default ingress mode, both in Terraform and in `make quicks
 | `terraform.tfvars` | Result |
 | --- | --- |
 | No gateway flags at all | Envoy Gateway |
-| `enable_istio_gateway = true` or `enable_nginx_ingress = true` | That controller, Envoy stays off |
+| `enable_istio_gateway = true` | That controller, Envoy stays off |
 | `enable_envoy_gateway` set explicitly | Your value always wins |
 
 Enabling two controllers is rejected at plan time by a precondition in `infra/main.tf`, because all gateway modes share a single ALB target group and only one port can be health-checked on it.
-
-**Upgrading an existing deployment?** Istio and NGINX deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
 
 When enabled, the `k8s-bootstrap` module:
 1. Applies the Gateway API CRDs (v1.6.1, standard channel) and the Envoy Gateway CRDs (v1.9.4). Helm does not upgrade CRDs, so the module downloads them, checks each file against a pinned sha256, and applies it with `kubectl apply --server-side`. The chart skips its own copy. The module needs EKS 1.33 to 1.36: it rejects an older `eks_cluster_version` at plan time and warns about a newer one.
@@ -498,10 +786,8 @@ Then apply and deploy:
 source infra/scripts/setup-env.sh
 make apply
 
-# Use the Envoy Gateway Helm values overlay
+# init-values.sh writes the Gateway values (ingress off, gateway on)
 make init-values
-# Copy the envoy gateway overlay:
-cp helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml helm/values/
 make deploy
 ```
 
@@ -523,6 +809,17 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 ```
 
 The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmith` namespace) read access to pods, pod logs, deployments, and ReplicaSets in the `langsmith-agents` namespace. Without this, agent run logs will not stream in the LangSmith UI.
+
+### Moving off NGINX ingress
+
+0.18 removed `enable_nginx_ingress`. Four checks stop an upgrade that would delete a running NGINX controller, or route traffic away from it, and leave LangSmith unreachable:
+
+- `enable_nginx_ingress = true` in `terraform.tfvars` fails at plan, however Terraform runs. The `false` that earlier QuickStart runs wrote still plans.
+- `make apply` and `make quickdeploy` refuse while the Terraform state still holds the NGINX controller, even when `terraform.tfvars` no longer mentions it (`infra/scripts/upgrade-guard.sh`).
+- `make init-values` and `make deploy` stop while the last apply still ran NGINX, so the Helm steps cannot write or apply routing for a mode Terraform has not built.
+- `make quickstart` in update mode stops on a `terraform.tfvars` that sets `enable_nginx_ingress = true`, instead of preselecting ALB.
+
+To move off NGINX, keep the previous release and switch there: choose Envoy Gateway, Istio, or ALB, then run `make apply`, `make init-values`, and `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes. Envoy Gateway and Istio keep the Terraform ALB and its hostname. ALB mode moves traffic to an ALB that the AWS Load Balancer Controller owns, so point DNS at its hostname. Upgrade after the deploy finishes.
 
 ---
 
@@ -554,24 +851,23 @@ To deploy it:
 After the deploy, an organization admin turns the gateway on for workspaces, adds provider secrets, and grants access, as
 in [Admin setup](https://docs.langchain.com/langsmith/llm-gateway-admin-setup).
 
-- **IRSA.** `init-values.sh` writes `langsmith-values-llm-gateway.yaml` with the LangSmith IRSA role on the gateway's
-  service account. The role already trusts every service account in the namespace, so the gateway needs no IAM change.
+- **IRSA.** `init-values.sh` writes the gateway into `langsmith-values-overrides.yaml`, with the LangSmith IRSA role on
+  the gateway's service account. The role already trusts every service account in the namespace, so the gateway needs no IAM change.
 - **Timeouts.** The chart's frontend allows 900 s on `/gateway` for long model calls. In front of it:
   - Envoy Gateway: Terraform adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute, which removes Envoy's 15 s
     request timeout on that path. Terraform creates the route only when `langsmith_domain` is set. Without a domain,
     model calls longer than 15 s fail, so set `langsmith_domain` and run `make apply`.
   - Istio: no request timeout.
-  - NGINX: `init-values.sh` sets 3600 s read and send timeouts.
   - Classic ALB Ingress: `init-values.sh` sets the idle timeout of the ALB that the AWS Load Balancer Controller creates
     to 900 s. The setting applies to every path on that ALB.
 
   In every mode except classic ALB Ingress, the Terraform-managed ALB idles at 3600 s.
-- **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer (chart `presidioAnalyzer`, its own
-  `langsmith-values-gateway-pii.yaml`) and turns redaction on for new organizations. It requires
+- **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer (chart `presidioAnalyzer`, in the same
+  overrides file) and turns redaction on for new organizations. It requires
   `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone. Presidio pulls
   `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage.tag`). On a cluster without
   egress to Microsoft's registry, mirror that image and set `images.presidioAnalyzerImage.repository` to the mirror in
-  `helm/values/langsmith-values.yaml`, which `init-values.sh` never overwrites.
+  `helm/values/langsmith-values-local.yaml`, which `init-values.sh` merges last.
 
 ---
 
@@ -705,6 +1001,7 @@ SSM is the persistent credential store. Setup exports each resolved credential t
 | `polly-encryption-key` | Auto-generated (Fernet key) | For LangSmith Chat (formerly Polly) |
 | `engine-encryption-key` | Auto-generated (Fernet key) | For Engine. Keep it stable. See [ENGINE.md](ENGINE.md) |
 | `engine-usage-signing-secret` | Auto-generated (`openssl rand -hex 32`) | For Engine usage reports. Keep it stable |
+| `sandbox-service-auth-secret` | Auto-generated (`openssl rand -hex 32`), only with `sandbox_runtime_source = "external"` | Signs calls between LangSmith and the separate sandbox cluster in place of the API key salt. Keep it stable; see [Secrets](#secrets) |
 
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
@@ -818,23 +1115,24 @@ make ssm                                                # interactive menu
 
 ### `make init-values`
 
-**When to use:** After `make apply`, or any time you change `terraform.tfvars` settings (addons, sizing, domain).
+**When to use:** After `make apply`, or any time you change `terraform.tfvars` settings (addons, domain).
 
 Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and Pass 2:
 
-1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `sizing_profile`, `enable_*` flags, `langsmith_domain`)
-2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`)
-3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
-4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
-   - `enable_deployments = true` → copies `langsmith-values-agent-deploys.yaml`
-   - `enable_fleet = true` → copies `langsmith-values-fleet.yaml`
-   - `enable_insights = true` → copies `langsmith-values-insights.yaml`
-   - `enable_polly = true` → copies `langsmith-values-polly.yaml`
-   - `enable_engine = true` → copies `langsmith-values-engine.yaml`, and writes the Engine IRSA role annotation into the overrides file
-   - `enable_llm_gateway = true` → writes `langsmith-values-llm-gateway.yaml`, and `langsmith-values-gateway-pii.yaml` with `enable_gateway_pii_redaction = true` (see [LLM Gateway](#llm-gateway))
-5. Copies the appropriate sizing file if `sizing_profile` is set
+1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `enable_*` flags, `langsmith_domain`)
+2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`, and the SmithDB and sandbox outputs)
+3. Copies `helm/values/examples/langsmith-values.yaml` to `helm/values/langsmith-values.yaml`
+4. Merges into `helm/values/langsmith-values-overrides.yaml`, in this order: the values from the Terraform outputs (hostname, IRSA role ARNs, S3 bucket, ACM cert ARN), then the example of each enabled feature, then SSO and SmithDB, then `langsmith-values-local.yaml`:
+   - `enable_deployments = true` → `langsmith-values-agent-deploys.yaml`
+   - `enable_engine = true` → `langsmith-values-engine.yaml`, and the Engine IRSA role annotation
+   - `enable_insights = true` → `langsmith-values-insights.yaml`
+   - `enable_polly = true` → `langsmith-values-polly.yaml`
+   - `enable_fleet = true` → `langsmith-values-fleet.yaml`
+   - `enable_llm_gateway = true` → the gateway with the LangSmith IRSA role, and Presidio with `enable_gateway_pii_redaction = true` (see [LLM Gateway](#llm-gateway))
+   - `enable_sso_oidc = true` → `langsmith-values-sso.yaml`
+   - `enable_smithdb = true` → `langsmith-values-smithdb.yaml`, and the SmithDB bucket, role, and cache from Terraform
 
-Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
+Re-running is safe: each run writes both files again from the same inputs, and keeps your admin email. When a generated file was edited by hand, the run stops, prints the edit, and writes nothing. See [Helm values](#helm-values).
 
 ---
 
@@ -850,28 +1148,14 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet storage can run in-cluster or use the external Postgres and Redis services.
+**Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet, LangSmith Chat and Insights keep their data on the shared RDS and ElastiCache.
 
-**Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
+**Step 5 — Check the values files.** Applies exactly two files:
 ```
--f langsmith-values.yaml                      (base — always)
--f langsmith-values-overrides.yaml            (your env — always)
--f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
--f langsmith-values-engine.yaml               (enable_engine = true)
--f langsmith-values-insights.yaml             (enable_insights = true)
--f langsmith-values-polly.yaml                (enable_polly = true)
--f langsmith-values-fleet.yaml                (enable_fleet = true)
--f langsmith-values-standalone-polly.yaml     (enable_standalone_polly = true)
--f langsmith-values-standalone-insights.yaml  (enable_standalone_insights = true)
--f langsmith-values-llm-gateway.yaml          (enable_llm_gateway = true)
--f langsmith-values-gateway-pii.yaml          (enable_gateway_pii_redaction = true)
--f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default)
--f langsmith-values-smithdb.yaml              (enable_smithdb = true)
--f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
+-f langsmith-values.yaml             (the base values)
+-f langsmith-values-overrides.yaml   (everything else, merged by make init-values)
 ```
-The sizing file overrides replicas and resources set by add-on files. SmithDB
-loads afterward so its object-store, identity, and staged integration settings
-take final precedence.
+Before that, it stops when a file is missing or was edited by hand, when an input of the overrides file changed after `make init-values`, or while a 0.17 values file is left in `helm/values`. See [What `make deploy` checks](#what-make-deploy-checks).
 
 **Step 6 — Pre-deploy hostname check.** If the ingress already exists and `langsmith_domain` is not set, compares `config.hostname` in the overrides file against the live ALB hostname. Auto-updates it if stale (prevents agent deployments getting stuck in `DEPLOYING` state with the wrong endpoint URL).
 
@@ -908,6 +1192,8 @@ Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` a
    | `.../langsmith-api-key-salt` | `api_key_salt` |
    | `.../langsmith-jwt-secret` | `jwt_secret` |
    | `.../langsmith-admin-password` | `initial_org_admin_password` |
+   | `.../sandbox-callback-signing-jwk` | `sandbox_callback_signing_jwk` *(only with `enable_sandboxes = true`)* |
+   | `.../sandbox-service-auth-secret` | `sandbox_service_auth_secret` *(only with `sandbox_runtime_source = "external"`)* |
    | `.../agent-builder-encryption-key` | `agent_builder_encryption_key` *(only if key exists in SSM)* |
    | `.../insights-encryption-key` | `insights_encryption_key` *(only if key exists in SSM)* |
    | `.../deployments-encryption-key` | `deployments_encryption_key` *(only if key exists in SSM)* |
@@ -936,9 +1222,9 @@ Runs `helm/scripts/sso.sh`. It stops with a clear message at the first check tha
 6. Checks the issuer URL serves an OIDC discovery document.
 7. Runs `apply-eso.sh` and checks `langsmith-config` has the three OIDC keys.
 8. Sets `enable_sso_oidc = true` in `terraform.tfvars`, changing only that line.
-9. Copies `helm/values/examples/langsmith-values-sso.yaml` to `helm/values/` if it is not there yet, then asks before running `make deploy`.
+9. Runs `make init-values`, which merges `langsmith-values-sso.yaml` into `langsmith-values-overrides.yaml` and keeps `langsmith-values-local.yaml`, then asks before running `make deploy`.
 
-It never runs `init-values.sh`, so `langsmith-values-overrides.yaml` is not rewritten. `deploy.sh` layers `langsmith-values-sso.yaml` whenever `enable_sso_oidc = true`, and stops if that file is missing, or if SSO is already on in the cluster but `enable_sso_oidc` is not true, rather than deploying with password login.
+`deploy.sh` stops if SSO is already on in the cluster but `enable_sso_oidc` is not true, rather than deploying with password login.
 
 ---
 
@@ -963,7 +1249,7 @@ make status-quick    # skip SSM + K8s queries (faster, for quick credential chec
 | 4 | **SSM Parameters** | All 6 required params exist; shows which optional addon keys are present |
 | 5 | **Terraform Infra** | `terraform output` returns outputs — confirms `apply` has run; prints cluster name, ALB, bucket, IRSA role |
 | 6 | **Kubeconfig** | `kubectl` context matches the cluster name; can reach the API server |
-| 7 | **Helm Values** | `langsmith-values-overrides.yaml` exists; hostname is populated; addon files present |
+| 7 | **Helm Values** | both values files exist and are not edited by hand; no input changed since `make init-values`; no 0.17 values file is left; hostname is populated |
 | 8 | **Kubernetes Resources** | Namespace exists; ESO `ClusterSecretStore` and `ExternalSecret` are deployed and synced; `langsmith-config` secret exists |
 | 9 | **Helm Release** | Release status (`deployed`, `failed`, `pending-upgrade`); pod count |
 
@@ -1150,19 +1436,28 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
-| `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
+| `enable_sandboxes` | `false` | no | Provision sandbox-host nodes, dedicated JuiceFS Redis, and sandbox storage access |
+| `sandbox_runtime_source` | `in-cluster` | no | `in-cluster` runs sandbox-host in the main EKS cluster; `external` creates a dedicated sandbox EKS cluster |
+| `sandbox_namespace` | `langsmith-sandbox` | separate cluster | Namespace for the standalone sandbox runtime |
+| `sandbox_service_account_name` | `sandbox-host` | no | ServiceAccount trusted by the sandbox IRSA role. `init-values.sh` writes it into `sandboxHost.serviceAccount.name`, so change it here rather than in the values file |
+| `sandbox_runtime_secret_revision` | `1` | no | Increment to rewrite the write-only runtime Secret in the sandbox cluster |
+| `sandbox_alb_allow_nat_egress` | `false` | no | Separate cluster with an internet-facing ALB: append the NAT gateway addresses to the ALB allowlist. Admits everything behind the NAT, sandboxes included; prefer an internal ALB |
+| `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
+| `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
+| `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.18.x chart version; empty deploys the latest 0.18.x. An external sandbox runtime requires an exact version |
+| `postgres_source` | `external` | no | Only `external` (RDS) from 0.18; `in-cluster` fails at plan. See [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
 | `postgres_max_storage_gb` | `100` | no | Maximum RDS storage in GB (autoscaling) |
 | `postgres_username` | `langsmith` | no | RDS database username |
-| `postgres_engine_version` | `16` | no | PostgreSQL engine version for RDS |
+| `postgres_engine_version` | `18` | no | PostgreSQL engine version for RDS |
 | `postgres_password` | `""` | when external | RDS password — use `TF_VAR_postgres_password` |
 | `postgres_iam_database_authentication_enabled` | `true` | no | Enable IAM database authentication on RDS |
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
 | `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `postgres_existing_security_group_id` | `null` | no | Attach an existing SG to RDS instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
-| `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
+| `redis_source` | `external` | no | Only `external` (ElastiCache, OSS mode) from 0.18; `in-cluster` fails at plan. See [Move an in-cluster Redis to ElastiCache](#move-an-in-cluster-redis-to-elasticache) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
@@ -1197,14 +1492,10 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `create_firewall` | `false` | no | Deploy AWS Network Firewall for FQDN-based egress filtering. Requires `create_vpc = true`. Cost: ~$0.395/hr/endpoint + $0.065/GB. |
 | `firewall_allowed_fqdns` | `["beacon.langchain.com"]` | no | Domains allowed for outbound internet traffic when `create_firewall = true`. Matched against TLS SNI (HTTPS) and HTTP Host header. All other destinations are dropped. |
 | `firewall_subnet_cidr` | `"10.0.64.0/21"` | no | CIDR for the firewall subnet. Must not overlap with private (10.0.0.0/21–10.0.32.0/21) or public (10.0.40.0/21–10.0.56.0/21) subnets. |
-| `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
 | `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
 | `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
-| `fleet_storage` | `external` | no | Fleet storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_insights` | `false` | no | Enable AI-powered trace analysis |
-| `insights_storage` | `external` | no | Insights storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
-| `polly_storage` | `external` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
 | `enable_engine` | `false` | no | Enable Engine (chart 0.17+). Requires `enable_sandboxes`. Creates the Engine IRSA role with Amazon Bedrock Mantle access. See [ENGINE.md](ENGINE.md) |
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
@@ -1212,15 +1503,18 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
 | `enable_llm_gateway` | `false` | no | Enable the LLM Gateway (chart `agentGateway`, beta, chart 0.17). With Envoy Gateway, adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute. See [LLM Gateway](#llm-gateway) |
 | `enable_gateway_pii_redaction` | `false` | no | Add Presidio PII redaction for gateway traffic. Requires `enable_llm_gateway` |
-| `enable_smithdb` | `false` | no | Provision SmithDB v17 dependencies: dedicated/BYO PostgreSQL, dedicated S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
-| `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
+| `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), IRSA, a managed node group, and EBS caches. An install upgraded from 0.17 without SmithDB sets `false` first. See [SMITHDB.md](SMITHDB.md). |
+| `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
+| `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |
+| `smithdb_metastore_source` | `create` | no | Only `create` (dedicated RDS) from 0.18; `external` fails at plan. See [Move an external metastore to RDS](SMITHDB.md#move-an-external-metastore-to-rds) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
-| `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
-| `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
-| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
-| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
+| `smithdb_metastore_existing_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_metastore_manage_existing_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for the small tier that the Helm values run, `m6a.8xlarge` for medium, `m6a.16xlarge` for large. See [SMITHDB.md](SMITHDB.md#scaling-up) |
+| `smithdb_cache_storage` | `network-disk` | no | SmithDB cache storage: `network-disk` (gp3 volumes) or `local-ssd` (the nodes' instance-store NVMe as RAID0, which needs a type such as `m6id.4xlarge`). See [SMITHDB.md](SMITHDB.md#local-ssd-cache) |
+| `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes |
+| `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes; must exceed the minimum |
+| `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |

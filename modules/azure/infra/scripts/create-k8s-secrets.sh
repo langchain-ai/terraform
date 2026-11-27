@@ -21,10 +21,14 @@ set -euo pipefail
 #                             and four Fernet encryption keys. Read by all LangSmith
 #                             pods via config.existingSecretName in Helm values.
 #                             With enable_sandboxes = true it also carries
-#                             sandbox_callback_signing_jwk.
-#   smithdb-taskdb          — postgres_password for the SmithDB backfill's taskdb,
-#                             when Key Vault holds smithdb-taskdb-password. Read
-#                             through smithdb.migration.taskdb.postgres.auth.
+#                             sandbox_callback_signing_jwk, and with
+#                             sandbox_runtime_source = external
+#                             sandbox_service_auth_secret.
+#   langsmith-sandbox-runtime — external runtime only, in the sandbox cluster's
+#                             namespace: exactly sandbox_service_auth_secret and
+#                             sandbox_callback_signing_jwk, never a copy of
+#                             langsmith-config-secret. Read by the
+#                             langsmith-sandbox chart (config.existingSecretName).
 #
 # The other two required secrets are created by Terraform (Pass 1):
 #   langsmith-postgres-secret — connection_url
@@ -91,14 +95,41 @@ if _kv_exists "langsmith-oauth-client-id"; then
   )
 fi
 
+# The sandbox secrets go to kubectl as files in a private directory rather than
+# as --from-literal arguments, which any user on the host can read from ps. The
+# directory also holds the sandbox cluster's kubeconfig with an external runtime.
+_SECRETS_TMP=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/langsmith-secrets.XXXXXX")
+trap 'rm -rf "$_SECRETS_TMP"' EXIT
+
 # Sandboxes: platform-backend and sandbox-host read sandbox_callback_signing_jwk
 # from this secret, and neither starts without it. Copied whenever the vault
 # holds it, so turning enable_sandboxes off and on again keeps the same key.
 _SANDBOX_ARGS=()
 if _kv_exists "langsmith-sandbox-callback-signing-jwk"; then
-  _SANDBOX_ARGS=("--from-literal=sandbox_callback_signing_jwk=$(_kv "langsmith-sandbox-callback-signing-jwk")")
+  printf '%s' "$(_kv "langsmith-sandbox-callback-signing-jwk")" > "$_SECRETS_TMP/sandbox_callback_signing_jwk"
+  _SANDBOX_ARGS=("--from-file=sandbox_callback_signing_jwk=$_SECRETS_TMP/sandbox_callback_signing_jwk")
 elif _tfvar_is_true "enable_sandboxes"; then
   echo "  ERROR: enable_sandboxes = true but Key Vault '$KV_NAME' has no langsmith-sandbox-callback-signing-jwk." >&2
+  echo "         Run: make seed-secrets, then re-run this script." >&2
+  exit 1
+fi
+
+# External runtime: the dedicated sandbox service-auth secret, under the key the
+# langsmith chart reads through sandboxes.serviceAuth.secretKey. The sandbox
+# cluster runs untrusted code, so it gets this secret and never api_key_salt;
+# the chart refuses sandboxes.external.enabled on the salt, and so does this script.
+# Copied whenever the vault holds it, like the JWK.
+if _kv_exists "langsmith-sandbox-service-auth-secret"; then
+  printf '%s' "$(_kv "langsmith-sandbox-service-auth-secret")" > "$_SECRETS_TMP/sandbox_service_auth_secret"
+  if [[ "$(cat "$_SECRETS_TMP/sandbox_service_auth_secret")" == "$API_KEY_SALT" ]]; then
+    echo "  ERROR: langsmith-sandbox-service-auth-secret in Key Vault '$KV_NAME' equals langsmith-api-key-salt." >&2
+    echo "         The sandbox cluster must never hold the salt. Set a new random value, then re-run this script:" >&2
+    echo "           ./scripts/manage-keyvault.sh delete langsmith-sandbox-service-auth-secret && make seed-secrets" >&2
+    exit 1
+  fi
+  _SANDBOX_ARGS+=("--from-file=sandbox_service_auth_secret=$_SECRETS_TMP/sandbox_service_auth_secret")
+elif _external_sandbox_runtime; then
+  echo "  ERROR: sandbox_runtime_source = external but Key Vault '$KV_NAME' has no langsmith-sandbox-service-auth-secret." >&2
   echo "         Run: make seed-secrets, then re-run this script." >&2
   exit 1
 fi
@@ -150,6 +181,9 @@ REQUIRED_KEYS=(
 if _tfvar_is_true "enable_sandboxes"; then
   REQUIRED_KEYS+=("sandbox_callback_signing_jwk")
 fi
+if _external_sandbox_runtime; then
+  REQUIRED_KEYS+=("sandbox_service_auth_secret")
+fi
 
 echo "  Verifying keys in langsmith-config-secret..."
 echo ""
@@ -175,26 +209,37 @@ else
   exit 1
 fi
 
-# ── SmithDB taskdb secret ──────────────────────────────────────────────────────
-# Piped through --from-file=/dev/stdin so the password never appears in argv.
-# A vault seeded before this secret existed skips it; deploy.sh stops the
-# backfill until make seed-secrets adds it.
-echo ""
-if _kv_exists "smithdb-taskdb-password"; then
-  TASKDB_PASSWORD=$(_kv "smithdb-taskdb-password")
-  echo "  Applying smithdb-taskdb to namespace/$NAMESPACE..."
-  printf '%s' "$TASKDB_PASSWORD" | kubectl create secret generic smithdb-taskdb \
-    --namespace "$NAMESPACE" \
-    --from-file=postgres_password=/dev/stdin \
-    --dry-run=client -o yaml | kubectl apply -f -
-  unset TASKDB_PASSWORD
-else
-  echo "  smithdb-taskdb-password not in Key Vault; skipping smithdb-taskdb (run make seed-secrets)"
+# ── Sandbox runtime secret (external runtime) ──────────────────────────────────
+# The langsmith-sandbox release in the sandbox cluster reads these two values
+# from a Secret of its own: the same service-auth secret and JWK as above, so
+# both clusters agree. Written through a kubeconfig of its own, so the current
+# context stays on the LangSmith cluster. Terraform created the namespace.
+if _external_sandbox_runtime; then
+  echo ""
+  if ! SANDBOX_NAMESPACE=$(_tf_out sandbox_namespace) \
+    || ! SANDBOX_CLUSTER=$(_tf_out sandbox_cluster_name); then
+    echo "  ERROR: the sandbox cluster outputs are missing. Run make apply with sandbox_runtime_source = external first." >&2
+    exit 1
+  fi
+  SANDBOX_RUNTIME_SECRET=$(_tf_out sandbox_runtime_secret_name) || SANDBOX_RUNTIME_SECRET="langsmith-sandbox-runtime"
+  if ! _sandbox_kubeconfig "$_SECRETS_TMP/sandbox-kubeconfig"; then
+    echo "  ERROR: could not fetch credentials for the sandbox cluster '$SANDBOX_CLUSTER'." >&2
+    exit 1
+  fi
+  echo "  Applying $SANDBOX_RUNTIME_SECRET to $SANDBOX_CLUSTER, namespace/$SANDBOX_NAMESPACE..."
+  KUBECONFIG="$_SECRETS_TMP/sandbox-kubeconfig" kubectl create secret generic "$SANDBOX_RUNTIME_SECRET" \
+    --namespace "$SANDBOX_NAMESPACE" \
+    --from-file=sandbox_service_auth_secret="$_SECRETS_TMP/sandbox_service_auth_secret" \
+    --from-file=sandbox_callback_signing_jwk="$_SECRETS_TMP/sandbox_callback_signing_jwk" \
+    --dry-run=client -o yaml | KUBECONFIG="$_SECRETS_TMP/sandbox-kubeconfig" kubectl apply -f -
+  echo -e "  ${GREEN}[✓]${NC} $SANDBOX_RUNTIME_SECRET (sandbox_service_auth_secret, sandbox_callback_signing_jwk)"
+  echo "  A changed value reaches sandbox-host on its next restart."
 fi
+
 # Note: langsmith-clickhouse secret is NOT needed for in-cluster ClickHouse
 # (clickhouse_source = "in-cluster"). The chart manages the connection internally.
 # For external ClickHouse, init-values.sh prompts for the connection and creates
-# that secret, and writes clickhouse.external into values-overrides.yaml.
+# that secret, and writes clickhouse.external into langsmith-values-overrides.yaml.
 
 echo ""
-echo "Next: fill values-overrides.yaml and run helm upgrade --install"
+echo "Next: make init-values, then make deploy"

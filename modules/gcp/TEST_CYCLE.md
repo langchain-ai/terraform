@@ -289,11 +289,10 @@ historical migration, or the query cutover.
 Render checks worth running before any apply, one per gate state:
 
 ```bash
-helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.17.0}" -n langsmith \
+make init-values
+helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.18.0}" -n langsmith \
   -f helm/values/langsmith-values.yaml \
-  -f helm/values/langsmith-values-smithdb-sizing.yaml \
-  -f helm/values/langsmith-values-smithdb.yaml \
-  -f helm/values/langsmith-values-smithdb-overrides.yaml >/dev/null
+  -f helm/values/langsmith-values-overrides.yaml >/dev/null
 ```
 
 ---
@@ -331,15 +330,13 @@ Core secrets are written as K8s Secrets by the k8s-bootstrap Terraform module:
 | `langsmith-postgres` | `langsmith` | `connection_url` — full Postgres connection string |
 | `langsmith-redis` | `langsmith` | `connection_url` — Redis connection URL |
 
-Secrets that must be provided for Helm (via `--set` or in `values-overrides.yaml`):
+The Helm values hold no secrets. `make deploy` writes them into the `langsmith-config` Secret from the `TF_VAR_*` values that `source infra/scripts/setup-env.sh` exports from Secret Manager, and the chart reads them from it (`config.existingSecretName`):
 
-| Secret | How to generate | Rotatable |
+| Key in `langsmith-config` | How to generate | Rotatable |
 |--------|----------------|-----------|
-| `config.langsmithLicenseKey` | Provided by LangChain | N/A |
-| `config.apiKeySalt` | `openssl rand -base64 32` | **Never** — invalidates all API keys |
-| `config.basicAuth.jwtSecret` | `openssl rand -base64 32` | **Never** — invalidates all sessions |
-| `config.basicAuth.initialOrgAdminPassword` | User-defined | Yes |
-| `config.agentBuilder.encryptionKey` | `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` | Requires re-encryption |
-| `insights.encryptionKey` | Same as above | Requires re-encryption |
-| `config.blobStorage.accessKey` | GCP Console → Cloud Storage → Interoperability → HMAC Keys | Yes |
-| `config.blobStorage.accessKeySecret` | Same | Yes |
+| `langsmith_license_key` | Provided by LangChain | N/A |
+| `api_key_salt` | `openssl rand -base64 32` | **Never** — invalidates all API keys |
+| `jwt_secret` | `openssl rand -base64 32` | **Never** — invalidates all sessions |
+| `initial_org_admin_password` | User-defined | Yes |
+| `agent_builder_encryption_key` | `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` | Requires re-encryption |
+| `insights_encryption_key` | Same as above | Requires re-encryption |

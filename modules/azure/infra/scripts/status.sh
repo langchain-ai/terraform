@@ -22,6 +22,8 @@ source "$SCRIPT_DIR/_common.sh"
 AZURE_DIR="$SCRIPT_DIR/../.."
 HELM_DIR="$AZURE_DIR/helm"
 VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+# shellcheck source=../../helm/scripts/_values.sh
+source "$HELM_DIR/scripts/_values.sh"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -181,8 +183,10 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"aks_cluster_name"'; 
   _kv_tf_name=$(echo "$_tf_output"    | jq -r '.keyvault_name.value       // empty' 2>/dev/null) || _kv_tf_name=""
   _storage_account=$(echo "$_tf_output" | jq -r '.storage_account_name.value // empty' 2>/dev/null) || _storage_account=""
   _langsmith_url=$(echo "$_tf_output" | jq -r '.langsmith_url.value       // empty' 2>/dev/null) || _langsmith_url=""
+  _sandbox_cluster=$(echo "$_tf_output" | jq -r '.sandbox_cluster_name.value // empty' 2>/dev/null) || _sandbox_cluster=""
 
   [[ -n "$_cluster_name" ]]    && info "AKS cluster: ${_cluster_name}"      || warn "No aks_cluster_name output"
+  [[ -n "$_sandbox_cluster" ]] && info "Sandbox AKS cluster: ${_sandbox_cluster} (external runtime; make deploy installs langsmith-sandbox there)"
   [[ -n "$_rg_name" ]]         && info "Resource group: ${_rg_name}"
   [[ -n "$_kv_tf_name" ]]      && info "Key Vault: ${_kv_tf_name}"
   [[ -n "$_storage_account" ]] && info "Storage account: ${_storage_account}" || warn "No storage_account_name output"
@@ -234,7 +238,6 @@ else
     _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
     case "$_ingress_controller" in
       envoy-gateway) _ingress_ns="envoy-gateway-system" ;;
-      nginx)         _ingress_ns="ingress-nginx" ;;
       istio)         _ingress_ns="istio-system" ;;
       istio-addon)   _ingress_ns="aks-istio-ingress" ;;
       *)             _ingress_ns="" ;;
@@ -262,41 +265,54 @@ fi
 # ── 7. Helm Values ────────────────────────────────────────────────────────────
 header "7. Helm Values"
 
-_base_values="$HELM_DIR/values/values.yaml"
-_overrides="$VALUES_DIR/values-overrides.yaml"
+_overrides="$VALUES_DIR/$_VALUES_OVERRIDES"
 
-if [[ -f "$_base_values" ]]; then
-  pass "values.yaml (base)"
-else
-  warn "values.yaml (base) — not found (will use overrides only)"
+# make deploy stops while a file from the 0.17 layout is in helm/values.
+_legacy=$(_values_legacy_files "$VALUES_DIR" "$HELM_DIR/values/examples")
+while IFS= read -r _old_file; do
+  [[ -n "$_old_file" ]] || continue
+  fail "${_old_file} — from the 0.17 layout; make deploy stops while it is in helm/values"
+done <<< "$_legacy"
+if [[ -n "$_legacy" ]]; then
+  action "Move your changes into $_VALUES_LOCAL and the files out of helm/values (README.md, \"Move from the 0.17 values layout\")"
+  set_next "Move the 0.17 values files out of helm/values (make init-values prints the steps)"
 fi
 
-if [[ -f "$_overrides" ]]; then
-  pass "values-overrides.yaml exists"
-  _hostname=$(grep -E '^\s*hostname:' "$_overrides" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
+for _name in "$_VALUES_BASE" "$_VALUES_OVERRIDES"; do
+  case "$(_values_seal_state "$VALUES_DIR/$_name")" in
+    intact) pass "$_name (written by make init-values)" ;;
+    edited)
+      fail "$_name — edited by hand after make init-values wrote it"
+      action "Move the change into $_VALUES_LOCAL, delete the file, then run make init-values"
+      set_next "Move your change into $_VALUES_LOCAL, then run make init-values"
+      ;;
+    missing)
+      fail "$_name — not generated"
+      action "make init-values  (or: ./helm/scripts/init-values.sh)"
+      set_next "make init-values"
+      ;;
+  esac
+done
+
+if [[ "$(_values_seal_state "$_overrides")" == intact && -z "$_legacy" ]]; then
+  _drift=$(_values_drift "$_overrides" "$AZURE_DIR" "$VALUES_DIR")
+  if [[ -n "$_drift" ]]; then
+    warn "$_VALUES_OVERRIDES is out of date: ${_drift//$'\n'/; }"
+    action "make init-values"
+    set_next "make init-values"
+  fi
+  _hostname=$(_values_get "$_overrides" -- config hostname) || _hostname=""
   if [[ -n "$_hostname" && "$_hostname" != *"placeholder"* && "$_hostname" != *"<"* ]]; then
     info "hostname: ${_hostname}"
   else
-    warn "hostname is blank or placeholder in values-overrides.yaml"
-    action "make init-values  (generates values-overrides.yaml from terraform outputs)"
+    warn "hostname is blank or a placeholder in $_VALUES_OVERRIDES"
+    action "make init-values  (writes it from terraform outputs)"
     set_next "make init-values"
   fi
-else
-  fail "values-overrides.yaml — not generated"
-  action "make init-values  (or: ./helm/scripts/init-values.sh)"
-  set_next "make init-values"
 fi
-
-# Addon files
-for addon in sizing-ha sizing-dev sizing-minimum agent-deploys agent-builder insights polly; do
-  f="$VALUES_DIR/langsmith-values-${addon}.yaml"
-  if [[ -f "$f" ]]; then
-    pass "langsmith-values-${addon}.yaml (addon active)"
-  else
-    skip "langsmith-values-${addon}.yaml — not enabled"
-  fi
-done
+if [[ -f "$VALUES_DIR/$_VALUES_LOCAL" ]]; then
+  info "$_VALUES_LOCAL (your changes, merged last by make init-values)"
+fi
 
 # ── 8. Kubernetes Resources ───────────────────────────────────────────────────
 header "8. Kubernetes Resources"
@@ -418,8 +434,6 @@ else
   _ingress_scope="public"
   [[ "$_ingress_lb" == "internal" ]] && _ingress_scope="private"
   case "${_ingress_controller:-envoy-gateway}" in
-    nginx)
-      _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
     istio-addon)
       # The add-on runs one gateway per load-balancer type; internal is
       # aks-istio-ingressgateway-internal.

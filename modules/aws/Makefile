@@ -15,8 +15,8 @@
 
 .PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
-        init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end sso uninstall clean deploy-all \
-        test-e2e test-permutations test-parallel \
+        init-values deploy apply-eso sso uninstall clean deploy-all \
+        test-e2e test-values test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
 INFRA_DIR := infra
@@ -83,6 +83,7 @@ plan: ## terraform plan (infra)
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra)
+	bash $(INFRA_DIR)/scripts/upgrade-guard.sh
 	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
@@ -150,16 +151,10 @@ deploy: ## Deploy LangSmith via Helm
 apply-eso: ## Re-apply ESO ClusterSecretStore + ExternalSecret (no Helm redeploy)
 	$(HELM_DIR)/scripts/apply-eso.sh
 
-smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
-	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
-
-smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
-	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
-
 sso: ## Turn on SSO (OIDC) login after a working password install — one-way
 	$(HELM_DIR)/scripts/sso.sh
 
-uninstall: ## Uninstall LangSmith Helm release
+uninstall: ## Uninstall LangSmith Helm release (the sandbox runtime first with an external runtime)
 	$(HELM_DIR)/scripts/uninstall.sh
 
 clean: ## Remove local generated files (run after make destroy and make purge-secrets)
@@ -167,6 +162,9 @@ clean: ## Remove local generated files (run after make destroy and make purge-se
 
 test-e2e: ## Run E2E gateway tests (ALB or Envoy Gateway)
 	$(HELM_DIR)/scripts/test-e2e.sh
+
+test-values: ## Render the Helm values and check sizing, autoscaling and chart-default requests (needs helm)
+	$(HELM_DIR)/scripts/test-values.sh
 
 test-permutations: ## Run permutation tests sequentially on current cluster (ARGS="1 2 5" for subset)
 	$(INFRA_DIR)/scripts/test-permutations.sh $(ARGS)

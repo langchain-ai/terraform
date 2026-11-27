@@ -1,25 +1,25 @@
 # Azure base Helm values for LangSmith.
 #
-# Applied on every deploy by helm/scripts/deploy.sh, which loads this as the base values file.
+# make init-values copies this file to ../langsmith-values.yaml on every run, and
+# make deploy applies that copy first, then ../langsmith-values-overrides.yaml.
 #
 # Holds the Azure-native defaults that do NOT vary per deployment: the Azure Blob
-# Storage engine and auth/secret conventions. Everything that
-# varies per environment is layered on top:
-#   Hostname, admin email, storage account/container, Workload Identity client ID,
-#     ingress class + TLS  → values-overrides.yaml
-#   External Postgres/Redis secret references          → same overrides layer
-#   Feature addon config (agent-deploys, insights)     → addon overlay files
-#   Resource sizing                                    → langsmith-values-sizing-*.yaml
+# Storage engine and auth/secret conventions. Everything that varies per
+# environment is in langsmith-values-overrides.yaml, which init-values.sh writes:
+# hostname, admin email, storage account/container, Workload Identity client ID,
+# ingress class and TLS, the external Postgres/Redis secret references, each
+# enabled feature, and the sizing profile. Put your own changes in
+# ../langsmith-values-local.yaml, not in the copy.
 #
 # Do NOT put secrets here. Secrets live in langsmith-config-secret (Key Vault →
 # Terraform or create-k8s-secrets.sh) and are referenced via config.existingSecretName.
 
 ingress:
   enabled: true
-  # No class here. The overrides layer sets one (nginx, istio,
+  # No class here. The overrides file sets one (istio,
   # azure-application-gateway) or disables Ingress (envoy-gateway, the default,
   # and istio-addon). With ingress_controller = "none" the cluster's default
-  # IngressClass serves it; set ingressClassName in values-overrides.yaml to
+  # IngressClass serves it; set ingressClassName in langsmith-values-local.yaml to
   # pick another.
 
 istioGateway:
@@ -47,8 +47,8 @@ config:
     engine: "Azure"
     # azureStorageAccountName + azureStorageContainerName are set in the overrides layer.
 
-# The chart enables both by default, and deploy.sh only ever layers an overlay
-# on top when enable_insights / enable_polly is true. Off here, so false means off.
+# The chart enables both by default, and init-values.sh merges their overlays
+# only when enable_insights / enable_polly is true. Off here, so false means off.
 insights:
   enabled: false
 

@@ -36,6 +36,8 @@ HELM_DIR="$AWS_DIR/helm"
 VALUES_DIR="$HELM_DIR/values"
 
 source "$SCRIPT_DIR/_common.sh"
+# shellcheck source=../../helm/scripts/_values.sh
+source "$HELM_DIR/scripts/_values.sh"
 
 # ── Colors (direct ANSI for banner/step headers) ──────────────────────────────
 RED='\033[0;31m'
@@ -102,15 +104,21 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 _step 1 "$TOTAL_STEPS" "Running terraform apply..."
 
+if ! bash "$SCRIPT_DIR/upgrade-guard.sh"; then
+  printf "\n${RED}[ERROR]${NC} The upgrade checks refused this apply. Check output above.\n"
+  printf "Fix the issue and re-run: ${CYAN}make quickdeploy${NC}\n"
+  exit 1
+fi
+
 if [[ "$AUTO_APPROVE" == "true" ]]; then
   info "Running with -auto-approve (--yes flag set)"
-  if ! _terraform -chdir="$INFRA_DIR" apply -auto-approve; then
+  if ! terraform -chdir="$INFRA_DIR" apply -auto-approve; then
     printf "\n${RED}[ERROR]${NC} terraform apply failed. Check output above.\n"
     printf "Fix the issue and re-run: ${CYAN}make quickdeploy${NC}\n"
     exit 1
   fi
 else
-  if ! _terraform -chdir="$INFRA_DIR" apply; then
+  if ! terraform -chdir="$INFRA_DIR" apply; then
     printf "\n${RED}[ERROR]${NC} terraform apply failed. Check output above.\n"
     printf "Fix the issue and re-run: ${CYAN}make quickdeploy${NC}\n"
     exit 1
@@ -168,12 +176,10 @@ _step 5 "$TOTAL_STEPS" "Deployment complete"
 
 # Resolve LangSmith URL from values overrides file
 _langsmith_url=""
-_overrides_file="$VALUES_DIR/langsmith-values-overrides.yaml"
+_overrides_file="$VALUES_DIR/$_VALUES_OVERRIDES"
 if [[ -f "$_overrides_file" ]]; then
-  _hostname=$(grep -E '^\s*hostname:' "$_overrides_file" 2>/dev/null \
-    | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _hostname=""
-  _url=$(grep -E '^\s*url:' "$_overrides_file" 2>/dev/null \
-    | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _url=""
+  _hostname=$(_values_get "$_overrides_file" -- config hostname) || _hostname=""
+  _url=$(_values_get "$_overrides_file" -- config deployment url) || _url=""
   if [[ -n "$_url" ]]; then
     _langsmith_url="$_url"
   elif [[ -n "$_hostname" ]]; then

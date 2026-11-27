@@ -163,6 +163,6 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 | `langsmith-smithdb` (optional) | `iam.gke.io/gcp-service-account: <smithdb gsa>` | GCS `storage.objectAdmin` on the SmithDB bucket only |
 
 GSA is defined by the `iam` module and output as `workload_identity_annotation`.
-`init-values.sh` writes these annotations into `values-overrides.yaml` automatically.
+`init-values.sh` writes these annotations into `langsmith-values-overrides.yaml` automatically.
 SmithDB uses a second, separate GSA from the `smithdb` module so its bucket access
 stays isolated from the LangSmith application identity.

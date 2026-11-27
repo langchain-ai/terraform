@@ -4,39 +4,47 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# init-values.sh — Generate Helm values files from Terraform outputs.
+# init-values.sh — Writes the two Helm values files from Terraform outputs.
 #
 # Usage (from azure/):
 #   make init-values  (or: ./helm/scripts/init-values.sh)
 #
 # Reads:
 #   - infra/terraform.tfvars    → name_prefix, environment, location, tls_certificate_source,
-#                                 postgres_source, redis_source, sizing_profile
+#                                 postgres_source, redis_source, sizing_profile, the enable_* flags
 #   - terraform output          → storage_account_name, storage_container_name,
 #                                 storage_account_k8s_managed_identity_client_id,
 #                                 langsmith_admin_email, langsmith_namespace, aks_cluster_name
+#   - helm/values/examples/     → the base values, the sizing profile, and each enabled feature
+#   - helm/values/langsmith-values-local.yaml → your own changes (optional), merged last
 #
-# Prompts for (on first run):
-#   - Admin email (if not in terraform outputs)
-#   - Sizing profile
-#   - Product tier (LangSmith / +Deployments / +Agent Builder / +Insights)
+# Prompts for (when Terraform does not supply them):
+#   - Hostname and admin email
+#   - The external ClickHouse connection, while the langsmith-clickhouse secret does not exist
 #
-# Creates:
-#   - helm/values/values-overrides.yaml              (auto-generated)
-#   - helm/values/langsmith-values-sizing-*.yaml     (based on sizing choice)
-#   - helm/values/langsmith-values-agent-*.yaml      (based on product tier)
-#   - helm/values/langsmith-values-insights.yaml     (if Insights chosen)
+# Writes, on every run:
+#   - helm/values/langsmith-values.yaml            (the base, copied from examples/)
+#   - helm/values/langsmith-values-overrides.yaml  (everything else, merged into one file)
+#   - helm/values/langsmith-sandbox-values-overrides.yaml
+#                                                  (langsmith-sandbox chart, if
+#                                                   sandbox_runtime_source = external)
 #
-# Re-running is safe: terraform outputs are refreshed; choices preserved if files exist.
+# make deploy applies langsmith-values.yaml, then langsmith-values-overrides.yaml.
+# Neither file holds a secret: they live in langsmith-config-secret. A re-run
+# rewrites both files. No script writes langsmith-values-local.yaml. When a
+# generated file was edited by hand, the run stops and prints the change instead.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
+MODULE_DIR="$(cd "$HELM_DIR/.." && pwd)"
 INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
 VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
 EXAMPLES_DIR="$HELM_DIR/values/examples"
 
 source "$HELM_DIR/../infra/scripts/_common.sh"
+# shellcheck source=_values.sh
+source "$SCRIPT_DIR/_values.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
@@ -44,6 +52,28 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   action "cp $INFRA_DIR/terraform.tfvars.example $INFRA_DIR/terraform.tfvars"
   exit 1
 fi
+
+# Below, an unset ingress_controller means envoy-gateway, so a deployment still on
+# ingress-nginx would get routing for a controller Terraform has not installed.
+INFRA_DIR="$INFRA_DIR" bash "$HELM_DIR/../infra/scripts/guard-ingress-nginx.sh" || exit 1
+
+if ! command -v helm >/dev/null 2>&1; then
+  fail "helm is not installed. init-values.sh merges the values files with it."
+  exit 1
+fi
+# A 0.17 values-overrides.yaml written under the previous default of
+# langsmith_image_registry_keeps_source_host (true, host kept) with the key still
+# unset in terraform.tfvars: the new file would switch the layout under a mirror
+# that serves the host-kept one. Stop first (_common.sh), before the 0.17 layout
+# stop below asks to move that file away.
+if [[ -f "$VALUES_DIR/values-overrides.yaml" ]]; then
+  _stop_if_values_layout_from_old_default "$VALUES_DIR/values-overrides.yaml" || exit 1
+fi
+_values_legacy_stop "$VALUES_DIR" "$EXAMPLES_DIR" || exit 1
+
+# The generated pieces of the overrides file, merged by _values_write below.
+_frag_dir=$(mktemp -d)
+trap 'rm -rf "$_frag_dir"' EXIT
 
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment="${_name_prefix:-dev}"
@@ -59,6 +89,7 @@ _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller=
 _enable_smithdb=$(_parse_tfvar "enable_smithdb") || _enable_smithdb="false"
 _enable_sandboxes=$(_parse_tfvar "enable_sandboxes") || _enable_sandboxes="false"
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+_sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 _langsmith_release_name=$(_parse_tfvar "langsmith_release_name") || _langsmith_release_name="langsmith"
 if [[ "$_langsmith_release_name" == *langsmith* ]]; then
   _langsmith_release_fullname="$_langsmith_release_name"
@@ -66,7 +97,6 @@ else
   _langsmith_release_fullname="${_langsmith_release_name}-langsmith"
 fi
 _smithdb_ingestion_enabled=$(_parse_tfvar "smithdb_ingestion_enabled") || _smithdb_ingestion_enabled="false"
-_smithdb_migration_enabled=$(_parse_tfvar "smithdb_migration_enabled") || _smithdb_migration_enabled="false"
 _smithdb_query_enabled=$(_parse_tfvar "smithdb_query_enabled") || _smithdb_query_enabled="false"
 
 # Derive protocol from TLS source
@@ -76,9 +106,7 @@ else
   _protocol="http"
 fi
 
-OUT_FILE="$VALUES_DIR/values-overrides.yaml"
-_first_run="false"
-[[ ! -f "$OUT_FILE" ]] && _first_run="true"
+OUT_FILE="$VALUES_DIR/$_VALUES_OVERRIDES"
 
 echo ""
 echo "Parsed terraform.tfvars:"
@@ -159,6 +187,18 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_MIN_REPLICAS=$(_tf_out sandbox_host_min_replicas) || SANDBOX_MIN_REPLICAS=""
   SANDBOX_MAX_REPLICAS=$(_tf_out sandbox_host_max_replicas) || SANDBOX_MAX_REPLICAS=""
 fi
+SANDBOX_CLUSTER_NAME=""
+SANDBOX_SERVICE_ACCOUNT_NAME=""
+SANDBOX_RUNTIME_SECRET_NAME=""
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  SANDBOX_CLUSTER_NAME=$(_tf_out sandbox_cluster_name) || SANDBOX_CLUSTER_NAME=""
+  # The sandbox-host federated credential trusts exactly this ServiceAccount, so
+  # read the name back from Terraform rather than repeat it here: the chart's
+  # own default would not match, and Workload Identity would fail at runtime
+  # with a 403 that points nowhere near this file.
+  SANDBOX_SERVICE_ACCOUNT_NAME=$(_tf_out sandbox_service_account_name) || SANDBOX_SERVICE_ACCOUNT_NAME=""
+  SANDBOX_RUNTIME_SECRET_NAME=$(_tf_out sandbox_runtime_secret_name) || SANDBOX_RUNTIME_SECRET_NAME=""
+fi
 
 echo ""
 pass "Terraform outputs read"
@@ -180,9 +220,9 @@ echo ""
 #   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
 #   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
 #      (cloudapp.usgovcloudapi.net in Azure Government)
-#      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
+#      Works for ALL ingress controllers (istio, istio-addon, envoy-gateway).
 #      Azure assigns the DNS label to whichever LB service has the annotation set.
-#   3. Existing value in values-overrides.yaml (keep on re-run)
+#   3. Existing value in langsmith-values-overrides.yaml (keep on re-run)
 #   4. Interactive prompt
 HOSTNAME=""
 
@@ -211,8 +251,7 @@ fi
 
 # Keep existing hostname on re-run
 if [[ -z "$HOSTNAME" && -f "$OUT_FILE" ]]; then
-  _existing_hostname=$(grep -E '^\s*hostname:' "$OUT_FILE" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _existing_hostname=""
+  _existing_hostname=$(_values_get "$OUT_FILE" -- config hostname) || _existing_hostname=""
   if [[ -n "$_existing_hostname" && "$_existing_hostname" != *"<"* ]]; then
     HOSTNAME="$_existing_hostname"
     info "Keeping existing hostname: $HOSTNAME"
@@ -237,8 +276,7 @@ fi
 # ── Admin email ────────────────────────────────────────────────────────────
 if [[ -z "$ADMIN_EMAIL" ]]; then
   if [[ -f "$OUT_FILE" ]]; then
-    _existing_email=$(grep -E '^\s*initialOrgAdminEmail:' "$OUT_FILE" 2>/dev/null \
-      | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _existing_email=""
+    _existing_email=$(_values_get "$OUT_FILE" -- config initialOrgAdminEmail) || _existing_email=""
     if [[ -n "$_existing_email" && "$_existing_email" != *"<"* ]]; then
       ADMIN_EMAIL="$_existing_email"
       info "Keeping existing admin email: $ADMIN_EMAIL"
@@ -270,25 +308,13 @@ if [[ -z "$ADMIN_EMAIL" ]]; then
 fi
 
 # ── Sizing profile ─────────────────────────────────────────────────────────
+# sizing_profile in terraform.tfvars is the only input, so a re-run writes the
+# same file and make deploy can tell when it changed.
 echo ""
-if [[ "$_sizing_profile" == "default" ]]; then
-  echo "  Sizing profile:"
-  echo "    1) default  — chart defaults (start here)"
-  echo "    2) minimum  — absolute floor, dev/POC/CI (may OOM under load)"
-  echo "    3) dev      — light dev profile"
-  echo "    4) production — HA production (3+ replicas, higher CPU/mem)"
-  echo ""
-  printf "  Sizing choice [1]: "
-  # EOF here is not an error: the block only runs when sizing_profile is already
-  # "default" in terraform.tfvars, so falling through to 1 preserves exactly what
-  # was configured rather than aborting a headless run.
-  read -r _sizing_choice || _sizing_choice=""
-  case "${_sizing_choice:-1}" in
-    2) _sizing_profile="minimum" ;;
-    3) _sizing_profile="dev" ;;
-    4) _sizing_profile="production" ;;
-    *) _sizing_profile="default" ;;
-  esac
+info "sizing_profile = ${_sizing_profile} (terraform.tfvars: default, minimum, dev, production, production-large)"
+if [[ "$_sizing_profile" != "default" && ! -f "$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml" ]]; then
+  fail "sizing_profile = ${_sizing_profile}, and examples/ has no langsmith-values-sizing-${_sizing_profile}.yaml"
+  exit 1
 fi
 
 # ── Product tier — read from terraform.tfvars (enable_* flags) ─────────────
@@ -347,6 +373,7 @@ info "enable_polly         = $_enable_polly"
 info "enable_fleet         = $_enable_fleet"
 info "enable_smithdb       = $_enable_smithdb"
 info "enable_sandboxes     = $_enable_sandboxes"
+[[ "$_enable_sandboxes" == "true" ]] && info "sandbox_runtime_source = $_sandbox_runtime_source"
 info "enable_sso_oidc      = $_enable_sso_oidc"
 info "enable_llm_gateway   = $_enable_llm_gateway"
 info "enable_gateway_pii_redaction = $_enable_gateway_pii_redaction"
@@ -382,12 +409,12 @@ if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
   exit 1
 fi
-if [[ "$_enable_smithdb" != "true" && ("$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
+if [[ "$_enable_smithdb" != "true" && ("$_smithdb_ingestion_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
   fail "SmithDB integration gates require enable_smithdb = true"
   exit 1
 fi
-if [[ "$_smithdb_ingestion_enabled" != "true" && ("$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
-  fail "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true"
+if [[ "$_smithdb_ingestion_enabled" != "true" && "$_smithdb_query_enabled" == "true" ]]; then
+  fail "smithdb_query_enabled requires smithdb_ingestion_enabled = true"
   exit 1
 fi
 
@@ -439,37 +466,23 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
   fi
 fi
 
-# ── Generate values-overrides.yaml ────────────────────────────────────────
-# A values-overrides.yaml written under the previous default of
-# langsmith_image_registry_keeps_source_host (true, host kept) with the key
-# still unset in terraform.tfvars: regenerating it here would switch the
-# layout under a mirror that serves the host-kept one, and deploy.sh would
-# then see a file that matches its tfvars. Stop first (_common.sh).
-if [[ -f "$OUT_FILE" ]]; then
-  _stop_if_values_layout_from_old_default "$OUT_FILE" || exit 1
-fi
+# ── The core of langsmith-values-overrides.yaml ───────────────────────────
 echo ""
-info "Generating values-overrides.yaml..."
+info "Generating $_VALUES_OVERRIDES..."
 
 # Build ingress/TLS block
 # The ingressClassName varies by ingress controller:
-#   nginx         → "nginx"
 #   istio         → "istio"  (self-managed via Helm)
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
 #   envoy-gateway → ""     (uses Gateway API, not Ingress — see the gateway block below)
-#   none          → ""       (the cluster's default IngressClass, or one set by
-#                             hand in this file, kept on re-run)
+#   none          → ""       (the cluster's default IngressClass, or the
+#                             ingress.ingressClassName in langsmith-values-local.yaml)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;
-  nginx)             _ingress_class="nginx" ;;
   agic)              _ingress_class="azure-application-gateway" ;;
   *)                 _ingress_class="" ;;
 esac
-if [[ "$_ingress_controller" == "none" && -f "$OUT_FILE" ]]; then
-  _ingress_class=$(_values_ingress_class "$OUT_FILE")
-  [[ -n "$_ingress_class" ]] && info "Keeping ingressClassName from values-overrides.yaml: $_ingress_class"
-fi
 
 if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
   _ingress_block='ingress:
@@ -589,18 +602,7 @@ else
   _blob_endpoint_line="    # azureStorageServiceUrlOverride: unset, commercial Azure (<account>.blob.core.windows.net)"
 fi
 
-cat > "$OUT_FILE" << EOF
-# LangSmith Azure — Helm values overrides
-# Auto-generated by init-values.sh — edit to customize, re-run to refresh from terraform outputs.
-# values-overrides.yaml is gitignored — never commit it.
-#
-# Values chain: values.yaml (base) → this file → addon overlays → sizing overlay
-#
-# Generated from these terraform.tfvars values. deploy.sh reads them back and
-# stops the deploy if any has changed since this file was written — editing
-# terraform.tfvars does not regenerate this file. Re-run make init-values.
-$(_values_input_stamp)
-
+cat > "$_frag_dir/core.yaml" << EOF
 config:
   hostname: "${HOSTNAME}"
   authType: "mixed"
@@ -736,87 +738,29 @@ fi)
 # config.existingSecretName, so the chart finds an encryption key and deploys both
 # agents without complaint — a base install would quietly grow workloads nobody
 # asked for. Make the terraform enable_* flags authoritative. The addon overlays
-# load after this file, so an enabled feature still turns itself back on.
+# merge after this block, so an enabled feature still turns itself back on.
 insights:
   enabled: ${_enable_insights}
 polly:
   enabled: ${_enable_polly}
 EOF
 
-pass "Generated: ${OUT_FILE}"
-
-# ── Generate sizing file ──────────────────────────────────────────────────
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_src="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  _sizing_dst="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_src" ]]; then
-    cp "$_sizing_src" "$_sizing_dst"
-    pass "Generated: langsmith-values-sizing-${_sizing_profile}.yaml"
-  else
-    warn "No example found for sizing_profile '${_sizing_profile}' in examples/ — skipping"
+# ── Deployments ───────────────────────────────────────────────────────────
+# The example leaves config.deployment.url empty and tlsEnabled false, and it
+# merges after the core values, so this fragment sets both again. The operator
+# builds the agent endpoint URLs from them: a wrong value keeps deployments in
+# DEPLOYING.
+if [[ "$_enable_deployments" == "true" ]]; then
+  _tls_enabled="false"
+  [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]] && _tls_enabled="true"
+  printf 'config:\n  deployment:\n    url: "%s"\n    tlsEnabled: %s\n' "${_protocol}://${HOSTNAME}" "$_tls_enabled" \
+    > "$_frag_dir/agent-deploys.yaml"
+  if [[ "$_deployment_templates" == "true" ]]; then
+    { printf 'operator:\n  templates:\n'; _deployment_templates_block "$_ls_image_registry" "$_ls_image_keeps_host"; } \
+      > "$_frag_dir/deployment-templates.yaml"
+    info "operator.templates.redis and db point at ${_ls_image_registry} (chart ${_chart_version})"
   fi
 fi
-
-# ── Generate addon files ──────────────────────────────────────────────────
-_copy_addon() {
-  local addon_file="$1"
-  local _src="$EXAMPLES_DIR/langsmith-values-${addon_file}.yaml"
-  local _dst="$VALUES_DIR/langsmith-values-${addon_file}.yaml"
-  if [[ -f "$_src" ]]; then
-    cp "$_src" "$_dst"
-    # Inject deployment URL and tlsEnabled into agent-deploys after copy
-    if [[ "$addon_file" == "agent-deploys" ]]; then
-      local _tls_enabled="false"
-      [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]] && _tls_enabled="true"
-      # macOS-safe sed: use python3 for in-place substitution
-      python3 -c "
-import sys
-content = open('${_dst}').read()
-content = content.replace('url: \"\"        # populated by init-values.sh → https://<dns_label>.<region>.cloudapp.azure.com',
-                          'url: \"${_protocol}://${HOSTNAME}\"')
-content = content.replace('tlsEnabled: false  # populated by init-values.sh',
-                          'tlsEnabled: ${_tls_enabled}')
-open('${_dst}', 'w').write(content)
-"
-      if [[ "$_deployment_templates" == "true" ]]; then
-        { printf '\n'; _deployment_templates_block "$_ls_image_registry" "$_ls_image_keeps_host"; } >> "$_dst"
-      fi
-    fi
-    pass "Generated: langsmith-values-${addon_file}.yaml"
-    if [[ "$addon_file" == "agent-deploys" && "$_deployment_templates" == "true" ]]; then
-      info "operator.templates.redis and db point at ${_ls_image_registry} (chart ${_chart_version})"
-    fi
-  else
-    warn "Example file not found: $EXAMPLES_DIR/langsmith-values-${addon_file}.yaml"
-  fi
-}
-
-[[ "$_enable_deployments"   == "true" ]] && _copy_addon "agent-deploys"
-[[ "$_enable_agent_builder" == "true" ]] && _copy_addon "agent-builder"
-# Fleet reuses the agent_builder encryption key already in langsmith-config-secret
-# (see infra/scripts/create-k8s-secrets.sh) — no key injection needed here.
-[[ "$_enable_fleet"         == "true" ]] && _copy_addon "fleet"
-
-# Insights: this overlay only turns the feature on. The ClickHouse connection is
-# configured in values-overrides.yaml from clickhouse_source, so insights no
-# longer decides whether ClickHouse runs in-cluster or points at an external one.
-if [[ "$_enable_insights" == "true" ]]; then
-  cat > "$VALUES_DIR/langsmith-values-insights.yaml" << 'INSIGHTS_EOF'
-# Insights — ClickHouse-backed analytics.
-# Auto-generated by init-values.sh.
-#
-# ClickHouse connection (in-cluster vs external) lives in values-overrides.yaml,
-# driven by clickhouse_source in terraform.tfvars — not this file.
-#
-# Chart 0.15.1 removed config.insights → top-level insights block. encryptionKey read from
-# langsmith-config-secret (insights_encryption_key) via config.existingSecretName.
-insights:
-  enabled: true
-INSIGHTS_EOF
-  pass "Generated: langsmith-values-insights.yaml"
-fi
-
-[[ "$_enable_polly"         == "true" ]] && _copy_addon "polly"
 
 # LLM Gateway — generated rather than copied, because it carries the Workload
 # Identity client ID. The longer ingress timeout for /gateway/ is not set here:
@@ -824,9 +768,9 @@ fi
 # (see helm/scripts/llm-gateway-ingress.py). Both pods take
 # langsmith.commonEnv (the blob storage settings), so both get the identity label
 # and the service account annotation that k8s-cluster federates for them.
-# Presidio has an overlay of its own, gated by enable_gateway_pii_redaction in
-# deploy.sh, so turning redaction off takes effect at the next make deploy.
-_llm_gateway_file="$VALUES_DIR/langsmith-values-llm-gateway.yaml"
+# Presidio has a fragment of its own, merged only while
+# enable_gateway_pii_redaction = true.
+_llm_gateway_file="$_frag_dir/llm-gateway.yaml"
 if [[ "$_enable_llm_gateway" == "true" ]]; then
   {
     cat << LLMGW_EOF
@@ -843,9 +787,9 @@ agentGateway:
       azure.workload.identity/client-id: "${WI_CLIENT_ID}"
 LLMGW_EOF
   } > "$_llm_gateway_file"
-  pass "Generated: langsmith-values-llm-gateway.yaml"
+  pass "LLM Gateway (agentGateway)"
   if [[ "$_enable_gateway_pii_redaction" == "true" ]]; then
-    cat > "$VALUES_DIR/langsmith-values-gateway-pii.yaml" << LLMGW_EOF
+    cat > "$_frag_dir/gateway-pii.yaml" << LLMGW_EOF
 # LLM Gateway PII redaction (chart presidioAnalyzer). Auto-generated by
 # init-values.sh from enable_gateway_pii_redaction in terraform.tfvars.
 presidioAnalyzer:
@@ -857,7 +801,7 @@ presidioAnalyzer:
     annotations:
       azure.workload.identity/client-id: "${WI_CLIENT_ID}"
 LLMGW_EOF
-    pass "Generated: langsmith-values-gateway-pii.yaml"
+    pass "LLM Gateway PII redaction (presidioAnalyzer)"
   fi
   if [[ "$_ingress_controller" == "envoy-gateway" || "$_ingress_controller" == "none" ]]; then
     warn "enable_llm_gateway with ingress_controller = ${_ingress_controller}: model calls longer than that controller's request timeout will fail at the ingress. Raise it there to 900 s to match the gateway."
@@ -870,7 +814,7 @@ fi
 # ServiceAccount, so both pods take the identity label: sandbox-host mounts the
 # JuiceFS Blob container with that identity, and the Job formats it. The JuiceFS
 # Secret and the callback signing key come from Terraform and langsmith-config-
-# secret, so this file holds no secret. images.sandboxHostImage.tag is not
+# secret, so these values hold no secret. images.sandboxHostImage.tag is not
 # written here: deploy.sh sets it from the appVersion of the chart it resolves.
 # safe-to-evict=false stops the cluster autoscaler from removing a node that
 # runs sandbox-host and its sandbox VMs. The format Job needs no KVM: it prefers
@@ -880,8 +824,92 @@ fi
 # pool's min_count (at least 1) and max_count, and each new replica's Pending
 # pod makes the cluster autoscaler add a node. To scale further, raise
 # sandbox_host_max_count, apply, and re-run make init-values and make deploy.
-_sandboxes_file="$VALUES_DIR/langsmith-values-sandboxes.yaml"
-if [[ "$_enable_sandboxes" == "true" ]]; then
+_sandboxes_file="$_frag_dir/sandboxes.yaml"
+# Copied to helm/values once the two values files are written.
+_sandbox_runtime_file="$_frag_dir/sandbox-runtime.yaml"
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" == "external" ]]; then
+  # External runtime: the langsmith release runs no sandbox-host, so its overlay
+  # carries the deployment mode and the dedicated service-auth key instead of
+  # the sandbox-host block, and the runtime gets its own values file for the
+  # langsmith-sandbox chart, which deploy.sh installs in the sandbox cluster.
+  # Neither file holds a secret: the runtime reads its JuiceFS config and its
+  # runtime Secret from the sandbox cluster, where Terraform and
+  # create-k8s-secrets.sh wrote them.
+  if [[ -z "$SANDBOX_WI_CLIENT_ID" || -z "$SANDBOX_JUICEFS_SECRET" || -z "$SANDBOX_CLUSTER_NAME" \
+    || -z "$SANDBOX_SERVICE_ACCOUNT_NAME" || -z "$SANDBOX_RUNTIME_SECRET_NAME" ]] \
+    || ! [[ "$SANDBOX_MIN_REPLICAS" =~ ^[0-9]+$ && "$SANDBOX_MAX_REPLICAS" =~ ^[0-9]+$ ]]; then
+    fail "sandbox_runtime_source = external but the sandbox cluster's Terraform outputs are missing"
+    action "Run make apply with sandbox_runtime_source = \"external\", then re-run make init-values"
+    exit 1
+  fi
+  _sandbox_service_url_line=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_line="
+  serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
+  cat > "$_sandboxes_file" << SANDBOXES_EOF
+# Sandboxes in a dedicated cluster (sandbox_runtime_source = external).
+# Auto-generated by init-values.sh. sandbox-host runs from the langsmith-sandbox
+# release in ${SANDBOX_CLUSTER_NAME}; see langsmith-sandbox-values-overrides.yaml.
+# sandbox_service_auth_secret is the dedicated key create-k8s-secrets.sh writes
+# into langsmith-config-secret: the chart refuses api_key_salt here.
+sandboxes:
+  enabled: true
+  external:
+    enabled: true${_sandbox_service_url_line}
+  serviceAuth:
+    secretKey: "sandbox_service_auth_secret"
+SANDBOXES_EOF
+  pass "Sandboxes (external runtime in ${SANDBOX_CLUSTER_NAME})"
+
+  cat > "$_sandbox_runtime_file" << RUNTIME_EOF
+# Auto-generated by init-values.sh for the dedicated sandbox cluster
+# (${SANDBOX_CLUSTER_NAME}). deploy.sh installs the langsmith-sandbox chart whose
+# appVersion matches the langsmith chart's, with this file.
+# create-k8s-secrets.sh writes the runtime Secret (config.existingSecretName)
+# in the sandbox namespace from Key Vault, with exactly these two keys. Both
+# values match the same keys in langsmith-config-secret; neither is the API
+# key salt.
+config:
+  endpoint: "${_protocol}://${HOSTNAME}/api"
+  existingSecretName: "${SANDBOX_RUNTIME_SECRET_NAME}"
+  callbackSigningJwkSecretKey: "sandbox_callback_signing_jwk"
+serviceAuth:
+  secretKey: "sandbox_service_auth_secret"
+
+# Workload Identity for sandbox-host and the JuiceFS format Job. The chart
+# annotates the ServiceAccount and labels both pods from this block.
+workloadIdentity:
+  provider: azure
+  azure:
+    clientId: "${SANDBOX_WI_CLIENT_ID}"
+
+# Terraform writes this Secret in the sandbox namespace.
+juicefs:
+  existingSecretName: "${SANDBOX_JUICEFS_SECRET}"
+
+# safe-to-evict=false stops the cluster autoscaler from removing a node that
+# runs sandbox-host and its sandbox VMs. The elected sandbox-host scales its
+# own Deployment between the sandboxhost pool's bounds.
+sandboxHost:
+  enabled: true
+  deployment:
+    nodeSelector:
+      sandbox.langsmith.com/host: "true"
+    podAnnotations:
+      cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+  autoscaling:
+    enabled: true
+    minReplicas: ${SANDBOX_MIN_REPLICAS}
+    maxReplicas: ${SANDBOX_MAX_REPLICAS}
+  # serviceAccount.name is the Workload Identity contract with the federated
+  # credential's subject (Terraform: sandbox_service_account_name). Do not
+  # rename it here alone: change the tfvar, apply, and re-run init-values.
+  serviceAccount:
+    name: "${SANDBOX_SERVICE_ACCOUNT_NAME}"
+RUNTIME_EOF
+  pass "Sandbox runtime values for the langsmith-sandbox chart (cluster: ${SANDBOX_CLUSTER_NAME})"
+elif [[ "$_enable_sandboxes" == "true" ]]; then
   if [[ -z "$SANDBOX_WI_CLIENT_ID" || -z "$SANDBOX_JUICEFS_SECRET" ]] \
     || ! [[ "$SANDBOX_MIN_REPLICAS" =~ ^[0-9]+$ && "$SANDBOX_MAX_REPLICAS" =~ ^[0-9]+$ ]]; then
     fail "enable_sandboxes = true but the sandbox Terraform outputs are missing"
@@ -930,27 +958,17 @@ sandboxes:
                   operator: In
                   values: ["true"]
 SANDBOXES_EOF
-  pass "Generated: langsmith-values-sandboxes.yaml"
-fi
-
-# Patch tlsEnabled in agent-deploys — derive from tls_certificate_source.
-# Example file defaults to false; patch so operator builds https:// agent URLs.
-_deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
-if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
-  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "acm" ]]; then
-    sed -i.bak 's/tlsEnabled: false/tlsEnabled: true/' "$_deploys_file" && rm -f "$_deploys_file.bak"
-  fi
+  pass "Sandboxes (in-cluster runtime)"
 fi
 
 # ── SmithDB ───────────────────────────────────────────────────────────────
-# Three files, in the order deploy.sh loads them: the sizing file (written every
-# run from terraform output smithdb_helm_values), the overlay (copied once from
-# examples/, safe to hand-edit), and the overrides file (written every run from
-# the other Terraform outputs). A later file wins.
+# Three sources, in merge order: the sizing (terraform output
+# smithdb_helm_values), the SmithDB example, and the storage, identity,
+# metastore and gate values from the other Terraform outputs. A later source
+# wins, and langsmith-values-local.yaml wins over all three.
 if [[ "$_enable_smithdb" == "true" ]]; then
-  _smithdb_sizing="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
-  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
-  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  _smithdb_sizing="$_frag_dir/smithdb-sizing.yaml"
+  _smithdb_overrides="$_frag_dir/smithdb-overrides.yaml"
 
   if [[ -z "$SMITHDB_STORAGE_ACCOUNT" || -z "$SMITHDB_STORAGE_CONTAINER" || -z "$SMITHDB_WI_CLIENT_ID" || -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
     fail "enable_smithdb = true but the SmithDB Terraform outputs are missing"
@@ -966,23 +984,9 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     exit 1
   fi
 
-  {
-    echo "# Auto-generated by init-values.sh from terraform output smithdb_helm_values."
-    echo "# Do not edit. To change the size, set smithdb_sizing in infra/terraform.tfvars."
-    echo ""
-    printf '%s\n' "$SMITHDB_HELM_VALUES"
-  } > "$_smithdb_sizing"
-  pass "Generated: langsmith-values-smithdb-sizing.yaml"
-
-  if [[ ! -f "$_smithdb_base" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_base"
-    pass "Generated: langsmith-values-smithdb.yaml"
-  elif grep -qE '^[[:space:]]+resourceTier:' "$_smithdb_base"; then
-    # Overlays copied before smithdb_sizing existed set resourceTier: small,
-    # which loads after the sizing file and would win over it.
-    warn "langsmith-values-smithdb.yaml sets resourceTier, which overrides smithdb_sizing"
-    action "Delete the resourceTier line from $_smithdb_base"
-  fi
+  # To change the size, set smithdb_sizing in infra/terraform.tfvars.
+  printf '%s\n' "$SMITHDB_HELM_VALUES" > "$_smithdb_sizing"
+  pass "SmithDB sizing (terraform output smithdb_helm_values)"
 
   # Outside the public cloud the chart needs the account's blob endpoint: left
   # empty, SmithDB falls back to the commercial blob suffix and cannot reach a
@@ -1058,22 +1062,84 @@ smithdb:
     job:
       labels:
         azure.workload.identity/use: "true"
-  migration:
-    job:
-      labels:
-        azure.workload.identity/use: "true"
-    # The TaskDB credential and the migration pod count are in
-    # langsmith-values-smithdb-migration.yaml, which make
-    # smithdb-migration-job-start writes and deploy.sh loads after this file.
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
-    migration:
-      enabled: ${_smithdb_migration_enabled}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDB_YAML
-  pass "Generated: langsmith-values-smithdb-overrides.yaml"
+  pass "SmithDB storage, identity, metastore and gates (Terraform outputs)"
+fi
+
+# ── Merge everything into langsmith-values-overrides.yaml ─────────────────
+# The sources merge in the order deploy.sh layered them on 0.17, after the base
+# values, so a later one wins. The sizing profile comes after the addons,
+# because agent-deploys carries hostBackend, listener and operator resources
+# for the default profile. The local file is the last file. The JuiceFS digest
+# applies after every file, so the sandbox-host pods restart when Terraform
+# changes the JuiceFS Redis URL.
+_values_plan_reset
+_values_plan_file generated "$_frag_dir/core.yaml" "core values from Terraform outputs: hostname, auth, blob storage, images, databases, ClickHouse, Workload Identity, ingress"
+if [[ "$_enable_deployments" == "true" ]]; then
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml"
+  _values_plan_file generated "$_frag_dir/agent-deploys.yaml" "config.deployment.url and tlsEnabled from the hostname and tls_certificate_source"
+  if [[ -f "$_frag_dir/deployment-templates.yaml" ]]; then
+    _values_plan_file generated "$_frag_dir/deployment-templates.yaml" "operator.templates.redis and db from langsmith_image_registry"
+  fi
+fi
+for _addon in agent-builder:"$_enable_agent_builder" fleet:"$_enable_fleet" insights:"$_enable_insights" polly:"$_enable_polly"; do
+  if [[ "${_addon#*:}" == "true" ]]; then
+    _values_plan_file example "$EXAMPLES_DIR/langsmith-values-${_addon%%:*}.yaml"
+  fi
+done
+if [[ "$_enable_llm_gateway" == "true" ]]; then
+  _values_plan_file generated "$_frag_dir/llm-gateway.yaml" "the LLM Gateway and its Workload Identity"
+  if [[ "$_enable_gateway_pii_redaction" == "true" ]]; then
+    _values_plan_file generated "$_frag_dir/gateway-pii.yaml" "the LLM Gateway PII redaction and its Workload Identity"
+  fi
+fi
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _values_plan_file generated "$_sandboxes_file" "sandboxes from the sandbox Terraform outputs"
+fi
+if [[ "$_sizing_profile" != "default" ]]; then
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+fi
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _values_plan_file generated "$_smithdb_sizing" "SmithDB sizing from terraform output smithdb_helm_values"
+  _values_plan_file example "$EXAMPLES_DIR/langsmith-values-smithdb.yaml"
+  _values_plan_file generated "$_smithdb_overrides" "SmithDB storage, identity, metastore and gates from Terraform outputs"
+fi
+_values_plan_local "$VALUES_DIR"
+# The chart hashes only the name of an existing JuiceFS Secret, so a new Redis
+# password or URL would reach the Secret and leave sandbox-host on the old one.
+# Terraform's digest of the metaurl (in-cluster and external sources) goes on
+# the pod template, and a change rolls sandbox-host.
+_juicefs_config_digest=""
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_runtime_source" != "external" ]]; then
+  if _juicefs_config_digest=$(_tf_out sandbox_juicefs_redis_config_digest); then
+    _values_plan_set --set-string "sandboxes.sandboxHost.deployment.podAnnotations.checksum/juicefs-redis=$_juicefs_config_digest"
+  else
+    _juicefs_config_digest=""
+  fi
+  _values_plan_resolved sandbox_juicefs_redis_config_digest "$_juicefs_config_digest"
+fi
+
+# Recorded in the header, so make deploy stops when one of them changes.
+# shellcheck disable=SC2086  # the key list splits on spaces
+_values_plan_tfvars $_VALUES_INPUT_KEYS
+_values_plan_resolved clickhouse_cluster "$(_clickhouse_cluster_resolved || true)"
+_values_plan_resolved deployment_templates "$_deployment_templates"
+_values_plan_script "$MODULE_DIR" helm/scripts/init-values.sh helm/scripts/_values.sh infra/scripts/_common.sh
+
+_values_write "$VALUES_DIR" "$EXAMPLES_DIR" || exit 1
+pass "Written: $VALUES_DIR/$_VALUES_BASE (the base values, from examples/)"
+pass "Written: $OUT_FILE"
+if [[ -f "$VALUES_DIR/$_VALUES_LOCAL" ]]; then
+  info "with your changes from $_VALUES_LOCAL"
+fi
+if [[ -f "$_sandbox_runtime_file" ]]; then
+  cp "$_sandbox_runtime_file" "$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
+  pass "Written: $VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 fi
 
 # ── External ClickHouse secret ────────────────────────────────────────────
@@ -1148,7 +1214,7 @@ if [[ "$_clickhouse_source" == "external" ]]; then
     # The password goes through a 0600 temp file, never --from-literal: argv is
     # world-readable in the process list for as long as kubectl runs.
     _ch_pass_file=$(mktemp "${TMPDIR:-/tmp}/langsmith-ch.XXXXXX")
-    trap 'rm -f "$_ch_pass_file"' EXIT
+    trap 'rm -f "$_ch_pass_file"; rm -rf "$_frag_dir"' EXIT
     printf '%s' "$_ch_pass" > "$_ch_pass_file"
     unset _ch_pass
 
@@ -1173,7 +1239,7 @@ if [[ "$_clickhouse_source" == "external" ]]; then
     fi
 
     rm -f "$_ch_pass_file"
-    trap - EXIT
+    trap 'rm -rf "$_frag_dir"' EXIT
   fi
 fi
 

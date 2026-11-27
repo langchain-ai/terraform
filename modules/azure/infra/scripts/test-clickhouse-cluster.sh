@@ -8,8 +8,9 @@
 # chart (_clickhouse_cluster_resolved and _clickhouse_values_block in
 # _common.sh): a name set only in *.auto.tfvars or TF_VAR_clickhouse_cluster
 # reaches clickhouse.external.cluster through the clickhouse_cluster output, and
-# the stamp deploy.sh compares reads the same value. terraform is a shell
-# function here, so no Azure and no Terraform binary.
+# the header entry deploy.sh compares (resolved clickhouse_cluster) reads the
+# same value. terraform is a shell function here, so no Azure and no Terraform
+# binary.
 #
 # Usage:
 #   ./infra/scripts/test-clickhouse-cluster.sh
@@ -21,6 +22,8 @@ trap 'rm -rf "$TMP"' EXIT
 export INFRA_DIR="$TMP"
 # shellcheck source=_common.sh
 source "$SCRIPT_DIR/_common.sh"
+# shellcheck source=../../helm/scripts/_values.sh
+source "$SCRIPT_DIR/../../helm/scripts/_values.sh"
 
 # The output the stub returns: unset = no state (the call fails), else the JSON.
 TF_OUTPUT_JSON=""
@@ -85,18 +88,29 @@ _check "an output outside the name rule is not written" "$BASE" "$(_clickhouse_v
 TF_HAS_STATE="true"; TF_OUTPUT_JSON='"replicated"'
 _check "in-cluster: the comment only" "# clickhouse: in-cluster (managed by Helm chart)" "$(_clickhouse_values_block in-cluster)"
 
-# The stamp and the drift check read the same resolved value.
+# init-values.sh records the resolved name in the header of the overrides file,
+# and deploy.sh resolves it again and compares.
+_write_header() {
+  _values_plan_reset
+  _values_plan_resolved clickhouse_cluster "$(_clickhouse_cluster_resolved || true)"
+  printf 'Inputs. make deploy stops when one of them differs:\n%s' "$_VALUES_PLAN_INPUTS" > "$TMP/notes"
+  printf 'clickhouse: {}\n' > "$TMP/body"
+  _values_seal "$TMP/overrides.yaml" "$_VALUES_OVERRIDES, written by make init-values" "$TMP/notes" "$TMP/body"
+}
+_stale() { _values_resolved_drift "$TMP/overrides.yaml" "clickhouse_cluster=$(_clickhouse_cluster_resolved || true)"; }
 TF_HAS_STATE="true"; TF_OUTPUT_JSON='"replicated"'; _tfvars 'clickhouse_source = "external"'
-_values_input_stamp > "$TMP/values.yaml"
-_check "the stamp records the output's name" "replicated" "$(_read_values_stamp "$TMP/values.yaml" clickhouse_cluster)"
-rc=0; out=$(_values_stamp_drift "$TMP/values.yaml") || rc=$?
-_check "the same output reads as no drift" "rc=0" "${out}rc=$rc"
+_write_header
+_check "the header records the output's name" "replicated" "$(_values_resolved "$TMP/overrides.yaml" clickhouse_cluster)"
+_check "the same output reads as no drift" "" "$(_stale)"
 TF_OUTPUT_JSON='"other"'
-rc=0; out=$(_values_stamp_drift "$TMP/values.yaml") || rc=$?
 _check "a changed output is drift, named as Terraform's" \
-  "clickhouse_cluster: generated with 'replicated', Terraform now says 'other'
-rc=1" "${out}
-rc=$rc"
+  'Terraform now resolves clickhouse_cluster to "other", and the file was written for "replicated"' "$(_stale)"
+TF_OUTPUT_JSON='null'
+_write_header
+_check "no name anywhere: the header records an empty name" "" "$(_values_resolved "$TMP/overrides.yaml" clickhouse_cluster)"
+TF_OUTPUT_JSON='"replicated"'
+_check "a name added later is drift" \
+  'Terraform now resolves clickhouse_cluster to "replicated", and the file was written for "unset"' "$(_stale)"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

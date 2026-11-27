@@ -15,8 +15,6 @@
 # Required env vars (exported by orchestrator, inherited automatically):
 #   WORKER_REGION           — AWS region
 #   WORKER_EKS_VERSION      — Kubernetes version (default: 1.34)
-#   WORKER_PG_SOURCE        — postgres_source: external|in-cluster (default: external)
-#   WORKER_REDIS_SOURCE     — redis_source:    external|in-cluster (default: external)
 #   WORKER_DOMAIN           — langsmith_domain  (can be empty)
 #   WORKER_LE_EMAIL         — letsencrypt_email (can be empty)
 #   WORKER_HOSTED_ZONE      — cert_manager_hosted_zone_id (can be empty)
@@ -51,11 +49,8 @@ DRY_RUN_FLAG="${4:-}"
 
 REGION="${WORKER_REGION:?WORKER_REGION env var required (set by orchestrator or manually)}"
 EKS_VERSION="${WORKER_EKS_VERSION:-1.34}"
-# Workers always use in-cluster Postgres + Redis — test clusters are lightweight
-# and short-lived. RDS/ElastiCache per worker would be expensive and slow to spin up.
-# The gateway/TLS permutations don't test backend service provisioning.
-PG_SOURCE="in-cluster"
-REDIS_SOURCE="in-cluster"
+# PostgreSQL and Redis are always RDS and ElastiCache from 0.18, so each
+# worker's RDS instance is created deletable.
 DOMAIN="${WORKER_DOMAIN:-}"
 LE_EMAIL="${WORKER_LE_EMAIL:-}"
 HOSTED_ZONE="${WORKER_HOSTED_ZONE:-}"
@@ -101,24 +96,25 @@ enable_public_eks_cluster = true
 #── EKS ───────────────────────────────────────────────────────────────────────
 eks_cluster_version = "${EKS_VERSION}"
 
+# The one sizing, add-ons off, runs on about 4 nodes at its minimum replicas and
+# needs up to 6 at its maximum.
 eks_managed_node_groups = {
   default = {
     name           = "node-group-default"
     instance_types = ["m5.2xlarge"]
     min_size       = 2
-    max_size       = 5
+    max_size       = 8
   }
 }
 create_gp3_storage_class = true
 
 #── Backend Services ──────────────────────────────────────────────────────────
-postgres_source   = "${PG_SOURCE}"
-redis_source      = "${REDIS_SOURCE}"
+postgres_deletion_protection = false
+postgres_skip_final_snapshot = true
 clickhouse_source = "in-cluster"
 
-#── Namespace & Sizing ────────────────────────────────────────────────────────
+#── Namespace ─────────────────────────────────────────────────────────────────
 langsmith_namespace = "langsmith"
-sizing_profile      = "dev"
 
 #── Features (all off for test clusters) ─────────────────────────────────────
 enable_deployments   = false

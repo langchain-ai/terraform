@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Google Kubernetes Engine (GKE), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`, never `0.18`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.18.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.18.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.18.0` = latest `0.18.x`, never `0.19`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -136,18 +136,22 @@ gcp/
 │       └── tf-run.sh           ← Terraform wrapper that auto-sources setup-env.sh
 └── helm/
     ├── scripts/
-    │   ├── deploy.sh             ← Helm deploy automation (values chain + WI annotation)
+    │   ├── deploy.sh             ← Helm deploy: langsmith-config Secret, the two values files, WI annotation
     │   ├── get-kubeconfig.sh     ← gcloud get-credentials wrapper
-    │   ├── init-values.sh        ← Generates values-overrides.yaml from Terraform outputs
+    │   ├── init-values.sh        ← Writes the two values files from Terraform outputs
+    │   ├── _values.sh            ← Merge, seal, and check the values files (same on every cloud)
+    │   ├── test-values.sh        ← Render each feature against the chart (make test-values)
     │   ├── preflight-check.sh    ← Pre-deploy validation (tools, cluster, values)
-    │   ├── smithdb-migration-job-start.sh ← Sets up the SmithDB historical migration (make smithdb-migration-job-start)
-    │   ├── smithdb-migration-job-end.sh   ← Removes the migration setup (make smithdb-migration-job-end)
     │   └── uninstall.sh          ← Helm uninstall + operator resource cleanup
     └── values/
-        ├── values.yaml                    ← GCP base Helm values (Gateway, GCS HMAC)
-        ├── values-overrides.yaml.example  ← Env-specific overlay template
-        └── examples/                      ← Annotated reference files and addon overlays
+        ├── langsmith-values.yaml               ← Base values (written by make init-values)
+        ├── langsmith-values-overrides.yaml     ← Everything else, one file (written by make init-values)
+        ├── langsmith-values-local.yaml         ← Your own changes (optional, you write it)
+        ├── langsmith-values-local.yaml.example ← Template for the file above
+        └── examples/                           ← Module sources: the base values, sizing profiles, features
 ```
+
+See [Helm values](#helm-values) for who writes each file and how to change a value.
 
 ---
 
@@ -198,7 +202,7 @@ From `modules/gcp`, run `source infra/scripts/setup-env.sh` before planning or a
 
 Existing Secret Manager values replace shell values without displaying either credential. Read errors, disabled APIs, write errors, and concurrent creation also stop setup. An existing secret with an empty, disabled, destroyed, or missing latest version requires recovery; setup never adds a replacement version. Use `infra/scripts/manage-secrets.sh` for intentional changes.
 
-**Changed setup requirements:** Enable Secret Manager and provide read access even when credentials are already exported in the shell. Setup no longer continues with credentials held only in the shell after a persistence failure. Existing Secret Manager names, shell variables, validation rules, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials.
+**Changed setup requirements:** Enable Secret Manager and provide read access even when credentials are already exported in the shell. Setup no longer continues with credentials held only in the shell after a persistence failure. Existing Secret Manager names, shell variables, validation rules, and generation methods are unchanged. Terraform state and private temporary files can still contain credentials. The Helm values files that `make init-values` writes do not; a 0.17 `helm/values/values-overrides.yaml` can.
 
 ### Terraform state backend (recommended for production)
 
@@ -260,45 +264,13 @@ kubectl get secrets -n langsmith
 Use the scripted flow (includes preflight + kubeconfig refresh):
 
 ```bash
-cd gcp/helm/scripts
-./deploy.sh
+cd gcp
+source infra/scripts/setup-env.sh   # exports the TF_VAR_* secrets that make deploy writes into langsmith-config
+make init-values                    # writes helm/values/langsmith-values.yaml and langsmith-values-overrides.yaml
+make deploy
 ```
 
-Or run manually — generate secrets first:
-
-```bash
-export API_KEY_SALT=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 32)
-export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="<strong-password>"
-
-# GCS HMAC credentials (create in GCP Console: Storage > Settings > Interoperability)
-export GCS_ACCESS_KEY="<your-hmac-access-key>"
-export GCS_ACCESS_SECRET="<your-hmac-secret>"
-```
-
-```bash
-helm repo add langchain https://langchain-ai.github.io/helm
-helm repo update
-
-helm upgrade --install langsmith langchain/langsmith \
-  --namespace langsmith \
-  --create-namespace \
-  -f ../helm/values/values.yaml \
-  -f ../helm/values/values-overrides.yaml \
-  --set config.langsmithLicenseKey="<your-license-key>" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="<your-langsmith-domain>" \
-  --set config.basicAuth.initialOrgAdminEmail="$ADMIN_EMAIL" \
-  --set config.basicAuth.initialOrgAdminPassword="$ADMIN_PASSWORD" \
-  --set config.blobStorage.bucketName="$(terraform output -raw storage_bucket_name)" \
-  --set config.blobStorage.accessKey="$GCS_ACCESS_KEY" \
-  --set config.blobStorage.accessKeySecret="$GCS_ACCESS_SECRET" \
-  --set gateway.enabled=true \
-  --set ingress.enabled=false \
-  --wait --timeout 15m
-```
+`make init-values` reads the `enable_*` flags and `sizing_profile` from `terraform.tfvars`. An unset flag is off. To apply the two files from your own pipeline instead of `deploy.sh`, see [Use the rendered files in your own CI/CD](#use-the-rendered-files-in-your-own-cicd).
 
 ### Verify and configure DNS
 
@@ -317,28 +289,103 @@ kubectl get certificate -n langsmith
 
 ---
 
+## Helm values
+
+`make deploy` applies two values files, and nothing else except the sandbox-host image tag. AWS, Azure, and GCP use the same two file names.
+
+| File in `helm/values/` | Written by | Holds |
+| --- | --- | --- |
+| `langsmith-values.yaml` | `make init-values`, on every run | A copy of `examples/langsmith-values.yaml`: the GCP base (Envoy Gateway, GCS, the default resources and autoscaling, the Secret names) |
+| `langsmith-values-overrides.yaml` | `make init-values`, on every run | Everything else, merged into one file: the Terraform outputs, the sizing profile, each enabled feature, SmithDB, and your local file |
+| `langsmith-values-local.yaml` | You. No script writes it | Your own changes. Optional. Start from `langsmith-values-local.yaml.example` |
+
+The values files hold no secrets. The base values set `config.existingSecretName: langsmith-config`, and `make deploy` writes that Secret from the `TF_VAR_*` values that `source infra/scripts/setup-env.sh` exports from Secret Manager: the license key, the API key salt, the JWT secret, the admin password, the OIDC client, and the encryption keys of the enabled features.
+
+`make init-values` merges the overrides file in the order 0.17 layered its files, so a later source wins: the values from the Terraform outputs (hostname, admin email, GCS bucket, Gateway, Workload Identity, sandboxes, in-cluster databases), the `sizing_profile` example, the example of each enabled feature, SmithDB, then `langsmith-values-local.yaml`. While Fleet is on, `hostBackend.enabled` is set after every file. The header of the file lists the sources in that order, and the inputs of the file.
+
+### Change a value
+
+1) Put the change in `helm/values/langsmith-values-local.yaml`. `make init-values` merges this file last, so a key in it wins over every other source.
+2) Run `make init-values`, then `make deploy`.
+
+Do not edit the two generated files. Line 1 of each holds a sha256 of the rest of the file, so `make init-values` and `make deploy` find a hand edit. `make init-values` then prints the edit and writes nothing. Turn features on or off, and pick `sizing_profile`, in `terraform.tfvars`: Terraform creates the databases, service accounts, and Secrets that each feature needs.
+
+### What `make deploy` checks
+
+Before it touches the cluster, `make deploy` stops when:
+
+- a values file is missing, or was edited after `make init-values` wrote it;
+- `terraform.tfvars`, an example file, a module script, or the local file changed after `make init-values` wrote the overrides file;
+- the `langsmith_domain` output differs from the file, because Terraform creates the Gateway listener for that domain;
+- a values file from the 0.17 layout is still in `helm/values` (see [Move from the 0.17 values layout](#move-from-the-017-values-layout)).
+
+After it points kubectl at the cluster, and before the Helm upgrade, `make deploy` also stops when the values turn on an external ClickHouse and the namespace has no Secret of the name they read (`langsmith-clickhouse`). `make init-values` asks for the ClickHouse details on its first run only. A later run finds the Secret name in the earlier overrides file, or in `langsmith-values-local.yaml`, and does not contact the cluster.
+
+Each message names the fix. In most cases it is `make init-values`. For an install without `langsmith_domain`, `make deploy` writes a changed Gateway IP into the hostname of the overrides file through the same merge, so the file stays sealed.
+
+### Use the rendered files in your own CI/CD
+
+The two files are complete Helm values. A pipeline can apply them without `deploy.sh`:
+
+1) Run `make init-values` in the pipeline, after `terraform apply`, so the files match the Terraform state. It needs `helm`, `terraform`, and read access to the state. With an external ClickHouse, the first run also looks up the `langsmith-clickhouse` Secret with `kubectl`, and asks for the connection details in a terminal when the Secret is missing. Later runs do not contact the cluster. `LANGSMITH_INFRA_DIR` and `LANGSMITH_VALUES_DIR` point it at a Terraform root and a values directory outside this repo.
+2) Keep the two files as build artifacts. Do not commit them to this repository: `.gitignore` excludes them.
+3) Write the `langsmith-config` Secret, as `deploy.sh` does, then apply the two files with the chart version that `deploy.sh` pins:
+
+```bash
+helm upgrade --install langsmith langchain/langsmith \
+  --namespace langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-overrides.yaml \
+  --set-string images.sandboxHostImage.tag=<chart-appVersion>   # only with enable_sandboxes = true
+```
+
+`deploy.sh` also refreshes an IP-based hostname from the Gateway, checks the sandbox values, the chart line, and that the external ClickHouse Secret exists, and annotates `langsmith-ksa` for Workload Identity after the upgrade. A pipeline that skips `deploy.sh` must do those steps.
+
+### Move from the 0.17 values layout
+
+The 0.17 layout kept `values-overrides.yaml` and one file per feature and sizing profile in `helm/values`, and the tracked base was `helm/values/values.yaml`. The 0.17 `values-overrides.yaml` also held the API key salt, the JWT secret, the admin password, the license key, and the encryption keys in plaintext. From 0.18, `make init-values` and `make deploy` stop while one of those files is still there, because a deploy no longer applies them. The message lists each file and marks it:
+
+| Mark | Meaning |
+| --- | --- |
+| `same as examples/<file>` | The file holds no change of yours. |
+| `differs from examples/<file>` | The file can hold your changes. |
+| `no example of this name` | The file can hold your changes. |
+| `written by make init-values on 0.17` | The 0.17 `values-overrides.yaml`. Check it for changes you made by hand. |
+
+The secrets do not move. A 0.17 `make deploy` already blanked them in the values and read them from the `langsmith-config` Secret, which it writes from Secret Manager, and 0.18 does the same.
+
+1) For each file marked `differs`, `no example`, or `written by make init-values on 0.17`, compare it with its example, for example `diff -u helm/values/examples/langsmith-values-fleet.yaml helm/values/langsmith-values-fleet.yaml`.
+2) Copy each change you made into `helm/values/langsmith-values-local.yaml`. Do not copy values that `make init-values` writes from Terraform, such as the hostname, the Workload Identity annotations, and the bucket names, and do not copy a secret.
+3) If 0.17 asked you for the product tier at the prompt, or loaded the feature files on disk without `enable_*` flags, set the `enable_*` flags in `terraform.tfvars`. An unset flag is off now.
+4) Move the old files out of `helm/values`. The message prints the command, for example:
+
+```bash
+mkdir -p ~/langsmith-values-0.17
+(cd helm/values && mv values-overrides.yaml langsmith-values-fleet.yaml ~/langsmith-values-0.17/)
+```
+
+5) Run `make init-values`, then `make deploy`. Delete the 0.17 `values-overrides.yaml` when you no longer need it, because it holds plaintext secrets.
+
+---
+
 ## Pass 3 — LangSmith Deployments (Optional)
 
 Enables deploying and managing LangGraph graphs from the LangSmith UI. Requires KEDA (auto-installed when `enable_langsmith_deployment = true`).
 
 ```hcl
 # terraform.tfvars
-enable_langsmith_deployment = true
+enable_langsmith_deployment = true   # KEDA
+enable_deployments          = true   # the Deployments values
 ```
 
 ```bash
-cd gcp/infra
-terraform apply -var-file=terraform.tfvars
+cd gcp
+make apply
 
 kubectl get pods -n keda
 
-helm upgrade langsmith langchain/langsmith \
-  --namespace langsmith \
-  -f ../helm/values/values.yaml \
-  -f ../helm/values/values-overrides.yaml \
-  --set config.deployment.enabled=true \
-  --set config.deployment.url="https://<your-langsmith-domain>" \
-  --wait --timeout 10m
+make init-values   # merges the Deployments values, with config.deployment.url and tlsEnabled
+make deploy
 ```
 
 ---
@@ -389,7 +436,7 @@ helm upgrade langsmith langchain/langsmith \
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |
 | `langsmith_license_key` | `""` | no | License key — use `TF_VAR_langsmith_license_key` |
-| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.17.0` line; must be on the 0.17 line) |
+| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.18.0` line; must be on the 0.18 line) |
 | `install_ingress` | `true` | no | Install Envoy Gateway via Terraform |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy`, `istio`, or `other` |
 | `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing` |
@@ -431,7 +478,7 @@ metadata goes to a dedicated Memorystore Redis.
 ### Requirements
 
 - Standard GKE. Autopilot cannot run the nested-virtualization pool.
-- `enable_gcp_iam_module = true`.
+- `enable_gcp_iam_module = true` (the default, with the `in-cluster` sandbox runtime).
 - A machine type with nested virtualization, such as N2.
 
 ### Enable
@@ -492,7 +539,99 @@ kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
 kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -i "juicefs mount ready"
 ```
 
-To upgrade from chart 0.16, see [MIGRATION-0.16-to-0.17.md](../../MIGRATION-0.16-to-0.17.md).
+### Optional dedicated sandbox cluster
+
+`enable_sandboxes = true` uses the LangSmith GKE cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
+
+```hcl
+enable_sandboxes        = true
+sandbox_runtime_source = "external"
+sandbox_namespace       = "langsmith-sandbox" # must differ from langsmith_namespace
+
+langsmith_helm_chart_version = "0.18.0"   # exact, 0.18 or later
+gateway_load_balancer_type   = "internal" # or configure TLS; see Network
+```
+
+An external sandbox runtime needs one exact chart version on 0.18 or later: the runtime chart is paired with that exact chart (see [Versions](#versions)), so the default `~0.18.0` range is not enough. `terraform plan` and `make deploy` both reject anything else.
+
+Terraform then creates, in the same VPC:
+
+- a second Standard GKE cluster, `<name>-sbox-gke`, on its own subnet (`sandbox_subnet_cidr`, `sandbox_pods_cidr`, `sandbox_services_cidr`) and control-plane range (`sandbox_gke_master_ipv4_cidr`, default `172.17.0.16/28`; the LangSmith cluster keeps `172.17.0.0/28`). It has a small untainted system pool for GKE's own add-ons, which cannot tolerate the sandbox taint, and the nested-virtualization `sandbox-host` pool;
+- a JuiceFS-only bucket, `<project>-<name>-jfs<suffix>`, with uniform bucket-level access and public access prevention, and an unconditioned `roles/storage.objectAdmin` grant for the `<name>-sbox-node` service account. Cloud Storage checks a list call against the bucket, so a grant on a shared bucket would need a condition; this one needs none, and sandbox nodes never reach trace data;
+- AUTH on the JuiceFS Memorystore instance, which another cluster now reaches over the VPC;
+- the firewall rules below;
+- in the sandbox namespace, two write-only Secrets: the runtime Secret and the JuiceFS config (volume name, metadata URL with AUTH, bucket).
+
+The LangSmith cluster gets none of the same-cluster pieces: no sandbox pool, no JuiceFS Secret, no quota or NetworkPolicy exceptions.
+
+#### Identity
+
+`sandbox-host` runs on the host network, where GKE Workload Identity does not apply, so it uses the sandbox node service account. `init-values.sh` sets `workloadIdentity.provider: gcp` in the runtime values, which moves the JuiceFS formatter onto the host network too, so the one bucket grant covers both pods and no Workload Identity binding is needed. Workload Identity stays enabled on the sandbox cluster, which hides the node service account from pod-network pods. It trusts a namespace and ServiceAccount name in every cluster of the project, so `sandbox_namespace` must differ from `langsmith_namespace`; `terraform plan` checks it.
+
+#### Network
+
+- **TCP 19190 into the sandbox nodes** comes from the LangSmith cluster's node and pod ranges (`platform-backend` and `ingest-queue` call `sandbox-host`; GKE does not masquerade RFC 1918 destinations, so the source is the pod IP) and from the sandbox subnet itself (hosts forward ingress requests, dial sandbox links and send live-migration streams to each other). A rule at priority 950 denies everything else from the LangSmith ranges to both sandbox pools; the VPC's `allow-internal` rule (priority 1000, no targets) would otherwise admit them on every port.
+- **That hop is plain HTTP** and carries sandbox commands, files and credentials. This example keeps it inside the VPC. If the two clusters are in different networks, enable the runtime chart's host ingress with TLS (`sandboxHost.ingress` in `langsmith-sandbox`) and set its `https://` origin as `sandboxes.external.hostIngressEndpoint` in the LangSmith values instead of widening 19190.
+- **Sandbox nodes reach the LangSmith API** at the runtime chart's `config.endpoint` (`<protocol>://<hostname>/api`) through the Envoy Gateway. With `gateway_load_balancer_type = "internal"` the gateway gets a private VPC address and the call stays in the VPC. An external gateway without TLS would carry the call across the internet in plaintext, so `terraform plan` refuses it: set the internal type or configure TLS. The hostname must resolve from the VPC: set `langsmith_domain = ""` (the default is `langsmith.example.com`) to use the gateway IP, or use a name in DNS the VPC sees. Choose the gateway type before the first deploy; GKE does not move an existing load balancer between external and internal.
+- **Sandbox nodes reach Memorystore only for JuiceFS.** Cloud SQL and the LangSmith Redis sit in the private services range, which every subnet in the VPC reaches. An egress rule allows the JuiceFS Redis address and denies the rest of that range to the sandbox nodes, which run untrusted code. Cloud NAT and Cloud Storage access are unchanged.
+- **Ranges.** The sandbox ranges must not overlap each other or the LangSmith ranges; `terraform plan` checks. On a VPC applied before, Google already picked the private services range: if creating the sandbox subnet fails with an overlap, look up that range (`gcloud compute addresses list --global --filter=purpose=VPC_PEERING`) and move the sandbox ranges.
+
+#### Secrets
+
+The runtime Secret (`sandbox_runtime_secret_name`, default `langsmith-sandbox-runtime`) holds exactly two keys, the `langsmith-sandbox` chart's defaults. Never copy the whole `langsmith-config` Secret into the sandbox cluster.
+
+| Key | Value |
+|-----|-------|
+| `sandbox_service_auth_secret` | A dedicated sandbox service-auth secret, identical to `sandbox_service_auth_secret` in `langsmith-config`. It is never the API key salt: `api_key_salt` also signs LangSmith's own service calls, and the sandbox cluster runs untrusted code. |
+| `sandbox_callback_signing_jwk` | The callback-signing JWK, identical to the one in `langsmith-config`. |
+
+With `sandbox_runtime_source = "external"`, `setup-env.sh` generates the service-auth secret (64 hex characters) into the Secret Manager secret `langsmith-<name_prefix>-<environment>-sandbox-service-auth-secret`, `deploy.sh` adds it to `langsmith-config` as `sandbox_service_auth_secret`, and `init-values.sh` sets `sandboxes.serviceAuth.secretKey: sandbox_service_auth_secret` in the LangSmith values. The in-cluster runtime creates none of this and keeps the chart default, `api_key_salt`.
+
+Terraform writes both runtime keys from `TF_VAR_sandbox_service_auth_secret` and `TF_VAR_sandbox_callback_signing_jwk` (exported by `source infra/scripts/setup-env.sh`) as write-only values, so neither is stored in state. `terraform plan` fails if the service-auth secret is missing, shorter than 32 characters, or equal to the API key salt. After changing either value, increment `sandbox_runtime_secret_revision` and re-apply, then restart `sandbox-host`; both sides read these values only at startup, and sandboxes fail while they disagree.
+
+#### Versions
+
+Each LangSmith install runs the `langsmith-sandbox` chart whose appVersion equals the `langsmith` chart's. `make deploy` reads the appVersion of the pinned `langsmith` chart and installs the newest `langsmith-sandbox` chart with the same appVersion. If no runtime chart matches, it stops before changing either release. To check by hand:
+
+```bash
+APP=$(helm show chart langchain/langsmith --version 0.18.0 | awk '/^appVersion:/{print $2}' | tr -d '"')
+helm search repo langchain/langsmith-sandbox --versions --devel -o json \
+  | jq -r --arg a "$APP" '[.[] | select(.app_version == $a)][0].version // error("no langsmith-sandbox chart for appVersion \($a)")'
+```
+
+#### One runtime per install
+
+Run exactly one `langsmith-sandbox` release per LangSmith install, and only while the LangSmith release uses `sandboxes.external.enabled: true`. LangSmith accepts host reports from one runtime at a time and refuses any other: a refused runtime's hosts never join, and its elected `sandbox-host` pod turns not ready. Do not install the runtime chart by hand next to the one `make deploy` manages, and do not point a second LangSmith install at this sandbox cluster.
+
+#### Install, upgrade and uninstall order
+
+- **Install:** `source infra/scripts/setup-env.sh`, `make apply`, `make init-values`, then `make deploy`. `make init-values` writes both the LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`; `make deploy` installs `langsmith` first, then `langsmith-sandbox` in the sandbox cluster, and waits for the JuiceFS format Job and `sandbox-host`.
+- **Upgrade:** change `langsmith_helm_chart_version` and run `make deploy`. It upgrades `langsmith` first and the runtime right after, to the matching chart. If you upgrade with other tools, keep that order and upgrade the runtime within 72 hours.
+- **Uninstall:** `make uninstall` removes the `langsmith-sandbox` release from the sandbox cluster first, then the LangSmith release; then run `make destroy`. Without Terraform outputs, uninstall the runtime release from the sandbox cluster yourself before running `make uninstall`.
+
+`make deploy` and `make uninstall` reach the sandbox cluster through a temporary kubeconfig, so your current context is unchanged. To inspect it:
+
+```bash
+gcloud container clusters get-credentials <name>-sbox-gke --region <region> --project <project>
+kubectl get pods -n langsmith-sandbox
+```
+
+To move an existing install from the in-cluster runtime: this topology starts a new sandbox file system in the JuiceFS-only bucket, and existing snapshots and sandboxes do not carry over. The JuiceFS Redis still holds metadata that points at chunks in the trace bucket, so replace it rather than reuse it:
+
+1. Delete the existing sandboxes and snapshots.
+2. Change `sandbox_runtime_source` and run `source infra/scripts/setup-env.sh` again (it creates the dedicated service-auth secret).
+3. Apply with the Redis replaced: `make apply ARGS="-replace=module.sandbox_juicefs_redis[0].google_redis_instance.langsmith[0]"` (with `sandbox_juicefs_redis_prevent_destroy = true`, turn it off first).
+4. Run `make init-values` and `make deploy`. `make deploy` carries the in-cluster runtime's proxy CA (`smithbox-proxy-ca`) into the sandbox namespace, and uses a CA Secret you copied there yourself, as the LangSmith docs' move steps describe, instead of minting a new one.
+
+The JuiceFS objects left under `<sandbox_juicefs_name>/` in the trace bucket can then be deleted.
+
+To move back to the in-cluster runtime, or turn Sandboxes off: this direction is not tested end to end yet. Before you change `sandbox_runtime_source` or `enable_sandboxes`, remove the three objects Terraform keeps in the sandbox cluster from state. They go when the cluster is deleted:
+
+```bash
+terraform -chdir=infra state rm 'kubernetes_secret_v1.sandbox_runtime[0]' 'kubernetes_secret_v1.sandbox_juicefs_config[0]' 'kubernetes_namespace_v1.sandbox[0]'
+```
+
+Without this, plan fails reaching `no-sandbox-cluster.invalid`. Once the sandbox cluster leaves the configuration, its Kubernetes provider points there, so it never falls back to your kubeconfig, where the in-cluster runtime's namespace has the same name.
 
 ---
 
@@ -537,10 +676,10 @@ Adding a private `googleapis.com` DNS zone would pin resolution to `private.goog
 
 ### Chart version
 
-SmithDB on this module needs chart 0.17. `deploy.sh` pins the 0.17 line and refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
+SmithDB on this module needs chart 0.17 or later. `deploy.sh` pins the 0.18 line and refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
 
 ```bash
-CHART_VERSION=0.17.0 make deploy
+CHART_VERSION=0.18.5 make deploy
 ```
 
 List what is published with `helm search repo langchain/langsmith --versions`.
@@ -549,16 +688,10 @@ List what is published with `helm search repo langchain/langsmith --versions`.
 
 `smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) in `infra/terraform.tfvars` set the chart tier, the resources, the node pool shapes, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
 
-The historical migration (backfill) is the one stage with its own make targets:
+Historical backfill is customer-managed through Helm. Follow the
+[SmithDB migration guide](https://docs.langchain.com/langsmith/self-host-smithdb-migrate).
 
-```bash
-make smithdb-migration-job-start   # TaskDB, sizing; sets smithdb_migration_enabled = true
-make deploy-all                    # make apply, make init-values, make deploy
-make smithdb-migration-job-end     # once the Job is Complete; sets smithdb_migration_enabled = false
-make deploy-all
-```
-
-See [SMITHDB.md](SMITHDB.md) for the sizing table, the stages, and the upgrade from chart 0.16.
+See [SMITHDB.md](SMITHDB.md) for sizing and staged rollout.
 
 ---
 

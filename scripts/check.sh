@@ -3,13 +3,14 @@
 # .github/workflows/checks.yaml, and run locally before handing back:
 #   bash scripts/check.sh                   # every root, plus every script
 #   bash scripts/check.sh modules/aws       # the roots under one dir, terraform only
-#   bash scripts/check.sh --scripts         # shellcheck and AWS/GCP secret tests
+#   bash scripts/check.sh --scripts         # shellcheck, the script tests, and the values helper
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
 # state) and tflint with the provider's pinned ruleset. Under each directory
 # named, every local chart with a ci/ directory is linted and rendered with each
-# ci/*-values.yaml. Scripts are linted repo-wide rather than per root, so naming
-# a directory checks terraform and charts only.
+# ci/*-values.yaml, and every helm/scripts/test-values.sh runs. Scripts are
+# linted repo-wide rather than per root, so naming a directory checks terraform,
+# charts, and values only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
@@ -55,8 +56,39 @@ lint_scripts() {
 check_scripts() {
   lint_scripts || return $?
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
+  bash "$REPO_ROOT/modules/aws/infra/scripts/test-smithdb.sh" || return $?
+  bash "$REPO_ROOT/modules/aws/infra/scripts/test-upgrade-guard.sh" || return $?
+  bash "$REPO_ROOT/modules/aws/helm/scripts/test-addon-storage.sh" || return $?
+  check_values_helper || return $?
   bash "$REPO_ROOT/modules/aws/helm/scripts/test-init-values-llm-gateway.sh" || return $?
   bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
+}
+
+# AWS, Azure and GCP write their two values files with one helper. Each module
+# carries a copy, so that a module works on its own. The copies must stay
+# identical, and the AWS test of the helper then covers all three; a module
+# without its copy fails its own values test. The test merges with helm, so CI
+# treats a missing helm as a failure, as check_values does.
+check_values_helper() {
+  local provider copy rc=0
+  for provider in azure gcp; do
+    copy="$REPO_ROOT/modules/$provider/helm/scripts/_values.sh"
+    [ -f "$copy" ] || continue
+    cmp -s "$REPO_ROOT/modules/aws/helm/scripts/_values.sh" "$copy" || {
+      echo "check: modules/$provider/helm/scripts/_values.sh differs from the AWS copy; keep the three identical" >&2
+      rc=1
+    }
+  done
+  [ "$rc" -eq 0 ] || return "$rc"
+  if ! command -v helm >/dev/null 2>&1; then
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      echo "check: helm is not installed, so the values helper test could not run" >&2
+      return 2
+    fi
+    echo "   (helm not installed, skipping the values helper test)"
+    return 0
+  fi
+  bash "$REPO_ROOT/modules/aws/helm/scripts/test-values-render.sh"
 }
 
 # Print the terraform roots at or beneath one repo-relative directory. Roots are
@@ -102,6 +134,33 @@ check_charts() {
     done
   done <<EOF
 $(cd "$REPO_ROOT" && find "$1" -type d -name ci -path '*/charts/*' -not -path '*/.terraform/*' | sort)
+EOF
+  return "$rc"
+}
+
+# The example values reach the published chart only through deploy.sh on a live
+# cluster, so a values change the chart rejects, or one that changes which
+# services autoscale, would first show on a deploy. Each test-values.sh renders
+# them offline. It fetches the chart, so CI treats a missing helm as a failure
+# rather than a skip: a skipped leg would pass having checked nothing.
+check_values() {
+  local tests t rc=0 status
+  tests=$(cd "$REPO_ROOT" && find "$1" -path '*/helm/scripts/test-values.sh' -not -path '*/.terraform/*' | sort)
+  [ -n "$tests" ] || return 0
+  if ! command -v helm >/dev/null 2>&1; then
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      echo "check: helm is not installed, so the values tests could not run" >&2
+      return 2
+    fi
+    echo "   (helm not installed, skipping values tests)"
+    return 0
+  fi
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    echo "== values $t"
+    bash "$REPO_ROOT/$t" || { status=$?; [ "$status" -le "$rc" ] || rc=$status; }
+  done <<EOF
+$tests
 EOF
   return "$rc"
 }
@@ -209,6 +268,7 @@ done
 
 for arg in "$@"; do
   check_charts "${arg#"$REPO_ROOT/"}" || fail $?
+  check_values "${arg#"$REPO_ROOT/"}" || fail $?
 done
 
 if [ "$lint_all" -eq 1 ]; then

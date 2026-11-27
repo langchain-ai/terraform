@@ -51,52 +51,87 @@ output "get_credentials_command" {
   value       = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.region}"
 }
 
+output "sandbox_cluster_name" {
+  description = "Dedicated sandbox EKS cluster name when separate-cluster mode is enabled"
+  value       = local.external_sandbox_runtime ? module.sandbox_eks[0].cluster_name : null
+}
+
+output "sandbox_get_credentials_command" {
+  description = "Command to update kubeconfig for the dedicated sandbox cluster"
+  value       = local.external_sandbox_runtime ? "aws eks update-kubeconfig --name ${module.sandbox_eks[0].cluster_name} --region ${var.region}" : null
+}
+
+output "sandbox_irsa_role_arn" {
+  description = "IRSA role used by sandbox-host in the dedicated sandbox cluster"
+  value       = local.external_sandbox_runtime ? aws_iam_role.sandbox_host[0].arn : null
+}
+
+output "sandbox_node_security_group_id" {
+  description = "Security group on the dedicated sandbox cluster's nodes. With alb_existing_security_group_id, allow it on the ALB's HTTP/HTTPS ports so sandbox-host can reach the LangSmith API."
+  value       = local.external_sandbox_runtime ? module.sandbox_eks[0].node_security_group_id : null
+}
+
+output "sandbox_namespace" {
+  description = "Namespace containing the standalone sandbox runtime"
+  value       = local.external_sandbox_runtime ? var.sandbox_namespace : null
+}
+
+output "sandbox_service_account_name" {
+  description = "ServiceAccount trusted by the sandbox IRSA role. init-values.sh writes this into sandboxHost.serviceAccount.name so the chart matches the role trust policy."
+  value       = local.external_sandbox_runtime ? var.sandbox_service_account_name : null
+}
+
 #------------------------------------------------------------------------------
 # PostgreSQL (RDS)
 #------------------------------------------------------------------------------
 output "postgres_source" {
-  description = "PostgreSQL deployment type: external (RDS) or in-cluster (Helm)"
+  description = "PostgreSQL deployment type: always external (RDS) from 0.18"
   value       = var.postgres_source
 }
 
 output "postgres_connection_url" {
-  description = "PostgreSQL connection URL (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].connection_url : null
+  description = "PostgreSQL connection URL"
+  value       = module.postgres[0].connection_url
   sensitive   = true
 }
 
 output "postgres_iam_connection_url" {
-  description = "Connection URL for IAM authentication — no password (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].iam_connection_url : null
+  description = "Connection URL for IAM authentication — no password"
+  value       = module.postgres[0].iam_connection_url
 }
 
 output "postgres_security_group_id" {
-  description = "Security group ID attached to the RDS instance (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_source == "external" ? module.postgres[0].security_group_id : null
+  description = "Security group ID attached to the RDS instance"
+  value       = module.postgres[0].security_group_id
 }
 
 #------------------------------------------------------------------------------
 # Redis (ElastiCache)
 #------------------------------------------------------------------------------
 output "redis_source" {
-  description = "Redis deployment type: external (ElastiCache) or in-cluster (Helm)"
+  description = "Redis deployment type: always external (ElastiCache) from 0.18"
   value       = var.redis_source
 }
 
 output "redis_connection_url" {
-  description = "Redis connection URL (null if using in-cluster Redis)"
-  value       = var.redis_source == "external" ? module.redis[0].connection_url : null
+  description = "Redis connection URL"
+  value       = module.redis[0].connection_url
   sensitive   = true
 }
 
 output "redis_security_group_id" {
-  description = "Security group ID attached to ElastiCache (null if using in-cluster Redis)"
-  value       = var.redis_source == "external" ? module.redis[0].security_group_id : null
+  description = "Security group ID attached to ElastiCache"
+  value       = module.redis[0].security_group_id
 }
 
 output "sandbox_juicefs_csi_config_secret_name" {
   description = "Kubernetes Secret name for the sandbox JuiceFS config when sandboxes are enabled"
   value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_runtime_secret_name" {
+  description = "Minimal service-auth Secret used by the standalone sandbox runtime"
+  value       = local.external_sandbox_runtime ? var.sandbox_runtime_secret_name : null
 }
 
 output "sandbox_juicefs_redis_name" {
@@ -187,6 +222,19 @@ output "enable_smithdb" {
   value       = var.enable_smithdb
 }
 
+# The applied LangSmith gates, read by init-values.sh: a gate left out of
+# terraform.tfvars takes its variable default, which the tfvars file cannot show.
+# A gate is on only with SmithDB on.
+output "smithdb_ingestion_enabled" {
+  description = "Whether LangSmith writes runs to SmithDB"
+  value       = var.enable_smithdb && var.smithdb_ingestion_enabled
+}
+
+output "smithdb_query_enabled" {
+  description = "Whether LangSmith queries SmithDB"
+  value       = var.enable_smithdb && var.smithdb_query_enabled
+}
+
 output "smithdb_object_store_bucket" {
   description = "SmithDB object-store S3 bucket name (null when enable_smithdb = false)"
   value       = var.enable_smithdb ? module.smithdb[0].object_store_bucket_name : null
@@ -218,7 +266,7 @@ output "smithdb_metastore_use_ssl" {
 }
 
 output "smithdb_metastore_security_group_id" {
-  description = "Security group ID attached to the metastore RDS instance (null when enable_smithdb = false or smithdb_metastore_source = 'external')"
+  description = "Security group ID attached to the metastore RDS instance (null when enable_smithdb = false)"
   value       = var.enable_smithdb ? module.smithdb[0].metastore_security_group_id : null
 }
 
@@ -330,29 +378,14 @@ output "enable_fleet" {
   value       = var.enable_fleet
 }
 
-output "fleet_storage" {
-  description = "Fleet storage location"
-  value       = var.fleet_storage
-}
-
 output "enable_insights" {
-  description = "Whether Insights is enabled by either the product or external-storage switch"
-  value       = local.insights_enabled
-}
-
-output "insights_storage" {
-  description = "Insights storage location"
-  value       = local.insights_external_storage ? "external" : var.insights_storage
+  description = "Whether Insights is enabled"
+  value       = var.enable_insights
 }
 
 output "enable_polly" {
-  description = "Whether LangSmith Chat (formerly Polly) is enabled by either the product or external-storage switch"
-  value       = local.polly_enabled
-}
-
-output "polly_storage" {
-  description = "LangSmith Chat storage location"
-  value       = local.polly_external_storage ? "external" : var.polly_storage
+  description = "Whether LangSmith Chat (formerly Polly) is enabled"
+  value       = var.enable_polly
 }
 
 output "enable_envoy_gateway" {
@@ -363,11 +396,6 @@ output "enable_envoy_gateway" {
 output "enable_istio_gateway" {
   description = "Whether the Istio ingress gateway path is enabled"
   value       = var.enable_istio_gateway
-}
-
-output "enable_nginx_ingress" {
-  description = "Whether the NGINX ingress controller path is enabled"
-  value       = var.enable_nginx_ingress
 }
 
 output "gateway_target_group_arn" {
@@ -381,25 +409,22 @@ output "gateway_target_group_arn" {
 output "resource_summary" {
   description = "Summary of provisioned resources"
   value = {
-    cluster          = module.eks.cluster_name
-    postgres_source  = var.postgres_source
-    postgres         = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
-    redis_source     = var.redis_source
-    redis            = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
-    storage_bucket   = local.bucket_name
-    namespace        = var.langsmith_namespace
-    tls              = var.tls_certificate_source
-    alb              = module.alb.alb_dns_name
-    bastion          = var.create_bastion ? module.bastion[0].instance_id : "not created"
-    firewall         = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
-    deployments      = var.enable_deployments
-    fleet            = var.enable_fleet
-    fleet_storage    = var.enable_fleet ? var.fleet_storage : "not enabled"
-    insights         = local.insights_enabled
-    insights_storage = local.insights_enabled ? (local.insights_external_storage ? "external" : var.insights_storage) : "not enabled"
-    polly            = local.polly_enabled
-    polly_storage    = local.polly_enabled ? (local.polly_external_storage ? "external" : var.polly_storage) : "not enabled"
-    smithdb          = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
+    cluster         = module.eks.cluster_name
+    postgres_source = var.postgres_source
+    postgres        = "external (RDS)"
+    redis_source    = var.redis_source
+    redis           = "external (ElastiCache)"
+    storage_bucket  = local.bucket_name
+    namespace       = var.langsmith_namespace
+    tls             = var.tls_certificate_source
+    alb             = module.alb.alb_dns_name
+    bastion         = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    firewall        = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
+    deployments     = var.enable_deployments
+    fleet           = var.enable_fleet
+    insights        = var.enable_insights
+    polly           = var.enable_polly
+    smithdb         = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
   }
 }
 
@@ -418,8 +443,8 @@ output "next_steps" {
 
     Resources:
     - EKS Cluster:  ${module.eks.cluster_name}
-    - PostgreSQL:   ${var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"}
-    - Redis:        ${var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"}
+    - PostgreSQL:   external (RDS)
+    - Redis:        external (ElastiCache)
     - S3 Bucket:    ${local.bucket_name}
     - ALB:          ${module.alb.alb_dns_name}
     - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (${var.dns_create_zone ? "new" : "existing"} Route 53 zone + ACM)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}

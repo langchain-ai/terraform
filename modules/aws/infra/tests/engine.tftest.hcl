@@ -36,7 +36,6 @@ override_module {
     langsmith_irsa_role_arn            = "arn:aws:iam::123456789012:role/plantest-dev-eks-irsa-role"
     langsmith_irsa_role_name           = "plantest-dev-eks-irsa-role"
     node_security_group_id             = "sg-00000000000000001"
-    karpenter_node_iam_role_name       = "plantest-dev-karpenter-node"
   }
 }
 
@@ -302,4 +301,26 @@ run "engine_inputs_reject_malformed_values" {
     var.engine_intelligence_base_url,
     var.langsmith_engine_usage_signing_secret,
   ]
+}
+
+# Engine shares the Insights deployment, so Engine alone must plan the Insights
+# database and Secrets, or that deployment falls back to the chart's in-cluster
+# StatefulSets.
+run "engine_alone_plans_the_insights_credentials" {
+  command = plan
+
+  variables {
+    enable_engine    = true
+    enable_sandboxes = true
+    enable_insights  = false
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.standalone_insights_postgres) == 1 && length(kubernetes_secret.standalone_insights_redis) == 1
+    error_message = "Engine without Insights did not plan the Insights Postgres and Redis Secrets it shares"
+  }
+  assert {
+    condition     = keys(terraform_data.standalone_db) == ["insights"]
+    error_message = "Engine without Insights did not plan only the langsmith_insights database"
+  }
 }

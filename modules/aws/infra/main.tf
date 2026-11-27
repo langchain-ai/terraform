@@ -24,6 +24,23 @@ provider "kubernetes" {
   }
 }
 
+# The dedicated sandbox cluster (sandbox_runtime_source = "external"). Its
+# fallback host never resolves: with null, the provider would take
+# KUBE_CONFIG_PATH or KUBE_HOST from the environment, and a back-out to the
+# in-cluster runtime would refresh and destroy the sandbox namespace in whatever
+# cluster those name, the LangSmith cluster included, where the in-cluster
+# runtime uses the same namespace.
+provider "kubernetes" {
+  alias                  = "sandbox"
+  host                   = try(module.sandbox_eks[0].cluster_endpoint, "https://no-sandbox-cluster.invalid")
+  cluster_ca_certificate = try(base64decode(module.sandbox_eks[0].cluster_certificate_authority_data), null)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", try(module.sandbox_eks[0].cluster_name, ""), "--region", var.region]
+  }
+}
+
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
@@ -36,10 +53,8 @@ provider "helm" {
   }
 }
 
-# kubectl provider — used for the SmithDB Karpenter CRs (EC2NodeClass, NodePool).
-# kubectl_manifest defers schema validation to apply time, so terraform plan
-# succeeds on a fresh cluster before the Karpenter CRDs are installed (the
-# controller is deployed by the eks module's blueprints add-on).
+# kubectl provider — used for the Fleet stream HTTPRoute below.
+# kubectl_manifest defers schema validation to apply time, so terraform plan succeeds on a fresh cluster before the Gateway API CRDs are installed.
 provider "kubectl" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
@@ -58,13 +73,13 @@ provider "kubectl" {
 resource "terraform_data" "validate_inputs" {
   lifecycle {
     precondition {
-      condition     = var.postgres_source != "external" || var.postgres_password != ""
-      error_message = "postgres_password is required when postgres_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_postgres_password."
+      condition     = var.postgres_password != ""
+      error_message = "postgres_password is required. Run: source ./scripts/setup-env.sh, or set TF_VAR_postgres_password."
     }
 
     precondition {
-      condition     = var.redis_source != "external" || (var.redis_auth_token != "" && length(var.redis_auth_token) >= 16)
-      error_message = "redis_auth_token is required (min 16 chars) when redis_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_redis_auth_token."
+      condition     = var.redis_auth_token != "" && length(var.redis_auth_token) >= 16
+      error_message = "redis_auth_token is required (min 16 chars). Run: source ./scripts/setup-env.sh, or set TF_VAR_redis_auth_token."
     }
 
     precondition {
@@ -75,6 +90,58 @@ resource "terraform_data" "validate_inputs" {
     precondition {
       condition     = !var.enable_sandboxes || (var.sandbox_juicefs_redis_auth_token != "" && length(var.sandbox_juicefs_redis_auth_token) >= 16)
       error_message = "sandbox_juicefs_redis_auth_token is required (min 16 chars) when enable_sandboxes = true. Run: source ./scripts/setup-env.sh, or set TF_VAR_sandbox_juicefs_redis_auth_token."
+    }
+
+    precondition {
+      condition = !local.external_sandbox_runtime || (
+        length(var.sandbox_service_auth_secret) >= 32 && var.sandbox_callback_signing_jwk != ""
+      )
+      error_message = "sandbox_runtime_source = \"external\" requires sandbox_service_auth_secret (at least 32 characters) and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
+    }
+
+    # The sandbox cluster runs untrusted code, so its service-auth secret must
+    # not be the API key salt, which also backs LangSmith's own service auth.
+    # The chart cannot compare the two when they live in an existing Secret.
+    precondition {
+      condition     = !local.external_sandbox_runtime || var.sandbox_service_auth_secret != var.langsmith_api_key_salt
+      error_message = "sandbox_service_auth_secret must differ from langsmith_api_key_salt: the separate sandbox cluster must not hold the API key salt. Delete the sandbox-service-auth-secret SSM parameter, unset TF_VAR_sandbox_service_auth_secret, and re-run: source ./scripts/setup-env.sh."
+    }
+
+    # sandboxes.external ships with chart 0.18, and deploy.sh picks the runtime
+    # chart by this chart's appVersion, so the pin must be one exact version on
+    # 0.18 or later: not empty (the ~0.18.0 range) and not a range. deploy.sh checks
+    # the same rule, since a CHART_VERSION environment variable overrides this.
+    precondition {
+      condition     = !local.external_sandbox_runtime || can(regex(local.external_runtime_chart_version_pattern, var.langsmith_helm_chart_version))
+      error_message = "sandbox_runtime_source = \"external\" requires langsmith_helm_chart_version to be an exact langsmith chart version on 0.18 or later, such as \"0.18.5\". The langsmith-sandbox chart is paired with that exact chart by appVersion, so the default ~0.18.0 range is not enough."
+    }
+
+    # Separate-cluster sandboxes call the LangSmith API through the ALB. With an
+    # internal ALB a security group rule covers that automatically; with an
+    # internet-facing ALB the call arrives from the NAT gateway and is matched by
+    # alb_allowed_cidr_blocks, so a narrowed allowlist silently breaks it. Fail at
+    # plan time rather than letting sandboxes come up unable to register.
+    precondition {
+      condition = (
+        !local.external_sandbox_runtime
+        || var.alb_scheme == "internal"
+        || local.alb_allowlist_is_open
+        || var.sandbox_alb_allow_nat_egress
+      )
+      error_message = "with sandbox_runtime_source = \"external\", sandboxes cannot reach the LangSmith API: alb_scheme is 'internet-facing' and alb_allowed_cidr_blocks is narrowed, so the sandbox cluster's callback (which egresses via the NAT gateway) is blocked. Preferred fix: set alb_scheme = 'internal'. Otherwise add your NAT egress address to alb_allowed_cidr_blocks, or set sandbox_alb_allow_nat_egress = true to add it automatically — note that this grants ALB access to everything sharing the NAT gateway, including untrusted sandbox code."
+    }
+
+    precondition {
+      condition     = !var.sandbox_alb_allow_nat_egress || var.create_vpc
+      error_message = "sandbox_alb_allow_nat_egress = true requires create_vpc = true, because the NAT gateway Elastic IPs are only known when Terraform manages the VPC. For bring-your-own-VPC, add your NAT egress address to alb_allowed_cidr_blocks explicitly."
+    }
+
+    # Egress filtering is FQDN-based, so the sandbox callback needs the LangSmith
+    # hostname allowed. locals.firewall_allowed_fqdns appends it automatically,
+    # which is only possible when the hostname is known.
+    precondition {
+      condition     = !local.external_sandbox_runtime || !var.create_firewall || var.langsmith_domain != ""
+      error_message = "sandbox_runtime_source = \"external\" with create_firewall = true require langsmith_domain, so the sandbox cluster's callback to the LangSmith API can be added to the Network Firewall allowlist. Without it the callback is dropped as unmatched egress."
     }
 
     precondition {
@@ -137,23 +204,6 @@ resource "terraform_data" "validate_inputs" {
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
 
-    # External Fleet storage uses a dedicated database and logical Redis index on
-    # the shared RDS and ElastiCache instances.
-    precondition {
-      condition     = !var.enable_fleet || var.fleet_storage != "external" || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
-    }
-
-    precondition {
-      condition     = !local.polly_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "External LangSmith Chat storage requires postgres_source = \"external\" and redis_source = \"external\"."
-    }
-
-    precondition {
-      condition     = !local.insights_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "External Insights storage requires postgres_source = \"external\" and redis_source = \"external\"."
-    }
-
     precondition {
       condition     = !(var.tls_certificate_source == "letsencrypt" && var.create_cert_manager_irsa)
       error_message = "tls_certificate_source = 'letsencrypt' (HTTP-01 via ALB) and create_cert_manager_irsa = true (DNS-01 via Route 53) are mutually exclusive. Both create ClusterIssuer/letsencrypt-prod. Use DNS-01 for Istio Gateway, HTTP-01 for ALB."
@@ -169,25 +219,10 @@ resource "terraform_data" "validate_inputs" {
       error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
     }
 
-    # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
-    # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
+    # The gates default to true, so they count only with SmithDB on: opting
+    # out takes enable_smithdb = false alone (outputs.tf reports them the same way).
     precondition {
-      condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
-      error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
-    }
-
-    precondition {
-      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
-      error_message = "SmithDB integration gates require enable_smithdb = true."
-    }
-
-    precondition {
-      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
-      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
-    }
-
-    precondition {
-      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      condition     = !var.enable_smithdb || !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
 
@@ -198,16 +233,16 @@ resource "terraform_data" "validate_inputs" {
       error_message = "enable_engine requires enable_sandboxes = true. Every Engine run executes in a sandbox, and the chart rejects Engine without Sandboxes."
     }
 
-    # Two gateway controllers share one ALB target group (all three
+    # Two gateway controllers share one ALB target group (both
     # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
     # gateway_target_port can only describe one of them, so a second controller
     # leaves both permanently unhealthy. init-values.sh rejects this combination
     # too, but only after apply — fail at plan time instead.
     precondition {
       condition = length([
-        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway, var.enable_nginx_ingress] : true if enabled
+        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway] : true if enabled
       ]) <= 1
-      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio or NGINX."
+      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio."
     }
 
     # Envoy Gateway v1.9 supports Kubernetes 1.33 to 1.36, so an older control plane
@@ -239,10 +274,6 @@ module "vpc" {
   private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 
-  # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
-  # over subnet IDs that are unknown until apply.
-  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
-
   pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
 
@@ -256,7 +287,7 @@ module "firewall" {
   nat_gateway_az          = module.vpc[0].nat_gateway_az
   firewall_subnet_cidr    = var.firewall_subnet_cidr
   private_route_table_ids = module.vpc[0].private_route_table_ids
-  allowed_fqdns           = var.firewall_allowed_fqdns
+  allowed_fqdns           = local.firewall_allowed_fqdns
   tags                    = local.common_tags
 
   depends_on = [module.vpc]
@@ -286,8 +317,6 @@ module "eks" {
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
   eks_managed_node_groups         = var.eks_managed_node_groups
   extra_eks_managed_node_groups   = local.extra_eks_managed_node_groups
-  enable_karpenter                = var.enable_smithdb
-  karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
@@ -296,6 +325,66 @@ module "eks" {
   pod_subnet_ids_by_az            = local.pod_subnet_ids_by_az
   cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
   enable_istio_gateway            = var.enable_istio_gateway
+}
+
+module "sandbox_eks" {
+  source = "./modules/sandbox-eks"
+  count  = local.external_sandbox_runtime ? 1 : 0
+
+  cluster_name                = local.sandbox_cluster_name
+  cluster_version             = var.eks_cluster_version
+  vpc_id                      = local.vpc_id
+  subnet_ids                  = local.private_subnets
+  managed_node_group_defaults = var.eks_managed_node_group_defaults
+  cluster_addons              = var.eks_addons
+  public_cluster_enabled      = var.enable_public_eks_cluster
+  public_access_cidrs         = var.eks_public_access_cidrs
+  cluster_enabled_log_types   = var.eks_cluster_enabled_log_types
+  tags                        = merge(local.common_tags, { component = "sandbox" })
+
+  # The in-cluster sandbox-host node group's role is <base_name>-sandbox-host.
+  # Moving an install from sandbox_runtime_source = "in-cluster" to "external"
+  # creates this group while that one still exists, so this role needs its own
+  # name, or IAM refuses it (EntityAlreadyExists). An iam_role_name in
+  # sandbox_host_node_group_overrides still wins.
+  managed_node_group = merge(local.sandbox_host_node_group, {
+    iam_role_name = lookup(var.sandbox_host_node_group_overrides, "iam_role_name", "${local.sandbox_cluster_name}-host")
+  })
+}
+
+# sandbox-host listens on TCP 19190 on each sandbox node (host network). That
+# hop is plain HTTP carrying sandbox commands, files and credentials, so it is
+# open to exactly two sources, both inside this VPC:
+#   - the LangSmith cluster's node security group, which platform-backend and
+#     ingest-queue use: pod ENIs carry it too, under custom networking as well;
+#   - the sandbox nodes themselves, which forward ingress requests, dial sandbox
+#     links and send live-migration streams to each other on 19190. The EKS
+#     module's node-to-node ephemeral-port rule covers this today; this rule
+#     states the requirement so it does not depend on that default.
+resource "aws_vpc_security_group_ingress_rule" "sandbox_host_from_langsmith" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  security_group_id            = module.sandbox_eks[0].node_security_group_id
+  referenced_security_group_id = module.eks.node_security_group_id
+  from_port                    = 19190
+  to_port                      = 19190
+  ip_protocol                  = "tcp"
+  description                  = "LangSmith platform-backend and ingest-queue to sandbox-host"
+
+  tags = local.common_tags
+}
+
+resource "aws_vpc_security_group_ingress_rule" "sandbox_host_from_sandbox_nodes" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  security_group_id            = module.sandbox_eks[0].node_security_group_id
+  referenced_security_group_id = module.sandbox_eks[0].node_security_group_id
+  from_port                    = 19190
+  to_port                      = 19190
+  ip_protocol                  = "tcp"
+  description                  = "sandbox-host to sandbox-host: ingress forwarding, sandbox links, live migration"
+
+  tags = local.common_tags
 }
 
 # State migration: adding count changes the module address.
@@ -312,16 +401,18 @@ moved {
 
 module "redis" {
   source = "./modules/redis"
-  count  = var.redis_source == "external" ? 1 : 0
+  # Always 1, like module.postgres; the count keeps the [0] address in state.
+  count = var.redis_source == "external" ? 1 : 0
 
-  name                 = local.redis_name
-  vpc_id               = local.vpc_id
-  subnet_ids           = local.private_subnets
-  instance_type        = var.redis_instance_type
-  ingress_cidrs        = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
-  vpc_cidr_block       = local.vpc_cidr_block
-  auth_token           = var.redis_auth_token
-  parameter_group_name = "default.redis7"
+  name                       = local.redis_name
+  vpc_id                     = local.vpc_id
+  subnet_ids                 = local.private_subnets
+  instance_type              = var.redis_instance_type
+  ingress_cidrs              = local.data_store_ingress_cidrs
+  ingress_security_group_ids = local.data_store_ingress_security_group_ids
+  vpc_cidr_block             = local.vpc_cidr_block
+  auth_token                 = var.redis_auth_token
+  parameter_group_name       = "default.redis7"
 
   existing_security_group_id = var.redis_existing_security_group_id
 }
@@ -371,19 +462,23 @@ module "storage" {
 
 module "postgres" {
   source = "./modules/postgres"
-  count  = var.postgres_source == "external" ? 1 : 0
+  # Always 1, because postgres_source admits only "external". The count keeps the
+  # module.postgres[0] address that every install's state already holds; drop it
+  # with a moved block when the [0] references are rewritten.
+  count = var.postgres_source == "external" ? 1 : 0
 
-  identifier     = local.postgres_name
-  engine_version = var.postgres_engine_version
-  vpc_id         = local.vpc_id
-  subnet_ids     = local.private_subnets
-  ingress_cidrs  = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
-  vpc_cidr_block = local.vpc_cidr_block
-  instance_type  = var.postgres_instance_type
-  storage_gb     = var.postgres_storage_gb
-  max_storage_gb = var.postgres_max_storage_gb
-  username       = var.postgres_username
-  password       = var.postgres_password
+  identifier                 = local.postgres_name
+  engine_version             = var.postgres_engine_version
+  vpc_id                     = local.vpc_id
+  subnet_ids                 = local.private_subnets
+  ingress_cidrs              = local.data_store_ingress_cidrs
+  ingress_security_group_ids = local.data_store_ingress_security_group_ids
+  vpc_cidr_block             = local.vpc_cidr_block
+  instance_type              = var.postgres_instance_type
+  storage_gb                 = var.postgres_storage_gb
+  max_storage_gb             = var.postgres_max_storage_gb
+  username                   = var.postgres_username
+  password                   = var.postgres_password
 
   iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
   iam_database_user                   = var.postgres_iam_database_user
@@ -482,6 +577,86 @@ resource "aws_iam_role_policy" "langsmith_bedrock" {
   policy = local.langsmith_bedrock_policy
 }
 
+# Trust is scoped to exactly one ServiceAccount, not a wildcard over the
+# namespace: any other workload scheduled there must not be able to assume the
+# role that reaches the trace bucket. var.sandbox_service_account_name is the
+# single source of truth for that name — init-values.sh reads it back out of
+# the sandbox_service_account_name output and writes the same value into
+# sandboxHost.serviceAccount.name, so the chart cannot drift away from the
+# trust policy and leave IRSA silently failing at runtime.
+resource "aws_iam_role" "sandbox_host" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  name = "${local.sandbox_cluster_name}-irsa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = module.sandbox_eks[0].oidc_provider_arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${module.sandbox_eks[0].oidc_provider}:aud" = "sts.amazonaws.com"
+            "${module.sandbox_eks[0].oidc_provider}:sub" = "system:serviceaccount:${var.sandbox_namespace}:${var.sandbox_service_account_name}"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# JuiceFS keeps every object under "<sandbox_juicefs_name>/" in the bucket, so
+# the sandbox cluster gets that prefix and nothing else of the trace bucket.
+# The bucket policy grants nothing to this role: it only adds Allow statements,
+# so naming the role there with whole-bucket access would undo this scoping.
+# Same account, so this identity policy alone grants the access.
+resource "aws_iam_role_policy" "sandbox_host_s3" {
+  count = local.external_sandbox_runtime ? 1 : 0
+
+  name = "sandbox-juicefs-s3-access"
+  role = aws_iam_role.sandbox_host[0].name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat([
+      {
+        Sid    = "JuiceFSObjects"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:AbortMultipartUpload",
+        ]
+        Resource = "${module.storage.bucket_arn}/${var.sandbox_juicefs_name}/*"
+      },
+      {
+        Sid      = "JuiceFSList"
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = module.storage.bucket_arn
+        Condition = {
+          StringLike = {
+            "s3:prefix" = "${var.sandbox_juicefs_name}/*"
+          }
+        }
+      },
+      ],
+      # With a customer-managed key, JuiceFS writes need the key too.
+      var.s3_kms_key_arn != "" ? [{
+        Sid      = "JuiceFSKms"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = var.s3_kms_key_arn
+      }] : [],
+    )
+  })
+}
+
 # ── ESO IRSA role (External Secrets Operator) ─────────────────────────────
 # Allows the ESO controller to read LangSmith secrets from SSM Parameter Store.
 # IRSA: https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
@@ -563,10 +738,9 @@ module "cert_manager" {
 # wires the validated cert into the ALB HTTPS listener.
 
 locals {
-  insights_enabled          = var.enable_insights || var.enable_standalone_insights
-  insights_external_storage = var.enable_standalone_insights || (var.enable_insights && var.insights_storage == "external")
-  polly_enabled             = var.enable_polly || var.enable_standalone_polly
-  polly_external_storage    = var.enable_standalone_polly || (var.enable_polly && var.polly_storage == "external")
+  # Engine and Insights share the engineInsightsAgent deployment, so Engine alone
+  # also needs the Insights database and Redis index.
+  engine_insights_agent_enabled = var.enable_insights || var.enable_engine
 
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
 }
@@ -603,21 +777,21 @@ resource "aws_route53_record" "langsmith_alb_alias" {
 module "alb" {
   source = "./modules/alb"
 
-  name                   = local.alb_name
-  vpc_id                 = local.vpc_id
-  vpc_cidr_block         = local.vpc_cidr_block
-  pod_cidr_blocks        = local.pod_cidr_blocks
-  subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
-  internal               = var.alb_scheme == "internal"
-  allowed_cidr_blocks    = local.alb_ingress_cidr_blocks
-  tls_certificate_source = var.tls_certificate_source
-  acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
-  access_logs_enabled    = var.alb_access_logs_enabled
-  bucket_suffix          = random_id.bucket_suffix.hex
-  enable_envoy_gateway   = local.enable_envoy_gateway
-  enable_istio_gateway   = var.enable_istio_gateway
-  enable_nginx_ingress   = var.enable_nginx_ingress
-  tags                   = local.common_tags
+  name                       = local.alb_name
+  vpc_id                     = local.vpc_id
+  vpc_cidr_block             = local.vpc_cidr_block
+  pod_cidr_blocks            = local.pod_cidr_blocks
+  subnets                    = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
+  internal                   = var.alb_scheme == "internal"
+  allowed_cidr_blocks        = local.alb_ingress_cidr_blocks
+  allowed_security_group_ids = local.alb_allowed_security_group_ids
+  tls_certificate_source     = var.tls_certificate_source
+  acm_certificate_arn        = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
+  access_logs_enabled        = var.alb_access_logs_enabled
+  bucket_suffix              = random_id.bucket_suffix.hex
+  enable_envoy_gateway       = local.enable_envoy_gateway
+  enable_istio_gateway       = var.enable_istio_gateway
+  tags                       = local.common_tags
 
   existing_security_group_id = var.alb_existing_security_group_id
 
@@ -632,7 +806,6 @@ module "alb" {
 #
 # Envoy Gateway: port 10080 (Gateway listener port 80 + 10000 offset, Envoy runs non-root)
 # Istio Gateway: port 80    (istio-ingressgateway listens on 80 directly via NET_BIND_SERVICE)
-# NGINX Ingress:  port 80    (ingress-nginx-controller)
 
 resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
   count = local.enable_envoy_gateway ? 1 : 0
@@ -658,19 +831,6 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_istio" {
   to_port                      = 80
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Istio ingress gateway pods on HTTP (target-type: ip)"
-
-  tags = local.common_tags
-}
-
-resource "aws_vpc_security_group_ingress_rule" "alb_to_nginx" {
-  count = var.enable_nginx_ingress ? 1 : 0
-
-  security_group_id            = module.eks.node_security_group_id
-  referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 80
-  to_port                      = 80
-  ip_protocol                  = "tcp"
-  description                  = "Allow ALB to reach NGINX ingress controller pods on HTTP (target-type: ip)"
 
   tags = local.common_tags
 }
@@ -729,26 +889,10 @@ resource "time_sleep" "wait_for_alb_webhook" {
   create_duration = "30s"
 }
 
-# ── In-cluster credentials ────────────────────────────────────────────────────
-# When postgres or redis runs in-cluster (deployed by the LangSmith Helm chart),
-# Terraform still creates the k8s Secret so the chart can initialize the DB and
-# backend pods can connect without manual patching after deploy.
-# Passwords are generated here so they are stable across re-applies.
-
-resource "random_password" "in_cluster_postgres" {
-  count   = var.postgres_source == "in-cluster" ? 1 : 0
-  length  = 32
-  special = false
-}
-
-
+# ── Connection Secrets ────────────────────────────────────────────────────────
 locals {
-  postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : (
-    "postgresql://langsmith:${random_password.in_cluster_postgres[0].result}@langsmith-postgres:5432/langsmith"
-  )
-  redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
-    "redis://langsmith-redis:6379"
-  )
+  postgres_connection_url = module.postgres[0].connection_url
+  redis_connection_url    = module.redis[0].connection_url
 
   # DB 0 is reserved for the main LangSmith install.
   redis_db_fleet    = 1
@@ -761,10 +905,7 @@ module "k8s_bootstrap" {
 
   namespace = var.langsmith_namespace
 
-  postgres_connection_url  = local.postgres_connection_url
-  postgres_in_cluster_user = var.postgres_source == "in-cluster" ? "langsmith" : ""
-  postgres_in_cluster_db   = var.postgres_source == "in-cluster" ? "langsmith" : ""
-  postgres_in_cluster_pass = var.postgres_source == "in-cluster" ? random_password.in_cluster_postgres[0].result : ""
+  postgres_connection_url = local.postgres_connection_url
 
   redis_connection_url = local.redis_connection_url
 
@@ -775,7 +916,6 @@ module "k8s_bootstrap" {
 
   enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
-  enable_nginx_ingress     = var.enable_nginx_ingress
   gateway_target_group_arn = module.alb.gateway_target_group_arn != null ? module.alb.gateway_target_group_arn : ""
 
   # cert-manager DNS-01 (Route 53 / Istio Gateway)
@@ -794,7 +934,7 @@ module "k8s_bootstrap" {
 }
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
-  count = var.enable_sandboxes ? 1 : 0
+  count = local.in_cluster_sandbox_runtime ? 1 : 0
 
   metadata {
     name      = var.sandbox_juicefs_csi_config_secret_name
@@ -813,6 +953,72 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
   data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 
   depends_on = [module.k8s_bootstrap]
+}
+
+resource "kubernetes_namespace_v1" "sandbox" {
+  provider = kubernetes.sandbox
+  count    = local.external_sandbox_runtime ? 1 : 0
+
+  metadata {
+    name = var.sandbox_namespace
+  }
+
+  depends_on = [module.sandbox_eks]
+}
+
+# The runtime chart's minimal Secret: never a copy of langsmith-config. Its two
+# keys are the langsmith-sandbox chart's defaults (serviceAuth.secretKey and
+# config.callbackSigningJwkSecretKey), and each value must equal the
+# control plane's. The control plane reads its service-auth secret from the
+# dedicated sandbox_service_auth_secret key in langsmith-config
+# (init-values.sh sets sandboxes.serviceAuth.secretKey to it), never from
+# api_key_salt, so the salt stays out of the sandbox cluster.
+locals {
+  # A local so the plan tests can check the wiring: data_wo is not readable,
+  # not even in a plan.
+  sandbox_runtime_secret_data = {
+    sandbox_service_auth_secret  = var.sandbox_service_auth_secret
+    sandbox_callback_signing_jwk = var.sandbox_callback_signing_jwk
+  }
+}
+
+# Write-only: neither value is stored in Terraform state. Bump
+# sandbox_runtime_secret_revision to rewrite it.
+resource "kubernetes_secret_v1" "sandbox_runtime" {
+  provider = kubernetes.sandbox
+  count    = local.external_sandbox_runtime ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_runtime_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = local.sandbox_runtime_secret_data
+
+  data_wo_revision = var.sandbox_runtime_secret_revision
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs_config" {
+  provider = kubernetes.sandbox
+  count    = local.external_sandbox_runtime ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    name    = var.sandbox_juicefs_name
+    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
+    storage = "s3"
+    bucket  = local.sandbox_juicefs_bucket_url
+  }
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 }
 
 #------------------------------------------------------------------------------
@@ -835,18 +1041,15 @@ locals {
   # Encoded admin URL for the shared RDS instance, without a database name.
   # Spaces are rejected by postgres_password validation, so urlencode() cannot
   # emit "+" for a space in URI userinfo.
-  standalone_pg_base = var.postgres_source == "external" ? (
-    "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
-  ) : ""
+  standalone_pg_base = "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
 
   standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
   standalone_polly_pg_url    = "${local.standalone_pg_base}/langsmith_polly?sslmode=require"
   standalone_insights_pg_url = "${local.standalone_pg_base}/langsmith_insights?sslmode=require"
 
   # Shared ElastiCache base URL (rediss://:<token>@<endpoint>:6379). Append the
-  # per-feature logical DB index. Guarded so module.redis[0] is only referenced
-  # when it exists.
-  standalone_redis_base = var.redis_source == "external" ? module.redis[0].connection_url : ""
+  # per-feature logical DB index.
+  standalone_redis_base = module.redis[0].connection_url
 
   standalone_fleet_redis_url    = "${local.standalone_redis_base}/${local.redis_db_fleet}"
   standalone_polly_redis_url    = "${local.standalone_redis_base}/${local.redis_db_polly}"
@@ -857,6 +1060,7 @@ locals {
 # Jobs do not rerun when Secret data changes, so a Job that failed on a broken
 # (unencoded) URL would otherwise stay failed. SQL in the Job is idempotent.
 resource "terraform_data" "postgres_connection_url_revision" {
+  # Always 1, like module.postgres; the count keeps the [0] address in state.
   count = var.postgres_source == "external" ? 1 : 0
   input = sha256(local.postgres_connection_url)
 }
@@ -869,10 +1073,10 @@ resource "terraform_data" "postgres_connection_url_revision" {
 resource "terraform_data" "standalone_db" {
   for_each = {
     for k, v in {
-      fleet    = var.enable_fleet && var.fleet_storage == "external"
-      polly    = local.polly_external_storage
-      insights = local.insights_external_storage
-    } : k => v if v && var.postgres_source == "external"
+      fleet    = var.enable_fleet
+      polly    = var.enable_polly
+      insights = local.engine_insights_agent_enabled
+    } : k => v if v
   }
 
   triggers_replace = jsonencode({
@@ -970,7 +1174,7 @@ removed {
 # apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_fleet ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -983,7 +1187,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.fleet_storage == "external" && var.redis_source == "external" ? 1 : 0
+  count = var.enable_fleet ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -996,7 +1200,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = local.polly_external_storage && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_polly ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -1009,7 +1213,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = local.polly_external_storage && var.redis_source == "external" ? 1 : 0
+  count = var.enable_polly ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -1022,7 +1226,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = local.insights_external_storage && var.postgres_source == "external" ? 1 : 0
+  count = local.engine_insights_agent_enabled ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -1035,7 +1239,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = local.insights_external_storage && var.redis_source == "external" ? 1 : 0
+  count = local.engine_insights_agent_enabled ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace
@@ -1075,7 +1279,6 @@ module "smithdb" {
   eks_oidc_provider_url      = module.eks.oidc_provider
 
   # Metastore
-  metastore_source                  = var.smithdb_metastore_source
   metastore_instance_class          = var.smithdb_metastore_instance_class
   metastore_engine_version          = var.smithdb_metastore_engine_version
   metastore_allocated_storage       = var.smithdb_metastore_allocated_storage
@@ -1085,22 +1288,14 @@ module "smithdb" {
   metastore_skip_final_snapshot     = var.smithdb_metastore_skip_final_snapshot
   metastore_master_username         = var.smithdb_metastore_master_username
 
-  external_metastore_host     = var.smithdb_external_metastore_host
-  external_metastore_port     = var.smithdb_external_metastore_port
-  external_metastore_database = var.smithdb_external_metastore_database
-  external_metastore_username = var.smithdb_external_metastore_username
-  external_metastore_password = var.smithdb_external_metastore_password
-
   # Object store
   bucket_name           = local.smithdb_bucket_name
   s3_kms_key_arn        = var.s3_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
 
-  migration_source_bucket_arn = var.smithdb_migration_enabled ? module.storage.bucket_arn : ""
-
-  existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
-  manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
+  existing_security_group_id           = var.smithdb_metastore_existing_security_group_id
+  manage_existing_security_group_rules = var.smithdb_metastore_manage_existing_security_group_rules
 }
 
 # Metastore connection secret consumed by smithdb.config.existingSecretName.
@@ -1120,198 +1315,6 @@ resource "kubernetes_secret" "smithdb_local" {
   }
   type       = "Opaque"
   depends_on = [module.k8s_bootstrap]
-}
-
-#------------------------------------------------------------------------------
-# SmithDB Karpenter provisioning
-#
-# The Karpenter controller is installed by module.eks (blueprints add-on). Here
-# we tag the discovery targets and create the SmithDB NodePools/EC2NodeClasses:
-#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (instanceStorePolicy)
-#     for the SmithDB emptyDir caches. Hosts query / ingestion / compaction-worker.
-#   - compute: no local NVMe. Hosts compaction / cluster-manager and the transient
-#     metastore-migration job.
-# Labels/taints (smithdb-local/instance-store, smithdb-local/compute) match the
-# nodeSelectors/tolerations in langsmith-values-smithdb.yaml.
-#------------------------------------------------------------------------------
-
-locals {
-  # Subnets are discovered by the karpenter.sh/discovery tag (applied to the
-  # private subnets at creation via the vpc module's extra_private_subnet_tags).
-  smithdb_karpenter_discovery = { "karpenter.sh/discovery" = local.cluster_name }
-
-  # Security groups are discovered by the EKS-managed cluster tag
-  # (kubernetes.io/cluster/<cluster> = owned), which is stable and always present
-  # on the cluster security group. We deliberately do NOT put karpenter.sh/discovery
-  # on the node SG ourselves: the EKS module reconciles node-SG tags and can drop
-  # an out-of-band tag, leaving the EC2NodeClass with SecurityGroupsReady=False.
-  smithdb_karpenter_sg_selector = { "kubernetes.io/cluster/${local.cluster_name}" = "owned" }
-}
-
-# EC2NodeClass subnet discovery for a bring-your-own VPC: tag the existing private
-# subnets here (a for_each is safe because their IDs are known statically). For a
-# Terraform-created VPC the tag is applied at creation via the vpc module's
-# extra_private_subnet_tags (above).
-resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
-  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
-
-  resource_id = each.value
-  key         = "karpenter.sh/discovery"
-  value       = local.cluster_name
-}
-
-resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata   = { name = "smithdb-instance-store" }
-    spec = {
-      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
-      role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
-      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
-      associatePublicIPAddress   = false
-      # Karpenter RAID0s the local NVMe and points kubelet at it — no userdata.
-      instanceStorePolicy = "RAID0"
-      metadataOptions = {
-        httpEndpoint            = "enabled"
-        httpProtocolIPv6        = "disabled"
-        httpPutResponseHopLimit = 1
-        httpTokens              = "required"
-      }
-      blockDeviceMappings = [{
-        deviceName = "/dev/xvda"
-        ebs = {
-          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
-          volumeType = "gp3"
-          encrypted  = true
-        }
-      }]
-    }
-  })
-
-  depends_on = [module.eks]
-}
-
-resource "kubectl_manifest" "smithdb_ec2nc_compute" {
-  count = var.enable_smithdb ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata   = { name = "smithdb-compute" }
-    spec = {
-      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
-      role                       = module.eks.karpenter_node_iam_role_name
-      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
-      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
-      associatePublicIPAddress   = false
-      metadataOptions = {
-        httpEndpoint            = "enabled"
-        httpProtocolIPv6        = "disabled"
-        httpPutResponseHopLimit = 1
-        httpTokens              = "required"
-      }
-      blockDeviceMappings = [{
-        deviceName = "/dev/xvda"
-        ebs = {
-          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
-          volumeType = "gp3"
-          encrypted  = true
-        }
-      }]
-    }
-  })
-
-  depends_on = [module.eks]
-}
-
-resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata   = { name = "smithdb-instance-store" }
-    spec = {
-      template = {
-        metadata = { labels = { "smithdb-local/instance-store" = "true" } }
-        spec = {
-          taints = [{ key = "smithdb-local/instance-store", value = "true", effect = "NoSchedule" }]
-          requirements = [
-            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
-            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
-            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
-            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
-            { key = "karpenter.k8s.aws/instance-local-nvme", operator = "Gt", values = [tostring(var.smithdb_instance_store_min_local_nvme_gib - 1)] },
-            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_instance_store_sizes },
-          ]
-          nodeClassRef = {
-            group = "karpenter.k8s.aws"
-            kind  = "EC2NodeClass"
-            name  = "smithdb-instance-store"
-          }
-          expireAfter = "720h"
-        }
-      }
-      limits = {
-        cpu    = tostring(var.smithdb_instance_store_limits.cpu)
-        memory = var.smithdb_instance_store_limits.memory
-      }
-      # Avoid churn for nodes holding large local caches.
-      disruption = {
-        consolidationPolicy = "WhenEmpty"
-        consolidateAfter    = "2m"
-        budgets             = [{ nodes = "10%" }]
-      }
-    }
-  })
-
-  depends_on = [kubectl_manifest.smithdb_ec2nc_instance_store]
-}
-
-resource "kubectl_manifest" "smithdb_nodepool_compute" {
-  count = var.enable_smithdb ? 1 : 0
-
-  yaml_body = yamlencode({
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata   = { name = "smithdb-compute" }
-    spec = {
-      template = {
-        metadata = { labels = { "smithdb-local/compute" = "true" } }
-        spec = {
-          taints = [{ key = "smithdb-local/compute", value = "true", effect = "NoSchedule" }]
-          requirements = [
-            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
-            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
-            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
-            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
-            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_compute_sizes },
-          ]
-          nodeClassRef = {
-            group = "karpenter.k8s.aws"
-            kind  = "EC2NodeClass"
-            name  = "smithdb-compute"
-          }
-          expireAfter = "720h"
-        }
-      }
-      limits = {
-        cpu    = tostring(var.smithdb_compute_limits.cpu)
-        memory = var.smithdb_compute_limits.memory
-      }
-      disruption = {
-        consolidationPolicy = "WhenEmptyOrUnderutilized"
-        consolidateAfter    = "2m"
-        budgets             = [{ nodes = "10%" }]
-      }
-    }
-  })
-
-  depends_on = [kubectl_manifest.smithdb_ec2nc_compute]
 }
 
 # ── Long-lived-stream timeout override ───────────────────────────────────────
@@ -1337,10 +1340,8 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 # own route. timeouts.request: 0s disables the request timeout for just
 # these path prefixes; every other path keeps Envoy Gateway's default.
 #
-# kubectl_manifest (not kubernetes_manifest) for the same reason as the
-# SmithDB Karpenter CRs above: it defers schema validation to apply time, so
-# terraform plan succeeds even before the Gateway API CRDs are installed
-# (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
+# kubectl_manifest (not kubernetes_manifest) defers schema validation to apply time, so terraform plan succeeds even before the Gateway API CRDs are installed.
+# Envoy Gateway's helm_release installs them inside module.k8s_bootstrap.
 resource "kubectl_manifest" "fleet_stream_httproute" {
   count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
 

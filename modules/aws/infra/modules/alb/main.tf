@@ -21,11 +21,10 @@ data "aws_caller_identity" "current" {}
 data "aws_elb_service_account" "current" {}
 
 locals {
-  gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway || var.enable_nginx_ingress
+  gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway
   # Envoy Gateway: pods listen on port 10080 (Gateway listener port 80 + 10000 offset,
   # Envoy runs non-root and can't bind to privileged ports below 1024).
   # Istio ingress gateway: listens directly on port 80 (envoy with NET_BIND_SERVICE).
-  # NGINX ingress controller: listens on port 80.
   gateway_target_port = var.enable_envoy_gateway ? 10080 : 80
 
   byo_security_group = var.existing_security_group_id != null && var.existing_security_group_id != ""
@@ -118,6 +117,31 @@ resource "aws_security_group" "alb" {
     }
   }
 
+  # Inline rather than standalone aws_security_group_rule resources: this
+  # security group already declares inline ingress blocks, and mixing the two
+  # forms makes each apply delete the rules the other manages.
+  dynamic "ingress" {
+    for_each = length(var.allowed_security_group_ids) > 0 ? [1] : []
+    content {
+      description     = "HTTP from allowed security groups"
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      security_groups = var.allowed_security_group_ids
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = length(var.allowed_security_group_ids) > 0 && var.tls_certificate_source != "none" ? [1] : []
+    content {
+      description     = "HTTPS from allowed security groups"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      security_groups = var.allowed_security_group_ids
+    }
+  }
+
   # Egress scoped to VPC CIDR: ALB only needs to reach EKS pod IPs (target-type: ip).
   # Under VPC CNI custom networking the pods live in pod_cidr_blocks instead.
   # If using VPC peering for targets outside this VPC, add those CIDRs here.
@@ -167,7 +191,6 @@ resource "aws_lb" "this" {
 #
 # Envoy Gateway: pods listen on port 10080 (Gateway listener port 80 + 10000 offset).
 # Istio:         pods listen on port 80    (istio-ingressgateway with NET_BIND_SERVICE).
-# NGINX:         pods listen on port 80    (ingress-nginx-controller).
 # Health check uses "200-404": Envoy/Istio returns 404 on unknown paths, which is
 # still a sign the proxy is alive and ready to serve traffic.
 

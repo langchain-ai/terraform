@@ -17,9 +17,8 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.37"
     }
-    # kubectl provider is used for the SmithDB Karpenter CRs (EC2NodeClass,
-    # NodePool). kubectl_manifest defers schema validation to apply time — plan
-    # succeeds even before the Karpenter CRDs are installed by the eks add-on.
+    # kubectl provider is used for the Fleet stream HTTPRoute.
+    # kubectl_manifest defers schema validation to apply time, so plan succeeds even before the Gateway API CRDs are installed.
     kubectl = {
       source  = "gavinbunney/kubectl"
       version = "~> 1.14"

@@ -176,6 +176,15 @@ _ask_int() {
   done
 }
 
+_ask_int_at_least() {
+  local minimum="$1"; shift
+  while true; do
+    _ask_int "$@"
+    (( 10#$_REPLY >= minimum )) && return
+    _red "  ERROR: enter at least $minimum."
+  done
+}
+
 _ask_required() {
   while true; do
     _ask "$@"
@@ -227,12 +236,11 @@ _existing() {
 
 # Return the gateway menu choice for QuickStart.
 # Fresh configurations recommend Envoy (1). Updates preserve the existing
-# controller; ALB is represented by all three controller flags being false (3).
+# controller; ALB is represented by both controller flags being false (3).
 _quickstart_gateway_default() {
   local update_mode="$1"
   local envoy_enabled="$2"
   local istio_enabled="$3"
-  local nginx_enabled="$4"
 
   if [[ "$update_mode" != "true" ]]; then
     echo "1"
@@ -240,8 +248,6 @@ _quickstart_gateway_default() {
     echo "1"
   elif [[ "$istio_enabled" == "true" ]]; then
     echo "2"
-  elif [[ "$nginx_enabled" == "true" ]]; then
-    echo "4"
   else
     echo "3"
   fi
@@ -272,16 +278,14 @@ _validate_conflicts() {
 
   local envoy; envoy=$(_parse_tfvar "enable_envoy_gateway" 2>/dev/null || echo "false")
   local istio;  istio=$(_parse_tfvar "enable_istio_gateway" 2>/dev/null || echo "false")
-  local nginx;  nginx=$(_parse_tfvar "enable_nginx_ingress" 2>/dev/null || echo "false")
   local tls;    tls=$(_parse_tfvar "tls_certificate_source" 2>/dev/null || echo "none")
   local dns01;  dns01=$(_parse_tfvar "create_cert_manager_irsa" 2>/dev/null || echo "false")
   # More than one gateway controller enabled at the same time
   local gw_count=0
   [[ "$envoy" == "true" ]] && (( gw_count++ )) || true
   [[ "$istio" == "true" ]] && (( gw_count++ )) || true
-  [[ "$nginx" == "true" ]] && (( gw_count++ )) || true
   if (( gw_count > 1 )); then
-    _conflict_warn "Multiple gateway controllers enabled (nginx=$nginx, envoy=$envoy, istio=$istio)."
+    _conflict_warn "Multiple gateway controllers enabled (envoy=$envoy, istio=$istio)."
     printf "  Only one gateway controller can be active. Choose one in Section 8.\n"
   fi
 
@@ -335,6 +339,17 @@ if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
   esac
 fi
 
+# 0.18 removed NGINX ingress. A terraform.tfvars that runs NGINX enables neither
+# Envoy nor Istio, so the menu below would preselect ALB, and the next apply
+# would delete the controller that serves the deployment today.
+if [[ "$UPDATE_MODE" == "true" ]] && _tfvar_is_true "enable_nginx_ingress"; then
+  echo ""
+  _red "ERROR"; printf ": %s sets enable_nginx_ingress = true, and 0.18 removed NGINX ingress.\n" "$OUTPUT_DISPLAY"
+  printf "  Keep the previous release until the deployment has moved to Envoy Gateway, Istio, or ALB.\n"
+  printf "  See README.md, \"Moving off NGINX ingress\". terraform.tfvars was not changed.\n"
+  exit 1
+fi
+
 # In update mode, check for conflicting values already in the file.
 if [[ "$UPDATE_MODE" == "true" ]]; then
   _validate_conflicts
@@ -361,7 +376,7 @@ echo ""
 printf "  ${DIM}Sets starting defaults for scale, security, and data protection.${RESET}\n"
 printf "  ${DIM}Dev / POC favors lower cost and easy cleanup; Production favors safer retention.${RESET}\n"
 if [[ "$UPDATE_MODE" == "true" ]]; then
-  printf "  ${DIM}Existing settings, including pod sizing, stay unchanged in update mode.${RESET}\n"
+  printf "  ${DIM}Existing settings stay unchanged in update mode.${RESET}\n"
 fi
 
 _profile_arg="--default"
@@ -542,12 +557,14 @@ else
   fi
 fi
 
-NODE_INSTANCE="$(_existing "instance_types" "$([[ "$PROFILE" == "prod" ]] && echo "m5.4xlarge" || echo "m5.2xlarge")")"
+NODE_INSTANCE="$(_existing "instance_types" "m6a.2xlarge")"
 NODE_MIN="$(_existing "min_size" "$([[ "$PROFILE" == "prod" ]] && echo "3" || echo "2")")"
-NODE_MAX="$(_existing "max_size" "$([[ "$PROFILE" == "prod" ]] && echo "10" || echo "5")")"
+# Both profiles run the one sizing, which needs up to 8 m6a.2xlarge nodes at its
+# maximum replicas. Cluster Autoscaler adds nodes only when pods need them.
+NODE_MAX="$(_existing "max_size" "10")"
 
 echo ""
-_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "Node group instance type")" "$NODE_INSTANCE"
+_ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "LangSmith node group instance type")" "$NODE_INSTANCE"
 NODE_INSTANCE="$_REPLY"
 _ask_int "$(_choice_arg "min_size")" "$(_numbered_prompt "4.5" "Node group min size")" "$NODE_MIN"
 NODE_MIN="$_REPLY"
@@ -568,12 +585,13 @@ if [[ "$PROFILE" == "prod" ]]; then
   printf "  $(_dim "Production: external RDS + ElastiCache recommended.")\n"
 fi
 
-_pg_source_default=1; [[ "$_ex_pg" == "in-cluster" ]] && _pg_source_default=2
-_ask_choice "$(_choice_arg "postgres_source")" "$_pg_source_default" --recommended 1 "$(_numbered_prompt "5.1" "Where should PostgreSQL run?")" \
-  "Amazon RDS — external and managed by AWS" \
-  "In-cluster — runs as Kubernetes pods"
-PG_SOURCE="external"; [[ "$_CHOICE" == "2" ]] && PG_SOURCE="in-cluster"
-_confirm_storage_change "PostgreSQL" "$_ex_pg" "$PG_SOURCE"
+# PostgreSQL is always Amazon RDS from 0.18; SmithDB needs it outside the cluster.
+if [[ "$_ex_pg" == "in-cluster" ]]; then
+  _red "  ERROR: postgres_source = \"in-cluster\" was removed in 0.18."
+  printf "  Back up the database before you remove the line: the next apply points LangSmith\n"
+  printf "  at a new, empty RDS instance. See \"Move an in-cluster PostgreSQL to RDS\" in README.md.\n"
+  exit 1
+fi
 
 PG_INSTANCE="$(_existing "postgres_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "db.r6g.xlarge" || echo "db.t3.large")")"
 PG_STORAGE="$(_existing "postgres_storage_gb" "$([[ "$PROFILE" == "prod" ]] && echo "50" || echo "20")")"
@@ -590,26 +608,23 @@ if [[ "$UPDATE_MODE" == "true" ]]; then
   PG_SKIP_FINAL_SNAPSHOT="$(_existing "postgres_skip_final_snapshot" "$PG_SKIP_FINAL_SNAPSHOT")"
 fi
 
-if [[ "$PG_SOURCE" == "external" ]]; then
-  echo ""
-  _ask "$(_choice_arg "postgres_instance_type")" "$(_numbered_prompt "5.2" "RDS instance type")" "$PG_INSTANCE"; PG_INSTANCE="$_REPLY"
-  _ask_int "$(_choice_arg "postgres_storage_gb")" "$(_numbered_prompt "5.3" "RDS initial storage (GB)")" "$PG_STORAGE"; PG_STORAGE="$_REPLY"
-  _ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.4" "RDS max storage (GB)")" "$PG_MAX_STORAGE"; PG_MAX_STORAGE="$_REPLY"
+echo ""
+_ask "$(_choice_arg "postgres_instance_type")" "$(_numbered_prompt "5.1" "RDS PostgreSQL instance type")" "$PG_INSTANCE"; PG_INSTANCE="$_REPLY"
+_ask_int "$(_choice_arg "postgres_storage_gb")" "$(_numbered_prompt "5.2" "RDS initial storage (GB)")" "$PG_STORAGE"; PG_STORAGE="$_REPLY"
+_ask_int "$(_choice_arg "postgres_max_storage_gb")" "$(_numbered_prompt "5.3" "RDS max storage (GB)")" "$PG_MAX_STORAGE"; PG_MAX_STORAGE="$_REPLY"
+
+# Redis is always Amazon ElastiCache (OSS mode) from 0.18.
+if [[ "$_ex_redis" == "in-cluster" ]]; then
+  _red "  ERROR: redis_source = \"in-cluster\" was removed in 0.18."
+  printf "  Let the LangSmith queues drain before you remove the line: the next apply points\n"
+  printf "  LangSmith at a new, empty ElastiCache instance. See \"Move an in-cluster Redis to\n"
+  printf "  ElastiCache\" in README.md.\n"
+  exit 1
 fi
-
-_redis_source_default=1; [[ "$_ex_redis" == "in-cluster" ]] && _redis_source_default=2
-_ask_choice "$(_choice_arg "redis_source")" "$_redis_source_default" --recommended 1 "$(_numbered_prompt "5.5" "Where should Redis run?")" \
-  "Amazon ElastiCache — external and managed by AWS" \
-  "In-cluster — runs as Kubernetes pods"
-REDIS_SOURCE="external"; [[ "$_CHOICE" == "2" ]] && REDIS_SOURCE="in-cluster"
-_confirm_storage_change "Redis" "$_ex_redis" "$REDIS_SOURCE"
-
 REDIS_INSTANCE="$(_existing "redis_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "cache.m6g.xlarge" || echo "cache.m6g.large")")"
-if [[ "$REDIS_SOURCE" == "external" ]]; then
-  echo ""
-  _ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.6" "ElastiCache instance type")" "$REDIS_INSTANCE"
-  REDIS_INSTANCE="$_REPLY"
-fi
+echo ""
+_ask "$(_choice_arg "redis_instance_type")" "$(_numbered_prompt "5.4" "ElastiCache instance type")" "$REDIS_INSTANCE"
+REDIS_INSTANCE="$_REPLY"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. ClickHouse
@@ -631,12 +646,26 @@ _confirm_storage_change "ClickHouse" "$_ex_ch" "$CH_SOURCE"
 
 _section "7. SmithDB"
 
-_ex_smithdb=$(_existing "enable_smithdb" "false")
-_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
-_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
-_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
+# An existing install's SmithDB state as applied, read from the Terraform
+# outputs: its tfvars may leave a key to its default, and the defaults changed
+# in 0.18. Before a 0.18 apply there are no gate outputs, and an unset key keeps
+# 0.17's meaning, off. A new setup defaults to SmithDB on.
+_ex_smithdb="true"; _ex_smithdb_ingestion="false"; _ex_smithdb_query="false"
+if [[ "$UPDATE_MODE" == "true" ]]; then
+  _ex_smithdb=$(_read_applied_flag "enable_smithdb" false)
+  _ex_smithdb_ingestion=$(_read_applied_flag "smithdb_ingestion_enabled" false)
+  _ex_smithdb_query=$(_read_applied_flag "smithdb_query_enabled" false)
+fi
 ENABLE_SMITHDB="false"
-SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+SMITHDB_INGESTION="false"; SMITHDB_QUERY="false"
+SMITHDB_NODE_TYPE="$(_existing smithdb_node_instance_type m6a.4xlarge)"
+[[ "$SMITHDB_NODE_TYPE" == "null" ]] && SMITHDB_NODE_TYPE="m6a.4xlarge"
+SMITHDB_CACHE_STORAGE="$(_existing smithdb_cache_storage network-disk)"
+[[ "$SMITHDB_CACHE_STORAGE" == "null" ]] && SMITHDB_CACHE_STORAGE="network-disk"
+SMITHDB_NODE_MIN="$(_existing smithdb_node_min_count 2)"
+SMITHDB_NODE_MAX="$(_existing smithdb_node_max_count 5)"
+[[ "$SMITHDB_NODE_MAX" == "null" ]] && SMITHDB_NODE_MAX=5
+SMITHDB_NODE_DISK="$(_existing smithdb_node_root_volume_size_gb 100)"
 
 if [[ "$PROFILE" == "prod" ]]; then
   SMITHDB_DELETION_PROTECTION="true"
@@ -655,20 +684,32 @@ fi
 
 echo ""
 printf "  ${DIM}SmithDB is LangChain's purpose-built trace database for LangSmith.${RESET}\n"
-printf "  ${DIM}Enabling it adds:${RESET}\n"
+printf "  ${DIM}SmithDB is enabled by default. SmithDB adds:${RESET}\n"
 printf "  ${DIM}  - A dedicated RDS PostgreSQL metastore${RESET}\n"
-printf "  ${DIM}  - A dedicated S3 object-store bucket${RESET}\n"
-printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes ServiceAccount${RESET}\n"
-printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection${RESET}\n"
-printf "  ${DIM}  - Karpenter with two EC2 node pools: local NVMe storage and general compute${RESET}\n"
-printf "  ${DIM}Ingestion, migration, and query cutover stay disabled initially.${RESET}\n"
+printf "  ${DIM}  - A dedicated S3 bucket for object storage${RESET}\n"
+printf "  ${DIM}  - An IRSA role for the SmithDB Kubernetes service account${RESET}\n"
+printf "  ${DIM}  - A Kubernetes Secret containing the metastore connection details${RESET}\n"
+printf "  ${DIM}  - A dedicated general-purpose managed node pool${RESET}\n"
+printf "  ${DIM}  - A SmithDB cache storage class (smithdb-cache) for per-pod gp3${RESET}\n"
+printf "  ${DIM}    EBS volumes, each configured with 7,000 IOPS and 1,000 MiB/s${RESET}\n"
+printf "  ${DIM}    of throughput${RESET}\n"
+printf "  ${DIM}LangSmith runs the SmithDB small tier, on m6a.4xlarge nodes by default.${RESET}\n"
+printf "  ${DIM}../SMITHDB.md describes scaling up to the medium or large tier.${RESET}\n"
+printf "  ${DIM}A new install writes to and queries SmithDB from the start. An existing${RESET}\n"
+printf "  ${DIM}install that turns SmithDB on starts with ingestion and query${RESET}\n"
+printf "  ${DIM}off, because its traces are in ClickHouse; ../SMITHDB.md stages them.${RESET}\n"
 echo ""
 if _ask_yn "$(_choice_arg "enable_smithdb")" "$(_numbered_prompt "7.1" "Enable SmithDB?")" \
   "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SMITHDB="true"
-  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
-  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
-  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
+  if [[ "$UPDATE_MODE" == "true" ]]; then
+    # Keep an existing install's gates: turning query on before its ClickHouse
+    # history is migrated would hide that history from the UI.
+    SMITHDB_INGESTION="$_ex_smithdb_ingestion"
+    SMITHDB_QUERY="$_ex_smithdb_query"
+  else
+    SMITHDB_INGESTION="true"; SMITHDB_QUERY="true"
+  fi
 fi
 if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" != "true" ]]; then
   echo ""
@@ -691,34 +732,23 @@ printf "  ${DIM}you don't need Gateway API. Istio is another split-dataplane opt
 
 _ex_envoy=$(_existing "enable_envoy_gateway" "false")
 _ex_istio=$(_existing "enable_istio_gateway" "false")
-_ex_nginx=$(_existing "enable_nginx_ingress" "false")
 _gw_default=$(_quickstart_gateway_default \
-  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio" "$_ex_nginx")
+  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio")
 
-_ask_choice "$(_choice_arg "enable_envoy_gateway" "enable_istio_gateway" "enable_nginx_ingress")" "$_gw_default" --recommended 1 "$(_numbered_prompt "8.1" "Ingress / Gateway mode:")" \
+_ask_choice "$(_choice_arg "enable_envoy_gateway" "enable_istio_gateway")" "$_gw_default" --recommended 1 "$(_numbered_prompt "8.1" "Ingress / Gateway mode:")" \
   "Envoy Gateway — modern routing with the Kubernetes Gateway API" \
   "Istio Gateway — service-mesh routing with VirtualServices" \
-  "Application Load Balancer (ALB) — simplest path using AWS load balancing" \
-  "NGINX Ingress Controller — legacy ingress compatibility"
+  "Application Load Balancer (ALB) — simplest path using AWS load balancing"
 
 GATEWAY_MODE="envoy"
 ENABLE_ENVOY="true"
 ENABLE_ISTIO="false"
-ENABLE_NGINX="false"
 
 case "$_CHOICE" in
   1) GATEWAY_MODE="envoy"; ENABLE_ENVOY="true" ;;
   2) GATEWAY_MODE="istio"; ENABLE_ENVOY="false"; ENABLE_ISTIO="true" ;;
   3) GATEWAY_MODE="alb"; ENABLE_ENVOY="false" ;;
-  4) GATEWAY_MODE="nginx"; ENABLE_ENVOY="false"; ENABLE_NGINX="true" ;;
 esac
-
-# For NGINX: brief note (ALB TGB wires automatically, no extra input needed)
-if [[ "$GATEWAY_MODE" == "nginx" ]]; then
-  echo ""
-  printf "  ${DIM}NGINX: ALB → TargetGroupBinding → NGINX controller pods → LangSmith.${RESET}\n"
-  printf "  ${DIM}TLS terminates at the ALB using ACM.${RESET}\n"
-fi
 
 # For Istio: brief note. No input is needed because the gateway service is ClusterIP and the ALB in front of it decides whether it is public or internal.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
@@ -1001,55 +1031,29 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 12. LangSmith Pod Sizing
+# 12. Capacity
 # ═══════════════════════════════════════════════════════════════════════════
 
-_section "12. LangSmith Pod Sizing"
+_section "12. Capacity"
 
 echo ""
-printf "  ${DIM}This saved setting controls resource requests, replica counts, and HPA/KEDA autoscaling for LangSmith pods.${RESET}\n"
-printf "  ${DIM}It is independent of the QuickStart setup preset in Section 1.${RESET}\n"
-
-_ex_sizing=$(_existing "sizing_profile" "")
-_size_options=(
-  "minimum — cost parking or CI; minimal resources"
-  "dev — development and testing; single-replica baseline"
-  "production — real workloads; multi-replica baseline"
-  "production-large — high-volume workloads; larger baseline"
-)
-_size_default=2
-[[ "$PROFILE" == "prod" ]] && _size_default=3
-_size_recommended="$_size_default"
-_size_arg="--default"
-_size_offset=0
-if [[ "$UPDATE_MODE" == "true" ]]; then
-  case "$_ex_sizing" in
-    minimum) _size_default=1 ;;
-    dev) _size_default=2 ;;
-    production) _size_default=3 ;;
-    production-large) _size_default=4 ;;
-    *)
-      _size_options=("keep current sizing" "${_size_options[@]}")
-      _size_default=1
-      _size_offset=1
-      ;;
-  esac
-  _size_recommended=""
-  if [[ "$_size_offset" == "0" ]]; then
-    _size_arg="--current"
-    _size_options[$((_size_default - 1))]="${_ex_sizing} — keep existing sizing values"
-  fi
+printf "  ${DIM}LangSmith runs one sizing: the scale guide's medium reads and medium writes${RESET}\n"
+printf "  ${DIM}(about 20 users and 100 traces per second). It runs on 4 to 5 m6a.2xlarge${RESET}\n"
+printf "  ${DIM}nodes at its minimum replicas and needs up to 8 at its maximum, so the node${RESET}\n"
+printf "  ${DIM}group max size in 4.6 must allow that. ../helm/values/examples/SIZING.md${RESET}\n"
+printf "  ${DIM}says how to size beyond it.${RESET}\n"
+if [[ "$UPDATE_MODE" == "true" && -n "$(_existing "sizing_profile" "")" ]]; then
+  echo ""
+  _yellow "NOTE"; printf ": sizing_profile was removed in 0.18, and this run drops it. make deploy stops\n"
+  printf "  while a langsmith-values-sizing-*.yaml file is left in helm/values.\n"
 fi
 
-_ask_choice "$_size_arg" "$_size_default" --recommended "$_size_recommended" "$(_numbered_prompt "12.1" "LangSmith pod sizing:")" "${_size_options[@]}"
-
-case "$((_CHOICE - _size_offset))" in
-  0) SIZING="${_ex_sizing:-default}" ;;
-  1) SIZING="minimum" ;;
-  2) SIZING="dev" ;;
-  3) SIZING="production" ;;
-  4) SIZING="production-large" ;;
-esac
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  _ask_int_at_least 1 "$(_choice_arg smithdb_node_min_count)" "SmithDB minimum nodes" "$SMITHDB_NODE_MIN"; SMITHDB_NODE_MIN="$_REPLY"
+  (( SMITHDB_NODE_MAX > SMITHDB_NODE_MIN )) || SMITHDB_NODE_MAX=$((SMITHDB_NODE_MIN + 1))
+  _ask_int_at_least "$((SMITHDB_NODE_MIN + 1))" "$(_choice_arg smithdb_node_max_count)" "SmithDB maximum nodes (must exceed minimum)" "$SMITHDB_NODE_MAX"; SMITHDB_NODE_MAX="$_REPLY"
+  _ask_int_at_least 1 "$(_choice_arg smithdb_node_root_volume_size_gb)" "SmithDB boot disk size (GiB)" "$SMITHDB_NODE_DISK"; SMITHDB_NODE_DISK="$_REPLY"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 13. Add-on Features
@@ -1063,79 +1067,46 @@ echo ""
 
 _ex_deploys=$(_existing "enable_deployments" "false")
 _ex_fleet=$(_existing "enable_fleet" "false")
-_ex_fleet_storage=$(_existing "fleet_storage" "external")
-_ex_fleet_external="false"
-[[ "$_ex_fleet_storage" == "external" ]] && _ex_fleet_external="true"
-_ex_insights_primary=$(_existing "enable_insights" "false")
-_ex_standalone_insights=$(_existing "enable_standalone_insights" "false")
-_ex_insights_storage=$(_existing "insights_storage" "")
-if [[ -z "$_ex_insights_storage" ]]; then
-  _ex_insights_storage="in-cluster"
-  [[ "$_ex_standalone_insights" == "true" ]] && _ex_insights_storage="external"
-fi
-_ex_insights_external="false"
-[[ "$_ex_insights_storage" == "external" ]] && _ex_insights_external="true"
-_ex_insights="false"
-[[ "$_ex_insights_primary" == "true" || "$_ex_standalone_insights" == "true" ]] && _ex_insights="true"
-_ex_insights_storage_guard="$_ex_insights"
-_ex_polly_primary=$(_existing "enable_polly" "false")
-_ex_standalone_polly=$(_existing "enable_standalone_polly" "false")
-_ex_polly_storage=$(_existing "polly_storage" "")
-if [[ -z "$_ex_polly_storage" ]]; then
-  _ex_polly_storage="in-cluster"
-  [[ "$_ex_standalone_polly" == "true" ]] && _ex_polly_storage="external"
-fi
-_ex_polly_external="false"
-[[ "$_ex_polly_storage" == "external" ]] && _ex_polly_external="true"
-_ex_polly="false"
-[[ "$_ex_polly_primary" == "true" || "$_ex_standalone_polly" == "true" ]] && _ex_polly="true"
-_ex_polly_storage_guard="$_ex_polly"
+_ex_insights=$(_existing "enable_insights" "false")
+_ex_polly=$(_existing "enable_polly" "false")
+# deploy.sh reads fleet_storage / polly_storage / insights_storage = "external" as
+# confirmation that a 0.17 install moved that add-on's data, so update mode keeps
+# the line.
+ADDON_STORAGE_HCL=""
+for _key in fleet_storage polly_storage insights_storage; do
+  if [[ "$(_existing "$_key" "")" == "external" ]]; then
+    ADDON_STORAGE_HCL+="${_key} = \"external\""$'\n'
+  fi
+done
+
+# Fleet, Chat and Insights always use the shared RDS and ElastiCache from 0.18.
+# The 0.17 QuickStart wrote "in-cluster" for add-ons that were off too; that
+# value does nothing and this run drops it, so only an add-on that is on stops.
+_ex_engine=$(_existing "enable_engine" "false")
+for _entry in "fleet_storage:$_ex_fleet" "polly_storage:$_ex_polly" \
+  "insights_storage:$([[ "$_ex_insights" == "true" || "$_ex_engine" == "true" ]] && echo true || echo false)"; do
+  _key="${_entry%%:*}"
+  [[ "${_entry##*:}" == "true" ]] || continue
+  if [[ "$(_existing "$_key" "external")" == "in-cluster" ]]; then
+    _red "  ERROR: $_key = \"in-cluster\" was removed in 0.18."
+    printf "  Move that data first, then set it to \"external\": the next deploy points the add-on\n"
+    printf "  at a new, empty database on RDS. See \"Move Fleet, Chat or Insights data to RDS\" in README.md.\n"
+    exit 1
+  fi
+done
+for _key in enable_standalone_polly enable_standalone_insights; do
+  if [[ "$(_existing "$_key" "false")" == "true" ]]; then
+    _red "  ERROR: $_key was removed in 0.18."
+    _feature="${_key#enable_standalone_}"
+    printf "  Replace it with enable_%s = true and %s_storage = \"external\" in terraform.tfvars.\n" "$_feature" "$_feature"
+    exit 1
+  fi
+done
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_FLEET="false"
-FLEET_STORAGE="$_ex_fleet_storage"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
-INSIGHTS_STORAGE="$_ex_insights_storage"
-POLLY_STORAGE="$_ex_polly_storage"
-ENABLE_INSIGHTS_PRIMARY="false"; ENABLE_POLLY_PRIMARY="false"
-ENABLE_STANDALONE_POLLY="false"; ENABLE_STANDALONE_INSIGHTS="false"
 ENABLE_SANDBOXES="false"
-
-_select_feature_storage() {
-  local feature="$1" existing_enabled="$2" existing_external="$3" storage_key="$4" question_number="$5"
-  local default=1 selected="in-cluster" current="in-cluster"
-
-  if [[ "$existing_enabled" == "true" && "$existing_external" == "true" ]]; then
-    default=2
-    current="external"
-  elif [[ "$existing_enabled" != "true" && "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
-    default=2
-  fi
-
-  local storage_choice_arg recommended=""
-  storage_choice_arg=$(_choice_arg "$storage_key")
-  if [[ "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
-    recommended=2
-  fi
-  _ask_choice "$storage_choice_arg" "$default" --recommended "$recommended" "$(_numbered_prompt "$question_number" "$feature storage (Postgres and Redis):")" \
-    "In-cluster — dedicated pods with persistent volumes" \
-    "External — use the same RDS and ElastiCache as LangSmith; $feature gets a separate Postgres database and Redis index"
-  [[ "$_CHOICE" == "2" ]] && selected="external"
-
-  # Helm does not move feature data between database locations during an upgrade.
-  if [[ "$UPDATE_MODE" == "true" && "$existing_enabled" == "true" && "$selected" != "$current" ]]; then
-    _red "  ERROR: Changing $feature storage requires a separate data migration."
-    printf "  Keep the current %s storage here and migrate it separately.\n" "$current"
-    exit 1
-  fi
-  if [[ "$selected" == "external" && ( "$PG_SOURCE" != "external" || "$REDIS_SOURCE" != "external" ) ]]; then
-    _red "  ERROR: External $feature storage requires external Postgres and Redis."
-    printf "  Re-run QuickStart and choose both external services in Section 5.\n"
-    exit 1
-  fi
-
-  [[ "$selected" == "external" ]]
-}
 
 _ask_yn "$(_choice_arg "enable_deployments")" "$(_numbered_prompt "13.1" "Enable LangSmith Deployments?" " — listener + operator + host-backend")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
@@ -1146,60 +1117,22 @@ _ask_yn "$(_choice_arg "enable_fleet")" "$(_numbered_prompt "13.2" "Enable Fleet
   "$([[ "$_ex_fleet" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_FLEET="true" || ENABLE_FLEET="false"
 
-if [[ "$ENABLE_FLEET" == "true" ]]; then
-  if _select_feature_storage "Fleet" "$_ex_fleet" "$_ex_fleet_external" "fleet_storage" "13.3"; then
-    FLEET_STORAGE="external"
-  else
-    FLEET_STORAGE="in-cluster"
-  fi
-fi
-
 echo ""
-_ask_yn "$(_choice_arg "enable_polly" "enable_standalone_polly")" "$(_numbered_prompt "13.4" "Enable LangSmith Chat (formerly Polly)?" " — chat for traces, threads, prompts, and experiments")" \
+_ask_yn "$(_choice_arg "enable_polly")" "$(_numbered_prompt "13.3" "Enable LangSmith Chat (formerly Polly)?" " — chat for traces, threads, prompts, and experiments")" \
   "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_POLLY="true" || ENABLE_POLLY="false"
 
-ENABLE_POLLY_PRIMARY="$ENABLE_POLLY"
-if [[ "$UPDATE_MODE" == "true" && "$_ex_polly" == "true" && "$ENABLE_POLLY" == "true" ]]; then
-  ENABLE_POLLY_PRIMARY="$_ex_polly_primary"
-fi
-
-# Existing features keep their storage model.
-# Newly enabled features follow the selected storage location; external storage requires both services to be external.
-if [[ "$ENABLE_POLLY" == "true" ]]; then
-  if _select_feature_storage "LangSmith Chat" "$_ex_polly_storage_guard" "$_ex_polly_external" "polly_storage" "13.5"; then
-    POLLY_STORAGE="external"
-    ENABLE_STANDALONE_POLLY="true"
-  else
-    POLLY_STORAGE="in-cluster"
-  fi
-fi
-
 echo ""
-_ask_yn "$(_choice_arg "enable_insights" "enable_standalone_insights")" "$(_numbered_prompt "13.6" "Enable Insights?" " — AI-powered trace analysis for patterns and failure modes")" \
+_ask_yn "$(_choice_arg "enable_insights")" "$(_numbered_prompt "13.4" "Enable Insights?" " — AI-powered trace analysis for patterns and failure modes")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
-
-ENABLE_INSIGHTS_PRIMARY="$ENABLE_INSIGHTS"
-if [[ "$UPDATE_MODE" == "true" && "$_ex_insights" == "true" && "$ENABLE_INSIGHTS" == "true" ]]; then
-  ENABLE_INSIGHTS_PRIMARY="$_ex_insights_primary"
-fi
-
-if [[ "$ENABLE_INSIGHTS" == "true" ]]; then
-  if _select_feature_storage "Insights" "$_ex_insights_storage_guard" "$_ex_insights_external" "insights_storage" "13.7"; then
-    INSIGHTS_STORAGE="external"
-    ENABLE_STANDALONE_INSIGHTS="true"
-  else
-    INSIGHTS_STORAGE="in-cluster"
-  fi
-fi
 
 echo ""
 printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
 printf "  ${DIM}external Redis instance for JuiceFS metadata. They also require a Linux${RESET}\n"
 printf "  ${DIM}KVM-compatible host. The matching Sandbox image is selected during deployment.${RESET}\n"
 echo ""
-if _ask_yn "$(_choice_arg "enable_sandboxes")" "$(_numbered_prompt "13.8" "Enable LangSmith Sandboxes?")" \
+if _ask_yn "$(_choice_arg "enable_sandboxes")" "$(_numbered_prompt "13.5" "Enable LangSmith Sandboxes?")" \
   "$([[ "$_ex_sandboxes" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SANDBOXES="true"
 fi
@@ -1251,13 +1184,11 @@ _show_summary() {
   _summary_row "Node maximum:" "$NODE_MAX"
 
   _summary_section "5. Backend Services"
-  _summary_row "Postgres:" "$PG_SOURCE"
-  if [[ "$PG_SOURCE" == "external" ]]; then
-    _summary_row "RDS instance type:" "$PG_INSTANCE"
-    _summary_row "RDS storage:" "${PG_STORAGE}-${PG_MAX_STORAGE} GB"
-  fi
-  _summary_row "Redis:" "$REDIS_SOURCE"
-  [[ "$REDIS_SOURCE" == "external" ]] && _summary_row "ElastiCache instance type:" "$REDIS_INSTANCE"
+  _summary_row "Postgres:" "external (RDS)"
+  _summary_row "RDS instance type:" "$PG_INSTANCE"
+  _summary_row "RDS storage:" "${PG_STORAGE}-${PG_MAX_STORAGE} GB"
+  _summary_row "Redis:" "external (ElastiCache)"
+  _summary_row "ElastiCache instance type:" "$REDIS_INSTANCE"
 
   _summary_section "6. ClickHouse"
   _summary_row "ClickHouse:" "$CH_SOURCE"
@@ -1265,8 +1196,9 @@ _show_summary() {
   _summary_section "7. SmithDB"
   _summary_bool_row "SmithDB:" "$ENABLE_SMITHDB"
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+    _summary_row "  Node pool:" "${SMITHDB_NODE_TYPE}  min=$SMITHDB_NODE_MIN  max=$SMITHDB_NODE_MAX"
+    _summary_row "  Cache:" "$SMITHDB_CACHE_STORAGE"
     _summary_bool_row "  Ingestion:" "$SMITHDB_INGESTION"
-    _summary_bool_row "  Migration:" "$SMITHDB_MIGRATION"
     _summary_bool_row "  Query:" "$SMITHDB_QUERY"
   fi
 
@@ -1300,17 +1232,14 @@ _show_summary() {
   _summary_row "Short-lived trace TTL:" "${S3_SHORT} days"
   _summary_row "Long-lived trace TTL:" "${S3_LONG} days"
 
-  _summary_section "12. LangSmith Pod Sizing"
-  _summary_row "Pod sizing:" "$SIZING"
+  _summary_section "12. Capacity"
+  _summary_row "LangSmith pods:" "medium reads, medium writes"
 
   _summary_section "13. Add-on Features"
   _summary_bool_row "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
   _summary_bool_row "Fleet:" "$ENABLE_FLEET"
-  [[ "$ENABLE_FLEET" == "true" ]] && _summary_row "Fleet storage:" "$FLEET_STORAGE"
   _summary_bool_row "LangSmith Chat (formerly Polly):" "$ENABLE_POLLY"
-  [[ "$ENABLE_POLLY" == "true" ]] && _summary_row "LangSmith Chat storage:" "$POLLY_STORAGE"
   _summary_bool_row "Insights:" "$ENABLE_INSIGHTS"
-  [[ "$ENABLE_INSIGHTS" == "true" ]] && _summary_row "Insights storage:" "$INSIGHTS_STORAGE"
   _summary_bool_row "Sandboxes:" "$ENABLE_SANDBOXES"
 }
 
@@ -1404,29 +1333,18 @@ create_gp3_storage_class = true
 #------------------------------------------------------------------------------
 # Backend Services
 #------------------------------------------------------------------------------
-postgres_source = "${PG_SOURCE}"
-redis_source    = "${REDIS_SOURCE}"
-TFVARS
-
-if [[ "$PG_SOURCE" == "external" ]]; then
-  cat >> "$OUTPUT" << TFVARS
-
 # PostgreSQL (RDS)
 postgres_instance_type       = "${PG_INSTANCE}"
 postgres_storage_gb          = ${PG_STORAGE}
 postgres_max_storage_gb      = ${PG_MAX_STORAGE}
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
 postgres_skip_final_snapshot = ${PG_SKIP_FINAL_SNAPSHOT}
-TFVARS
-fi
-
-if [[ "$REDIS_SOURCE" == "external" ]]; then
-  cat >> "$OUTPUT" << TFVARS
 
 # Redis (ElastiCache)
 redis_instance_type = "${REDIS_INSTANCE}"
 TFVARS
-fi
+
+SMITHDB_NODE_TYPE_HCL="\"${SMITHDB_NODE_TYPE}\""
 
 cat >> "$OUTPUT" << TFVARS
 
@@ -1439,8 +1357,12 @@ clickhouse_source = "${CH_SOURCE}"
 # SmithDB
 #------------------------------------------------------------------------------
 enable_smithdb                           = ${ENABLE_SMITHDB}
+smithdb_node_instance_type               = ${SMITHDB_NODE_TYPE_HCL}
+smithdb_cache_storage                    = "${SMITHDB_CACHE_STORAGE}"
+smithdb_node_min_count                   = ${SMITHDB_NODE_MIN}
+smithdb_node_max_count                   = ${SMITHDB_NODE_MAX}
+smithdb_node_root_volume_size_gb          = ${SMITHDB_NODE_DISK}
 smithdb_ingestion_enabled                = ${SMITHDB_INGESTION}
-smithdb_migration_enabled                = ${SMITHDB_MIGRATION}
 smithdb_query_enabled                    = ${SMITHDB_QUERY}
 smithdb_metastore_deletion_protection    = ${SMITHDB_DELETION_PROTECTION}
 smithdb_metastore_skip_final_snapshot    = ${SMITHDB_SKIP_FINAL_SNAPSHOT}
@@ -1451,9 +1373,8 @@ cat >> "$OUTPUT" << TFVARS
 
 #------------------------------------------------------------------------------
 # Traffic Routing
-# Only one of enable_nginx_ingress / enable_envoy_gateway / enable_istio_gateway should be true at a time.
+# Only one of enable_envoy_gateway / enable_istio_gateway should be true at a time.
 #------------------------------------------------------------------------------
-enable_nginx_ingress = ${ENABLE_NGINX}
 enable_envoy_gateway = ${ENABLE_ENVOY}
 enable_istio_gateway = ${ENABLE_ISTIO}
 TFVARS
@@ -1517,27 +1438,15 @@ s3_ttl_long_days  = ${S3_LONG}
 langsmith_namespace = "langsmith"
 
 #------------------------------------------------------------------------------
-# LangSmith Pod Sizing
-# Controls resource requests, replica counts, and HPA/KEDA autoscaling.
-# Docs: https://docs.langchain.com/langsmith/self-host-scale
-#------------------------------------------------------------------------------
-sizing_profile = "${SIZING}"
-
-#------------------------------------------------------------------------------
 # Add-on Features
 # Set to true to enable add-ons. Each requires a matching license entitlement.
 # deploy.sh reads these flags to select the right Helm values overlays.
 #------------------------------------------------------------------------------
 enable_deployments   = ${ENABLE_DEPLOYMENTS}
 enable_fleet         = ${ENABLE_FLEET}
-fleet_storage        = "${FLEET_STORAGE}"
-enable_insights      = ${ENABLE_INSIGHTS_PRIMARY}
-insights_storage     = "${INSIGHTS_STORAGE}"
-enable_polly         = ${ENABLE_POLLY_PRIMARY}
-polly_storage        = "${POLLY_STORAGE}"
-enable_standalone_polly = ${ENABLE_STANDALONE_POLLY}
-enable_standalone_insights = ${ENABLE_STANDALONE_INSIGHTS}
-enable_sandboxes = ${ENABLE_SANDBOXES}
+enable_insights      = ${ENABLE_INSIGHTS}
+enable_polly         = ${ENABLE_POLLY}
+${ADDON_STORAGE_HCL}enable_sandboxes = ${ENABLE_SANDBOXES}
 TFVARS
 
 if command -v terraform >/dev/null 2>&1; then
@@ -1595,11 +1504,6 @@ if [[ "$GATEWAY_MODE" == "istio" ]]; then
   if [[ "$CREATE_CERT_MANAGER" == "true" ]]; then
     printf "  ${DIM}Terraform also installs cert-manager and configures DNS-01 through Route 53.${RESET}\n"
   fi
-elif [[ "$GATEWAY_MODE" == "nginx" ]]; then
-  echo ""
-  printf "  ${DIM}Note: terraform apply installs NGINX ingress-nginx chart and creates a${RESET}\n"
-  printf "  ${DIM}TargetGroupBinding to wire the ALB target group to the NGINX controller.${RESET}\n"
-  printf "  ${DIM}No separate controller install step needed — handled by k8s-bootstrap.${RESET}\n"
 elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
   echo ""
   printf "  ${DIM}Note: terraform apply installs Envoy Gateway and creates the GatewayClass/Gateway.${RESET}\n"

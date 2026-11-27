@@ -60,20 +60,8 @@ variable "release_name" {
 }
 
 #------------------------------------------------------------------------------
-# Metastore (RDS Postgres) — dedicated instance per SmithDB Customer Engineering
-# docs. Set metastore_source = external to bring your own Postgres.
+# Metastore (RDS Postgres)
 #------------------------------------------------------------------------------
-variable "metastore_source" {
-  type        = string
-  description = "SmithDB metastore Postgres: 'create' (dedicated RDS instance, default) or 'external' (bring-your-own)."
-  default     = "create"
-
-  validation {
-    condition     = contains(["create", "external"], var.metastore_source)
-    error_message = "metastore_source must be 'create' or 'external'."
-  }
-}
-
 variable "metastore_instance_class" {
   type        = string
   description = "RDS instance class for the SmithDB metastore."
@@ -124,53 +112,21 @@ variable "metastore_master_username" {
 
 variable "metastore_master_password" {
   type        = string
-  description = "Master password for the SmithDB metastore. Leave null to auto-generate (metastore_source = create)."
+  description = "Master password for the SmithDB metastore. Leave null to auto-generate."
   default     = null
   sensitive   = true
 }
 
-variable "existing_metastore_security_group_id" {
+variable "existing_security_group_id" {
   type        = string
-  description = "ID of an existing security group to attach to the metastore RDS instance instead of creating one. Only applies when metastore_source = 'create'. By default Terraform does not write rules onto it; see manage_byo_security_group_rules."
+  description = "ID of an existing security group to attach to the metastore RDS instance instead of creating one. By default Terraform does not write rules onto it; see manage_existing_security_group_rules."
   default     = null
 }
 
-variable "manage_byo_security_group_rules" {
+variable "manage_existing_security_group_rules" {
   type        = bool
-  description = "When existing_metastore_security_group_id is set, allow Terraform to write the tcp/5432-from-EKS-nodes ingress rule onto that supplied security group. Default false (attach-only). This helps on a new deployment because the EKS node security group ID is created in the same apply."
+  description = "When existing_security_group_id is set, allow Terraform to write the tcp/5432-from-EKS-nodes ingress rule onto that supplied security group. Default false (attach-only). This helps on a new deployment because the EKS node security group ID is created in the same apply."
   default     = false
-}
-
-# External metastore fields (used when metastore_source = external).
-variable "external_metastore_host" {
-  type        = string
-  description = "Hostname of an existing Postgres instance for the SmithDB metastore."
-  default     = null
-}
-
-variable "external_metastore_port" {
-  type        = number
-  description = "Port of the existing SmithDB metastore Postgres instance."
-  default     = 5432
-}
-
-variable "external_metastore_database" {
-  type        = string
-  description = "Database name on the existing SmithDB metastore Postgres instance."
-  default     = "smithdb"
-}
-
-variable "external_metastore_username" {
-  type        = string
-  description = "Username for the existing SmithDB metastore Postgres instance."
-  default     = null
-}
-
-variable "external_metastore_password" {
-  type        = string
-  description = "Password for the existing SmithDB metastore Postgres instance."
-  default     = null
-  sensitive   = true
 }
 
 #------------------------------------------------------------------------------
@@ -184,12 +140,6 @@ variable "bucket_name" {
 variable "s3_kms_key_arn" {
   type        = string
   description = "ARN of a KMS CMK for the object-store bucket. Empty uses SSE-S3 (AES256)."
-  default     = ""
-}
-
-variable "migration_source_bucket_arn" {
-  type        = string
-  description = "ARN of the LangSmith traces bucket the migration Job reads from. Empty grants no access."
   default     = ""
 }
 

@@ -833,7 +833,7 @@ variable "clickhouse_cluster" {
 
   validation {
     condition     = var.clickhouse_cluster == "" || can(regex("^[A-Za-z0-9_.-]+$", var.clickhouse_cluster))
-    error_message = "clickhouse_cluster must match ^[A-Za-z0-9_.-]+$: init-values.sh writes it into values-overrides.yaml inside double quotes with no escaping."
+    error_message = "clickhouse_cluster must match ^[A-Za-z0-9_.-]+$: init-values.sh writes it into langsmith-values-overrides.yaml inside double quotes with no escaping."
   }
 }
 
@@ -1456,12 +1456,6 @@ variable "smithdb_ingestion_enabled" {
   default     = false
 }
 
-variable "smithdb_migration_enabled" {
-  type        = bool
-  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled. make smithdb-migration-job-start sets it to true, and make smithdb-migration-job-end sets it to false."
-  default     = false
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
@@ -1724,6 +1718,94 @@ variable "sandbox_service_url_base_url" {
   default     = ""
 }
 
+# ── Sandboxes in a dedicated cluster ─────────────────────────────────────────
+# An external runtime runs sandbox-host from its own langsmith-sandbox release in a
+# second AKS cluster, so untrusted sandbox code never shares nodes or a cluster
+# with LangSmith. Requires an exact langsmith chart of 0.18 or later; see the
+# README, "Sandboxes in a separate cluster".
+
+variable "sandbox_runtime_source" {
+  type        = string
+  description = "Sandbox runtime location: 'in-cluster' (default, sandbox-host in the LangSmith AKS cluster) or 'external' (a dedicated sandbox AKS cluster in the same VNet, running the langsmith-sandbox chart)."
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["in-cluster", "external"], var.sandbox_runtime_source)
+    error_message = "sandbox_runtime_source must be 'in-cluster' or 'external'."
+  }
+}
+
+variable "sandbox_namespace" {
+  type        = string
+  description = "Kubernetes namespace for the standalone langsmith-sandbox release when sandbox_runtime_source is external."
+  default     = "langsmith-sandbox"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,62}$", var.sandbox_namespace))
+    error_message = "sandbox_namespace must be a valid Kubernetes namespace name."
+  }
+}
+
+variable "sandbox_service_account_name" {
+  type        = string
+  description = <<-EOT
+    ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+    This name is the Workload Identity contract: it is written into the
+    federated credential's subject AND into sandboxHost.serviceAccount.name in
+    the generated langsmith-sandbox values, so both sides always agree. The
+    langsmith-sandbox chart otherwise defaults this to
+    <release>-langsmith-sandbox-sandbox-host, which the credential would not
+    trust. Only change it if you also install the chart with the same
+    sandboxHost.serviceAccount.name.
+  EOT
+  default     = "sandbox-host"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.sandbox_service_account_name)) && length(var.sandbox_service_account_name) <= 63
+    error_message = "sandbox_service_account_name must be a valid DNS-1123 label: up to 63 lowercase alphanumeric characters or '-', starting and ending with an alphanumeric character."
+  }
+}
+
+variable "sandbox_runtime_secret_name" {
+  type        = string
+  description = "Name of the minimal Secret shared with the standalone sandbox runtime: keys sandbox_service_auth_secret and sandbox_callback_signing_jwk, never a copy of langsmith-config-secret. create-k8s-secrets.sh writes it into sandbox_namespace from Key Vault, so neither value enters Terraform state."
+  default     = "langsmith-sandbox-runtime"
+}
+
+variable "sandbox_subnet_address_prefix" {
+  type        = list(string)
+  description = "Prefix for the sandbox cluster subnet, carved when sandbox_runtime_source = \"external\" and sandbox_subnet_id is empty. Only nodes take addresses from it (the sandbox cluster runs Azure CNI overlay), so a /24 holds about 250 nodes. Must sit inside the VNet and clear of every other subnet."
+  default     = ["10.0.112.0/24"]
+}
+
+variable "sandbox_subnet_id" {
+  type        = string
+  description = "The id of an existing subnet for the sandbox cluster's nodes, used when create_vnet = false and sandbox_runtime_source = \"external\". Leave empty to have Terraform carve one from sandbox_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage service endpoint for the Blob firewall, and its NSG is yours: admit TCP 19190 from the AKS node subnet and the sandbox subnet only (see the README)."
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.sandbox_subnet_id))
+    error_message = "sandbox_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "sandbox_system_node_vm_size" {
+  type        = string
+  description = "VM size of the sandbox cluster's system pool, which runs only the add-ons AKS marks critical (CoreDNS, konnectivity, the Workload Identity webhook). AKS needs at least 2 vCPU and 4 GiB there."
+  default     = "Standard_D4s_v5"
+}
+
+variable "sandbox_system_node_count" {
+  type        = number
+  description = "Node count of the sandbox cluster's system pool. 1 keeps a test install cheap; Microsoft recommends at least 2 for production so CoreDNS survives a node upgrade."
+  default     = 1
+
+  validation {
+    condition     = var.sandbox_system_node_count >= 1
+    error_message = "sandbox_system_node_count must be 1 or greater."
+  }
+}
+
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
@@ -1732,12 +1814,12 @@ variable "langsmith_namespace" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. Changing it on an existing deployment removes the old controller and its load balancer IP. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
   default     = "envoy-gateway"
 
   validation {
-    condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
-    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
+    condition     = contains(["istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
+    error_message = "ingress_controller must be 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
   }
 }
 
@@ -1777,12 +1859,12 @@ variable "langsmith_domain" {
   }
 }
 
-# No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
-# terraform.tfvars for the --version it passes to helm upgrade.
-# tflint-ignore: terraform_unused_declarations
+# helm/scripts/deploy.sh parses it out of terraform.tfvars for the --version it
+# passes to helm upgrade. Terraform reads it only to check the
+# sandbox_runtime_source = "external" requirement below.
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.18.0 (the newest stable 0.18 patch). deploy.sh accepts only 0.18.x; see SMITHDB.md, 'Version requirements'. sandbox_runtime_source = \"external\" needs one exact version on 0.18 or later, because deploy.sh picks the langsmith-sandbox chart by that chart's appVersion."
   default     = ""
 }
 
@@ -1921,7 +2003,7 @@ variable "langsmith_image_pull_secret_name" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_image_registry" {
   type        = string
-  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. By default (langsmith_image_registry_keeps_source_host = false) the mirror serves each source registry's paths directly, the layout the chart's own scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and a proxy repository in Nexus or Artifactory serves: init-values.sh leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.17 and 0.18 chart lines, and deploy.sh refuses a chart with an image the module does not know. A mirror laid out with the source host kept as the first path segment (<registry>/docker.io/langchain/<name>:<tag>) takes langsmith_image_registry_keeps_source_host = true: the value then becomes images.registry in values-overrides.yaml and the chart composes the paths. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
+  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. By default (langsmith_image_registry_keeps_source_host = false) the mirror serves each source registry's paths directly, the layout the chart's own scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and a proxy repository in Nexus or Artifactory serves: init-values.sh leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.17 and 0.18 chart lines, and deploy.sh refuses a chart with an image the module does not know. A mirror laid out with the source host kept as the first path segment (<registry>/docker.io/langchain/<name>:<tag>) takes langsmith_image_registry_keeps_source_host = true: the value then becomes images.registry in langsmith-values-overrides.yaml and the chart composes the paths. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
   default     = ""
 
   validation {
@@ -2035,7 +2117,7 @@ variable "create_dns_zone" {
 
 variable "ingress_ip" {
   type        = string
-  description = "Public IP of the ingress controller's Load Balancer. Used by the DNS module for the A record. For envoy-gateway, get it from: kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway. For nginx: kubectl get svc -n ingress-nginx."
+  description = "Public IP of the ingress controller's Load Balancer. Used by the DNS module for the A record. For envoy-gateway, get it from: kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway."
   default     = ""
 }
 
@@ -2449,13 +2531,13 @@ variable "enable_fleet" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with envoy-gateway, nginx, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with envoy-gateway, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
   default     = ""
 }
 
 variable "ingress_load_balancer" {
   type        = string
-  description = "Whether the ingress controller's Azure load balancer is 'public' (the default: a public IP) or 'internal' (a private IP in the cluster's VNet, on the AKS-managed kubernetes-internal load balancer, with no public frontend). Applies to envoy-gateway, nginx, istio and istio-addon. 'internal' cannot be combined with dns_label, which needs a public IP; put the hostname in your own DNS or a private DNS zone instead. See INGRESS_CONTROLLERS.md, \"Private ingress\"."
+  description = "Whether the ingress controller's Azure load balancer is 'public' (the default: a public IP) or 'internal' (a private IP in the cluster's VNet, on the AKS-managed kubernetes-internal load balancer, with no public frontend). Applies to envoy-gateway, istio and istio-addon. 'internal' cannot be combined with dns_label, which needs a public IP; put the hostname in your own DNS or a private DNS zone instead. See INGRESS_CONTROLLERS.md, \"Private ingress\"."
   default     = "public"
 
   validation {
@@ -2468,7 +2550,7 @@ variable "ingress_load_balancer" {
     # module installs no controller, so neither has a Service to annotate.
     # Refused rather than ignored, so a set value is never silently dropped.
     condition     = var.ingress_load_balancer == "public" || !contains(["agic", "none"], var.ingress_controller)
-    error_message = "ingress_load_balancer = \"internal\" applies to envoy-gateway, nginx, istio and istio-addon. With agic, give the Application Gateway a private frontend instead; with none, configure your own controller's Service."
+    error_message = "ingress_load_balancer = \"internal\" applies to envoy-gateway, istio and istio-addon. With agic, give the Application Gateway a private frontend instead; with none, configure your own controller's Service."
   }
 
   validation {
