@@ -14,21 +14,6 @@ _smithdb_pool_scheduling() {
   printf '%s    effect: NoSchedule\n' "$indent"
 }
 
-# Each migration pod requests 100Gi of ephemeral storage, and the pods run on the
-# SmithDB nodes. A node with the default 100 GiB boot disk cannot hold one, so the
-# pods would stay Pending and the deploy would hang. Stop before anything is written.
-# With the local-ssd cache, ephemeral storage is on the instance store, so the boot
-# disk size does not count.
-_smithdb_migration_disk_check() {
-  local gb="$1" cache_storage="${2:-network-disk}"
-  [[ "$cache_storage" != "local-ssd" ]] || return 0
-  [[ "$gb" =~ ^[0-9]+$ ]] || return 0
-  (( gb >= 150 )) && return 0
-  echo "ERROR: each migration pod requests 100Gi of ephemeral storage, and the SmithDB nodes have a ${gb} GiB boot disk, so the pods would stay Pending." >&2
-  echo "       Set smithdb_node_root_volume_size_gb to at least 150 in terraform.tfvars, run make apply, then run this again." >&2
-  return 1
-}
-
 # A langsmith-values-smithdb.yaml copied from an older release pins the Karpenter
 # pools (smithdb-local/instance-store, smithdb-local/compute). Helm merges node
 # selectors across values files, and a null does not remove a key that only an

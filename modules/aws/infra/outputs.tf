@@ -230,11 +230,6 @@ output "smithdb_ingestion_enabled" {
   value       = var.enable_smithdb && var.smithdb_ingestion_enabled
 }
 
-output "smithdb_migration_enabled" {
-  description = "Whether the historical ClickHouse-to-SmithDB migration is on"
-  value       = var.enable_smithdb && var.smithdb_migration_enabled
-}
-
 output "smithdb_query_enabled" {
   description = "Whether LangSmith queries SmithDB"
   value       = var.enable_smithdb && var.smithdb_query_enabled

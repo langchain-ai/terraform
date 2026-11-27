@@ -72,7 +72,7 @@ config:
 EOF
 # The SmithDB overrides come from the heredoc in init-values.sh itself, so a change to the
 # generated scheduling or cache values is rendered against the real chart here.
-# The gates are a new install's defaults: ingestion and query on, migration off.
+# The gates are a new install's defaults: ingestion and query on.
 source "$SCRIPT_DIR/../../infra/scripts/_smithdb-transition.sh"
 (
   export _smithdb_overrides="$TEST_TMP/smithdb-overrides.yaml"
@@ -82,7 +82,6 @@ source "$SCRIPT_DIR/../../infra/scripts/_smithdb-transition.sh"
   export _region=us-west-2
   export _smithdb_metastore_use_ssl=true
   export _smithdb_ingestion_enabled=true
-  export _smithdb_migration_enabled=false
   export _smithdb_query_enabled=true
   sed -n '/^  cat > "\$_smithdb_overrides" << SMITHDB_YAML$/,/^SMITHDB_YAML$/p' \
     "$SCRIPT_DIR/init-values.sh" > "$TEST_TMP/generate-smithdb.sh"

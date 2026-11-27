@@ -304,7 +304,6 @@ log_lacks "no warning about the SmithDB node type" "$TMP/defaults.log" "gives Sm
 log_has "QuickStart points to the SmithDB scale-up steps" "$TMP/defaults.log" "describes scaling up to the medium or large tier"
 has_line "SmithDB enabled by default" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
 has_line "ingestion enabled by default" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
-has_line "migration remains disabled" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_migration_enabled             = false'
 has_line "a new setup serves reads from SmithDB" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_query_enabled                 = true'
 lacks_key "a new setup writes no sizing_profile" "$DEFAULT_INFRA/terraform.tfvars" sizing_profile
 log_has "QuickStart names the one sizing" "$TMP/defaults.log" "LangSmith runs one sizing"

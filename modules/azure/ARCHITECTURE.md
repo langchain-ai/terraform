@@ -215,7 +215,6 @@ Pass 1 — Infrastructure
       langsmith-agent-builder-encryption-key  — generated (Fernet)
       langsmith-insights-encryption-key       — generated (Fernet)
       langsmith-polly-encryption-key          — generated (Fernet)
-      smithdb-taskdb-password                 — generated
       langsmith-sandbox-callback-signing-jwk  — generated (Ed25519 JWK), enable_sandboxes only
     Write-once — an existing secret is never overwritten, so it is safe to re-run.
 
@@ -224,7 +223,7 @@ Pass 2 — Application
   kubectl create secret generic langsmith-config-secret
     Reads:  Key Vault secrets + terraform outputs (postgres/redis URLs, blob account)
     Writes: K8s secrets — langsmith-config-secret, langsmith-postgres-secret,
-                          langsmith-redis-secret, smithdb-taskdb
+                          langsmith-redis-secret
 
   helm upgrade --install langsmith ...
     chart reads config.existingSecretName = "langsmith-config-secret"
@@ -291,13 +290,11 @@ Resource Group
 │                                   private DNS zone, no public endpoint
 ├── SmithDB Storage Account
 │   └── private container ───────── object store
-├── LangSmith Storage Account ───── trace blobs (existing, migration source)
+├── LangSmith Storage Account ───── trace blobs
 └── SmithDB user-assigned identity
     ├── federated to K8s ServiceAccount <release>-smithdb
     ├── Entra administrator on the metastore server
-    ├── Storage Blob Data Contributor  → SmithDB Storage Account
-    └── Storage Blob Data Reader      → LangSmith Storage Account
-                                         (only while smithdb_migration_enabled = true)
+    └── Storage Blob Data Contributor  → SmithDB Storage Account
 ```
 
 By default the metastore authenticates through Microsoft Entra ID using that same
@@ -309,25 +306,17 @@ refuses Entra: SmithDB requests its token for the commercial scope there (LG-913
 Object-store access always uses Workload Identity, so no storage key or SAS token
 reaches Kubernetes or Terraform outputs.
 
-The trace-blob read grant is scoped to the migration window on purpose. It exists
-only while `smithdb_migration_enabled = true`, so a steady-state install leaves the
-SmithDB identity able to reach nothing but its own account. Because an Azure blob
-data-plane role change takes up to 10 minutes to become effective, the apply that
-creates the grant holds for 300 seconds in
-`time_sleep.smithdb_trace_blob_reader_propagation` before returning.
-
 Rollout is staged, and the variables enforce the order:
 
 ```
 enable_smithdb            ──▶ infrastructure only, no traffic
   smithdb_ingestion_enabled ──▶ dual-write to SmithDB and ClickHouse
-    smithdb_migration_enabled ──▶ historical backfill from trace blobs
     smithdb_query_enabled     ──▶ reads served from SmithDB
 ```
 
-Validation rules in `infra/main.tf` reject the invalid combinations: the three stage
-gates all require `enable_smithdb = true`, and both `smithdb_migration_enabled` and
-`smithdb_query_enabled` require `smithdb_ingestion_enabled = true`.
+Validation rules in `infra/main.tf` reject the invalid combinations: both stage
+gates require `enable_smithdb = true`, and `smithdb_query_enabled` requires
+`smithdb_ingestion_enabled = true`.
 
 One side effect worth knowing before a light deploy: `enable_smithdb = true` forces
 `create_postgres_subnet`, because the metastore is always an external Flexible Server.

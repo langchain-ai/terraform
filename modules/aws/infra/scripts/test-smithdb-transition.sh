@@ -127,7 +127,6 @@ helm template values-test "$TEST_DIR/chart" -f "$TEST_DIR/legacy.json" |
   export _region=us-east-2
   export _smithdb_metastore_use_ssl=true
   export _smithdb_ingestion_enabled=true
-  export _smithdb_migration_enabled=true
   export _smithdb_query_enabled=false
   sed -n '/^  cat > "\$_smithdb_overrides" << SMITHDB_YAML$/,/^SMITHDB_YAML$/p' \
     "$SCRIPT_DIR/../../helm/scripts/init-values.sh" > "$TEST_DIR/generate.sh"
@@ -144,18 +143,17 @@ jq -e --slurpfile before "$TEST_DIR/before.json" '
 ' "$TEST_DIR/values.json" >/dev/null
 echo "PASS: generated service cache settings preserve the migration Job and TaskDB settings"
 
-# The generated overrides put every SmithDB service, the metastore migration Job and TaskDB on
+# The generated overrides put every SmithDB service, the metastore migration Job on
 # the managed node group. migration.job is not touched here.
 jq -e '
   def pool: {"langsmith-nodepool/smithdb": "true"};
   def tol: [{key:"langsmith-nodepool/smithdb", operator:"Equal", value:"true", effect:"NoSchedule"}];
   ([.query.deployment, .mutations.deployment, .runRules.deployment, .statsQuery.deployment,
     .ingestion.deployment, .compactionWorker.deployment, .compaction.deployment,
-    .clusterManager.deployment, .metastoreMigration.job,
-    .migration.taskdb.postgres.statefulSet]
+    .clusterManager.deployment, .metastoreMigration.job]
    | all(.[]; .nodeSelector == pool and .tolerations == tol))
 ' "$TEST_DIR/values.json" >/dev/null
-echo "PASS: generated overrides schedule SmithDB and TaskDB on the managed pool"
+echo "PASS: generated overrides schedule SmithDB on the managed pool"
 
 # A langsmith-values-smithdb.yaml from an older release pins the Karpenter pools, and Helm would
 # merge those keys with the new one. init-values.sh replaces such a copy first.
@@ -192,18 +190,6 @@ jq -e '
   .query.deployment.nodeSelector == pool and .compaction.deployment.nodeSelector == pool
 ' "$TEST_DIR/fresh.json" >/dev/null
 echo "PASS: an overlay that pins the old Karpenter pools is replaced, and only the managed pool remains"
-
-# Migration pods request 100Gi of ephemeral storage, so a small boot disk stops the script
-# instead of leaving the pods Pending.
-for gb in 100 149; do
-  if _smithdb_migration_disk_check "$gb" 2>"$TEST_DIR/disk.err"; then echo "FAIL: a ${gb} GiB boot disk was accepted"; exit 1; fi
-done
-grep -q "smithdb_node_root_volume_size_gb to at least 150" "$TEST_DIR/disk.err"
-for gb in 150 400 not-a-number; do
-  _smithdb_migration_disk_check "$gb" 2>/dev/null || { echo "FAIL: '$gb' was rejected"; exit 1; }
-done
-_smithdb_migration_disk_check 100 local-ssd || { echo "FAIL: the boot disk was checked with the local-ssd cache"; exit 1; }
-echo "PASS: migration stops on a boot disk under 150 GiB and accepts 150 GiB or more, or any size with the local-ssd cache"
 
 jq -n '{items: ([range(0;5) | {
   kind:"Deployment", metadata:{name:("langsmith-smithdb-" + tostring), generation:2},

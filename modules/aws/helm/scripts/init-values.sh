@@ -68,16 +68,15 @@ _enable_nginx_ingress=$(_read_applied_flag "enable_nginx_ingress" false)
 # The defaults match variables.tf, for a run before the first apply.
 _enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
 _smithdb_ingestion_enabled=$(_read_applied_flag "smithdb_ingestion_enabled" true)
-_smithdb_migration_enabled=$(_read_applied_flag "smithdb_migration_enabled" false)
 _smithdb_query_enabled=$(_read_applied_flag "smithdb_query_enabled" true)
 _smithdb_metastore_use_ssl=$(_parse_tfvar "smithdb_metastore_use_ssl") || _smithdb_metastore_use_ssl="true"
 
 # The gates default to true and count only with SmithDB on (as in outputs.tf).
 if [[ "$_enable_smithdb" != "true" ]]; then
-  _smithdb_ingestion_enabled=false; _smithdb_migration_enabled=false; _smithdb_query_enabled=false
+  _smithdb_ingestion_enabled=false; _smithdb_query_enabled=false
 fi
-if [[ "$_smithdb_ingestion_enabled" != "true" && ( "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
-  echo "ERROR: SmithDB migration/query require smithdb_ingestion_enabled = true." >&2
+if [[ "$_smithdb_ingestion_enabled" != "true" && "$_smithdb_query_enabled" == "true" ]]; then
+  echo "ERROR: SmithDB queries require smithdb_ingestion_enabled = true." >&2
   exit 1
 fi
 # upgrade-guard.sh covers only make apply, and an unset query gate defaults to on,
@@ -1019,8 +1018,7 @@ echo ""
 # Copies the SmithDB overlay and generates langsmith-values-smithdb-overrides.yaml
 # with the object-store bucket, region, IRSA role ARN, and metastore secret-key
 # mapping from the infra outputs, and the node selector and tolerations that put
-# SmithDB and TaskDB on their own node group. All LangSmith integration gates start disabled;
-# operators enable ingestion, migration, and query in separate validated stages.
+# SmithDB on its own node group.
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
@@ -1109,8 +1107,6 @@ $(_smithdb_pool_scheduling "          ")
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
-    migration:
-      enabled: ${_smithdb_migration_enabled}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDB_YAML
