@@ -592,6 +592,37 @@ run "a_certificate_arn_plans_no_dns" {
   }
 }
 
+# ── LLM Gateway ──────────────────────────────────────────────────────────────
+# With Envoy Gateway, /gateway joins the langsmith-fleet-streams HTTPRoute only
+# when the gateway is on, so model calls are not cut at Envoy's 15 s default.
+
+run "llm_gateway_adds_its_path_to_the_streams_route" {
+  command = plan
+
+  variables {
+    langsmith_domain   = "plan-tests.example.com"
+    enable_llm_gateway = true
+  }
+
+  assert {
+    condition     = contains([for m in yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].matches : m.path.value], "/gateway")
+    error_message = "enable_llm_gateway did not add /gateway to the langsmith-fleet-streams HTTPRoute"
+  }
+}
+
+run "streams_route_has_no_gateway_path_by_default" {
+  command = plan
+
+  variables {
+    langsmith_domain = "plan-tests.example.com"
+  }
+
+  assert {
+    condition     = !contains([for m in yamldecode(kubectl_manifest.fleet_stream_httproute[0].yaml_body).spec.rules[0].matches : m.path.value], "/gateway")
+    error_message = "the langsmith-fleet-streams HTTPRoute carries /gateway with enable_llm_gateway off"
+  }
+}
+
 # ── Bring your own VPC ───────────────────────────────────────────────────────
 
 run "create_vpc_false_plans_no_vpc" {

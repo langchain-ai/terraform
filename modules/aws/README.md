@@ -762,8 +762,9 @@ Envoy Gateway is the default ingress mode, both in Terraform and in `make quicks
 Enabling two controllers is rejected at plan time by a precondition in `infra/main.tf`, because all gateway modes share a single ALB target group and only one port can be health-checked on it.
 
 When enabled, the `k8s-bootstrap` module:
-1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
-2. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
+1. Applies the Gateway API CRDs (v1.6.1, standard channel) and the Envoy Gateway CRDs (v1.9.4). Helm does not upgrade CRDs, so the module downloads them, checks each file against a pinned sha256, and applies it with `kubectl apply --server-side`. The chart skips its own copy. The module needs EKS 1.33 to 1.36: it rejects an older `eks_cluster_version` at plan time and warns about a newer one.
+2. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.9.4) in the `envoy-gateway-system` namespace.
+3. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
 
 The LangSmith Helm chart then creates an `HTTPRoute` (not an `Ingress`) pointing to `langsmith-frontend`.
 
@@ -819,6 +820,54 @@ The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmi
 - `make quickstart` in update mode stops on a `terraform.tfvars` that sets `enable_nginx_ingress = true`, instead of preselecting ALB.
 
 To move off NGINX, keep the previous release and switch there: choose Envoy Gateway, Istio, or ALB, then run `make apply`, `make init-values`, and `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes. Envoy Gateway and Istio keep the Terraform ALB and its hostname. ALB mode moves traffic to an ALB that the AWS Load Balancer Controller owns, so point DNS at its hostname. Upgrade after the deploy finishes.
+
+---
+
+## LLM Gateway
+
+`enable_llm_gateway = true` deploys the chart's `agentGateway`, the
+[LLM Gateway](https://docs.langchain.com/langsmith/llm-gateway) (beta; on self-hosted, chart 0.17 only). It lets one
+LangSmith API key call models across the providers an organization configures, traces every call, and applies spend and
+rate policies centrally. It adds one Deployment and a `/gateway` path on the LangSmith hostname:
+
+| Client format | Base URL |
+|---|---|
+| OpenAI Chat Completions, Responses | `https://<langsmith host>/gateway/v1` |
+| Anthropic Messages | `https://<langsmith host>/gateway` |
+
+```hcl
+# infra/terraform.tfvars
+enable_llm_gateway           = true
+enable_gateway_pii_redaction = false  # Presidio PII redaction; requires enable_llm_gateway
+```
+
+To deploy it:
+
+1. With Envoy Gateway as the routing mode (the default), run `make apply`. It adds the `/gateway` path to the streams
+   route; without it, model calls longer than 15 s fail. Skip this step with Istio, NGINX, or classic ALB Ingress.
+2. Run `make init-values`.
+3. Run `make deploy`.
+
+After the deploy, an organization admin turns the gateway on for workspaces, adds provider secrets, and grants access, as
+in [Admin setup](https://docs.langchain.com/langsmith/llm-gateway-admin-setup).
+
+- **IRSA.** `init-values.sh` writes the gateway into `langsmith-values-overrides.yaml`, with the LangSmith IRSA role on
+  the gateway's service account. The role already trusts every service account in the namespace, so the gateway needs no IAM change.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway` for long model calls. In front of it:
+  - Envoy Gateway: Terraform adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute, which removes Envoy's 15 s
+    request timeout on that path. Terraform creates the route only when `langsmith_domain` is set. Without a domain,
+    model calls longer than 15 s fail, so set `langsmith_domain` and run `make apply`.
+  - Istio: no request timeout.
+  - Classic ALB Ingress: `init-values.sh` sets the idle timeout of the ALB that the AWS Load Balancer Controller creates
+    to 900 s. The setting applies to every path on that ALB.
+
+  In every mode except classic ALB Ingress, the Terraform-managed ALB idles at 3600 s.
+- **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer (chart `presidioAnalyzer`, in the same
+  overrides file) and turns redaction on for new organizations. It requires
+  `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone. Presidio pulls
+  `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage.tag`). On a cluster without
+  egress to Microsoft's registry, mirror that image and set `images.presidioAnalyzerImage.repository` to the mirror in
+  `helm/values/langsmith-values-local.yaml`, which `init-values.sh` merges last.
 
 ---
 
@@ -1079,6 +1128,7 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
    - `enable_insights = true` → `langsmith-values-insights.yaml`
    - `enable_polly = true` → `langsmith-values-polly.yaml`
    - `enable_fleet = true` → `langsmith-values-fleet.yaml`
+   - `enable_llm_gateway = true` → the gateway with the LangSmith IRSA role, and Presidio with `enable_gateway_pii_redaction = true` (see [LLM Gateway](#llm-gateway))
    - `enable_sso_oidc = true` → `langsmith-values-sso.yaml`
    - `enable_smithdb = true` → `langsmith-values-smithdb.yaml`, and the SmithDB bucket, role, and cache from Terraform
 
@@ -1451,6 +1501,8 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
+| `enable_llm_gateway` | `false` | no | Enable the LLM Gateway (chart `agentGateway`, beta, chart 0.17). With Envoy Gateway, adds `/gateway` to the `langsmith-fleet-streams` HTTPRoute. See [LLM Gateway](#llm-gateway) |
+| `enable_gateway_pii_redaction` | `false` | no | Add Presidio PII redaction for gateway traffic. Requires `enable_llm_gateway` |
 | `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), IRSA, a managed node group, and EBS caches. An install upgraded from 0.17 without SmithDB sets `false` first. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
 | `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |

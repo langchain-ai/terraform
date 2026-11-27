@@ -985,6 +985,23 @@ variable "fleet_storage" {
   }
 }
 
+variable "enable_llm_gateway" {
+  type        = bool
+  description = "Enable the LLM Gateway (chart agentGateway, beta, chart 0.17): one LangSmith API key calls models across the configured providers, every call is traced, and spend and rate policies apply centrally. Clients use https://<langsmith host>/gateway/v1 (OpenAI formats) or /gateway (Anthropic Messages). An organization admin still enables providers and grants access in the UI. With Envoy Gateway, Terraform adds /gateway to the langsmith-fleet-streams HTTPRoute so model calls are not cut at Envoy's 15 s default. Read by init-values.sh and deploy.sh."
+  default     = false
+}
+
+variable "enable_gateway_pii_redaction" {
+  type        = bool
+  description = "Run the Presidio analyzer beside the LLM Gateway so it can redact PII (named entities) from gateway traffic, and turn the redaction feature on for new organizations. Requires enable_llm_gateway = true. Read by init-values.sh and deploy.sh."
+  default     = false
+
+  validation {
+    condition     = !var.enable_gateway_pii_redaction || var.enable_llm_gateway
+    error_message = "enable_gateway_pii_redaction = true requires enable_llm_gateway = true: Presidio only serves the gateway."
+  }
+}
+
 # The two standalone switches were removed in 0.18, when external storage became
 # the only option. They stay as variables only so a terraform.tfvars that still
 # sets one fails at plan: an undeclared variable is just a warning, and Chat or

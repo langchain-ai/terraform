@@ -280,3 +280,38 @@ run "two_ingress_controllers_are_rejected" {
 
   expect_failures = [terraform_data.validate_inputs]
 }
+
+# Envoy Gateway v1.9 is tested on Kubernetes 1.33 to 1.36. Below the range the plan
+# is rejected, above it the check warns.
+
+run "envoy_gateway_on_eks_below_1_33_is_rejected" {
+  command = plan
+
+  variables {
+    enable_envoy_gateway = true
+    eks_cluster_version  = "1.32"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "envoy_gateway_on_an_old_eks_is_allowed_when_it_is_off" {
+  command = plan
+
+  variables {
+    enable_envoy_gateway = false
+    enable_nginx_ingress = true
+    eks_cluster_version  = "1.32"
+  }
+}
+
+run "envoy_gateway_on_eks_above_1_36_warns" {
+  command = plan
+
+  variables {
+    enable_envoy_gateway = true
+    eks_cluster_version  = "1.37"
+  }
+
+  expect_failures = [check.envoy_gateway_kubernetes_range]
+}

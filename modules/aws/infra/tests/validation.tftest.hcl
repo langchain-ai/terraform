@@ -102,6 +102,27 @@ run "enable_nginx_ingress_false_still_plans" {
   }
 }
 
+# Presidio only serves the LLM Gateway, so redaction without it is refused, and
+# the pair together must still plan.
+run "gateway_pii_redaction_requires_the_gateway" {
+  command = plan
+
+  variables {
+    enable_gateway_pii_redaction = true
+  }
+
+  expect_failures = [var.enable_gateway_pii_redaction]
+}
+
+run "gateway_pii_redaction_with_the_gateway_plans" {
+  command = plan
+
+  variables {
+    enable_llm_gateway           = true
+    enable_gateway_pii_redaction = true
+  }
+}
+
 run "names_and_ids_reject_a_malformed_value" {
   command = plan
 

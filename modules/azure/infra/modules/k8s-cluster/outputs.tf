@@ -265,11 +265,11 @@ output "ingress_internal_annotations" {
 }
 
 output "ingress_load_balancer_subnet_grant" {
-  description = "The grant the internal load balancer needs on a subnet other than the node subnet, or null when none is needed. made_by is \"terraform\" when this module creates it and \"owner\" when the network owner must."
-  value = local.ingress_lb_other_subnet ? {
+  description = "The grant the internal load balancer needs on its subnet, or null when none is needed: on a subnet other than the node subnet, and on the node subnet for a created cluster with a system-assigned identity. made_by is \"terraform\" when this module creates it and \"owner\" when the network owner must."
+  value = local.ingress_lb_subnet_grant ? {
     role         = "Network Contributor"
     actions      = ["Microsoft.Network/virtualNetworks/subnets/join/action", "Microsoft.Network/virtualNetworks/subnets/read"]
-    scope        = var.ingress_load_balancer_subnet_id
+    scope        = local.ingress_lb_grant_scope
     principal_id = local.cluster_identity_principal_id
     made_by      = var.ingress_load_balancer_manage_subnet_assignment ? "terraform" : "owner"
   } : null

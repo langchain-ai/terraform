@@ -124,6 +124,10 @@ enable_usage_telemetry = false # Extended usage telemetry
 
 # Engine (chart v0.17+; requires enable_sandboxes = true; see ENGINE.md)
 enable_engine        = true    # Engine on Amazon Bedrock through a dedicated IRSA role
+
+# LLM Gateway (chart v0.17, beta; see README "LLM Gateway")
+enable_llm_gateway           = true   # make apply first under Envoy Gateway
+enable_gateway_pii_redaction = false  # Presidio PII redaction; requires enable_llm_gateway
 ```
 
 ```bash
