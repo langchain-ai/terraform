@@ -1,0 +1,24 @@
+modules/aws/helm/scripts/test-values.sh
+  s_1a073585f82f8e::t_efa571d510c2d3 171-184
+  s_1a073585f82f8e::t_26764e83253fc0 244
+  s_1a073585f82f8e::t_1eb52b5821e553 132-140
+  s_1a073585f82f8e::t_13a9ece46f8a32 3-5
+modules/aws/helm/values/examples/langsmith-values.yaml
+  s_1a073585f82f8e::t_d57d3239944aea 59-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a20a2783b796d3ba49d3337e28264913484bade",
+  "prompts": {},
+  "sessions": {
+    "s_1a073585f82f8e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e5f9dcdc-2465-48fc-af50-b79589033879",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
