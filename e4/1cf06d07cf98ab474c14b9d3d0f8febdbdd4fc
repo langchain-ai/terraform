@@ -53,6 +53,7 @@ modules/azure/infra/variables.tf
   s_8cee47d9319ea3::t_826caa06ab1e2c 2006
 modules/azure/infra/scripts/test-values-stamp.sh
   s_8cee47d9319ea3::t_3b8adf8b6a4dd0 7-14,27-28,41-45,47-49,51-69,71,74-79,81-87,89,92-94,97,99-103,105-134,139-141,143,145,147,149,151-152
+  s_8cee47d9319ea3::t_665a5106933f39 80,88,98,104
 modules/azure/infra/scripts/clean.sh
   s_8cee47d9319ea3::t_0379ad7a1e6697 105
   s_8cee47d9319ea3::t_4bb8c46b56d234 22-25,29
@@ -68,9 +69,11 @@ modules/azure/infra/main.tf
 modules/azure/helm/values/examples/langsmith-values.yaml
   s_8cee47d9319ea3::t_29fd83c47a10a6 3-18,20-22
   s_8cee47d9319ea3::t_3b76753eb14355 50-51
+  s_8cee47d9319ea3::t_6d5e44a1974eaf 19
 modules/azure/Makefile
   s_8cee47d9319ea3::t_01f4a2b681a846 60,63-64
   s_8cee47d9319ea3::t_61495266d7497e 65
+  s_8cee47d9319ea3::t_e92b8c92a4c560 12
 modules/aws/helm/scripts/test-values-render.sh
   s_8cee47d9319ea3::t_56d6ad6ca5b172 135-136
 modules/azure/helm/values/examples/langsmith-values-agent-builder.yaml
@@ -114,6 +117,9 @@ modules/azure/helm/scripts/test-values.sh
   s_8cee47d9319ea3::t_d3bac886c9b3e8 1-183,185-208,210-266,268-331,333-436,439,441,442-455,457,460-619
   s_8cee47d9319ea3::t_6c40c3af71dbae 267
   s_8cee47d9319ea3::t_319dbba9301a32 456,458-459
+  s_8cee47d9319ea3::t_3189ca28a73654 184
+  s_8cee47d9319ea3::t_19b85dd39dfb15 209
+  s_8cee47d9319ea3::t_983acee252d14b 437-438,440
 modules/azure/helm/scripts/_values.sh
   s_8cee47d9319ea3::t_3c3cb6109e849b 1-493
 ---
