@@ -20,7 +20,6 @@
 #   9. langsmith-values-smithdb-sizing.yaml      — SmithDB tier and replicas, from terraform output (if enable_smithdb = true)
 #  10. langsmith-values-smithdb.yaml             — SmithDB overlay, hand-edited (if enable_smithdb = true)
 #  11. langsmith-values-smithdb-overrides.yaml   — SmithDB storage, identity, metastore, gates (if enable_smithdb = true)
-#  12. langsmith-values-smithdb-migration.yaml   — TaskDB and migration pod count, from make smithdb-migration-job-start (if smithdb_migration_enabled = true)
 #
 # With sandbox_runtime_source = external, a second release follows the
 # langsmith one: langsmith-sandbox (SANDBOX_RELEASE_NAME) in the sandbox cluster,
@@ -73,6 +72,11 @@ echo "════════════════════════�
 echo "  LangSmith Azure — Helm Deploy"
 echo "══════════════════════════════════════════════════════"
 echo ""
+
+# Below, an unset ingress_controller means envoy-gateway, so a deployment still on
+# ingress-nginx would get a Gateway HTTP-01 ClusterIssuer and Gateway objects for
+# a controller Terraform has not installed.
+INFRA_DIR="$INFRA_DIR" bash "$HELM_DIR/../infra/scripts/guard-ingress-nginx.sh" || exit 1
 
 # ── Validate required values files ────────────────────────────────────────
 if [[ ! -f "$OVERRIDES_FILE" ]]; then
@@ -152,7 +156,7 @@ echo ""
 # Azure assigns <dns_label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net
 # in Azure Government) to the public IP only when
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
-# Covers nginx, istio and istio-addon. Envoy Gateway creates its Service per Gateway,
+# Covers istio and istio-addon. Envoy Gateway creates its Service per Gateway,
 # so the EnvoyProxy in the Envoy Gateway block below carries the label instead.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
@@ -161,7 +165,7 @@ _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller=
 _cloudapp_suffix=$(_azure_cloudapp_suffix)
 # ingress_load_balancer = "internal" puts the controller's load balancer on a
 # private IP in the cluster's VNet. Terraform annotates the Services it owns
-# (nginx, self-managed Istio); the EnvoyProxy and the Istio add-on's internal
+# (self-managed Istio); the EnvoyProxy and the Istio add-on's internal
 # gateway are handled below. Terraform refuses dns_label with "internal".
 _ingress_lb=$(_parse_tfvar "ingress_load_balancer") || _ingress_lb="public"
 _ingress_lb_subnet_id=$(_parse_tfvar "ingress_load_balancer_subnet_id") || _ingress_lb_subnet_id=""
@@ -170,10 +174,6 @@ _ingress_lb_ip=$(_parse_tfvar "ingress_load_balancer_ip") || _ingress_lb_ip=""
 _ingress_lb_subnet="${_ingress_lb_subnet_id##*/}"
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
-    nginx)
-      _lb_svc="ingress-nginx-controller"
-      _lb_ns="ingress-nginx"
-      ;;
     istio-addon)
       _lb_svc="aks-istio-ingressgateway-external"
       _lb_ns="aks-istio-ingress"
@@ -289,7 +289,6 @@ EOF
     # istio-addon and agic never get here: Terraform rejects them with letsencrypt.
     case "$_ingress_controller" in
       istio) _acme_ingress_class="istio" ;;
-      nginx) _acme_ingress_class="nginx" ;;
       *)     _acme_ingress_class="$_byo_ingress_class" ;;
     esac
     kubectl apply -f - &>/dev/null <<EOF
@@ -536,44 +535,6 @@ else
   skip "langsmith-clickhouse secret not required (clickhouse_source = in-cluster)"
 fi
 
-# ── Ensure the TaskDB secret exists (SmithDB backfill only) ───────────────
-# make smithdb-migration-job-start writes the migration values file, which names
-# the TaskDB secret: smithdb-taskdb (from Key Vault) for the chart-managed
-# TaskDB, or smithdb-taskdb-external for an external one. The TaskDB and the
-# migration Job read it through secretKeyRef, so a missing secret or key strands
-# both in CreateContainerConfigError.
-_smithdb_migration_file="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
-if _tfvar_is_true "enable_smithdb" && _tfvar_is_true "smithdb_migration_enabled"; then
-  if [[ ! -f "$_smithdb_migration_file" ]]; then
-    fail "smithdb_migration_enabled = true but langsmith-values-smithdb-migration.yaml is missing."
-    action "Run: make smithdb-migration-job-start"
-    exit 1
-  fi
-  if grep -qE '^[[:space:]]+external:' "$_smithdb_migration_file"; then
-    _taskdb_secret="smithdb-taskdb-external"
-    _taskdb_required="smithdb_taskdb_host smithdb_taskdb_database smithdb_taskdb_username smithdb_taskdb_password"
-    _taskdb_fix="Run: make smithdb-migration-job-start"
-  else
-    _taskdb_secret="smithdb-taskdb"
-    _taskdb_required="postgres_password"
-    _taskdb_fix="Run: make seed-secrets && make k8s-secrets"
-  fi
-  info "Verifying $_taskdb_secret secret..."
-  # go-template over key names only — secret values never leave the API server.
-  _taskdb_keys=$(kubectl get secret "$_taskdb_secret" -n "$NAMESPACE" \
-    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _taskdb_keys=""
-  _taskdb_missing=""
-  for _taskdb_key in $_taskdb_required; do
-    grep -qx "$_taskdb_key" <<< "$_taskdb_keys" || _taskdb_missing="${_taskdb_missing} ${_taskdb_key}"
-  done
-  if [[ -n "$_taskdb_missing" ]]; then
-    fail "smithdb_migration_enabled = true but secret $_taskdb_secret in namespace $NAMESPACE is missing, or lacks keys:${_taskdb_missing}"
-    action "$_taskdb_fix"
-    exit 1
-  fi
-  pass "$_taskdb_secret secret exists"
-fi
-
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
 _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
@@ -730,27 +691,6 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   fi
   VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base" -f "$_smithdb_overrides")
   echo "  ✔ langsmith-values-smithdb-sizing.yaml + langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
-
-  # init-values.sh writes the migration gate into the overrides. A run of
-  # make smithdb-migration-job-end without make init-values leaves it on, and the
-  # chart then fails on the TaskDB password with no hint of the cause.
-  _smithdb_migration_enabled=false
-  _tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true || true
-  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides")
-  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
-    fail "langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration, but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled."
-    action "Run: make init-values, then make deploy"
-    exit 1
-  fi
-
-  # Written by make smithdb-migration-job-start; its presence was checked with
-  # the TaskDB secret above. Loaded only while the migration is on.
-  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
-    VALUES_ARGS+=(-f "$_smithdb_migration_file")
-    echo "  ✔ langsmith-values-smithdb-migration.yaml"
-  elif [[ -f "$_smithdb_migration_file" ]]; then
-    echo "  ○ langsmith-values-smithdb-migration.yaml (file exists but smithdb_migration_enabled = false — skipped)"
-  fi
 fi
 echo ""
 
@@ -883,7 +823,7 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   _eg_service_annotations="{}"
   [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
-  # Internal: the annotations Terraform puts on the nginx and Istio Services,
+  # Internal: the annotations Terraform puts on the Istio Services,
   # from its output. It prints a one-line JSON object, which is YAML flow
   # syntax. dns_label is refused with "internal", so the two never combine.
   if [[ "$_ingress_lb" == "internal" ]]; then
@@ -1548,12 +1488,13 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
     warn "Envoy Gateway LoadBalancer has no IP yet. Check: kubectl get gateway langsmith-gateway -n ${NAMESPACE}"
   fi
 
-  # A deployment moved off ingress-nginx still has the langsmith-tls Certificate
-  # its Ingress owned, and cert-manager's gateway-shim refuses to take it over.
-  # The helm upgrade above removed that Ingress, so garbage collection deletes
-  # the Certificate, and the shim does not retry on its own: the Secret keeps
-  # serving until it expires, and nothing renews it. Touching the Gateway makes
-  # the shim re-sync and create a Certificate the Gateway owns.
+  # A deployment moved to Envoy Gateway from a controller that serves the
+  # chart's Ingress still has the langsmith-tls Certificate that Ingress owned,
+  # and cert-manager's gateway-shim refuses to take it over. The helm upgrade
+  # above removed that Ingress, so garbage collection deletes the Certificate,
+  # and the shim does not retry on its own: the Secret keeps serving until it
+  # expires, and nothing renews it. Touching the Gateway makes the shim re-sync
+  # and create a Certificate the Gateway owns.
   if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
     _eg_cert_owner=""
     for _ in $(seq 1 24); do
@@ -1662,7 +1603,7 @@ fi
 
 # ── LLM Gateway: an Ingress of its own for /gateway/ ─────────────────────
 # The chart's frontend allows 900 s on /gateway/ for long model calls, but
-# ingress-nginx cuts at 60 s and Application Gateway at 30 s. Raising that on the
+# Application Gateway cuts at 30 s. Raising that on the
 # chart's Ingress would raise it for every path, so /gateway/ gets a second
 # Ingress, built from the chart's (same class, host, TLS and backend), carrying
 # the longer timeout; every other path keeps the controller default. Istio has no
@@ -1671,7 +1612,7 @@ fi
 _chart_fullname="$RELEASE_NAME"
 [[ "$RELEASE_NAME" == *langsmith* ]] || _chart_fullname="${RELEASE_NAME}-langsmith"
 _gw_ingress="${_chart_fullname}-llm-gateway"
-if [[ "$_enable_llm_gateway" == "true" && ( "$_ingress_controller" == "nginx" || "$_ingress_controller" == "agic" ) ]]; then
+if [[ "$_enable_llm_gateway" == "true" && "$_ingress_controller" == "agic" ]]; then
   if _chart_ingress_json=$(kubectl get ingress "${_chart_fullname}-ingress" -n "$NAMESPACE" -o json 2>/dev/null); then
     if printf '%s' "$_chart_ingress_json" \
         | python3 "$SCRIPT_DIR/llm-gateway-ingress.py" --controller "$_ingress_controller" --name "$_gw_ingress" \

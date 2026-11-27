@@ -915,18 +915,6 @@ variable "langsmith_jwt_secret" {
 # deploy.sh reads these to decide which values overlay files to include.
 # Addons require the corresponding entitlement in your LangSmith license key.
 #------------------------------------------------------------------------------
-# tflint-ignore: terraform_unused_declarations
-variable "sizing_profile" {
-  type        = string
-  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
-  default     = "default"
-
-  validation {
-    condition     = contains(["production", "production-large", "dev", "minimum", "default"], var.sizing_profile)
-    error_message = "sizing_profile must be one of: production, production-large, dev, minimum, default."
-  }
-}
-
 variable "enable_deployments" {
   type        = bool
   description = "Enable LangSmith Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
@@ -952,12 +940,14 @@ variable "enable_insights" {
 
 variable "insights_storage" {
   type        = string
-  description = "Insights storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "in-cluster"
+  description = "Insights storage. Only 'external' is supported from 0.18: the langsmith_insights database on the shared RDS instance and DB index 3 on the shared ElastiCache. Engine uses the same storage. Setting it explicitly confirms to make deploy that a 0.17 install, which read an unset value as in-cluster, has moved its data."
+  default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.insights_storage)
-    error_message = "insights_storage must be one of: external, in-cluster."
+    # The 0.17 QuickStart wrote "in-cluster" for an add-on that was off, where it
+    # does nothing, so the value only fails while the add-on runs.
+    condition     = var.insights_storage == "external" || !(var.enable_insights || var.enable_engine)
+    error_message = "insights_storage = \"in-cluster\" was removed in 0.18: Insights uses its own database on the shared RDS instance (langsmith_insights) and its own DB index on the shared ElastiCache. Back up the in-cluster Insights database, then set this to \"external\" in terraform.tfvars: the next deploy points Insights at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
 
@@ -969,12 +959,12 @@ variable "enable_polly" {
 
 variable "polly_storage" {
   type        = string
-  description = "LangSmith Chat storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "in-cluster"
+  description = "LangSmith Chat storage. Only 'external' is supported from 0.18: the langsmith_polly database on the shared RDS instance and DB index 2 on the shared ElastiCache. Setting it explicitly confirms to make deploy that a 0.17 install, which read an unset value as in-cluster, has moved its data."
+  default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.polly_storage)
-    error_message = "polly_storage must be one of: external, in-cluster."
+    condition     = var.polly_storage == "external" || !var.enable_polly
+    error_message = "polly_storage = \"in-cluster\" was removed in 0.18: Chat uses its own database on the shared RDS instance (langsmith_polly) and its own DB index on the shared ElastiCache. Back up the in-cluster Chat database, then set this to \"external\" in terraform.tfvars: the next deploy points Chat at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
 
@@ -986,25 +976,39 @@ variable "enable_fleet" {
 
 variable "fleet_storage" {
   type        = string
-  description = "Fleet storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  description = "Fleet storage. Only 'external' is supported from 0.18: the langsmith_fleet database on the shared RDS instance and DB index 1 on the shared ElastiCache. Setting it explicitly confirms to make deploy that a 0.17 install that set it to in-cluster has moved its data."
   default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.fleet_storage)
-    error_message = "fleet_storage must be one of: external, in-cluster."
+    condition     = var.fleet_storage == "external" || !var.enable_fleet
+    error_message = "fleet_storage = \"in-cluster\" was removed in 0.18: Fleet uses its own database on the shared RDS instance (langsmith_fleet) and its own DB index on the shared ElastiCache. Back up the in-cluster Fleet database, then set this to \"external\" in terraform.tfvars: the next deploy points Fleet at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
 
+# The two standalone switches were removed in 0.18, when external storage became
+# the only option. They stay as variables only so a terraform.tfvars that still
+# sets one fails at plan: an undeclared variable is just a warning, and Chat or
+# Insights would silently turn off.
 variable "enable_standalone_polly" {
   type        = bool
-  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for LangSmith Chat (formerly Polly). Also enables Chat when enable_polly is false for backward compatibility. Requires postgres_source = redis_source = external."
+  description = "Removed in 0.18. Set enable_polly = true instead; Chat always uses the shared RDS and ElastiCache."
   default     = false
+
+  validation {
+    condition     = !var.enable_standalone_polly
+    error_message = "enable_standalone_polly was removed in 0.18: Chat always uses the shared RDS and ElastiCache. Replace it with enable_polly = true and polly_storage = \"external\" in terraform.tfvars."
+  }
 }
 
 variable "enable_standalone_insights" {
   type        = bool
-  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for Insights. Also enables Insights when enable_insights is false for backward compatibility. ClickHouse is still required. Requires postgres_source = redis_source = external."
+  description = "Removed in 0.18. Set enable_insights = true instead; Insights always uses the shared RDS and ElastiCache."
   default     = false
+
+  validation {
+    condition     = !var.enable_standalone_insights
+    error_message = "enable_standalone_insights was removed in 0.18: Insights always uses the shared RDS and ElastiCache. Replace it with enable_insights = true and insights_storage = \"external\" in terraform.tfvars."
+  }
 }
 
 # tflint-ignore: terraform_unused_declarations
@@ -1030,10 +1034,10 @@ variable "sandbox_service_url_base_url" {
 
 variable "enable_envoy_gateway" {
   type        = bool
-  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true. Set it to false to use a standard ALB-backed Kubernetes Ingress instead."
+  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway is true. Set it to false to use a standard ALB-backed Kubernetes Ingress instead."
   # Unset (null) means "derive" — see local.enable_envoy_gateway in locals.tf.
   # An explicit true or false in terraform.tfvars always wins over the derivation,
-  # so existing Istio/NGINX deployments keep working without a tfvars edit.
+  # so existing Istio deployments keep working without a tfvars edit.
   default = null
 }
 
@@ -1045,8 +1049,13 @@ variable "enable_istio_gateway" {
 
 variable "enable_nginx_ingress" {
   type        = bool
-  description = "Install NGINX ingress controller (ingress-nginx chart). ALB forwards to nginx controller pods via a TargetGroupBinding; LangSmith uses ingressClassName: nginx."
+  description = "Removed in 0.18. Accepted only as false, which earlier QuickStart runs wrote into every terraform.tfvars, so those files still plan."
   default     = false
+
+  validation {
+    condition     = var.enable_nginx_ingress == false
+    error_message = "enable_nginx_ingress was removed in 0.18. Applying this release would delete the NGINX controller and leave the ALB with nothing behind it. Keep the previous release until the deployment has moved to Envoy Gateway, Istio, or ALB, then remove this setting. See README.md, \"Moving off NGINX ingress\"."
+  }
 }
 
 #------------------------------------------------------------------------------
@@ -1130,12 +1139,6 @@ variable "smithdb_ingestion_enabled" {
   default     = true
 }
 
-variable "smithdb_migration_enabled" {
-  type        = bool
-  description = "Enable historical ClickHouse-to-SmithDB migration integration."
-  default     = false
-}
-
 variable "smithdb_query_enabled" {
   type        = bool
   description = "Serve LangSmith queries from SmithDB. On by default for a new install, which has no history to migrate. An install with traces in ClickHouse keeps this false until they are migrated (SMITHDB.md)."
@@ -1149,6 +1152,20 @@ variable "langsmith_release_name" {
 }
 
 # ── Metastore (dedicated RDS Postgres) ────────────────────────────────────────
+# Only "create" since 0.18, kept for the same reason as postgres_source: a 0.17
+# tfvars file that says external fails at plan instead of silently pointing
+# SmithDB at a new, empty RDS instance.
+variable "smithdb_metastore_source" {
+  type        = string
+  description = "SmithDB metastore Postgres. Only 'create' (a dedicated RDS instance) is supported from 0.18."
+  default     = "create"
+
+  validation {
+    condition     = var.smithdb_metastore_source == "create"
+    error_message = "smithdb_metastore_source = \"external\" was removed in 0.18: Terraform always creates a dedicated RDS instance for the SmithDB metastore. Copy the external metastore before you remove this line and the smithdb_external_metastore_* lines from terraform.tfvars, because the next apply points SmithDB at a new, empty RDS instance. See \"Move an external metastore to RDS\" in modules/aws/SMITHDB.md."
+  }
+}
+
 variable "smithdb_metastore_instance_class" {
   type        = string
   description = "RDS instance class for the SmithDB metastore."
@@ -1213,6 +1230,32 @@ variable "smithdb_metastore_manage_existing_security_group_rules" {
   type        = bool
   description = "When smithdb_metastore_existing_security_group_id is set, allow Terraform to write the tcp/5432-from-EKS-nodes ingress rule onto that supplied security group. Default false (attach-only). This helps on a new deployment because the EKS node security group ID is created in the same apply."
   default     = false
+}
+
+# Renamed in 0.18. The old names stay as variables only so a terraform.tfvars
+# that still sets one fails at plan: an undeclared variable is just a warning,
+# and the next apply would swap the supplied security group for a new one, or
+# delete the ingress rule that Terraform manages on it.
+variable "smithdb_existing_metastore_security_group_id" {
+  type        = string
+  description = "Renamed in 0.18. Set smithdb_metastore_existing_security_group_id instead."
+  default     = null
+
+  validation {
+    condition     = var.smithdb_existing_metastore_security_group_id == null || var.smithdb_existing_metastore_security_group_id == ""
+    error_message = "smithdb_existing_metastore_security_group_id was renamed in 0.18: rename it to smithdb_metastore_existing_security_group_id in terraform.tfvars."
+  }
+}
+
+variable "smithdb_manage_byo_security_group_rules" {
+  type        = bool
+  description = "Renamed in 0.18. Set smithdb_metastore_manage_existing_security_group_rules instead."
+  default     = false
+
+  validation {
+    condition     = !var.smithdb_manage_byo_security_group_rules
+    error_message = "smithdb_manage_byo_security_group_rules was renamed in 0.18: rename it to smithdb_metastore_manage_existing_security_group_rules in terraform.tfvars."
+  }
 }
 
 # ── Object store (S3) ─────────────────────────────────────────────────────────

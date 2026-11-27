@@ -672,8 +672,8 @@ langsmith_namespace = "langsmith"
 #       Also opens port 15017 on the node SG for the istiod webhook.
 #
 # enable_envoy_gateway has no hardcoded default. Leave it out entirely and Envoy
-# Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true,
-# so existing Istio/NGINX configurations keep working untouched. Setting it
+# Gateway is enabled unless enable_istio_gateway is true,
+# so existing Istio configurations keep working untouched. Setting it
 # explicitly — as below — always wins over that derivation.
 enable_envoy_gateway = true
 enable_istio_gateway = false
@@ -764,33 +764,6 @@ enable_istio_gateway = false
 # firewall_subnet_cidr = "10.0.64.0/21"
 
 #------------------------------------------------------------------------------
-# HELM SIZING PROFILE
-#------------------------------------------------------------------------------
-# Controls resource requests/limits and replica counts for LangSmith pods.
-# deploy.sh uses this to select the correct sizing values file.
-#
-# Profiles are based on the LangSmith scale guide:
-#   https://docs.langchain.com/langsmith/self-host-scale
-#
-# Every profile, "default" included, autoscales queue, ingest-queue, and the
-# SmithDB compaction worker with KEDA. Each profile sets its own ranges.
-#
-#   "production"       — Multi-replica with HPA/KEDA autoscaling. Fits the
-#                        Medium/Medium pattern (~20 users, ~100 traces/sec).
-#                        Good starting point for most production deployments.
-#   "production-large" — Higher baselines and wider autoscaling ranges. Fits the
-#                        High/High pattern (~50 users, ~1000 traces/sec).
-#                        Use when you know the deployment handles heavy volume.
-#   "dev"              — Single-replica baseline with HPA/KEDA autoscaling. For
-#                        local dev, CI, demos, and short-lived POCs. Chart defaults
-#                        request 1+ CPU per component and 3.5 CPU / 12Gi for
-#                        ClickHouse — without this profile, pods won't schedule
-#                        on small clusters.
-#   "default"          — Chart defaults (no sizing file applied), plus the KEDA
-#                        ranges in the base values.
-sizing_profile = "production"
-
-#------------------------------------------------------------------------------
 # LANGSMITH FEATURES (product addons)
 #------------------------------------------------------------------------------
 # These flags control which LangSmith product features are enabled.
@@ -801,19 +774,16 @@ sizing_profile = "production"
 #
 #   enable_deployments — LangSmith Deployments (listener, operator, host-backend)
 #   enable_fleet       — No-code agents; enables its required host-backend
-#   fleet_storage      — Fleet Postgres/Redis: "external" or "in-cluster"
 #   enable_insights    — AI-powered trace analysis
-#   insights_storage   — Insights Postgres/Redis: "external" or "in-cluster"
 #   enable_polly       — LangSmith Chat (formerly Polly)
-#   polly_storage      — Chat Postgres/Redis: "external" or "in-cluster"
+#
+# Fleet, Chat and Insights each use their own database on the shared RDS and their
+# own DB index on the shared ElastiCache.
 #
 enable_deployments   = false
 enable_fleet         = false
-fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = false
-insights_storage     = "in-cluster" # Or "external"
 enable_polly         = false
-polly_storage        = "in-cluster" # Or "external"
 
 # Extended usage telemetry — sends anonymized usage metrics to LangChain.
 # Default is off. Enable if you want to share usage data.
@@ -895,7 +865,6 @@ enable_bedrock_access = false
 
 # enable_smithdb            = true
 # smithdb_ingestion_enabled = true
-# smithdb_migration_enabled = false
 # smithdb_query_enabled     = true
 
 # ── Metastore (dedicated RDS Postgres)
@@ -920,7 +889,7 @@ enable_bedrock_access = false
 # smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
 
 # ── SmithDB nodes (includes TaskDB) ─────────────────────────────
-# Every sizing_profile runs the SmithDB small tier, and these defaults fit it. The
+# The Helm values run the SmithDB small tier, and these defaults fit it. The
 # medium tier needs m6a.8xlarge nodes and the large tier m6a.16xlarge, with higher
 # counts: see ../SMITHDB.md, "Scaling up". Caches are gp3 volumes (7,000 IOPS,
 # 1,000 MiB/s). "local-ssd" puts them on the nodes' instance-store NVMe instead,

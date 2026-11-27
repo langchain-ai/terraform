@@ -22,11 +22,7 @@ Deploy from a tag (`git checkout v0.17.0`), never from a branch.
 
 ## Chart line cutovers
 
-Moving the pinned chart line is a breaking change for existing installs, so each
-cutover gets a migration note next to this file:
-
-- 0.15 to 0.16 — [MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md)
-- 0.16 to 0.17 — [MIGRATION-0.16-to-0.17.md](MIGRATION-0.16-to-0.17.md)
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance.
 
 At each cutover the outgoing line moves to a maintenance branch and keeps
 releasing there, so `main` and the maintenance branch cut tags on their own

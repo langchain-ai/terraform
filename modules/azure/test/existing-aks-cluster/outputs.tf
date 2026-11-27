@@ -67,7 +67,7 @@ output "langsmith_tfvars" {
     # istio-addon is an argument on the azurerm_kubernetes_cluster resource, which
     # does not exist under create_cluster = false, so a precondition rejects it.
     # agic works only if the ingress-appgw add-on is already enabled on the cluster.
-    ingress_controller = "nginx"
+    ingress_controller = "envoy-gateway"
 
     # Off because the test reaches the cluster through the public API server.
     create_bastion = false

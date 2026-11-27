@@ -9,23 +9,13 @@ type: "reference"
 
 *Updated as deployment is validated.*
 
-## Live Diagrams
-
-### Production Deploy (External Postgres + Redis)
-
-**[LangSmith Azure — Production Architecture (v0.13.28)](https://app.eraser.io/workspace/oto9FgBOY2s7877578R2)**
-
-![LangSmith Azure Production Architecture](diagrams/lang_smith_deployment_pass_4_5.png)
-
-Full topology: all passes (2–4), AKS namespaces, pod names, external managed services, Workload Identity flow, Key Vault, TLS, KEDA, and NGINX ingress, drawn before `envoy-gateway` became the default.
+## Platform Components
 
 ### Pass 5 — Insights (verified)
 
-No new diagram — Pass 5 adds `insights.enabled: true` only. On chart 0.16 Insights runs as the standalone `engineInsightsAgent` deployment (an api-server and a queue pod) rather than an operator-managed LangGraph deployment created on first UI invocation.
+Pass 5 adds `insights.enabled: true` only. On chart 0.16 Insights runs as the standalone `engineInsightsAgent` deployment (an api-server and a queue pod) rather than an operator-managed LangGraph deployment created on first UI invocation.
 
 ### Pass 4 — Agent Builder Containers (verified)
-
-**[LangSmith Azure — Pass 4 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/BdnsvoccuOm7wh2dLyKi)**
 
 Adds to Pass 3 — 2 static + 4 dynamic pods:
 - `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
@@ -33,10 +23,6 @@ Adds to Pass 3 — 2 static + 4 dynamic pods:
 - `agent-builder-<hash>` + `queue` + `redis` + `lg-<hash>-0` — operator-managed Agent Builder agent deployment (dynamic)
 
 ### Pass 3 — LangGraph Platform Containers (verified)
-
-**[LangSmith Azure — Pass 3 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/6renzZO9DtNdvLuqO0Aa)**
-
-![LangSmith Azure Pass 3 Platform Containers](diagrams/lang_smith_deployment_pass_3.png)
 
 Adds 3 pods to the Pass 2 topology:
 - `langsmith-host-backend` — LangGraph control plane API (WI)
@@ -46,22 +32,12 @@ Adds 3 pods to the Pass 2 topology:
 
 ### Pass 2 — Platform Containers (External Postgres + Redis, verified)
 
-**[LangSmith Azure — Pass 2 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/CTA7dtpxBysehdXeYOHu)**
-
-![LangSmith Azure Pass 2 Platform Containers](diagrams/lang_smith_deployment_pass_2.png)
-
 Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 deploy:
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)
 - 1 StatefulSet: clickhouse (large node pool, 500Gi PVC)
 - 3 completed Jobs: backend-migrations, backend-ch-migrations, backend-auth-bootstrap
 - External: Azure DB for PostgreSQL (subnet-postgres), Azure Managed Redis (subnet-redis)
 - WI pods (4): backend, platform-backend, queue, ingest-queue
-
-### Light Deploy (All In-Cluster)
-
-**[LangSmith Azure — Light Deploy Architecture (v0.13.28)](https://app.eraser.io/workspace/sQxjXna8084czm2eRPFj)**
-
-![LangSmith Azure Light Deploy Architecture](diagrams/lang_smith_deployment_light.png)
 
 ---
 
@@ -76,7 +52,6 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 | Controller | Variable | DNS label support | Notes |
 |-----------|---------|------------------|-------|
 | `envoy-gateway` | `ingress_controller = "envoy-gateway"` | yes | Default. Gateway API native. Uses `envoyproxy/gateway-helm`. |
-| `nginx` | `ingress_controller = "nginx"` | yes | NGINX via Helm, standard Kubernetes Ingress. For clusters standardized on classic Ingress. |
 | `istio-addon` | `ingress_controller = "istio-addon"` | yes | AKS managed Istio service mesh. Use `istio_addon_revision` to pin revision. |
 | `istio` | `ingress_controller = "istio"` | yes | Self-managed Istio via Helm. Full control over revision and config. |
 | `none` | `ingress_controller = "none"` | — | Bring your own ingress. The Ingress goes to the cluster's default IngressClass unless `ingress.ingressClassName` is set in `values-overrides.yaml`; `deploy.sh` checks for one. |
@@ -215,7 +190,6 @@ Pass 1 — Infrastructure
       langsmith-agent-builder-encryption-key  — generated (Fernet)
       langsmith-insights-encryption-key       — generated (Fernet)
       langsmith-polly-encryption-key          — generated (Fernet)
-      smithdb-taskdb-password                 — generated
       langsmith-sandbox-callback-signing-jwk  — generated (Ed25519 JWK), enable_sandboxes only
     Write-once — an existing secret is never overwritten, so it is safe to re-run.
 
@@ -224,7 +198,7 @@ Pass 2 — Application
   kubectl create secret generic langsmith-config-secret
     Reads:  Key Vault secrets + terraform outputs (postgres/redis URLs, blob account)
     Writes: K8s secrets — langsmith-config-secret, langsmith-postgres-secret,
-                          langsmith-redis-secret, smithdb-taskdb
+                          langsmith-redis-secret
 
   helm upgrade --install langsmith ...
     chart reads config.existingSecretName = "langsmith-config-secret"
@@ -291,13 +265,11 @@ Resource Group
 │                                   private DNS zone, no public endpoint
 ├── SmithDB Storage Account
 │   └── private container ───────── object store
-├── LangSmith Storage Account ───── trace blobs (existing, migration source)
+├── LangSmith Storage Account ───── trace blobs
 └── SmithDB user-assigned identity
     ├── federated to K8s ServiceAccount <release>-smithdb
     ├── Entra administrator on the metastore server
-    ├── Storage Blob Data Contributor  → SmithDB Storage Account
-    └── Storage Blob Data Reader      → LangSmith Storage Account
-                                         (only while smithdb_migration_enabled = true)
+    └── Storage Blob Data Contributor  → SmithDB Storage Account
 ```
 
 By default the metastore authenticates through Microsoft Entra ID using that same
@@ -309,25 +281,17 @@ refuses Entra: SmithDB requests its token for the commercial scope there (LG-913
 Object-store access always uses Workload Identity, so no storage key or SAS token
 reaches Kubernetes or Terraform outputs.
 
-The trace-blob read grant is scoped to the migration window on purpose. It exists
-only while `smithdb_migration_enabled = true`, so a steady-state install leaves the
-SmithDB identity able to reach nothing but its own account. Because an Azure blob
-data-plane role change takes up to 10 minutes to become effective, the apply that
-creates the grant holds for 300 seconds in
-`time_sleep.smithdb_trace_blob_reader_propagation` before returning.
-
 Rollout is staged, and the variables enforce the order:
 
 ```
 enable_smithdb            ──▶ infrastructure only, no traffic
   smithdb_ingestion_enabled ──▶ dual-write to SmithDB and ClickHouse
-    smithdb_migration_enabled ──▶ historical backfill from trace blobs
     smithdb_query_enabled     ──▶ reads served from SmithDB
 ```
 
-Validation rules in `infra/main.tf` reject the invalid combinations: the three stage
-gates all require `enable_smithdb = true`, and both `smithdb_migration_enabled` and
-`smithdb_query_enabled` require `smithdb_ingestion_enabled = true`.
+Validation rules in `infra/main.tf` reject the invalid combinations: both stage
+gates require `enable_smithdb = true`, and `smithdb_query_enabled` requires
+`smithdb_ingestion_enabled = true`.
 
 One side effect worth knowing before a light deploy: `enable_smithdb = true` forces
 `create_postgres_subnet`, because the metastore is always an external Flexible Server.

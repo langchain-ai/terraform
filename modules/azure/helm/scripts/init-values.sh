@@ -49,6 +49,10 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
+# Below, an unset ingress_controller means envoy-gateway, so a deployment still on
+# ingress-nginx would get routing for a controller Terraform has not installed.
+INFRA_DIR="$INFRA_DIR" bash "$HELM_DIR/../infra/scripts/guard-ingress-nginx.sh" || exit 1
+
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment="${_name_prefix:-dev}"
 _location=$(_parse_tfvar "location") || _location="eastus"
@@ -71,7 +75,6 @@ else
   _langsmith_release_fullname="${_langsmith_release_name}-langsmith"
 fi
 _smithdb_ingestion_enabled=$(_parse_tfvar "smithdb_ingestion_enabled") || _smithdb_ingestion_enabled="false"
-_smithdb_migration_enabled=$(_parse_tfvar "smithdb_migration_enabled") || _smithdb_migration_enabled="false"
 _smithdb_query_enabled=$(_parse_tfvar "smithdb_query_enabled") || _smithdb_query_enabled="false"
 
 # Derive protocol from TLS source
@@ -197,7 +200,7 @@ echo ""
 #   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
 #   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
 #      (cloudapp.usgovcloudapi.net in Azure Government)
-#      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
+#      Works for ALL ingress controllers (istio, istio-addon, envoy-gateway).
 #      Azure assigns the DNS label to whichever LB service has the annotation set.
 #   3. Existing value in values-overrides.yaml (keep on re-run)
 #   4. Interactive prompt
@@ -400,12 +403,12 @@ if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
   exit 1
 fi
-if [[ "$_enable_smithdb" != "true" && ("$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
+if [[ "$_enable_smithdb" != "true" && ("$_smithdb_ingestion_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
   fail "SmithDB integration gates require enable_smithdb = true"
   exit 1
 fi
-if [[ "$_smithdb_ingestion_enabled" != "true" && ("$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
-  fail "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true"
+if [[ "$_smithdb_ingestion_enabled" != "true" && "$_smithdb_query_enabled" == "true" ]]; then
+  fail "smithdb_query_enabled requires smithdb_ingestion_enabled = true"
   exit 1
 fi
 
@@ -471,7 +474,6 @@ info "Generating values-overrides.yaml..."
 
 # Build ingress/TLS block
 # The ingressClassName varies by ingress controller:
-#   nginx         → "nginx"
 #   istio         → "istio"  (self-managed via Helm)
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
@@ -480,7 +482,6 @@ info "Generating values-overrides.yaml..."
 #                             hand in this file, kept on re-run)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;
-  nginx)             _ingress_class="nginx" ;;
   agic)              _ingress_class="azure-application-gateway" ;;
   *)                 _ingress_class="" ;;
 esac
@@ -1159,18 +1160,9 @@ smithdb:
     job:
       labels:
         azure.workload.identity/use: "true"
-  migration:
-    job:
-      labels:
-        azure.workload.identity/use: "true"
-    # The TaskDB credential and the migration pod count are in
-    # langsmith-values-smithdb-migration.yaml, which make
-    # smithdb-migration-job-start writes and deploy.sh loads after this file.
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
-    migration:
-      enabled: ${_smithdb_migration_enabled}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDB_YAML

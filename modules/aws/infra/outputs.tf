@@ -230,11 +230,6 @@ output "smithdb_ingestion_enabled" {
   value       = var.enable_smithdb && var.smithdb_ingestion_enabled
 }
 
-output "smithdb_migration_enabled" {
-  description = "Whether the historical ClickHouse-to-SmithDB migration is on"
-  value       = var.enable_smithdb && var.smithdb_migration_enabled
-}
-
 output "smithdb_query_enabled" {
   description = "Whether LangSmith queries SmithDB"
   value       = var.enable_smithdb && var.smithdb_query_enabled
@@ -383,29 +378,14 @@ output "enable_fleet" {
   value       = var.enable_fleet
 }
 
-output "fleet_storage" {
-  description = "Fleet storage location"
-  value       = var.fleet_storage
-}
-
 output "enable_insights" {
-  description = "Whether Insights is enabled by either the product or external-storage switch"
-  value       = local.insights_enabled
-}
-
-output "insights_storage" {
-  description = "Insights storage location"
-  value       = local.insights_external_storage ? "external" : var.insights_storage
+  description = "Whether Insights is enabled"
+  value       = var.enable_insights
 }
 
 output "enable_polly" {
-  description = "Whether LangSmith Chat (formerly Polly) is enabled by either the product or external-storage switch"
-  value       = local.polly_enabled
-}
-
-output "polly_storage" {
-  description = "LangSmith Chat storage location"
-  value       = local.polly_external_storage ? "external" : var.polly_storage
+  description = "Whether LangSmith Chat (formerly Polly) is enabled"
+  value       = var.enable_polly
 }
 
 output "enable_envoy_gateway" {
@@ -416,11 +396,6 @@ output "enable_envoy_gateway" {
 output "enable_istio_gateway" {
   description = "Whether the Istio ingress gateway path is enabled"
   value       = var.enable_istio_gateway
-}
-
-output "enable_nginx_ingress" {
-  description = "Whether the NGINX ingress controller path is enabled"
-  value       = var.enable_nginx_ingress
 }
 
 output "gateway_target_group_arn" {
@@ -434,25 +409,22 @@ output "gateway_target_group_arn" {
 output "resource_summary" {
   description = "Summary of provisioned resources"
   value = {
-    cluster          = module.eks.cluster_name
-    postgres_source  = var.postgres_source
-    postgres         = "external (RDS)"
-    redis_source     = var.redis_source
-    redis            = "external (ElastiCache)"
-    storage_bucket   = local.bucket_name
-    namespace        = var.langsmith_namespace
-    tls              = var.tls_certificate_source
-    alb              = module.alb.alb_dns_name
-    bastion          = var.create_bastion ? module.bastion[0].instance_id : "not created"
-    firewall         = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
-    deployments      = var.enable_deployments
-    fleet            = var.enable_fleet
-    fleet_storage    = var.enable_fleet ? var.fleet_storage : "not enabled"
-    insights         = local.insights_enabled
-    insights_storage = local.insights_enabled ? (local.insights_external_storage ? "external" : var.insights_storage) : "not enabled"
-    polly            = local.polly_enabled
-    polly_storage    = local.polly_enabled ? (local.polly_external_storage ? "external" : var.polly_storage) : "not enabled"
-    smithdb          = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
+    cluster         = module.eks.cluster_name
+    postgres_source = var.postgres_source
+    postgres        = "external (RDS)"
+    redis_source    = var.redis_source
+    redis           = "external (ElastiCache)"
+    storage_bucket  = local.bucket_name
+    namespace       = var.langsmith_namespace
+    tls             = var.tls_certificate_source
+    alb             = module.alb.alb_dns_name
+    bastion         = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    firewall        = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
+    deployments     = var.enable_deployments
+    fleet           = var.enable_fleet
+    insights        = var.enable_insights
+    polly           = var.enable_polly
+    smithdb         = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
   }
 }
 

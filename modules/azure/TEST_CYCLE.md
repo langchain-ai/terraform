@@ -200,8 +200,6 @@ keda-operator-metrics-apiserver-5bd8f8bb6-vvblq   1/1     Running   0          9
 NAME                    READY   STATUS    RESTARTS   AGE
 envoy-gateway-<hash>    1/1     Running   0          16m
 
-# With ingress_controller = "nginx", check ingress-nginx instead:
-# kubectl get pods -n ingress-nginx
 ```
 
 #### LangSmith namespace
@@ -394,7 +392,6 @@ zone to Azure.
 | PostgreSQL provisioning takes >20 min | `apply` appears hung on postgres module | Normal for Azure DB for PostgreSQL — it can take 10–15 min. Wait for it to complete. |
 | `secrets.auto.tfvars` not found | `terraform plan` fails: variables have no value | Run `make setup-env` first. The file is gitignored and must be generated locally. |
 | Envoy LB IP pending | `kubectl get gateway langsmith-gateway -n langsmith` shows no address | Wait 1–3 min for Azure LB provisioning. Check the proxy service: `kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway`. If still pending after 5 min, check AKS node status: `kubectl get nodes`. |
-| NGINX LB IP pending | `kubectl get svc -n ingress-nginx` shows `<pending>` for EXTERNAL-IP | Wait 1–3 min for Azure LB provisioning. If still pending after 5 min, check AKS node status: `kubectl get nodes`. |
 
 ---
 
@@ -420,7 +417,7 @@ make clean
 **Before destroy, verify this is set in `terraform.tfvars`:**
 - `keyvault_purge_protection    = false`
 
-**If destroy hangs on the VNet**: the ingress controller's LoadBalancer service (the Envoy proxy service, or ingress-nginx with `nginx`) may have created Azure LB rules
+**If destroy hangs on the VNet**: the ingress controller's LoadBalancer service (the Envoy proxy service) may have created Azure LB rules
 that hold the subnet. Delete the LB manually from Azure Portal → Load Balancers → find the
 `kubernetes` LB → delete, then re-run `make destroy`.
 

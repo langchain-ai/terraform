@@ -1,6 +1,5 @@
 # Dedicated SmithDB nodes, scaled independently by Cluster Autoscaler. The defaults
-# fit the small tier, which every sizing profile runs; ../SMITHDB.md covers medium
-# and large.
+# fit the small tier that the Helm values run; ../SMITHDB.md covers medium and large.
 locals {
   smithdb_local_ssd = var.enable_smithdb && var.smithdb_cache_storage == "local-ssd"
 
@@ -79,7 +78,7 @@ output "smithdb_cache_storage" {
 
 variable "smithdb_node_instance_type" {
   type        = string
-  description = "SmithDB EC2 instance type. The default, m6a.4xlarge, fits the small tier that every sizing profile runs. The medium tier needs m6a.8xlarge nodes and the large tier m6a.16xlarge (SMITHDB.md, Scaling up)."
+  description = "SmithDB EC2 instance type. The default, m6a.4xlarge, fits the small tier that the Helm values run. The medium tier needs m6a.8xlarge nodes and the large tier m6a.16xlarge (SMITHDB.md, Scaling up)."
   default     = "m6a.4xlarge"
   nullable    = false
 

@@ -222,11 +222,6 @@ resource "terraform_data" "validate_inputs" {
     # The gates default to true, so they count only with SmithDB on: opting
     # out takes enable_smithdb = false alone (outputs.tf reports them the same way).
     precondition {
-      condition     = !var.enable_smithdb || !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
-      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
-    }
-
-    precondition {
       condition     = !var.enable_smithdb || !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
@@ -238,16 +233,16 @@ resource "terraform_data" "validate_inputs" {
       error_message = "enable_engine requires enable_sandboxes = true. Every Engine run executes in a sandbox, and the chart rejects Engine without Sandboxes."
     }
 
-    # Two gateway controllers share one ALB target group (all three
+    # Two gateway controllers share one ALB target group (both
     # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
     # gateway_target_port can only describe one of them, so a second controller
     # leaves both permanently unhealthy. init-values.sh rejects this combination
     # too, but only after apply — fail at plan time instead.
     precondition {
       condition = length([
-        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway, var.enable_nginx_ingress] : true if enabled
+        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway] : true if enabled
       ]) <= 1
-      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio or NGINX."
+      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio."
     }
   }
 }
@@ -727,10 +722,9 @@ module "cert_manager" {
 # wires the validated cert into the ALB HTTPS listener.
 
 locals {
-  insights_enabled          = var.enable_insights || var.enable_standalone_insights
-  insights_external_storage = var.enable_standalone_insights || (var.enable_insights && var.insights_storage == "external")
-  polly_enabled             = var.enable_polly || var.enable_standalone_polly
-  polly_external_storage    = var.enable_standalone_polly || (var.enable_polly && var.polly_storage == "external")
+  # Engine and Insights share the engineInsightsAgent deployment, so Engine alone
+  # also needs the Insights database and Redis index.
+  engine_insights_agent_enabled = var.enable_insights || var.enable_engine
 
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
 }
@@ -781,7 +775,6 @@ module "alb" {
   bucket_suffix              = random_id.bucket_suffix.hex
   enable_envoy_gateway       = local.enable_envoy_gateway
   enable_istio_gateway       = var.enable_istio_gateway
-  enable_nginx_ingress       = var.enable_nginx_ingress
   tags                       = local.common_tags
 
   existing_security_group_id = var.alb_existing_security_group_id
@@ -797,7 +790,6 @@ module "alb" {
 #
 # Envoy Gateway: port 10080 (Gateway listener port 80 + 10000 offset, Envoy runs non-root)
 # Istio Gateway: port 80    (istio-ingressgateway listens on 80 directly via NET_BIND_SERVICE)
-# NGINX Ingress:  port 80    (ingress-nginx-controller)
 
 resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
   count = local.enable_envoy_gateway ? 1 : 0
@@ -823,19 +815,6 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_istio" {
   to_port                      = 80
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Istio ingress gateway pods on HTTP (target-type: ip)"
-
-  tags = local.common_tags
-}
-
-resource "aws_vpc_security_group_ingress_rule" "alb_to_nginx" {
-  count = var.enable_nginx_ingress ? 1 : 0
-
-  security_group_id            = module.eks.node_security_group_id
-  referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 80
-  to_port                      = 80
-  ip_protocol                  = "tcp"
-  description                  = "Allow ALB to reach NGINX ingress controller pods on HTTP (target-type: ip)"
 
   tags = local.common_tags
 }
@@ -921,7 +900,6 @@ module "k8s_bootstrap" {
 
   enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
-  enable_nginx_ingress     = var.enable_nginx_ingress
   gateway_target_group_arn = module.alb.gateway_target_group_arn != null ? module.alb.gateway_target_group_arn : ""
 
   # cert-manager DNS-01 (Route 53 / Istio Gateway)
@@ -1079,9 +1057,9 @@ resource "terraform_data" "postgres_connection_url_revision" {
 resource "terraform_data" "standalone_db" {
   for_each = {
     for k, v in {
-      fleet    = var.enable_fleet && var.fleet_storage == "external"
-      polly    = local.polly_external_storage
-      insights = local.insights_external_storage
+      fleet    = var.enable_fleet
+      polly    = var.enable_polly
+      insights = local.engine_insights_agent_enabled
     } : k => v if v
   }
 
@@ -1180,7 +1158,7 @@ removed {
 # apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
+  count = var.enable_fleet ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -1193,7 +1171,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
+  count = var.enable_fleet ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -1206,7 +1184,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = local.polly_external_storage ? 1 : 0
+  count = var.enable_polly ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -1219,7 +1197,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = local.polly_external_storage ? 1 : 0
+  count = var.enable_polly ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -1232,7 +1210,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = local.insights_external_storage ? 1 : 0
+  count = local.engine_insights_agent_enabled ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -1245,7 +1223,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = local.insights_external_storage ? 1 : 0
+  count = local.engine_insights_agent_enabled ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace
@@ -1299,8 +1277,6 @@ module "smithdb" {
   s3_kms_key_arn        = var.s3_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
-
-  migration_source_bucket_arn = var.enable_smithdb && var.smithdb_migration_enabled ? module.storage.bucket_arn : ""
 
   existing_security_group_id           = var.smithdb_metastore_existing_security_group_id
   manage_existing_security_group_rules = var.smithdb_metastore_manage_existing_security_group_rules

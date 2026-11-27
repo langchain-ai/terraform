@@ -254,18 +254,6 @@ run "pod_subnets_in_another_vpc_are_rejected" {
 
 # ── SmithDB ──────────────────────────────────────────────────────────────────
 
-run "smithdb_migration_without_ingestion_is_rejected" {
-  command = plan
-
-  variables {
-    enable_smithdb            = true
-    smithdb_ingestion_enabled = false
-    smithdb_migration_enabled = true
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
 run "smithdb_query_without_ingestion_is_rejected" {
   command = plan
 
@@ -287,7 +275,7 @@ run "two_ingress_controllers_are_rejected" {
 
   variables {
     enable_envoy_gateway = true
-    enable_nginx_ingress = true
+    enable_istio_gateway = true
   }
 
   expect_failures = [terraform_data.validate_inputs]

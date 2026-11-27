@@ -19,13 +19,10 @@
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
 #   - values/langsmith-values-overrides.yaml    (auto-generated: hostname, IRSA, S3)
-#   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
 #   - values/langsmith-values-agent-deploys.yaml (if Deployments is enabled)
 #   - values/langsmith-values-insights.yaml     (if Insights is enabled)
 #   - values/langsmith-values-polly.yaml        (if LangSmith Chat is enabled)
 #   - values/langsmith-values-fleet.yaml        (if Fleet is enabled)
-#   - values/langsmith-values-standalone-polly.yaml (if Chat uses external storage)
-#   - values/langsmith-values-standalone-insights.yaml (if Insights uses external storage)
 #   - values/langsmith-values-engine.yaml        (if Engine is enabled)
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
@@ -51,6 +48,8 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
+_stop_if_nginx_applied || exit 1
+
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment=""
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
@@ -58,30 +57,27 @@ _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
 _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
-# is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
+# is derived (unset = on unless Istio was chosen), so a tfvars that never mentions
 # Envoy still deploys it. Reading the applied state keeps this script in agreement with
 # what Terraform actually built.
 _enable_envoy_gateway=$(_read_applied_flag "enable_envoy_gateway" false)
 _enable_istio_gateway=$(_read_applied_flag "enable_istio_gateway" false)
-_enable_nginx_ingress=$(_read_applied_flag "enable_nginx_ingress" false)
 
 # The defaults match variables.tf, for a run before the first apply.
 _enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
 _smithdb_ingestion_enabled=$(_read_applied_flag "smithdb_ingestion_enabled" true)
-_smithdb_migration_enabled=$(_read_applied_flag "smithdb_migration_enabled" false)
 _smithdb_query_enabled=$(_read_applied_flag "smithdb_query_enabled" true)
 _smithdb_metastore_use_ssl=$(_parse_tfvar "smithdb_metastore_use_ssl") || _smithdb_metastore_use_ssl="true"
 
 # The gates default to true and count only with SmithDB on (as in outputs.tf).
 if [[ "$_enable_smithdb" != "true" ]]; then
-  _smithdb_ingestion_enabled=false; _smithdb_migration_enabled=false; _smithdb_query_enabled=false
+  _smithdb_ingestion_enabled=false; _smithdb_query_enabled=false
 fi
-if [[ "$_smithdb_ingestion_enabled" != "true" && ( "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
-  echo "ERROR: SmithDB migration/query require smithdb_ingestion_enabled = true." >&2
+if [[ "$_smithdb_ingestion_enabled" != "true" && "$_smithdb_query_enabled" == "true" ]]; then
+  echo "ERROR: SmithDB queries require smithdb_ingestion_enabled = true." >&2
   exit 1
 fi
 # upgrade-guard.sh covers only make apply, and an unset query gate defaults to on,
@@ -95,14 +91,13 @@ fi
 _gateway_modes=0
 [[ "$_enable_envoy_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 [[ "$_enable_istio_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
-[[ "$_enable_nginx_ingress" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 if (( _gateway_modes > 1 )); then
-  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true." >&2
-  echo "       Envoy Gateway is the default when enable_envoy_gateway is unset — set it to false explicitly in terraform.tfvars to run Istio or NGINX, then re-apply." >&2
+  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway can be true." >&2
+  echo "       Envoy Gateway is the default when enable_envoy_gateway is unset — set it to false explicitly in terraform.tfvars to run Istio, then re-apply." >&2
   exit 1
 fi
 
-# Classic ALB Ingress mode = none of the gateway/nginx routing modes enabled.
+# Classic ALB Ingress mode = none of the gateway routing modes enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB.
 _alb_ingress_mode=false
 (( _gateway_modes == 0 )) && _alb_ingress_mode=true
@@ -130,7 +125,6 @@ echo "  name_prefix            = ${_name_prefix:-(empty)}"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
-echo "  sizing_profile         = $_sizing_profile"
 echo "  sandbox_runtime_source = $_sandbox_runtime_source"
 echo ""
 
@@ -170,7 +164,7 @@ echo ""
 #     On first run the Ingress doesn't exist yet, so this resolves to blank and
 #     deploy.sh patches config.hostname/deployment.url once the controller
 #     provisions the ALB.
-#   - NGINX / Envoy / Istio modes: the Terraform-provisioned ALB is the entry
+#   - Envoy / Istio modes: the Terraform-provisioned ALB is the entry
 #     point (it fronts the in-cluster controller/gateway via a TargetGroupBinding).
 _ingress_alb_hostname() {
   kubectl get ingress langsmith-ingress -n "${NAMESPACE:-langsmith}" \
@@ -236,21 +230,6 @@ else
 fi
 echo ""
 
-# ── Sizing profile (from terraform.tfvars) ──────────────────────────────────
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ ! -f "$_sizing_file" ]]; then
-    cp "$_sizing_example" "$_sizing_file"
-    echo "Sizing: ${_sizing_profile} (created langsmith-values-sizing-${_sizing_profile}.yaml)"
-  else
-    echo "Sizing: ${_sizing_profile} (existing langsmith-values-sizing-${_sizing_profile}.yaml)"
-  fi
-else
-  echo "Sizing: chart defaults (sizing_profile = default)"
-fi
-echo ""
-
 # ── Product addons (driven by enable_* flags in terraform.tfvars) ────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
@@ -261,8 +240,6 @@ _enable_insights=false
 _enable_polly=false
 _enable_usage_telemetry=false
 _enable_fleet=false
-_enable_standalone_polly=false
-_enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_engine=false
 _enable_sso_oidc=false
@@ -271,8 +248,6 @@ _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
 _tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
-_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
-_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
 _tfvar_is_true "enable_engine"              && _enable_engine=true
 _tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
@@ -334,40 +309,6 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
     echo "  Existing: langsmith-values-sso.yaml"
   fi
   echo "  ✔ SSO login"
-fi
-
-_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
-if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
-  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
-if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
-  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_polly" == "true" ]]; then
-  _enable_polly=true
-  _polly_storage="external"
-elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
-  _enable_standalone_polly=true
-fi
-
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
-if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
-  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_insights" == "true" ]]; then
-  _enable_insights=true
-  _insights_storage="external"
-elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
-  _enable_standalone_insights=true
 fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
@@ -531,13 +472,12 @@ if [[ "$_enable_polly" == "true" ]]; then
   fi
 fi
 
-# ── Fleet and external-storage overlays ─────────────────────────────────────
-# Top-level fleet:/polly:/insights: deployments wired to per-feature databases on
-# the shared RDS/ElastiCache (K8s Secrets created by Terraform). encryptionKey and
+# ── Fleet ────────────────────────────────────────────────────────────────────
+# Fleet, Chat and Insights each use their own database on the shared RDS and
+# their own DB index on the shared ElastiCache (K8s Secrets created by
+# Terraform); deploy.sh sets that storage on every deploy. encryptionKey and
 # IRSA service-account annotations are injected into the overrides file below.
 _fleet_file="$VALUES_DIR/langsmith-values-fleet.yaml"
-_standalone_polly_file="$VALUES_DIR/langsmith-values-standalone-polly.yaml"
-_standalone_insights_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml"
 
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ ! -f "$_fleet_file" ]]; then
@@ -551,37 +491,16 @@ else
   echo "  ✗ Fleet (enable_fleet = false)"
 fi
 
-if [[ "$_enable_standalone_polly" == "true" ]]; then
-  if [[ ! -f "$_standalone_polly_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_standalone_polly_file"
-    echo "  Created: langsmith-values-standalone-polly.yaml"
-  else
-    echo "  Existing: langsmith-values-standalone-polly.yaml"
-  fi
-fi
-
-if [[ "$_enable_standalone_insights" == "true" ]]; then
-  if [[ ! -f "$_standalone_insights_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_standalone_insights_file"
-    echo "  Created: langsmith-values-standalone-insights.yaml"
-  else
-    echo "  Existing: langsmith-values-standalone-insights.yaml"
-  fi
-fi
-
 if [[ "$_enable_polly" == "true" ]]; then
-  _polly_storage="in-cluster Postgres/Redis"
-  [[ "$_enable_standalone_polly" == "true" ]] && _polly_storage="external Postgres/Redis"
-  echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage)"
+  echo "  ✔ LangSmith Chat (formerly Polly)"
 else
-  echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly and enable_standalone_polly are false)"
+  echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly = false)"
 fi
 
-if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
-  _insights_storage_label="${_insights_storage} Postgres/Redis"
-  echo "  ✔ Insights ($_insights_storage_label)"
+if [[ "$_enable_insights" == "true" ]]; then
+  echo "  ✔ Insights"
 else
-  echo "  ✗ Insights (enable_insights and enable_standalone_insights are false)"
+  echo "  ✗ Insights (enable_insights = false)"
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -600,9 +519,7 @@ if [[ "$_enable_engine" == "true" ]]; then
   else
     echo "  Existing: langsmith-values-engine.yaml"
   fi
-  _engine_storage_label="in-cluster Postgres/Redis"
-  [[ "$_enable_insights" == "true" ]] && _engine_storage_label="Insights ${_insights_storage} Postgres/Redis"
-  echo "  ✔ Engine (Bedrock through IRSA; $_engine_storage_label)"
+  echo "  ✔ Engine (Bedrock through IRSA; the Insights database and Redis index)"
 else
   echo "  ✗ Engine (enable_engine = false)"
 fi
@@ -656,25 +573,6 @@ istioGateway:
   namespace: \"${NAMESPACE:-langsmith}\"
 
 # ALB-always: frontend is ClusterIP. External traffic: ALB → Istio gateway → VirtualService → frontend.
-# The Terraform ALB module provisions a target group; k8s-bootstrap creates a TargetGroupBinding.
-frontend:
-  service:
-    type: ClusterIP"
-elif [[ "$_enable_nginx_ingress" == "true" ]]; then
-  # ALB-always + NGINX Ingress mode: ALB is the external entry point.
-  # The ALB forwards to ingress-nginx-controller pods via a TargetGroupBinding (Terraform-managed).
-  # Frontend service is ClusterIP — no internet-facing NLB is created.
-  # NGINX handles host-based routing via standard Kubernetes Ingress resources.
-  _routing_block="
-ingress:
-  enabled: true
-  ingressClassName: nginx
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: \"0\"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: \"3600\"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: \"3600\"
-
-# ALB-always: frontend is ClusterIP. External traffic: ALB → NGINX controller → Ingress → frontend.
 # The Terraform ALB module provisions a target group; k8s-bootstrap creates a TargetGroupBinding.
 frontend:
   service:
@@ -737,9 +635,9 @@ if [[ "$_enable_fleet" == "true" ]]; then
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
-  _fleet_storage_block=""
-  if [[ "$_fleet_storage" == "external" ]]; then
-    _fleet_storage_block="
+  _standalone_block+="
+fleet:
+  encryptionKey: \"${_fleet_key}\"
   postgres:
     external:
       enabled: true
@@ -747,19 +645,7 @@ if [[ "$_enable_fleet" == "true" ]]; then
   redis:
     external:
       enabled: true
-      existingSecretName: \"langsmith-fleet-redis\""
-  else
-    _fleet_storage_block="
-  postgres:
-    external:
-      enabled: false
-  redis:
-    external:
-      enabled: false"
-  fi
-  _standalone_block+="
-fleet:
-  encryptionKey: \"${_fleet_key}\"${_fleet_storage_block}
+      existingSecretName: \"langsmith-fleet-redis\"
   apiServer:
     serviceAccount:
       annotations:
@@ -789,6 +675,14 @@ if [[ "$_enable_polly" == "true" ]]; then
   _standalone_block+="
 polly:
   encryptionKey: \"${_polly_key}\"
+  postgres:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-polly-postgres\"
+  redis:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-polly-redis\"
   apiServer:
     serviceAccount:
       annotations:
@@ -856,17 +750,51 @@ engine:${_engine_settings}
   fi
 fi
 
+# The chart sets no requests or limits on the shared Engine and Insights
+# deployment, and a strict ResourceQuota rejects a pod without them. They go in
+# this file because init-values.sh rewrites it on every run, while it writes
+# langsmith-values-insights.yaml only once. The Engine and Insights files load
+# after this file, so a value set in either of them wins. test-values.sh
+# renders this block.
 if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
-  _standalone_block+="
+  _engine_insights_agent_block=$(cat << ENGINE_INSIGHTS_AGENT_YAML
 engineInsightsAgent:
+  postgres:
+    external:
+      enabled: true
+      existingSecretName: "langsmith-insights-postgres"
+  redis:
+    external:
+      enabled: true
+      existingSecretName: "langsmith-insights-redis"
   apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 8Gi
     serviceAccount:
       annotations:
-        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\"
+        eks.amazonaws.com/role-arn: "${_engine_agent_role_arn}"
   queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
     serviceAccount:
       annotations:
-        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\""
+        eks.amazonaws.com/role-arn: "${_engine_agent_role_arn}"
+ENGINE_INSIGHTS_AGENT_YAML
+)
+  _standalone_block+="
+${_engine_insights_agent_block}"
 fi
 
 _sandbox_config_block=""
@@ -1000,6 +928,10 @@ commonEnv:
     value: "${_region}"
   - name: AWS_DEFAULT_REGION
     value: "${_region}"
+  # The medium reads, medium writes pattern in the scale guide; commonEnv lives here
+  # because a list in a later file replaces the base values' list.
+  - name: CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT
+    value: "0"
 $( [[ "$_enable_usage_telemetry" == "true" ]] && cat <<'TELEMETRY'
   - name: PHONE_HOME_USAGE_REPORTING_ENABLED
     value: "true"
@@ -1067,8 +999,7 @@ echo ""
 # Copies the SmithDB overlay and generates langsmith-values-smithdb-overrides.yaml
 # with the object-store bucket, region, IRSA role ARN, and metastore secret-key
 # mapping from the infra outputs, and the node selector and tolerations that put
-# SmithDB and TaskDB on their own node group. All LangSmith integration gates start disabled;
-# operators enable ingestion, migration, and query in separate validated stages.
+# SmithDB on its own node group.
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
@@ -1154,8 +1085,6 @@ $(_smithdb_pool_scheduling "          ")
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}
-    migration:
-      enabled: ${_smithdb_migration_enabled}
     query:
       enabled: ${_smithdb_query_enabled}
 SMITHDB_YAML

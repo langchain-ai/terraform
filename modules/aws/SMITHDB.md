@@ -57,8 +57,9 @@ The module sets no size limit on Sandbox storage: the bucket grows with use.
 
 Run `make quickstart`, or leave the SmithDB settings out of `infra/terraform.tfvars` to take the defaults.
 Terraform always creates the metastore RDS instance and the S3 bucket, both dedicated to SmithDB.
+An install that used an external metastore in 0.17 moves it first: see [Move an external metastore to RDS](#move-an-external-metastore-to-rds).
 
-SmithDB services and TaskDB run on their own EKS managed node group. Every sizing
+SmithDB services run on their own EKS managed node group. Every sizing
 profile runs the SmithDB small tier, and the defaults below fit it. For the medium
 or large tier, see [Scaling up](#scaling-up).
 
@@ -88,8 +89,8 @@ SmithDB group (`langsmith-nodepool/smithdb`) into
 migration Job and TaskDB. `make deploy` does not add them.
 
 **Tier and node size.** `langsmith-values-smithdb.yaml` sets
-`smithdb.resourceTier: small`, and no sizing profile changes it, so every profile
-runs the small tier on the default nodes. `make deploy` stops when the tier's
+`smithdb.resourceTier: small`, so every install runs the small tier on the default
+nodes. `make deploy` stops when the tier's
 largest pod does not fit a SmithDB node. To move to a larger tier, follow
 [Scaling up](#scaling-up).
 
@@ -97,13 +98,6 @@ largest pod does not fit a SmithDB node. To move to a larger tier, follow
 the `nodeSelector` and `tolerations` blocks under each SmithDB key in
 `langsmith-values-smithdb-overrides.yaml`. `make init-values` rewrites that file, so
 repeat the edit after each run. The SmithDB node group is still created.
-
-**Migration.** The migration Job (`make smithdb-migration-job-start`) runs on the SmithDB
-nodes. Each pod requests 100Gi of ephemeral storage, so raise
-`smithdb_node_root_volume_size_gb` and run `make apply` before you enable migration.
-The script stops when the boot disk is under 150 GiB. With the
-[local SSD cache](#local-ssd-cache), ephemeral storage is on the instance store, and
-the boot disk size does not count.
 
 ## Deploy SmithDB services
 
@@ -128,8 +122,6 @@ smithdb:
   langsmith:
     ingestion:
       enabled: true
-    migration:
-      enabled: false
     query:
       enabled: true
 ```
@@ -139,17 +131,12 @@ An install with traces in ClickHouse turns SmithDB on in stages instead: set
 `infra/terraform.tfvars`, then follow the installation guide provided by
 LangChain to validate services and dual ingestion, optionally migrate historical
 data, and finally switch queries, applying each stage separately. The gates
-count only with `enable_smithdb = true`; with it false, all three are off
+count only with `enable_smithdb = true`; with it false, both are off
 whatever they are set to.
 
-To run the historical migration, run `make smithdb-migration-job-start`, then `make apply`, `make init-values`, and `make deploy`.
-It asks whether TaskDB is chart-managed or an external Postgres, how many runs to migrate in how many days, and how many migration pods to run (suggesting a count from the LangSmith formula plus 50% headroom), then stores the TaskDB settings in SSM, writes `helm/values/langsmith-values-smithdb-migration.yaml`, and sets `smithdb_migration_enabled = true`.
-Existing chart-managed migrations keep using `smithdb-migration-taskdb/postgres_password` when that Secret exists, so the helper does not change the Job's immutable secret reference.
-With the flag on, Terraform grants the SmithDB role read access to the traces bucket, and the deploy starts the migration Job.
-Once the Job is Complete, run `make smithdb-migration-job-end`, then the same three commands, to remove the grant, TaskDB, and its settings.
-An external TaskDB Postgres is not deleted.
-If migration pods are OOMKilled, raise their memory in `langsmith-values-smithdb-migration.yaml` (keep requests equal to limits).
-Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `make deploy`. Kubernetes cannot update an existing Job's pod template; the recreated Job resumes from progress saved in TaskDB.
+Historical backfill is customer-managed, including Helm values, TaskDB, and
+source-storage permissions. Follow the
+[SmithDB migration guide](https://docs.langchain.com/langsmith/self-host-smithdb-migrate).
 
 ## Scaling up
 
@@ -210,9 +197,9 @@ To move to the large tier:
 
 `make deploy` compares the tier with the SmithDB nodes before it upgrades the
 release. It stops when no SmithDB node can hold the tier's largest pod, and it
-names the input to change. It also stops when your sizing file still sets
-`smithdb.resourceTier` to another tier, as a copy from an earlier build of this
-module can: the SmithDB values file loads later and would replace that tier
+names the input to change. It also stops when `helm/values/langsmith-values.yaml`
+sets `smithdb.resourceTier` to another tier, as a value moved there from a 0.17
+sizing file can: the SmithDB values file loads later and would replace that tier
 without notice. Move the tier into `helm/values/langsmith-values-smithdb.yaml`. In the unified layout (`smithdb.topology: unified`,
 chart 0.18 or later), one pod runs every role and the tier sizes it; the same node
 types fit it, and the check covers it too.
@@ -322,6 +309,15 @@ outside `make apply` too, such as a plain `terraform apply` or a CI pipeline. It
 refuses to switch a release that serves reads from ClickHouse to SmithDB unless
 `terraform.tfvars` sets `smithdb_query_enabled = true`.
 
+**Metastore settings.** `smithdb_metastore_source = "external"` fails at plan,
+because Terraform always creates the metastore. Move the data first, as in
+[Move an external metastore to RDS](#move-an-external-metastore-to-rds).
+`smithdb_existing_metastore_security_group_id` and
+`smithdb_manage_byo_security_group_rules` are renamed to
+`smithdb_metastore_existing_security_group_id` and
+`smithdb_metastore_manage_existing_security_group_rules`, and the old names fail
+at plan.
+
 ### Existing Karpenter deployments
 
 In 0.17, `enable_smithdb = true` runs SmithDB on Karpenter node pools, and 0.18
@@ -338,3 +334,86 @@ install.
 `smithdb_compute_sizes`, and `smithdb_compute_limits`. Delete them from
 `terraform.tfvars`. Terraform only warns about a value that it no longer
 declares.
+
+### Move an external metastore to RDS
+
+From 0.18 the module always creates the SmithDB metastore as a dedicated RDS
+instance, and `smithdb_metastore_source = "external"` fails at plan. Move the data
+before the first 0.18 apply. That apply points the `smithdb-local` Secret at a new,
+empty RDS instance. Writes made after the dump are not copied, so stop sending
+traces until the move is done. The commands use the default namespace, `langsmith`.
+In 0.17, an install with SmithDB also runs it on Karpenter, and `make apply`
+refuses that state. Read [Existing Karpenter deployments](#existing-karpenter-deployments) first.
+
+1. Save this pod as `smithdb-pg.yaml`. It reads the metastore connection from
+   `smithdb-local` when it starts: before the apply, that is the external
+   metastore, and after it, the new RDS instance. Use the image for your RDS engine
+   version (`smithdb_metastore_engine_version`, default `18`):
+
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: smithdb-pg
+     namespace: langsmith
+   spec:
+     restartPolicy: Never
+     containers:
+       - name: smithdb-pg
+         image: postgres:18
+         command: ["sleep", "3600"]
+         env:
+           - name: PGHOST
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_host
+           - name: PGDATABASE
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_name
+           - name: PGUSER
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_username
+           - name: PGPASSWORD
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_password
+   ```
+
+   The Secret holds no port. If the external metastore does not listen on 5432,
+   add a `PGPORT` variable with its port for the dump.
+
+2. Dump the external metastore to your machine:
+
+   ```bash
+   kubectl apply -f smithdb-pg.yaml
+   kubectl wait -n langsmith --for=condition=Ready pod/smithdb-pg --timeout=180s
+   kubectl exec -n langsmith smithdb-pg -- pg_dump -Fc > smithdb-metastore.dump
+   kubectl delete pod -n langsmith smithdb-pg
+   ```
+
+3. Remove `smithdb_metastore_source = "external"` and the
+   `smithdb_external_metastore_*` lines from `infra/terraform.tfvars`, and unset
+   `TF_VAR_smithdb_external_metastore_password`. Run `make apply`. It creates the
+   RDS instance and points `smithdb-local` at it.
+4. Restore the dump before `make deploy`, which runs the metastore migration Job.
+   Start the pod again, so that it reads the new connection:
+
+   ```bash
+   kubectl apply -f smithdb-pg.yaml
+   kubectl wait -n langsmith --for=condition=Ready pod/smithdb-pg --timeout=180s
+   kubectl cp smithdb-metastore.dump langsmith/smithdb-pg:/tmp/smithdb-metastore.dump
+   kubectl exec -n langsmith smithdb-pg -- \
+     sh -c 'pg_restore --no-owner --no-privileges -d "$PGDATABASE" /tmp/smithdb-metastore.dump'
+   kubectl delete pod -n langsmith smithdb-pg
+   ```
+
+5. Run `make init-values` and `make deploy`.
+6. Keep the external database and `smithdb-metastore.dump` until LangSmith shows
+   your traces. Terraform does not manage the external database, so delete it
+   yourself.

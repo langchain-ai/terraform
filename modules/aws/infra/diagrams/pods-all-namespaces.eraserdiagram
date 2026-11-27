@@ -6,7 +6,7 @@ typeface clean
 // ============================================================
 // KUBERNETES VIEW: All Pods Across All Namespaces
 // Full-featured LangSmith deployment — all features enabled:
-//   LangGraph Deployments, Fleet, Insights, LangSmith Chat, NGINX, cert-manager
+//   LangGraph Deployments, Fleet, Insights, LangSmith Chat, cert-manager
 // AWS services shown as external reference boxes only
 // ============================================================
 
@@ -47,7 +47,7 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
 
     // AWS Load Balancer Controller — manages ALB lifecycle
     // In ALB-native mode: watches Ingress resources, provisions ALB
-    // In Envoy/Istio/NGINX modes: manages TargetGroupBinding CRD
+    // In Envoy/Istio modes: manages TargetGroupBinding CRD
     // Runs as 2-replica Deployment for HA
     aws-load-balancer-controller [icon: kubernetes, color: gray]
 
@@ -107,17 +107,6 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
     // Certificate CRD — requests a TLS cert for the LangSmith domain
     // cert-manager fulfills this via ACME challenge → stores as TLS Secret
     Certificate langsmith-tls [icon: lock, color: gray]
-  }
-
-  // ── ingress-nginx (opt-in, NGINX mode — Path 2) ──────────
-  // Deployed when enable_nginx_ingress = true
-  // ALB forwards HTTPS traffic to NGINX NodePort → NGINX routes internally
-  ingress-nginx [color: purple] {
-
-    // NGINX Ingress Controller — single Deployment, handles all routing
-    // Reads Ingress resources in langsmith namespace
-    // Terminates TLS here (Let's Encrypt cert from cert-manager)
-    ingress-nginx-controller [icon: server, color: purple]
   }
 
   // ── envoy-gateway-system (opt-in, Envoy mode — Path 3) ───
@@ -280,22 +269,6 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
       // ClickHouse StatefulSet — single pod, no replication
       // Only suitable for dev/POC — will be a bottleneck under load
       langsmith-clickhouse [icon: database, color: red]
-
-      // In-cluster Redis — no requirepass, no auth, no persistence guarantee
-      // Use ElastiCache for any real workload
-      langsmith-redis [icon: database, color: red]
-
-      // In-cluster Postgres StatefulSet — no Multi-AZ, no automated backups
-      // Use RDS for any real workload
-      langsmith-postgres [icon: database, color: red]
-
-      // Optional chart-managed stores for Fleet, Chat, and Insights
-      langsmith-standalone-fleet-postgres [icon: database, color: red]
-      langsmith-standalone-fleet-redis [icon: database, color: red]
-      langsmith-standalone-polly-postgres [icon: database, color: red]
-      langsmith-standalone-polly-redis [icon: database, color: red]
-      langsmith-standalone-insights-postgres [icon: database, color: red]
-      langsmith-standalone-insights-redis [icon: database, color: red]
     }
 
   }
@@ -340,8 +313,6 @@ aws-load-balancer-controller --> TargetGroupBinding: manages CRD lifecycle
 aws-load-balancer-controller --> Ingress langsmith: provisions ALB (Path 1)
 
 // ── Inbound traffic → gateway → services ────────────────────
-// NGINX path (opt-in, Path 2)
-ingress-nginx-controller > langsmith-frontend: Ingress backend
 
 // Envoy path (opt-in, Path 3)
 envoy-langsmith-gateway-proxy > langsmith-frontend: HTTPRoute backendRef
@@ -374,10 +345,6 @@ langsmith-host-backend > RDS PostgreSQL: :5432 agent state
 langsmith-ingest-queue --> LangChain Managed ClickHouse: :9000 analytics writes
 // Dev/POC: in-cluster ClickHouse
 langsmith-ingest-queue > langsmith-clickhouse: :9000 (dev/POC only)
-
-// ── In-cluster data store connections (dev/POC) ───────────────
-langsmith-backend > langsmith-redis: :6379 (dev/POC only)
-langsmith-backend > langsmith-postgres: :5432 (dev/POC only)
 
 // ── LangGraph Deployments flow ────────────────────────────────
 langsmith-listener > langsmith-operator: deployment events
