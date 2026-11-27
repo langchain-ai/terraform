@@ -1,0 +1,61 @@
+modules/aws/infra/scripts/upgrade-guard.sh
+  s_7f2b3772a94a7a::t_09e84d7db6d4e3 7-8,10-20,33,36,46-50
+  s_982a02284cc2f9::t_0409bf58b57ab0 51
+modules/aws/infra/variables.tf
+  s_7f2b3772a94a7a::t_3a3ce9f020a0e0 1046-1056
+modules/aws/README.md
+  s_7f2b3772a94a7a::t_5d833b36b0655f 688-697
+modules/azure/infra/scripts/test-guard-ingress-nginx.sh
+  s_7f2b3772a94a7a::t_75a4c4cca3738a 1-62
+modules/azure/infra/scripts/tf-run.sh
+  s_7f2b3772a94a7a::t_297a3fb014975c 28-31
+modules/aws/infra/tests/validation.tftest.hcl
+  s_7f2b3772a94a7a::t_0d66b432a16889 97-123
+modules/aws/infra/scripts/test-upgrade-guard.sh
+  s_7f2b3772a94a7a::t_e9cd3e2881cd73 67-74
+modules/azure/infra/scripts/guard-ingress-nginx.sh
+  s_7f2b3772a94a7a::t_a080241702a878 14-15
+  s_7f2b3772a94a7a::t_03903bc3bfb33d 1-13,16-34
+modules/aws/infra/scripts/test-quickstart-dns.sh
+  s_7f2b3772a94a7a::t_4284e8358d8a43 336-338
+  s_7f2b3772a94a7a::t_9260d8a9d7d514 331-335,339-352
+  s_7f2b3772a94a7a::t_e6e1ea91c42e8b 11-13
+modules/azure/helm/scripts/deploy.sh
+  s_7f2b3772a94a7a::t_f3e098774337fb 1545-1573
+modules/azure/README.md
+  s_7f2b3772a94a7a::t_5b0c895a3a7c63 572-576
+modules/aws/infra/scripts/quickstart.sh
+  s_7f2b3772a94a7a::t_582887a1c4f1f7 342-344
+  s_7f2b3772a94a7a::t_804a862db6bc04 345-352
+modules/azure/INGRESS_CONTROLLERS.md
+  s_7f2b3772a94a7a::t_bac5ddde72c452 10-18
+modules/azure/Makefile
+  s_7f2b3772a94a7a::t_50c6e2c69f7269 71-73
+  s_7f2b3772a94a7a::t_451e18a6d9c5b4 98,105
+  s_7f2b3772a94a7a::t_a0afad82f216ed 13
+  s_7f2b3772a94a7a::t_39fe953fa1b888 138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "92b03edefd0396bd5707453afdf75bbb47faf51a",
+  "prompts": {},
+  "sessions": {
+    "s_7f2b3772a94a7a": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7a9c2c77-f391-4e94-90e5-681c4440aa7a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    },
+    "s_982a02284cc2f9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e3a10cb0-85a5-4a58-baab-c4783fb4b31d",
+        "model": "auto-smart"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
