@@ -1,0 +1,24 @@
+modules/aws/helm/scripts/deploy.sh
+  s_cd03e8f6bf2eb7::t_efd4216835924f 243-254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "418363fa798aa61735a39871451869a6c9dc5a11",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_cd03e8f6bf2eb7": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "bfcec538-f610-41e9-b662-3ccfc0a66b0f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
