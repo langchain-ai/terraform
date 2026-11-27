@@ -1108,10 +1108,11 @@ _ex_deploys=$(_existing "enable_deployments" "false")
 _ex_fleet=$(_existing "enable_fleet" "false")
 _ex_insights=$(_existing "enable_insights" "false")
 _ex_polly=$(_existing "enable_polly" "false")
-# deploy.sh reads polly_storage / insights_storage = "external" as confirmation that
-# a 0.17 install moved that add-on's data, so update mode keeps the line.
+# deploy.sh reads fleet_storage / polly_storage / insights_storage = "external" as
+# confirmation that a 0.17 install moved that add-on's data, so update mode keeps
+# the line.
 ADDON_STORAGE_HCL=""
-for _key in polly_storage insights_storage; do
+for _key in fleet_storage polly_storage insights_storage; do
   if [[ "$(_existing "$_key" "")" == "external" ]]; then
     ADDON_STORAGE_HCL+="${_key} = \"external\""$'\n'
   fi

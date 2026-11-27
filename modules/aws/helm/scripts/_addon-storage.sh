@@ -32,12 +32,13 @@ _addon_storage_values() {
   done
 }
 
-# A 0.17 install that left polly_storage or insights_storage unset kept that
-# add-on in the chart's in-cluster StatefulSets. From 0.18 the same tfvars means
-# external, so the next deploy would point the add-on at a new, empty database
-# and strand its data. A plan cannot see the live release, so the check runs
-# here. Fleet already defaulted to external in 0.17.
-# _addon_storage_cutover_check <release> <namespace> <polly|engineInsightsAgent>...
+# A 0.17 install that left polly_storage or insights_storage unset, or set
+# fleet_storage = "in-cluster", kept that add-on in the chart's in-cluster
+# StatefulSets. From 0.18 the add-on always uses external storage, so the next
+# deploy would point it at a new, empty database and strand its data. A plan
+# cannot see the live release, and make deploy runs no plan, so the check runs
+# here.
+# _addon_storage_cutover_check <release> <namespace> <fleet|polly|engineInsightsAgent>...
 # Checks only the sections given, which the caller passes when the add-on is on
 # and terraform.tfvars does not set its *_storage = "external". Returns 0 for a
 # new install (no release yet) or a release already on external storage, and 1,
@@ -48,7 +49,7 @@ _addon_storage_cutover_check() {
   (( $# )) || return 0
   found=$(helm list -a -n "$namespace" --filter "^${release}\$" -q) || {
     echo "ERROR: could not list the Helm releases in $namespace, so the add-on storage check cannot run." >&2
-    echo "       Check cluster access (make kubeconfig), or set polly_storage / insights_storage = \"external\" in terraform.tfvars." >&2
+    echo "       Check cluster access (make kubeconfig), or set fleet_storage / polly_storage / insights_storage = \"external\" in terraform.tfvars." >&2
     return 1
   }
   [[ -n "$found" ]] || return 0
@@ -58,12 +59,14 @@ _addon_storage_cutover_check() {
   }
   for section in "$@"; do
     case "$section" in
+      fleet) feature="Fleet" key=fleet_storage ;;
       polly) feature="Chat" key=polly_storage ;;
       *) feature="Insights and Engine" key=insights_storage ;;
     esac
     in_cluster=$(jq -r --arg s "$section" '
-      (if $s == "polly" then .polly.enabled
-       else (.insights.enabled // false) or (.engine.enabled // false) end) == true
+      (if $s == "engineInsightsAgent"
+       then (.insights.enabled // false) or (.engine.enabled // false)
+       else .[$s].enabled end) == true
       and (.[$s].postgres.external.enabled // false) != true' <<< "$live") || {
       echo "ERROR: could not read the $feature storage of release $release, so the add-on storage check cannot run." >&2
       return 1

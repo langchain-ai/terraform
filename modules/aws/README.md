@@ -359,9 +359,9 @@ to copy there.
 
 2. Set `polly_storage = "external"` in `infra/terraform.tfvars`, then run `make apply`.
    It creates the `langsmith_polly` database and the `langsmith-polly-postgres` Secret.
-   `make deploy` stops on a release that keeps Chat in the cluster until this line says
-   `external`, including on an install that never set it, because 0.17 read an unset
-   `polly_storage` or `insights_storage` as `in-cluster`.
+   `make deploy` stops on a release that keeps the feature in the cluster until this
+   line says `external`. It also stops when the line is missing, because 0.17 read an
+   unset `polly_storage` or `insights_storage` as `in-cluster`.
 3. Restore the dump with the `pg-restore.yaml` pod from
    [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds), with
    the Secret `name: langsmith-polly-postgres` and `key: postgres_connection_url`.

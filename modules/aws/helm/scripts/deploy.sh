@@ -578,6 +578,9 @@ fi
 _engine_insights_agent=false
 [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]] && _engine_insights_agent=true
 _unconfirmed_storage=()
+if [[ "$_enable_fleet" == "true" && "$(_parse_tfvar fleet_storage || true)" != "external" ]]; then
+  _unconfirmed_storage+=(fleet)
+fi
 if [[ "$_enable_polly" == "true" && "$(_parse_tfvar polly_storage || true)" != "external" ]]; then
   _unconfirmed_storage+=(polly)
 fi

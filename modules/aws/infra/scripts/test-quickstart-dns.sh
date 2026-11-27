@@ -355,14 +355,16 @@ run_wizard "update mode accepts in-cluster storage for an add-on that is off" "$
 lacks_key "update mode drops the stale polly_storage" "$STALE_INFRA/terraform.tfvars" "polly_storage"
 KEEP_INFRA="$TMP/addon-keep"
 mkdir -p "$KEEP_INFRA"
-{ cat "$SMITHDB_INFRA/terraform.tfvars"; printf 'polly_storage = "external"\n'; } > "$KEEP_INFRA/terraform.tfvars"
+{ cat "$SMITHDB_INFRA/terraform.tfvars"; printf 'fleet_storage = "external"\npolly_storage = "external"\n'; } > "$KEEP_INFRA/terraform.tfvars"
 write_update_defaults "$TMP/addon-keep.answers" true
-run_wizard "update mode accepts polly_storage = external" "$KEEP_INFRA" "$TMP/addon-keep.answers" "$TMP/addon-keep.log"
-if awk '$1 == "polly_storage" { found = ($3 == "\"external\"") } END { exit !found }' "$KEEP_INFRA/terraform.tfvars"; then
-  ok "update mode keeps the confirmation that deploy.sh reads"
-else
-  bad "update mode keeps the confirmation that deploy.sh reads"
-fi
+run_wizard "update mode accepts fleet_storage and polly_storage = external" "$KEEP_INFRA" "$TMP/addon-keep.answers" "$TMP/addon-keep.log"
+for key in fleet_storage polly_storage; do
+  if awk -v key="$key" '$1 == key { found = ($3 == "\"external\"") } END { exit !found }' "$KEEP_INFRA/terraform.tfvars"; then
+    ok "update mode keeps the $key confirmation that deploy.sh reads"
+  else
+    bad "update mode keeps the $key confirmation that deploy.sh reads"
+  fi
+done
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

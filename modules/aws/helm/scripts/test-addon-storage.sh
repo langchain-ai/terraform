@@ -44,6 +44,8 @@ run() {
   FAIL=$((FAIL + 1)); echo "  FAIL  $name"; sed 's/^/        /' "$TMP/err"
 }
 
+FLEET_IN='{"fleet":{"enabled":true,"postgres":{"external":{"enabled":false}}}}'
+FLEET_EXT='{"fleet":{"enabled":true,"postgres":{"external":{"enabled":true}}}}'
 CHAT_IN='{"polly":{"enabled":true,"postgres":{"external":{"enabled":false}}}}'
 CHAT_EXT='{"polly":{"enabled":true,"postgres":{"external":{"enabled":true}}}}'
 CHAT_OFF='{"polly":{"enabled":false,"postgres":{"external":{"enabled":false}}}}'
@@ -51,7 +53,9 @@ ENGINE_IN='{"insights":{"enabled":false},"engine":{"enabled":true},"engineInsigh
 INSIGHTS_EXT='{"insights":{"enabled":true},"engineInsightsAgent":{"postgres":{"external":{"enabled":true}}}}'
 
 run "nothing to check passes without a helm call" "" BROKEN "" 
-run "a new install passes" "" "" "" polly engineInsightsAgent
+run "a new install passes" "" "" "" fleet polly engineInsightsAgent
+run "Fleet on in-cluster storage refuses" "keeps Fleet data in the cluster" langsmith "$FLEET_IN" fleet
+run "Fleet already external passes" "" langsmith "$FLEET_EXT" fleet
 run "Chat on in-cluster storage refuses" "keeps Chat data in the cluster" langsmith "$CHAT_IN" polly
 run "Chat already external passes" "" langsmith "$CHAT_EXT" polly
 run "Chat off in the release passes" "" langsmith "$CHAT_OFF" polly
