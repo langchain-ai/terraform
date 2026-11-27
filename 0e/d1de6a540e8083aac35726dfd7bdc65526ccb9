@@ -1,0 +1,149 @@
+modules/aws/helm/scripts/test-values.sh
+  s_1a073585f82f8e::t_e64cd1410cd19a 3-7
+  s_1a073585f82f8e::t_4a1c8c54d1c759 241
+  s_1a073585f82f8e::t_2b745ff7d5fde7 242-244
+AGENTS.md
+  s_1a073585f82f8e::t_950c89aaf72c27 58-62
+CHANGELOG.md
+  s_1a073585f82f8e::t_e25bf005edb46e 25
+README.md
+  s_1a073585f82f8e::t_2dd90ad9223fd4 49,125-127
+modules/aws/ENGINE.md
+  s_1a073585f82f8e::t_89bf2ecc9962b5 61,155-158,263-264
+modules/aws/Makefile
+  s_1a073585f82f8e::t_bcea483b87634a 18,165
+modules/aws/QUICK_REFERENCE.md
+  s_1a073585f82f8e::t_0d8e34f84bc7c0 136
+modules/aws/README.md
+  s_1a073585f82f8e::t_badb7931902feb 168,334-375,651,655,657,973,977,1003,1017-1019,1372,1374
+modules/aws/SERVICES.md
+  s_1a073585f82f8e::t_6f95b9453d3285 133,150
+modules/aws/SMITHDB.md
+  s_1a073585f82f8e::t_15e553dbf2b6f2 71,104-105,146,149-151,212-214,303-304
+modules/aws/helm/scripts/_addon-storage.sh
+  s_1a073585f82f8e::t_bbdb006e62a75a 7-11,13-32,35-78
+modules/aws/helm/scripts/_sizing.sh
+  s_1a073585f82f8e::t_ff918631b8aa32 7-40
+modules/aws/helm/scripts/deploy.sh
+  s_1a073585f82f8e::t_11ade25550d2b4 17-18,30-44,207,209,255-266,518-524,531,560-565,586-587,590,598,604,607,610-627,631,651,691
+modules/aws/helm/scripts/init-values.sh
+  s_1a073585f82f8e::t_e50531bedc7f6d 76,78-79,475-478,495,497,500-501,503,522,657-659,667,697-704,772-777,779,781-788,790-797,800,802-809,812-816,949-952,1020
+modules/aws/helm/scripts/test-addon-storage.sh
+  s_1a073585f82f8e::t_1e0c80c3a165eb 7-8,10-11,14-19,21-32,34-45,47-53,55-65,67-70,72,74-77
+modules/aws/helm/scripts/test-sizing.sh
+  s_1a073585f82f8e::t_c6ffa01a36193e 7-8,10-11,14-40,42-43,45-56,58-69,71-81,83-90,92,94-96
+modules/aws/helm/values/examples/SIZING.md
+  s_1a073585f82f8e::t_cc1893b7f10121 1,3,5,7-13,15,17,19,21,23,25,27,29,31,33-40,42,44,46,48-51,53,55,57-65
+modules/aws/helm/values/examples/langsmith-values-engine.yaml
+  s_1a073585f82f8e::t_d91437bbd8a73e 44-46,67-69
+modules/aws/helm/values/examples/langsmith-values-fleet.yaml
+  s_1a073585f82f8e::t_1022add84df9d7 67,72,75
+modules/aws/helm/values/examples/langsmith-values-insights.yaml
+  s_1a073585f82f8e::t_c134b053c5250c 13-24
+modules/aws/helm/values/examples/langsmith-values-polly.yaml
+  s_1a073585f82f8e::t_4ae5c71c6b2327 7-9
+modules/aws/helm/values/examples/langsmith-values-smithdb.yaml
+  s_1a073585f82f8e::t_930e3b9eee9a94 7-10
+modules/aws/helm/values/examples/langsmith-values.yaml
+  s_1a073585f82f8e::t_0961fac963dd19 63-65,79-81,83-102
+modules/aws/infra/diagrams/path5-full-architecture.eraserdiagram
+  s_1a073585f82f8e::t_899dee0a9d078a 270
+modules/aws/infra/main.tf
+  s_1a073585f82f8e::t_4fd46428d2d82e 740-742,1091-1093,1192,1205,1218,1231,1244,1257
+modules/aws/infra/outputs.tf
+  s_1a073585f82f8e::t_6313027151e611 382-383,387-388,417-432
+modules/aws/infra/scripts/_smithdb-transition.sh
+  s_1a073585f82f8e::t_311de4eae92aff 138-141,143
+modules/aws/infra/scripts/clean.sh
+  s_1a073585f82f8e::t_be4cae25045267 23
+modules/aws/infra/scripts/quickstart.sh
+  s_1a073585f82f8e::t_5b302e5dd21ea1 373,556-558,647,654,691-692,694,1040,1043,1046-1054,1076-1110,1127,1132,1141,1241-1242,1455-1457
+modules/aws/infra/scripts/status.sh
+  s_1a073585f82f8e::t_4fcceb2332dd97 25-26,301-305,310-317,335
+modules/aws/infra/scripts/test-quickstart-dns.sh
+  s_1a073585f82f8e::t_a34130ccf893d3 79-80,293-315,319,330-368
+modules/aws/infra/scripts/test-smithdb-transition.sh
+  s_1a073585f82f8e::t_b39cea1f40aa60 146,153,156,417-427,429-430
+modules/aws/infra/scripts/test-worker.sh
+  s_1a073585f82f8e::t_0956661014a1e8 99-100,106,116
+modules/aws/infra/smithdb-nodes.tf
+  s_1a073585f82f8e::t_ac3ed483455c73 2,81
+modules/aws/infra/terraform.tfvars.dev
+  s_1a073585f82f8e::t_558e2ffac96b67 37-38,44
+modules/aws/infra/terraform.tfvars.example
+  s_1a073585f82f8e::t_21599c1abc8d4a 779-781,899
+modules/aws/infra/tests/engine.tftest.hcl
+  s_1a073585f82f8e::t_62632ecd7debab 306-327
+modules/aws/infra/tests/validation.tftest.hcl
+  s_1a073585f82f8e::t_598a8305444982 241-292
+modules/aws/infra/tests/wiring.tftest.hcl
+  s_1a073585f82f8e::t_2084a01c6d41a6 77-83,417,435,787-790,792,797-798,802-807,810-815,819,823-826,830-831
+modules/aws/infra/variables.tf
+  s_1a073585f82f8e::t_d5cc8ddc2546b4 943-944,947-950,962-963,966-967,979,983-984,988-991,994,996-1000,1005,1007-1011
+modules/azure/ARCHITECTURE.md
+  s_1a073585f82f8e::t_9ddf82863e66de 226,293,297,317-319
+modules/azure/README.md
+  s_1a073585f82f8e::t_609943817c1dbf 435-436,760
+modules/azure/SMITHDB.md
+  s_1a073585f82f8e::t_3536c9fec14921 42,92,166,169-170,184,189,191,193-195,208-211,213,216
+modules/azure/TROUBLESHOOTING.md
+  s_1a073585f82f8e::t_f51d28a2289ee2 1184
+modules/azure/helm/scripts/init-values.sh
+  s_1a073585f82f8e::t_a9274aed5078db 402,406-407
+modules/azure/infra/main.tf
+  s_1a073585f82f8e::t_fcf4456fce2de1 1086,1091-1092,2049
+modules/azure/infra/scripts/seed-keyvault-secrets.sh
+  s_1a073585f82f8e::t_5e417f057fc555 41-42,47,240,255
+modules/azure/infra/terraform.tfvars.example
+  s_1a073585f82f8e::t_88c248079084ac 159,169
+modules/azure/infra/tests/wiring.tftest.hcl
+  s_1a073585f82f8e::t_b8bc232804f33d 498-500,513
+modules/gcp/Makefile
+  s_1a073585f82f8e::t_96af9fa87de4bd 13
+modules/gcp/README.md
+  s_1a073585f82f8e::t_47aad606a9b18d 642-643,645
+modules/gcp/SMITHDB.md
+  s_1a073585f82f8e::t_b818fbbb2589f2 6,22,115,141,267-268,273,275,277-279,288-291,293,296,319-340,402-403
+modules/gcp/TEARDOWN.md
+  s_1a073585f82f8e::t_2ebe1d20f611a8 97,515-516,522
+modules/gcp/helm/scripts/deploy.sh
+  s_1a073585f82f8e::t_45db1d1e2cfdd2 638-639,645,1123
+modules/gcp/helm/scripts/init-values.sh
+  s_1a073585f82f8e::t_8ec7439c548795 133,138-139,219
+modules/gcp/helm/scripts/uninstall.sh
+  s_1a073585f82f8e::t_422d3201d471cf 270,284
+modules/gcp/helm/values/examples/langsmith-values-smithdb.yaml
+  s_1a073585f82f8e::t_4fe18a21224c69 19
+modules/gcp/infra/locals.tf
+  s_1a073585f82f8e::t_1f278495e25c88 165,232-233
+modules/gcp/infra/main.tf
+  s_1a073585f82f8e::t_e23a5154814fd6 168
+modules/gcp/infra/modules/smithdb-nodes/variables.tf
+  s_1a073585f82f8e::t_c22c52172639c9 73
+modules/gcp/infra/scripts/quickstart.sh
+  s_1a073585f82f8e::t_0f3a0bab15cc6b 587-589
+modules/gcp/infra/terraform.tfvars.example
+  s_1a073585f82f8e::t_0c7cfa3f22e64a 445
+modules/gcp/infra/tests/wiring.tftest.hcl
+  s_1a073585f82f8e::t_d2c708d170575f 441-444,454,467,575,593
+modules/gcp/infra/variables.tf
+  s_1a073585f82f8e::t_708b4de6260d12 1116,1340,1358
+scripts/check.sh
+  s_1a073585f82f8e::t_955364861abcd6 61-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ed1de6a540e8083aac35726dfd7bdc65526ccb9",
+  "prompts": {},
+  "sessions": {
+    "s_1a073585f82f8e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e5f9dcdc-2465-48fc-af50-b79589033879",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
