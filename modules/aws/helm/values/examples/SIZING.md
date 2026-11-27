@@ -56,10 +56,10 @@ With SmithDB off, ClickHouse also serves the reads. Raise `clickhouse.statefulSe
 
 ## Product workloads
 
-Fleet, LangSmith Chat and Insights each run an api-server and a queue Deployment, sized in their overlays:
+Fleet, LangSmith Chat and Insights each run an api-server and a queue Deployment. The chart gives these six Deployments no requests, so the module sets them:
 
-- `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`
-- `polly.apiServer.deployment.resources` and `polly.queue.deployment.resources`
-- `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`
+- `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`, in the Fleet overlay
+- `polly.apiServer.deployment.resources` and `polly.queue.deployment.resources`, in the Chat overlay
+- `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`, which Insights and Engine share. `make init-values` writes them into `langsmith-values-overrides.yaml` on every run, and the Engine overlay repeats them. To change them, set `engineInsightsAgent` in `helm/values/langsmith-values-insights.yaml`, or in `langsmith-values-engine.yaml` when only Engine is on; both load after the overrides file.
 
-The chart gives these six Deployments no requests, so the overlays set them. Each add-on keeps its data in its own database on the shared RDS instance and its own index on the shared ElastiCache.
+Each add-on keeps its data in its own database on the shared RDS instance and its own index on the shared ElastiCache.

@@ -223,9 +223,9 @@ To move to the large tier:
 
 `make deploy` compares the tier with the SmithDB nodes before it upgrades the
 release. It stops when no SmithDB node can hold the tier's largest pod, and it
-names the input to change. It also stops when your sizing file still sets
-`smithdb.resourceTier` to another tier, as a copy from an earlier build of this
-module can: the SmithDB values file loads later and would replace that tier
+names the input to change. It also stops when `helm/values/langsmith-values.yaml`
+sets `smithdb.resourceTier` to another tier, as a value moved there from a 0.17
+sizing file can: the SmithDB values file loads later and would replace that tier
 without notice. Move the tier into `helm/values/langsmith-values-smithdb.yaml`. In the unified layout (`smithdb.topology: unified`,
 chart 0.18 or later), one pod runs every role and the tier sizes it; the same node
 types fit it, and the check covers it too.

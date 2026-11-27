@@ -773,8 +773,8 @@ fi
 # The chart sets no requests or limits on the shared Engine and Insights
 # deployment, and a strict ResourceQuota rejects a pod without them. They go in
 # this file because init-values.sh rewrites it on every run, while it writes
-# langsmith-values-insights.yaml only once. The Engine, Insights and sizing files
-# load after this file, so a value set in one of them wins. test-values.sh
+# langsmith-values-insights.yaml only once. The Engine and Insights files load
+# after this file, so a value set in either of them wins. test-values.sh
 # renders this block.
 if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
   _engine_insights_agent_block=$(cat << ENGINE_INSIGHTS_AGENT_YAML
