@@ -83,6 +83,7 @@ plan: ## terraform plan (infra)
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra)
+	bash $(INFRA_DIR)/scripts/upgrade-guard.sh
 	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — run make uninstall first

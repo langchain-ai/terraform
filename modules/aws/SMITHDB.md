@@ -298,3 +298,43 @@ kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 - Verify SmithDB workloads schedule on the dedicated managed group and can
   reach PostgreSQL and S3.
 - For the best cache performance, use the [local SSD cache](#local-ssd-cache).
+
+## Upgrading from 0.17
+
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance. The Terraform module also requires the settings below.
+
+**SmithDB settings.** The defaults now turn SmithDB on with queries served from
+it. In 0.17 an unset `enable_smithdb`, `smithdb_ingestion_enabled` or
+`smithdb_query_enabled` meant off, so a `terraform.tfvars` that leaves them out
+would switch an install to querying a SmithDB that holds none of its ClickHouse
+history. Before the first 0.18 apply, write them explicitly:
+
+- without SmithDB: `enable_smithdb = false`, or turn it on and stage it as above;
+- with SmithDB still staged: `smithdb_ingestion_enabled` and
+  `smithdb_query_enabled` as they are today, `false` unless already cut over.
+
+`make apply` and `make quickdeploy` refuse the first 0.18 apply until these are
+set (`infra/scripts/upgrade-guard.sh`). Installs written by the QuickStart
+wizard already carry them.
+
+`make init-values` also checks the live Helm release, so it covers an apply run
+outside `make apply` too, such as a plain `terraform apply` or a CI pipeline. It
+refuses to switch a release that serves reads from ClickHouse to SmithDB unless
+`terraform.tfvars` sets `smithdb_query_enabled = true`.
+
+### Existing Karpenter deployments
+
+In 0.17, `enable_smithdb = true` runs SmithDB on Karpenter node pools, and 0.18
+has no Karpenter. An apply would delete those pools and the Karpenter controller
+under the running SmithDB pods. `make apply` and `make quickdeploy` refuse a
+state that still has them, but a plain `terraform apply` does not check. Contact
+LangChain Support before you upgrade such an install, or build a new 0.18
+install.
+
+0.18 also removes the settings that configured those pools:
+`smithdb_karpenter_chart_version`, `smithdb_karpenter_ami_alias`,
+`smithdb_node_arch`, `smithdb_capacity_type`, `smithdb_instance_store_sizes`,
+`smithdb_instance_store_min_local_nvme_gib`, `smithdb_instance_store_limits`,
+`smithdb_compute_sizes`, and `smithdb_compute_limits`. Delete them from
+`terraform.tfvars`. Terraform only warns about a value that it no longer
+declares.

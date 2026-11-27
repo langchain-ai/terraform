@@ -169,6 +169,42 @@ done
 _smithdb_migration_disk_check 100 local-ssd || { echo "FAIL: the boot disk was checked with the local-ssd cache"; exit 1; }
 echo "PASS: migration stops on a boot disk under 150 GiB and accepts 150 GiB or more, or any size with the local-ssd cache"
 
+# init-values.sh must not switch a release that serves reads from ClickHouse to SmithDB
+# queries. The fake helm is on PATH only inside the subshell, so the real helm above is
+# untouched. A refusal must name its reason.
+mkdir "$TEST_DIR/helm-bin"
+cat > "$TEST_DIR/helm-bin/helm" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  list)
+    [[ "$CASE" != list_failure ]] || exit 1
+    [[ "$CASE" == new_install ]] || echo langsmith ;;
+  get)
+    case "$CASE" in
+      on_smithdb) echo '{"smithdb":{"langsmith":{"query":{"enabled":true}}}}' ;;
+      staged) echo '{"smithdb":{"enabled":true,"langsmith":{"query":{"enabled":false}}}}' ;;
+      *) echo '{"clickhouse":{"external":{"enabled":false}}}' ;;
+    esac ;;
+  *) echo "Unexpected helm call: $*" >&2; exit 2 ;;
+esac
+MOCK
+chmod +x "$TEST_DIR/helm-bin/helm"
+for CASE in new_install on_smithdb staged without_smithdb list_failure; do
+  export CASE
+  case "$CASE" in
+    new_install|on_smithdb) want="" ;;
+    list_failure) want="could not list the Helm releases" ;;
+    *) want="serves reads from ClickHouse" ;;
+  esac
+  if (PATH="$TEST_DIR/helm-bin:$PATH" _smithdb_query_cutover_check langsmith langsmith) 2> "$TEST_DIR/query.err"; then
+    [[ -z "$want" ]] || { echo "FAIL: query cutover accepted $CASE"; exit 1; }
+  elif [[ -z "$want" ]] || ! grep -qF "$want" "$TEST_DIR/query.err"; then
+    echo "FAIL: query cutover refused $CASE"; cat "$TEST_DIR/query.err"; exit 1
+  fi
+  echo "PASS: query cutover $CASE"
+done
+
 # deploy.sh stops when the tier's largest pod fits no SmithDB node. The fake kubectl
 # is on PATH only inside the subshell, and reports approximate EKS allocatable values
 # for each instance type. An unknown tier is left to the chart, without a node lookup.

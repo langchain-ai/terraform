@@ -1120,7 +1120,7 @@ variable "langsmith_polly_encryption_key" {
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB metastore, S3 bucket, IRSA role, managed node group, and EBS cache storage. On by default: SmithDB is part of every install from 0.18."
+  description = "Provision the SmithDB metastore, S3 bucket, IRSA role, managed node group, and EBS cache storage. On by default: SmithDB is part of every install from 0.18. An install upgraded from 0.17 without SmithDB must set this to false, or follow SMITHDB.md, before it applies."
   default     = true
 }
 

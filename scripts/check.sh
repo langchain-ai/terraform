@@ -57,6 +57,7 @@ check_scripts() {
   lint_scripts || return $?
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-smithdb.sh" || return $?
+  bash "$REPO_ROOT/modules/aws/infra/scripts/test-upgrade-guard.sh" || return $?
   bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
 }
 

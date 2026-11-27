@@ -84,6 +84,13 @@ if [[ "$_smithdb_ingestion_enabled" != "true" && ( "$_smithdb_migration_enabled"
   echo "ERROR: SmithDB migration/query require smithdb_ingestion_enabled = true." >&2
   exit 1
 fi
+# upgrade-guard.sh covers only make apply, and an unset query gate defaults to on,
+# so confirm it against the live release before writing it.
+if [[ "$_smithdb_query_enabled" == "true" ]] && ! _tfvar_is_true "smithdb_query_enabled"; then
+  _tf_release_name=$(_parse_tfvar "langsmith_release_name") || _tf_release_name="langsmith"
+  _tf_namespace=$(_parse_tfvar "langsmith_namespace") || _tf_namespace="langsmith"
+  _smithdb_query_cutover_check "${RELEASE_NAME:-$_tf_release_name}" "${NAMESPACE:-$_tf_namespace}" || exit 1
+fi
 
 _gateway_modes=0
 [[ "$_enable_envoy_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true

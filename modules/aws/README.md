@@ -1327,7 +1327,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
 | `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
-| `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), IRSA, a managed node group, and EBS caches. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), IRSA, a managed node group, and EBS caches. An install upgraded from 0.17 without SmithDB sets `false` first. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
 | `smithdb_migration_enabled` | `false` | no | Migrate historical ClickHouse data to SmithDB. Set by `make smithdb-migration-job-start` |
 | `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |

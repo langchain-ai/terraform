@@ -888,8 +888,10 @@ enable_bedrock_access = false
 # Pass 2 uses the repository's ~0.17.0 pin, which resolves to the latest
 # compatible 0.17.x chart unless CHART_VERSION explicitly overrides it.
 #
-# A new install writes runs to SmithDB and serves reads from it.
-# An install with traces in ClickHouse sets ingestion and query to false and stages them (../SMITHDB.md).
+# A new install writes runs to SmithDB and serves reads from it. An install with
+# traces in ClickHouse sets ingestion and query to false and stages them
+# (../SMITHDB.md); one upgraded from 0.17 without SmithDB sets enable_smithdb =
+# false before its first 0.18 apply.
 
 # enable_smithdb            = true
 # smithdb_ingestion_enabled = true
