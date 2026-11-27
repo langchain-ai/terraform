@@ -976,7 +976,7 @@ variable "enable_fleet" {
 
 variable "fleet_storage" {
   type        = string
-  description = "Fleet storage. Only 'external' is supported from 0.18: the langsmith_fleet database on the shared RDS instance and DB index 1 on the shared ElastiCache."
+  description = "Fleet storage. Only 'external' is supported from 0.18: the langsmith_fleet database on the shared RDS instance and DB index 1 on the shared ElastiCache. Setting it explicitly confirms to make deploy that a 0.17 install that set it to in-cluster has moved its data."
   default     = "external"
 
   validation {

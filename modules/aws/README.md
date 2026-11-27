@@ -337,14 +337,17 @@ From 0.18 Fleet, LangSmith Chat and Insights always use their own database on th
 shared RDS instance (`langsmith_fleet`, `langsmith_polly`, `langsmith_insights`) and
 their own DB index on the shared ElastiCache (1, 2 and 3). Engine uses the Insights
 storage. `fleet_storage`, `polly_storage` or `insights_storage = "in-cluster"` fails
-at plan while that add-on is on (for `insights_storage`, Insights or Engine), and so do `enable_standalone_polly` and `enable_standalone_insights`: replace
-those two with `enable_polly = true`, `polly_storage = "external"`, `enable_insights =
-true` and `insights_storage = "external"`.
+at plan while that add-on is on (for `insights_storage`, Insights or Engine).
+`enable_standalone_polly` and `enable_standalone_insights` always fail at plan, and
+`make deploy` stops on them too: replace them with `enable_polly = true`,
+`polly_storage = "external"`, `enable_insights = true` and
+`insights_storage = "external"`.
 
 The first 0.18 deploy points each feature at its new, empty database, so move the data
 before it. The steps use Chat (`polly`); for Fleet or Insights, put `fleet` or
 `insights` in its place. Redis holds only each feature's job queue, so there is no data
-to copy there.
+to copy there. But writes made after the dump are not copied, and jobs still in the
+in-cluster queue are not run, so stop using the feature until the move is done.
 
 1. Dump the in-cluster database to your machine:
 
@@ -356,9 +359,9 @@ to copy there.
 
 2. Set `polly_storage = "external"` in `infra/terraform.tfvars`, then run `make apply`.
    It creates the `langsmith_polly` database and the `langsmith-polly-postgres` Secret.
-   `make deploy` stops on a release that keeps Chat in the cluster until this line says
-   `external`, including on an install that never set it, because 0.17 read an unset
-   `polly_storage` or `insights_storage` as `in-cluster`.
+   `make deploy` stops on a release that keeps the feature in the cluster until this
+   line says `external`. It also stops when the line is missing, because 0.17 read an
+   unset `polly_storage` or `insights_storage` as `in-cluster`.
 3. Restore the dump with the `pg-restore.yaml` pod from
    [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds), with
    the Secret `name: langsmith-polly-postgres` and `key: postgres_connection_url`.

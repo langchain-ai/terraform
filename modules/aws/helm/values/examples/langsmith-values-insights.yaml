@@ -10,11 +10,18 @@
 
 # Chart 0.15.1 removed the bundled config.insights path and its validator hard-fails
 # on the mere presence of the key (hasKey), even when set to false. The top-level
-# insights block is the only supported path. Workload settings (scaling, databases,
-# resources) live in engineInsightsAgent below. Insights uses the langsmith_insights
+# insights block is the only supported path. Insights uses the langsmith_insights
 # database on the shared RDS and DB index 3 on the shared ElastiCache; init-values.sh
 # writes that storage into langsmith-values-overrides.yaml and deploy.sh sets it on
 # every deploy.
+#
+# Chart 0.16 co-hosts the Engine and Insights agents on one deployment, so every
+# workload setting moved out of `insights` into `engineInsightsAgent`; the chart
+# hard-fails on insights.{namePrefix,apiServer,queue,postgres,redis}. init-values.sh
+# writes the requests and limits of that deployment into
+# langsmith-values-overrides.yaml on every run, because a strict ResourceQuota
+# rejects a pod without them. To change them, set engineInsightsAgent in
+# ../langsmith-values-insights.yaml: deploy.sh loads it after the overrides file.
 insights:
   enabled: true
   # encryptionKey is pulled from SSM via ESO — do not set it here.
@@ -24,30 +31,6 @@ insights:
   #             --value "<key>" --type SecureString
   # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
 
-# Chart 0.16 co-hosts the Engine and Insights agents on one deployment, so every
-# workload setting moved out of `insights` into `engineInsightsAgent`; the chart
-# hard-fails on insights.{namePrefix,apiServer,queue,postgres,redis}.
-engineInsightsAgent:
-  # Explicit resources: a strict ResourceQuota rejects any pod without cpu/memory
-  # requests and limits (migration issue #7).
-  apiServer:
-    deployment:
-      resources:
-        requests:
-          cpu: "2"
-          memory: 4Gi
-        limits:
-          cpu: "4"
-          memory: 8Gi
-  queue:
-    deployment:
-      resources:
-        requests:
-          cpu: "1"
-          memory: 2Gi
-        limits:
-          cpu: "2"
-          memory: 4Gi
 clickhouse:
   external:
     enabled: true

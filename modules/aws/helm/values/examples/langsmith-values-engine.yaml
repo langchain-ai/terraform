@@ -41,8 +41,9 @@ engine:
 engineInsightsAgent:
   namePrefix: "standalone-insights"
 
-  # The same sizing as langsmith-values-insights.yaml. deploy.sh loads the
-  # Insights file after this file, so its settings win when Insights is on.
+  # The same requests and limits that init-values.sh writes into
+  # langsmith-values-overrides.yaml. deploy.sh loads this file after the overrides
+  # file, and the Insights file after this one, so a setting there wins over both.
   apiServer:
     deployment:
       resources:

@@ -770,25 +770,51 @@ engine:${_engine_settings}
   fi
 fi
 
+# The chart sets no requests or limits on the shared Engine and Insights
+# deployment, and a strict ResourceQuota rejects a pod without them. They go in
+# this file because init-values.sh rewrites it on every run, while it writes
+# langsmith-values-insights.yaml only once. The Engine, Insights and sizing files
+# load after this file, so a value set in one of them wins. test-values.sh
+# renders this block.
 if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
-  _standalone_block+="
+  _engine_insights_agent_block=$(cat << ENGINE_INSIGHTS_AGENT_YAML
 engineInsightsAgent:
   postgres:
     external:
       enabled: true
-      existingSecretName: \"langsmith-insights-postgres\"
+      existingSecretName: "langsmith-insights-postgres"
   redis:
     external:
       enabled: true
-      existingSecretName: \"langsmith-insights-redis\"
+      existingSecretName: "langsmith-insights-redis"
   apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 8Gi
     serviceAccount:
       annotations:
-        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\"
+        eks.amazonaws.com/role-arn: "${_engine_agent_role_arn}"
   queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
     serviceAccount:
       annotations:
-        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\""
+        eks.amazonaws.com/role-arn: "${_engine_agent_role_arn}"
+ENGINE_INSIGHTS_AGENT_YAML
+)
+  _standalone_block+="
+${_engine_insights_agent_block}"
 fi
 
 _sandbox_config_block=""
