@@ -1,0 +1,135 @@
+modules/azure/infra/scripts/status.sh
+  s_8cee47d9319ea3::t_d4e12f98d31202 268-278,281-304,308-309,313-315
+  s_8cee47d9319ea3::t_7352212fc2b464 25-26
+modules/azure/helm/values/examples/langsmith-values-ingress-agic.yaml
+  s_8cee47d9319ea3::t_df6eecc0e493af 13
+modules/aws/helm/scripts/_values.sh
+  s_8cee47d9319ea3::t_7c549c157a4fb4 423-428,438
+modules/azure/helm/scripts/deploy.sh
+  s_8cee47d9319ea3::t_bb53b83dc7a7e2 682
+  s_8cee47d9319ea3::t_7ceef49af8dc05 10-14,21-24
+  s_8cee47d9319ea3::t_0f756bc7326c0c 1001-1002
+  s_8cee47d9319ea3::t_2e00023211edd5 987-992
+  s_8cee47d9319ea3::t_9027fb309b91e3 1518
+  s_8cee47d9319ea3::t_199679c6308577 64-65,78-83,85-93,95-102
+  s_8cee47d9319ea3::t_2a0316906082f7 104
+  s_8cee47d9319ea3::t_c19712b717d8e6 178-181,184-185
+  s_8cee47d9319ea3::t_6fc05c538c320f 508
+  s_8cee47d9319ea3::t_3ff79a80df0345 33,38-39
+  s_8cee47d9319ea3::t_02c33bf8cee080 993,996,998
+  s_8cee47d9319ea3::t_5a781455127e94 209
+  s_8cee47d9319ea3::t_1a7ab890c74374 868-869
+  s_8cee47d9319ea3::t_7efe4f4b9cd0f0 1285
+  s_8cee47d9319ea3::t_e90ab82f9126ab 206
+  s_8cee47d9319ea3::t_97547add6da48e 638-640
+  s_8cee47d9319ea3::t_ad33a76b5fe18a 658,662-667
+  s_8cee47d9319ea3::t_ae7b0481e7565f 555-568,576-583,585-588
+  s_8cee47d9319ea3::t_e69c13c34a50fc 203
+modules/azure/infra/scripts/test-clickhouse-cluster.sh
+  s_8cee47d9319ea3::t_4c3c234a5c169c 91-100,102-104,107-113
+  s_8cee47d9319ea3::t_f108565f14cdc2 11-13
+  s_8cee47d9319ea3::t_f7385cd821e470 25-26
+modules/azure/helm/values/examples/langsmith-values-insights.yaml
+  s_8cee47d9319ea3::t_c30267b1337bbc 24
+  s_8cee47d9319ea3::t_aeb2a32c7d968e 3-4,8
+modules/azure/infra/scripts/test-langsmith-images-block.sh
+  s_8cee47d9319ea3::t_40af9b6c25a145 8
+modules/azure/infra/terraform.tfvars.example
+  s_8cee47d9319ea3::t_afae4cae9c8639 280-282
+  s_8cee47d9319ea3::t_ef6f51c6fb851d 264
+modules/azure/infra/outputs.tf
+  s_8cee47d9319ea3::t_e8158b57b799b8 165
+modules/azure/helm/values/examples/langsmith-values-agent-deploys.yaml
+  s_8cee47d9319ea3::t_746a9248f18895 69
+  s_8cee47d9319ea3::t_1610655607577e 3-4
+modules/azure/helm/values/examples/langsmith-values-fleet.yaml
+  s_8cee47d9319ea3::t_47b60bb824581a 86-87
+  s_8cee47d9319ea3::t_8e67a57ef70262 9-10
+  s_8cee47d9319ea3::t_d6cdf47c3c00f4 34-35
+modules/azure/helm/values/examples/langsmith-values-smithdb.yaml
+  s_8cee47d9319ea3::t_638c4454d79ff1 3-5,9-10
+modules/azure/infra/variables.tf
+  s_8cee47d9319ea3::t_6f5e172f5dfc18 836
+  s_8cee47d9319ea3::t_826caa06ab1e2c 2006
+modules/azure/infra/scripts/test-values-stamp.sh
+  s_8cee47d9319ea3::t_3b8adf8b6a4dd0 7-14,27-28,41-45,47-49,51-69,71,74-79,81-87,89,92-94,97,99-103,105-134,139-141,143,145,147,149,151-152
+modules/azure/infra/scripts/clean.sh
+  s_8cee47d9319ea3::t_0379ad7a1e6697 105
+  s_8cee47d9319ea3::t_4bb8c46b56d234 22-25,29
+modules/azure/helm/values/langsmith-values-local.yaml.example
+  s_8cee47d9319ea3::t_74446300364115 9-12
+  s_8cee47d9319ea3::t_520e7647db675b 1-8,13-30
+modules/azure/infra/scripts/create-k8s-secrets.sh
+  s_8cee47d9319ea3::t_9aefe01f188319 242,245
+modules/azure/helm/values/examples/langsmith-values-ingress-istio.yaml
+  s_8cee47d9319ea3::t_8e98daea17a6e6 8
+modules/azure/infra/main.tf
+  s_8cee47d9319ea3::t_9b8945a854c0f9 2071-2073
+modules/azure/helm/values/examples/langsmith-values.yaml
+  s_8cee47d9319ea3::t_29fd83c47a10a6 3-18,20-22
+  s_8cee47d9319ea3::t_3b76753eb14355 50-51
+modules/azure/Makefile
+  s_8cee47d9319ea3::t_01f4a2b681a846 60,63-64
+  s_8cee47d9319ea3::t_61495266d7497e 65
+modules/aws/helm/scripts/test-values-render.sh
+  s_8cee47d9319ea3::t_56d6ad6ca5b172 135-136
+modules/azure/helm/values/examples/langsmith-values-agent-builder.yaml
+  s_8cee47d9319ea3::t_7b275dfdb78ba7 3-4
+modules/azure/helm/values/examples/langsmith-values-polly.yaml
+  s_8cee47d9319ea3::t_d352aa30b76f70 2-3
+modules/azure/helm/scripts/init-values.sh
+  s_8cee47d9319ea3::t_1854bff0402cd9 225
+  s_8cee47d9319ea3::t_524364d8307972 863
+  s_8cee47d9319ea3::t_c913333386127e 7,14,18-19,21-23,25-27,29-30,32-35,40,46-47,60-76
+  s_8cee47d9319ea3::t_08328f2b7e4473 965-968,970-971
+  s_8cee47d9319ea3::t_60c024d3902488 605
+  s_8cee47d9319ea3::t_ad7b4a0a5ff393 479-480
+  s_8cee47d9319ea3::t_4312f10c39354f 254
+  s_8cee47d9319ea3::t_ab744ce5f5a52d 1071-1142
+  s_8cee47d9319ea3::t_5cb84708f85a51 1242
+  s_8cee47d9319ea3::t_97ee12657b2ac2 741,748-761,771-773
+  s_8cee47d9319ea3::t_3d9b81014b7db7 827-829
+  s_8cee47d9319ea3::t_fe1a7e3ede583e 469,471
+  s_8cee47d9319ea3::t_5c0a9668ef6ceb 311-312,314-317
+  s_8cee47d9319ea3::t_6270997e992d46 804
+  s_8cee47d9319ea3::t_0b1af032d9cd42 817
+  s_8cee47d9319ea3::t_0f1ceb0cc7daad 790,792
+  s_8cee47d9319ea3::t_4c3524df5d07d9 961
+  s_8cee47d9319ea3::t_a195f52c57496a 987-989
+  s_8cee47d9319ea3::t_ea7277f1ac845c 279
+  s_8cee47d9319ea3::t_4bf2290aaf3ff1 1217
+  s_8cee47d9319ea3::t_df6cef8a3ed53f 109
+  s_8cee47d9319ea3::t_237aa77893fcd7 911
+modules/azure/infra/scripts/_common.sh
+  s_8cee47d9319ea3::t_c4081a2b2f857e 471
+  s_8cee47d9319ea3::t_735da9161d6e24 390-392
+  s_8cee47d9319ea3::t_5d075fb0d642a3 634-636
+  s_8cee47d9319ea3::t_4fc4a9344567ba 428
+  s_8cee47d9319ea3::t_af628f582c242b 21-22
+  s_8cee47d9319ea3::t_22a4634322b177 618-624
+  s_8cee47d9319ea3::t_42d4f1e14d61a4 35-36
+  s_8cee47d9319ea3::t_50058c91560ba6 312-320
+modules/azure/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_108f2aff5cff07 332
+  s_8cee47d9319ea3::t_d3bac886c9b3e8 1-183,185-208,210-266,268-331,333-436,439,441,442-455,457,460-619
+  s_8cee47d9319ea3::t_6c40c3af71dbae 267
+  s_8cee47d9319ea3::t_319dbba9301a32 456,458-459
+modules/azure/helm/scripts/_values.sh
+  s_8cee47d9319ea3::t_3c3cb6109e849b 1-493
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e41cf06d07cf98ab474c14b9d3d0f8febdbdd4fc",
+  "prompts": {},
+  "sessions": {
+    "s_8cee47d9319ea3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4553e7f8-7983-41d0-9467-9cb545cda8d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

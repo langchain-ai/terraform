@@ -1,0 +1,110 @@
+modules/aws/helm/scripts/_values.sh
+  s_8cee47d9319ea3::t_df81e1f11bf3b5 213
+  s_8cee47d9319ea3::t_ee528bcdfa1e82 234-254,256,262-264
+  s_8cee47d9319ea3::t_f5a663fd7e43bc 1-212,214-219,221-233,255,257-261,265-487
+  s_8cee47d9319ea3::t_1fa4673c939c67 220
+modules/aws/infra/scripts/_smithdb.sh
+  s_8cee47d9319ea3::t_b536ac361de125 77
+modules/aws/helm/values/examples/langsmith-values-fleet.yaml
+  s_8cee47d9319ea3::t_0d4535617337e7 11-12,14-15
+  s_8cee47d9319ea3::t_be8a83a21738d3 23-25
+modules/aws/helm/scripts/init-values.sh
+  s_8cee47d9319ea3::t_e8c1baec768494 312
+  s_8cee47d9319ea3::t_90fceff1a8432c 456
+  s_8cee47d9319ea3::t_f55faee9236bba 474-477
+  s_8cee47d9319ea3::t_3061caaa577707 803-807
+  s_8cee47d9319ea3::t_3f1aaec62bcdec 559-561
+  s_8cee47d9319ea3::t_23e73d52bea52a 222
+  s_8cee47d9319ea3::t_36ea644771ba57 667-669
+  s_8cee47d9319ea3::t_44dd7d71bb05d4 902-905,907
+  s_8cee47d9319ea3::t_fc6507e6feadb5 441-443
+  s_8cee47d9319ea3::t_fa3644c50f8fad 7,13-14,16-18,22-26,30-36,41-45,47-50,61-69
+  s_8cee47d9319ea3::t_4e599d6e3ff6ce 375-377
+  s_8cee47d9319ea3::t_8b9b86e73253e7 737-738
+  s_8cee47d9319ea3::t_1b0a1ff6af291a 192
+  s_8cee47d9319ea3::t_bdd5ffc0d8e5fa 370-373,378-381,383-388
+  s_8cee47d9319ea3::t_881a8df60785a6 623-625
+  s_8cee47d9319ea3::t_cbdbd273b7a71f 988-1004,1009-1061,1063-1068,1069-1070,1072-1083
+  s_8cee47d9319ea3::t_abcff162366244 1005-1008
+  s_8cee47d9319ea3::t_17c2e025f11082 136
+modules/aws/helm/values/examples/langsmith-values-agent-deploys.yaml
+  s_8cee47d9319ea3::t_866870151a7b3e 3-4
+modules/aws/infra/scripts/clean.sh
+  s_8cee47d9319ea3::t_25c0fc4618d6f0 18-19,25
+modules/aws/helm/values/examples/langsmith-values.yaml
+  s_8cee47d9319ea3::t_120240192b1ee9 3-4,6-7,12-13
+modules/aws/helm/values/examples/langsmith-values-polly.yaml
+  s_8cee47d9319ea3::t_ac3a82123a4abb 9-11
+modules/aws/helm/values/examples/langsmith-values-sso.yaml
+  s_8cee47d9319ea3::t_121167b56bdcc4 1
+scripts/check.sh
+  s_8cee47d9319ea3::t_5c3ae07af873fc 6
+  s_8cee47d9319ea3::t_1aa57130b9f7ee 62,66-67,71,73,77-90
+  s_8cee47d9319ea3::t_d127e4f87e0334 68-70,72,74-76
+  s_8cee47d9319ea3::t_cc022852112b74 91-92
+modules/aws/infra/scripts/status.sh
+  s_8cee47d9319ea3::t_38598c941731cc 24-26
+  s_8cee47d9319ea3::t_0021055e978799 296-306,309-336,342-344
+modules/aws/helm/scripts/deploy.sh
+  s_8cee47d9319ea3::t_79308a964372cb 90-100,102-105,111-116
+  s_8cee47d9319ea3::t_8e0ef024ad4657 851,855,860-861
+  s_8cee47d9319ea3::t_d0991a5589b823 237
+  s_8cee47d9319ea3::t_60b0f482bc2fea 388
+  s_8cee47d9319ea3::t_d3dd9d5b0912f4 487-489,492-497,500,510-511
+  s_8cee47d9319ea3::t_77ca9cf558497a 10-13,15-18,24-27,30-33,35-41,42-46
+  s_8cee47d9319ea3::t_83a449ffbf8d26 154
+  s_8cee47d9319ea3::t_b1e75cc34d0b94 529-531,536-542
+  s_8cee47d9319ea3::t_b574d52e35980e 401-414,416-417,420,422,425-429,433
+  s_8cee47d9319ea3::t_480aeb6851ec89 134-136
+  s_8cee47d9319ea3::t_f798414ff73a67 883-887
+  s_8cee47d9319ea3::t_059e059beedcfe 347-354
+  s_8cee47d9319ea3::t_a748da87c96c8f 317-319
+  s_8cee47d9319ea3::t_d12542155571bf 618-619
+  s_8cee47d9319ea3::t_d7912a9f0f7e60 167-168
+  s_8cee47d9319ea3::t_d20c2a51cd905c 557,567,572-573
+modules/aws/helm/scripts/test-values-render.sh
+  s_8cee47d9319ea3::t_85e4b95e4375bb 1-238
+modules/aws/helm/values/langsmith-values-local.yaml.example
+  s_8cee47d9319ea3::t_657b885ce0ed8e 1-30
+modules/aws/helm/values/examples/langsmith-values-engine.yaml
+  s_8cee47d9319ea3::t_73c119f62cc23f 44-45
+  s_8cee47d9319ea3::t_47410b6125f206 3-4
+modules/aws/infra/scripts/quickdeploy.sh
+  s_8cee47d9319ea3::t_d1cdc2d905fe8d 39-40
+  s_8cee47d9319ea3::t_be641b793e568f 179,181-182
+modules/aws/helm/scripts/sso.sh
+  s_8cee47d9319ea3::t_499fc885656092 52
+  s_8cee47d9319ea3::t_9d4374f4a9b4b5 9-10
+  s_8cee47d9319ea3::t_906ef612312d1a 22-23,28-29
+  s_8cee47d9319ea3::t_91c05cfe577b2b 183-187,189
+modules/aws/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_07b9d0d0c43e9e 663-664
+  s_8cee47d9319ea3::t_ac880f5c6604b8 170-176
+  s_8cee47d9319ea3::t_084bf7bad645e1 2-10,12-15,19,24-25,64-65,69-70,72,74-169,177-204,206-242,244-258,260-261,263-266,267-281,284,301-304,314-322,413-429,431-435,437-438,440-481,486-503,505-567,569,574,576-579,581-585,588-590,592-596,598-613,616-662,665-671,683,688,690,693,695,698-699,701-705,709,727-733,736-737,739,760
+  s_8cee47d9319ea3::t_c47a1d1100979b 436
+  s_8cee47d9319ea3::t_496a7975e12c3f 259
+  s_8cee47d9319ea3::t_d3f8c8ee7fdc7e 710-711
+  s_8cee47d9319ea3::t_49e48edac6ceb8 482-485
+  s_8cee47d9319ea3::t_cbbe831b6fa62a 734-735
+  s_8cee47d9319ea3::t_e3fd62f1e7b761 738
+  s_8cee47d9319ea3::t_09da3471fa86b7 504
+  s_8cee47d9319ea3::t_d72a745d9bdb67 587,591
+modules/aws/helm/values/examples/langsmith-values-insights.yaml
+  s_8cee47d9319ea3::t_5ab904cd8c70d3 1,3-15,21,29,37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c62e31a2a9502cccfd4a893bc561aa5c5a7c8d8",
+  "prompts": {},
+  "sessions": {
+    "s_8cee47d9319ea3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4553e7f8-7983-41d0-9467-9cb545cda8d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
