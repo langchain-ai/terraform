@@ -1,0 +1,43 @@
+.github/workflows/release.yml
+  s_10b3b82a49b370::t_28ac87d71e5bf0 9
+modules/aws/helm/scripts/deploy.sh
+  s_10b3b82a49b370::t_3c388d1e78bb00 54,60,71,119-122,124-128,181
+modules/aws/infra/main.tf
+  s_10b3b82a49b370::t_b1e4a0ab349cef 112,116
+modules/aws/infra/tests/sandbox_cluster.tftest.hcl
+  s_10b3b82a49b370::t_3a3337026d16cb 357-358
+modules/aws/infra/tests/validation.tftest.hcl
+  s_10b3b82a49b370::t_7c85c2f0788b71 170,174-175
+modules/aws/infra/variables.tf
+  s_10b3b82a49b370::t_f85d4e54791462 815,819-820
+modules/azure/helm/scripts/deploy.sh
+  s_10b3b82a49b370::t_85c04e6654fd72 28,607-608,610-611,613-617,623
+modules/azure/infra/main.tf
+  s_10b3b82a49b370::t_c9e359232b13b1 2410
+modules/azure/infra/variables.tf
+  s_10b3b82a49b370::t_100301854cd286 1867
+modules/baremetal/helm/scripts/deploy.sh
+  s_10b3b82a49b370::t_96e3d10b23b907 44,46,48-50,52-55
+modules/gcp/helm/scripts/deploy.sh
+  s_10b3b82a49b370::t_cbab826720974a 89,96,140-143,145-149,216
+modules/gcp/infra/main.tf
+  s_10b3b82a49b370::t_6e390971be727a 256
+modules/ocp/helm/scripts/deploy.sh
+  s_10b3b82a49b370::t_34c8f2678ef71f 15,21,24,26,28-29,31-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "596c608489c8e48552ffb3a861e63ef995fa0721",
+  "prompts": {},
+  "sessions": {
+    "s_10b3b82a49b370": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d51e48f3-9924-4499-9ab6-517d7c5b83c8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
