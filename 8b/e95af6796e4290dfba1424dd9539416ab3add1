@@ -1,0 +1,57 @@
+modules/gcp/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_e1c989f1de027c 587-616
+  s_8cee47d9319ea3::t_efcd8831e250d1 632-643
+  s_8cee47d9319ea3::t_9c785f0e2b145d 99-100,103,105-110
+modules/aws/helm/scripts/deploy.sh
+  s_8cee47d9319ea3::t_866abb6b42f605 264-267
+modules/aws/helm/scripts/_values.sh
+  s_8cee47d9319ea3::t_75fbd4b57454b5 26-27
+  s_8cee47d9319ea3::t_b683eed72c1c19 504-546
+modules/aws/TROUBLESHOOTING.md
+  s_8cee47d9319ea3::t_938de912995fe1 631
+  s_8cee47d9319ea3::t_521a838390ff84 639-640
+modules/aws/helm/scripts/init-values.sh
+  s_8cee47d9319ea3::t_81804bcbbb912c 372-375,385-396
+  s_8cee47d9319ea3::t_b14903d16ef7bf 443-444,454-456,458
+modules/gcp/TROUBLESHOOTING.md
+  s_8cee47d9319ea3::t_38033f61e23b5a 408-424
+modules/gcp/helm/scripts/init-values.sh
+  s_8cee47d9319ea3::t_db6a863712e1ae 503-504,514-516,518
+  s_8cee47d9319ea3::t_bf4efc90baf1a9 434-437,445-456
+modules/gcp/helm/scripts/deploy.sh
+  s_8cee47d9319ea3::t_99624e455bd186 301-304
+modules/aws/helm/scripts/test-values-render.sh
+  s_8cee47d9319ea3::t_6e4e5cbafe720a 252-292
+modules/aws/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_49873989eb8817 679-708
+  s_8cee47d9319ea3::t_63727c0597d378 105-106,109,111-116
+  s_8cee47d9319ea3::t_6d94b3e187a198 724-735
+modules/aws/README.md
+  s_8cee47d9319ea3::t_19c585d1e8186a 694-695
+  s_8cee47d9319ea3::t_cb6fb95114cbe8 702
+  s_8cee47d9319ea3::t_75c8e1bcc2a466 714
+modules/gcp/README.md
+  s_8cee47d9319ea3::t_885f5ed0005658 330
+  s_8cee47d9319ea3::t_00f0decd91061a 322-323
+  s_8cee47d9319ea3::t_1271a3916916c7 342
+modules/azure/helm/scripts/_values.sh
+  s_8cee47d9319ea3::t_ed277a36716218 26-27,504-546
+modules/gcp/helm/scripts/_values.sh
+  s_8cee47d9319ea3::t_91afb359860fa2 26-27,504-546
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8be95af6796e4290dfba1424dd9539416ab3add1",
+  "prompts": {},
+  "sessions": {
+    "s_8cee47d9319ea3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4553e7f8-7983-41d0-9467-9cb545cda8d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
