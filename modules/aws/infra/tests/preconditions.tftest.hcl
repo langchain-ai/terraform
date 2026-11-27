@@ -300,7 +300,6 @@ run "envoy_gateway_on_an_old_eks_is_allowed_when_it_is_off" {
 
   variables {
     enable_envoy_gateway = false
-    enable_nginx_ingress = true
     eks_cluster_version  = "1.32"
   }
 }
