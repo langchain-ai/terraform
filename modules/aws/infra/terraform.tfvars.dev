@@ -34,13 +34,14 @@ create_vpc = true
 enable_public_eks_cluster = true
 eks_cluster_version       = "1.34"
 
-# Smaller node group for dev — 3 nodes, autoscales to 6.
+# Node group for dev — 3 nodes, autoscales to 10. The one sizing runs on 4 to 5
+# of these nodes at its minimum replicas and needs up to 8 at its maximum.
 eks_managed_node_groups = {
   default = {
     name           = "node-group-default"
     instance_types = ["m5.2xlarge"]   # 8 vCPU, 32 GB — sufficient for dev
     min_size       = 3
-    max_size        = 6
+    max_size       = 10
   }
 }
 

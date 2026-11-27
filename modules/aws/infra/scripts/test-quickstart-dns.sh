@@ -295,6 +295,7 @@ DEFAULT_INFRA="$TMP/smithdb-defaults"
 write_fresh_answers "$TMP/defaults.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false
 run_wizard "SmithDB defaults complete" "$DEFAULT_INFRA" "$TMP/defaults.answers" "$TMP/defaults.log"
 has_line "LangSmith type is independent of SmithDB" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6a.2xlarge"]'
+has_line "Dev / POC lets the LangSmith nodes reach the sizing's maximum" "$DEFAULT_INFRA/terraform.tfvars" '    max_size       = 10'
 has_line "SmithDB type is m6a.4xlarge" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6a.4xlarge"'
 has_line "SmithDB initial capacity" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
 has_line "SmithDB ceiling is 5" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"

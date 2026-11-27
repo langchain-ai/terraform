@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Renders the LangSmith chart with the AWS example values, in deploy.sh's order,
 # with SmithDB off and on, and checks the scaler or replica count each sized
-# service gets, that SmithDB runs the small tier, and that no service requests
-# less than the chart's own default. No cluster and no AWS calls.
+# service gets, that SmithDB runs the small tier, that no service requests less
+# than the chart's own default, and that the overrides init-values.sh generates
+# give the ClickHouse writers the pattern's async-insert setting. No cluster and
+# no AWS calls.
 # Requires helm, and network access to fetch the chart unless LANGSMITH_CHART
 # names a local chart directory or archive.
 # Usage: bash modules/aws/helm/scripts/test-values.sh
@@ -353,9 +355,9 @@ else
   echo "PASS: Fleet, Chat and Insights use the shared RDS and ElastiCache"
 fi
 
-# No service may request less than the chart's own default (PRO-34: the 0.17
-# production profile ran platform-backend, ace-backend, listener and operator
-# below it). Render every feature with the example values, and again with only the
+# No service may request less than the chart's own default (the 0.17 production
+# profile ran platform-backend, ace-backend, listener and operator below it).
+# Render every feature with the example values, and again with only the
 # base values, which set no requests, and the switches that turn the features on;
 # then compare each Deployment's requests. A Deployment the chart gives no
 # requests, such as the add-on agents, has no floor.
@@ -418,6 +420,47 @@ if (( ${#problems[@]} )); then
   failures=$((failures + 1))
 else
   echo "PASS: no service requests less than the chart default ($compared Deployments)"
+fi
+
+# The pattern's CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT lives in the generated
+# overrides, because commonEnv is a list and a list in a later values file replaces
+# an earlier one. Generate that file from the heredoc in init-values.sh itself,
+# render it, and check that each service that writes to ClickHouse gets the
+# variable. An example values file that set commonEnv would replace the list.
+(
+  export OUT_FILE="$TEST_TMP/generated-overrides.yaml"
+  export _protocol=https HOSTNAME=langsmith.example.com ADMIN_EMAIL=admin@example.com
+  export BUCKET_NAME=values-test-blob _region=us-west-2
+  export IRSA_ROLE_ARN=arn:aws:iam::123456789012:role/values-test
+  export _enable_usage_telemetry=false _sandbox_config_block="" _routing_block="" _standalone_block=""
+  sed -n '/^cat > "\$OUT_FILE" << YAML$/,/^YAML$/p' \
+    "$SCRIPT_DIR/init-values.sh" > "$TEST_TMP/generate-overrides.sh"
+  [[ -s "$TEST_TMP/generate-overrides.sh" ]] || { echo "ERROR: no overrides block found in init-values.sh" >&2; exit 2; }
+  source "$TEST_TMP/generate-overrides.sh"
+)
+out="$TEST_TMP/generated-overrides-render.yaml"
+problems=()
+for values in "$EXAMPLES_DIR"/langsmith-values*.yaml; do
+  found=$(key_paths "$values" | grep -E '^commonEnv$' | head -1) || true
+  [[ -z "$found" ]] || problems+=("${values##*/} sets commonEnv, which would replace the generated list")
+done
+if ! helm template langsmith "$chart" --namespace langsmith -f "$EXAMPLES_DIR/langsmith-values.yaml" \
+    -f "$TEST_TMP/generated-overrides.yaml" --set polly.enabled=false --set insights.enabled=false \
+    > "$out" 2> "$out.err"; then
+  problems+=("the chart rejected the generated overrides: $(head -1 "$out.err")")
+else
+  for name in langsmith-backend langsmith-platform-backend langsmith-queue langsmith-ingest-queue; do
+    got=$(manifest "$out" Deployment "$name" | grep -A1 'name: CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT$' |
+      grep -c 'value: "0"') || true
+    (( got > 0 )) || problems+=("$name: CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT is not 0")
+  done
+fi
+if (( ${#problems[@]} )); then
+  echo "FAIL: the generated overrides give the ClickHouse writers CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT=0"
+  printf '      %s\n' "${problems[@]}"
+  failures=$((failures + 1))
+else
+  echo "PASS: the generated overrides give the ClickHouse writers CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT=0"
 fi
 
 if (( failures )); then

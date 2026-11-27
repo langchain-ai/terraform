@@ -29,6 +29,19 @@ VALUES_DIR="$HELM_DIR/values"
 source "$INFRA_DIR/scripts/_common.sh"
 # shellcheck source=_addon-storage.sh
 source "$SCRIPT_DIR/_addon-storage.sh"
+# shellcheck source=_sizing.sh
+source "$SCRIPT_DIR/_sizing.sh"
+
+# 0.18 dropped sizing_profile and its files. Stop before anything touches the cluster.
+_old_sizing=$(_old_sizing_files "$VALUES_DIR")
+if [[ -n "$_old_sizing" ]]; then
+  echo "ERROR: deploy.sh no longer loads this 0.17 sizing file in helm/values: ${_old_sizing//$'\n'/, }." >&2
+  echo "       None of its values apply unless you copy them. Follow \"Moving from a 0.17 sizing profile\"" >&2
+  echo "       in helm/values/examples/SIZING.md: copy the new sizing into langsmith-values.yaml, copy across" >&2
+  echo "       the ranges and limits you rely on, check the node group, then delete the file and the" >&2
+  echo "       sizing_profile line in terraform.tfvars." >&2
+  exit 1
+fi
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
@@ -486,21 +499,17 @@ _resolve_entry_hostname() {
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
 
-# 0.18 dropped sizing_profile and its files. make init-values copied the profile's
-# file into helm/values on 0.17, where it may hold tuned values this script no longer
-# loads, so a release would quietly lose them.
-_old_sizing=("$VALUES_DIR"/langsmith-values-sizing-*.yaml)
-if [[ -e "${_old_sizing[0]}" ]]; then
-  echo "ERROR: ${_old_sizing[0]##*/} is no longer loaded: every install now runs the one sizing in langsmith-values.yaml." >&2
-  echo "       Move any values you changed in it into helm/values/langsmith-values.yaml, delete the file," >&2
-  echo "       and remove sizing_profile from terraform.tfvars. See helm/values/examples/SIZING.md." >&2
-  exit 1
-fi
-
 # Print values chain so the user knows exactly what's going into the release.
 echo ""
 echo "Values chain:"
 echo "  ✔ langsmith-values.yaml (base)"
+_sizing_gaps=$(_base_sizing_gaps "$VALUES_DIR/langsmith-values.yaml")
+if [[ -n "$_sizing_gaps" ]]; then
+  echo "    ⚠ WARNING: it does not set ${_sizing_gaps//$'\n'/, }."
+  echo "      Those run the chart's defaults, not the one sizing. A copy made on 0.17 lacks them:"
+  echo "      copy them from helm/values/examples/langsmith-values.yaml (SIZING.md, \"Moving from a"
+  echo "      0.17 sizing profile\")."
+fi
 echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 
 # Addon files: gated by enable_* flags in terraform.tfvars.

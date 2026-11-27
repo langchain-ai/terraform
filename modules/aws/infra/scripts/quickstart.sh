@@ -553,7 +553,9 @@ fi
 
 NODE_INSTANCE="$(_existing "instance_types" "m6a.2xlarge")"
 NODE_MIN="$(_existing "min_size" "$([[ "$PROFILE" == "prod" ]] && echo "3" || echo "2")")"
-NODE_MAX="$(_existing "max_size" "$([[ "$PROFILE" == "prod" ]] && echo "10" || echo "5")")"
+# Both profiles run the one sizing, which needs up to 8 m6a.2xlarge nodes at its
+# maximum replicas. Cluster Autoscaler adds nodes only when pods need them.
+NODE_MAX="$(_existing "max_size" "10")"
 
 echo ""
 _ask "$(_choice_arg "instance_types")" "$(_numbered_prompt "4.4" "LangSmith node group instance type")" "$NODE_INSTANCE"
@@ -1044,7 +1046,9 @@ _section "12. Capacity"
 
 echo ""
 printf "  ${DIM}LangSmith runs one sizing: the scale guide's medium reads and medium writes${RESET}\n"
-printf "  ${DIM}(about 20 users and 100 traces per second). ../helm/values/examples/SIZING.md${RESET}\n"
+printf "  ${DIM}(about 20 users and 100 traces per second). It runs on 4 to 5 m6a.2xlarge${RESET}\n"
+printf "  ${DIM}nodes at its minimum replicas and needs up to 8 at its maximum, so the node${RESET}\n"
+printf "  ${DIM}group max size in 4.6 must allow that. ../helm/values/examples/SIZING.md${RESET}\n"
 printf "  ${DIM}says how to size beyond it.${RESET}\n"
 if [[ "$UPDATE_MODE" == "true" && -n "$(_existing "sizing_profile" "")" ]]; then
   echo ""

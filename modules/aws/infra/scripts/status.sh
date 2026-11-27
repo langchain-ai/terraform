@@ -22,6 +22,8 @@ source "$SCRIPT_DIR/_common.sh"
 AWS_DIR="$INFRA_DIR/.."
 HELM_DIR="$AWS_DIR/helm"
 VALUES_DIR="$HELM_DIR/values"
+# shellcheck source=../../helm/scripts/_sizing.sh
+source "$HELM_DIR/scripts/_sizing.sh"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -296,9 +298,22 @@ _base_values="$VALUES_DIR/langsmith-values.yaml"
 
 if [[ -f "$_base_values" ]]; then
   pass "langsmith-values.yaml (base)"
+  _sizing_gaps=$(_base_sizing_gaps "$_base_values")
+  if [[ -n "$_sizing_gaps" ]]; then
+    warn "langsmith-values.yaml does not set ${_sizing_gaps//$'\n'/, } — those run the chart's defaults, not the one sizing"
+    action "Copy them from helm/values/examples/langsmith-values.yaml (helm/values/examples/SIZING.md)"
+  fi
 else
   fail "langsmith-values.yaml (base) — missing"
 fi
+
+# make deploy stops while a 0.17 sizing file is left in helm/values.
+while IFS= read -r _old_sizing; do
+  [[ -n "$_old_sizing" ]] || continue
+  fail "${_old_sizing} — 0.17 sizing file; make deploy stops while it is in helm/values"
+  action "Move the values you need into langsmith-values.yaml, then delete it (helm/values/examples/SIZING.md)"
+  set_next "Move what you need from helm/values/${_old_sizing} into langsmith-values.yaml, then delete it"
+done <<< "$(_old_sizing_files "$VALUES_DIR")"
 
 if [[ -f "$_overrides" ]]; then
   pass "langsmith-values-overrides.yaml exists"
