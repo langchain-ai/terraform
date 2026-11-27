@@ -186,7 +186,7 @@ fleetTriggerServer:
 # validator hard-fails on the presence of config.polly / config.insights (even
 # when only sizing their nested agent.resources). Standalone Fleet/Polly/Insights
 # are sized via the top-level apiServer/queue resources in their own overlays
-# (langsmith-values-fleet.yaml, -standalone-polly.yaml, -standalone-insights.yaml).
+# (langsmith-values-fleet.yaml, -polly.yaml, -insights.yaml).
 
 # -- SmithDB ---------------------------------------------------------------
 # No profile sizes SmithDB. Every profile runs the small tier that

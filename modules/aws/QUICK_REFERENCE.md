@@ -122,11 +122,8 @@ Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the f
 # infra/terraform.tfvars
 enable_deployments   = true    # Optional full Deployments: listener + operator
 enable_fleet         = true    # No-code agents; enables its required host-backend
-fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = true    # AI-powered trace analysis
-insights_storage     = "external" # Or "in-cluster"
 enable_polly         = true    # LangSmith Chat (formerly Polly)
-polly_storage        = "external" # Or "in-cluster"
 enable_usage_telemetry = false # Extended usage telemetry
 
 # Engine (chart v0.17+; requires enable_sandboxes = true; see ENGINE.md)

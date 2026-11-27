@@ -160,8 +160,6 @@ aws/
         │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
         │   ├── langsmith-values-insights.yaml           ← Insights
         │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
-        │   ├── langsmith-values-standalone-polly.yaml   ← Chat external-storage overlay
-        │   ├── langsmith-values-standalone-insights.yaml ← Insights external-storage overlay
         │   ├── langsmith-values-engine.yaml             ← Engine (see ENGINE.md)
         │   ├── langsmith-values-smithdb.yaml            ← SmithDB base
         │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
@@ -335,6 +333,48 @@ Runs still in the old queue are not processed.
 2. Remove `redis_source = "in-cluster"` from `infra/terraform.tfvars`, then run
    `make apply`. It creates the ElastiCache instance.
 3. Run `make init-values` and `make deploy`. The deploy removes the in-cluster Redis.
+
+### Move Fleet, Chat or Insights data to RDS
+
+From 0.18 Fleet, LangSmith Chat and Insights always use their own database on the
+shared RDS instance (`langsmith_fleet`, `langsmith_polly`, `langsmith_insights`) and
+their own DB index on the shared ElastiCache (1, 2 and 3). Engine uses the Insights
+storage. `fleet_storage`, `polly_storage` or `insights_storage = "in-cluster"` fails
+at plan while that add-on is on (for `insights_storage`, Insights or Engine).
+`enable_standalone_polly` and `enable_standalone_insights` always fail at plan, and
+`make deploy` stops on them too: replace them with `enable_polly = true`,
+`polly_storage = "external"`, `enable_insights = true` and
+`insights_storage = "external"`.
+
+The first 0.18 deploy points each feature at its new, empty database, so move the data
+before it. The steps use Chat (`polly`); for Fleet or Insights, put `fleet` or
+`insights` in its place. Redis holds only each feature's job queue, so there is no data
+to copy there. But writes made after the dump are not copied, and jobs still in the
+in-cluster queue are not run, so stop using the feature until the move is done.
+
+1. Dump the in-cluster database to your machine:
+
+   ```bash
+   kubectl exec -n langsmith langsmith-standalone-polly-postgres-0 -c postgres -- \
+     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+     > polly.dump
+   ```
+
+2. Set `polly_storage = "external"` in `infra/terraform.tfvars`, then run `make apply`.
+   It creates the `langsmith_polly` database and the `langsmith-polly-postgres` Secret.
+   `make deploy` stops on a release that keeps the feature in the cluster until this
+   line says `external`. It also stops when the line is missing, because 0.17 read an
+   unset `polly_storage` or `insights_storage` as `in-cluster`.
+3. Restore the dump with the `pg-restore.yaml` pod from
+   [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds), with
+   the Secret `name: langsmith-polly-postgres` and `key: postgres_connection_url`.
+4. Run `make init-values` and `make deploy`. The deploy removes the in-cluster
+   StatefulSets and keeps their volumes.
+5. When the feature shows its data, delete the old volumes. This cannot be undone:
+
+   ```bash
+   kubectl delete pvc -n langsmith data-langsmith-standalone-polly-postgres-0 data-langsmith-standalone-polly-redis-0
+   ```
 
 ---
 
@@ -975,8 +1015,6 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 -f langsmith-values-insights.yaml             (enable_insights = true)
 -f langsmith-values-polly.yaml                (enable_polly = true)
 -f langsmith-values-fleet.yaml                (enable_fleet = true)
--f langsmith-values-standalone-polly.yaml     (enable_standalone_polly = true)
--f langsmith-values-standalone-insights.yaml  (enable_standalone_insights = true)
 -f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default)
 -f langsmith-values-smithdb.yaml              (enable_smithdb = true)
 -f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
@@ -1323,11 +1361,8 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
 | `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
 | `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
-| `fleet_storage` | `external` | no | Fleet storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_insights` | `false` | no | Enable AI-powered trace analysis |
-| `insights_storage` | `external` | no | Insights storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
-| `polly_storage` | `external` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
 | `enable_engine` | `false` | no | Enable Engine (chart 0.17+). Requires `enable_sandboxes`. Creates the Engine IRSA role with Amazon Bedrock Mantle access. See [ENGINE.md](ENGINE.md) |
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |

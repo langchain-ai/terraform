@@ -317,7 +317,7 @@ else
 fi
 
 # Report addon files
-for addon in sizing-production sizing-production-large sizing-dev agent-deploys fleet insights polly standalone-polly standalone-insights engine; do
+for addon in sizing-production sizing-production-large sizing-dev agent-deploys fleet insights polly engine; do
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
   if [[ -f "$f" ]]; then
     pass "langsmith-values-${addon}.yaml (addon)"
