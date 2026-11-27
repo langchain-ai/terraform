@@ -46,6 +46,7 @@ Use|access|every login; tunnels to LangSmith, Grafana and Mission Control
 |soak|the design load with reads for DURATION=900 s; STEP=1 raises it until it breaks; TRACES=agent sends realistic traces
 |experiment|every size from no data, held to its machine: verify, then 1x twice, 2x and 3x its design rate, in realistic (agent) traces
 |report|the runs in build/soak (or the folders given) as figures, numbers and the runs' own files
+|compare|every finished experiment (or the folders given) on one scale: what each size held and took
 |down|delete the install and every trace in it
 Inspect and change|secrets|change the license key or the tunnel token (infra/.secrets.env, mode 600)
 |values|every release's chart and values, as the box gets them
@@ -61,7 +62,7 @@ EOF
 verb="${1:-help}"
 shift || true
 case "$verb" in
-  secrets | preflight | plan | up | export | access | status | verify | soak | experiment | report | down | values | pins | render | check)
+  secrets | preflight | plan | up | export | access | status | verify | soak | experiment | report | compare | down | values | pins | render | check)
     "cmd_$verb" "$@" ;;
   tf) need terraform && tf "$@" ;;
   help | -h | --help) usage ;;

@@ -103,6 +103,32 @@ run "payload_and_redis_knobs_reach_the_chart" {
   }
 }
 
+# SmithDB's merge timing reaches the unified pod as the env SmithDB reads (smithdb-ingestion config.rs:
+# processor.max_flush_time_ms, run_segment_manager.partition_flush_timeout and max_l1_flush_jitter_ms).
+run "smithdb_merge_timing_reaches_the_unified_pod" {
+  command = plan
+  variables {
+    smithdb_merge = { l1_timeout_minutes = 3 }
+  }
+  assert {
+    condition = { for e in output.values.langsmith.values.smithdb.unified.deployment.extraEnv : e.name => e.value } == {
+      SMITHDB_INGESTION__PROCESSOR__MAX_FLUSH_TIME_MS                                = "1000"
+      SMITHDB_INGESTION__RUN_SEGMENT_MANAGER__PARTITION_FLUSH_TIMEOUT                = "3m"
+      SMITHDB_INGESTION__RUN_SEGMENT_MANAGER__PARTITION_FLUSH_TIMEOUT_CHECK_INTERVAL = "30s"
+      SMITHDB_INGESTION__RUN_SEGMENT_MANAGER__MAX_L1_FLUSH_JITTER_MS                 = "30000"
+    }
+    error_message = "smithdb_merge should reach the unified pod's env, its defaults where unset."
+  }
+}
+
+run "a_merge_timeout_past_an_hour_is_refused" {
+  command = plan
+  variables {
+    smithdb_merge = { l1_timeout_minutes = 90 }
+  }
+  expect_failures = [var.smithdb_merge]
+}
+
 run "observability_and_mission_control_follow_their_switches" {
   command = plan
   variables {

@@ -268,6 +268,31 @@ variable "blob_min_kb" {
   description = "Payloads at or above this many KB go to the object store rather than SmithDB's rows (config.blobStorage.minBlobStorageSizeKb)."
 }
 
+variable "smithdb_merge" {
+  type = object({
+    l0_flush_ms        = optional(number, 1000)
+    l1_timeout_minutes = optional(number, 4)
+    l1_jitter_seconds  = optional(number, 30)
+  })
+  default     = {}
+  description = <<-EOT
+    How SmithDB batches what it ingests (SIZING.md, SmithDB's merges). It writes a small segment for a partition at most every l0_flush_ms, and merges a partition's segments into one L1 segment every l1_timeout_minutes (plus up to l1_jitter_seconds, and the 30-second check) or at 25,000 rows. Every read scans the segments still waiting, so the timeout bounds how slow a read gets. SmithDB's own defaults (500 ms, 10 minutes, 3 minutes) let up to 1,200 segments pile up and slowed reads past 5 s at 420 or more on one box.
+  EOT
+
+  validation {
+    condition     = var.smithdb_merge.l0_flush_ms >= 1 && var.smithdb_merge.l0_flush_ms <= 30000
+    error_message = "smithdb_merge.l0_flush_ms must be 1 to 30000, the range SmithDB accepts (processor.max_flush_time_ms)."
+  }
+  validation {
+    condition     = var.smithdb_merge.l1_timeout_minutes >= 1 && var.smithdb_merge.l1_timeout_minutes <= 60 && floor(var.smithdb_merge.l1_timeout_minutes) == var.smithdb_merge.l1_timeout_minutes
+    error_message = "smithdb_merge.l1_timeout_minutes must be a whole number of minutes, 1 to 60."
+  }
+  validation {
+    condition     = var.smithdb_merge.l1_jitter_seconds >= 0 && var.smithdb_merge.l1_jitter_seconds <= 900
+    error_message = "smithdb_merge.l1_jitter_seconds must be 0 to 900, the range SmithDB accepts (run_segment_manager.max_l1_flush_jitter_ms)."
+  }
+}
+
 variable "redis_runs_expiry_hours" {
   type        = number
   default     = 6

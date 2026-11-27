@@ -133,7 +133,15 @@ locals {
           }
         }
         unified = { deployment = {
-          resources         = local.k8s.smithdb
+          resources = local.k8s.smithdb
+          # SmithDB's merge timing (variables.tf, smithdb_merge; SIZING.md, SmithDB's merges). The check runs
+          # every 30 s, not SmithDB's 60, so a partition waits at most half a minute past its timeout.
+          extraEnv = [
+            { name = "SMITHDB_INGESTION__PROCESSOR__MAX_FLUSH_TIME_MS", value = tostring(var.smithdb_merge.l0_flush_ms) },
+            { name = "SMITHDB_INGESTION__RUN_SEGMENT_MANAGER__PARTITION_FLUSH_TIMEOUT", value = "${var.smithdb_merge.l1_timeout_minutes}m" },
+            { name = "SMITHDB_INGESTION__RUN_SEGMENT_MANAGER__PARTITION_FLUSH_TIMEOUT_CHECK_INTERVAL", value = "30s" },
+            { name = "SMITHDB_INGESTION__RUN_SEGMENT_MANAGER__MAX_L1_FLUSH_JITTER_MS", value = tostring(var.smithdb_merge.l1_jitter_seconds * 1000) },
+          ]
           priorityClassName = local.stores_priority_class
           # The query cache is disposable: the scratch class, sized from the hot window (the chart's
           # tier would ask 100 GiB). SmithDB keeps it within SMITHDB__DISK_LIMIT, read from this size.

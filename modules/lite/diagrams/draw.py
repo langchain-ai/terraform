@@ -564,8 +564,8 @@ READS = [("ui", "traefik", 0), ("frontend", "backend", 0), ("backend", "smithdb"
 KEY = [("1, 2", "An SDK sends a run through Traefik to frontend, the nginx in front of every request."),
        ("3", "On /runs, platform-backend accepts it and answers 202 at once."),
        ("4", "It keeps the run and a task in Redis, and a payload of 20 KiB or more in RustFS's blob bucket."),
-       ("5, 6", "ingest-queue takes the task and writes the run's rows to SmithDB."),
-       ("7, 8", "SmithDB records each segment in its metastore, a database of the one Postgres, and flushes the segment's file to RustFS.")]
+       ("5, 6", "ingest-queue takes the task, writes the run to SmithDB, and deletes its payload from Redis, keeping a small record for late feedback."),
+       ("7, 8", "SmithDB writes small segments, merges them into one every few minutes, records each in its metastore in Postgres, and stores its file in RustFS.")]
 
 
 def edge(a: str, b: str, bend: float = 0) -> tuple[str, float, float]:

@@ -1,6 +1,6 @@
 # Operating Lite
 
-> **Status:** current · **Last verified:** 2026-11-25 (installed, verified and soaked on an Arch-family server; dashboards and alerts on Grafana 13.3.1 locally)
+> **Status:** current · **Last verified:** 2026-11-27 (installed, verified and soaked on an Arch-family server, every size twice; dashboards and alerts on Grafana 13.3.1 locally)
 
 Choosing and checking a machine, reaching it, proving it works, watching it, changing it, keeping its
 data, handing an install to a cluster, and what to do when an install stops. Every command is a `make`
@@ -145,8 +145,9 @@ methods](https://docs.langchain.com/langsmith/authentication-methods#self-hosted
 | `make soak` | Does the box hold its design load, with reads? Every target (nothing lost, readable in time), whether ingestion kept up, and each watch item against its alarm level. | `DURATION` (900 s) plus a 120 s ramp |
 | `TRACES=agent make soak` | The same soak in realistic traces; `verify` and `experiment` take `TRACES` too. `simple`, the default for `verify` and `soak`, is ten runs in a flat tree, each a size from a measured mix: quick, and comparable run to run. `agent`, the default for `experiment`, is an application's traces as customers send them: mostly one model call, a third an agent calling tools for several turns, every model call resending the conversation so far (the load test's [`payloads/agent.py`](../../utils/langsmith-load-test/src/loadtest/payloads/agent.py)). | the same |
 | `STEP=1 make soak` | What does it hold? The design rate x 0.5, 1, 1.5, 2, 3 and 4 in turn, until a step does not hold, and what crossed its level there. | up to six soaks |
-| `make experiment` | What does each size hold? For each size (`SIZES`, all four by default): `FRESH=1 make up` at that size, held to its machine (`emulate_machine`), `make verify`, then `MINUTES` (10) at each multiple of its design rate in `STEPS` (1 1 2 3: 1x right after the fresh install and again once it has warmed), every step run whether or not the last held. After each size and at the end, two tables: what each step held, and what it took from the machine. Deletes the install's data for each size, one root step a size: it asks for the install's name, or takes `CONFIRM=<name>`. Stopped part way, the next `make experiment` continues it with the settings it started with: the sizes that finished are kept, and the one it was on is measured again from no data. `NEW=1` starts a new one. `TRACES` (`agent` unless set) is kept with the experiment's settings. | about an hour and a quarter a size |
+| `make experiment` | What does each size hold? For each size (`SIZES`, all four by default): `FRESH=1 make up` at that size, held to its machine (`emulate_machine`), `make verify`, then `MINUTES` (10) at each multiple of its design rate in `STEPS` (1 1 2 3: 1x right after the fresh install and again once it has warmed), every step run whether or not the last held. After each size and at the end, two tables: what each step held, and what it took from the machine. Deletes the install's data for each size, one root step a size: it asks for the install's name, or takes `CONFIRM=<name>`. Stopped part way, the next `make experiment` continues it with the settings it started with: the sizes that finished are kept, and the one it was on is measured again from no data. `NEW=1` starts a new one. `TRACES` (`agent` unless set), `LABEL` (how `make compare` names it) and the commit it ran are kept with the experiment's settings, and each size's plan beside its steps. | about an hour and a quarter a size |
 | `make report` | The runs in `build/soak/`, or the folders given, as figures, their numbers and the runs' own files. | a minute |
+| `make compare` | Every finished experiment, or the folders given, on one scale: whether each step held and what failed it; each workload's request in the plan the newest experiment ran with against what it used (and the oldest's plan, where it differs), and each machine's reserve, requests and use; lag and reads against the rate, every pod's cores (mean, spread and busiest minute), SmithDB's memory through the run, what a run keeps and writes, SmithDB's merges against reads, and each service's cores a run a second. A row a step in `steps.csv`. `make experiment` ends with it. | a minute |
 
 They log in as the first admin, make an API key for the run and revoke it after; they reach the box's
 Kubernetes API and LangSmith through ssh, with no port opened. They are the load test's own commands
@@ -210,6 +211,17 @@ make up      # resolves the lines again: a new LangSmith patch shows as a change
 A patch inside a pinned line arrives with any `make up`. A new line (LangSmith 0.19, k3s 1.37) is an edit
 to `infra/pins.yaml`, made on purpose: read the chart's changelog, then `make render` before any box gets
 it.
+
+An upgrade is the chart's own: k3s's helm-controller runs `helm upgrade` for each changed release, the
+stores first, and the chart's migrations (LangSmith's database, SmithDB's metastore) run as Jobs before
+the new pods start. Go one line at a time and never back: the migrations are not reversible, so a
+snapshot first (Keeping its data) is the way back. Many installs upgrade the same way, each from its own
+folder with the same `pins.yaml`, so every install a `make up` reaches runs the same versions; a fleet
+upgrades one install, watches its health dashboard, then the rest.
+
+Limit: every box measured so far started from no data; an upgrade across a line with data on the box
+has not been run here. Before a fleet takes one, a plain `make up` (no `FRESH=1`) on a copy of a real
+install is the test.
 
 ## Keeping its data
 
@@ -275,7 +287,9 @@ sudo journalctl -u k3s --since -30min
 | Pods that cannot reach each other, with Docker on the box | Docker's FORWARD policy: allow the pod range (10.42.0.0/16), or stop Docker |
 | No certificate with `access = dns` | the A record does not resolve to the box, or port 80 is closed: Traefik's log says which |
 | `make verify` stops at a hop | that hop's workload printed its last log lines; the health dashboard's tab for it shows since when |
-| feedback stats answers 429, "Too many concurrent partitions" | SmithDB refused a query that would scan more than its partition limit, in the minute before compaction merges the segments waiting for it; it answers again once they are merged. Seen on magus at `m` from 25 runs/s, raised with SmithDB's maintainers (2026-11-25) |
+| Opening a trace or the trace list slows past seconds while every core has room, and recovers on its own | SmithDB's small segments waiting for their merge: every read scans each one. The health dashboard's "Segments waiting for their L1 merge" (Compaction) shows the pile, which falls at the next merge. Lite merges every 4 minutes; held above 300, shorten `smithdb_merge.l1_timeout_minutes` ([SIZING.md, SmithDB's merges](SIZING.md#smithdbs-merges)) |
+| A read answers 429, "Too many concurrent partitions" | SmithDB refused a query that would scan more than 10,000 partitions, a limit that protects its memory, with many segments waiting for their merge; it answers again after the merge. "Reads refused for scan fanout" (Compaction) counts them. Seen at `l`, 2x, under SmithDB's own 10-minute timer |
+| Redis's memory climbing toward its maxmemory | ingest is behind: payloads wait in Redis until ingest-queue stores them. Find why on the Ingestion tab (an old backlog, failed writes) before adding memory; a run older than `redis_runs_expiry_hours` is dropped, and full, Redis refuses new runs, which the SDK retries |
 
 ## What the first install confirms
 
@@ -283,8 +297,10 @@ What only a running box can show, each read on the first install of each size:
 
 1. SmithDB as one pod at each size: its use at the design load (`make soak`), and whether it is killed.
    At `m` on magus (2026-11-25): 1.5 to 1.6 cores from 50 to 75 runs/s, never killed; every run stored up
-   to 75 runs/s, three times the design rate. Every size in the load test's simple traces (2026-11-26):
-   never killed, every run stored at 1 to 3 times its design rate. In realistic traces: `make experiment`.
+   to 75 runs/s, three times the design rate. Every size in simple and in agent traces (2026-11-26):
+   never killed, every run stored at 1 to 3 times its design rate; its memory climbs toward the limit it
+   divides among its parts, which the plan now reserves ([SIZING.md, What the experiments
+   measured](SIZING.md#what-the-experiments-measured)).
 2. Traefik's HTTPS redirect and Let's Encrypt resolver, as k3s's bundled Traefik chart takes them.
 3. The health dashboard's signals reading data. Three LangSmith metric names
    (`langsmith_ingest_task_failures_total`, `langsmith_asynq_queue_latency_seconds`,

@@ -19,8 +19,10 @@ infra/.secrets.env.*
 # The packaged datastores chart, the plan file (it holds the license key), and each run's logs.
 build/
 
-# Ideas kept for later, and the comparison with another product: not part of the public module.
+# Ideas kept for later, the comparison with another product, and the team's own record of what each
+# experiment and customer conversation taught: not part of the public module.
 PROPOSALS.md
+learnings.md
 
 crash.log
 crash.*.log

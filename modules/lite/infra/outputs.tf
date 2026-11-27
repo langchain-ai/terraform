@@ -37,6 +37,7 @@ output "plan" {
     runs_per_second = local.peak
     readers         = local.readers
     requested       = local.requested
+    allocatable     = local.allocatable
     allowed         = local.allowed
     used_pct = {
       cpu    = floor(100 * local.requested.cpu_m / local.allowed.cpu_m)

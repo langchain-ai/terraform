@@ -69,8 +69,9 @@ locals {
   object_store_gi  = ceil(local.runs_a_day * 1000 * (local.kb.smithdb * local.smithdb_days + local.kb.blob * local.blob_days) * var.storage_factor * local.st.headroom / local.gib)
   smithdb_cache_gi = max(local.st.cache_min_gi, ceil(local.runs_a_day * 1000 * local.kb.smithdb * var.query_hot_days * local.st.headroom / local.gib))
 
+  # sizes.yaml, redis: a record a run for the expiry, and a stalled ingest's payloads for stall_hours.
   rd                 = local.sizes.redis
-  redis_maxmemory_mi = max(local.rd.min_maxmemory_mi, ceil(local.peak * local.kb.redis * 1000 * var.redis_runs_expiry_hours * 3600 * local.rd.headroom / pow(1024, 2)))
+  redis_maxmemory_mi = max(local.rd.min_maxmemory_mi, ceil(local.peak * 1000 * (local.rd.record_kb * var.redis_runs_expiry_hours + local.kb.redis * local.rd.stall_hours) * 3600 * local.rd.headroom / pow(1024, 2)))
   redis_limit_mi     = ceil(local.redis_maxmemory_mi / local.rd.maxmemory_share)
 
   volumes = {

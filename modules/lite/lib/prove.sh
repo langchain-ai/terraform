@@ -137,6 +137,7 @@ cmd_experiment() {
   # Every size's steps, not its verify: a verify is a minute of one user, not a rate.
   heading "experiment" "every size"
   report "$out/report" "$out"/*/*x/
+  cmd_compare "$out"
   next "make up   (the last size stays held to its machine until a plain make up lifts the cap)"
 }
 
@@ -158,7 +159,9 @@ experiment_folder() {
   fi
   out="$BUILD/experiment/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$out"
-  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\nTRACES=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 1 2 3}" "${MINUTES:-10}" "${TRACES:-agent}" >"$out/settings"
+  # LABEL names the experiment in make compare's figures; COMMIT is the tree it ran.
+  printf 'SIZES=%s\nSTEPS=%s\nMINUTES=%s\nTRACES=%s\nLABEL=%s\nCOMMIT=%s\n' "${SIZES:-xs s m l}" "${STEPS:-1 1 2 3}" "${MINUTES:-10}" "${TRACES:-agent}" \
+    "${LABEL:-}" "$(git -C "$LITE" describe --always --dirty 2>/dev/null)" >"$out/settings"
   echo "$out"
 }
 
@@ -174,7 +177,10 @@ experiment_size() {
   # The cap rides on this up alone, never saved: the next plain make up lifts it.
   box="$size" TF_VAR_emulate_machine=true FRESH=1 CONFIRM="$name" YES=1 "$LITE/bin/lite" up || { echo install >"$dir/stopped"; return 1; }
   TRACES="$traces" OUT="$dir/verify" "$LITE/bin/lite" verify || { echo verify >"$dir/stopped"; return 1; }
-  design="$(tf_output plan | json_get runs_per_second)"
+  # The plan the size ran with, beside its steps: make compare sets what each workload used against what
+  # it asked, and an experiment run after the sizing changed must be read against its own plan.
+  tf_output plan >"$dir/plan.json"
+  design="$(json_get runs_per_second <"$dir/plan.json")"
   # Each step's folder is numbered in order, as a multiple can repeat: STEPS 1 1 2 3 runs 1x again once
   # the install has warmed, so a first step slower than the second is the fresh install, not the load. The
   # first experiment's first steps after a fresh install were each size's slowest (magus, 2026-11-26).
@@ -199,6 +205,23 @@ cmd_report() {
   ((${#folders[@]})) || folders=("$BUILD"/soak/*/)
   heading "report" "${#folders[@]} folders of runs"
   report "$BUILD/report/$(date -u +%Y%m%dT%H%M%SZ)" "${folders[@]}"
+}
+
+# Experiments side by side: every size and both kinds of traces on one scale, a row a step in steps.csv and
+# the figures in the brand's dark theme (the load test's load-test-experiments). Each run's own report
+# shows one size; this one shows what changed between them.
+cmd_compare() {
+  need uv
+  local folders=("$@") out brand=()
+  if ((${#folders[@]} == 0)); then
+    for f in "$BUILD"/experiment/*/; do [[ -e "$f/settings" && -e "$f/report" ]] && folders+=("$f"); done
+  fi
+  ((${#folders[@]})) || fail "no finished experiment to compare" "make experiment runs one; or name the folders."
+  out="$BUILD/compare/$(date -u +%Y%m%dT%H%M%SZ)"
+  heading "compare" "${#folders[@]} experiments on one scale"
+  if [[ -n "${FONTS:-}" ]]; then brand=(--fonts "$FONTS" ${LOGOS:+--logos "$LOGOS"}); else brand=(--draft); fi
+  uv run --quiet --project "$LITE/../../utils/langsmith-load-test" load-test-experiments "$out" "${folders[@]}" "${brand[@]}" || exit 1
+  field "figures" "${out#"$LITE"/}/figures"
 }
 
 report() {

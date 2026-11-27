@@ -1,6 +1,6 @@
 # LangSmith Lite: tracing on one box
 
-> **Status:** Example · **Last verified:** 2026-11-25 (installed, verified and soaked on an Arch-family server: `m` on 2026-11-25, every size in the load test's simple traces on 2026-11-26)
+> **Status:** Example · **Last verified:** 2026-11-27 (installed, verified and soaked on an Arch-family server: every size from 1 to 3 times its design rate, in simple and in realistic agent traces, 2026-11-26)
 
 Self-hosted LangSmith's tracing, sized to one machine from the load and the retention you name: k3s,
 every store beside the app, Prometheus and Grafana with a health dashboard and LangSmith's recommended
@@ -9,9 +9,10 @@ values and Secrets for a Kubernetes cluster you already run, one install a names
 wants its own LangSmith on one machine, for many isolated installs (one a customer), and for anyone who
 needs a LangSmith to test against.
 
-It has run on one machine so far, magus, an Arch-family server, where `m` stored every run up to three
-times its design rate ([SIZING.md](SIZING.md#where-the-numbers-come-from) has what was measured,
-[OPERATE.md](OPERATE.md#what-the-first-install-confirms) what the first installs still confirm). It is
+It has run on one machine so far, magus, an Arch-family server, where every size stored all of 700,309
+runs at 1 to 3 times its design rate, and the sizing now follows what those runs used ([SIZING.md, What
+the experiments measured](SIZING.md#what-the-experiments-measured);
+[OPERATE.md](OPERATE.md#what-the-first-install-confirms) has what the first installs still confirm). It is
 **not** highly available (the box is one failure domain), **not** a production blueprint, and **not** an
 installer LangChain supports: LangChain supports the LangSmith application under your agreement, and you
 own the box, its backups and its upgrades. Past size `l` is a full deployment: a cloud module
@@ -73,6 +74,7 @@ own traces: [OPERATE.md, Sending traces](OPERATE.md#sending-traces).
 | `soak` | does it hold its design load? `STEP=1`: the rate it holds, and what breaks first |
 | `experiment` | every size from no data, held to its machine: verify, then 1x twice, 2x and 3x its design rate |
 | `report` | the runs as figures, their numbers and the runs' own files |
+| `compare` | experiments side by side, every size on one scale, each against the plan it ran with |
 | `export` | the releases, values and Secrets for a cluster of one's own |
 | `access`, `status`, `down` | use it, read it, delete it |
 | `secrets`, `values`, `pins`, `render`, `check`, `tf` | change the license key; what is installed; the chart lines; the module's own gates; any Terraform command |
@@ -87,11 +89,23 @@ goes to `build/logs/`, shown only when it fails. `VERBOSE=1 make plan` prints th
 | `xs` | 2 vCPU, 16 GiB, 100 GiB | 1 | r7i.large, about $110 |
 | `s` | 4 vCPU, 32 GiB, 200 GiB | 5 | r7i.xlarge, about $217 |
 | `m` | 8 vCPU, 64 GiB, 640 GiB | 25 | r7i.2xlarge, about $464 |
-| `l` | 16 vCPU, 64 GiB, 1,280 GiB | 50 | m7i.4xlarge, about $738 |
+| `l` | 16 vCPU, 64 GiB, 1,280 GiB | 50 | m7i.4xlarge, about $737 |
 
-A run is one span: a trace of 10 calls at one trace a second is 10 runs/s. **Retention is your choice to
-make:** the TTLs size the disk more than anything else, so `make up` asks for them.
-[SIZING.md](SIZING.md) has every pod, volume and cost, and how each follows from the load and the TTLs.
+A run is one span: a trace of 10 calls at one trace a second is 10 runs/s, and 30,000 runs a month is
+0.01 runs/s, well inside `xs`. **Retention is your choice to make:** the TTLs size the disk more than
+anything else, so `make up` asks for them. [SIZING.md](SIZING.md) has every pod, volume and cost, the
+same shapes on Azure and Google Cloud, and how each follows from the load and the TTLs.
+
+Questions people ask first, and where each is answered:
+
+| Question | Answer |
+|:--|:--|
+| What does Lite leave out? | Every product off the tracing path: the playground, Insights, Polly, Fleet, LangGraph deployments; custom code evaluators run with `code_evaluators = true`. Datasets and experiments the SDK runs use the same API, but nothing here has measured them ([SIZING.md, What the chart runs](SIZING.md#what-the-chart-runs-and-what-lite-keeps)) |
+| Can Postgres and the object store be managed services? | Not yet; where it plugs in: [ARCHITECTURE.md, Security, known limits](ARCHITECTURE.md#security) |
+| How is it upgraded, one install or a hundred? | [OPERATE.md, Changing and upgrading it](OPERATE.md#changing-and-upgrading-it) |
+| How much disk does a retention take? | [SIZING.md, The retention](SIZING.md#the-retention) |
+| Can many installs share a cluster, each on nodes of its own? | Many installs share one today, each in its own namespaces; a node pool an install is not built yet ([ARCHITECTURE.md, Many installs](ARCHITECTURE.md#many-installs)) |
+| What if it is down? | One box is one failure domain: snapshots and `pg_dumpall` ([OPERATE.md, Keeping its data](OPERATE.md#keeping-its-data)) |
 
 ## The rest
 

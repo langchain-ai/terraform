@@ -4,13 +4,15 @@
 # Units: cpu_m millicores, mem_mi MiB, *_gi GiB, kb decimal kilobytes, usd US dollars. A request is
 # what the scheduler reserves and the fit adds up; a limit is the ceiling a pod may burst to.
 
-# LangSmith's services follow a model measured on the bare-metal lab: cores at idle (base) plus cores per
-# unit of work (per_unit), times headroom, never below min_cpu_m. Work is the design rate in runs a second
-# (offered: what clients send; processed: what the workers drain), the readers at once, or nothing (fixed).
-# Memory is the sampled peak times mem_headroom: a peak sampled at one lab load had no buffer as a
-# request, where CPU had half again.
-# Source: bare-metal lab runs at 3 runs a trace and about 180 KiB a run, 5 s samples over ten minutes,
-# 2026-10-31 and 2026-11-01 (Reed Bender); the sizing calculator's lite.measured parameters.
+# LangSmith's services follow a model measured on Lite itself: cores at idle (base) plus cores per unit of
+# work (per_unit), times headroom, never below min_cpu_m. Work is the design rate in runs a second (offered:
+# what clients send; processed: what the workers drain), the readers at once, or nothing (fixed). Memory is
+# the measured peak times mem_headroom.
+# Source: every size's experiment on magus, 2026-11-26, simple and agent traces, 1 to 3 times each size's
+# design rate (SIZING.md, What the experiments measured): the rate-driven services are least-squares fits of
+# cores against runs a second, the heavier of the two kinds of traces; the flat ones their busiest step. The
+# reader-driven ones (frontend, backend) keep the bare-metal lab's model: the load test reads, but no
+# browser does, so their measured use says nothing about a person's.
 model:
   headroom: 1.5
   mem_headroom: 1.2
@@ -18,9 +20,14 @@ model:
   workloads:
     # Go services keep a 2-CPU limit: Go sets GOMAXPROCS to the limit, and at 1 CPU ingest-queue was
     # throttled in 98% of periods at 4.3 traces/s (lab, 2026-10-22; terraform#513, Michael Frederick).
-    platformBackend: { work: offered, base: 0.003, per_unit: 0.0045, mem_mi: 512, lim_cpu_m: 2000 }
-    ingestQueue: { work: processed, base: 0.025, per_unit: 0.035, mem_mi: 1126, lim_cpu_m: 2000 }
-    queue: { work: processed, base: 0.082, per_unit: 0.0058, mem_mi: 1638, lim_cpu_m: 1000 }
+    # An ingest-queue pod starts as many workers as its CPU limit allows, so its limit stays at 2 CPU
+    # however little it uses: a smaller limit backlogs with the CPU idle (Dzmitry Dubarau, 2026-10-12).
+    # Measured 1.0 millicores a run/s (platform-backend) and 6.9 (ingest-queue, simple traces; 4.0 in agent
+    # traces), against 4.5 and 35 planned before; peaks 0.13 and 0.59 GiB.
+    platformBackend: { work: offered, base: 0.003, per_unit: 0.0013, mem_mi: 256, lim_cpu_m: 2000 }
+    ingestQueue: { work: processed, base: 0.025, per_unit: 0.007, mem_mi: 640, lim_cpu_m: 2000 }
+    # The queue did not follow the rate: 0.13 cores at every step from 1 to 150 runs a second, 1.0 GiB.
+    queue: { work: fixed, base: 0.13, per_unit: 0, mem_mi: 1100, lim_cpu_m: 1000 }
     frontend: { work: readers, base: 0.001, per_unit: 0.0214, mem_mi: 128, lim_cpu_m: 500 }
     # backend imports many Python modules at start: a higher CPU limit fits it inside its startup probes.
     backend: { work: readers, base: 0.013, per_unit: 0.0012, mem_mi: 973, lim_cpu_m: 2000 }
@@ -37,6 +44,7 @@ storage:
   mix_pct: { small: 70, medium: 25, large: 5 }
   smithdb_kb: { small: 3.75, medium: 15, large: 112 }
   blob_kb: { small: 0, medium: 38, large: 84 }
+  # What a run waiting for ingest holds in Redis: the payload inline, or a pointer once offloaded.
   redis_kb: { small: 9.7, medium: 2.9, large: 12 }
   # The design rate is the busiest minute; storage fills at the average, the peak over this.
   peak_factor: 3
@@ -47,10 +55,20 @@ storage:
   # SmithDB's query cache holds the hot window, never less than this.
   cache_min_gi: 10
 
-# Redis holds each run until ingest-queue drains it. Its maxmemory holds a stalled ingest at the peak for
-# the whole run expiry, with headroom; its limit adds a quarter for the fork of a save, and its request
-# equals its limit, so the memory is reserved.
+# What Redis holds on chart 0.18 with ClickHouse off: ingest deletes a run's payload once the run is stored
+# and keeps a small record until the run expiry, for late feedback (LangSmith's ingest, from 0.18; the
+# sizing calculator's redis.payload_trimmed_from). Through 0.17 every payload stayed for the whole expiry, the 8.1 KB a run this plan
+# once held for 6 hours: 14 GiB at box l, of which the box used 0.4.
+# maxmemory = peak x (record_kb x expiry + the payloads' redis_kb x stall_hours) x headroom: the records for
+# the expiry, and a stalled ingest's payloads for stall_hours. Its limit adds a quarter for the fork of a
+# save, and its request equals its limit, so the memory is reserved.
+# record_kb: 1.56 to 1.73 KiB a run measured whatever the payload (34 to 97 KiB a run, magus, 2026-11-26),
+# about 2.5 KB in LangChain's 20k to 200k runs/s load test: the larger. stall_hours: an hour of the peak's
+# payloads; the slowest drain measured was under a minute. The sizing calculator's redis.trimmed_kb_per_run
+# and redis.stall_hours.
 redis:
+  record_kb: 2.5
+  stall_hours: 1
   headroom: 1.3
   maxmemory_share: 0.75
   min_maxmemory_mi: 256
@@ -79,8 +97,12 @@ single_machine_max_runs_per_second: 50
 # watches from one shared stack; aws the instance type with the machine's vCPUs and memory.
 #
 # SmithDB runs as one unified pod (chart 0.18) whose smallest chart tier asks 4 CPU and 16 GiB. Its sizes
-# here are the bare-metal module's tested minimal tier for the pods it replaces, not yet measured as one
-# pod. ponytail: unmeasured unified SmithDB; the first install of each box measures it.
+# here are the bare-metal module's minimal tier for the pods it replaces. One pod divides its memory limit
+# among its parts: 40% the query pool, 25% compaction, 20% ingest, 10% the query cache
+# (smithdb crates/smithdb/src/bin/main.rs, memory shares for smithdb all), so it grows toward its limit by
+# design: box s held 4.75 of its 6 GiB after 48 minutes. Its request is its limit, so the memory it will
+# use is reserved and counted in the fit. Its CPU peaks in the minute before an L1 merge (SIZING.md,
+# SmithDB's merges), at up to 1.75 times its request; its limit is twice the request.
 # Memory binds before CPU (Redis holds a stalled ingest, SmithDB and the stores keep their working sets,
 # the services carry a 1.2 buffer), so xs, s and m take 8 GiB a vCPU (r7i on AWS). At 4 GiB a vCPU, s with
 # Mission Control overran its allowed memory and m sat at 98% (2026-11-24); l holds its load at 84%.
@@ -91,7 +113,7 @@ boxes:
     design: { runs_per_second: 1, readers: 1 }
     reserved: { cpu_m: 400, mem_mi: 1024 }
     features: { observability: false, mission_control: false }
-    smithdb: { cpu_m: 500, mem_mi: 2048, lim_cpu_m: 2000, lim_mem_mi: 4096 }
+    smithdb: { cpu_m: 500, mem_mi: 4096, lim_cpu_m: 2000, lim_mem_mi: 4096 }
     postgres: { cpu_m: 50, mem_mi: 512, lim_cpu_m: 1000, volume_gi: 10 }
     rustfs: { cpu_m: 100, mem_mi: 512, lim_cpu_m: 1000, lim_mem_mi: 2048 }
     prometheus: { volume_gi: 10 }
@@ -101,9 +123,9 @@ boxes:
     design: { runs_per_second: 5, readers: 2 }
     reserved: { cpu_m: 500, mem_mi: 1536 }
     features: { observability: true, mission_control: true }
-    smithdb: { cpu_m: 750, mem_mi: 3072, lim_cpu_m: 2000, lim_mem_mi: 6144 }
-    postgres: { cpu_m: 100, mem_mi: 768, lim_cpu_m: 1000, volume_gi: 10 }
-    rustfs: { cpu_m: 100, mem_mi: 768, lim_cpu_m: 2000, lim_mem_mi: 3072 }
+    smithdb: { cpu_m: 750, mem_mi: 6144, lim_cpu_m: 2000, lim_mem_mi: 6144 }
+    postgres: { cpu_m: 100, mem_mi: 768, lim_cpu_m: 2000, volume_gi: 10 }
+    rustfs: { cpu_m: 100, mem_mi: 1024, lim_cpu_m: 2000, lim_mem_mi: 3072 }
     prometheus: { volume_gi: 10 }
   m:
     machine: { cpu: 8, memory_gi: 64, disk_gi: 640 }
@@ -111,7 +133,7 @@ boxes:
     design: { runs_per_second: 25, readers: 5 }
     reserved: { cpu_m: 750, mem_mi: 2048 }
     features: { observability: true, mission_control: true }
-    smithdb: { cpu_m: 2000, mem_mi: 8192, lim_cpu_m: 4000, lim_mem_mi: 12288 }
+    smithdb: { cpu_m: 2000, mem_mi: 12288, lim_cpu_m: 4000, lim_mem_mi: 12288 }
     postgres: { cpu_m: 250, mem_mi: 1536, lim_cpu_m: 2000, volume_gi: 20 }
     # 6 GiB limit, as the bare-metal lab profile: RustFS was OOM-killed 9 times at 2 GiB under about 70 to
     # 80 traces/s of SmithDB flushes, and each kill failed SmithDB's writes.
@@ -123,9 +145,9 @@ boxes:
     design: { runs_per_second: 50, readers: 10 }
     reserved: { cpu_m: 1000, mem_mi: 3072 }
     features: { observability: true, mission_control: true }
-    smithdb: { cpu_m: 4000, mem_mi: 16384, lim_cpu_m: 8000, lim_mem_mi: 24576 }
+    smithdb: { cpu_m: 4000, mem_mi: 24576, lim_cpu_m: 8000, lim_mem_mi: 24576 }
     postgres: { cpu_m: 500, mem_mi: 3072, lim_cpu_m: 4000, volume_gi: 50 }
-    rustfs: { cpu_m: 500, mem_mi: 4096, lim_cpu_m: 4000, lim_mem_mi: 8192 }
+    rustfs: { cpu_m: 500, mem_mi: 2048, lim_cpu_m: 4000, lim_mem_mi: 8192 }
     prometheus: { volume_gi: 40 }
 
 # Pods whose size does not move with the load, each under the feature that runs it. Mission Control's are

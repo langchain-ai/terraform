@@ -58,17 +58,18 @@ run "past_l_is_a_full_deployment" {
   expect_failures = [terraform_data.fit]
 }
 
-# ingest-queue at 5 runs/s: (0.025 + 0.035 x 5) x 1.5 = 300m; its sampled peak of 1126 MiB x 1.2 = 1352 MiB.
+# ingest-queue at 5 runs/s: (0.025 + 0.007 x 5) x 1.5 = 90m; its measured peak of 640 MiB x 1.2 = 768 MiB, its
+# limit twice that. Its CPU limit stays 2 CPU, as its workers follow it.
 run "the_model_sizes_the_services_from_the_rate" {
   command = plan
   variables { box = "s" }
   assert {
-    condition     = output.plan.pods.ingestQueue.cpu_m == 300 && output.plan.pods.backend.cpu_m == 50
-    error_message = "ingestQueue should ask 300m at 5 runs/s, and backend sit at the 50m floor."
+    condition     = output.plan.pods.ingestQueue.cpu_m == 90 && output.plan.pods.ingestQueue.lim_cpu_m == 2000 && output.plan.pods.backend.cpu_m == 50
+    error_message = "ingestQueue should ask 90m at 5 runs/s under a 2-CPU limit, and backend sit at the 50m floor."
   }
   assert {
-    condition     = output.plan.pods.ingestQueue.mem_mi == 1352 && output.plan.pods.ingestQueue.lim_mem_mi == 2704
-    error_message = "a service's memory request should be its sampled peak x 1.2, its limit twice that."
+    condition     = output.plan.pods.ingestQueue.mem_mi == 768 && output.plan.pods.ingestQueue.lim_mem_mi == 1536
+    error_message = "a service's memory request should be its measured peak x 1.2, its limit twice that."
   }
 }
 
@@ -121,13 +122,25 @@ run "the_query_cache_holds_the_hot_window" {
   }
 }
 
-# 25 runs/s x 8.1 KB x 6 h x 1.3 = 5.3 GiB maxmemory; Redis's memory request equals its limit (reserved).
-run "redis_is_reserved_for_a_stalled_ingest" {
+# 25 runs/s x (2.5 KB x 6 h + 8.1 KB x 1 h) x 1.3 = 2,580 MiB maxmemory: each run's record for the expiry and an
+# hour of a stalled ingest's payloads, not every payload for 6 hours (5,433 MiB before chart 0.18's trim).
+# Redis's memory request equals its limit (reserved).
+run "redis_holds_records_for_the_expiry_and_payloads_for_a_stall" {
   command = plan
   variables { box = "m" }
   assert {
-    condition     = output.plan.data.redis_maxmemory_mi >= 5200 && output.plan.pods.redis.mem_mi == output.plan.pods.redis.lim_mem_mi
-    error_message = "Redis should hold six hours of runs at 25 runs/s, with its memory reserved."
+    condition     = output.plan.data.redis_maxmemory_mi == 2580 && output.plan.pods.redis.mem_mi == output.plan.pods.redis.lim_mem_mi
+    error_message = "Redis should hold 2,580 MiB at 25 runs/s with its memory reserved; got ${output.plan.data.redis_maxmemory_mi}."
+  }
+}
+
+# SmithDB divides its memory limit among its parts and grows toward it, so its request is its limit.
+run "smithdb_reserves_the_memory_it_budgets" {
+  command = plan
+  variables { box = "s" }
+  assert {
+    condition     = output.plan.pods.smithdb.mem_mi == output.plan.pods.smithdb.lim_mem_mi
+    error_message = "SmithDB's memory request should equal its limit."
   }
 }
 

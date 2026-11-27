@@ -82,7 +82,7 @@ signals:
     crit: 90
     for: 10m
     severity: urgent
-    action: A backlog is filling Redis, or Redis is too small for the load; at the limit it evicts runs.
+    action: "A backlog is filling Redis with payloads waiting for ingest, or the load is past the plan. Redis evicts nothing (noeviction): at the limit it refuses new runs, which the SDK retries. Find why ingest is behind before adding memory."
 
   - id: write-failures
     tab: Writes and queries
@@ -139,6 +139,37 @@ signals:
     for: 2h
     severity: non-urgent
     action: "Queries read more segments each day. On one box, SmithDB needs more CPU: a larger box."
+
+  # Lite's own, not one of the recommended alerts. SmithDB writes a small segment about every second and
+  # merges a partition's into one L1 segment on a timer (smithdb_merge) or at 25,000 rows; every read scans
+  # the segments still waiting. On magus (2026-11-26, the chart's 10-minute timer) every step under 300
+  # waiting read a trace within 2 s at p99, and the four slower than 5 s had 420 to 527. Lite's 4-minute
+  # timer keeps the pile under about 300; held above 500, merges are not keeping up.
+  - id: segments-waiting
+    tab: Compaction
+    title: Segments waiting for their L1 merge
+    expr: sum by (namespace) (ingest_pending_segment_entry_count{namespace=~"{ns}",level="L1"})
+    unit: short
+    warn: 300
+    crit: 500
+    for: 10m
+    severity: non-urgent
+    action: "Reads scan every segment waiting and slow past seconds from about 400. Shorten smithdb_merge.l1_timeout_minutes; if the pile still holds high, SmithDB needs more CPU: a larger box."
+
+  # Lite's own: SmithDB refuses a query that would scan more than 10,000 partitions (HTTP 429), a limit that
+  # protects its memory. On magus 80 trace reads were refused in one step at box l, at 2x its design rate,
+  # with 445 segments waiting; each refusal clears at the next merge.
+  - id: reads-refused
+    tab: Compaction
+    title: Reads refused for scan fanout
+    expr: sum by (namespace) (increase(query_fanout_limit_exceeded_total{namespace=~"{ns}"}[10m]))
+    unit: short
+    warn: 1
+    crit: 50
+    for: 10m
+    severity: non-urgent
+    zero_when_absent: true
+    action: "Too many segments waiting for their merge: shorten smithdb_merge.l1_timeout_minutes. Raising the fanout limit trades refusals for SmithDB's memory."
 
   - id: compaction-stopped
     tab: Compaction

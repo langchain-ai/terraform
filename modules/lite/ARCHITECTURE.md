@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status:** current · **Last verified:** 2026-11-25
+> **Status:** current · **Last verified:** 2026-11-27
 
 How Lite goes from `make up` to a running box, how a trace moves through it, why each piece is the
 one it is, and how it differs from the other modules.
@@ -21,14 +21,21 @@ box keeps running if the laptop goes away.
 
 ## How a trace moves
 
-<img alt="A run written, in order: 1 and 2, an SDK sends it through Traefik to frontend, the nginx in front of every request; 3, on /runs, platform-backend accepts it and answers 202; 4, it keeps the run and a task in Redis, and a payload of 20 KiB or more in RustFS's blob bucket; 5 and 6, ingest-queue takes the task and writes the run's rows to SmithDB, one pod; 7 and 8, SmithDB records each segment in its metastore, a database of the one Postgres, and flushes the segment's file to RustFS. A read: a reader reaches backend through Traefik and frontend on /api, which asks SmithDB for runs, recent segments from its query cache on local disk, and Postgres for orgs, projects and keys. queue, LangSmith's background worker, reads Redis and Postgres beside the path." src="diagrams/trace-path.png">
+<img alt="A run written, in order: 1 and 2, an SDK sends it through Traefik to frontend, the nginx in front of every request; 3, on /runs, platform-backend accepts it and answers 202; 4, it keeps the run and a task in Redis, and a payload of 20 KiB or more in RustFS's blob bucket; 5 and 6, ingest-queue takes the task, writes the run to SmithDB, one pod, and deletes its payload from Redis, keeping a small record for late feedback; 7 and 8, SmithDB writes small segments, merges them into one every few minutes, records each in its metastore in Postgres, and stores its file in RustFS. A read: a reader reaches backend through Traefik and frontend on /api, which asks SmithDB for runs, recent segments from its query cache on local disk, and Postgres for orgs, projects and keys. queue, LangSmith's background worker, reads Redis and Postgres beside the path." src="diagrams/trace-path.png">
 
 `queue`, LangSmith's background worker, reads Redis and Postgres beside this path. Each store holds one
-kind of data with one bound on it: [SIZING.md, Each store](SIZING.md#each-store) has the numbers. Redis
-and Postgres reserve their memory (request equals limit), since they hold the runs waiting to be ingested
-and every install's metadata, and a node short of memory reclaims first from pods using more than they
-asked; the stores (Postgres, Redis, RustFS and SmithDB) also run at a priority above the app's, so under
-memory pressure an app pod, which restarts with no loss, is evicted before a store.
+kind of data with one bound on it: [SIZING.md, Each store](SIZING.md#each-store) has the numbers. Redis,
+Postgres and SmithDB reserve their memory (request equals limit): Redis and Postgres hold the runs
+waiting to be ingested and every install's metadata, SmithDB divides its limit among its parts and grows
+to it, and a node short of memory reclaims first from pods using more than they asked. The stores
+(Postgres, Redis, RustFS and SmithDB) also run at a priority above the app's, so under memory pressure an
+app pod, which restarts with no loss, is evicted before a store.
+
+Two things on this path set how an install behaves under load. From chart 0.18, ingest deletes a run's
+payload from Redis once SmithDB has it, so Redis holds payloads only while ingest is behind, and a
+small record of each run for the run expiry. And SmithDB writes small segments and merges them on a
+timer, so a read's cost follows how many wait for their merge: Lite merges every 4 minutes, not
+SmithDB's 10 ([SIZING.md, SmithDB's merges](SIZING.md#smithdbs-merges)).
 
 ## What runs, and why each piece
 
@@ -105,6 +112,11 @@ Known limits, each a deliberate corner cut:
   client secret in the Secret Lite already makes (`infra/secrets.tf`), and basic auth off; your own
   certificate is a TLS Secret and Traefik's default certificate (`traefik_values`); an internal CA for
   outbound calls is the chart's `config.customCa`.
+- Not built yet: Postgres and the object store outside the box, for a managed database's backups and
+  zone redundancy. LangSmith already reaches both as external services (`postgres.external`, and
+  `blobStorage` and SmithDB's object store as S3 at an endpoint), so the plug-in is one setting that
+  points those at a managed Postgres and bucket, puts their credentials in the Secrets Lite makes, and
+  leaves the datastores chart's instance off; the plan then drops their pods and volumes from the fit.
 
 ## Many installs
 
@@ -132,7 +144,12 @@ here. What that system needs, Lite gives:
   must not share a node either, the plug-in is one setting that pins every release to a pool: the
   LangSmith chart takes a `nodeSelector` and `tolerations` on each component, the datastores chart does
   not yet, and a node pool with a taint per install is the cluster's to make. Until then, a node of its
-  own is a machine of its own: `cloud = baremetal` or `aws`.
+  own is a machine of its own: `cloud = baremetal` or `aws`. This is the shape for a provider that runs
+  one install per customer of its own, tens to hundreds of them: each customer's data on nodes of its
+  own, and every install sized, upgraded and watched from one cluster and one set of pins.
+- **One upgrade path for every install.** Each install pins the same chart lines (`infra/pins.yaml`), so
+  a fleet moves one line at a time, one install first ([OPERATE.md, Changing and upgrading
+  it](OPERATE.md#changing-and-upgrading-it)).
 - **Watched from one place, later.** On a cluster an install runs no observability stack or Mission
   Control of its own, since their roles are cluster-wide. The health dashboard and its alerts are
   grouped by namespace, with an install picker, ready for one shared stack; that stack is not built
