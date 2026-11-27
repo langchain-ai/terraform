@@ -1,0 +1,125 @@
+modules/azure/ARCHITECTURE.md
+  s_8cee47d9319ea3::t_41ad4cabb11644 82
+modules/aws/TROUBLESHOOTING.md
+  s_8cee47d9319ea3::t_38523c0a1e020b 629-643
+modules/gcp/SMITHDB.md
+  s_8cee47d9319ea3::t_b5c076628c95a3 348-350
+  s_8cee47d9319ea3::t_10e5ef2d3b207e 253-268
+  s_8cee47d9319ea3::t_4a93a1afb3f3b5 23-24
+  s_8cee47d9319ea3::t_e5ef88df902c54 243
+modules/gcp/TEST_CYCLE.md
+  s_8cee47d9319ea3::t_fba463ebebe3f4 292,295
+  s_8cee47d9319ea3::t_5c037af31c89db 333,335,337-342
+modules/aws/QUICK_REFERENCE.md
+  s_8cee47d9319ea3::t_baff03ad1eb4b9 132,136-138
+modules/aws/SMITHDB.md
+  s_8cee47d9319ea3::t_ec1ba6d9110d0c 175-176
+  s_8cee47d9319ea3::t_efd9d8ab9cc952 185-186
+  s_8cee47d9319ea3::t_ec2624058296df 274,276-278,282
+  s_8cee47d9319ea3::t_566c10c306bcd0 97-101,106-118
+  s_8cee47d9319ea3::t_cc16fa0bfe4eb8 251,254-255
+  s_8cee47d9319ea3::t_e755ac9412e477 194
+  s_8cee47d9319ea3::t_a8306f0989606f 214,218-220
+modules/aws/infra/variables.tf
+  s_8cee47d9319ea3::t_c3c445e41fce09 1369
+modules/aws/ENGINE.md
+  s_8cee47d9319ea3::t_58ccb2e1c501a9 261-262
+  s_8cee47d9319ea3::t_782327446562b4 63
+  s_8cee47d9319ea3::t_bef2e461dcd1e2 61
+modules/azure/.gitignore
+  s_8cee47d9319ea3::t_00489b0c3be73e 27-29
+modules/azure/TEST_CYCLE.md
+  s_8cee47d9319ea3::t_9cd988090d25c0 278
+modules/gcp/README.md
+  s_8cee47d9319ea3::t_6203fc21ce66a3 139,141-143,147-151,154
+  s_8cee47d9319ea3::t_dff695d3620e79 292-352,354,360-364,366-368
+  s_8cee47d9319ea3::t_949d187849d8ef 353,355-359,365
+  s_8cee47d9319ea3::t_62d26f4bb894e5 380-381,385-386
+  s_8cee47d9319ea3::t_1635a3980b6249 205
+  s_8cee47d9319ea3::t_4051e59deb9b68 267-270,273
+  s_8cee47d9319ea3::t_088cf2c37d36d4 375-376
+  s_8cee47d9319ea3::t_fadd6530b65f3b 155
+modules/aws/README.md
+  s_8cee47d9319ea3::t_852111254c6e55 1167,1169
+  s_8cee47d9319ea3::t_5f3122c8f59065 661
+  s_8cee47d9319ea3::t_14220a3222c34a 1194
+  s_8cee47d9319ea3::t_3287ab6c7bc194 1066-1077
+  s_8cee47d9319ea3::t_14238d0d767895 791
+  s_8cee47d9319ea3::t_fae286715a6dab 667-748
+  s_8cee47d9319ea3::t_e6d80ef3bbbfa8 1095,1097-1098,1100
+  s_8cee47d9319ea3::t_db9eaa2294cc9a 150-152,156,163,165,168-172,175
+  s_8cee47d9319ea3::t_010bed202ad032 176
+  s_8cee47d9319ea3::t_4375e50f3e075c 749-750
+modules/aws/helm/values/examples/SIZING.md
+  s_8cee47d9319ea3::t_e811f4fe490f9d 25,27
+  s_8cee47d9319ea3::t_ff9099ff8393ac 31,33-34,37-39
+  s_8cee47d9319ea3::t_54883a30672217 52
+  s_8cee47d9319ea3::t_e7ad0f14e949ca 62
+modules/azure/SMITHDB.md
+  s_8cee47d9319ea3::t_28857790c13a4b 92-93,95-98,100-103
+  s_8cee47d9319ea3::t_6fe6342e71b879 333-334
+modules/gcp/SERVICES.md
+  s_8cee47d9319ea3::t_6f75c44ee46d43 166
+modules/README.md
+  s_8cee47d9319ea3::t_ac0f0cad29f3ec 36-37
+  s_8cee47d9319ea3::t_b149915f96688e 81
+README.md
+  s_8cee47d9319ea3::t_415877d175e6ca 48
+modules/azure/README.md
+  s_8cee47d9319ea3::t_496c60eb4af9a2 881,884,887-888
+  s_8cee47d9319ea3::t_468b6810a7212b 1923-1929
+  s_8cee47d9319ea3::t_bd58cb0deb1855 1306,1308,1310-1351,1354,1356,1358,1360-1365,1367-1370,1372-1377,1379-1386,1388,1390,1398
+  s_8cee47d9319ea3::t_2bff415ebf9263 1446,1448
+  s_8cee47d9319ea3::t_e40e4a6488dde5 1435
+  s_8cee47d9319ea3::t_7ab9083ad9162d 1259
+  s_8cee47d9319ea3::t_0981eed60aca30 897
+  s_8cee47d9319ea3::t_8751d4c7a9685e 1411
+  s_8cee47d9319ea3::t_bd8150df8152ce 1475-1478,1483-1486,1489
+  s_8cee47d9319ea3::t_a34517bfdc5b7d 1913-1914
+  s_8cee47d9319ea3::t_6c4c126b9c841b 906
+  s_8cee47d9319ea3::t_295e02af8664e1 1039
+  s_8cee47d9319ea3::t_280f15b10b60a1 543-546
+  s_8cee47d9319ea3::t_c274ef1c65bd82 844-845
+modules/gcp/QUICK_REFERENCE.md
+  s_8cee47d9319ea3::t_fe77abb4705161 101,104-105,109
+  s_8cee47d9319ea3::t_583c139101197d 178-179
+  s_8cee47d9319ea3::t_ae08b1a0624eb7 245
+  s_8cee47d9319ea3::t_1f278a9f05d250 127,129
+  s_8cee47d9319ea3::t_8f9a96dfe8b731 277
+  s_8cee47d9319ea3::t_16bfa360fc35a1 110
+modules/aws/.gitignore
+  s_8cee47d9319ea3::t_95f29950b2202a 25-27
+modules/azure/TROUBLESHOOTING.md
+  s_8cee47d9319ea3::t_5edf3d01ca47ac 876-890
+  s_8cee47d9319ea3::t_9a196f4728f66c 927,929,931
+  s_8cee47d9319ea3::t_b0a335948acb41 999,1001,1003
+  s_8cee47d9319ea3::t_1942d7dcc463b4 893
+  s_8cee47d9319ea3::t_97e9921930007f 987
+  s_8cee47d9319ea3::t_b62d7f57e7f602 1012
+  s_8cee47d9319ea3::t_59572d6814c07f 907
+  s_8cee47d9319ea3::t_7e0a954bbeaedc 1189,1191
+AGENTS.md
+  s_8cee47d9319ea3::t_16f5fc47eb11ec 57-71
+modules/azure/INGRESS_CONTROLLERS.md
+  s_8cee47d9319ea3::t_506b7a5030616f 465
+  s_8cee47d9319ea3::t_26eab12f885e92 96
+  s_8cee47d9319ea3::t_c0a884882b66f7 189
+modules/gcp/.gitignore
+  s_8cee47d9319ea3::t_fb900b5e235f97 25-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8bceba6b784ea3de2d853c6691458b0d898d1bff",
+  "prompts": {},
+  "sessions": {
+    "s_8cee47d9319ea3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4553e7f8-7983-41d0-9467-9cb545cda8d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
