@@ -158,7 +158,6 @@ run "external_runtime_iam_and_network_are_scoped" {
       langsmith_irsa_role_arn            = "arn:aws:iam::123456789012:role/plantest-dev-eks-irsa-role"
       langsmith_irsa_role_name           = "plantest-dev-eks-irsa-role"
       node_security_group_id             = "sg-00000000000000001"
-      karpenter_node_iam_role_name       = "plantest-dev-karpenter-node"
       eks_managed_node_group_inputs      = {}
     }
   }
@@ -268,7 +267,6 @@ run "external_runtime_data_stores_admit_the_bastion" {
       langsmith_irsa_role_arn            = "arn:aws:iam::123456789012:role/plantest-dev-eks-irsa-role"
       langsmith_irsa_role_name           = "plantest-dev-eks-irsa-role"
       node_security_group_id             = "sg-00000000000000001"
-      karpenter_node_iam_role_name       = "plantest-dev-karpenter-node"
       eks_managed_node_group_inputs      = {}
     }
   }

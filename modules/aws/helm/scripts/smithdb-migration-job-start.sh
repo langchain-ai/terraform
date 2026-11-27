@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INFRA_DIR="${INFRA_DIR:-$SCRIPT_DIR/../../infra}"
 source "$INFRA_DIR/scripts/_common.sh"
-source "$INFRA_DIR/scripts/_smithdb-transition.sh"
+source "$INFRA_DIR/scripts/_smithdb.sh"
 
 NAMESPACE="${NAMESPACE:-langsmith}"
 TFVARS_FILE="$INFRA_DIR/terraform.tfvars"

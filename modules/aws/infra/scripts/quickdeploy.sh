@@ -104,13 +104,13 @@ _step 1 "$TOTAL_STEPS" "Running terraform apply..."
 
 if [[ "$AUTO_APPROVE" == "true" ]]; then
   info "Running with -auto-approve (--yes flag set)"
-  if ! bash "$SCRIPT_DIR/apply.sh" -auto-approve; then
+  if ! terraform -chdir="$INFRA_DIR" apply -auto-approve; then
     printf "\n${RED}[ERROR]${NC} terraform apply failed. Check output above.\n"
     printf "Fix the issue and re-run: ${CYAN}make quickdeploy${NC}\n"
     exit 1
   fi
 else
-  if ! bash "$SCRIPT_DIR/apply.sh"; then
+  if ! terraform -chdir="$INFRA_DIR" apply; then
     printf "\n${RED}[ERROR]${NC} terraform apply failed. Check output above.\n"
     printf "Fix the issue and re-run: ${CYAN}make quickdeploy${NC}\n"
     exit 1

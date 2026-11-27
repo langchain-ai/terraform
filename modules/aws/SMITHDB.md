@@ -85,10 +85,7 @@ resources and cache sizes. By default, caches use gp3
 **Scheduling.** `make init-values` writes the node selector and tolerations for the
 SmithDB group (`langsmith-nodepool/smithdb`) into
 `langsmith-values-smithdb-overrides.yaml`, for every SmithDB service, the metastore
-migration Job and TaskDB. `make deploy` does not add them. If
-`langsmith-values-smithdb.yaml` is a copy from an older release that still pins the
-Karpenter pools, `make init-values` replaces it with the current example and keeps
-the old copy as `langsmith-values-smithdb.legacy.yaml`.
+migration Job and TaskDB. `make deploy` does not add them.
 
 **Tier and node size.** `langsmith-values-smithdb.yaml` sets
 `smithdb.resourceTier: small`, and no sizing profile changes it, so every profile
@@ -301,41 +298,3 @@ kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 - Verify SmithDB workloads schedule on the dedicated managed group and can
   reach PostgreSQL and S3.
 - For the best cache performance, use the [local SSD cache](#local-ssd-cache).
-
-## Upgrading from 0.17
-
-**SmithDB settings.** The defaults now turn SmithDB on with queries served from
-it. In 0.17 an unset `enable_smithdb`, `smithdb_ingestion_enabled` or
-`smithdb_query_enabled` meant off, so a `terraform.tfvars` that leaves them out
-would switch an install to querying a SmithDB that holds none of its ClickHouse
-history. Before the first 0.18 apply, write them explicitly:
-
-- without SmithDB: `enable_smithdb = false`, or turn it on and stage it as above;
-- with SmithDB still staged: `smithdb_ingestion_enabled` and
-  `smithdb_query_enabled` as they are today, `false` unless already cut over.
-
-`make apply` and `make quickdeploy` refuse the first 0.18 apply until these are
-set (`infra/scripts/upgrade-guard.sh`). Installs written by the QuickStart
-wizard already carry them.
-
-`make init-values` also checks the live Helm release, so it covers an apply run
-outside `make apply` too, such as a plain `terraform apply` or a CI pipeline. It
-refuses to switch a release that serves reads from ClickHouse to SmithDB unless
-`terraform.tfvars` sets `smithdb_query_enabled = true`.
-
-### Existing Karpenter deployments
-
-Finish and disable any historical migration on the current version before upgrading.
-
-1. Set `smithdb_transition_mode = true` in `infra/terraform.tfvars`, keeping
-   `enable_smithdb = true`. Run `make init` and `make apply` to add managed nodes
-   while retaining Karpenter.
-2. Run `make init-values` and `make deploy`. Deployment clears old service
-   resource and cache-volume overrides, uses the selected resource tier,
-   and moves workloads to the managed group.
-3. Set `smithdb_transition_mode = false` and run `make apply`. Cleanup checks
-   workload health and cache storage, waits for old nodes to terminate, then
-   removes Karpenter. Failed checks stop cleanup.
-
-Use `make apply` or `make quickdeploy`; direct `terraform apply` bypasses these
-checks. The existing S3 bucket and metastore are preserved.

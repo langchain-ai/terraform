@@ -42,7 +42,7 @@ INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 EXAMPLES_DIR="$VALUES_DIR/examples"
 source "$INFRA_DIR/scripts/_common.sh"
-source "$INFRA_DIR/scripts/_smithdb-transition.sh"
+source "$INFRA_DIR/scripts/_smithdb.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
@@ -83,13 +83,6 @@ fi
 if [[ "$_smithdb_ingestion_enabled" != "true" && ( "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
   echo "ERROR: SmithDB migration/query require smithdb_ingestion_enabled = true." >&2
   exit 1
-fi
-# upgrade-guard.sh covers only make apply, and an unset query gate defaults to on,
-# so confirm it against the live release before writing it.
-if [[ "$_smithdb_query_enabled" == "true" ]] && ! _tfvar_is_true "smithdb_query_enabled"; then
-  _tf_release_name=$(_parse_tfvar "langsmith_release_name") || _tf_release_name="langsmith"
-  _tf_namespace=$(_parse_tfvar "langsmith_namespace") || _tf_namespace="langsmith"
-  _smithdb_query_cutover_check "${RELEASE_NAME:-$_tf_release_name}" "${NAMESPACE:-$_tf_namespace}" || exit 1
 fi
 
 _gateway_modes=0
@@ -1076,9 +1069,6 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   if [[ ! -f "$_smithdb_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
     echo "SmithDB: created langsmith-values-smithdb.yaml"
-  elif _smithdb_refresh_legacy_overlay "$_smithdb_file" "$EXAMPLES_DIR/langsmith-values-smithdb.yaml"; then
-    echo "SmithDB: replaced langsmith-values-smithdb.yaml, which still pinned the old Karpenter pools"
-    echo "         (the old copy is kept as langsmith-values-smithdb.legacy.yaml)"
   else
     echo "SmithDB: langsmith-values-smithdb.yaml (existing)"
   fi

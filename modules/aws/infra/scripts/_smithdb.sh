@@ -29,41 +29,6 @@ _smithdb_migration_disk_check() {
   return 1
 }
 
-# A langsmith-values-smithdb.yaml copied from an older release pins the Karpenter
-# pools (smithdb-local/instance-store, smithdb-local/compute). Helm merges node
-# selectors across values files, and a null does not remove a key that only an
-# earlier file sets, so those keys would sit next to the managed-pool key and no
-# node would match. Replace such a copy with the current example and keep the old
-# one beside it. Returns 1 when the file needs no replacing.
-_smithdb_refresh_legacy_overlay() {
-  local file="$1" example="$2"
-  grep -q 'smithdb-local/' "$file" 2>/dev/null || return 1
-  cp "$file" "${file%.yaml}.legacy.yaml" && cp "$example" "$file"
-}
-
-# Switching SmithDB query on for a release that serves reads from ClickHouse
-# hides that release's traces in the UI until they are migrated. Returns 0 for a
-# new install (no release yet) or a release that already queries SmithDB, and 1,
-# with the reason, otherwise. A failed lookup returns 1.
-_smithdb_query_cutover_check() {
-  local release="$1" namespace="$2" found live
-  found=$(helm list -a -n "$namespace" --filter "^${release}\$" -q) || {
-    echo "ERROR: could not list the Helm releases in $namespace, so the SmithDB query check cannot run." >&2
-    echo "       Check cluster access (make kubeconfig), or set smithdb_query_enabled = true in terraform.tfvars for a new install." >&2
-    return 1
-  }
-  [[ -n "$found" ]] || return 0
-  live=$(helm get values "$release" -n "$namespace" --all -o json |
-    jq -r '.smithdb.langsmith.query.enabled // false') || live=""
-  [[ "$live" == "true" ]] && return 0
-  echo "ERROR: release $release serves reads from ClickHouse, and these values would switch them to SmithDB." >&2
-  echo "       The UI would stop showing its existing traces until they are migrated." >&2
-  echo "       Set smithdb_query_enabled = false in terraform.tfvars (enable_smithdb = false keeps SmithDB off)," >&2
-  echo "       or set it to true to confirm, then run make apply and make init-values." >&2
-  echo "       See SMITHDB.md, \"Upgrading from 0.17\"." >&2
-  return 1
-}
-
 # Node scheduling comes from the generated overrides (see _smithdb_pool_scheduling).
 # --set-json replaces a map, whereas another YAML overlay merges it, so the legacy
 # service resources are cleared here: the chart tier controls EBS workloads, while
@@ -167,12 +132,9 @@ _smithdb_sizing_tier_check() {
   return 1
 }
 
-# Use Helm's YAML merge to replace only cache overrides, preserving unrelated
-# volumes and mounts. This also handles existing values files during transition.
-# The network-disk cache drops every cache volume, so the chart generates its gp3
-# claim. The local-ssd cache (--set-string cacheStorage=local-ssd) replaces it with
-# an emptyDir named cache and sets the tier's CPU and memory with a matching
-# ephemeral-storage, which the chart needs for an emptyDir cache.
+# Use Helm's YAML merge to replace only cache overrides, preserving unrelated volumes and mounts.
+# The network-disk cache drops every cache volume, so the chart generates its gp3 claim.
+# The local-ssd cache (--set-string cacheStorage=local-ssd) replaces it with an emptyDir named cache and sets the tier's CPU and memory with a matching ephemeral-storage, which the chart needs for an emptyDir cache.
 _smithdb_cache_values() (
   set -euo pipefail
   local chart tier="$1"
@@ -244,111 +206,3 @@ TEMPLATE
   helm template smithdb-cache "$chart" "$@" --set-string "fallbackTier=$tier" |
     sed '/^#/d; /^---$/d' | jq -er '.data.values'
 )
-
-_smithdb_old_instances() {
-  aws ec2 describe-instances --region "$2" --filters \
-    "Name=tag:kubernetes.io/cluster/$1,Values=owned" \
-    "Name=tag:karpenter.sh/nodepool,Values=smithdb-instance-store,smithdb-compute" \
-    "Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down" \
-    --query 'Reservations[].Instances[].InstanceId' --output text
-}
-
-# <cache_storage> is the planned smithdb_cache_storage output, network-disk by default.
-_smithdb_cleanup() {
-  local namespace="$1" release="$2" region="$3" cache_class="$4" cluster="$5" cache_storage="${6:-network-disk}"
-  local workloads nodes claims pods pools node_names claim_names instance_ids ec2_ids
-  workloads=$(kubectl get deployments,statefulsets -n "$namespace" -l "app.kubernetes.io/instance=$release" -o json) || return 1
-  # Check the complete rollout, including TaskDB. A ready old replica alone
-  # does not prove that the updated pod template can schedule.
-  if ! jq -e '[.items[] | select(
-      (.metadata.name | contains("smithdb")) or
-      .spec.template.spec.nodeSelector["langsmith-nodepool/smithdb"] == "true" or
-      .spec.template.spec.nodeSelector["smithdb-local/instance-store"] != null or
-      .spec.template.spec.nodeSelector["smithdb-local/compute"] != null
-    )] | length >= 5 and all(.[];
-      .spec.template.spec.nodeSelector["langsmith-nodepool/smithdb"] == "true" and
-      .spec.template.spec.nodeSelector["smithdb-local/instance-store"] == null and
-      .spec.template.spec.nodeSelector["smithdb-local/compute"] == null and
-      (.status.observedGeneration // 0) >= .metadata.generation and
-      (.status.updatedReplicas // 0) == (.spec.replicas // 1) and
-      (.status.readyReplicas // 0) == (.spec.replicas // 1) and
-      (if .kind == "StatefulSet" then .status.currentRevision == .status.updateRevision else true end)
-    )' <<< "$workloads" >/dev/null; then
-    echo "ERROR: SmithDB or TaskDB is not ready on the managed node group." >&2
-    echo "Set smithdb_transition_mode = true, make apply, make init-values, then make deploy." >&2
-    return 1
-  fi
-  # With local-ssd, the caches stay on EBS until the nodes that have the RAID0
-  # array run, so both kinds pass.
-  if ! jq -e --arg sc "$cache_class" --arg mode "$cache_storage" '[.items[] |
-      select(.spec.template.spec.nodeSelector["langsmith-nodepool/smithdb"] == "true") |
-      .spec.template.spec.volumes[]? | select(.name == "cache")] |
-      length > 0 and all(.[]; .ephemeral.volumeClaimTemplate.spec.storageClassName == $sc or
-        ($mode == "local-ssd" and .emptyDir != null))' <<< "$workloads" >/dev/null; then
-    if [[ "$cache_storage" == "local-ssd" ]]; then
-      echo "ERROR: SmithDB caches must use the generated EBS StorageClass or an emptyDir on the local SSD." >&2
-    else
-      echo "ERROR: SmithDB caches must use the generated EBS StorageClass." >&2
-    fi
-    echo "Run make deploy to apply the tier resources and caches." >&2
-    return 1
-  fi
-
-  pools=$(kubectl get nodepools -o json) || return 1
-  claims=$(kubectl get nodeclaims -o json) || return 1
-  nodes=$(kubectl get nodes -l karpenter.sh/nodepool -o json) || return 1
-  pods=$(kubectl get pods -A -o json) || return 1
-  # This module owns Karpenter. Other pools/claims must not lose their controller.
-  if ! jq -e '[.items[].metadata.name | select(. != "smithdb-instance-store" and . != "smithdb-compute")] | length == 0' <<< "$pools" >/dev/null ||
-     ! jq -e 'all(.items[]; .metadata.labels["karpenter.sh/nodepool"] == "smithdb-instance-store" or .metadata.labels["karpenter.sh/nodepool"] == "smithdb-compute")' <<< "$claims" >/dev/null ||
-     ! jq -e 'all(.items[]; .metadata.labels["karpenter.sh/nodepool"] == "smithdb-instance-store" or .metadata.labels["karpenter.sh/nodepool"] == "smithdb-compute")' <<< "$nodes" >/dev/null; then
-    echo "ERROR: other Karpenter pools or nodes remain. Keep transition mode enabled." >&2
-    return 1
-  fi
-  if ! jq -e --argjson nodes "$nodes" '[.items[] |
-      select(.spec.nodeName as $node | any($nodes.items[]; .metadata.name == $node)) |
-      select(.status.phase != "Succeeded" and .status.phase != "Failed") |
-      select(any(.metadata.ownerReferences[]?; .kind == "DaemonSet") | not)
-    ] | length == 0' <<< "$pods" >/dev/null; then
-    echo "ERROR: application pods still use Karpenter nodes. Move them before cleanup." >&2
-    return 1
-  fi
-  # Capture EC2 IDs before Karpenter removes the Kubernetes objects. Waiting on
-  # Kubernetes alone can leave terminating instances behind without a controller.
-  instance_ids=$(jq -nr --argjson nodes "$nodes" --argjson claims "$claims" '
-    [$nodes.items[].spec.providerID, $claims.items[].status.providerID] |
-    map(select(. != null) | split("/")[-1]) | unique | .[]') || return 1
-  # A previous attempt may have lost its Kubernetes objects before the EC2
-  # waiter failed. Rediscover those instances so retries still wait for them.
-  ec2_ids=$(_smithdb_old_instances "$cluster" "$region") || return 1
-  instance_ids=$(printf '%s\n%s\n' "$instance_ids" "$ec2_ids" | tr '[:space:]' '\n' | sort -u) || return 1
-  if [[ -n "$instance_ids" ]] && ! [[ "$instance_ids" =~ ^[i0-9a-f[:space:]-]+$ ]]; then
-    echo "ERROR: could not identify old EC2 instances safely." >&2
-    return 1
-  fi
-  node_names=$(jq -r '.items[].metadata.name' <<< "$nodes") || return 1
-  claim_names=$(jq -r '.items[].metadata.name' <<< "$claims") || return 1
-  echo "SmithDB is healthy. Removing old pools; Karpenter stays running until nodes terminate..."
-  kubectl delete nodepool smithdb-instance-store smithdb-compute --ignore-not-found --wait=true --timeout=15m || return 1
-  local name
-  for name in $claim_names; do
-    kubectl wait --for=delete "nodeclaim/$name" --timeout=15m || return 1
-  done
-  for name in $node_names; do
-    kubectl wait --for=delete "node/$name" --timeout=15m || return 1
-  done
-  if [[ -n "$instance_ids" ]]; then
-    # Word splitting is intentional: the waiter accepts a list of EC2 IDs.
-    # shellcheck disable=SC2086
-    aws ec2 wait instance-terminated --region "$region" --instance-ids $instance_ids || return 1
-  fi
-  # Recheck after termination; do not rely solely on the earlier snapshot.
-  claims=$(kubectl get nodeclaims -o json) || return 1
-  nodes=$(kubectl get nodes -l karpenter.sh/nodepool -o json) || return 1
-  ec2_ids=$(_smithdb_old_instances "$cluster" "$region") || return 1
-  [[ -z "$ec2_ids" ]] && jq -e '.items | length == 0' <<< "$claims" >/dev/null &&
-    jq -e '.items | length == 0' <<< "$nodes" >/dev/null || {
-      echo "ERROR: Karpenter nodes, claims, or EC2 instances remain. Keeping the controller; check them and rerun make apply." >&2
-      return 1
-    }
-}

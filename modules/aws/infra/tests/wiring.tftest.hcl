@@ -393,9 +393,8 @@ run "sandbox_host_nested_virt_true_rejects_bare_metal" {
   ]
 }
 
-# SmithDB is part of every install from 0.18: a default install plans it, on its
-# own node group with its EBS cache class and no Karpenter pools, writing and
-# serving reads, with no historical migration.
+# SmithDB is part of every install from 0.18.
+# A default install plans it on its own node group with its EBS cache class, writing and serving reads, with no historical migration.
 run "default_install_smithdb_state" {
   command = plan
 
@@ -412,16 +411,12 @@ run "default_install_smithdb_state" {
     error_message = "SmithDB must have managed capacity and its own EBS cache class"
   }
   assert {
-    condition     = length(kubectl_manifest.smithdb_nodepool_instance_store) == 0 && length(kubectl_manifest.smithdb_nodepool_compute) == 0
-    error_message = "new SmithDB installations must not provision Karpenter pools"
-  }
-  assert {
     condition     = output.smithdb_ingestion_enabled && output.smithdb_query_enabled && !output.smithdb_migration_enabled
     error_message = "a default install must have SmithDB ingestion and query on and migration off"
   }
 }
 
-# An install upgraded from 0.17 without SmithDB opts out with one variable.
+# An install without SmithDB opts out with one variable.
 run "enable_smithdb_false_opts_out" {
   command = plan
 
@@ -575,35 +570,6 @@ run "smithdb_local_ssd_without_smithdb_reads_nothing" {
   }
 }
 
-run "smithdb_transition_retains_both_old_pools_and_adds_managed_capacity" {
-  command = plan
-
-  variables {
-    enable_smithdb          = true
-    smithdb_transition_mode = true
-    smithdb_node_min_count  = 3
-    smithdb_node_max_count  = 7
-  }
-
-  assert {
-    condition = (
-      length(kubectl_manifest.smithdb_nodepool_instance_store) == 1 &&
-      length(kubectl_manifest.smithdb_nodepool_compute) == 1 &&
-      length(kubectl_manifest.smithdb_ec2nc_instance_store) == 1 &&
-      length(kubectl_manifest.smithdb_ec2nc_compute) == 1
-    )
-    error_message = "transition mode must preserve both old pools and their node classes"
-  }
-  assert {
-    condition = (
-      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 3 &&
-      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 7 &&
-      module.eks.eks_managed_node_group_inputs["default"].min_size == 3
-    )
-    error_message = "SmithDB capacity settings must reach its managed pool independently of LangSmith"
-  }
-}
-
 # ── DNS, which is gated on two variables rather than a flag ──────────────────
 # A domain with no certificate ARN means Terraform provisions the Route 53 zone
 # and the ACM certificate. Supplying the ARN means the customer already has one.
@@ -668,10 +634,8 @@ run "create_vpc_false_plans_no_vpc" {
 }
 
 # ── EKS network mode ─────────────────────────────────────────────────────────
-# custom-networking moves pods to their own subnets. Everything downstream (the
-# vpc-cni add-on, Karpenter's reserved ENI, the pod CIDRs in the security group
-# rules) keys off pod_subnet_ids_by_az and pod_cidr_blocks, so the runs assert
-# those two and the subnets behind them.
+# custom-networking moves pods to their own subnets.
+# Everything downstream (the vpc-cni add-on and the pod CIDRs in the security group rules) keys off pod_subnet_ids_by_az and pod_cidr_blocks, so the runs assert those two and the subnets behind them.
 
 run "node_subnet_mode_plans_no_pod_subnets" {
   command = plan
