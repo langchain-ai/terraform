@@ -96,12 +96,14 @@ enable_public_eks_cluster = true
 #── EKS ───────────────────────────────────────────────────────────────────────
 eks_cluster_version = "${EKS_VERSION}"
 
+# The one sizing, add-ons off, runs on about 4 nodes at its minimum replicas and
+# needs up to 6 at its maximum.
 eks_managed_node_groups = {
   default = {
     name           = "node-group-default"
     instance_types = ["m5.2xlarge"]
     min_size       = 2
-    max_size       = 5
+    max_size       = 8
   }
 }
 create_gp3_storage_class = true
@@ -111,9 +113,8 @@ postgres_deletion_protection = false
 postgres_skip_final_snapshot = true
 clickhouse_source = "in-cluster"
 
-#── Namespace & Sizing ────────────────────────────────────────────────────────
+#── Namespace ─────────────────────────────────────────────────────────────────
 langsmith_namespace = "langsmith"
-sizing_profile      = "dev"
 
 #── Features (all off for test clusters) ─────────────────────────────────────
 enable_deployments   = false

@@ -454,26 +454,6 @@ run "smithdb_node_group_defaults_fit_the_small_tier" {
   }
 }
 
-# Every sizing profile runs the SmithDB small tier, so the largest profile keeps the
-# default SmithDB nodes.
-run "smithdb_node_group_does_not_follow_the_sizing_profile" {
-  command = plan
-
-  variables {
-    enable_smithdb = true
-    sizing_profile = "production-large"
-  }
-
-  assert {
-    condition = (
-      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.4xlarge" &&
-      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2 &&
-      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 5
-    )
-    error_message = "sizing_profile must not change the SmithDB node type or counts"
-  }
-}
-
 run "smithdb_node_type_and_counts_are_plain_inputs" {
   command = plan
 

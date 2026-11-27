@@ -19,7 +19,6 @@
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
 #   - values/langsmith-values-overrides.yaml    (auto-generated: hostname, IRSA, S3)
-#   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
 #   - values/langsmith-values-agent-deploys.yaml (if Deployments is enabled)
 #   - values/langsmith-values-insights.yaml     (if Insights is enabled)
 #   - values/langsmith-values-polly.yaml        (if LangSmith Chat is enabled)
@@ -56,7 +55,6 @@ _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
 _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
@@ -128,7 +126,6 @@ echo "  name_prefix            = ${_name_prefix:-(empty)}"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
-echo "  sizing_profile         = $_sizing_profile"
 echo "  sandbox_runtime_source = $_sandbox_runtime_source"
 echo ""
 
@@ -231,21 +228,6 @@ elif [[ -t 0 ]]; then
 else
   echo "ERROR: Admin email is required. Set LANGSMITH_ADMIN_EMAIL env var or re-run interactively." >&2
   exit 1
-fi
-echo ""
-
-# ── Sizing profile (from terraform.tfvars) ──────────────────────────────────
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ ! -f "$_sizing_file" ]]; then
-    cp "$_sizing_example" "$_sizing_file"
-    echo "Sizing: ${_sizing_profile} (created langsmith-values-sizing-${_sizing_profile}.yaml)"
-  else
-    echo "Sizing: ${_sizing_profile} (existing langsmith-values-sizing-${_sizing_profile}.yaml)"
-  fi
-else
-  echo "Sizing: chart defaults (sizing_profile = default)"
 fi
 echo ""
 
@@ -791,8 +773,8 @@ fi
 # The chart sets no requests or limits on the shared Engine and Insights
 # deployment, and a strict ResourceQuota rejects a pod without them. They go in
 # this file because init-values.sh rewrites it on every run, while it writes
-# langsmith-values-insights.yaml only once. The Engine, Insights and sizing files
-# load after this file, so a value set in one of them wins. test-values.sh
+# langsmith-values-insights.yaml only once. The Engine and Insights files load
+# after this file, so a value set in either of them wins. test-values.sh
 # renders this block.
 if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
   _engine_insights_agent_block=$(cat << ENGINE_INSIGHTS_AGENT_YAML
@@ -966,6 +948,10 @@ commonEnv:
     value: "${_region}"
   - name: AWS_DEFAULT_REGION
     value: "${_region}"
+  # The medium reads, medium writes pattern in the scale guide; commonEnv lives here
+  # because a list in a later file replaces the base values' list.
+  - name: CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT
+    value: "0"
 $( [[ "$_enable_usage_telemetry" == "true" ]] && cat <<'TELEMETRY'
   - name: PHONE_HOME_USAGE_REPORTING_ENABLED
     value: "true"

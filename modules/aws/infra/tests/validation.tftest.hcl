@@ -53,7 +53,6 @@ run "enums_reject_an_unlisted_value" {
     environment              = "qa"
     tls_certificate_source   = "self-signed"
     clickhouse_source        = "langsmith-managed"
-    sizing_profile           = "small"
     smithdb_metastore_source = "import"
     smithdb_node_arch        = "x86_64"
     smithdb_cache_storage    = "nvme"
@@ -67,7 +66,6 @@ run "enums_reject_an_unlisted_value" {
     var.environment,
     var.tls_certificate_source,
     var.clickhouse_source,
-    var.sizing_profile,
     var.smithdb_metastore_source,
     var.smithdb_node_arch,
     var.smithdb_cache_storage,
