@@ -240,6 +240,18 @@ if [[ "$_enable_engine" == "true" ]]; then
   fi
 fi
 
+# Terraform rejects the standalone switches that 0.18 removed, but only at plan,
+# and this script reads terraform.tfvars without one. Chat or Insights that only
+# a switch turned on would deploy as off.
+for _switch in enable_standalone_polly enable_standalone_insights; do
+  if _tfvar_is_true "$_switch"; then
+    _switch_feature="${_switch#enable_standalone_}"
+    echo "ERROR: $_switch was removed in 0.18. Replace it with enable_${_switch_feature} = true and" >&2
+    echo "       ${_switch_feature}_storage = \"external\" in terraform.tfvars, then run 'make apply', 'make init-values' and 'make deploy'." >&2
+    exit 1
+  fi
+done
+
 if [[ -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
   echo "       Ensure terraform.tfvars has 'environment' and 'region' set." >&2
