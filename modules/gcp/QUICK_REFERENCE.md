@@ -98,16 +98,15 @@ enable_usage_telemetry = true
 
 > **Chart 0.16:** `config.polly.*` and `config.insights.*` are rejected outright — the chart fails the release if either key is present at all. `config.agentBuilder.*` still gates the Agent Builder UI and its tool/trigger servers, but no longer deploys an agent runtime. Use the standalone flags above.
 
-To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
+To add an addon after initial install, set its flag in `terraform.tfvars`, then write the values again. Do not copy example files into `helm/values/`: `make init-values` and `make deploy` stop on a copied feature file.
 
 ```bash
-cp helm/values/examples/langsmith-values-agent-deploys.yaml    helm/values/
-cp helm/values/examples/langsmith-values-fleet.yaml            helm/values/
-cp helm/values/examples/langsmith-values-standalone-polly.yaml helm/values/
-cp helm/values/examples/langsmith-values-standalone-insights.yaml helm/values/
-
+make apply         # the addon's databases and secrets
+make init-values   # merges the addon's example into langsmith-values-overrides.yaml
 make deploy
 ```
+
+Put your own value changes in `helm/values/langsmith-values-local.yaml`, then run `make init-values`. See [Helm values](README.md#helm-values).
 
 ## Sizing Profiles
 
@@ -125,9 +124,9 @@ sizing_profile = "production"   # default | minimum | dev | production | product
 | `production` | Multi-replica with HPA — recommended for real workloads |
 | `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
 
-After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`. With SmithDB enabled and `smithdb_sizing` unset, the profile also sets the SmithDB size, so run `make deploy-all` ([SMITHDB.md](SMITHDB.md#sizing)).
+After changing `sizing_profile`, re-run `make init-values` to merge the sizing profile, then `make deploy`. With SmithDB enabled and `smithdb_sizing` unset, the profile also sets the SmithDB size, so run `make deploy-all` ([SMITHDB.md](SMITHDB.md#sizing)).
 
-`make init-values` copies the example only when `helm/values/langsmith-values-sizing-<profile>.yaml` is missing. It does not update a copy that exists. To get a newer example, rename that file (for example, add `.bak` to the name), then run `make init-values`. Copy your own edits from the `.bak` file into the new file, then run `make deploy`. On chart 0.17, an existing install with `sizing_profile = "minimum"` must do this. The older `minimum` example lets the queue HPA scale out until the nodes have no free CPU. Backend, host-backend, and playground then fail their startup probes.
+`make init-values` merges the example of the profile on every run, so a module upgrade that changes an example takes effect at the next `make init-values`. Put your own sizing changes in `helm/values/langsmith-values-local.yaml`, which merges after the profile and every feature.
 
 > **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
 
@@ -176,8 +175,8 @@ kubectl get secrets -n langsmith
 ```bash
 # Recommended: use the scripted deployment
 cd modules/gcp
-make init-values   # generates values-overrides.yaml from Terraform outputs
-make deploy        # runs helm upgrade --install with the full values chain
+make init-values   # writes langsmith-values.yaml and langsmith-values-overrides.yaml
+make deploy        # runs helm upgrade --install with the two files
 
 # Check what was deployed
 helm status langsmith -n langsmith
@@ -243,7 +242,7 @@ enable_fleet = true   # replaces enable_agent_builder (deprecated in chart v0.15
 
 ```bash
 make apply          # provisions fleet Cloud SQL DB + K8s secrets
-make init-values    # copies langsmith-values-fleet.yaml; injects encryptionKey
+make init-values    # merges the Fleet example; make deploy writes its encryption key into langsmith-config
 make deploy         # rolls out fleet api-server, queue, tool-server, trigger-server
 ```
 
@@ -275,7 +274,7 @@ enable_standalone_insights = true   # replaces enable_insights (deprecated in ch
 
 ```bash
 make apply          # provisions polly + insights Cloud SQL DBs + K8s secrets
-make init-values    # copies langsmith-values-standalone-polly.yaml + langsmith-values-standalone-insights.yaml
+make init-values    # merges the standalone Polly and Insights examples
 make deploy
 ```
 

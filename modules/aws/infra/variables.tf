@@ -1292,7 +1292,7 @@ variable "smithdb_node_root_volume_size_gb" {
 #------------------------------------------------------------------------------
 variable "enable_engine" {
   type        = bool
-  description = "Enable LangSmith Engine (chart 0.17+). Creates an IRSA role for Engine's API server and queue, with Amazon Bedrock Mantle access and the shared role's LangSmith bucket access. Makes init-values.sh copy, and deploy.sh load, langsmith-values-engine.yaml. Requires enable_sandboxes = true and a license with the Engine entitlement."
+  description = "Enable LangSmith Engine (chart 0.17+). Creates an IRSA role for Engine's API server and queue, with Amazon Bedrock Mantle access and the shared role's LangSmith bucket access. Makes init-values.sh merge langsmith-values-engine.yaml into langsmith-values-overrides.yaml. Requires enable_sandboxes = true and a license with the Engine entitlement."
   default     = false
 }
 

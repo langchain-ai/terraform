@@ -1,0 +1,30 @@
+# Your own changes to the LangSmith values. To use them:
+#
+#   cp helm/values/langsmith-values-local.yaml.example helm/values/langsmith-values-local.yaml
+#   make init-values   # merges this file last into langsmith-values-overrides.yaml
+#   make deploy
+#
+# No script writes langsmith-values-local.yaml, and make init-values keeps it. A key
+# here wins over the base values, the generated values, and each enabled feature.
+# It cannot turn a feature on or off, or change where a feature keeps its data:
+# terraform.tfvars decides those. make deploy stops when this file changed after
+# make init-values, so run make init-values after each edit.
+#
+# Keep secrets out of this file. They belong in SSM, which ESO syncs into the
+# langsmith-config Secret.
+#
+# Examples. Remove the leading "# " to use one.
+#
+# More frontend replicas:
+# frontend:
+#   deployment:
+#     replicas: 3
+#
+# A larger SmithDB tier. Raise the SmithDB node inputs in terraform.tfvars first
+# (SMITHDB.md, "Scaling up"):
+# smithdb:
+#   resourceTier: medium
+#
+# More detailed logs:
+# config:
+#   logLevel: debug

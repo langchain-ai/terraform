@@ -20,8 +20,8 @@ With `enable_smithdb = true`, the infrastructure pass creates:
   `minimal`);
 - a Hyperdisk Balanced StorageClass in `network-disk` mode (not for `minimal`);
 - the `smithdb-metastore` Kubernetes Secret;
-- the output `smithdb_helm_values`, which `make init-values` writes to
-  `helm/values/langsmith-values-smithdb-sizing.yaml`.
+- the output `smithdb_helm_values`, which `make init-values` merges into
+  `helm/values/langsmith-values-overrides.yaml`.
 
 Object-store traffic uses Private Google Access, not Cloud NAT. SmithDB requires
 GKE Standard: `enable_smithdb = true` with `gke_use_autopilot = true` fails at
@@ -240,7 +240,7 @@ smithdb_metastore_use_ssl           = false
 ```
 
 Add the sidecar to `smithdb.commonInitContainers` in
-`helm/values/langsmith-values-smithdb.yaml`. The chart example
+`helm/values/langsmith-values-local.yaml`, then run `make init-values`. The chart example
 `examples/smithdb_alloydb_auth_proxy.yaml` has the container, the probes, and the
 security context. Its positional argument is the full instance path
 `projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE`. The
@@ -250,22 +250,22 @@ grant for an external instance.
 ## Deploy
 
 `make deploy-all` runs `make apply`, `make init-values`, and `make deploy`.
-`deploy.sh` loads the SmithDB values files in this order, and a
-later file wins:
+`make init-values` merges three SmithDB sources into
+`helm/values/langsmith-values-overrides.yaml`, in this order, and a later
+source wins:
 
-1. `langsmith-values-smithdb-sizing.yaml`: generated from
-   `terraform output smithdb_helm_values`. Do not edit it.
-2. `langsmith-values-smithdb.yaml`: copied once from `helm/values/examples/`.
-   Your edits go here. Helm replaces lists, so write a complete `volumes` list.
-3. `langsmith-values-smithdb-overrides.yaml`: generated with the bucket,
-   Workload Identity, metastore mapping, Auth Proxy, and gates.
+1. `terraform output smithdb_helm_values`: the tier, resources, HPA minimum
+   replicas, cache volumes, and node placement. Change it through
+   `smithdb_sizing` and `smithdb_cache_storage`.
+2. `helm/values/examples/langsmith-values-smithdb.yaml`, the SmithDB example.
+3. The bucket, Workload Identity, metastore mapping, Auth Proxy, and gates,
+   from the other Terraform outputs.
 
-`deploy.sh` stops before Helm in these cases:
-
-- A SmithDB values file is missing. `deploy.sh` tells you to run
-  `init-values.sh`.
-- The overlay has the chart 0.16 volume name `local-ssd-storage`.
-  `deploy.sh` names the value.
+`helm/values/langsmith-values-local.yaml` merges after all three, so your own
+SmithDB changes go there. Helm replaces lists, so write a complete `volumes`
+list. `make deploy` stops before Helm when a values file is missing, was
+edited by hand, or was written for other inputs; the message tells you to run
+`make init-values`.
 
 ## Staged rollout
 
@@ -345,9 +345,9 @@ applying Terraform or deploying the chart:
 
 The rendered values have `useSsl: true` without the Auth Proxy. Terraform
 rejects that mode for a created metastore, so run `make apply`,
-`make init-values`, and `make deploy`. For a direct Helm upgrade, add
-`-f helm/values/langsmith-values-smithdb-overrides.yaml` after the current
-values. For an external Cloud SQL instance, use mode 2, or add a proxy as in
+`make init-values`, and `make deploy`. For a direct Helm upgrade, apply
+`helm/values/langsmith-values.yaml` and `helm/values/langsmith-values-overrides.yaml`
+after `make init-values`. For an external Cloud SQL instance, use mode 2, or add a proxy as in
 [AlloyDB](#alloydb). See [Metastore TLS on GCP](#metastore-tls-on-gcp).
 
 ### Shared Cloud SQL instance: cloudsqlsuperuser

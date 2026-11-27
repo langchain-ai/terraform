@@ -22,7 +22,9 @@ infra/.license_key
 infra/.admin_password
 infra/.admin_email
 
-# Helm generated values — contain real credentials
+# Helm values that make init-values writes, and your langsmith-values-local.yaml.
+# They name this install's hosts and resources. A 0.17 values-overrides.yaml can
+# hold plaintext secrets.
 **/helm/values/langsmith-values*.yaml
 !**/helm/values/langsmith-values*.yaml.example
 **/helm/values/langsmith-sandbox-values*.yaml

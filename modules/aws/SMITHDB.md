@@ -85,19 +85,28 @@ resources and cache sizes. By default, caches use gp3
 
 **Scheduling.** `make init-values` writes the node selector and tolerations for the
 SmithDB group (`langsmith-nodepool/smithdb`) into
-`langsmith-values-smithdb-overrides.yaml`, for every SmithDB service, the metastore
+`langsmith-values-overrides.yaml`, for every SmithDB service, the metastore
 migration Job and TaskDB. `make deploy` does not add them.
 
-**Tier and node size.** `langsmith-values-smithdb.yaml` sets
-`smithdb.resourceTier: small`, so every install runs the small tier on the default
+**Tier and node size.** The SmithDB example, `helm/values/examples/langsmith-values-smithdb.yaml`,
+sets `smithdb.resourceTier: small`, so every install runs the small tier on the default
 nodes. `make deploy` stops when the tier's
 largest pod does not fit a SmithDB node. To move to a larger tier, follow
 [Scaling up](#scaling-up).
 
-**One pool.** To run SmithDB on the LangSmith nodes instead of its own group, delete
-the `nodeSelector` and `tolerations` blocks under each SmithDB key in
-`langsmith-values-smithdb-overrides.yaml`. `make init-values` rewrites that file, so
-repeat the edit after each run. The SmithDB node group is still created.
+**One pool.** To run SmithDB on the LangSmith nodes instead of its own group, set
+`nodeSelector: null` and `tolerations: null` under each SmithDB key in
+`helm/values/langsmith-values-local.yaml`, then run `make init-values`. For example:
+
+```yaml
+smithdb:
+  query:
+    deployment:
+      nodeSelector: null
+      tolerations: null
+```
+
+Repeat the block for each SmithDB service. The SmithDB node group is still created.
 
 ## Deploy SmithDB services
 
@@ -154,8 +163,8 @@ lists the load each tier was tested at.
 
 Each replica also gets a gp3 cache volume of the tier's cache size, up to
 1,000 GiB in the large tier. Put the Helm settings in
-`helm/values/langsmith-values-smithdb.yaml`: it loads after the base and sizing
-files, so its values win, and `make init-values` keeps your copy.
+`helm/values/langsmith-values-local.yaml`: `make init-values` merges it after the
+SmithDB example, so its values win, and no script writes it.
 
 To move to the medium tier:
 
@@ -164,8 +173,8 @@ To move to the medium tier:
    so the medium workloads need three nodes. Raise `smithdb_node_max_count` to at
    least 4, so a rolling update has a free node, and above that for the replicas
    the autoscalers add. Run `make apply`.
-2. In `helm/values/langsmith-values-smithdb.yaml`, set `smithdb.resourceTier: medium`.
-3. Run `make deploy`.
+2. In `helm/values/langsmith-values-local.yaml`, set `smithdb.resourceTier: medium`.
+3. Run `make init-values`, then `make deploy`.
 
 To move to the large tier:
 
@@ -173,7 +182,7 @@ To move to the large tier:
    and `smithdb_node_min_count = 7`. At the starting replicas, the large pods need
    seven `m6a.16xlarge` nodes. Raise `smithdb_node_max_count` to at least 8, and
    above that for the replicas the autoscalers add. Run `make apply`.
-2. In `helm/values/langsmith-values-smithdb.yaml`, set the tier and the starting
+2. In `helm/values/langsmith-values-local.yaml`, set the tier and the starting
    replicas:
 
    ```yaml
@@ -193,14 +202,13 @@ To move to the large tier:
            minReplicaCount: 4
    ```
 
-3. Run `make deploy`.
+3. Run `make init-values`, then `make deploy`.
 
 `make deploy` compares the tier with the SmithDB nodes before it upgrades the
 release. It stops when no SmithDB node can hold the tier's largest pod, and it
-names the input to change. It also stops when `helm/values/langsmith-values.yaml`
-sets `smithdb.resourceTier` to another tier, as a value moved there from a 0.17
-sizing file can: the SmithDB values file loads later and would replace that tier
-without notice. Move the tier into `helm/values/langsmith-values-smithdb.yaml`. In the unified layout (`smithdb.topology: unified`,
+names the input to change. A tier from a 0.17 sizing file goes in
+`helm/values/langsmith-values-local.yaml` too, because that file merges after the
+SmithDB example. In the unified layout (`smithdb.topology: unified`,
 chart 0.18 or later), one pod runs every role and the tier sizes it; the same node
 types fit it, and the check covers it too.
 
@@ -231,10 +239,11 @@ With `local-ssd`, the module does these steps:
   `ephemeral-storage`. This is the configuration in
   [Provision EKS managed node groups](https://docs.langchain.com/langsmith/self-host-smithdb-infrastructure#provision-eks-managed-node-groups).
 - The plan fails when `smithdb_node_instance_type` has no instance store.
-- `make deploy` writes each cache as an `emptyDir` named `cache`, with a
+- `make init-values` writes each cache as an `emptyDir` named `cache`, with a
   `sizeLimit` of the tier's cache size. It sets requests equal to limits for CPU,
   memory, and `ephemeral-storage`, as in the guide's local SSD values. The tier is
-  the one in `langsmith-values-smithdb.yaml`. Other volumes on those services stay.
+  `smithdb.resourceTier`: small from the SmithDB example, or the tier you set in
+  `langsmith-values-local.yaml`. Other volumes on those services stay.
 - `make deploy` stops when no SmithDB node can hold the tier's largest pod, or its
   largest cache in allocatable `ephemeral-storage`.
 - The gp3 StorageClass stays, so you can switch back.
@@ -253,14 +262,15 @@ To move the caches to the local SSD:
 
 2. Run `make apply`. EKS replaces the SmithDB nodes. The caches stay on gp3 until
    the next step.
-3. Run `make deploy`. The caches move to the local SSD.
+3. Run `make init-values`, then `make deploy`. The caches move to the local SSD.
 
-`make deploy` uses the local SSD only when `terraform.tfvars` and the applied node
-group both have it. To move the caches back to gp3, keep this order:
+`make init-values` uses the local SSD only when `terraform.tfvars` and the applied node
+group both have it, and `make deploy` stops when the applied node group changed
+after `make init-values`. To move the caches back to gp3, keep this order:
 
 1. In `infra/terraform.tfvars`, set `smithdb_cache_storage = "network-disk"`, and
    the `m6a` node type if you want it.
-2. Run `make deploy`. The caches move to gp3 volumes on the current nodes.
+2. Run `make init-values`, then `make deploy`. The caches move to gp3 volumes on the current nodes.
 3. Run `make apply`. EKS replaces the SmithDB nodes without the RAID0 array.
 
 Do step 2 before step 3. A node without the array cannot hold a local SSD cache,

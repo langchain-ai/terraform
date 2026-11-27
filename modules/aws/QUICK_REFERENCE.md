@@ -129,11 +129,13 @@ enable_engine        = true    # Engine on Amazon Bedrock through a dedicated IR
 ```bash
 # Engine only: create its SSM keys and its IRSA role first.
 # source infra/scripts/setup-env.sh && make apply
-make init-values   # copies addon values files based on enable_* flags
+make init-values   # writes langsmith-values.yaml and langsmith-values-overrides.yaml from the enable_* flags
 make deploy
 ```
 
-**Sizing**: every install runs one sizing, the scale guide's medium reads, medium writes pattern, set in `helm/values/langsmith-values.yaml`. To size beyond it, see [SIZING.md](helm/values/examples/SIZING.md).
+**Values**: `make deploy` applies `helm/values/langsmith-values.yaml` and `helm/values/langsmith-values-overrides.yaml`, which `make init-values` writes. Put your own changes in `helm/values/langsmith-values-local.yaml`, then run `make init-values`. See [Helm values](README.md#helm-values).
+
+**Sizing**: every install runs one sizing, the scale guide's medium reads, medium writes pattern, set in `helm/values/examples/langsmith-values.yaml`. To size beyond it, see [SIZING.md](helm/values/examples/SIZING.md).
 
 ---
 

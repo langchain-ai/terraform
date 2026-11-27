@@ -833,7 +833,7 @@ variable "clickhouse_cluster" {
 
   validation {
     condition     = var.clickhouse_cluster == "" || can(regex("^[A-Za-z0-9_.-]+$", var.clickhouse_cluster))
-    error_message = "clickhouse_cluster must match ^[A-Za-z0-9_.-]+$: init-values.sh writes it into values-overrides.yaml inside double quotes with no escaping."
+    error_message = "clickhouse_cluster must match ^[A-Za-z0-9_.-]+$: init-values.sh writes it into langsmith-values-overrides.yaml inside double quotes with no escaping."
   }
 }
 
@@ -2003,7 +2003,7 @@ variable "langsmith_image_pull_secret_name" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_image_registry" {
   type        = string
-  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. By default (langsmith_image_registry_keeps_source_host = false) the mirror serves each source registry's paths directly, the layout the chart's own scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and a proxy repository in Nexus or Artifactory serves: init-values.sh leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.17 and 0.18 chart lines, and deploy.sh refuses a chart with an image the module does not know. A mirror laid out with the source host kept as the first path segment (<registry>/docker.io/langchain/<name>:<tag>) takes langsmith_image_registry_keeps_source_host = true: the value then becomes images.registry in values-overrides.yaml and the chart composes the paths. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
+  description = "Registry that mirrors LangSmith's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). Read by init-values.sh and deploy.sh, not by Terraform. By default (langsmith_image_registry_keeps_source_host = false) the mirror serves each source registry's paths directly, the layout the chart's own scripts/mirror_langsmith_images.sh pushes (<registry>/langchain/<name>:<tag>) and a proxy repository in Nexus or Artifactory serves: init-values.sh leaves images.registry empty and writes images.<name>Image.repository as <registry>/<path> for every image of the 0.17 and 0.18 chart lines, and deploy.sh refuses a chart with an image the module does not know. A mirror laid out with the source host kept as the first path segment (<registry>/docker.io/langchain/<name>:<tag>) takes langsmith_image_registry_keeps_source_host = true: the value then becomes images.registry in langsmith-values-overrides.yaml and the chart composes the paths. Empty (default) pulls from docker.io. The chart itself still comes from the Helm repository deploy.sh uses, on the machine that runs it."
   default     = ""
 
   validation {

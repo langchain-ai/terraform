@@ -9,7 +9,7 @@
 
 .PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy tf \
         preflight kubeconfig \
-        init-values deploy uninstall deploy-all \
+        init-values test-values deploy uninstall deploy-all \
         patch-lgp
 
 INFRA_DIR := infra
@@ -88,8 +88,11 @@ kubeconfig: ## Fetch kubeconfig for the GKE cluster
 
 # ── Pass 2: Helm Deployment ───────────────────────────────────────────────────
 
-init-values: ## Generate Helm values from Terraform outputs
+init-values: ## Write the two Helm values files from Terraform outputs
 	$(HELM_DIR)/scripts/init-values.sh
+
+test-values: ## Run init-values for each feature and check the two values files against the chart (needs helm)
+	$(HELM_DIR)/scripts/test-values.sh
 
 deploy: ## Deploy LangSmith via Helm
 	$(HELM_DIR)/scripts/deploy.sh

@@ -136,16 +136,22 @@ gcp/
 │       └── tf-run.sh           ← Terraform wrapper that auto-sources setup-env.sh
 └── helm/
     ├── scripts/
-    │   ├── deploy.sh             ← Helm deploy automation (values chain + WI annotation)
+    │   ├── deploy.sh             ← Helm deploy: langsmith-config Secret, the two values files, WI annotation
     │   ├── get-kubeconfig.sh     ← gcloud get-credentials wrapper
-    │   ├── init-values.sh        ← Generates values-overrides.yaml from Terraform outputs
+    │   ├── init-values.sh        ← Writes the two values files from Terraform outputs
+    │   ├── _values.sh            ← Merge, seal, and check the values files (same on every cloud)
+    │   ├── test-values.sh        ← Render each feature against the chart (make test-values)
     │   ├── preflight-check.sh    ← Pre-deploy validation (tools, cluster, values)
     │   └── uninstall.sh          ← Helm uninstall + operator resource cleanup
     └── values/
-        ├── values.yaml                    ← GCP base Helm values (Gateway, GCS HMAC)
-        ├── values-overrides.yaml.example  ← Env-specific overlay template
-        └── examples/                      ← Annotated reference files and addon overlays
+        ├── langsmith-values.yaml               ← Base values (written by make init-values)
+        ├── langsmith-values-overrides.yaml     ← Everything else, one file (written by make init-values)
+        ├── langsmith-values-local.yaml         ← Your own changes (optional, you write it)
+        ├── langsmith-values-local.yaml.example ← Template for the file above
+        └── examples/                           ← Module sources: the base values, sizing profiles, features
 ```
+
+See [Helm values](#helm-values) for who writes each file and how to change a value.
 
 ---
 
@@ -196,7 +202,7 @@ From `modules/gcp`, run `source infra/scripts/setup-env.sh` before planning or a
 
 Existing Secret Manager values replace shell values without displaying either credential. Read errors, disabled APIs, write errors, and concurrent creation also stop setup. An existing secret with an empty, disabled, destroyed, or missing latest version requires recovery; setup never adds a replacement version. Use `infra/scripts/manage-secrets.sh` for intentional changes.
 
-**Changed setup requirements:** Enable Secret Manager and provide read access even when credentials are already exported in the shell. Setup no longer continues with credentials held only in the shell after a persistence failure. Existing Secret Manager names, shell variables, validation rules, and generation methods are unchanged. Terraform state, generated Helm files, and private temporary files can still contain credentials.
+**Changed setup requirements:** Enable Secret Manager and provide read access even when credentials are already exported in the shell. Setup no longer continues with credentials held only in the shell after a persistence failure. Existing Secret Manager names, shell variables, validation rules, and generation methods are unchanged. Terraform state and private temporary files can still contain credentials. The Helm values files that `make init-values` writes do not; a 0.17 `helm/values/values-overrides.yaml` can.
 
 ### Terraform state backend (recommended for production)
 
@@ -258,45 +264,13 @@ kubectl get secrets -n langsmith
 Use the scripted flow (includes preflight + kubeconfig refresh):
 
 ```bash
-cd gcp/helm/scripts
-./deploy.sh
+cd gcp
+source infra/scripts/setup-env.sh   # exports the TF_VAR_* secrets that make deploy writes into langsmith-config
+make init-values                    # writes helm/values/langsmith-values.yaml and langsmith-values-overrides.yaml
+make deploy
 ```
 
-Or run manually — generate secrets first:
-
-```bash
-export API_KEY_SALT=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 32)
-export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="<strong-password>"
-
-# GCS HMAC credentials (create in GCP Console: Storage > Settings > Interoperability)
-export GCS_ACCESS_KEY="<your-hmac-access-key>"
-export GCS_ACCESS_SECRET="<your-hmac-secret>"
-```
-
-```bash
-helm repo add langchain https://langchain-ai.github.io/helm
-helm repo update
-
-helm upgrade --install langsmith langchain/langsmith \
-  --namespace langsmith \
-  --create-namespace \
-  -f ../helm/values/values.yaml \
-  -f ../helm/values/values-overrides.yaml \
-  --set config.langsmithLicenseKey="<your-license-key>" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="<your-langsmith-domain>" \
-  --set config.basicAuth.initialOrgAdminEmail="$ADMIN_EMAIL" \
-  --set config.basicAuth.initialOrgAdminPassword="$ADMIN_PASSWORD" \
-  --set config.blobStorage.bucketName="$(terraform output -raw storage_bucket_name)" \
-  --set config.blobStorage.accessKey="$GCS_ACCESS_KEY" \
-  --set config.blobStorage.accessKeySecret="$GCS_ACCESS_SECRET" \
-  --set gateway.enabled=true \
-  --set ingress.enabled=false \
-  --wait --timeout 15m
-```
+`make init-values` reads the `enable_*` flags and `sizing_profile` from `terraform.tfvars`. An unset flag is off. To apply the two files from your own pipeline instead of `deploy.sh`, see [Use the rendered files in your own CI/CD](#use-the-rendered-files-in-your-own-cicd).
 
 ### Verify and configure DNS
 
@@ -315,28 +289,103 @@ kubectl get certificate -n langsmith
 
 ---
 
+## Helm values
+
+`make deploy` applies two values files, and nothing else except the sandbox-host image tag. AWS, Azure, and GCP use the same two file names.
+
+| File in `helm/values/` | Written by | Holds |
+| --- | --- | --- |
+| `langsmith-values.yaml` | `make init-values`, on every run | A copy of `examples/langsmith-values.yaml`: the GCP base (Envoy Gateway, GCS, the default resources and autoscaling, the Secret names) |
+| `langsmith-values-overrides.yaml` | `make init-values`, on every run | Everything else, merged into one file: the Terraform outputs, the sizing profile, each enabled feature, SmithDB, and your local file |
+| `langsmith-values-local.yaml` | You. No script writes it | Your own changes. Optional. Start from `langsmith-values-local.yaml.example` |
+
+The values files hold no secrets. The base values set `config.existingSecretName: langsmith-config`, and `make deploy` writes that Secret from the `TF_VAR_*` values that `source infra/scripts/setup-env.sh` exports from Secret Manager: the license key, the API key salt, the JWT secret, the admin password, the OIDC client, and the encryption keys of the enabled features.
+
+`make init-values` merges the overrides file in the order 0.17 layered its files, so a later source wins: the values from the Terraform outputs (hostname, admin email, GCS bucket, Gateway, Workload Identity, sandboxes, in-cluster databases), the `sizing_profile` example, the example of each enabled feature, SmithDB, then `langsmith-values-local.yaml`. While Fleet is on, `hostBackend.enabled` is set after every file. The header of the file lists the sources in that order, and the inputs of the file.
+
+### Change a value
+
+1) Put the change in `helm/values/langsmith-values-local.yaml`. `make init-values` merges this file last, so a key in it wins over every other source.
+2) Run `make init-values`, then `make deploy`.
+
+Do not edit the two generated files. Line 1 of each holds a sha256 of the rest of the file, so `make init-values` and `make deploy` find a hand edit. `make init-values` then prints the edit and writes nothing. Turn features on or off, and pick `sizing_profile`, in `terraform.tfvars`: Terraform creates the databases, service accounts, and Secrets that each feature needs.
+
+### What `make deploy` checks
+
+Before it touches the cluster, `make deploy` stops when:
+
+- a values file is missing, or was edited after `make init-values` wrote it;
+- `terraform.tfvars`, an example file, a module script, or the local file changed after `make init-values` wrote the overrides file;
+- the `langsmith_domain` output differs from the file, because Terraform creates the Gateway listener for that domain;
+- a values file from the 0.17 layout is still in `helm/values` (see [Move from the 0.17 values layout](#move-from-the-017-values-layout)).
+
+After it points kubectl at the cluster, and before the Helm upgrade, `make deploy` also stops when the values turn on an external ClickHouse and the namespace has no Secret of the name they read (`langsmith-clickhouse`). `make init-values` asks for the ClickHouse details on its first run only. A later run finds the Secret name in the earlier overrides file, or in `langsmith-values-local.yaml`, and does not contact the cluster.
+
+Each message names the fix. In most cases it is `make init-values`. For an install without `langsmith_domain`, `make deploy` writes a changed Gateway IP into the hostname of the overrides file through the same merge, so the file stays sealed.
+
+### Use the rendered files in your own CI/CD
+
+The two files are complete Helm values. A pipeline can apply them without `deploy.sh`:
+
+1) Run `make init-values` in the pipeline, after `terraform apply`, so the files match the Terraform state. It needs `helm`, `terraform`, and read access to the state. With an external ClickHouse, the first run also looks up the `langsmith-clickhouse` Secret with `kubectl`, and asks for the connection details in a terminal when the Secret is missing. Later runs do not contact the cluster. `LANGSMITH_INFRA_DIR` and `LANGSMITH_VALUES_DIR` point it at a Terraform root and a values directory outside this repo.
+2) Keep the two files as build artifacts. Do not commit them to this repository: `.gitignore` excludes them.
+3) Write the `langsmith-config` Secret, as `deploy.sh` does, then apply the two files with the chart version that `deploy.sh` pins:
+
+```bash
+helm upgrade --install langsmith langchain/langsmith \
+  --namespace langsmith --version <chart-version> \
+  -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-overrides.yaml \
+  --set-string images.sandboxHostImage.tag=<chart-appVersion>   # only with enable_sandboxes = true
+```
+
+`deploy.sh` also refreshes an IP-based hostname from the Gateway, checks the sandbox values, the chart line, and that the external ClickHouse Secret exists, and annotates `langsmith-ksa` for Workload Identity after the upgrade. A pipeline that skips `deploy.sh` must do those steps.
+
+### Move from the 0.17 values layout
+
+The 0.17 layout kept `values-overrides.yaml` and one file per feature and sizing profile in `helm/values`, and the tracked base was `helm/values/values.yaml`. The 0.17 `values-overrides.yaml` also held the API key salt, the JWT secret, the admin password, the license key, and the encryption keys in plaintext. From 0.18, `make init-values` and `make deploy` stop while one of those files is still there, because a deploy no longer applies them. The message lists each file and marks it:
+
+| Mark | Meaning |
+| --- | --- |
+| `same as examples/<file>` | The file holds no change of yours. |
+| `differs from examples/<file>` | The file can hold your changes. |
+| `no example of this name` | The file can hold your changes. |
+| `written by make init-values on 0.17` | The 0.17 `values-overrides.yaml`. Check it for changes you made by hand. |
+
+The secrets do not move. A 0.17 `make deploy` already blanked them in the values and read them from the `langsmith-config` Secret, which it writes from Secret Manager, and 0.18 does the same.
+
+1) For each file marked `differs`, `no example`, or `written by make init-values on 0.17`, compare it with its example, for example `diff -u helm/values/examples/langsmith-values-fleet.yaml helm/values/langsmith-values-fleet.yaml`.
+2) Copy each change you made into `helm/values/langsmith-values-local.yaml`. Do not copy values that `make init-values` writes from Terraform, such as the hostname, the Workload Identity annotations, and the bucket names, and do not copy a secret.
+3) If 0.17 asked you for the product tier at the prompt, or loaded the feature files on disk without `enable_*` flags, set the `enable_*` flags in `terraform.tfvars`. An unset flag is off now.
+4) Move the old files out of `helm/values`. The message prints the command, for example:
+
+```bash
+mkdir -p ~/langsmith-values-0.17
+(cd helm/values && mv values-overrides.yaml langsmith-values-fleet.yaml ~/langsmith-values-0.17/)
+```
+
+5) Run `make init-values`, then `make deploy`. Delete the 0.17 `values-overrides.yaml` when you no longer need it, because it holds plaintext secrets.
+
+---
+
 ## Pass 3 — LangSmith Deployments (Optional)
 
 Enables deploying and managing LangGraph graphs from the LangSmith UI. Requires KEDA (auto-installed when `enable_langsmith_deployment = true`).
 
 ```hcl
 # terraform.tfvars
-enable_langsmith_deployment = true
+enable_langsmith_deployment = true   # KEDA
+enable_deployments          = true   # the Deployments values
 ```
 
 ```bash
-cd gcp/infra
-terraform apply -var-file=terraform.tfvars
+cd gcp
+make apply
 
 kubectl get pods -n keda
 
-helm upgrade langsmith langchain/langsmith \
-  --namespace langsmith \
-  -f ../helm/values/values.yaml \
-  -f ../helm/values/values-overrides.yaml \
-  --set config.deployment.enabled=true \
-  --set config.deployment.url="https://<your-langsmith-domain>" \
-  --wait --timeout 10m
+make init-values   # merges the Deployments values, with config.deployment.url and tlsEnabled
+make deploy
 ```
 
 ---

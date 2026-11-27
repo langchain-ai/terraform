@@ -89,19 +89,18 @@ the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `smithdb_workload_identity_client_id`, and labels SmithDB pods with
 `azure.workload.identity/use: "true"`.
 
-`deploy.sh` loads three SmithDB files, in this order:
+`init-values.sh` merges three SmithDB sources into
+`langsmith-values-overrides.yaml` on every run, in this order:
 
-1. `langsmith-values-smithdb-sizing.yaml`, which `init-values.sh` writes from
-   the `smithdb_helm_values` output on every run. It holds the chart tier, the
-   replicas, and the `minimal` resources. Do not edit it; see [Sizing](#sizing).
-2. `langsmith-values-smithdb.yaml`, the overlay. `init-values.sh` copies it once
-   and never overwrites it, so scheduling and other hand edits go here.
-3. `langsmith-values-smithdb-overrides.yaml`, which `init-values.sh` writes from
-   the identity, storage, and metastore outputs on every run.
+1. The `smithdb_helm_values` output: the chart tier, the replicas, and the
+   `minimal` resources. To change them, set `smithdb_sizing`; see [Sizing](#sizing).
+2. `helm/values/examples/langsmith-values-smithdb.yaml`, the SmithDB example.
+3. The values from the identity, storage, and metastore outputs.
 
-A later file wins, so a `smithdb.resourceTier` line in the overlay replaces the
-size. An overlay copied before the sizing file existed has that line.
-`init-values.sh` warns about it; delete the line.
+`langsmith-values-local.yaml` merges after all three, so scheduling and other
+changes of your own go there. A later source wins, so a `smithdb.resourceTier`
+line in the local file replaces the size from `smithdb_sizing`, and Terraform
+would size the pool for the other tier. Set `smithdb_sizing` instead.
 
 Select the chart line explicitly alongside the flag, as described in
 [Version requirements](#version-requirements):
@@ -331,8 +330,8 @@ Size the VM for the largest SmithDB pod at the chosen size; see the VM row in
 
 The pool does nothing until SmithDB is scheduled onto it. Pin every SmithDB
 service to the pool and give it the matching toleration in
-`langsmith-values-smithdb.yaml`. `init-values.sh` copies that file once and
-never overwrites it.
+`helm/values/langsmith-values-local.yaml`, then run `make init-values`. No
+script writes that file.
 
 ```yaml
 smithdb:

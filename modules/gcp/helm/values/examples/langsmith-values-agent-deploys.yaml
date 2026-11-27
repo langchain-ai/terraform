@@ -1,8 +1,7 @@
 # Deployments (LangGraph Platform) — enables the Deployments UI, listener, and operator.
 #
-# init-values.sh copies this to ../langsmith-values-agent-deploys.yaml when you choose
-# a product tier that includes Deployments.
-# Manual: cp examples/langsmith-values-agent-deploys.yaml ../langsmith-values-agent-deploys.yaml
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_deployments = true. Put your changes in ../langsmith-values-local.yaml.
 #
 # Prerequisites:
 #   - LangGraph Platform entitlement in your LangSmith license
@@ -10,20 +9,21 @@
 
 config:
   deployment:
-    # Enables the Deployments nav item in the UI. Also requires config.hostname to be
-    # set in values-overrides.yaml — find the Envoy Gateway IP with:
+    # Enables the Deployments nav item in the UI. Also requires config.hostname,
+    # which init-values.sh writes from langsmith_domain or the Envoy Gateway IP:
     #   kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
     enabled: true
-    # Set to true if TLS is configured (tls_certificate_source = "letsencrypt" or "existing").
-    # false = HTTP-only (tls_certificate_source = "none"). The operator uses this to
-    # build agent deployment endpoint URLs — wrong value keeps deployments in DEPLOYING.
+    # init-values.sh sets this to true after this file when tls_certificate_source
+    # is "letsencrypt" or "existing". false = HTTP-only (tls_certificate_source = "none").
+    # The operator uses this to build agent deployment endpoint URLs — wrong value
+    # keeps deployments in DEPLOYING.
     tlsEnabled: false
 
 # Resource sizing for shared components (backend, frontend, playground, aceBackend)
-# is handled by the sizing files (langsmith-values-sizing-ha.yaml or langsmith-values-sizing-light.yaml).
+# is handled by the sizing profiles (langsmith-values-sizing-*.yaml).
 # Do not set replicaCount or resources for those components here — it silently
-# overrides HPA/autoscaling settings from the sizing file because this file
-# is loaded after them in Helm's values merge order.
+# overrides HPA/autoscaling settings from the sizing profile because init-values.sh
+# merges this file after it.
 
 hostBackend:
   enabled: true

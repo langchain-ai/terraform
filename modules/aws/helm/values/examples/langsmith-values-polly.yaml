@@ -6,7 +6,9 @@
 # the mere presence of the key (hasKey), even when set to false. The top-level polly
 # block below is the only supported path. Chat uses the langsmith_polly database on the
 # shared RDS and DB index 2 on the shared ElastiCache; init-values.sh writes that
-# storage into langsmith-values-overrides.yaml and deploy.sh sets it on every deploy.
+# storage into langsmith-values-overrides.yaml, after every values file.
+# init-values.sh merges this file into langsmith-values-overrides.yaml when
+# enable_polly = true.
 polly:
   enabled: true
   # Sizing mirrors the legacy config.polly.agent.resources defaults

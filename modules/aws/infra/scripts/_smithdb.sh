@@ -41,8 +41,9 @@ _smithdb_query_cutover_check() {
 # --set-json replaces a map, whereas another YAML overlay merges it, so the legacy
 # service resources are cleared here: the chart tier controls EBS workloads, while
 # migration and TaskDB keep their own sizing. The tier is smithdb.resourceTier from
-# the values files (langsmith-values-smithdb.yaml sets small), and small when none
-# does. The resolved tier is left in SMITHDB_RESOURCE_TIER for _smithdb_tier_fits.
+# the values sources (the SmithDB example sets small, and langsmith-values-local.yaml
+# can set another), and small when none does. The resolved tier is left in
+# SMITHDB_RESOURCE_TIER for _smithdb_tier_fits.
 # <cache_storage> is the mode from _smithdb_cache_mode, network-disk by default.
 _smithdb_managed_values() {
   local cache_storage="${1:-network-disk}" path values setting tier=small
@@ -74,7 +75,7 @@ _smithdb_cache_mode() {
     return 0
   fi
   if [[ "$wanted" == local-ssd ]]; then
-    echo "NOTE: the SmithDB caches stay on EBS until make apply adds the local SSD. Then run make deploy again." >&2
+    echo "NOTE: the SmithDB caches stay on EBS until make apply adds the local SSD. Then run make init-values and make deploy again." >&2
   elif [[ "$applied" == local-ssd ]]; then
     echo "NOTE: the SmithDB caches move to EBS now. Run make apply next to roll the SmithDB nodes." >&2
   fi
@@ -119,23 +120,7 @@ _smithdb_tier_fits() {
   [[ "$disk" == 0 ]] || need="$cpu vCPU, $mem GiB, and $disk GiB of ephemeral-storage"
   echo "ERROR: smithdb.resourceTier $tier needs a SmithDB node with $need allocatable, and node-group-smithdb has none." >&2
   echo "       Set smithdb_node_instance_type for that tier in terraform.tfvars and run make apply," >&2
-  echo "       or set a smaller tier in langsmith-values-smithdb.yaml. See SMITHDB.md, \"Scaling up\"." >&2
-  return 1
-}
-
-# langsmith-values.yaml loads before langsmith-values-smithdb.yaml, so a tier set in
-# it, such as one moved there from a 0.17 sizing file, would be replaced without
-# notice. Returns 1, with the fix, when the file sets a tier other than the deployed one.
-_smithdb_base_tier_check() {
-  local file="$1" deployed="$2" tier
-  [[ -f "$file" ]] || return 0
-  tier=$(awk '
-    /^[^ #]/ { s = ($1 == "smithdb:") }
-    s && /^  resourceTier:/ { v = $2; gsub(/["\047]/, "", v); print v; exit }
-  ' "$file")
-  [[ -z "$tier" || "$tier" == "$deployed" ]] && return 0
-  echo "ERROR: ${file##*/} sets smithdb.resourceTier: $tier, but langsmith-values-smithdb.yaml loads after it, so the release would run the $deployed tier." >&2
-  echo "       Set the tier in langsmith-values-smithdb.yaml and remove it from ${file##*/}. See SMITHDB.md, \"Scaling up\"." >&2
+  echo "       or set a smaller tier in langsmith-values-local.yaml and run make init-values. See SMITHDB.md, \"Scaling up\"." >&2
   return 1
 }
 

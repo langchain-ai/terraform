@@ -1,12 +1,11 @@
 # Insights — ClickHouse-backed analytics.
 #
-# init-values.sh generates ../langsmith-values-insights.yaml directly when
-# enable_insights = true, so this file is a reference copy for the manual path:
-#   cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
+# init-values.sh merges this file into ../langsmith-values-overrides.yaml when
+# enable_insights = true. Put your changes in ../langsmith-values-local.yaml.
 #
 # This overlay only turns the feature on. Where ClickHouse lives is a separate
 # decision, made by clickhouse_source in terraform.tfvars and written into
-# values-overrides.yaml by init-values.sh:
+# langsmith-values-overrides.yaml by init-values.sh:
 #
 #   clickhouse_source = "in-cluster"  → the chart runs ClickHouse as a StatefulSet
 #   clickhouse_source = "external"    → the chart skips it and reads the connection
@@ -22,7 +21,7 @@
 # NOTE: chart 0.15.1 removed config.insights → top-level insights block (migrated below).
 # Chart 0.16 keeps that block. The external-ClickHouse path has NOT been validated on 0.16
 # (only in-cluster was), so check the clickhouse block init-values.sh writes into
-# values-overrides.yaml against the 0.16 insights schema before using it.
+# langsmith-values-overrides.yaml against the 0.16 insights schema before using it.
 
 insights:
   enabled: true

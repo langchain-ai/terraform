@@ -54,12 +54,21 @@ before the PR does, not a separate standard.
   - Shell edit → `bash scripts/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
   - Helm values edit → `bash scripts/check.sh modules/<provider>` also runs
-    `modules/<provider>/helm/scripts/test-values.sh` where one exists (AWS
-    today). It renders the published chart at the `deploy.sh` pin, SmithDB off
-    and on, and checks the scaler or replica count each sized service gets and
-    that no service requests less than the chart's default. It needs `helm` and
-    network access; `make test-values` runs it alone. A change to a default must
-    also change the expectations at the top of the script.
+    `modules/<provider>/helm/scripts/test-values.sh` (AWS, Azure, and GCP).
+    It runs the real `init-values.sh` for each feature against stub
+    `terraform`, `kubectl`, and cloud CLI commands, renders the published chart
+    at the `deploy.sh` pin with the two values files it writes, and checks the
+    settings of each case, that the merge equals its sources layered one by
+    one, that no secret reaches a file, that a second run writes the same
+    bytes, and that the checks of `deploy.sh` pass. On AWS it also checks the
+    scaler or replica count each sized service gets and that no service
+    requests less than the chart's default. It needs `helm` and network access
+    (or `LANGSMITH_CHART` naming a local chart); `make test-values` runs it
+    alone. A change to a default must also change the expectations in the
+    script.
+  - `helm/scripts/_values.sh` is shared: the AWS, Azure, and GCP copies must
+    stay identical, and `check.sh --scripts` fails when they differ and runs
+    its unit test, `modules/aws/helm/scripts/test-values-render.sh`.
   - No argument → both, across every root.
   - Conditional wiring, a `validation` block, or a precondition →
     `bash scripts/plan-tests.sh modules/<provider>`: `terraform test` plans the

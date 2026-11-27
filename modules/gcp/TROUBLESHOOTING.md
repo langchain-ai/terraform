@@ -405,6 +405,23 @@ kubectl get secret langsmith-redis -n langsmith
 
 ---
 
+### Issue #16 — make init-values or make deploy stops on the values files
+
+**Symptom:** one of these messages from `make init-values` or `make deploy`:
+
+| Message | Cause | Fix |
+| --- | --- | --- |
+| `... holds values files from the 0.17 layout` | A file from the 0.17 layout is in `helm/values`. A deploy no longer applies it. | Move your changes into `langsmith-values-local.yaml`, then move the files out. See [Move from the 0.17 values layout](README.md#move-from-the-017-values-layout). |
+| `... was edited after make init-values wrote it` | A generated file was edited by hand. `make init-values` prints the edit (the lines marked `+`) and writes nothing. | Move the change into `helm/values/langsmith-values-local.yaml`, delete the edited file, then run `make init-values`. |
+| `langsmith-values-overrides.yaml is out of date` | `terraform.tfvars`, a module file, the local file, or the `langsmith_domain` output changed after `make init-values`. | Run `make init-values`, then `make deploy`. |
+| `helm could not merge the values files` | A values source is not valid YAML, often `langsmith-values-local.yaml`. Nothing was written. | Fix the file that Helm names, then run `make init-values`. |
+| `kubectl could not check namespace ... for the Secret langsmith-clickhouse` | On its first run with an external ClickHouse, `make init-values` looks up the Secret, and kubectl could not answer: no context, expired credentials, or no permission. Nothing was written. | Point kubectl at the cluster (`make kubeconfig`), then run `make init-values`. |
+| `the values read the external ClickHouse connection from the Secret ...` | `make deploy` found no ClickHouse Secret in the namespace. `make init-values` creates it on its first run only, so it does not create a deleted Secret again, or one for a new namespace. | Delete `helm/values/langsmith-values-overrides.yaml` and run `make init-values` in a terminal to enter the details. Or create the Secret with the keys that the message lists. |
+
+The header of `helm/values/langsmith-values-overrides.yaml` lists the sources of the file in merge order, and the inputs that `make deploy` compares.
+
+---
+
 ## Diagnostic Commands
 
 ### Cluster access

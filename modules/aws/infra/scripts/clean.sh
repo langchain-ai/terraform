@@ -15,13 +15,14 @@ set -euo pipefail
 #   infra/terraform.tfstate             — local state (when not using remote backend)
 #   infra/terraform.tfstate*.backup     — state backup files
 #   infra/logs/                         — permutation and parallel test run logs
-#   helm/values/langsmith-values*.yaml           — gitignored local copies (canonical versions in examples/)
+#   helm/values/langsmith-values*.yaml           — the values files make init-values wrote,
+#                                                  and your langsmith-values-local.yaml
 #   helm/values/langsmith-sandbox-values*.yaml   — generated runtime chart values (external runtime)
 #
 # Does NOT remove:
 #   infra/terraform.tfvars.example      — template, keep it
 #   infra/terraform.tfvars.dev/.production  — preset templates, keep them
-#   helm/values/langsmith-values-*.yaml — static overlay files, keep them
+#   helm/values/examples/               — the module's values sources, keep them
 #   .terraform/                         — provider cache, not sensitive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

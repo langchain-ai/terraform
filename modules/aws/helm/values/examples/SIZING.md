@@ -22,22 +22,21 @@ Cluster Autoscaler adds LangSmith nodes, up to the node group's `max_size`, as t
 
 ## Sizing beyond the pattern
 
-Edit `helm/values/langsmith-values.yaml`, the copy `make init-values` made, then run `make deploy`. The scale guide's [high reads, high writes](https://docs.langchain.com/langsmith/self-host-scale#high-reads-high-writes) section has the next set of numbers. An autoscaler owns the replica count once it is on, so set `maxReplicas` at or above the count the pattern calls for. No feature overlay sets the replicas or autoscaling of these services, so this file's values hold.
+Put the new values in `helm/values/langsmith-values-local.yaml`, then run `make init-values` and `make deploy`. `make init-values` merges that file last, so its values win over this sizing. Do not edit `helm/values/langsmith-values.yaml`: `make init-values` writes it again on every run, and `make deploy` stops on a hand edit. The scale guide's [high reads, high writes](https://docs.langchain.com/langsmith/self-host-scale#high-reads-high-writes) section has the next set of numbers. An autoscaler owns the replica count once it is on, so set `maxReplicas` at or above the count the pattern calls for. No feature overlay sets the replicas or autoscaling of these services, so the values hold.
 
-The SmithDB tier is set in `langsmith-values-smithdb.yaml`, which loads after this file; `make deploy` stops when `langsmith-values.yaml` sets a different tier. See [Scaling up](../../../SMITHDB.md#scaling-up).
+The SmithDB example sets the small tier. Set another tier in `langsmith-values-local.yaml` too. See [Scaling up](../../../SMITHDB.md#scaling-up).
 
 ## Moving from a 0.17 sizing profile
 
-0.18 removed `sizing_profile` and its four files. Terraform warns about a leftover `sizing_profile` line, and `make deploy` stops while a `langsmith-values-sizing-*.yaml` is left in `helm/values`, because it no longer loads that file. No value in that file applies after the move unless you copy it. To move:
+0.18 removed `sizing_profile` and its four files. Terraform warns about a leftover `sizing_profile` line, and `make init-values` and `make deploy` stop while a `langsmith-values-sizing-*.yaml` is left in `helm/values`, because a deploy no longer applies that file. No value in that file applies after the move unless you copy it. To move:
 
-1. `make init-values` copies `langsmith-values.yaml` only when `helm/values` has none, so a 0.17 copy lacks this sizing. Copy the `frontend`, `backend` and `config.settings` blocks from `helm/values/examples/langsmith-values.yaml` into it. `make deploy` and `make status` warn while one of them is missing.
-2. Copy across the ranges and limits in `helm/values/langsmith-values-sizing-<profile>.yaml` that you rely on, and any value you changed. Keep each request at or above the chart's [default](https://docs.langchain.com/langsmith/self-host-scale#default-resource-requests-and-limits); some 0.17 profiles set requests below it.
-   - `production` ran `frontend`, `platformBackend`, `aceBackend` and `playground` on HPAs, up to 10, 10, 5 and 5 replicas, where this sizing runs 2, 3, 1 and 1. It let `ingestQueue` reach 10 replicas, not 6, and `hostBackend` 10, not 5. Set `hostBackend` in `helm/values/langsmith-values-agent-deploys.yaml`, which loads after the base values.
+1. Copy the ranges and limits in `helm/values/langsmith-values-sizing-<profile>.yaml` that you rely on, and any value you changed, into `helm/values/langsmith-values-local.yaml`. Keep each request at or above the chart's [default](https://docs.langchain.com/langsmith/self-host-scale#default-resource-requests-and-limits); some 0.17 profiles set requests below it.
+   - `production` ran `frontend`, `platformBackend`, `aceBackend` and `playground` on HPAs, up to 10, 10, 5 and 5 replicas, where this sizing runs 2, 3, 1 and 1. It let `ingestQueue` reach 10 replicas, not 6, and `hostBackend` 10, not 5.
    - `production-large` set wider ranges, such as backend 10 to 50, queue and ingest-queue 6 to 24, and platform-backend 5 to 20. It also set limits of 4 CPU and 8 GiB on `backend`, `queue` and `ingestQueue`, and 2 CPU and 4 GiB on `frontend`, twice the chart's. Copy its `autoscaling` blocks and those limits.
    - `dev` and `minimum` are smaller than this sizing. Copy only the values you changed on purpose.
-3. Check the LangSmith node group in `infra/terraform.tfvars` against [Capacity](#capacity), and run `make apply` after a change. A node group made from the 0.17 `minimum` preset, one or two `m5.xlarge` nodes, cannot hold even the minimum replicas.
-4. Delete the sizing file, and the `sizing_profile` line in `infra/terraform.tfvars`.
-5. Run `make init-values`, then `make deploy`.
+2. Check the LangSmith node group in `infra/terraform.tfvars` against [Capacity](#capacity), and run `make apply` after a change. A node group made from the 0.17 `minimum` preset, one or two `m5.xlarge` nodes, cannot hold even the minimum replicas.
+3. Move the sizing file out of `helm/values`, and delete the `sizing_profile` line in `infra/terraform.tfvars`. The README section "Move from the 0.17 values layout" covers the other 0.17 files.
+4. Run `make init-values`, then `make deploy`.
 
 ## ClickHouse
 
@@ -50,7 +49,7 @@ kubectl patch pvc data-langsmith-clickhouse-0 -n langsmith \
   -p '{"spec":{"resources":{"requests":{"storage":"<size>Gi"}}}}'
 ```
 
-Do not change `clickhouse.statefulSet.persistence.size` on an existing install. Kubernetes does not let a StatefulSet change its volume claim template, so `helm upgrade` fails. A new install can set it in `helm/values/langsmith-values.yaml` before its first `make deploy`.
+Do not change `clickhouse.statefulSet.persistence.size` on an existing install. Kubernetes does not let a StatefulSet change its volume claim template, so `helm upgrade` fails. A new install can set it in `helm/values/langsmith-values-local.yaml` before its first `make init-values` and `make deploy`.
 
 With SmithDB off, ClickHouse also serves the reads. Raise `clickhouse.statefulSet.resources` within what one LangSmith node can hold, or move to [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
@@ -60,6 +59,6 @@ Fleet, LangSmith Chat and Insights each run an api-server and a queue Deployment
 
 - `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`, in the Fleet overlay
 - `polly.apiServer.deployment.resources` and `polly.queue.deployment.resources`, in the Chat overlay
-- `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`, which Insights and Engine share. `make init-values` writes them into `langsmith-values-overrides.yaml` on every run, and the Engine overlay repeats them. To change them, set `engineInsightsAgent` in `helm/values/langsmith-values-insights.yaml`, or in `langsmith-values-engine.yaml` when only Engine is on; both load after the overrides file.
+- `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`, which Insights and Engine share. `make init-values` writes them into `langsmith-values-overrides.yaml` on every run, and the Engine overlay repeats them. To change them, set `engineInsightsAgent` in `helm/values/langsmith-values-local.yaml`, which merges after both.
 
 Each add-on keeps its data in its own database on the shared RDS instance and its own index on the shared ElastiCache.

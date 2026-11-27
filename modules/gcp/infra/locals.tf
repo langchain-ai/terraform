@@ -217,8 +217,8 @@ locals {
   smithdb_metastore_use_ssl        = coalesce(var.smithdb_metastore_use_ssl, !local.smithdb_metastore_use_auth_proxy)
 
   #----------------------------------------------------------------------------
-  # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them
-  # to helm/values/langsmith-values-smithdb-sizing.yaml.
+  # SmithDB Helm values (output smithdb_helm_values). init-values.sh merges them
+  # into helm/values/langsmith-values-overrides.yaml before the SmithDB example.
   #----------------------------------------------------------------------------
   smithdb_pin_cache_pool = {
     nodeSelector = { "smithdb-local/instance-store" = "true" }
