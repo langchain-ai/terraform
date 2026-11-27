@@ -82,6 +82,19 @@ tf_output() {
 # An expression evaluated against the configuration with no apply, for what preflight reads before a
 # machine exists. console prints jsonencode's result as an HCL string, so it is decoded twice: decoded
 # only once, a user read "reed" with its quotes and ssh took "" for a port.
+# Before anything deletes an install's data: say what goes and what stays, then take the install's name,
+# typed or as CONFIRM=<name>. YES=1 is never enough to delete data. "Type the install's name" alone left a
+# person asking what it meant and what they were agreeing to.
+confirm_delete() {
+  local name="$1" deletes="$2" keeps="$3" typed
+  field "deletes" "$deletes"
+  field "keeps" "$keeps"
+  printf '\n'
+  typed="${CONFIRM:-}"
+  [[ -n "$typed" ]] || read -r -p "  To go ahead, type the install's name ($name), or press Ctrl-C to stop: " typed
+  [[ "$typed" == "$name" ]]
+}
+
 tf_eval() {
   tf console <<<"jsonencode($1)" 2>/dev/null | python3 -c 'import json,sys
 v = json.loads(json.loads(sys.stdin.read()))

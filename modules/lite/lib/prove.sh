@@ -108,7 +108,7 @@ minutes() { python3 -c "s = $1; print(f'{s / 60:g} minutes' if s % 60 == 0 else 
 # process of its own, so a size that fails is recorded and the next one still runs.
 cmd_experiment() {
   need terraform python3 ssh kubectl uv
-  local name typed out size sizes steps minutes traces
+  local name out size sizes steps minutes traces
   name="$(tf_eval var.name)"
   out="$(experiment_folder)" || exit 1
   sizes="$(experiment_setting "$out" SIZES)" steps="$(experiment_setting "$out" STEPS)" minutes="$(experiment_setting "$out" MINUTES)"
@@ -118,12 +118,11 @@ cmd_experiment() {
   TRACES="$traces" traces_field
   for size in $sizes; do [[ -e "$out/$size/finished" ]] && field "$size" "finished earlier: kept"; done
   field "results" "${out#"$LITE"/}"
-  field "root" "once a size, to install it; every trace in $name is deleted each time"
-  printf '\n'
+  field "root" "asked once a size, to install it"
   # Each size starts from no data, so the sizes differ in one thing; that deletes every trace each time.
-  typed="${CONFIRM:-}"
-  [[ -n "$typed" ]] || read -r -p "  Type the install's name to delete it for each size: " typed
-  [[ "$typed" == "$name" ]] || fail "nothing changed" "the name did not match."
+  confirm_delete "$name" "for each size, every trace in $name and its Postgres, Redis and object store volumes; it reinstalls from no data" \
+    "k3s, the images it pulled, the credentials, and the earlier experiments' results" ||
+    fail "nothing changed" "the name did not match."
   for size in $sizes; do
     [[ -e "$out/$size/finished" ]] && continue
     # A size stopped part way is measured again from a clean install: its partial runs were taken on a

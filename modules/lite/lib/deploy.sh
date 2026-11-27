@@ -146,14 +146,13 @@ write_export() {
 # FRESH=1 deletes every trace on the box before installing, so it asks for the install's name as make down
 # does: YES=1 is not enough to delete data.
 confirm_fresh() {
-  local name typed
+  local name
   [[ "$1" != cluster ]] || fail "FRESH=1 is for a box" "on a cluster of one's own, remove the releases with its own tools."
   name="$(tf_eval var.name)"
   printf '\n'
-  warn "FRESH=1 deletes every trace in $name before installing"
-  typed="${CONFIRM:-}"
-  [[ -n "$typed" ]] || read -r -p "  Type the install's name to delete its data: " typed
-  [[ "$typed" == "$name" ]] || { rm -f "$PLAN_FILE"; fail "nothing changed" "the name did not match."; }
+  confirm_delete "$name" "every trace in $name, and its Postgres, Redis and object store volumes, before it installs again" \
+    "k3s, the images it pulled, the credentials, and the box" ||
+    { rm -f "$PLAN_FILE"; fail "nothing changed" "the name did not match."; }
 }
 
 # Send the bundle, the datastores chart and the box's scripts over ssh and run box/install.sh there. The
@@ -201,17 +200,25 @@ send_bundle() {
 # runs on the box first; terraform destroy then forgets the generated credentials.
 cmd_down() {
   need terraform python3 ssh
-  local name cloud typed data_path status
+  local name cloud data_path status
   name="$(tf_eval var.name)" || fail "could not read the install's name" "is anything installed? make up installs."
   cloud="$(tf_eval var.cloud)"
   heading "down" "delete $name and every trace in it"
   field "install" "$name"
   field "cloud" "$cloud"
-  printf '\n'
-  # A script confirms with CONFIRM=<name>; a person types it. YES=1 is not enough to delete data.
-  typed="${CONFIRM:-}"
-  [[ -n "$typed" ]] || read -r -p "  Type the install's name to delete it: " typed
-  [[ "$typed" == "$name" ]] || fail "nothing deleted" "the name did not match."
+  if [[ "$cloud" == aws ]]; then
+    confirm_delete "$name" "the instance, its data volume with every trace, and the generated credentials" \
+      "the snapshots already taken, as the last copy of the data (make down prints how to delete them)" ||
+      fail "nothing deleted" "the name did not match."
+  elif [[ "$cloud" == cluster ]]; then
+    confirm_delete "$name" "the generated credentials Lite holds for $name" \
+      "everything on the cluster: remove its releases and namespaces with the cluster's own tools" ||
+      fail "nothing deleted" "the name did not match."
+  else
+    confirm_delete "$name" "k3s, every trace and volume of $name on the box, and the generated credentials" \
+      "the box itself, and anything on it Lite did not install" ||
+      fail "nothing deleted" "the name did not match."
+  fi
   printf '\n'
   start_log "$BUILD/logs"
   if [[ "$cloud" == baremetal ]]; then
