@@ -251,6 +251,22 @@ kubectl auth can-i get nodes/proxy                       # yes: CPU and throttli
 kubectl -n langsmith auth can-i create pods/exec        # yes: in-cluster Redis and Postgres are read
 ```
 
+### Experiments compared
+
+`load-test-report` draws one set of runs. `load-test-experiments OUT EXPERIMENT...` takes experiment
+folders (a folder a size, a folder a step, each with its `soak.json` and `soak.metrics.jsonl`, as Lite's
+`make experiment` writes them) and puts every size and every experiment on one scale: a scorecard of
+every step, whether it held and what failed it; lag and trace reads against the rate; every pod's cores, stacked by workload, with the spread and the busiest minute
+of every pod together; SmithDB's memory through each size's run; what a run keeps in each bucket and
+writes to disk; SmithDB's L1 segments waiting to merge against reads; and each service's cores a run a
+second, fitted. Spreads and peaks are of minutes, not of 15 s samples: Prometheus's counters move when
+it scrapes, and over one sample's interval a reading alternated between nothing and twice the rate.
+`OUT/steps.csv` holds a row a step. An experiment's `settings` file names it (`LABEL`), and a size's
+`plan.json` (Lite's `terraform output plan`, written as the size installs) is the plan it ran with: from
+those the figures set each workload's request against what it used, and each machine's reserve, requests
+and every pod's use, the newest experiment drawn solid and the ones before dashed and dotted, so a change
+to the sizing is read against the runs on both sides of it.
+
 ## Rate mode and users mode
 
 - **Rate mode** (`--traces-per-second X`, or `--profile`, whose rate is its average) starts traces on a
@@ -360,8 +376,9 @@ Every module under `src/loadtest/` is listed here; `tests/test_readme.py` fails 
 - `cluster.py`: reads the install through kubectl while the load runs, and turns the samples into watch readings and cores used.
 - `plot.py`: draws a run's samples as one HTML page (`load-test-plot`).
 - `report.py`: a set of runs as branded figures, their numbers as JSON and CSV, and the runs' own files (`load-test-report`).
+- `experiments.py`: experiment folders compared, every size and both kinds of traces on one scale, a row a step in steps.csv (`load-test-experiments`).
 - `fields.py`: the unit and meaning of every results field; [docs/results-fields.md](docs/results-fields.md) is generated from it (`make reference` in `../langsmith-sizing`).
-- `payloads/`: payload sizes from the mix and the English-like text.
+- `payloads/`: payload sizes from the mix, an agent's traces (`agent.py`) and the English-like text.
 
 ## Credits
 
