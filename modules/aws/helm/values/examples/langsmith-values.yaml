@@ -56,6 +56,9 @@ config:
     # Placing it at the top level of config silently passes Helm validation but does not
     # wire correctly. The value is injected via existingSecretName as the 'jwt_secret' key.
   blobStorage:
+    # Chart 0.17 sends payloads to S3 only with enabled: true. Chart 0.18 always does
+    # and fails only on enabled: false, so keep true for both chart lines.
+    enabled: true
     engine: "S3"
 
 postgres:
