@@ -991,7 +991,6 @@ config:
     url: "${_protocol}://${HOSTNAME}"
   blobStorage:
     bucketName: "${BUCKET_NAME}"
-    awsRegion: "${_region}"
     apiURL: "https://s3.${_region}.amazonaws.com"
 ${_sandbox_config_block}
 

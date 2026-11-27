@@ -56,7 +56,6 @@ config:
     # Placing it at the top level of config silently passes Helm validation but does not
     # wire correctly. The value is injected via existingSecretName as the 'jwt_secret' key.
   blobStorage:
-    enabled: true
     engine: "S3"
 
 postgres:

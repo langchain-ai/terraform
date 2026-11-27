@@ -64,7 +64,7 @@ AWS Account [icon: aws, color: blue] {
   AWS Secrets Manager [icon: aws-systems-manager, color: green]
 
   // S3 Traces Bucket — ALWAYS REQUIRED
-  // All LangSmith trace payloads must go to S3 (not ClickHouse)
+  // Blob storage is required as of LangSmith v0.18
   // Accessed via VPC Gateway Endpoint — no NAT cost, no public route
   S3 Traces Bucket [icon: aws-simple-storage-service, color: green]
 

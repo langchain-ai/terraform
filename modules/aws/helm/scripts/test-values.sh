@@ -71,7 +71,6 @@ config:
     url: "https://langsmith.example.com"
   blobStorage:
     bucketName: "values-test-blob"
-    awsRegion: "us-west-2"
     apiURL: "https://s3.us-west-2.amazonaws.com"
 EOF
 # The SmithDB overrides come from the heredoc in init-values.sh itself, so a change to the
