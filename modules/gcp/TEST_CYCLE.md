@@ -290,7 +290,7 @@ Render checks worth running before any apply, one per gate state:
 
 ```bash
 make init-values
-helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.17.0}" -n langsmith \
+helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.18.0}" -n langsmith \
   -f helm/values/langsmith-values.yaml \
   -f helm/values/langsmith-values-overrides.yaml >/dev/null
 ```

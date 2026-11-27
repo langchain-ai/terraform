@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`, never `0.18`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.18.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.18.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.18.0` = latest `0.18.x`, never `0.19`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -553,7 +553,7 @@ sandbox_namespace       = "langsmith-sandbox"
 langsmith_helm_chart_version = "0.18.0" # exact, 0.18 or later
 ```
 
-An external sandbox runtime needs chart 0.18 or later, pinned to one exact version: the default 0.17 line has no separate-cluster support, and the runtime chart is paired with that exact chart (see [Versions](#versions)). `terraform plan` and `make deploy` both reject anything else.
+An external sandbox runtime needs one exact chart version on 0.18 or later: the runtime chart is paired with that exact chart (see [Versions](#versions)), so the default `~0.18.0` range is not enough. `terraform plan` and `make deploy` both reject anything else.
 
 Terraform then creates a second EKS cluster in the same VPC and private subnets, with only the KVM-capable sandbox node group. Around it, Terraform creates:
 
@@ -1444,7 +1444,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `sandbox_alb_allow_nat_egress` | `false` | no | Separate cluster with an internet-facing ALB: append the NAT gateway addresses to the ALB allowlist. Admits everything behind the NAT, sandboxes included; prefer an internal ALB |
 | `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
 | `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
-| `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.17.x or 0.18.x chart version; empty deploys the latest 0.17.x. An external sandbox runtime requires an exact version on 0.18 or later |
+| `langsmith_helm_chart_version` | `""` | separate cluster | Exact 0.18.x chart version; empty deploys the latest 0.18.x. An external sandbox runtime requires an exact version |
 | `postgres_source` | `external` | no | Only `external` (RDS) from 0.18; `in-cluster` fails at plan. See [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
