@@ -462,6 +462,8 @@ for name in $CASES; do
   want="$_VALUES_BASE"$'\n'"$_VALUES_OVERRIDES"
   [[ "$name" != sandboxes-external ]] || want="langsmith-sandbox-values-overrides.yaml"$'\n'"$want"
   [[ "$written" == "$(LC_ALL=C sort <<< "$want")" ]] || problems+=("helm/values holds ${written//$'\n'/, }")
+  ! grep -qF "$SECRET_MARK" "$dir/values/$_VALUES_BASE" "$dir/values/$_VALUES_OVERRIDES" ||
+    problems+=("a secret reached a values file")
   out="$dir/render.yaml"
   if ! render "$dir" "$out"; then
     problems+=("the chart rejected the two files: $(head -1 "$out.err")")
@@ -469,8 +471,6 @@ for name in $CASES; do
     continue
   fi
   same_values "$dir" || problems+=("the two files do not give the values of their sources layered one by one")
-  ! grep -qF "$SECRET_MARK" "$dir/values/$_VALUES_BASE" "$dir/values/$_VALUES_OVERRIDES" ||
-    problems+=("a secret reached a values file")
   deploy_checks "$dir" 2> "$dir/check.err" || problems+=("deploy.sh's checks stop: $(head -1 "$dir/check.err")")
   mkdir -p "$dir/first"
   cp "$dir/values/$_VALUES_BASE" "$dir/values/$_VALUES_OVERRIDES" "$dir/first/"
@@ -573,6 +573,21 @@ grep -q 'langsmith-values-sizing-production.yaml .*differs from examples/langsmi
 [[ ! -f "$dir/values/$_VALUES_OVERRIDES" ]] || problems+=("init-values.sh wrote the overrides file anyway")
 deploy_checks "$dir" 2> /dev/null && problems+=("deploy.sh's checks pass with 0.17 files in helm/values")
 report "files from the 0.17 layout stop init-values.sh and deploy.sh" ${problems[@]+"${problems[@]}"}
+
+# deploy.sh hands Helm the two values files and no other: no values file in
+# VALUES_ARGS or in the helm upgrade of the LangSmith release besides them.
+problems=()
+awk '
+  /VALUES_ARGS\+?=\(/ { a = 1 }
+  /helm upgrade --install "\$RELEASE_NAME"/ { u = 1 }
+  a || u { print }
+  a && /\)/ { a = 0 }
+  u && !/\\$/ { u = 0 }
+' "$SCRIPT_DIR/deploy.sh" > "$TEST_TMP/deploy-values-args"
+found=$(grep -oE -- '(^|[[:space:](])(-f|--values|--set-file)[ =]"?[^ )]*' "$TEST_TMP/deploy-values-args" | sed -E 's/^[[:space:](]//') || true
+[[ "$(grep -c . <<< "$found")" == 2 ]] ||
+  problems+=("deploy.sh passes these values files to the LangSmith release: ${found//$'\n'/, }; want only the two files")
+report "deploy.sh applies only the two values files" ${problems[@]+"${problems[@]}"}
 
 # ── The example files ─────────────────────────────────────────────────────────
 problems=()
