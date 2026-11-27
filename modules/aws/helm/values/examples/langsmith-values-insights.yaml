@@ -9,6 +9,7 @@
 #       kubectl create secret generic langsmith-clickhouse -n langsmith \
 #         --from-literal=clickhouse_host=<host> \
 #         --from-literal=clickhouse_port=8123 \
+#         --from-literal=clickhouse_native_port=9000 \
 #         --from-literal=clickhouse_user=default \
 #         --from-literal=clickhouse_password=<password> \
 #         --from-literal=clickhouse_db=default \

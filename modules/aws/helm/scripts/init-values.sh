@@ -397,8 +397,11 @@ CHEOF
       printf "  ClickHouse port [8123]: "
       read -r _ch_port
       _ch_port="${_ch_port:-8123}"
-      if ! [[ "$_ch_port" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: ClickHouse port must be numeric." >&2
+      printf "  ClickHouse native port [9000]: "
+      read -r _ch_native_port
+      _ch_native_port="${_ch_native_port:-9000}"
+      if ! [[ "$_ch_port" =~ ^[0-9]+$ && "$_ch_native_port" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: ClickHouse ports must be numeric." >&2
         exit 1
       fi
       printf "  ClickHouse database [default]: "
@@ -421,6 +424,7 @@ CHEOF
       if ! kubectl create secret generic langsmith-clickhouse -n "${NAMESPACE:-langsmith}" \
         --from-literal=clickhouse_host="${_ch_host}" \
         --from-literal=clickhouse_port="${_ch_port}" \
+        --from-literal=clickhouse_native_port="${_ch_native_port}" \
         --from-literal=clickhouse_user="${_ch_user}" \
         --from-literal=clickhouse_password="${_ch_pass}" \
         --from-literal=clickhouse_db="${_ch_db}" \
