@@ -76,7 +76,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 ### S3 Bucket
 - **What**: Object store for trace payloads — large inputs/outputs, attachments
 - **Access**: IRSA (no static keys) via `langsmith_irsa_role` · VPC Gateway Endpoint (no public internet)
-- **Always required**: Yes — disabling blob causes cluster issues with large payloads
+- **Always required**: Yes. As of LangSmith v0.18, the API and queue workers do not start without blob storage
 - **Prefixes**: `ttl_s/` (short TTL) · `ttl_l/` (long TTL)
 
 ### SSM Parameter Store

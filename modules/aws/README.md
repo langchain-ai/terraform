@@ -24,7 +24,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | **Dev** | RDS PostgreSQL (small instance) | ElastiCache Redis (small instance) | In-cluster pod | Demo / POC |
 | **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster ClickHouse | Scalable / persistent |
 
-> **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
+> **As of LangSmith v0.18, blob storage is required.** The module creates the S3 bucket and points LangSmith at it.
 >
 > **In-cluster ClickHouse is recommended for production during the transition to SmithDB.** It runs as a single StatefulSet. Customers who prefer a managed ClickHouse lifecycle can use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Renders the LangSmith chart with the AWS example values, in deploy.sh's order,
-# with SmithDB off and on, and checks the scaler or replica count each sized
-# service gets, that SmithDB runs the small tier, that no service requests less
-# than the chart's own default, and that the overrides init-values.sh generates
-# give the ClickHouse writers the pattern's async-insert setting. No cluster and
-# no AWS calls.
+# with SmithDB off and on, and checks that blob storage is on, the scaler or
+# replica count each sized service gets, that SmithDB runs the small tier, that
+# no service requests less than the chart's own default, and that the overrides
+# init-values.sh generates give the ClickHouse writers the pattern's async-insert
+# setting. No cluster and no AWS calls.
 # Requires helm, and network access to fetch the chart unless LANGSMITH_CHART
 # names a local chart directory or archive.
 # Usage: bash modules/aws/helm/scripts/test-values.sh
@@ -67,7 +67,6 @@ config:
     url: "https://langsmith.example.com"
   blobStorage:
     bucketName: "values-test-blob"
-    awsRegion: "us-west-2"
     apiURL: "https://s3.us-west-2.amazonaws.com"
 EOF
 # The SmithDB overrides come from the heredoc in init-values.sh itself, so a change to the
@@ -124,6 +123,15 @@ spec_field() {
   '
 }
 
+# Prints the value of the first env var with this name in the manifest on stdin.
+env_value() {
+  awk -v name="$1" '
+    $1 == "-" && $2 == "name:" { n = $3; gsub(/"/, "", n); if (n == name) { want = 1; next } }
+    want && $1 == "value:" { v = $2; gsub(/"/, "", v); print v; exit }
+    want { exit }
+  '
+}
+
 # Checks one service in one rendered release against its expected scaler.
 expect_scaler() {
   local out="$1" name="$2" mode min max so hpa deploy got
@@ -152,6 +160,20 @@ expect_scaler() {
   [[ "$got" == "$min:$max" ]] || { echo "$name: $mode range $got, want $min:$max"; return 1; }
   # An autoscaler owns the replica count, so the chart must not pin one.
   [[ -z "$(spec_field replicas <<< "$deploy")" ]] || { echo "$name: Deployment pins replicas under $mode"; return 1; }
+}
+
+# Blob storage is on for the API and queue services, with the test bucket. Chart 0.17
+# sets these variables only when config.blobStorage.enabled is true.
+expect_blob_storage() {
+  local out="$1" bucket="$2" name m got
+  for name in langsmith-backend langsmith-platform-backend langsmith-queue langsmith-ingest-queue; do
+    m=$(manifest "$out" Deployment "$name")
+    [[ -n "$m" ]] || { echo "$name: no Deployment rendered"; return 1; }
+    got=$(env_value FF_BLOB_STORAGE_ENABLED <<< "$m")
+    [[ "$got" == true ]] || { echo "$name: FF_BLOB_STORAGE_ENABLED ${got:-unset}, want true"; return 1; }
+    got=$(env_value S3_BUCKET_NAME <<< "$m")
+    [[ "$got" == "$bucket" ]] || { echo "$name: S3_BUCKET_NAME ${got:-unset}, want $bucket"; return 1; }
+  done
 }
 
 # The SmithDB workloads must run on the managed node group and nowhere else.
@@ -215,6 +237,7 @@ for smithdb in off on; do
   for spec in $EXPECTED; do
     msg=$(expect_scaler "$out" "${spec%%:*}" "${spec#*:}") || problems+=("$msg")
   done
+  msg=$(expect_blob_storage "$out" values-test-blob) || problems+=("$msg")
   manifest "$out" Deployment langsmith-backend | grep -A1 'name: REDIS_RUNS_EXPIRY_SECONDS$' | grep -q 'value: "3600"' ||
     problems+=("langsmith-backend: REDIS_RUNS_EXPIRY_SECONDS is not 3600")
   if [[ "$smithdb" == on ]]; then
