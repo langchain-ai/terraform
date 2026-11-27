@@ -117,7 +117,7 @@ make apply
 make init-values
 ```
 
-The deploy script pins the latest 0.17.x Helm chart (`~0.17.0`):
+The deploy script pins the latest 0.18.x Helm chart (`~0.18.0`):
 
 ```sh
 make deploy

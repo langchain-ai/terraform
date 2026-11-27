@@ -425,7 +425,7 @@ enable_sso_oidc = false
 # Requires GKE Standard. Autopilot manages its own node pools, so the dedicated
 # SmithDB pools do not exist there and SmithDB pods would stay Pending.
 #
-# Pass 2 deploys on the pinned ~0.17.0 chart line, which already carries SmithDB,
+# Pass 2 deploys on the pinned ~0.18.0 chart line, which already carries SmithDB,
 # so no chart version needs to be set. List what is published with:
 #   helm search repo langchain/langsmith --versions
 #------------------------------------------------------------------------------

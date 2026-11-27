@@ -17,7 +17,7 @@ LangSmith is LangChain's observability, evaluation, and prompt-engineering platf
 
 Enterprise customers running LangSmith in their own cloud account or OpenShift cluster. If you are evaluating Self-Hosted or standing up a production deployment, start here.
 
-For LangSmith fundamentals and architecture, see the [Self-Hosted documentation](https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform).
+For LangSmith fundamentals and architecture, see the [Self-Hosted documentation](https://docs.langchain.com/langsmith/self-hosted).
 
 ## Pick your cloud
 
@@ -80,22 +80,22 @@ A typical first deployment takes 20–30 minutes end-to-end.
 
 This repository is released as **global tags** `vMAJOR.MINOR.PATCH`. Always deploy from a tag — never from a branch.
 
-- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.17.0`, meaning the latest `0.17.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.18`). You always get the newest patch within the line.
-- **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.17.4` does not mean chart `0.17.4`.
+- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.18.0`, meaning the latest `0.18.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.19`). You always get the newest patch within the line.
+- **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.18.4` does not mean chart `0.18.4`.
 
-Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.17.x` are not valid):
+Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.18.x` are not valid):
 
 ```bash
 git fetch --tags
-git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"
+git checkout "$(git tag -l 'v0.18.*' --sort=-v:refname | head -1)"
 ```
 
 If you would rather download than clone, every release has a source archive — one URL per release, covering all providers:
 
 ```bash
-TAG=v0.17.0     # latest v0.17.* — see GitHub Releases below
+TAG=v0.18.0     # latest v0.18.* — see GitHub Releases below
 curl -sL "https://github.com/langchain-ai/terraform/archive/refs/tags/${TAG}.zip" -o "${TAG}.zip"
-unzip "${TAG}.zip"     # extracts terraform-0.17.0/
+unzip "${TAG}.zip"     # extracts terraform-0.18.0/
 ```
 
 GitHub generates these archives on request, so don't pin a checksum of one; clone and check out the tag if you need bit-for-bit reproducibility.
@@ -103,28 +103,33 @@ GitHub generates these archives on request, so don't pin a checksum of one; clon
 What this means for you:
 
 - Pin to a tag for reproducible infrastructure; re-run the command above to move to a newer patch within the line as fixes land.
-- Moving to a new chart line is an explicit switch to the matching tag series (`git tag -l 'v0.18.*'`).
-- **Staying on the previous line is supported.** `0.16` is maintained on the `release/0.16` branch and still receives `v0.16.*` tags, so you can take fixes without moving to `0.17`. See [Maintenance branches](#maintenance-branches).
+- Moving to a new chart line is an explicit switch to the matching tag series (`git tag -l 'v0.19.*'`).
+- **Staying on the previous line is supported.** `0.17` is maintained on the `release/0.17` branch and still receives `v0.17.*` tags, so you can take fixes without moving to `0.18`. See [Maintenance branches](#maintenance-branches).
 - Browse all releases in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
 - Advanced override: set the `CHART_VERSION` environment variable to pin an exact chart patch.
 
-### The 0.17 chart line
+### The 0.18 chart line
 
-These modules carry the chart 0.17 values schema. It keeps the 0.16 layout
-(`engineInsightsAgent`, the top-level `insights` / `polly` blocks, and no
-`backend.agentBootstrap`) and moves sandboxes off the removed JuiceFS CSI driver onto
-JuiceFS mounts owned by `sandbox-host`. Chart 0.16 has no keys for those mounts, and
-chart 0.18 has not been validated against these values. Each `deploy.sh` therefore
-refuses anything outside the 0.17 line rather than deploying a half-configured release,
-and `CHART_VERSION` can only narrow the pin to a 0.17 patch:
+These modules carry the chart 0.18 values schema. It keeps the 0.17 layout
+(`engineInsightsAgent`, the top-level `insights` / `polly` blocks, and JuiceFS mounts
+owned by `sandbox-host`) and adds keys that only chart 0.18 has, such as
+`sandboxes.external` for a separate sandbox cluster. Chart 0.17 ignores those keys.
+Each `deploy.sh` therefore refuses anything outside the 0.18 line rather than deploying
+a half-configured release, and `CHART_VERSION` can only narrow the pin to a 0.18 patch:
 
 ```bash
-cd modules/aws && make apply && make init-values && CHART_VERSION="0.17.0" make deploy
+cd modules/aws && make apply && make init-values && CHART_VERSION="0.18.5" make deploy
 ```
 
 ### Version upgrades
 
 For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance.
+
+An install that moves from a `v0.17.*` tag to `v0.18.*` also has Terraform changes to make. Each provider documents its own:
+
+- AWS: [Move from the 0.17 values layout](modules/aws/README.md#move-from-the-017-values-layout), [Moving from a 0.17 sizing profile](modules/aws/helm/values/examples/SIZING.md#moving-from-a-017-sizing-profile), [Move an in-cluster PostgreSQL to RDS](modules/aws/README.md#move-an-in-cluster-postgresql-to-rds), [Move an in-cluster Redis to ElastiCache](modules/aws/README.md#move-an-in-cluster-redis-to-elasticache), [Move Fleet, Chat or Insights data to RDS](modules/aws/README.md#move-fleet-chat-or-insights-data-to-rds), [Moving off NGINX ingress](modules/aws/README.md#moving-off-nginx-ingress), and [SmithDB: Upgrading from 0.17](modules/aws/SMITHDB.md#upgrading-from-017).
+- Azure: [Upgrading an existing deployment](modules/azure/README.md#upgrading-an-existing-deployment), [Move from the 0.17 values layout](modules/azure/README.md#move-from-the-017-values-layout), and [INGRESS_CONTROLLERS.md](modules/azure/INGRESS_CONTROLLERS.md) for a deployment that runs ingress-nginx.
+- GCP: [Move from the 0.17 values layout](modules/gcp/README.md#move-from-the-017-values-layout) and [SmithDB version upgrades](modules/gcp/SMITHDB.md#version-upgrades).
 
 ### Maintenance branches
 
@@ -135,7 +140,8 @@ their own series without colliding.
 
 | Chart line | Releases from | Tag series | Status |
 | --- | --- | --- | --- |
-| 0.17 | `main` | `v0.17.*` | current |
+| 0.18 | `main` | `v0.18.*` | current |
+| 0.17 | `release/0.17` | `v0.17.*` | maintenance |
 | 0.16 | `release/0.16` | `v0.16.*` | maintenance |
 | 0.15 | `release/0.15` | `v0.15.*` | maintenance |
 
@@ -144,7 +150,7 @@ latest tag, not the branch:
 
 ```bash
 git fetch --tags
-git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"
+git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"
 ```
 
 Report bugs through the [support channels](#support), including the chart line you are running. Fixes land on `main` first and are
@@ -162,7 +168,7 @@ The per-release history is published in [GitHub Releases](https://github.com/lan
 
 ## Documentation
 
-- [LangSmith Self-Hosted overview](https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform)
+- [LangSmith Self-Hosted overview](https://docs.langchain.com/langsmith/self-hosted)
 - [Kubernetes deployment reference](https://docs.langchain.com/langsmith/kubernetes)
 - [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse)
 - [Self-host blob storage](https://docs.langchain.com/langsmith/self-host-blob-storage)

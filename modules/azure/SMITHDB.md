@@ -8,21 +8,20 @@ independently of the LangSmith application database and trace-blob account.
 
 Two version numbers apply here, and they are not the same thing.
 
-**LangSmith chart: a stable release on the 0.17 or 0.18 line.**
+**LangSmith chart: a stable release on the 0.18 line.**
 The 0.17 line is the first with both the Azure SmithDB values and the per-pod
-cache PVC contract, and 0.18 keeps that layout. `deploy.sh` accepts `0.17.x` and
-`0.18.x`. It rejects 0.16, because the Azure values are absent there. To run
-0.18, set it explicitly; the module never moves to a new minor on its own.
+cache PVC contract, and 0.18 keeps that layout. `deploy.sh` accepts only `0.18.x`,
+the line this module tag pins; the module never moves to a new minor on its own.
 
-The default pin, `~0.17.0`, takes the newest released 0.17 patch. Helm leaves
+The default pin, `~0.18.0`, takes the newest released 0.18 patch. Helm leaves
 prereleases out of a constraint like that, so it selects only stable releases.
 Naming a prerelease exactly does install it, and that is not a supported
 configuration: an RC carries an unreleased application image, so a problem found
 on one cannot be told apart from a problem in the module.
 
-**Module tag: `v0.17.*`.** SmithDB is an ordinary feature of the pinned line, so
+**Module tag: `v0.18.*`.** SmithDB is an ordinary feature of the pinned line, so
 it needs no chart selection of its own. Leave `langsmith_helm_chart_version`
-empty to take the newest 0.17 patch, or set it to name one. A `v0.16.*` tag
+empty to take the newest 0.18 patch, or set it to name one. A `v0.16.*` tag
 cannot deploy SmithDB on Azure: its pin is `~0.16.0`, and the 0.16 chart has no
 Azure SmithDB values.
 
@@ -82,7 +81,7 @@ outputs.
 
 ## Chart contract
 
-The chart 0.17 line supports Azure as a SmithDB object-store provider and
+Chart 0.17 and later support Azure as a SmithDB object-store provider and
 per-pod cache PVCs. `make init-values` generates the overlay from
 `smithdb_storage_account_name` and `smithdb_storage_container_name`, annotates
 the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
@@ -107,7 +106,7 @@ Select the chart line explicitly alongside the flag, as described in
 
 ```hcl
 enable_smithdb               = true
-langsmith_helm_chart_version = "~0.17.0"
+langsmith_helm_chart_version = "~0.18.0"
 ```
 
 The chart is intentionally a separate deployment pass: `terraform apply`

@@ -351,8 +351,8 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox_service_account_name = "sandbox-host"
 #
 # An external runtime requires an exact langsmith chart version on 0.18 or later
-# (the default 0.17 line has no separate-cluster support):
-# langsmith_helm_chart_version = "0.18.0"
+# (the default ~0.18.0 range is not enough):
+# langsmith_helm_chart_version = "0.18.5"
 #
 # An external runtime also needs sandbox_service_auth_secret, a dedicated secret
 # that the sandbox cluster holds instead of the API key salt. Do not put it in
@@ -570,15 +570,15 @@ langsmith_namespace = "langsmith"
 # HELM CHART VERSION
 #------------------------------------------------------------------------------
 # Pin the chart to an exact patch for reproducible deploys. Empty deploys the
-# latest patch on the pinned 0.17 line, so a rebuild months apart can land on a
-# different chart. Must be a 0.17.x or 0.18.x version — deploy.sh refuses anything else.
+# latest patch on the pinned 0.18 line, so a rebuild months apart can land on a
+# different chart. Must be a 0.18.x version — deploy.sh refuses anything else.
 #
 # The CHART_VERSION environment variable still overrides this when set:
-#   CHART_VERSION=0.17.0 make deploy
+#   CHART_VERSION=0.18.5 make deploy
 #
 # List what is published with:
 #   helm search repo langchain/langsmith --versions
-# langsmith_helm_chart_version = "0.17.0"
+# langsmith_helm_chart_version = "0.18.5"
 
 #------------------------------------------------------------------------------
 # SECURITY ADD-ONS (all optional, all default to off)
@@ -867,8 +867,8 @@ enable_bedrock_access = false
 #   - an IRSA role for the SmithDB service account (S3 access, no static keys)
 #   - a dedicated general-purpose EKS managed group and gp3 cache StorageClass
 #
-# Pass 2 uses the repository's ~0.17.0 pin, which resolves to the latest
-# compatible 0.17.x chart unless CHART_VERSION explicitly overrides it.
+# Pass 2 uses the repository's ~0.18.0 pin, which resolves to the latest
+# compatible 0.18.x chart unless CHART_VERSION explicitly overrides it.
 #
 # A new install writes runs to SmithDB and serves reads from it. An install with
 # traces in ClickHouse sets ingestion and query to false and stages them

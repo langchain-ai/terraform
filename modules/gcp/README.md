@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Google Kubernetes Engine (GKE), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`, never `0.18`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.18.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.18.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.18.0` = latest `0.18.x`, never `0.19`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -436,7 +436,7 @@ make deploy
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |
 | `langsmith_license_key` | `""` | no | License key — use `TF_VAR_langsmith_license_key` |
-| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.17.0` line; must be on the 0.17 line) |
+| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.18.0` line; must be on the 0.18 line) |
 | `install_ingress` | `true` | no | Install Envoy Gateway via Terraform |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy`, `istio`, or `other` |
 | `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing` |
@@ -552,7 +552,7 @@ langsmith_helm_chart_version = "0.18.0"   # exact, 0.18 or later
 gateway_load_balancer_type   = "internal" # or configure TLS; see Network
 ```
 
-An external sandbox runtime needs chart 0.18 or later, pinned to one exact version: the default 0.17 line has no separate-cluster support, and the runtime chart is paired with that exact chart (see [Versions](#versions)). `terraform plan` and `make deploy` both reject anything else.
+An external sandbox runtime needs one exact chart version on 0.18 or later: the runtime chart is paired with that exact chart (see [Versions](#versions)), so the default `~0.18.0` range is not enough. `terraform plan` and `make deploy` both reject anything else.
 
 Terraform then creates, in the same VPC:
 
@@ -676,10 +676,10 @@ Adding a private `googleapis.com` DNS zone would pin resolution to `private.goog
 
 ### Chart version
 
-SmithDB on this module needs chart 0.17. `deploy.sh` pins the 0.17 line and refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
+SmithDB on this module needs chart 0.17 or later. `deploy.sh` pins the 0.18 line and refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
 
 ```bash
-CHART_VERSION=0.17.0 make deploy
+CHART_VERSION=0.18.5 make deploy
 ```
 
 List what is published with `helm search repo langchain/langsmith --versions`.
