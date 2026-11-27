@@ -1,0 +1,35 @@
+modules/aws/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_d94e62f9b9a60f 418
+  s_8cee47d9319ea3::t_543e3fdde2c01e 380
+  s_8cee47d9319ea3::t_8328754a9ef23a 285-287
+  s_8cee47d9319ea3::t_dd26034763d5f2 506
+modules/azure/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_57900f10f78db7 398
+  s_8cee47d9319ea3::t_e03c029aec4801 297-299
+  s_8cee47d9319ea3::t_6c5c62afd4b9cb 441
+  s_8cee47d9319ea3::t_fef4b316129b75 458
+  s_8cee47d9319ea3::t_a19ecfcde376c2 322
+modules/gcp/helm/scripts/test-values.sh
+  s_8cee47d9319ea3::t_a2fb4e88d4b5f8 275-277
+  s_8cee47d9319ea3::t_3a4ecc8b392194 387
+  s_8cee47d9319ea3::t_0580ec00601e78 300
+  s_8cee47d9319ea3::t_236972cb4444df 422
+  s_8cee47d9319ea3::t_f96a254c6c134f 414
+  s_8cee47d9319ea3::t_6b04d28d67e953 378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d2b66b3ad2c216dab9219c846f2ec4ff9d01495",
+  "prompts": {},
+  "sessions": {
+    "s_8cee47d9319ea3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "4553e7f8-7983-41d0-9467-9cb545cda8d1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
