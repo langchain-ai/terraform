@@ -79,10 +79,11 @@ redis:
 #   https://docs.langchain.com/langsmith/self-host-scale#medium-reads-medium-writes
 #   https://docs.langchain.com/langsmith/self-host-smithdb-scale
 # Requests and limits stay at the chart's defaults, and the pattern's 13 GiB of
-# Redis is the default ElastiCache node, cache.m6g.xlarge. Its ClickHouse
-# (16 CPU, 24 GiB) does not fit the default m6a.2xlarge nodes, and with SmithDB
-# serving reads ClickHouse mostly takes writes, so ClickHouse keeps the chart
-# default. Size beyond this pattern here.
+# Redis is the default ElastiCache node, cache.m6g.xlarge. In-cluster ClickHouse
+# keeps the chart's 3.5 CPU, 12 GiB and 50 GiB volume, below the pattern's: with
+# SmithDB serving reads it mostly takes writes, and
+# helm/values/examples/SIZING.md says how to grow its volume. Size beyond this
+# pattern here.
 frontend:
   deployment:
     replicas: 2

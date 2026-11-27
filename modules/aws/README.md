@@ -651,7 +651,7 @@ make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 
 `init-values.sh` reads the `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
-Every install runs one sizing, the scale guide's medium reads, medium writes pattern: the base values run the frontend at 2 replicas, the backend on an HPA from 8 to 16, and KEDA for `queue`, `ingest-queue`, and the SmithDB compaction worker. Requests stay at the chart's defaults. These settings do not enable node autoscaling. See [SIZING.md](helm/values/examples/SIZING.md) to size beyond it, or to move from a 0.17 `sizing_profile`.
+Every install runs one sizing, the scale guide's medium reads, medium writes pattern: the base values run the frontend at 2 replicas, the backend on an HPA from 8 to 16, and KEDA for `queue`, `ingest-queue`, and the SmithDB compaction worker. Requests stay at the chart's defaults. Cluster Autoscaler adds LangSmith nodes up to the node group's `max_size`, and on `m6a.2xlarge` nodes the sizing needs up to 8 at maximum replicas. See [SIZING.md](helm/values/examples/SIZING.md) to size beyond it, or to move from a 0.17 `sizing_profile`.
 
 ---
 
