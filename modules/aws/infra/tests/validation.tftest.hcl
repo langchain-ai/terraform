@@ -167,12 +167,12 @@ run "chart_version_accepts_the_pinned_line" {
   command = plan
 
   variables {
-    langsmith_helm_chart_version = "0.17.0"
+    langsmith_helm_chart_version = "0.18.5"
   }
 
   assert {
-    condition     = var.langsmith_helm_chart_version == "0.17.0"
-    error_message = "a 0.17.x langsmith_helm_chart_version failed validation"
+    condition     = var.langsmith_helm_chart_version == "0.18.5"
+    error_message = "a 0.18.x langsmith_helm_chart_version failed validation"
   }
 }
 

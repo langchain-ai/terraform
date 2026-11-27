@@ -1864,7 +1864,7 @@ variable "langsmith_domain" {
 # sandbox_runtime_source = "external" requirement below.
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.17.0 (the newest stable 0.17 patch). deploy.sh accepts only 0.17.x and 0.18.x; see SMITHDB.md, 'Version requirements'. sandbox_runtime_source = \"external\" needs one exact version on 0.18 or later, because deploy.sh picks the langsmith-sandbox chart by that chart's appVersion."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins, ~0.18.0 (the newest stable 0.18 patch). deploy.sh accepts only 0.18.x; see SMITHDB.md, 'Version requirements'. sandbox_runtime_source = \"external\" needs one exact version on 0.18 or later, because deploy.sh picks the langsmith-sandbox chart by that chart's appVersion."
   default     = ""
 }
 

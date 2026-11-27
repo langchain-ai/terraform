@@ -51,13 +51,13 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
 SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
-# Pin the chart *line*: deploy the latest 0.17.x, never auto-jump to 0.18.
+# Pin the chart *line*: deploy the latest 0.18.x, never auto-jump to 0.19.
 # Override with the CHART_VERSION env var for an exact patch if needed.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.17.0 pin."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.18.0 pin."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
 # Fall back to the langsmith_helm_chart_version tfvar before the line default, so
@@ -68,7 +68,7 @@ if [[ -z "${CHART_VERSION:-}" ]]; then
   [[ -n "$CHART_VERSION" ]] && \
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
-CHART_VERSION="${CHART_VERSION:-~0.17.0}"
+CHART_VERSION="${CHART_VERSION:-~0.18.0}"
 # An external runtime runs sandbox-host from its own langsmith-sandbox release in
 # the sandbox cluster. That chart has no version setting here: it is the newest
 # one whose appVersion equals the langsmith chart's, resolved below.
@@ -116,18 +116,16 @@ _validate_sandbox_values() {
   fi
 }
 
-# These values use the chart 0.17 schema: the 0.16 layout (engineInsightsAgent,
-# top-level insights/polly, no backend.agentBootstrap) plus the sandbox-host
-# JuiceFS mount that replaced sandboxes.juicefs.csi. Chart 0.16 has no host-mount
-# keys, and chart 0.15 silently drops the external Insights Postgres/Redis wiring.
-# Chart 0.18 keeps that layout and only adds keys, so it is accepted too.
-# Refuse any other line rather than deploy a half-configured release.
+# These values use the chart 0.18 schema: the 0.17 layout (engineInsightsAgent,
+# top-level insights/polly, the sandbox-host JuiceFS mount) plus keys that only
+# chart 0.18 has, such as sandboxes.external. Chart 0.17 ignores those keys, so
+# it would deploy a half-configured release. Refuse any other line.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.17" && "$_chart_line" != "0.18" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 or 0.18 line." >&2
-  echo "       These values require chart 0.17 or 0.18 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 or 0.18 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.17.0 make deploy" >&2
+if [[ "$_chart_line" != "0.18" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.18 line." >&2
+  echo "       These values require chart 0.18 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.18 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.18.5 make deploy" >&2
   exit 1
 fi
 
@@ -180,7 +178,7 @@ fi
 
 # sandboxes.external ships with chart 0.18, and the runtime chart is picked below by
 # this chart's appVersion, so the langsmith chart must be one exact version on
-# 0.18 or later: not the default 0.17 line and not a range. Terraform checks
+# 0.18 or later, and not a range (the default ~0.18.0 is one). Terraform checks
 # langsmith_helm_chart_version the same way; this also covers CHART_VERSION.
 # Keep the pattern in step with external_runtime_chart_version_pattern in
 # infra/locals.tf.
