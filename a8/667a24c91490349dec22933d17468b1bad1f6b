@@ -1,0 +1,43 @@
+README.md
+  s_10b3b82a49b370::t_0ef7d38bdd4ab3 20,83-84,86,90,96,98,106-107,111,113-118,121,128-133,143-144,153,171
+CHANGELOG.md
+  s_10b3b82a49b370::t_8fc245f4603d8a 15-16,18-19,21,33-34
+modules/aws/README.md
+  s_10b3b82a49b370::t_5a261fc4d94a64 5,556,1447
+modules/aws/SMITHDB.md
+  s_10b3b82a49b370::t_a53b60ada60ed4 120
+modules/aws/infra/terraform.tfvars.example
+  s_10b3b82a49b370::t_202944f87997f4 354-355,573-574,577,581,870-871
+modules/azure/README.md
+  s_10b3b82a49b370::t_18bd9fcbb04d18 5,81
+modules/azure/SERVICES.md
+  s_10b3b82a49b370::t_c416a4ace2955c 171
+modules/azure/SMITHDB.md
+  s_10b3b82a49b370::t_9b86b1e6ee23ff 11,13-14,16,22,24,84,109
+modules/baremetal/README.md
+  s_10b3b82a49b370::t_f2e94d93076b89 84
+modules/gcp/README.md
+  s_10b3b82a49b370::t_4d35f1aa6597dc 5,439,555,679,682
+modules/gcp/TEST_CYCLE.md
+  s_10b3b82a49b370::t_dcf8deedda1087 293
+modules/gcp/infra/terraform.tfvars.example
+  s_10b3b82a49b370::t_18cb2185d15858 428
+modules/ocp/README.md
+  s_10b3b82a49b370::t_6a4984e9af5e97 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a8667a24c91490349dec22933d17468b1bad1f6b",
+  "prompts": {},
+  "sessions": {
+    "s_10b3b82a49b370": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d51e48f3-9924-4499-9ab6-517d7c5b83c8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
