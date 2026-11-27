@@ -1,0 +1,52 @@
+modules/aws/infra/scripts/test-smithdb.sh
+  s_982a02284cc2f9::t_d336bec3b5fdf8 172-207
+modules/aws/infra/variables.tf
+  s_982a02284cc2f9::t_92639c0675d164 1123
+modules/aws/infra/scripts/test-upgrade-guard.sh
+  s_982a02284cc2f9::t_d6add6bff3b66e 67-71
+  s_7f2b3772a94a7a::t_e51f6fbd113c43 1-66,72-75
+modules/aws/infra/scripts/_smithdb.sh
+  s_982a02284cc2f9::t_de3254cb9f141e 32-54
+modules/aws/helm/scripts/init-values.sh
+  s_982a02284cc2f9::t_eb4ac3269b76ef 87-93
+modules/aws/infra/scripts/quickdeploy.sh
+  s_982a02284cc2f9::t_14a1d6784ec59c 105-110
+modules/aws/Makefile
+  s_982a02284cc2f9::t_7d3d77d065f184 86
+scripts/check.sh
+  s_982a02284cc2f9::t_7b3a40eb9b7cd2 60
+modules/aws/SMITHDB.md
+  s_982a02284cc2f9::t_aa867c2e1861f2 301-340
+modules/aws/infra/scripts/upgrade-guard.sh
+  s_982a02284cc2f9::t_b2e728d097f913 42,45-48,60
+  s_982a02284cc2f9::t_46cda0cf21ac6c 8-21,24
+  s_7f2b3772a94a7a::t_095bec49cf98ee 1-7,22-23,25-41,43-44,49-59
+modules/aws/infra/terraform.tfvars.example
+  s_982a02284cc2f9::t_60bc85bbe7e293 891-894
+modules/aws/README.md
+  s_982a02284cc2f9::t_e522b60d2eec02 1330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd0e67f4a10b4589f8a76048aad2417b91239c8c",
+  "prompts": {},
+  "sessions": {
+    "s_7f2b3772a94a7a": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7a9c2c77-f391-4e94-90e5-681c4440aa7a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    },
+    "s_982a02284cc2f9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e3a10cb0-85a5-4a58-baab-c4783fb4b31d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
