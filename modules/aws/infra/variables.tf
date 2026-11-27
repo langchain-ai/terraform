@@ -1034,10 +1034,10 @@ variable "sandbox_service_url_base_url" {
 
 variable "enable_envoy_gateway" {
   type        = bool
-  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true. Set it to false to use a standard ALB-backed Kubernetes Ingress instead."
+  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway is true. Set it to false to use a standard ALB-backed Kubernetes Ingress instead."
   # Unset (null) means "derive" — see local.enable_envoy_gateway in locals.tf.
   # An explicit true or false in terraform.tfvars always wins over the derivation,
-  # so existing Istio/NGINX deployments keep working without a tfvars edit.
+  # so existing Istio deployments keep working without a tfvars edit.
   default = null
 }
 
@@ -1049,8 +1049,13 @@ variable "enable_istio_gateway" {
 
 variable "enable_nginx_ingress" {
   type        = bool
-  description = "Install NGINX ingress controller (ingress-nginx chart). ALB forwards to nginx controller pods via a TargetGroupBinding; LangSmith uses ingressClassName: nginx."
+  description = "Removed in 0.18. Accepted only as false, which earlier QuickStart runs wrote into every terraform.tfvars, so those files still plan."
   default     = false
+
+  validation {
+    condition     = var.enable_nginx_ingress == false
+    error_message = "enable_nginx_ingress was removed in 0.18. Applying this release would delete the NGINX controller and leave the ALB with nothing behind it. Keep the previous release until the deployment has moved to Envoy Gateway, Istio, or ALB, then remove this setting. See README.md, \"Moving off NGINX ingress\"."
+  }
 }
 
 #------------------------------------------------------------------------------

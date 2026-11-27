@@ -42,7 +42,7 @@ _drift() {
 
 TFVARS="$TMP/terraform.tfvars"
 VALUES="$TMP/values-overrides.yaml"
-printf 'ingress_controller = "nginx"\nlangsmith_domain   = "ls.example.com"\n' > "$TFVARS"
+printf 'ingress_controller = "envoy-gateway"\nlangsmith_domain   = "ls.example.com"\n' > "$TFVARS"
 
 # A stamp written from these tfvars, every key present (empty when unset).
 _values_input_stamp > "$VALUES"
@@ -52,18 +52,18 @@ _check "stamped from the same tfvars: clean" \
 
 printf 'ingress_controller = "agic"\nlangsmith_domain   = "ls.example.com"\n' > "$TFVARS"
 _check "a stamped value changed: one line, rc 1" \
-  "ingress_controller: generated with 'nginx', terraform.tfvars now says 'agic'
+  "ingress_controller: generated with 'envoy-gateway', terraform.tfvars now says 'agic'
 rc=1" \
   "$(_drift "$VALUES")"
 
 # A file written before langsmith_image_registry was stamped.
-printf 'ingress_controller = "nginx"\nlangsmith_domain   = "ls.example.com"\n' > "$TFVARS"
+printf 'ingress_controller = "envoy-gateway"\nlangsmith_domain   = "ls.example.com"\n' > "$TFVARS"
 grep -v '^#   langsmith_image_registry =' "$VALUES" > "$VALUES.old"
 _check "an older stamp lacks a key that tfvars leaves unset: clean" \
   'rc=0' \
   "$(_drift "$VALUES.old")"
 
-printf 'ingress_controller = "nginx"\nlangsmith_domain   = "ls.example.com"\nlangsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
+printf 'ingress_controller = "envoy-gateway"\nlangsmith_domain   = "ls.example.com"\nlangsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
 _check "an older stamp lacks a key that tfvars now sets: not stamped, rc 1" \
   "langsmith_image_registry: not stamped (the file predates this key), terraform.tfvars now says 'nexus.example.com'
 rc=1" \
@@ -71,7 +71,7 @@ rc=1" \
 
 printf 'ingress_controller = "agic"\nlangsmith_domain   = "ls.example.com"\nlangsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
 _check "a changed value and a missing key together: both lines" \
-  "ingress_controller: generated with 'nginx', terraform.tfvars now says 'agic'
+  "ingress_controller: generated with 'envoy-gateway', terraform.tfvars now says 'agic'
 langsmith_image_registry: not stamped (the file predates this key), terraform.tfvars now says 'nexus.example.com'
 rc=1" \
   "$(_drift "$VALUES.old")"
@@ -95,7 +95,7 @@ printf 'langsmith_image_registry = "nexus.example.com"\nlangsmith_image_registry
 _check "host-kept layout, key set: no stop" 'rc=1' "$(_old "$VALUES.oldlayout")"
 printf 'langsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
 _check "host-dropped layout (registry empty), key unset: no stop" 'rc=1' "$(_old "$VALUES.newlayout")"
-printf 'ingress_controller = "nginx"\n' > "$TFVARS"
+printf 'ingress_controller = "envoy-gateway"\n' > "$TFVARS"
 _check "no registry in tfvars: no stop, whatever the file" 'rc=1' "$(_old "$VALUES.oldlayout")"
 printf 'langsmith_image_registry = "nexus.example.com"\n' > "$TFVARS"
 printf 'redis:\n  registry: "decoy"\nimages:\n  imagePullSecrets:\n    - name: "nexus-pull"\n' > "$VALUES.decoy"

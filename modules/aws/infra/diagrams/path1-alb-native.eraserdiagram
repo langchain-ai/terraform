@@ -7,7 +7,7 @@ typeface clean
 // Path 1: ALB-Native (AWS Load Balancer Controller)
 // TLS terminates at ALB via ACM certificate
 // ALB is created and owned by Kubernetes Ingress + AWS LBC
-// No NGINX required — AWS LBC manages ALB lifecycle directly
+// AWS LBC manages ALB lifecycle directly
 // ─────────────────────────────────────────────
 
 // ─────────────────────────────────────────────

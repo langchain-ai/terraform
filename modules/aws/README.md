@@ -667,12 +667,10 @@ Envoy Gateway is the default ingress mode, both in Terraform and in `make quicks
 | `terraform.tfvars` | Result |
 | --- | --- |
 | No gateway flags at all | Envoy Gateway |
-| `enable_istio_gateway = true` or `enable_nginx_ingress = true` | That controller, Envoy stays off |
+| `enable_istio_gateway = true` | That controller, Envoy stays off |
 | `enable_envoy_gateway` set explicitly | Your value always wins |
 
 Enabling two controllers is rejected at plan time by a precondition in `infra/main.tf`, because all gateway modes share a single ALB target group and only one port can be health-checked on it.
-
-**Upgrading an existing deployment?** Istio and NGINX deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
 
 When enabled, the `k8s-bootstrap` module:
 1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
@@ -723,6 +721,17 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 ```
 
 The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmith` namespace) read access to pods, pod logs, deployments, and ReplicaSets in the `langsmith-agents` namespace. Without this, agent run logs will not stream in the LangSmith UI.
+
+### Moving off NGINX ingress
+
+0.18 removed `enable_nginx_ingress`. Four checks stop an upgrade that would delete a running NGINX controller, or route traffic away from it, and leave LangSmith unreachable:
+
+- `enable_nginx_ingress = true` in `terraform.tfvars` fails at plan, however Terraform runs. The `false` that earlier QuickStart runs wrote still plans.
+- `make apply` and `make quickdeploy` refuse while the Terraform state still holds the NGINX controller, even when `terraform.tfvars` no longer mentions it (`infra/scripts/upgrade-guard.sh`).
+- `make init-values` and `make deploy` stop while the last apply still ran NGINX, so the Helm steps cannot write or apply routing for a mode Terraform has not built.
+- `make quickstart` in update mode stops on a `terraform.tfvars` that sets `enable_nginx_ingress = true`, instead of preselecting ALB.
+
+To move off NGINX, keep the previous release and switch there: choose Envoy Gateway, Istio, or ALB, then run `make apply`, `make init-values`, and `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes. Envoy Gateway and Istio keep the Terraform ALB and its hostname. ALB mode moves traffic to an ALB that the AWS Load Balancer Controller owns, so point DNS at its hostname. Upgrade after the deploy finishes.
 
 ---
 

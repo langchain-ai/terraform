@@ -86,6 +86,33 @@ run "enable_agent_builder_is_rejected_when_true" {
   expect_failures = [var.enable_agent_builder]
 }
 
+# enable_nginx_ingress is the same kind of bool: 0.18 removed the NGINX path,
+# and the variable survives so that true stops at plan instead of being ignored
+# while the apply deletes the controller. The false that earlier QuickStart runs
+# wrote must still plan, and must not change the derived ingress mode.
+run "enable_nginx_ingress_is_rejected_when_true" {
+  command = plan
+
+  variables {
+    enable_nginx_ingress = true
+  }
+
+  expect_failures = [var.enable_nginx_ingress]
+}
+
+run "enable_nginx_ingress_false_still_plans" {
+  command = plan
+
+  variables {
+    enable_nginx_ingress = false
+  }
+
+  assert {
+    condition     = output.enable_envoy_gateway == true
+    error_message = "enable_nginx_ingress = false changed the derived ingress mode"
+  }
+}
+
 run "names_and_ids_reject_a_malformed_value" {
   command = plan
 

@@ -8,8 +8,9 @@
 #
 # Runs the full AWS wizard against temp directories with scripted answers. It
 # covers new-zone and existing-zone output, invalid existing zone IDs, update
-# mode preserving both existing-zone answers, and the existing-ACM path that
-# does not activate the DNS module. No AWS, Terraform, credentials, or state.
+# mode preserving both existing-zone answers, the existing-ACM path that does
+# not activate the DNS module, and the update-mode stop on a file that runs NGINX
+# ingress. No AWS, Terraform, credentials, or state.
 #
 # Usage:
 #   ./infra/scripts/test-quickstart-dns.sh
@@ -365,6 +366,28 @@ for key in fleet_storage polly_storage; do
     bad "update mode keeps the $key confirmation that deploy.sh reads"
   fi
 done
+
+echo "10. Update mode stops on a file that runs NGINX ingress, and accepts a false one"
+NGINX_INFRA="$TMP/nginx"
+mkdir -p "$NGINX_INFRA"
+{ cat "$REUSE_INFRA/terraform.tfvars"; printf 'enable_nginx_ingress = true\n'; } > "$NGINX_INFRA/terraform.tfvars"
+cp "$NGINX_INFRA/terraform.tfvars" "$TMP/nginx.before"
+# A full set of answers, so a wizard that failed to stop would finish and
+# rewrite the file rather than exit at the end of its input.
+if INFRA_DIR="$NGINX_INFRA" bash "$SRC" < "$TMP/update.answers" > "$TMP/nginx.log" 2>&1; then
+  bad "an NGINX file stops the update (wizard exited 0)"
+else
+  ok "an NGINX file stops the update"
+fi
+log_has "the stop names the removed setting" "$TMP/nginx.log" "sets enable_nginx_ingress = true"
+if cmp -s "$TMP/nginx.before" "$NGINX_INFRA/terraform.tfvars"; then
+  ok "the NGINX file is left unchanged"
+else
+  bad "the NGINX file is left unchanged"
+fi
+sed 's/^enable_nginx_ingress = true$/enable_nginx_ingress = false/' "$TMP/nginx.before" > "$NGINX_INFRA/terraform.tfvars"
+run_wizard "a false written by an earlier QuickStart does not stop the update" "$NGINX_INFRA" \
+  "$TMP/update.answers" "$TMP/nginx-false.log"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
