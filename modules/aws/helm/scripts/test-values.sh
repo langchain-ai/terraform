@@ -282,7 +282,9 @@ same_values() {
 }
 
 # ── Manifest helpers ──────────────────────────────────────────────────────────
-# Prints the manifest with this kind and metadata.name, or nothing.
+# Prints the manifest with this kind and metadata.name, or nothing. Read its
+# output whole, with grep -q PATTERN <<< "$(manifest ...)": under pipefail, a pipe
+# into grep -q fails when grep exits on the first match and awk gets SIGPIPE.
 manifest() {
   awk -v kind="$2" -v name="$3" '
     function flush() {
@@ -375,7 +377,7 @@ expect_blob_storage() {
 # Each cache volume claim uses the generated StorageClass.
 expect_cache_class() {
   local out="$1" name="$2" want="$3"
-  manifest "$out" Deployment "$name" | grep -q "storageClassName: \"\?$want\"\?" ||
+  grep -q "storageClassName: \"\?$want\"\?" <<< "$(manifest "$out" Deployment "$name")" ||
     { echo "$name: cache volume does not use StorageClass $want"; return 1; }
 }
 
@@ -413,7 +415,7 @@ expect_local_cache() {
 # The service account of a Deployment carries this IRSA role.
 expect_role() {
   local out="$1" name="$2" role="$3"
-  manifest "$out" ServiceAccount "$name" | grep -qF "eks.amazonaws.com/role-arn: $role" ||
+  grep -qF "eks.amazonaws.com/role-arn: $role" <<< "$(manifest "$out" ServiceAccount "$name")" ||
     { echo "$name: service account does not carry the role $role"; return 1; }
 }
 
@@ -501,7 +503,7 @@ check_case() {
       ;;
     clickhouse-external)
       ! has "$out" StatefulSet langsmith-clickhouse || echo "external ClickHouse: the chart still runs its StatefulSet"
-      manifest "$out" Deployment langsmith-backend | grep -A5 'name: CLICKHOUSE_HOST$' | grep -q 'name: langsmith-clickhouse$' ||
+      grep -q 'name: langsmith-clickhouse$' <<< "$(manifest "$out" Deployment langsmith-backend | grep -A5 'name: CLICKHOUSE_HOST$')" ||
         echo "external ClickHouse: the backend does not read CLICKHOUSE_HOST from the Secret langsmith-clickhouse"
       ;;
     engine)

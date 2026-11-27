@@ -272,7 +272,9 @@ same_values() {
 }
 
 # ── Manifest helpers ──────────────────────────────────────────────────────────
-# Prints the manifest with this kind and metadata.name, or nothing.
+# Prints the manifest with this kind and metadata.name, or nothing. Read its
+# output whole, with grep -q PATTERN <<< "$(manifest ...)": under pipefail, a pipe
+# into grep -q fails when grep exits on the first match and awk gets SIGPIPE.
 manifest() {
   awk -v kind="$2" -v name="$3" '
     function flush() {
@@ -295,7 +297,7 @@ has() {
 # The ServiceAccount carries the Workload Identity annotation.
 expect_identity() {
   local out="$1" name="$2" sa="$3"
-  manifest "$out" ServiceAccount "$name" | grep -qF "iam.gke.io/gcp-service-account: $sa" ||
+  grep -qF "iam.gke.io/gcp-service-account: $sa" <<< "$(manifest "$out" ServiceAccount "$name")" ||
     { echo "$name: the ServiceAccount does not carry $sa"; return 1; }
 }
 
@@ -373,7 +375,7 @@ check_case() {
     fleet)
       [[ "$(value "$dir" hostBackend enabled || true)" == true ]] || echo "Fleet is on, but hostBackend.enabled is not true"
       has "$out" Deployment langsmith-host-backend || echo "Fleet is on, but host-backend is not rendered"
-      _values_notes "$dir/values/$_VALUES_OVERRIDES" set | grep -q 'set hostBackend.enabled' ||
+      grep -q 'set hostBackend.enabled' <<< "$(_values_notes "$dir/values/$_VALUES_OVERRIDES" set)" ||
         echo "the header does not record the hostBackend.enabled setting"
       ;;
     insights)
@@ -382,7 +384,7 @@ check_case() {
       ;;
     clickhouse-external)
       ! has "$out" StatefulSet langsmith-clickhouse || echo "external ClickHouse: the chart still runs its StatefulSet"
-      manifest "$out" Deployment langsmith-backend | grep -A5 'name: CLICKHOUSE_HOST$' | grep -q 'name: langsmith-clickhouse$' ||
+      grep -q 'name: langsmith-clickhouse$' <<< "$(manifest "$out" Deployment langsmith-backend | grep -A5 'name: CLICKHOUSE_HOST$')" ||
         echo "external ClickHouse: the backend does not read CLICKHOUSE_HOST from the Secret langsmith-clickhouse"
       ;;
     standalone-polly|standalone-insights)
@@ -409,7 +411,7 @@ check_case() {
         echo "smithdb.config.objectStore.bucket is not values-test-smithdb"
       [[ "$(value "$dir" smithdb serviceAccount annotations iam.gke.io/gcp-service-account || true)" == "$SMITHDB_SA" ]] ||
         echo "SmithDB does not carry its Workload Identity annotation"
-      manifest "$out" Deployment langsmith-smithdb-query | grep -q 'name: cloud-sql-proxy' ||
+      grep -q 'name: cloud-sql-proxy' <<< "$(manifest "$out" Deployment langsmith-smithdb-query)" ||
         echo "SmithDB query has no Cloud SQL Auth Proxy sidecar"
       ;;
     sizing-production) expect_order "$dir" production ;;
@@ -417,7 +419,7 @@ check_case() {
     sso)
       [[ "$(value "$dir" config oauth enabled || true)" == true ]] || echo "config.oauth.enabled is not true"
       [[ "$(value "$dir" config basicAuth enabled || true)" == false ]] || echo "config.basicAuth.enabled is not false"
-      manifest "$out" Deployment langsmith-backend | grep -A4 'name: OAUTH_CLIENT_ID$' | grep -q 'name: langsmith-config$' ||
+      grep -q 'name: langsmith-config$' <<< "$(manifest "$out" Deployment langsmith-backend | grep -A4 'name: OAUTH_CLIENT_ID$')" ||
         echo "the backend does not read OAUTH_CLIENT_ID from the Secret langsmith-config"
       ;;
     in-cluster-db)

@@ -294,7 +294,9 @@ same_values() {
 }
 
 # ── Manifest helpers ──────────────────────────────────────────────────────────
-# Prints the manifest with this kind and metadata.name, or nothing.
+# Prints the manifest with this kind and metadata.name, or nothing. Read its
+# output whole, with grep -q PATTERN <<< "$(manifest ...)": under pipefail, a pipe
+# into grep -q fails when grep exits on the first match and awk gets SIGPIPE.
 manifest() {
   awk -v kind="$2" -v name="$3" '
     function flush() {
@@ -317,7 +319,7 @@ has() {
 # The ServiceAccount carries the Workload Identity client ID.
 expect_identity() {
   local out="$1" name="$2" client_id="$3"
-  manifest "$out" ServiceAccount "$name" | grep -qF "azure.workload.identity/client-id: $client_id" ||
+  grep -qF "azure.workload.identity/client-id: $client_id" <<< "$(manifest "$out" ServiceAccount "$name")" ||
     { echo "$name: the ServiceAccount does not carry the client ID $client_id"; return 1; }
 }
 
@@ -393,7 +395,7 @@ check_case() {
       ;;
     clickhouse-external)
       ! has "$out" StatefulSet langsmith-clickhouse || echo "external ClickHouse: the chart still runs its StatefulSet"
-      manifest "$out" Deployment langsmith-backend | grep -A5 'name: CLICKHOUSE_HOST$' | grep -q 'name: langsmith-clickhouse$' ||
+      grep -q 'name: langsmith-clickhouse$' <<< "$(manifest "$out" Deployment langsmith-backend | grep -A5 'name: CLICKHOUSE_HOST$')" ||
         echo "external ClickHouse: the backend does not read CLICKHOUSE_HOST from the Secret langsmith-clickhouse"
       [[ "$(value "$dir" clickhouse external cluster || true)" == replicated ]] || echo "clickhouse.external.cluster is not replicated"
       ;;
@@ -436,7 +438,7 @@ check_case() {
       ;;
     agic)
       expect_ingress_class "$out" azure-application-gateway || true
-      manifest "$out" Ingress langsmith-ingress | grep -q 'cert-manager.io/cluster-issuer: "\?letsencrypt-prod"\?' ||
+      grep -q 'cert-manager.io/cluster-issuer: "\?letsencrypt-prod"\?' <<< "$(manifest "$out" Ingress langsmith-ingress)" ||
         echo "agic: the Ingress has no cert-manager issuer"
       ;;
     none) expect_ingress_class "$out" "" || true ;;
@@ -453,7 +455,7 @@ check_case() {
       [[ "$(_values_resolved "$dir/values/$_VALUES_OVERRIDES" deployment_templates)" == "$templates" ]] ||
         echo "the header does not record deployment_templates = $templates for this chart"
       if [[ "$templates" == true ]]; then
-        value "$dir" operator templates redis | grep -q 'image: nexus.example.com/redis:7$' ||
+        grep -q 'image: nexus.example.com/redis:7$' <<< "$(value "$dir" operator templates redis)" ||
           echo "the per-deployment Redis template does not pull from the mirror"
       elif value "$dir" operator templates redis >/dev/null; then
         echo "a per-deployment Redis template is written for a chart that reads the images block"
