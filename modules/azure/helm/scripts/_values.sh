@@ -24,6 +24,9 @@
 # copies in modules/aws, modules/azure and modules/gcp are identical, and
 # scripts/check.sh fails when they differ. Needs helm, awk, base64, and
 # sha256sum or shasum. Runs on bash 3.2. The caller provides _parse_tfvar.
+#
+# Every step checks its own status: callers run these functions as `f || exit 1`,
+# and bash ignores set -e inside a command that runs under || or &&.
 
 _VALUES_BASE="langsmith-values.yaml"
 _VALUES_OVERRIDES="langsmith-values-overrides.yaml"
@@ -50,11 +53,11 @@ _values_merge() (
   set -euo pipefail
   local out="$1" chart
   shift
-  chart=$(mktemp -d)
+  chart=$(mktemp -d) || return 1
   trap 'rm -rf "$chart"' EXIT
-  mkdir "$chart/templates"
-  printf 'apiVersion: v2\nname: langsmith-values\nversion: 0.1.0\n' > "$chart/Chart.yaml"
-  printf '%s\n' '{{ toYaml .Values }}' > "$chart/templates/values.yaml"
+  mkdir "$chart/templates" || return 1
+  printf 'apiVersion: v2\nname: langsmith-values\nversion: 0.1.0\n' > "$chart/Chart.yaml" || return 1
+  printf '%s\n' '{{ toYaml .Values }}' > "$chart/templates/values.yaml" || return 1
   if ! helm template langsmith-values "$chart" "$@" > "$chart/rendered" 2> "$chart/err"; then
     echo "ERROR: helm could not merge the values files:" >&2
     sed 's/^/       /' "$chart/err" >&2
@@ -62,7 +65,7 @@ _values_merge() (
   fi
   awk 'body { line[++n] = $0; if ($0 != "") last = n }
        /^# Source: / { body = 1 }
-       END { for (i = 1; i <= last; i++) print line[i] }' "$chart/rendered" > "$out"
+       END { for (i = 1; i <= last; i++) print line[i] }' "$chart/rendered" > "$out" || return 1
 )
 
 # _values_get <file>... -- <key>...
@@ -86,14 +89,14 @@ _values_get() (
     arg=${arg//\"/\\\"}
     path+="${path:+,}\"$arg\""
   done
-  chart=$(mktemp -d)
+  chart=$(mktemp -d) || return 1
   trap 'rm -rf "$chart"' EXIT
-  mkdir "$chart/templates"
-  printf 'apiVersion: v2\nname: langsmith-values-get\nversion: 0.1.0\n' > "$chart/Chart.yaml"
+  mkdir "$chart/templates" || return 1
+  printf 'apiVersion: v2\nname: langsmith-values-get\nversion: 0.1.0\n' > "$chart/Chart.yaml" || return 1
   # Helm reads every rendered document as a manifest, so the value goes out
   # inside a map, base64-encoded so that YAML quoting cannot change it. The "v"
   # prefix keeps an empty string apart from a missing value.
-  cat > "$chart/templates/get.yaml" <<'TEMPLATE'
+  cat > "$chart/templates/get.yaml" <<'TEMPLATE' || return 1
 {{- $v := .Values -}}
 {{- $found := true -}}
 {{- range $k := .Values.langsmithValuesGetPath -}}
@@ -108,9 +111,9 @@ _values_get() (
 {{- end -}}
 TEMPLATE
   encoded=$(helm template langsmith-values-get "$chart" ${files[@]+"${files[@]}"} \
-    --set-json "langsmithValuesGetPath=[$path]" | awk '/^langsmithValuesGet: / { print $2 }')
+    --set-json "langsmithValuesGetPath=[$path]" | awk '/^langsmithValuesGet: / { print $2 }') || return 1
   [[ -n "$encoded" ]] || return 1
-  encoded=$(printf '%s' "$encoded" | base64 --decode)
+  encoded=$(printf '%s' "$encoded" | base64 --decode) || return 1
   printf '%s\n' "${encoded#v}"
 )
 
@@ -121,12 +124,12 @@ _values_seal() (
   set -euo pipefail
   local file="$1" title="$2" notes="$3" body="$4" tmp sum
   umask 077
-  tmp=$(mktemp "$file.XXXXXX")
+  tmp=$(mktemp "$file.XXXXXX") || return 1
   trap 'rm -f "$tmp" "$tmp.rest"' EXIT
-  { sed -e 's/^/# /' -e 's/^# $/#/' "$notes"; cat "$body"; } > "$tmp.rest"
-  sum=$(_values_sha256 "$tmp.rest")
-  { printf '# %s, sha256 %s\n' "$title" "$sum"; cat "$tmp.rest"; } > "$tmp"
-  mv -f "$tmp" "$file"
+  { sed -e 's/^/# /' -e 's/^# $/#/' "$notes" && cat "$body"; } > "$tmp.rest" || return 1
+  sum=$(_values_sha256 "$tmp.rest") || return 1
+  { printf '# %s, sha256 %s\n' "$title" "$sum" && cat "$tmp.rest"; } > "$tmp" || return 1
+  mv -f "$tmp" "$file" || return 1
 )
 
 # _values_seal_state <file>
@@ -237,18 +240,18 @@ _values_plan_script() {
 # sources one by one and compare the result with the merged file.
 _values_save_plan() {
   local dir="$1" arg n=0 file_next=0
-  mkdir -p "$dir"
-  : > "$dir/args"
+  mkdir -p "$dir" || return 1
+  : > "$dir/args" || return 1
   for arg in ${_VALUES_PLAN_ARGS[@]+"${_VALUES_PLAN_ARGS[@]}"}; do
     if (( file_next )); then
       n=$((n + 1))
-      cp "$arg" "$dir/$n-${arg##*/}"
+      cp "$arg" "$dir/$n-${arg##*/}" || return 1
       arg="$dir/$n-${arg##*/}"
       file_next=0
     elif [[ "$arg" == -f ]]; then
       file_next=1
     fi
-    printf '%s\n' "$arg" >> "$dir/args"
+    printf '%s\n' "$arg" >> "$dir/args" || return 1
   done
 }
 
@@ -257,12 +260,12 @@ _values_save_plan() {
 _values_render_overrides() (
   set -euo pipefail
   local file="$1" work
-  work=$(mktemp -d)
+  work=$(mktemp -d) || return 1
   trap 'rm -rf "$work"' EXIT
   if [[ -n "${LANGSMITH_VALUES_PLAN_DIR:-}" ]]; then
-    _values_save_plan "$LANGSMITH_VALUES_PLAN_DIR"
+    _values_save_plan "$LANGSMITH_VALUES_PLAN_DIR" || return 1
   fi
-  _values_merge "$work/body" ${_VALUES_PLAN_ARGS[@]+"${_VALUES_PLAN_ARGS[@]}"}
+  _values_merge "$work/body" ${_VALUES_PLAN_ARGS[@]+"${_VALUES_PLAN_ARGS[@]}"} || return 1
   {
     echo "$_VALUES_DO_NOT_EDIT"
     echo "make deploy applies $_VALUES_BASE first, then this file."
@@ -276,39 +279,45 @@ _values_render_overrides() (
     echo "Inputs. make deploy stops when one of them differs:"
     printf '%s' "$_VALUES_PLAN_INPUTS"
     echo ""
-  } > "$work/notes"
-  _values_seal "$file" "$_VALUES_OVERRIDES, written by make init-values" "$work/notes" "$work/body"
+  } > "$work/notes" || return 1
+  _values_seal "$file" "$_VALUES_OVERRIDES, written by make init-values" "$work/notes" "$work/body" || return 1
 )
 
 # _values_render_base <example> <file>: copies the base values and seals the copy.
 _values_render_base() (
   set -euo pipefail
   local example="$1" file="$2" work
-  work=$(mktemp -d)
+  work=$(mktemp -d) || return 1
   trap 'rm -rf "$work"' EXIT
-  printf '%s\n' "Copied from examples/${example##*/}. $_VALUES_DO_NOT_EDIT" > "$work/notes"
-  _values_seal "$file" "$_VALUES_BASE, written by make init-values" "$work/notes" "$example"
+  printf '%s\n' "Copied from examples/${example##*/}. $_VALUES_DO_NOT_EDIT" > "$work/notes" || return 1
+  _values_seal "$file" "$_VALUES_BASE, written by make init-values" "$work/notes" "$example" || return 1
 )
 
 # _values_write <values_dir> <examples_dir>
-# Writes the base copy and the planned overrides into <values_dir>. When a file
-# there was edited after make init-values wrote it, prints what the run would
-# drop instead, writes nothing, and returns 1.
+# Writes the base copy and the planned overrides into <values_dir>. Both are
+# rendered first, so a failed merge changes neither file. When a file there was
+# edited after make init-values wrote it, prints what the run would drop
+# instead, writes nothing, and returns 1.
 _values_write() (
   set -euo pipefail
-  local dir="$1" examples="$2" work name edited=""
+  local dir="$1" examples="$2" work name tmp edited=""
   for name in "$_VALUES_BASE" "$_VALUES_OVERRIDES"; do
     [[ "$(_values_seal_state "$dir/$name")" != edited ]] || edited+="$name "
   done
+  work=$(mktemp -d) || return 1
+  trap 'rm -rf "$work"' EXIT
+  _values_render_base "$examples/$_VALUES_BASE" "$work/$_VALUES_BASE" || return 1
+  _values_render_overrides "$work/$_VALUES_OVERRIDES" || return 1
   if [[ -z "$edited" ]]; then
-    _values_render_base "$examples/$_VALUES_BASE" "$dir/$_VALUES_BASE"
-    _values_render_overrides "$dir/$_VALUES_OVERRIDES"
+    for name in "$_VALUES_BASE" "$_VALUES_OVERRIDES"; do
+      tmp=$(mktemp "$dir/.$name.XXXXXX") || return 1
+      if ! cat "$work/$name" > "$tmp" || ! mv -f "$tmp" "$dir/$name"; then
+        rm -f "$tmp"
+        return 1
+      fi
+    done
     return 0
   fi
-  work=$(mktemp -d)
-  trap 'rm -rf "$work"' EXIT
-  _values_render_base "$examples/$_VALUES_BASE" "$work/$_VALUES_BASE"
-  _values_render_overrides "$work/$_VALUES_OVERRIDES"
   for name in $edited; do
     echo "ERROR: $dir/$name was edited after make init-values wrote it." >&2
     echo "       This run would replace it. Lines marked + are only in your copy:" >&2
@@ -485,9 +494,9 @@ _values_set_strings() (
   for pair in "$@"; do
     args+=(--set-string "$pair")
   done
-  work=$(mktemp -d)
+  work=$(mktemp -d) || return 1
   trap 'rm -rf "$work"' EXIT
-  _values_merge "$work/body" "${args[@]}"
-  _values_notes "$file" > "$work/notes"
-  _values_seal "$file" "$_VALUES_OVERRIDES, written by make init-values" "$work/notes" "$work/body"
+  _values_merge "$work/body" "${args[@]}" || return 1
+  _values_notes "$file" > "$work/notes" || return 1
+  _values_seal "$file" "$_VALUES_OVERRIDES, written by make init-values" "$work/notes" "$work/body" || return 1
 )

@@ -230,6 +230,25 @@ check "the secrets in values-overrides.yaml are named" "plaintext secrets" \
 check "the move command names the files" "1" "$(grep -c 'mv .*langsmith-values-fleet.yaml' "$TMP/legacy.err")"
 check "no 0.17 file passes" "0" "$(_values_legacy_stop "$TMP/none" "$EXAMPLES" 2>/dev/null; echo $?)"
 
+echo "failures"
+_values_plan_reset
+_values_plan_file generated "$TMP/core.yaml" "core values"
+_values_plan_tfvars region
+_values_write "$VALUES" "$EXAMPLES"
+cp "$OVR" "$TMP/before.yaml"
+_VALUES_PLAN_ARGS+=(-f "$TMP/missing.yaml")
+rc=0; _values_write "$VALUES" "$EXAMPLES" 2> "$TMP/fail.err" || rc=$?
+check "a failed merge fails the write" "1" "$rc"
+check "it names the helm error" "helm could not merge" "$(grep -o 'helm could not merge' "$TMP/fail.err")"
+check "it leaves the overrides file as it was" "same" "$(cmp -s "$TMP/before.yaml" "$OVR" && echo same)"
+_values_plan_reset
+_values_plan_file generated "$TMP/core.yaml" "core values"
+rc=0; _values_write "$TMP/no such dir" "$EXAMPLES" 2>/dev/null || rc=$?
+check "a missing values directory fails the write" "1" "$rc"
+rc=0; _values_set_strings "$TMP/none.yaml" "config.hostname=x" 2>/dev/null || rc=$?
+check "a set on a missing file fails" "1" "$rc"
+check "no temporary file is left in the values directory" "" "$(find "$VALUES" -maxdepth 1 -type f -name '.*')"
+
 echo "bash 3.2"
 _values_plan_reset
 _values_render_overrides "$TMP/empty.yaml"
