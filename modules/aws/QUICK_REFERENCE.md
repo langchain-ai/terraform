@@ -77,10 +77,6 @@ make init-values
 # Re-sync ESO secrets without redeploying
 make apply-eso
 
-# SmithDB historical migration: start, then make apply, init-values, deploy; end once the Job is Complete
-make smithdb-migration-job-start
-make smithdb-migration-job-end
-
 # Turn on SSO login after a working password install (one-way)
 make sso
 
@@ -122,11 +118,8 @@ Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the f
 # infra/terraform.tfvars
 enable_deployments   = true    # Optional full Deployments: listener + operator
 enable_fleet         = true    # No-code agents; enables its required host-backend
-fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = true    # AI-powered trace analysis
-insights_storage     = "external" # Or "in-cluster"
 enable_polly         = true    # LangSmith Chat (formerly Polly)
-polly_storage        = "external" # Or "in-cluster"
 enable_usage_telemetry = false # Extended usage telemetry
 
 # Engine (chart v0.17+; requires enable_sandboxes = true; see ENGINE.md)
@@ -140,16 +133,7 @@ make init-values   # copies addon values files based on enable_* flags
 make deploy
 ```
 
-**Sizing**: Set `sizing_profile` in `terraform.tfvars`:
-
-```hcl
-sizing_profile = "production"         # multi-replica with HPA (recommended)
-sizing_profile = "production-large"   # high-volume (~50 users, ~1000 traces/sec)
-sizing_profile = "dev"                # single-replica, minimal resources (dev/CI/demos)
-sizing_profile = "default"            # chart defaults (no sizing file)
-```
-
-Then re-run `make init-values && make deploy`.
+**Sizing**: every install runs one sizing, the scale guide's medium reads, medium writes pattern, set in `helm/values/langsmith-values.yaml`. To size beyond it, see [SIZING.md](helm/values/examples/SIZING.md).
 
 ---
 

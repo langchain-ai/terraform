@@ -16,22 +16,6 @@ resource "random_password" "metastore" {
   override_special = "!#%*()-_=+[]{}:?"
 }
 
-# Credential for the in-chart taskdb Postgres that holds ClickHouse-to-SmithDB
-# migration task state. It is a StatefulSet inside the release, not a Cloud SQL
-# instance, and it only renders once the migration gate is on — but the chart
-# hard-fails validation without a password, so generate it up front and let the
-# gate stay a values-only flip.
-resource "random_password" "taskdb" {
-  length      = 32
-  special     = true
-  min_lower   = 1
-  min_upper   = 1
-  min_numeric = 1
-  min_special = 1
-
-  override_special = "!#%*()-_=+[]{}:?"
-}
-
 resource "google_sql_database_instance" "metastore" {
   count = local.create_metastore ? 1 : 0
 

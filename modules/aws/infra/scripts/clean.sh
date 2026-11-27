@@ -20,7 +20,7 @@ set -euo pipefail
 #
 # Does NOT remove:
 #   infra/terraform.tfvars.example      — template, keep it
-#   infra/terraform.tfvars.dev/.minimum/.production  — preset templates, keep them
+#   infra/terraform.tfvars.dev/.production  — preset templates, keep them
 #   helm/values/langsmith-values-*.yaml — static overlay files, keep them
 #   .terraform/                         — provider cache, not sensitive
 

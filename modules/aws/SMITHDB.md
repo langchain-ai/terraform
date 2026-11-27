@@ -68,7 +68,7 @@ smithdb_external_metastore_username = "smithdb"
 Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file.
 The Postgres database and S3 bucket must be dedicated to SmithDB.
 
-SmithDB services and TaskDB run on their own EKS managed node group. Every sizing
+SmithDB services run on their own EKS managed node group. Every sizing
 profile runs the SmithDB small tier, and the defaults below fit it. For the medium
 or large tier, see [Scaling up](#scaling-up).
 
@@ -101,8 +101,8 @@ Karpenter pools, `make init-values` replaces it with the current example and kee
 the old copy as `langsmith-values-smithdb.legacy.yaml`.
 
 **Tier and node size.** `langsmith-values-smithdb.yaml` sets
-`smithdb.resourceTier: small`, and no sizing profile changes it, so every profile
-runs the small tier on the default nodes. `make deploy` stops when the tier's
+`smithdb.resourceTier: small`, so every install runs the small tier on the default
+nodes. `make deploy` stops when the tier's
 largest pod does not fit a SmithDB node. To move to a larger tier, follow
 [Scaling up](#scaling-up).
 
@@ -110,13 +110,6 @@ largest pod does not fit a SmithDB node. To move to a larger tier, follow
 the `nodeSelector` and `tolerations` blocks under each SmithDB key in
 `langsmith-values-smithdb-overrides.yaml`. `make init-values` rewrites that file, so
 repeat the edit after each run. The SmithDB node group is still created.
-
-**Migration.** The migration Job (`make smithdb-migration-job-start`) runs on the SmithDB
-nodes. Each pod requests 100Gi of ephemeral storage, so raise
-`smithdb_node_root_volume_size_gb` and run `make apply` before you enable migration.
-The script stops when the boot disk is under 150 GiB. With the
-[local SSD cache](#local-ssd-cache), ephemeral storage is on the instance store, and
-the boot disk size does not count.
 
 ## Deploy SmithDB services
 
@@ -141,8 +134,6 @@ smithdb:
   langsmith:
     ingestion:
       enabled: true
-    migration:
-      enabled: false
     query:
       enabled: true
 ```
@@ -152,17 +143,12 @@ An install with traces in ClickHouse turns SmithDB on in stages instead: set
 `infra/terraform.tfvars`, then follow the installation guide provided by
 LangChain to validate services and dual ingestion, optionally migrate historical
 data, and finally switch queries, applying each stage separately. The gates
-count only with `enable_smithdb = true`; with it false, all three are off
+count only with `enable_smithdb = true`; with it false, both are off
 whatever they are set to.
 
-To run the historical migration, run `make smithdb-migration-job-start`, then `make apply`, `make init-values`, and `make deploy`.
-It asks whether TaskDB is chart-managed or an external Postgres, how many runs to migrate in how many days, and how many migration pods to run (suggesting a count from the LangSmith formula plus 50% headroom), then stores the TaskDB settings in SSM, writes `helm/values/langsmith-values-smithdb-migration.yaml`, and sets `smithdb_migration_enabled = true`.
-Existing chart-managed migrations keep using `smithdb-migration-taskdb/postgres_password` when that Secret exists, so the helper does not change the Job's immutable secret reference.
-With the flag on, Terraform grants the SmithDB role read access to the traces bucket, and the deploy starts the migration Job.
-Once the Job is Complete, run `make smithdb-migration-job-end`, then the same three commands, to remove the grant, TaskDB, and its settings.
-An external TaskDB Postgres is not deleted.
-If migration pods are OOMKilled, raise their memory in `langsmith-values-smithdb-migration.yaml` (keep requests equal to limits).
-Preserve TaskDB and its PVC, delete only the failed migration Job, then rerun `make deploy`. Kubernetes cannot update an existing Job's pod template; the recreated Job resumes from progress saved in TaskDB.
+Historical backfill is customer-managed, including Helm values, TaskDB, and
+source-storage permissions. Follow the
+[SmithDB migration guide](https://docs.langchain.com/langsmith/self-host-smithdb-migrate).
 
 ## Scaling up
 
@@ -223,9 +209,9 @@ To move to the large tier:
 
 `make deploy` compares the tier with the SmithDB nodes before it upgrades the
 release. It stops when no SmithDB node can hold the tier's largest pod, and it
-names the input to change. It also stops when your sizing file still sets
-`smithdb.resourceTier` to another tier, as a copy from an earlier build of this
-module can: the SmithDB values file loads later and would replace that tier
+names the input to change. It also stops when `helm/values/langsmith-values.yaml`
+sets `smithdb.resourceTier` to another tier, as a value moved there from a 0.17
+sizing file can: the SmithDB values file loads later and would replace that tier
 without notice. Move the tier into `helm/values/langsmith-values-smithdb.yaml`. In the unified layout (`smithdb.topology: unified`,
 chart 0.18 or later), one pod runs every role and the tier sizes it; the same node
 types fit it, and the check covers it too.
@@ -313,6 +299,8 @@ kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 - For the best cache performance, use the [local SSD cache](#local-ssd-cache).
 
 ## Upgrading from 0.17
+
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance. The Terraform module also requires the settings below.
 
 **SmithDB settings.** The defaults now turn SmithDB on with queries served from
 it. In 0.17 an unset `enable_smithdb`, `smithdb_ingestion_enabled` or

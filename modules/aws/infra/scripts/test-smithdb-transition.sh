@@ -38,7 +38,6 @@ cat > "$TEST_DIR/legacy.json" <<'VALUES'
 }}
 VALUES
 VALUES_ARGS=(-f "$TEST_DIR/legacy.json")
-_sizing_profile=production
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
@@ -57,7 +56,6 @@ jq -e --slurpfile before "$TEST_DIR/legacy.json" '
 echo "PASS: EBS clears legacy service overrides, uses the small tier when no values file sets one, and preserves migration, TaskDB, and customer volumes"
 
 VALUES_ARGS=(--set smithdb.enabled=true --set smithdb.resourceTier=large)
-_sizing_profile=dev
 _smithdb_managed_values
 helm template values-test "$TEST_DIR/chart" "${VALUES_ARGS[@]}" |
   sed '/^#/d; /^---$/d' | jq -er '.data.values' > "$TEST_DIR/values.json"
@@ -129,7 +127,6 @@ helm template values-test "$TEST_DIR/chart" -f "$TEST_DIR/legacy.json" |
   export _region=us-east-2
   export _smithdb_metastore_use_ssl=true
   export _smithdb_ingestion_enabled=true
-  export _smithdb_migration_enabled=true
   export _smithdb_query_enabled=false
   sed -n '/^  cat > "\$_smithdb_overrides" << SMITHDB_YAML$/,/^SMITHDB_YAML$/p' \
     "$SCRIPT_DIR/../../helm/scripts/init-values.sh" > "$TEST_DIR/generate.sh"
@@ -146,18 +143,17 @@ jq -e --slurpfile before "$TEST_DIR/before.json" '
 ' "$TEST_DIR/values.json" >/dev/null
 echo "PASS: generated service cache settings preserve the migration Job and TaskDB settings"
 
-# The generated overrides put every SmithDB service, the metastore migration Job and TaskDB on
+# The generated overrides put every SmithDB service, the metastore migration Job on
 # the managed node group. migration.job is not touched here.
 jq -e '
   def pool: {"langsmith-nodepool/smithdb": "true"};
   def tol: [{key:"langsmith-nodepool/smithdb", operator:"Equal", value:"true", effect:"NoSchedule"}];
   ([.query.deployment, .mutations.deployment, .runRules.deployment, .statsQuery.deployment,
     .ingestion.deployment, .compactionWorker.deployment, .compaction.deployment,
-    .clusterManager.deployment, .metastoreMigration.job,
-    .migration.taskdb.postgres.statefulSet]
+    .clusterManager.deployment, .metastoreMigration.job]
    | all(.[]; .nodeSelector == pool and .tolerations == tol))
 ' "$TEST_DIR/values.json" >/dev/null
-echo "PASS: generated overrides schedule SmithDB and TaskDB on the managed pool"
+echo "PASS: generated overrides schedule SmithDB on the managed pool"
 
 # A langsmith-values-smithdb.yaml from an older release pins the Karpenter pools, and Helm would
 # merge those keys with the new one. init-values.sh replaces such a copy first.
@@ -194,18 +190,6 @@ jq -e '
   .query.deployment.nodeSelector == pool and .compaction.deployment.nodeSelector == pool
 ' "$TEST_DIR/fresh.json" >/dev/null
 echo "PASS: an overlay that pins the old Karpenter pools is replaced, and only the managed pool remains"
-
-# Migration pods request 100Gi of ephemeral storage, so a small boot disk stops the script
-# instead of leaving the pods Pending.
-for gb in 100 149; do
-  if _smithdb_migration_disk_check "$gb" 2>"$TEST_DIR/disk.err"; then echo "FAIL: a ${gb} GiB boot disk was accepted"; exit 1; fi
-done
-grep -q "smithdb_node_root_volume_size_gb to at least 150" "$TEST_DIR/disk.err"
-for gb in 150 400 not-a-number; do
-  _smithdb_migration_disk_check "$gb" 2>/dev/null || { echo "FAIL: '$gb' was rejected"; exit 1; }
-done
-_smithdb_migration_disk_check 100 local-ssd || { echo "FAIL: the boot disk was checked with the local-ssd cache"; exit 1; }
-echo "PASS: migration stops on a boot disk under 150 GiB and accepts 150 GiB or more, or any size with the local-ssd cache"
 
 jq -n '{items: ([range(0;5) | {
   kind:"Deployment", metadata:{name:("langsmith-smithdb-" + tostring), generation:2},
@@ -430,18 +414,17 @@ for spec in small:m6id.4xlarge:pass small:m6a.4xlarge:refuse medium:m6id.8xlarge
   echo "PASS: local-ssd tier check, $tier on $NODES: $want"
 done
 
-# A tier left in an earlier sizing file must be the deployed one, because the SmithDB
-# overlay loads after it and wins. Only the top-level smithdb block counts.
-printf 'queue:\n  autoscaling: {}\nsmithdb:\n  resourceTier: "medium"  # copied earlier\n' > "$TEST_DIR/sizing-medium.yaml"
-printf 'smithdb:\n  query:\n    autoscaling:\n      hpa:\n        minReplicas: 1\n' > "$TEST_DIR/sizing-no-tier.yaml"
-printf 'polly:\n  resourceTier: large\n' > "$TEST_DIR/sizing-other-key.yaml"
-_smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" medium
-_smithdb_sizing_tier_check "$TEST_DIR/sizing-no-tier.yaml" small
-_smithdb_sizing_tier_check "$TEST_DIR/sizing-other-key.yaml" small
-_smithdb_sizing_tier_check "" small
-_smithdb_sizing_tier_check "$TEST_DIR/no-such-file.yaml" small
-if _smithdb_sizing_tier_check "$TEST_DIR/sizing-medium.yaml" small 2> "$TEST_DIR/sizing.err"; then
-  echo "FAIL: a sizing-file tier that the SmithDB overlay replaces was accepted"; exit 1
+# A tier set in the base values must be the deployed one, because the SmithDB
+# overlay loads after them and wins. Only the top-level smithdb block counts.
+printf 'queue:\n  autoscaling: {}\nsmithdb:\n  resourceTier: "medium"  # moved from a sizing file\n' > "$TEST_DIR/base-medium.yaml"
+printf 'smithdb:\n  query:\n    autoscaling:\n      hpa:\n        minReplicas: 1\n' > "$TEST_DIR/base-no-tier.yaml"
+printf 'polly:\n  resourceTier: large\n' > "$TEST_DIR/base-other-key.yaml"
+_smithdb_base_tier_check "$TEST_DIR/base-medium.yaml" medium
+_smithdb_base_tier_check "$TEST_DIR/base-no-tier.yaml" small
+_smithdb_base_tier_check "$TEST_DIR/base-other-key.yaml" small
+_smithdb_base_tier_check "$TEST_DIR/no-such-file.yaml" small
+if _smithdb_base_tier_check "$TEST_DIR/base-medium.yaml" small 2> "$TEST_DIR/base.err"; then
+  echo "FAIL: a base-values tier that the SmithDB overlay replaces was accepted"; exit 1
 fi
-grep -q 'sizing-medium.yaml sets smithdb.resourceTier: medium' "$TEST_DIR/sizing.err"
-echo "PASS: a sizing-file tier other than the deployed one stops the deploy, and a matching or absent one does not"
+grep -q 'base-medium.yaml sets smithdb.resourceTier: medium' "$TEST_DIR/base.err"
+echo "PASS: a base-values tier other than the deployed one stops the deploy, and a matching or absent one does not"

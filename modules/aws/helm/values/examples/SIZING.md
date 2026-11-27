@@ -1,56 +1,65 @@
-# LangSmith Helm Sizing Profiles
+# LangSmith sizing on AWS
 
-Four sizing profiles for different deployment scenarios. Each profile has a corresponding values file in this directory, and that file holds the per-component replicas, requests, limits, and autoscaling settings.
+Every install runs one sizing: the [medium reads, medium writes](https://docs.langchain.com/langsmith/self-host-scale#medium-reads-medium-writes) pattern in the scale guide, about 20 concurrent users and 100 traces per second, with the SmithDB small tier. [`langsmith-values.yaml`](langsmith-values.yaml) sets it:
 
-| Profile | Use Case | Values File |
+| Service | Setting | Source |
 |---|---|---|
-| **Minimum** | Cost parking, idle standby, CI smoke tests, single-user demos | [`langsmith-values-sizing-minimum.yaml`](langsmith-values-sizing-minimum.yaml) |
-| **Dev** | Local dev, integration tests, demos, POCs, with a developer actually using the system | [`langsmith-values-sizing-dev.yaml`](langsmith-values-sizing-dev.yaml) |
-| **Production** | Any environment serving real traffic, multi-replica with HPA/KEDA | [`langsmith-values-sizing-production.yaml`](langsmith-values-sizing-production.yaml) |
-| **Production Large** | High-volume (~50 concurrent users, ~1,000 traces/sec), higher baselines | [`langsmith-values-sizing-production-large.yaml`](langsmith-values-sizing-production-large.yaml) |
+| `frontend` | 2 replicas | the pattern |
+| `backend` | HPA, 8 to 16 replicas | the pattern's autoscaling range |
+| `ingestQueue` | KEDA, 3 to 6 replicas | the pattern's autoscaling range |
+| `queue` | KEDA, 1 to 10 replicas | the chart's range, with KEDA on |
+| SmithDB compaction worker | KEDA, 1 to 10 replicas | [SmithDB scale guide](https://docs.langchain.com/langsmith/self-host-smithdb-scale) |
+| `config.settings.redisRunsExpirySeconds` | `3600` | the pattern |
+| `CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT` | `0`, in the generated overrides file | the pattern |
 
-Every profile, and the base values when no profile is set, uses KEDA for `queue` and `ingestQueue` (queue target: 10) and for the SmithDB compaction worker (target: 60 pending jobs per worker). The dev, production, and production-large profiles use HPA for the other core services. Node autoscaling is configured separately.
+Every other service runs the chart's own requests, limits and replica count, and no example values file requests less than the chart's default; `make test-values` checks both. The pattern's Redis, 13 GiB, is the default ElastiCache node, `cache.m6g.xlarge`. The QuickStart Dev / POC profile writes `cache.m6g.large`, about 6.4 GiB, and `terraform.tfvars.dev` sets `cache.t3.medium`, about 3 GiB; set `redis_instance_type = "cache.m6g.xlarge"` in `terraform.tfvars` for the pattern's Redis. In-cluster ClickHouse stays below the pattern: see [ClickHouse](#clickhouse).
 
-The dev profile (`queue`) and the minimum profile (`queue` and `ingestQueue`) set `targetMemoryUtilizationPercentage: 150`. Their idle memory is close to the request and does not fall as replicas are added, so the chart's 80% target would keep extra replicas running at idle.
+## Capacity
 
-The chart allows one scaler per service. To run the compaction worker on its CPU HPA instead, set `smithdb.compactionWorker.autoscaling.hpa.enabled: true` and `smithdb.compactionWorker.autoscaling.keda.enabled: false`.
+Rendered from chart 0.18.2, the core services, in-cluster ClickHouse included, request 22 CPU and 49 GiB across 21 pods at minimum replicas, and 42 CPU at maximum. Deployments, Fleet, LangSmith Chat and Insights together add about 10 CPU and 21 GiB at minimum replicas, and 13 CPU at maximum. SmithDB runs on its own node group, sized in [SMITHDB.md](../../../SMITHDB.md).
 
-The profiles do not size SmithDB. Every profile runs the SmithDB small tier that `langsmith-values-smithdb.yaml` sets, with the chart's replica defaults and the compaction-worker range from the base values. The medium and large tiers need larger SmithDB nodes; see [Scaling up](../../../SMITHDB.md#scaling-up).
+Cluster Autoscaler adds LangSmith nodes, up to the node group's `max_size`, as the HPA and KEDA scale out. On `m6a.2xlarge` nodes the sizing runs on 4 to 5 nodes at minimum replicas and needs up to 8 at maximum, so keep `max_size` at 8 or more. The Terraform default and both QuickStart profiles set 10. Under a lower ceiling, the replicas that the HPA and KEDA add stay `Pending`.
 
-`make init-values` preserves existing sizing files; merge template updates manually. When disabling an autoscaler, also set the component's fixed replica count.
+## Sizing beyond the pattern
 
-### Product workloads (Insights, LangSmith Chat (formerly Polly), Fleet)
+Edit `helm/values/langsmith-values.yaml`, the copy `make init-values` made, then run `make deploy`. The scale guide's [high reads, high writes](https://docs.langchain.com/langsmith/self-host-scale#high-reads-high-writes) section has the next set of numbers. An autoscaler owns the replica count once it is on, so set `maxReplicas` at or above the count the pattern calls for. No feature overlay sets the replicas or autoscaling of these services, so this file's values hold.
 
-On chart 0.16 the standalone agents are ordinary Deployments, and everything about them is settable from Helm values. Each agent splits into an api-server and a queue:
+The SmithDB tier is set in `langsmith-values-smithdb.yaml`, which loads after this file; `make deploy` stops when `langsmith-values.yaml` sets a different tier. See [Scaling up](../../../SMITHDB.md#scaling-up).
 
-- `polly.apiServer.deployment.resources` and `polly.queue.deployment.resources`
-- `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`
-- `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`
+## Moving from a 0.17 sizing profile
 
-Each agent also gets its own Postgres and Redis. Left alone those are in-cluster StatefulSets sized by `<agent>.postgres.statefulSet.resources` and `<agent>.redis.statefulSet.resources` (`engineInsightsAgent.*` for Insights). Setting `<agent>.postgres.external.enabled` points the agent at a managed database instead, which is what the `langsmith-values-standalone-*.yaml` overlays do.
+0.18 removed `sizing_profile` and its four files. Terraform warns about a leftover `sizing_profile` line, and `make deploy` stops while a `langsmith-values-sizing-*.yaml` is left in `helm/values`, because it no longer loads that file. No value in that file applies after the move unless you copy it. To move:
 
-The sizing profiles do not override these six product-service Deployments. Their resources come from the Fleet, Chat, and Insights overlays, so they are the same in every profile.
+1. `make init-values` copies `langsmith-values.yaml` only when `helm/values` has none, so a 0.17 copy lacks this sizing. Copy the `frontend`, `backend` and `config.settings` blocks from `helm/values/examples/langsmith-values.yaml` into it. `make deploy` and `make status` warn while one of them is missing.
+2. Copy across the ranges and limits in `helm/values/langsmith-values-sizing-<profile>.yaml` that you rely on, and any value you changed. Keep each request at or above the chart's [default](https://docs.langchain.com/langsmith/self-host-scale#default-resource-requests-and-limits); some 0.17 profiles set requests below it.
+   - `production` ran `frontend`, `platformBackend`, `aceBackend` and `playground` on HPAs, up to 10, 10, 5 and 5 replicas, where this sizing runs 2, 3, 1 and 1. It let `ingestQueue` reach 10 replicas, not 6, and `hostBackend` 10, not 5. Set `hostBackend` in `helm/values/langsmith-values-agent-deploys.yaml`, which loads after the base values.
+   - `production-large` set wider ranges, such as backend 10 to 50, queue and ingest-queue 6 to 24, and platform-backend 5 to 20. It also set limits of 4 CPU and 8 GiB on `backend`, `queue` and `ingestQueue`, and 2 CPU and 4 GiB on `frontend`, twice the chart's. Copy its `autoscaling` blocks and those limits.
+   - `dev` and `minimum` are smaller than this sizing. Copy only the values you changed on purpose.
+3. Check the LangSmith node group in `infra/terraform.tfvars` against [Capacity](#capacity), and run `make apply` after a change. A node group made from the 0.17 `minimum` preset, one or two `m5.xlarge` nodes, cannot hold even the minimum replicas.
+4. Delete the sizing file, and the `sizing_profile` line in `infra/terraform.tfvars`.
+5. Run `make init-values`, then `make deploy`.
 
-This replaces the chart 0.15 arrangement, where `config.*.agent.resources` fed an agent-bootstrap Job that wrote database and redis sidecars at production-scale defaults which could then only be reduced through the LangSmith UI. Chart 0.16 removed that Job, so there is no longer anything to correct after the fact - and `config.agentBuilder.agent.resources` is no longer read at all.
+## ClickHouse
 
----
+The pattern gives ClickHouse 16 CPU and 24 GiB, which do not fit an `m6a.2xlarge` LangSmith node. In-cluster ClickHouse, the default, keeps the chart's 3.5 CPU, 12 GiB and 50 GiB volume. With SmithDB serving reads, ClickHouse mostly takes writes, so its volume is the first limit. The scale guide plans 60 GiB for each day of short-lived trace TTL at a constant 100 traces per second, and the chart keeps short-lived traces for 14 days: 840 GiB, against the 50 GiB volume.
 
-## Quick Comparison
+Grow the volume in place. The `gp3` StorageClass allows it, and EBS accepts one change to a volume every six hours:
 
-Totals from rendering chart 0.16.34 in `deploy.sh`'s values order, at minimum replica counts, with Postgres and Redis on RDS and ElastiCache. System pods are not included.
+```bash
+kubectl patch pvc data-langsmith-clickhouse-0 -n langsmith \
+  -p '{"spec":{"resources":{"requests":{"storage":"<size>Gi"}}}}'
+```
 
-- **Core:** no add-ons, with in-cluster ClickHouse.
-- **Full:** Deployments, Fleet, LangSmith Chat, and Insights, each product on external Postgres and Redis. The Insights overlay requires external ClickHouse, so this scope has no ClickHouse pod. Fleet itself needs host-backend, but not listener or operator. Choosing in-cluster storage for a product adds one Postgres and one Redis StatefulSet for it.
+Do not change `clickhouse.statefulSet.persistence.size` on an existing install. Kubernetes does not let a StatefulSet change its volume claim template, so `helm upgrade` fails. A new install can set it in `helm/values/langsmith-values.yaml` before its first `make deploy`.
 
-| Profile | Scope | Pods | CPU Reserved | Memory Reserved | CPU Limit | Memory Limit |
-|---|---|---:|---:|---:|---:|---:|
-| Minimum | Core | 8 | 1.7 vCPU | 3.9Gi | 4.8 vCPU | 8.0Gi |
-| Minimum | Full | 18 | 9.1 vCPU | 18.3Gi | 21.8 vCPU | 40.6Gi |
-| Dev | Core | 8 | 4.0 vCPU | 12.2Gi | 10.0 vCPU | 24.5Gi |
-| Dev | Full | 18 | 10.8 vCPU | 22.3Gi | 26.0 vCPU | 48.5Gi |
-| Production | Core | 16 | 13.7 vCPU | 32.0Gi | 28.0 vCPU | 70.0Gi |
-| Production | Full | 28 | 22.7 vCPU | 45.0Gi | 48.5 vCPU | 101.0Gi |
-| Prod Large | Core | 36 | 35.0 vCPU | 78.0Gi | 122.0 vCPU | 268.0Gi |
-| Prod Large | Full | 52 | 43.5 vCPU | 87.0Gi | 152.0 vCPU | 312.0Gi |
+With SmithDB off, ClickHouse also serves the reads. Raise `clickhouse.statefulSet.resources` within what one LangSmith node can hold, or move to [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
-Treat these as starting points: the [scale guide](https://docs.langchain.com/langsmith/self-host-scale) notes that optimal capacity depends on actual usage and trace payloads.
+## Product workloads
+
+Fleet, LangSmith Chat and Insights each run an api-server and a queue Deployment. The chart gives these six Deployments no requests, so the module sets them:
+
+- `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`, in the Fleet overlay
+- `polly.apiServer.deployment.resources` and `polly.queue.deployment.resources`, in the Chat overlay
+- `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`, which Insights and Engine share. `make init-values` writes them into `langsmith-values-overrides.yaml` on every run, and the Engine overlay repeats them. To change them, set `engineInsightsAgent` in `helm/values/langsmith-values-insights.yaml`, or in `langsmith-values-engine.yaml` when only Engine is on; both load after the overrides file.
+
+Each add-on keeps its data in its own database on the shared RDS instance and its own index on the shared ElastiCache.
