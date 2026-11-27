@@ -47,15 +47,16 @@ run "enums_reject_an_unlisted_value" {
   command = plan
 
   variables {
-    postgres_source        = "rds"
-    redis_source           = "elasticache"
-    alb_scheme             = "public"
-    environment            = "qa"
-    tls_certificate_source = "self-signed"
-    clickhouse_source      = "langsmith-managed"
-    smithdb_node_arch      = "x86_64"
-    smithdb_cache_storage  = "nvme"
-    eks_network_mode       = "overlay"
+    postgres_source          = "rds"
+    redis_source             = "elasticache"
+    alb_scheme               = "public"
+    environment              = "qa"
+    tls_certificate_source   = "self-signed"
+    clickhouse_source        = "langsmith-managed"
+    smithdb_metastore_source = "import"
+    smithdb_node_arch        = "x86_64"
+    smithdb_cache_storage    = "nvme"
+    eks_network_mode         = "overlay"
   }
 
   expect_failures = [
@@ -65,6 +66,7 @@ run "enums_reject_an_unlisted_value" {
     var.environment,
     var.tls_certificate_source,
     var.clickhouse_source,
+    var.smithdb_metastore_source,
     var.smithdb_node_arch,
     var.smithdb_cache_storage,
     var.eks_network_mode,
@@ -286,6 +288,49 @@ run "standalone_switches_are_rejected" {
     var.enable_standalone_polly,
     var.enable_standalone_insights,
   ]
+}
+
+# A 0.17 tfvars file with an external metastore must fail at plan rather than
+# point SmithDB at a new, empty RDS instance.
+run "smithdb_metastore_source_rejects_external" {
+  command = plan
+
+  variables {
+    smithdb_metastore_source = "external"
+  }
+
+  expect_failures = [var.smithdb_metastore_source]
+}
+
+# The 0.17 names of the metastore security group settings must fail at plan
+# rather than be ignored, which would swap the supplied group for a new one or
+# delete the ingress rule on it.
+run "renamed_smithdb_security_group_settings_are_rejected" {
+  command = plan
+
+  variables {
+    smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+    smithdb_manage_byo_security_group_rules      = true
+  }
+
+  expect_failures = [
+    var.smithdb_existing_metastore_security_group_id,
+    var.smithdb_manage_byo_security_group_rules,
+  ]
+}
+
+run "smithdb_metastore_takes_a_supplied_security_group" {
+  command = plan
+
+  variables {
+    smithdb_metastore_existing_security_group_id           = "sg-0123456789abcdef4"
+    smithdb_metastore_manage_existing_security_group_rules = true
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_security_group_id == "sg-0123456789abcdef4"
+    error_message = "smithdb_metastore_existing_security_group_id should be the security group on the metastore"
+  }
 }
 
 # RDS rejects these characters in a master password, and the ones that survive

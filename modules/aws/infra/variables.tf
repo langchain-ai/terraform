@@ -1147,6 +1147,20 @@ variable "langsmith_release_name" {
 }
 
 # ── Metastore (dedicated RDS Postgres) ────────────────────────────────────────
+# Only "create" since 0.18, kept for the same reason as postgres_source: a 0.17
+# tfvars file that says external fails at plan instead of silently pointing
+# SmithDB at a new, empty RDS instance.
+variable "smithdb_metastore_source" {
+  type        = string
+  description = "SmithDB metastore Postgres. Only 'create' (a dedicated RDS instance) is supported from 0.18."
+  default     = "create"
+
+  validation {
+    condition     = var.smithdb_metastore_source == "create"
+    error_message = "smithdb_metastore_source = \"external\" was removed in 0.18: Terraform always creates a dedicated RDS instance for the SmithDB metastore. Copy the external metastore before you remove this line and the smithdb_external_metastore_* lines from terraform.tfvars, because the next apply points SmithDB at a new, empty RDS instance. See \"Move an external metastore to RDS\" in modules/aws/SMITHDB.md."
+  }
+}
+
 variable "smithdb_metastore_instance_class" {
   type        = string
   description = "RDS instance class for the SmithDB metastore."
@@ -1211,6 +1225,32 @@ variable "smithdb_metastore_manage_existing_security_group_rules" {
   type        = bool
   description = "When smithdb_metastore_existing_security_group_id is set, allow Terraform to write the tcp/5432-from-EKS-nodes ingress rule onto that supplied security group. Default false (attach-only). This helps on a new deployment because the EKS node security group ID is created in the same apply."
   default     = false
+}
+
+# Renamed in 0.18. The old names stay as variables only so a terraform.tfvars
+# that still sets one fails at plan: an undeclared variable is just a warning,
+# and the next apply would swap the supplied security group for a new one, or
+# delete the ingress rule that Terraform manages on it.
+variable "smithdb_existing_metastore_security_group_id" {
+  type        = string
+  description = "Renamed in 0.18. Set smithdb_metastore_existing_security_group_id instead."
+  default     = null
+
+  validation {
+    condition     = var.smithdb_existing_metastore_security_group_id == null || var.smithdb_existing_metastore_security_group_id == ""
+    error_message = "smithdb_existing_metastore_security_group_id was renamed in 0.18: rename it to smithdb_metastore_existing_security_group_id in terraform.tfvars."
+  }
+}
+
+variable "smithdb_manage_byo_security_group_rules" {
+  type        = bool
+  description = "Renamed in 0.18. Set smithdb_metastore_manage_existing_security_group_rules instead."
+  default     = false
+
+  validation {
+    condition     = !var.smithdb_manage_byo_security_group_rules
+    error_message = "smithdb_manage_byo_security_group_rules was renamed in 0.18: rename it to smithdb_metastore_manage_existing_security_group_rules in terraform.tfvars."
+  }
 }
 
 # ── Object store (S3) ─────────────────────────────────────────────────────────

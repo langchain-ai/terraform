@@ -57,6 +57,7 @@ The module sets no size limit on Sandbox storage: the bucket grows with use.
 
 Run `make quickstart`, or leave the SmithDB settings out of `infra/terraform.tfvars` to take the defaults.
 Terraform always creates the metastore RDS instance and the S3 bucket, both dedicated to SmithDB.
+An install that used an external metastore in 0.17 moves it first: see [Move an external metastore to RDS](#move-an-external-metastore-to-rds).
 
 SmithDB services run on their own EKS managed node group. Every sizing
 profile runs the SmithDB small tier, and the defaults below fit it. For the medium
@@ -311,6 +312,15 @@ outside `make apply` too, such as a plain `terraform apply` or a CI pipeline. It
 refuses to switch a release that serves reads from ClickHouse to SmithDB unless
 `terraform.tfvars` sets `smithdb_query_enabled = true`.
 
+**Metastore settings.** `smithdb_metastore_source = "external"` fails at plan,
+because Terraform always creates the metastore. Move the data first, as in
+[Move an external metastore to RDS](#move-an-external-metastore-to-rds).
+`smithdb_existing_metastore_security_group_id` and
+`smithdb_manage_byo_security_group_rules` are renamed to
+`smithdb_metastore_existing_security_group_id` and
+`smithdb_metastore_manage_existing_security_group_rules`, and the old names fail
+at plan.
+
 ### Existing Karpenter deployments
 
 Finish and disable any historical migration on the current version before upgrading.
@@ -327,3 +337,84 @@ Finish and disable any historical migration on the current version before upgrad
 
 Use `make apply` or `make quickdeploy`; direct `terraform apply` bypasses these
 checks. The existing S3 bucket and metastore are preserved.
+
+### Move an external metastore to RDS
+
+From 0.18 the module always creates the SmithDB metastore as a dedicated RDS
+instance, and `smithdb_metastore_source = "external"` fails at plan. Move the data
+before the first 0.18 apply. That apply points the `smithdb-local` Secret at a new,
+empty RDS instance. Writes made after the dump are not copied, so stop sending
+traces until the move is done. The commands use the default namespace, `langsmith`.
+
+1. Save this pod as `smithdb-pg.yaml`. It reads the metastore connection from
+   `smithdb-local` when it starts: before the apply, that is the external
+   metastore, and after it, the new RDS instance. Use the image for your RDS engine
+   version (`smithdb_metastore_engine_version`, default `18`):
+
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: smithdb-pg
+     namespace: langsmith
+   spec:
+     restartPolicy: Never
+     containers:
+       - name: smithdb-pg
+         image: postgres:18
+         command: ["sleep", "3600"]
+         env:
+           - name: PGHOST
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_host
+           - name: PGDATABASE
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_name
+           - name: PGUSER
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_username
+           - name: PGPASSWORD
+             valueFrom:
+               secretKeyRef:
+                 name: smithdb-local
+                 key: smithdb_metastore_db_password
+   ```
+
+   The Secret holds no port. If the external metastore does not listen on 5432,
+   add a `PGPORT` variable with its port for the dump.
+
+2. Dump the external metastore to your machine:
+
+   ```bash
+   kubectl apply -f smithdb-pg.yaml
+   kubectl wait -n langsmith --for=condition=Ready pod/smithdb-pg --timeout=180s
+   kubectl exec -n langsmith smithdb-pg -- pg_dump -Fc > smithdb-metastore.dump
+   kubectl delete pod -n langsmith smithdb-pg
+   ```
+
+3. Remove `smithdb_metastore_source = "external"` and the
+   `smithdb_external_metastore_*` lines from `infra/terraform.tfvars`, and unset
+   `TF_VAR_smithdb_external_metastore_password`. Run `make apply`. It creates the
+   RDS instance and points `smithdb-local` at it.
+4. Restore the dump before `make deploy`, which runs the metastore migration Job.
+   Start the pod again, so that it reads the new connection:
+
+   ```bash
+   kubectl apply -f smithdb-pg.yaml
+   kubectl wait -n langsmith --for=condition=Ready pod/smithdb-pg --timeout=180s
+   kubectl cp smithdb-metastore.dump langsmith/smithdb-pg:/tmp/smithdb-metastore.dump
+   kubectl exec -n langsmith smithdb-pg -- \
+     sh -c 'pg_restore --no-owner --no-privileges -d "$PGDATABASE" /tmp/smithdb-metastore.dump'
+   kubectl delete pod -n langsmith smithdb-pg
+   ```
+
+5. Run `make init-values` and `make deploy`.
+6. Keep the external database and `smithdb-metastore.dump` until LangSmith shows
+   your traces. Terraform does not manage the external database, so delete it
+   yourself.

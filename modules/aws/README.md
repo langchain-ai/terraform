@@ -488,6 +488,9 @@ Set it to `true` and Terraform adds that ingress rule to your security group.
 `terraform destroy` removes the rule.
 Manual teardown without Terraform state leaves the rule in place; see [Teardown](#teardown) / `TEARDOWN.md` for removal instructions.
 
+Before 0.18 these two settings were `smithdb_existing_metastore_security_group_id` and `smithdb_manage_byo_security_group_rules`.
+The old names fail at plan, so rename them in `infra/terraform.tfvars` before the first 0.18 apply.
+
 ### What Terraform does not check
 
 Unlike the [Azure bring-your-own-VNet path](../azure/README.md#bring-your-own-vnet),
@@ -1361,6 +1364,7 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), IRSA, a managed node group, and EBS caches. An install upgraded from 0.17 without SmithDB sets `false` first. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
 | `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |
+| `smithdb_metastore_source` | `create` | no | Only `create` (dedicated RDS) from 0.18; `external` fails at plan. See [Move an external metastore to RDS](SMITHDB.md#move-an-external-metastore-to-rds) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_metastore_existing_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_metastore_manage_existing_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
