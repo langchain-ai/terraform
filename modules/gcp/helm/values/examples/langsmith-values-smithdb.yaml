@@ -16,8 +16,7 @@
 #
 # Do not set SmithDB sizing or placement here. Set smithdb_sizing and
 # smithdb_cache_storage in infra/terraform.tfvars, so Terraform sizes the node
-# pools for the same values. The one exception is more memory for OOMKilled
-# migration pods (SMITHDB.md#oomkilled-migration-pods).
+# pools for the same values.
 # Helm merges maps but replaces lists, so a volumes or tolerations list here
 # replaces the generated list.
 

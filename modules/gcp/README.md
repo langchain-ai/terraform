@@ -140,8 +140,6 @@ gcp/
     │   ├── get-kubeconfig.sh     ← gcloud get-credentials wrapper
     │   ├── init-values.sh        ← Generates values-overrides.yaml from Terraform outputs
     │   ├── preflight-check.sh    ← Pre-deploy validation (tools, cluster, values)
-    │   ├── smithdb-migration-job-start.sh ← Sets up the SmithDB historical migration (make smithdb-migration-job-start)
-    │   ├── smithdb-migration-job-end.sh   ← Removes the migration setup (make smithdb-migration-job-end)
     │   └── uninstall.sh          ← Helm uninstall + operator resource cleanup
     └── values/
         ├── values.yaml                    ← GCP base Helm values (Gateway, GCS HMAC)
@@ -492,8 +490,6 @@ kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
 kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -i "juicefs mount ready"
 ```
 
-To upgrade from chart 0.16, see [MIGRATION-0.16-to-0.17.md](../../MIGRATION-0.16-to-0.17.md).
-
 ### Optional dedicated sandbox cluster
 
 `enable_sandboxes = true` uses the LangSmith GKE cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
@@ -643,16 +639,10 @@ List what is published with `helm search repo langchain/langsmith --versions`.
 
 `smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) in `infra/terraform.tfvars` set the chart tier, the resources, the node pool shapes, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The gates `smithdb_ingestion_enabled` and `smithdb_query_enabled` in the same file move SmithDB through dual write and cutover. Run `make deploy-all` after each change. ClickHouse stays enabled in every stage.
 
-The historical migration (backfill) is the one stage with its own make targets:
+Historical backfill is customer-managed through Helm. Follow the
+[SmithDB migration guide](https://docs.langchain.com/langsmith/self-host-smithdb-migrate).
 
-```bash
-make smithdb-migration-job-start   # TaskDB, sizing; sets smithdb_migration_enabled = true
-make deploy-all                    # make apply, make init-values, make deploy
-make smithdb-migration-job-end     # once the Job is Complete; sets smithdb_migration_enabled = false
-make deploy-all
-```
-
-See [SMITHDB.md](SMITHDB.md) for the sizing table, the stages, and the upgrade from chart 0.16.
+See [SMITHDB.md](SMITHDB.md) for sizing and staged rollout.
 
 ---
 

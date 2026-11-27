@@ -53,13 +53,9 @@ run "enums_reject_an_unlisted_value" {
     environment              = "qa"
     tls_certificate_source   = "self-signed"
     clickhouse_source        = "langsmith-managed"
-    sizing_profile           = "small"
     smithdb_metastore_source = "import"
     smithdb_node_arch        = "x86_64"
     smithdb_cache_storage    = "nvme"
-    fleet_storage            = "rds"
-    insights_storage         = "rds"
-    polly_storage            = "rds"
     eks_network_mode         = "overlay"
   }
 
@@ -70,13 +66,9 @@ run "enums_reject_an_unlisted_value" {
     var.environment,
     var.tls_certificate_source,
     var.clickhouse_source,
-    var.sizing_profile,
     var.smithdb_metastore_source,
     var.smithdb_node_arch,
     var.smithdb_cache_storage,
-    var.fleet_storage,
-    var.insights_storage,
-    var.polly_storage,
     var.eks_network_mode,
   ]
 }
@@ -271,6 +263,58 @@ run "redis_source_rejects_in_cluster" {
   }
 
   expect_failures = [var.redis_source]
+}
+
+# A 0.17 tfvars file that still keeps Fleet, Chat or Insights in the cluster, or
+# still uses a standalone switch, must fail at plan rather than move the feature
+# to a new, empty database or silently turn it off.
+run "addon_storage_rejects_in_cluster" {
+  command = plan
+
+  variables {
+    enable_fleet     = true
+    enable_polly     = true
+    enable_insights  = true
+    fleet_storage    = "in-cluster"
+    insights_storage = "in-cluster"
+    polly_storage    = "in-cluster"
+  }
+
+  expect_failures = [
+    var.fleet_storage,
+    var.insights_storage,
+    var.polly_storage,
+  ]
+}
+
+# The 0.17 QuickStart wrote "in-cluster" for add-ons that were off, where the
+# value does nothing, so those tfvars must still plan.
+run "addon_storage_in_cluster_is_ignored_while_the_addon_is_off" {
+  command = plan
+
+  variables {
+    enable_fleet     = false
+    enable_polly     = false
+    enable_insights  = false
+    enable_engine    = false
+    fleet_storage    = "in-cluster"
+    insights_storage = "in-cluster"
+    polly_storage    = "in-cluster"
+  }
+}
+
+run "standalone_switches_are_rejected" {
+  command = plan
+
+  variables {
+    enable_standalone_polly    = true
+    enable_standalone_insights = true
+  }
+
+  expect_failures = [
+    var.enable_standalone_polly,
+    var.enable_standalone_insights,
+  ]
 }
 
 # RDS rejects these characters in a master password, and the ones that survive

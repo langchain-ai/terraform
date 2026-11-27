@@ -1155,8 +1155,7 @@ object created by the previous 0.15 release.
 kubectl delete job langsmith-agent-bootstrap -n langsmith --ignore-not-found
 ```
 
-The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. See
-[MIGRATION-0.15-to-0.16.md](../../MIGRATION-0.15-to-0.16.md).
+The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance.
 
 ---
 

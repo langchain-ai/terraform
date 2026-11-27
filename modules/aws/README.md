@@ -153,15 +153,10 @@ aws/
     └── values/
         ├── examples/                                    ← Reference templates (init-values.sh copies from here)
         │   ├── langsmith-values.yaml                    ← Base AWS values
-        │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
-        │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
-        │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
         │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
         │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
         │   ├── langsmith-values-insights.yaml           ← Insights
         │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
-        │   ├── langsmith-values-standalone-polly.yaml   ← Chat external-storage overlay
-        │   ├── langsmith-values-standalone-insights.yaml ← Insights external-storage overlay
         │   ├── langsmith-values-engine.yaml             ← Engine (see ENGINE.md)
         │   ├── langsmith-values-smithdb.yaml            ← SmithDB base
         │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
@@ -170,7 +165,7 @@ aws/
         ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
         ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
         ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
-        └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
+        └── langsmith-values-*.yaml                      ← Active addon files (based on choices)
 ```
 
 ---
@@ -335,6 +330,48 @@ Runs still in the old queue are not processed.
 2. Remove `redis_source = "in-cluster"` from `infra/terraform.tfvars`, then run
    `make apply`. It creates the ElastiCache instance.
 3. Run `make init-values` and `make deploy`. The deploy removes the in-cluster Redis.
+
+### Move Fleet, Chat or Insights data to RDS
+
+From 0.18 Fleet, LangSmith Chat and Insights always use their own database on the
+shared RDS instance (`langsmith_fleet`, `langsmith_polly`, `langsmith_insights`) and
+their own DB index on the shared ElastiCache (1, 2 and 3). Engine uses the Insights
+storage. `fleet_storage`, `polly_storage` or `insights_storage = "in-cluster"` fails
+at plan while that add-on is on (for `insights_storage`, Insights or Engine).
+`enable_standalone_polly` and `enable_standalone_insights` always fail at plan, and
+`make deploy` stops on them too: replace them with `enable_polly = true`,
+`polly_storage = "external"`, `enable_insights = true` and
+`insights_storage = "external"`.
+
+The first 0.18 deploy points each feature at its new, empty database, so move the data
+before it. The steps use Chat (`polly`); for Fleet or Insights, put `fleet` or
+`insights` in its place. Redis holds only each feature's job queue, so there is no data
+to copy there. But writes made after the dump are not copied, and jobs still in the
+in-cluster queue are not run, so stop using the feature until the move is done.
+
+1. Dump the in-cluster database to your machine:
+
+   ```bash
+   kubectl exec -n langsmith langsmith-standalone-polly-postgres-0 -c postgres -- \
+     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
+     > polly.dump
+   ```
+
+2. Set `polly_storage = "external"` in `infra/terraform.tfvars`, then run `make apply`.
+   It creates the `langsmith_polly` database and the `langsmith-polly-postgres` Secret.
+   `make deploy` stops on a release that keeps the feature in the cluster until this
+   line says `external`. It also stops when the line is missing, because 0.17 read an
+   unset `polly_storage` or `insights_storage` as `in-cluster`.
+3. Restore the dump with the `pg-restore.yaml` pod from
+   [Move an in-cluster PostgreSQL to RDS](#move-an-in-cluster-postgresql-to-rds), with
+   the Secret `name: langsmith-polly-postgres` and `key: postgres_connection_url`.
+4. Run `make init-values` and `make deploy`. The deploy removes the in-cluster
+   StatefulSets and keeps their volumes.
+5. When the feature shows its data, delete the old volumes. This cannot be undone:
+
+   ```bash
+   kubectl delete pvc -n langsmith data-langsmith-standalone-polly-postgres-0 data-langsmith-standalone-polly-redis-0
+   ```
 
 ---
 
@@ -611,13 +648,13 @@ make quickdeploy-auto
 ```bash
 cd terraform/aws
 
-make init-values       # reads admin email, sizing, and addons from Terraform
+make init-values       # reads admin email and addons from Terraform
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
-`init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
+`init-values.sh` reads the `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
-Queue autoscaling is on by default: the base values turn on KEDA for `queue`, `ingest-queue`, and the SmithDB compaction worker, and every sizing template keeps it on with its own ranges. The `dev`, `production`, and `production-large` templates also add HPAs for the other core services; `minimum` keeps those fixed while retaining the SmithDB query and ingestion HPAs. These settings do not enable node autoscaling. Existing sizing files are preserved, so merge template updates into your current values when upgrading. See [sizing guidance](helm/values/examples/SIZING.md).
+Every install runs one sizing, the scale guide's medium reads, medium writes pattern: the base values run the frontend at 2 replicas, the backend on an HPA from 8 to 16, and KEDA for `queue`, `ingest-queue`, and the SmithDB compaction worker. Requests stay at the chart's defaults. Cluster Autoscaler adds LangSmith nodes up to the node group's `max_size`, and on `m6a.2xlarge` nodes the sizing needs up to 8 at maximum replicas. See [SIZING.md](helm/values/examples/SIZING.md) to size beyond it, or to move from a 0.17 `sizing_profile`.
 
 ---
 
@@ -942,11 +979,11 @@ make ssm                                                # interactive menu
 
 ### `make init-values`
 
-**When to use:** After `make apply`, or any time you change `terraform.tfvars` settings (addons, sizing, domain).
+**When to use:** After `make apply`, or any time you change `terraform.tfvars` settings (addons, domain).
 
 Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and Pass 2:
 
-1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `sizing_profile`, `enable_*` flags, `langsmith_domain`)
+1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `enable_*` flags, `langsmith_domain`)
 2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`)
 3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
 4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
@@ -955,7 +992,6 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
    - `enable_insights = true` → copies `langsmith-values-insights.yaml`
    - `enable_polly = true` → copies `langsmith-values-polly.yaml`
    - `enable_engine = true` → copies `langsmith-values-engine.yaml`, and writes the Engine IRSA role annotation into the overrides file
-5. Copies the appropriate sizing file if `sizing_profile` is set
 
 Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
 
@@ -973,7 +1009,7 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet storage can run in-cluster or use the external Postgres and Redis services.
+**Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet, LangSmith Chat and Insights keep their data on the shared RDS and ElastiCache.
 
 **Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
 ```
@@ -984,15 +1020,12 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 -f langsmith-values-insights.yaml             (enable_insights = true)
 -f langsmith-values-polly.yaml                (enable_polly = true)
 -f langsmith-values-fleet.yaml                (enable_fleet = true)
--f langsmith-values-standalone-polly.yaml     (enable_standalone_polly = true)
--f langsmith-values-standalone-insights.yaml  (enable_standalone_insights = true)
--f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default)
 -f langsmith-values-smithdb.yaml              (enable_smithdb = true)
 -f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
 ```
-The sizing file overrides replicas and resources set by add-on files. SmithDB
-loads afterward so its object-store, identity, and staged integration settings
-take final precedence.
+SmithDB loads last so its object-store, identity, and staged integration settings
+take final precedence. `make deploy` stops while a 0.17 `langsmith-values-sizing-*.yaml`
+is left in `helm/values`, because it no longer loads that file.
 
 **Step 6 — Pre-deploy hostname check.** If the ingress already exists and `langsmith_domain` is not set, compares `config.hostname` in the overrides file against the live ALB hostname. Auto-updates it if stale (prevents agent deployments getting stuck in `DEPLOYING` state with the wrong endpoint URL).
 
@@ -1329,14 +1362,10 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `create_firewall` | `false` | no | Deploy AWS Network Firewall for FQDN-based egress filtering. Requires `create_vpc = true`. Cost: ~$0.395/hr/endpoint + $0.065/GB. |
 | `firewall_allowed_fqdns` | `["beacon.langchain.com"]` | no | Domains allowed for outbound internet traffic when `create_firewall = true`. Matched against TLS SNI (HTTPS) and HTTP Host header. All other destinations are dropped. |
 | `firewall_subnet_cidr` | `"10.0.64.0/21"` | no | CIDR for the firewall subnet. Must not overlap with private (10.0.0.0/21–10.0.32.0/21) or public (10.0.40.0/21–10.0.56.0/21) subnets. |
-| `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
 | `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
 | `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
-| `fleet_storage` | `external` | no | Fleet storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_insights` | `false` | no | Enable AI-powered trace analysis |
-| `insights_storage` | `external` | no | Insights storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
-| `polly_storage` | `external` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
 | `enable_engine` | `false` | no | Enable Engine (chart 0.17+). Requires `enable_sandboxes`. Creates the Engine IRSA role with Amazon Bedrock Mantle access. See [ENGINE.md](ENGINE.md) |
 | `engine_bedrock_policy_arn` | `""` | no | IAM policy for the Engine role. Empty uses the AWS managed policy `AmazonBedrockMantleInferenceAccess` in the current partition |
@@ -1344,15 +1373,14 @@ export KUBECONFIG=~/.kube/langsmith-<cluster_name>
 | `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only). `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
 | `enable_smithdb` | `true` | no | Provision SmithDB PostgreSQL, S3 (no TTL rules on it; compaction handles retention, see [SMITHDB.md](SMITHDB.md#blob-storage)), IRSA, a managed node group, and EBS caches. An install upgraded from 0.17 without SmithDB sets `false` first. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_ingestion_enabled` | `true` | no | Write new runs to SmithDB. Counts only with `enable_smithdb = true` |
-| `smithdb_migration_enabled` | `false` | no | Migrate historical ClickHouse data to SmithDB. Set by `make smithdb-migration-job-start` |
 | `smithdb_query_enabled` | `true` | no | Serve reads from SmithDB. An install with traces in ClickHouse keeps it `false` until they are migrated |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
-| `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for the small tier that every sizing profile runs, `m6a.8xlarge` for medium, `m6a.16xlarge` for large. See [SMITHDB.md](SMITHDB.md#scaling-up) |
+| `smithdb_node_instance_type` | `m6a.4xlarge` | no | SmithDB instance type: `m6a.4xlarge` for the small tier that the Helm values run, `m6a.8xlarge` for medium, `m6a.16xlarge` for large. See [SMITHDB.md](SMITHDB.md#scaling-up) |
 | `smithdb_cache_storage` | `network-disk` | no | SmithDB cache storage: `network-disk` (gp3 volumes) or `local-ssd` (the nodes' instance-store NVMe as RAID0, which needs a type such as `m6id.4xlarge`). See [SMITHDB.md](SMITHDB.md#local-ssd-cache) |
-| `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes, including TaskDB |
+| `smithdb_node_min_count` | `2` | no | Minimum SmithDB nodes |
 | `smithdb_node_max_count` | `5` | no | Maximum SmithDB nodes; must exceed the minimum |
 | `smithdb_node_root_volume_size_gb` | `100` | no | SmithDB boot disk size in GiB |
 | `smithdb_transition_mode` | `false` | no | Retain Karpenter during an existing deployment's transition. See [SMITHDB.md](SMITHDB.md#existing-karpenter-deployments) |

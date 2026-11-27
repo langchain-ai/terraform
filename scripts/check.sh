@@ -58,6 +58,8 @@ check_scripts() {
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-setup-env-ssm.sh" || return $?
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-smithdb-transition.sh" || return $?
   bash "$REPO_ROOT/modules/aws/infra/scripts/test-upgrade-guard.sh" || return $?
+  bash "$REPO_ROOT/modules/aws/helm/scripts/test-addon-storage.sh" || return $?
+  bash "$REPO_ROOT/modules/aws/helm/scripts/test-sizing.sh" || return $?
   bash "$REPO_ROOT/modules/gcp/infra/scripts/test-setup-env-sm.sh"
 }
 

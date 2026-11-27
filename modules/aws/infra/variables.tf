@@ -915,18 +915,6 @@ variable "langsmith_jwt_secret" {
 # deploy.sh reads these to decide which values overlay files to include.
 # Addons require the corresponding entitlement in your LangSmith license key.
 #------------------------------------------------------------------------------
-# tflint-ignore: terraform_unused_declarations
-variable "sizing_profile" {
-  type        = string
-  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
-  default     = "default"
-
-  validation {
-    condition     = contains(["production", "production-large", "dev", "minimum", "default"], var.sizing_profile)
-    error_message = "sizing_profile must be one of: production, production-large, dev, minimum, default."
-  }
-}
-
 variable "enable_deployments" {
   type        = bool
   description = "Enable LangSmith Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
@@ -952,12 +940,14 @@ variable "enable_insights" {
 
 variable "insights_storage" {
   type        = string
-  description = "Insights storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "in-cluster"
+  description = "Insights storage. Only 'external' is supported from 0.18: the langsmith_insights database on the shared RDS instance and DB index 3 on the shared ElastiCache. Engine uses the same storage. Setting it explicitly confirms to make deploy that a 0.17 install, which read an unset value as in-cluster, has moved its data."
+  default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.insights_storage)
-    error_message = "insights_storage must be one of: external, in-cluster."
+    # The 0.17 QuickStart wrote "in-cluster" for an add-on that was off, where it
+    # does nothing, so the value only fails while the add-on runs.
+    condition     = var.insights_storage == "external" || !(var.enable_insights || var.enable_engine)
+    error_message = "insights_storage = \"in-cluster\" was removed in 0.18: Insights uses its own database on the shared RDS instance (langsmith_insights) and its own DB index on the shared ElastiCache. Back up the in-cluster Insights database, then set this to \"external\" in terraform.tfvars: the next deploy points Insights at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
 
@@ -969,12 +959,12 @@ variable "enable_polly" {
 
 variable "polly_storage" {
   type        = string
-  description = "LangSmith Chat storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "in-cluster"
+  description = "LangSmith Chat storage. Only 'external' is supported from 0.18: the langsmith_polly database on the shared RDS instance and DB index 2 on the shared ElastiCache. Setting it explicitly confirms to make deploy that a 0.17 install, which read an unset value as in-cluster, has moved its data."
+  default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.polly_storage)
-    error_message = "polly_storage must be one of: external, in-cluster."
+    condition     = var.polly_storage == "external" || !var.enable_polly
+    error_message = "polly_storage = \"in-cluster\" was removed in 0.18: Chat uses its own database on the shared RDS instance (langsmith_polly) and its own DB index on the shared ElastiCache. Back up the in-cluster Chat database, then set this to \"external\" in terraform.tfvars: the next deploy points Chat at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
 
@@ -986,25 +976,39 @@ variable "enable_fleet" {
 
 variable "fleet_storage" {
   type        = string
-  description = "Fleet storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  description = "Fleet storage. Only 'external' is supported from 0.18: the langsmith_fleet database on the shared RDS instance and DB index 1 on the shared ElastiCache. Setting it explicitly confirms to make deploy that a 0.17 install that set it to in-cluster has moved its data."
   default     = "external"
 
   validation {
-    condition     = contains(["external", "in-cluster"], var.fleet_storage)
-    error_message = "fleet_storage must be one of: external, in-cluster."
+    condition     = var.fleet_storage == "external" || !var.enable_fleet
+    error_message = "fleet_storage = \"in-cluster\" was removed in 0.18: Fleet uses its own database on the shared RDS instance (langsmith_fleet) and its own DB index on the shared ElastiCache. Back up the in-cluster Fleet database, then set this to \"external\" in terraform.tfvars: the next deploy points Fleet at a new, empty database. See \"Move Fleet, Chat or Insights data to RDS\" in modules/aws/README.md."
   }
 }
 
+# The two standalone switches were removed in 0.18, when external storage became
+# the only option. They stay as variables only so a terraform.tfvars that still
+# sets one fails at plan: an undeclared variable is just a warning, and Chat or
+# Insights would silently turn off.
 variable "enable_standalone_polly" {
   type        = bool
-  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for LangSmith Chat (formerly Polly). Also enables Chat when enable_polly is false for backward compatibility. Requires postgres_source = redis_source = external."
+  description = "Removed in 0.18. Set enable_polly = true instead; Chat always uses the shared RDS and ElastiCache."
   default     = false
+
+  validation {
+    condition     = !var.enable_standalone_polly
+    error_message = "enable_standalone_polly was removed in 0.18: Chat always uses the shared RDS and ElastiCache. Replace it with enable_polly = true and polly_storage = \"external\" in terraform.tfvars."
+  }
 }
 
 variable "enable_standalone_insights" {
   type        = bool
-  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for Insights. Also enables Insights when enable_insights is false for backward compatibility. ClickHouse is still required. Requires postgres_source = redis_source = external."
+  description = "Removed in 0.18. Set enable_insights = true instead; Insights always uses the shared RDS and ElastiCache."
   default     = false
+
+  validation {
+    condition     = !var.enable_standalone_insights
+    error_message = "enable_standalone_insights was removed in 0.18: Insights always uses the shared RDS and ElastiCache. Replace it with enable_insights = true and insights_storage = \"external\" in terraform.tfvars."
+  }
 }
 
 # tflint-ignore: terraform_unused_declarations
@@ -1133,12 +1137,6 @@ variable "smithdb_ingestion_enabled" {
   type        = bool
   description = "Write new LangSmith runs to SmithDB (and to ClickHouse too while ClickHouse is on). On by default for a new install."
   default     = true
-}
-
-variable "smithdb_migration_enabled" {
-  type        = bool
-  description = "Enable historical ClickHouse-to-SmithDB migration integration."
-  default     = false
 }
 
 variable "smithdb_query_enabled" {

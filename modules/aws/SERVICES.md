@@ -130,7 +130,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 - **What**: Kubernetes Event-driven Autoscaling — scales `queue`, `ingest-queue`, and the SmithDB compaction worker on their backlog and CPU (and memory for the two queues)
 - **Namespace**: `keda`
 - **Deployed by**: Terraform `k8s-bootstrap` module, on every install
-- **Required for**: every install. The base values and every sizing profile turn it on for those three services, and the Deployments operator also uses it. Sizing profiles set their own replica ranges.
+- **Required for**: every install. The base values turn it on for those three services and set their replica ranges, and the Deployments operator also uses it.
 
 ### cert-manager
 - **What**: Automates TLS certificate issuance and renewal
@@ -147,7 +147,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 ### SmithDB
 - **What**: In-chart trace ingestion and query services
 - **Cloud dependencies**: Dedicated PostgreSQL 18, dedicated S3, and SmithDB-specific IRSA
-- **Scheduling**: Dedicated EKS managed node group for SmithDB services and TaskDB; gp3 cache volumes, or the nodes' local NVMe with `smithdb_cache_storage = "local-ssd"`
+- **Scheduling**: Dedicated EKS managed node group for SmithDB services; gp3 cache volumes, or the nodes' local NVMe with `smithdb_cache_storage = "local-ssd"`
 - **Autoscaling**: query and ingestion use HPAs; the compaction worker uses KEDA on pending compaction jobs and CPU (1–10 replicas by default)
 - **Network**: Same-region S3 traffic uses the shared Gateway VPC endpoint
 - **Rollout**: on by default, with ingestion and query on and migration off; an install with traces in ClickHouse enables them in separate stages

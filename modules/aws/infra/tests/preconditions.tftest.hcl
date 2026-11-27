@@ -265,18 +265,6 @@ run "external_smithdb_metastore_without_connection_details_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "smithdb_migration_without_ingestion_is_rejected" {
-  command = plan
-
-  variables {
-    enable_smithdb            = true
-    smithdb_ingestion_enabled = false
-    smithdb_migration_enabled = true
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
 run "smithdb_query_without_ingestion_is_rejected" {
   command = plan
 

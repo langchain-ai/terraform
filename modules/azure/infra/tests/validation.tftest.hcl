@@ -908,19 +908,6 @@ run "smithdb_sizing_rejects_an_unlisted_size" {
   expect_failures = [var.smithdb_sizing]
 }
 
-run "smithdb_migration_requires_ingestion" {
-  command = plan
-
-  variables {
-    enable_smithdb            = true
-    availability_zones        = ["1", "2", "3"]
-    smithdb_ingestion_enabled = false
-    smithdb_migration_enabled = true
-  }
-
-  expect_failures = [terraform_data.validate_network]
-}
-
 # ── Storage and ClusterIP rules ──────────────────────────────────────────────
 
 # A private endpoint removes the public listener the allowlist writes rules for.
