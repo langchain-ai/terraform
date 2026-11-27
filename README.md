@@ -122,10 +122,9 @@ and `CHART_VERSION` can only narrow the pin to a 0.17 patch:
 cd modules/aws && make apply && make init-values && CHART_VERSION="0.17.0" make deploy
 ```
 
-Read [MIGRATION-0.16-to-0.17.md](MIGRATION-0.16-to-0.17.md) before upgrading an existing
-install. An install still on chart 0.15 also needs
-[MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md), because those schema changes
-carry over to 0.17.
+### Version upgrades
+
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance.
 
 ### Maintenance branches
 
