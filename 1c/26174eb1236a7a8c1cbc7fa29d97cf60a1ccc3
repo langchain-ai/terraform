@@ -1,0 +1,46 @@
+modules/aws/helm/scripts/deploy.sh
+  s_82ce142c9e5ef2::t_05f32d71042da7 506-507,512
+  s_82ce142c9e5ef2::t_b83772181ac7f7 32-44
+  s_82ce142c9e5ef2::t_376d627a921d72 508-511
+modules/aws/infra/scripts/test-worker.sh
+  s_82ce142c9e5ef2::t_35860894e07b7e 99-100,106
+modules/aws/helm/scripts/test-sizing.sh
+  s_82ce142c9e5ef2::t_469ab2b3b6bc5f 1-96
+modules/aws/infra/scripts/status.sh
+  s_82ce142c9e5ef2::t_e8e64e68603250 301-305,310-316
+  s_82ce142c9e5ef2::t_99bb67756caf69 25-26
+  s_82ce142c9e5ef2::t_af5d914d6be41f 317
+modules/aws/infra/scripts/test-quickstart-dns.sh
+  s_82ce142c9e5ef2::t_b969a00049cf7c 298
+modules/aws/helm/scripts/_sizing.sh
+  s_82ce142c9e5ef2::t_45e0b1cce4e990 1-40
+modules/aws/infra/scripts/quickstart.sh
+  s_82ce142c9e5ef2::t_026e9b1a55490b 1050-1051
+  s_82ce142c9e5ef2::t_b4704fd6a4dc8c 1049
+  s_82ce142c9e5ef2::t_2cddb85b81b8a6 556-558
+modules/aws/infra/terraform.tfvars.dev
+  s_82ce142c9e5ef2::t_3963e5870a7dde 38,44
+  s_82ce142c9e5ef2::t_9ddfa12284e2a5 37
+modules/aws/helm/scripts/test-values.sh
+  s_82ce142c9e5ef2::t_388b999cba2d1d 4-7
+  s_82ce142c9e5ef2::t_0552a7b86a46d9 425-465
+  s_82ce142c9e5ef2::t_cfac195510826a 358-360
+scripts/check.sh
+  s_82ce142c9e5ef2::t_7233b49c6bb9ac 62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c26174eb1236a7a8c1cbc7fa29d97cf60a1ccc3",
+  "prompts": {},
+  "sessions": {
+    "s_82ce142c9e5ef2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "be49cdda-d22e-49ce-b81a-e72ef6da4a94",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
